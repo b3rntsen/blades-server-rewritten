@@ -213,6 +213,7 @@ async fn main() -> Result<()> {
                     .service(arena::leaderboards::get_leaderboard)
                     .service(arena::avatar::set_avatar)
                     .service(arena::matchmaking::matchmaking_ws)
+                    .service(arena::matchmaking::create_matchmaking_session)
                     .service(
                         Files::new(
                             "/bundles.blades.bgs.services/",

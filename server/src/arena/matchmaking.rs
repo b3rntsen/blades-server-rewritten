@@ -2,8 +2,11 @@ use std::{sync::Arc, time::Duration};
 
 use actix_web::{
     HttpRequest, HttpResponse, get,
-    http::header::{HeaderName, HeaderValue},
-    rt, web,
+    http::{
+        StatusCode,
+        header::{HeaderName, HeaderValue},
+    },
+    post, rt, web,
 };
 use actix_ws::AggregatedMessage;
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper, insert_into};
@@ -12,6 +15,7 @@ use diesel_async::{
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::{select, sync::mpsc, time::sleep};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
@@ -319,4 +323,39 @@ async fn matchmaking_ws(
         HeaderValue::from_static("json"),
     );
     Ok(res)
+}
+
+#[post("/blades.bgs.services/api/matchmaking/v1/public/matches/create")]
+pub async fn create_matchmaking_session(
+    _request: web::Json<Value>,
+    user_session: SessionLookedUpMaybe,
+) -> Result<HttpResponse, BladeApiError> {
+    let user_session = user_session.get_session_or_error()?;
+
+    let matchmaking_tx = user_session.session.matchmaking_ws.lock().await;
+    if let Some(tx) = matchmaking_tx.as_ref() {
+        if tx.send(MatchmakingMessage::InitiateMatchmaking).is_err() {
+            return Err(BladeApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                1,
+                1035,
+            ));
+        }
+    } else {
+        return Err(BladeApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            1,
+            1035,
+        ));
+    }
+
+    let response = serde_json::json!({
+        "match": {
+            "ticketId": Uuid::new_v4().to_string(),
+            "status": "QUEUED",
+            "port": 0
+        }
+    });
+
+    Ok(HttpResponse::Ok().json(response))
 }
