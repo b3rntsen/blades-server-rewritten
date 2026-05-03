@@ -49,3 +49,9 @@ where
         Ok(IsNull::No)
     }
 }
+
+impl<T: Clone + std::fmt::Debug> Clone for JsonDbWrapper<T> {
+    fn clone(&self) -> Self {
+        JsonDbWrapper(self.0.clone())
+    }
+}

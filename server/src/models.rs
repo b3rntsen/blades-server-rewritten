@@ -5,7 +5,11 @@ use blades_lib::user_data::{
 use diesel::prelude::*;
 use uuid::Uuid;
 
-use crate::{json_db::JsonDbWrapper, util::CharacterHolder};
+use crate::{
+    arena::matchmaking::{AckInfo, MatchInfo},
+    json_db::JsonDbWrapper,
+    util::CharacterHolder,
+};
 
 #[derive(Queryable, Selectable, Insertable)]
 #[diesel(table_name = crate::schema::users)]
@@ -141,4 +145,14 @@ pub struct QuestDbEntryDungeonStateAndGeneratedData {
     pub id: Uuid,
     pub dungeon_state: Option<JsonDbWrapper<DungeonState>>,
     pub generated_data: JsonDbWrapper<Option<DungeonGeneratedData>>,
+}
+
+#[derive(Queryable, Selectable, Insertable, Clone)]
+#[diesel(table_name = crate::schema::matchmaking)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct MatchmakingDbEntry {
+    pub id: Uuid,
+    pub other_id: Option<Uuid>,
+    pub match_info: Option<JsonDbWrapper<MatchInfo>>,
+    pub ack_info: Option<JsonDbWrapper<AckInfo>>,
 }
