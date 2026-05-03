@@ -16,7 +16,7 @@ use diesel_async::{
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::{select, sync::mpsc, time::sleep};
+use tokio::{select, sync::mpsc, time::interval};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 
@@ -166,6 +166,8 @@ async fn matchmaking_ws(
             let mut matchmaking_started = false;
             let mut wait_for_ack_from: Option<Uuid> = None;
             let mut bail_out = false;
+            let mut matchmaking_interval = interval(Duration::from_secs(1));
+            let mut ping_interval = interval(Duration::from_secs(10));
             loop {
                 if bail_out {
                     break;
@@ -189,7 +191,7 @@ async fn matchmaking_ws(
                             _ => {}
                         }
                     }
-                    _ = sleep(Duration::from_secs(1)) => {
+                    _ = matchmaking_interval.tick() => {
                         if matchmaking_started {
                             let user_session_cloned = user_session_cloned.clone();
                             (wait_for_ack_from, session, bail_out) = conn.transaction(|mut conn| {
@@ -257,7 +259,7 @@ async fn matchmaking_ws(
                             }).await.unwrap();
                         }
                     }
-                    _ = sleep(Duration::from_secs(10)) => {
+                    _ = ping_interval.tick() => {
                         session.ping(b"").await.unwrap();
                     }
                     Some(msg) = rx.next() => {
