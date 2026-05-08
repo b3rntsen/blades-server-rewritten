@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Placeholder zipalign for nix.
+# objection calls it like: zipalign -p 4 <input> <output>
+# This script simply copies the input APK to the output path.
+
+INPUT=""
+OUTPUT=""
+SKIP_NEXT=false
+
+for arg in "$@"; do
+    # Skip flags and their values
+    if [[ "$arg" == -* ]]; then
+        SKIP_NEXT=true
+        continue
+    fi
+    if $SKIP_NEXT; then
+        SKIP_NEXT=false
+        continue
+    fi
+    if [[ -z "$INPUT" ]]; then
+        INPUT="$arg"
+    elif [[ -z "$OUTPUT" ]]; then
+        OUTPUT="$arg"
+    fi
+done
+
+if [[ -z "$INPUT" || -z "$OUTPUT" ]]; then
+    echo "Usage: zipalign [options] <input> <output>" >&2
+    exit 1
+fi
+
+cp "$INPUT" "$OUTPUT"

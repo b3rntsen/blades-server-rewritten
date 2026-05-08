@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Wrapper script that forwards 'aapt' calls to 'aapt2'.
+# This is needed because objection expects a binary named 'aapt',
+# but modern Android tools only ship 'aapt2'.
+
+exec aapt2 "$@"

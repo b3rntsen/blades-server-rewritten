@@ -6,6 +6,6 @@ data/parsed.json
 *.pyc
 build-app/tmp
 build-app/keys.keystore
-build-app/source-package.apk
-build-app/patched.apk
-build-app/patched.apk.idsig
+build-app/*.apk.idsig
+build-app/tmpfrida
+build-app/*.apk
