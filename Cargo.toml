@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
-    "blades_lib", "libenet", "match-server",
-    "server", "tools/libenet-pcap-reader",
+    "blades_lib",
+    "match-server",
+    "server"
 ]
