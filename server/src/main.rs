@@ -1,5 +1,6 @@
 use std::{
     fs::File,
+    net::SocketAddr,
     path::PathBuf,
     sync::{Arc, atomic::Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -13,12 +14,13 @@ use actix_web::{
     main,
     web::Data,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use bb8::Pool;
 use blades_lib::game_data::GameData;
 use clap::{Parser, Subcommand};
 use diesel_async::{AsyncPgConnection, pooled_connection::AsyncDieselConnectionManager};
 use log::debug;
+use tokio::select;
 
 mod abyss;
 mod analytics;
@@ -51,7 +53,10 @@ mod wallet;
 pub use error::BladeApiError;
 use uuid::Uuid;
 
-use crate::session::{SessionLookedUpMaybe, SessionStore};
+use crate::{
+    arena::enet_channel::run_enet_channel,
+    session::{SessionLookedUpMaybe, SessionStore},
+};
 
 #[derive(Parser)]
 #[command(name = "blade")]
@@ -74,6 +79,10 @@ enum Commands {
         port: u16,
         #[arg(long)]
         static_data: PathBuf,
+        #[arg(long)]
+        enet_listen_addr: SocketAddr,
+        #[arg(long)]
+        enet_public_addr: SocketAddr,
     },
 }
 
@@ -84,6 +93,9 @@ pub struct ServerGlobal {
     pub session_store: SessionStore,
     pub static_data_path: PathBuf,
     pub game_data: GameData,
+    pub enet_listen_addr: SocketAddr,
+    //TODO: check the protocol handle IPv6 too.
+    pub enet_public_addr: SocketAddr,
 }
 
 #[main]
@@ -99,6 +111,8 @@ async fn main() -> Result<()> {
             host,
             port,
             static_data,
+            enet_listen_addr,
+            enet_public_addr,
         } => {
             let db_pool = Pool::builder()
                 .build(AsyncDieselConnectionManager::<AsyncPgConnection>::new(
@@ -118,11 +132,15 @@ async fn main() -> Result<()> {
                 session_store: SessionStore::new(Duration::from_hours(24)),
                 static_data_path: static_data.clone(),
                 game_data,
+                enet_listen_addr: enet_listen_addr.clone(),
+                enet_public_addr: enet_public_addr.clone(),
             });
 
             let static_data_clone = static_data.clone();
 
-            HttpServer::new(move || {
+            let enet_future = tokio::spawn(run_enet_channel(server_global.clone()));
+
+            let srv_future = HttpServer::new(move || {
                 App::new()
                     .app_data(Data::new(server_global.clone()))
                     .wrap_fn(|mut req, srv| {
@@ -224,11 +242,21 @@ async fn main() -> Result<()> {
             })
             .bind((host.as_str(), *port))
             .context("binding server")?
-            .run()
-            .await
-            .context("running the server")?;
+            .run();
+
+            let srv_handle = srv_future.handle();
+            select! {
+                srv_result = srv_future => {
+                    //TODO: politely close the enet thread
+                    srv_result.context("server error")?;
+                    bail!("actix-web server exited without error?");
+                }
+                enet_result = enet_future => {
+                    srv_handle.stop(true).await;
+                    enet_result.context("enet error")??;
+                    bail!("enet exited without error?");
+                }
+            }
         }
     }
-
-    Ok(())
 }

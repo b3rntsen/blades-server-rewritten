@@ -2,6 +2,5 @@
 resolver = "3"
 members = [
     "blades_lib",
-    "match-server",
     "server"
 ]
