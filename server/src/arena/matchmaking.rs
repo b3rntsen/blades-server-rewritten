@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use actix_web::{
     HttpRequest, HttpResponse, get,
@@ -32,7 +32,9 @@ use crate::{
 const MESSAGE_TYPE_MATCHMAKING: &'static str = "matchmaking";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct MatchInfo {}
+pub struct MatchInfo {
+    connect_to: std::net::SocketAddr,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AckInfo {}
@@ -40,14 +42,14 @@ pub struct AckInfo {}
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct WSMatchmakingResponse {
-    pub message_type: String,
+    pub message_type: &'static str,
     pub inner: WSMatchmakingResponseInner,
 }
 
 impl WSMatchmakingResponse {
     pub fn new_simple(ticket_status: WSMatchmakingStatus) -> Self {
         Self {
-            message_type: MESSAGE_TYPE_MATCHMAKING.to_string(),
+            message_type: MESSAGE_TYPE_MATCHMAKING,
             inner: WSMatchmakingResponseInner {
                 ticket_id: Uuid::new_v4(),
                 player_session_id: None,
@@ -84,7 +86,11 @@ pub struct WSMatchmakingResponseInner {
 /// Assume current user matchmaking is already locked for update no key if it exist
 /// Will crash on failure
 /// Will return Some value if another user is found. It will stay locked for this transaction. This user is not deleted (and should be if it had been created)
-async fn try_initiate_match(conn: &mut AsyncPgConnection, user_session: &Session) -> Option<Uuid> {
+async fn try_initiate_match(
+    conn: &mut AsyncPgConnection,
+    user_session: &Session,
+    enet_addr: SocketAddr,
+) -> Option<Uuid> {
     let matchmaking_entries = matchmaking::table
         .filter(matchmaking::id.ne(user_session.user_id))
         .filter(matchmaking::other_id.is_null())
@@ -106,7 +112,9 @@ async fn try_initiate_match(conn: &mut AsyncPgConnection, user_session: &Session
         .filter(matchmaking::id.eq(entry.id))
         .set((
             matchmaking::other_id.eq(user_session.user_id),
-            matchmaking::match_info.eq(Some(JsonDbWrapper(MatchInfo {}))),
+            matchmaking::match_info.eq(Some(JsonDbWrapper(MatchInfo {
+                connect_to: enet_addr,
+            }))),
         ))
         .execute(conn)
         .await
@@ -116,11 +124,32 @@ async fn try_initiate_match(conn: &mut AsyncPgConnection, user_session: &Session
 }
 
 async fn send_match_info_to_client(
-    _entry: &MatchmakingDbEntry,
-    _session: &mut actix_ws::Session,
-    _user_id: Uuid,
+    entry: &MatchmakingDbEntry,
+    session: &mut actix_ws::Session,
+    user_id: Uuid,
 ) {
-    todo!("send match info to client");
+    let enet_addr = entry
+        .match_info
+        .as_ref()
+        .expect("match info should be available when a match is started");
+    session
+        .text(
+            serde_json::to_string(&WSMatchmakingResponse {
+                message_type: MESSAGE_TYPE_MATCHMAKING,
+                inner: WSMatchmakingResponseInner {
+                    ticket_id: Uuid::new_v4(),
+                    player_session_id: Some(user_id.to_string()),
+                    ticket_status: WSMatchmakingStatus::MatchmakingSucceeded,
+                    game_session_id: Some(Uuid::new_v4()),
+                    address: Some(enet_addr.0.connect_to.ip().to_string()),
+                    port: Some(enet_addr.0.connect_to.port()),
+                },
+            })
+            .unwrap()
+            .as_ref(),
+        )
+        .await
+        .unwrap();
 }
 
 #[get("/blades.bgs.services/api/rms/v1/public/")]
@@ -151,6 +180,9 @@ async fn matchmaking_ws(
     let user_session_cloned = user_session.session.clone();
     let user_session_cloned_2 = user_session.session.clone();
     let pool_cloned = app_state.db_pool.clone();
+    let pool_cloned_2 = app_state.db_pool.clone();
+
+    let enet_addr = app_state.enet_public_addr.clone();
 
     rt::spawn(async move {
         // spawn another thread to catch panic
@@ -213,8 +245,6 @@ async fn matchmaking_ws(
                                         } else {
                                             todo!("while waiting for ack, entry deleted. Should restore bail out? or restore?")
                                         }
-
-                                        println!("{:?}", other_user_id);
                                     } else {
                                         let matchmaking_entry = matchmaking::table
                                             .filter(matchmaking::id.eq(user_session_cloned.user_id))
@@ -238,8 +268,10 @@ async fn matchmaking_ws(
                                                 .await
                                                 .unwrap();
                                             send_match_info_to_client(matchmaking_entry, &mut session, user_session_cloned.user_id).await;
+                                            // wait a few seconds before deleting our entry, so the other thread can read the ack.
+                                            tokio::time::sleep(std::time::Duration::from_secs(6)).await;
                                             bail_out = true;
-                                        } else if let Some(other_user_id) = try_initiate_match(&mut *conn, &*user_session_cloned).await {
+                                        } else if let Some(other_user_id) = try_initiate_match(&mut *conn, &*user_session_cloned, enet_addr.clone()).await {
                                             // we have found a match, send ack and inform client
                                             // here, other is the id column of matchmaking
                                             diesel::delete(
@@ -272,7 +304,7 @@ async fn matchmaking_ws(
                                     (wait_for_ack_from, session) = conn.transaction(|conn| {
                                         async move {
                                             if let Some(other_user_id) =
-                                                try_initiate_match(&mut *conn, &*user_session_cloned).await
+                                                try_initiate_match(&mut *conn, &*user_session_cloned, enet_addr.clone()).await
                                             {
                                                 wait_for_ack_from = Some(other_user_id);
                                                 session.text(serde_json::to_string(&WSMatchmakingResponse::new_simple(WSMatchmakingStatus::PotentialMatchCreated)).unwrap().as_ref()).await.unwrap()
@@ -285,16 +317,28 @@ async fn matchmaking_ws(
                                     .unwrap();
                                 }
 
-                                insert_into(matchmaking::table)
-                                    .values(MatchmakingDbEntry {
-                                        id: user_session_cloned.user_id,
-                                        other_id: None,
-                                        match_info: None,
-                                        ack_info: None,
-                                    })
-                                    .execute(&mut conn)
-                                    .await
-                                    .unwrap();
+                                if wait_for_ack_from.is_none() {
+                                    // avoid issue if the entry wasn’t correctly deleted previously
+                                    diesel::delete(
+                                            matchmaking::table.filter(
+                                                matchmaking::id.eq(user_session_cloned.user_id),
+                                            ),
+                                        )
+                                        .execute(&mut conn)
+                                        .await
+                                        .unwrap();
+
+                                    insert_into(matchmaking::table)
+                                        .values(MatchmakingDbEntry {
+                                            id: user_session_cloned.user_id,
+                                            other_id: None,
+                                            match_info: None,
+                                            ack_info: None,
+                                        })
+                                        .execute(&mut conn)
+                                        .await
+                                        .unwrap();
+                                }
 
                                 matchmaking_started = true;
                             }
@@ -316,6 +360,14 @@ async fn matchmaking_ws(
 
         let mut matchmaking_ws = user_session_cloned_2.matchmaking_ws.lock().await;
         *matchmaking_ws = None;
+
+        let mut conn = pool_cloned_2.get().await.unwrap();
+        diesel::delete(
+            matchmaking::table.filter(matchmaking::id.eq(user_session_cloned_2.user_id)),
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
     });
 
     // respond immediately with response connected to WS session
