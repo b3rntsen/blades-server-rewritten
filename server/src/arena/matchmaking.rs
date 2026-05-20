@@ -43,15 +43,15 @@ pub struct AckInfo {}
 #[serde(rename_all = "camelCase")]
 pub struct WSMatchmakingResponse {
     pub message_type: &'static str,
-    pub inner: WSMatchmakingResponseInner,
+    pub payload: WSMatchmakingResponseInner,
 }
 
 impl WSMatchmakingResponse {
-    pub fn new_simple(ticket_status: WSMatchmakingStatus) -> Self {
+    pub fn new_simple(ticket_status: WSMatchmakingStatus, ticket_id: Uuid) -> Self {
         Self {
             message_type: MESSAGE_TYPE_MATCHMAKING,
-            inner: WSMatchmakingResponseInner {
-                ticket_id: Uuid::new_v4(),
+            payload: WSMatchmakingResponseInner {
+                ticket_id,
                 player_session_id: None,
                 ticket_status,
                 game_session_id: None,
@@ -127,6 +127,7 @@ async fn send_match_info_to_client(
     entry: &MatchmakingDbEntry,
     session: &mut actix_ws::Session,
     user_id: Uuid,
+    ticket_id: Uuid,
 ) {
     let enet_addr = entry
         .match_info
@@ -136,9 +137,9 @@ async fn send_match_info_to_client(
         .text(
             serde_json::to_string(&WSMatchmakingResponse {
                 message_type: MESSAGE_TYPE_MATCHMAKING,
-                inner: WSMatchmakingResponseInner {
-                    ticket_id: Uuid::new_v4(),
-                    player_session_id: Some(user_id.to_string()),
+                payload: WSMatchmakingResponseInner {
+                    ticket_id: ticket_id,
+                    player_session_id: Some(format!("psess-{}", user_id.to_string())),
                     ticket_status: WSMatchmakingStatus::MatchmakingSucceeded,
                     game_session_id: Some(Uuid::new_v4()),
                     address: Some(enet_addr.0.connect_to.ip().to_string()),
@@ -193,26 +194,30 @@ async fn matchmaking_ws(
         // 3. in a loop:
         //   3.1. if someone else has matched against us, send ack and inform client
         //   3.2. if someone else is waiting, create match, write match info and delete ourself. Wait for ack, and matchmaking done.
+        //
+        // TODO: making something that do not (normally) panic would be nice)
         let thread = rt::spawn(async move {
+            struct MatchmakingState {
+                ticket_id: Uuid,
+            }
+
             let mut conn = pool_cloned.get().await.unwrap();
-            let mut matchmaking_started = false;
+            let mut matchmaking_state: Option<MatchmakingState> = None;
             let mut wait_for_ack_from: Option<Uuid> = None;
-            let mut bail_out = false;
+            // Still wait for client to disconnect
+            let mut matchmaking_finished = false;
             let mut matchmaking_interval = interval(Duration::from_secs(1));
             let mut ping_interval = interval(Duration::from_secs(10));
             loop {
-                if bail_out {
-                    break;
-                }
                 select! {
                     Some(msg) = stream.next() => {
                         match msg {
                             Ok(AggregatedMessage::Text(_text)) => {
-                                todo!("handle text message");
+                                session.text("Unexpected text message from websocket...").await.unwrap();
                             }
 
                             Ok(AggregatedMessage::Binary(_bin)) => {
-                                todo!("handle binary message");
+                                session.text("Unexpected binary message from websocket...").await.unwrap();
                             }
 
                             Ok(AggregatedMessage::Ping(msg)) => {
@@ -224,9 +229,10 @@ async fn matchmaking_ws(
                         }
                     }
                     _ = matchmaking_interval.tick() => {
-                        if matchmaking_started {
+                        if let Some(matchmaking_state) = &matchmaking_state && !matchmaking_finished{
                             let user_session_cloned = user_session_cloned.clone();
-                            (wait_for_ack_from, session, bail_out) = conn.transaction(|mut conn| {
+                            let ticket_id = matchmaking_state.ticket_id.clone();
+                            (wait_for_ack_from, session, matchmaking_finished) = conn.transaction(|mut conn| {
                                 async move {
                                     if let Some(other_user_id) = wait_for_ack_from {
                                         //TODO: time limit. If it is too long, delete the row (will cancel matchmaking for the other user) and re-add ourself
@@ -239,8 +245,8 @@ async fn matchmaking_ws(
 
                                         if let Some(entry) = matchmaking_entry.get(0) {
                                             if entry.ack_info.is_some() {
-                                                send_match_info_to_client(entry, &mut session, user_session_cloned.user_id).await;
-                                                bail_out = true;
+                                                send_match_info_to_client(entry, &mut session, user_session_cloned.user_id, ticket_id).await;
+                                                matchmaking_finished = true;
                                             }
                                         } else {
                                             todo!("while waiting for ack, entry deleted. Should restore bail out? or restore?")
@@ -267,10 +273,10 @@ async fn matchmaking_ws(
                                                 .execute(&mut conn)
                                                 .await
                                                 .unwrap();
-                                            send_match_info_to_client(matchmaking_entry, &mut session, user_session_cloned.user_id).await;
+                                            send_match_info_to_client(matchmaking_entry, &mut session, user_session_cloned.user_id, ticket_id).await;
                                             // wait a few seconds before deleting our entry, so the other thread can read the ack.
                                             tokio::time::sleep(std::time::Duration::from_secs(6)).await;
-                                            bail_out = true;
+                                            matchmaking_finished = true;
                                         } else if let Some(other_user_id) = try_initiate_match(&mut *conn, &*user_session_cloned, enet_addr.clone()).await {
                                             // we have found a match, send ack and inform client
                                             // here, other is the id column of matchmaking
@@ -283,10 +289,10 @@ async fn matchmaking_ws(
                                                 .await
                                                 .unwrap();
                                             wait_for_ack_from = Some(other_user_id);
-                                            session.text(serde_json::to_string(&WSMatchmakingResponse::new_simple(WSMatchmakingStatus::PotentialMatchCreated)).unwrap().as_ref()).await.unwrap()
+                                            session.text(serde_json::to_string(&WSMatchmakingResponse::new_simple(WSMatchmakingStatus::PotentialMatchCreated, ticket_id)).unwrap().as_ref()).await.unwrap()
                                         }
                                     }
-                                    Ok::<_, diesel::result::Error>((wait_for_ack_from, session, bail_out))
+                                    Ok::<_, diesel::result::Error>((wait_for_ack_from, session, matchmaking_finished))
                                 }.scope_boxed()
                             }).await.unwrap();
                         }
@@ -296,8 +302,8 @@ async fn matchmaking_ws(
                     }
                     Some(msg) = rx.next() => {
                         match msg {
-                            MatchmakingMessage::InitiateMatchmaking => {
-                                session.text(serde_json::to_string(&WSMatchmakingResponse::new_simple(WSMatchmakingStatus::MatchmakingSearching)).unwrap().as_ref()).await.unwrap();
+                            MatchmakingMessage::InitiateMatchmaking { ticket_id } => {
+                                session.text(serde_json::to_string(&WSMatchmakingResponse::new_simple(WSMatchmakingStatus::MatchmakingSearching, ticket_id)).unwrap().as_ref()).await.unwrap();
 
                                 {
                                     let user_session_cloned = user_session_cloned.clone();
@@ -307,7 +313,7 @@ async fn matchmaking_ws(
                                                 try_initiate_match(&mut *conn, &*user_session_cloned, enet_addr.clone()).await
                                             {
                                                 wait_for_ack_from = Some(other_user_id);
-                                                session.text(serde_json::to_string(&WSMatchmakingResponse::new_simple(WSMatchmakingStatus::PotentialMatchCreated)).unwrap().as_ref()).await.unwrap()
+                                                session.text(serde_json::to_string(&WSMatchmakingResponse::new_simple(WSMatchmakingStatus::PotentialMatchCreated, ticket_id)).unwrap().as_ref()).await.unwrap()
                                             }
                                             Ok::<_, diesel::result::Error>((wait_for_ack_from, session))
                                         }
@@ -340,7 +346,9 @@ async fn matchmaking_ws(
                                         .unwrap();
                                 }
 
-                                matchmaking_started = true;
+                                matchmaking_state = Some(MatchmakingState {
+                                    ticket_id: ticket_id,
+                                });
                             }
                         }
                     }
@@ -386,9 +394,14 @@ pub async fn create_matchmaking_session(
 ) -> Result<HttpResponse, BladeApiError> {
     let user_session = user_session.get_session_or_error()?;
 
+    let ticket_id = Uuid::new_v4();
+
     let matchmaking_tx = user_session.session.matchmaking_ws.lock().await;
     if let Some(tx) = matchmaking_tx.as_ref() {
-        if tx.send(MatchmakingMessage::InitiateMatchmaking).is_err() {
+        if tx
+            .send(MatchmakingMessage::InitiateMatchmaking { ticket_id })
+            .is_err()
+        {
             return Err(BladeApiError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 1,
@@ -405,7 +418,7 @@ pub async fn create_matchmaking_session(
 
     let response = serde_json::json!({
         "match": {
-            "ticketId": Uuid::new_v4().to_string(),
+            "ticketId": ticket_id,
             "status": "QUEUED",
             "port": 0
         }
