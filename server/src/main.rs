@@ -25,6 +25,7 @@ mod analytics;
 mod analytics_events;
 mod announcements;
 mod arena;
+mod arena_import;
 mod authentification;
 mod challenge;
 mod character;
@@ -85,6 +86,10 @@ pub struct ServerGlobal {
     pub static_data_path: PathBuf,
     pub game_data: GameData,
     pub arena: Arc<arena::matchmaker::ArenaGlobal>,
+    /// Static dev token for the `/api/dev/v1/import-character` endpoint, read
+    /// from `ARENA_IMPORT_TOKEN` at startup. `None` (unset) disables the
+    /// endpoint entirely. Never a game session — this is for our own tooling.
+    pub arena_import_token: Option<String>,
 }
 
 #[main]
@@ -117,12 +122,15 @@ async fn main() -> Result<()> {
             let arena =
                 arena::matchmaker::ArenaGlobal::start(arena::config::ArenaConfig::from_env());
 
+            let arena_import_token = std::env::var("ARENA_IMPORT_TOKEN").ok();
+
             let server_global = Arc::new(ServerGlobal {
                 db_pool,
                 session_store: SessionStore::new(Duration::from_hours(24)),
                 static_data_path: static_data.clone(),
                 game_data,
                 arena,
+                arena_import_token,
             });
 
             // Live arena ENet host (real-client path) — needs the shared Arc.
@@ -228,6 +236,7 @@ async fn main() -> Result<()> {
                     .service(arena::matchmaking::matchmaking_ws)
                     .service(arena::matchmaker::create_match)
                     .service(arena::matchmaker::cancel_match)
+                    .service(arena_import::import_character)
                     .service(
                         Files::new(
                             "/bundles.blades.bgs.services/",
