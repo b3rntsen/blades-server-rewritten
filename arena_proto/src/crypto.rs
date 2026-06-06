@@ -61,11 +61,12 @@ impl CryptoCtx {
     }
 }
 
-/// **Q1 seam.** Where the 8-byte nonce comes from. The inbound decrypt path and
-/// the offline replay harness never need this (the nonce is known up front —
-/// read from `arena_session_keys.nonce_b64`). The live *outbound* encrypt path
-/// is gated on a real impl: until experiment A1 resolves the nonce origin, a
-/// live server must refuse to emit rather than ship a wrong-nonce frame.
+/// **Nonce source.** Where the 8-byte nonce comes from. RESOLVED (spec §4): a
+/// random 8-byte nonce per Connection, conveyed in the connect handshake and
+/// used both directions at counter 0 — so a live server simply GENERATES one per
+/// connection (`FixedNonce` then holds that value). Inbound decrypt / the replay
+/// harness read the known nonce; `UnresolvedNonce` remains only as a safety
+/// default for a half-built path not yet given its connection nonce.
 pub trait NonceSource: Send + Sync {
     /// The nonce to use, or `None` if it can't be determined (Q1 unresolved).
     fn nonce(&self) -> Option<[u8; 8]>;

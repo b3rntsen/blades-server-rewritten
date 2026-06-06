@@ -4,10 +4,13 @@
 //! Built on `arena_proto` (the byte layer proven byte-for-byte against the
 //! production Python decoder).
 //!
-//! **Dev handshake.** The retail client's connect handshake (how it conveys its
-//! X25519 pubkey + the per-context nonce, and where the `playerSessionId` sits)
-//! is still OPEN — see `docs/arena-protocol-spec.md` §4 (Q-NONCE) / §9
-//! (Q-PSESS). Since our server owns both ends, v1 defines its **own** minimal
+//! **Dev handshake.** The nonce mechanism is RESOLVED (spec §4): a random 8-byte
+//! nonce per Connection, exchanged in the ENet connect handshake
+//! (`GetNonce`→`SetNonce`), used both directions at counter 0 — exactly what this
+//! server does (generate a nonce, send it in the handshake reply). The remaining
+//! retail-interop gaps are the exact ENet CONNECT/VERIFY_CONNECT framing that
+//! carries it, and where `playerSessionId` sits (§9 Q-PSESS still OPEN). Since
+//! our server owns both ends, v1 defines its **own** minimal
 //! handshake (for our own client + tests) so a connecting client is bound to the
 //! match the matchmaker pre-allocated:
 //!   - c2s packet #1 = client X25519 pubkey(32) ‖ `playerSessionId` (UTF-8).
