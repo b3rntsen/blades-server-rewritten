@@ -9,3 +9,6 @@ build-app/keys.keystore
 build-app/source-package.apk
 build-app/patched.apk
 build-app/patched.apk.idsig
+
+# arena deploy secrets (docker-compose.arena.yml --env-file)
+deploy/arena.env
