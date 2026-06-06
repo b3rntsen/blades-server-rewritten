@@ -86,14 +86,21 @@ impl UdpServer {
             let data = &buf[..n];
 
             if self.registry.is_active(&peer) {
-                match self.registry.decode(&peer, data) {
-                    Some(op) => {
-                        info!("arena-udp: {peer} → GameMessageId {op}");
-                        if let Some(tap) = &self.tap {
-                            let _ = tap.send((peer, op));
+                if let Some(out) = self.registry.handle_inbound(&peer, data) {
+                    match out.opcode {
+                        Some(op) => {
+                            info!("arena-udp: {peer} → GameMessageId {op} [{}]", out.state);
+                            if let Some(tap) = &self.tap {
+                                let _ = tap.send((peer, op));
+                            }
+                        }
+                        None => debug!("arena-udp: {peer} frame with no decodable opcode ({n} B)"),
+                    }
+                    for reply in &out.replies {
+                        if let Err(e) = self.socket.send_to(reply, peer).await {
+                            warn!("arena-udp: s2c reply to {peer} failed: {e}");
                         }
                     }
-                    None => debug!("arena-udp: {peer} frame with no decodable opcode ({n} B)"),
                 }
                 continue;
             }
@@ -148,7 +155,12 @@ mod tests {
             nonce,
         };
         let frame = build_send_reliable(0, 1, &crypto, &[0xBE, 50, 0x01, 0x02]);
-        assert_eq!(reg.decode(&peer, &frame), Some(50));
+        let out = reg.handle_inbound(&peer, &frame).expect("active match");
+        assert_eq!(out.opcode, Some(50));
+        assert!(
+            out.replies.is_empty(),
+            "ReceiveDamage in Connecting yields no reply"
+        );
         assert!(reg.is_active(&peer));
     }
 
@@ -244,5 +256,72 @@ mod tests {
         let mut buf = [0u8; 64];
         let r = timeout(Duration::from_millis(400), client.recv(&mut buf)).await;
         assert!(r.is_err(), "server must not reply to an unallocated psess");
+    }
+
+    /// Milestone (d): a scripted client connects, sends PlayerLoadoutReady (36);
+    /// the server transitions Connecting→InProgress and emits PlayerWelcome (21)
+    /// + PlayerSpawnAvatar (22), which the client decodes.
+    #[tokio::test]
+    async fn match_loop_loadout_then_welcome() {
+        let reg = MatchRegistry::new(4);
+        let psid = "psess-d-1".to_string();
+        assert!(reg.allocate(psid.clone(), Uuid::nil()));
+        let server = UdpServer::bind("127.0.0.1:0", reg.clone()).await.unwrap();
+        let addr = server.local_addr();
+        tokio::spawn({
+            let s = server.clone();
+            async move { s.run().await }
+        });
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client.connect(addr).await.unwrap();
+        let (client_sk, client_pk) = gen_keypair();
+        let mut hs = client_pk.to_vec();
+        hs.extend_from_slice(psid.as_bytes());
+        client.send(&hs).await.unwrap();
+
+        let mut buf = [0u8; 256];
+        let n = timeout(Duration::from_secs(2), client.recv(&mut buf))
+            .await
+            .expect("handshake reply timed out")
+            .unwrap();
+        assert_eq!(n, 40);
+        let mut server_pk = [0u8; 32];
+        server_pk.copy_from_slice(&buf[..32]);
+        let mut nonce = [0u8; 8];
+        nonce.copy_from_slice(&buf[32..40]);
+        let crypto = CryptoCtx {
+            key: x25519_shared(&client_sk, &server_pk),
+            nonce,
+        };
+
+        // c2s PlayerLoadoutReady (36); c2s marker 0x84.
+        client
+            .send(&build_send_reliable(0, 1, &crypto, &[0x84, 36]))
+            .await
+            .unwrap();
+
+        let mut got = Vec::new();
+        for _ in 0..2 {
+            let n = timeout(Duration::from_secs(2), client.recv(&mut buf))
+                .await
+                .expect("s2c reply timed out")
+                .unwrap();
+            let pt = arena_proto::reconstruct_plaintext(
+                &buf[..n],
+                &crypto.key,
+                &crypto.nonce,
+                None,
+                false,
+            )
+            .expect("decode s2c");
+            got.push(arena_proto::first_opcode_in_plaintext(&pt));
+        }
+        got.sort();
+        assert_eq!(
+            got,
+            vec![Some(21), Some(22)],
+            "PlayerWelcome + PlayerSpawnAvatar"
+        );
     }
 }

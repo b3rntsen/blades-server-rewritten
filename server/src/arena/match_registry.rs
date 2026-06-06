@@ -23,7 +23,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 
 use arena_proto::{
-    CryptoCtx, first_opcode_in_plaintext, reconstruct_plaintext, x25519_public, x25519_shared,
+    CryptoCtx, GameMessageId, first_opcode_in_plaintext, reconstruct_plaintext, x25519_public,
+    x25519_shared,
 };
 
 /// A match the matchmaker reserved, awaiting the client's UDP connect.
@@ -39,6 +40,7 @@ struct ActiveMatch {
     #[allow(dead_code)]
     player_session_id: String,
     crypto: CryptoCtx,
+    instance: MatchInstance,
     _permit: OwnedSemaphorePermit, // released on drop → frees a Semaphore slot
 }
 
@@ -99,6 +101,7 @@ impl MatchRegistry {
                 game_session_id: pending.game_session_id,
                 player_session_id: player_session_id.to_string(),
                 crypto: CryptoCtx { key, nonce },
+                instance: MatchInstance::new(),
                 _permit: pending.permit,
             },
         );
@@ -106,12 +109,32 @@ impl MatchRegistry {
         Some((server_pk, nonce))
     }
 
-    /// Decode an inbound datagram from an active peer → first GameMessageId.
-    pub fn decode(&self, peer: &SocketAddr, datagram: &[u8]) -> Option<u8> {
-        let active = self.active.lock().unwrap();
-        let m = active.get(peer)?;
-        let pt = reconstruct_plaintext(datagram, &m.crypto.key, &m.crypto.nonce, None, false)?;
-        first_opcode_in_plaintext(&pt)
+    /// Decode an inbound datagram from an active peer, drive its match FSM, and
+    /// return the decoded opcode (for logging/tap) + any s2c reply datagrams to
+    /// send. The reply frames are already ENet-framed + ChaCha20-encrypted under
+    /// this match's context.
+    pub fn handle_inbound(&self, peer: &SocketAddr, datagram: &[u8]) -> Option<InboundOutcome> {
+        let mut active = self.active.lock().unwrap();
+        let m = active.get_mut(peer)?;
+        let pt = reconstruct_plaintext(datagram, &m.crypto.key, &m.crypto.nonce, None, false);
+        let opcode = pt.as_deref().and_then(first_opcode_in_plaintext);
+
+        let mut replies = Vec::new();
+        if let Some(op) = opcode {
+            for (out_op, body) in m.instance.on_c2s(op) {
+                let mut plain = Vec::with_capacity(2 + body.len());
+                plain.push(0xBE); // s2c marker (NetTransportMessage.MAGIC_HEADER)
+                plain.push(out_op);
+                plain.extend_from_slice(&body);
+                let seq = m.instance.next_seq();
+                replies.push(crate::arena::udp::build_send_reliable(0, seq, &m.crypto, &plain));
+            }
+        }
+        Some(InboundOutcome {
+            opcode,
+            replies,
+            state: m.instance.state_name(),
+        })
     }
 
     pub fn is_active(&self, peer: &SocketAddr) -> bool {
@@ -143,4 +166,83 @@ pub(crate) fn gen_keypair() -> ([u8; 32], [u8; 32]) {
 /// Random 8-byte nonce (ChaCha20 counter stays 0; all variation is in the nonce).
 pub(crate) fn gen_nonce() -> [u8; 8] {
     rand::rng().random()
+}
+
+/// What a decoded inbound datagram produced: the decoded opcode (for logging),
+/// any s2c reply datagrams to send (already framed + encrypted), and the match's
+/// resulting state name.
+pub struct InboundOutcome {
+    pub opcode: Option<u8>,
+    pub replies: Vec<Vec<u8>>,
+    pub state: &'static str,
+}
+
+/// Per-match authoritative state (v1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum MatchState {
+    Connecting,
+    InProgress,
+    Finished,
+}
+
+/// Per-match state machine.
+///
+/// NOTE: the real server→client message *flow* (which s2c follows which c2s) is
+/// still OPEN — `docs/arena-protocol-spec.md` §6 marks the opcode→semantics
+/// dictionary unresolved. So the transitions below are a PLACEHOLDER that emits
+/// well-formed, correctly-encrypted s2c frames, to exercise the full wire path
+/// (decode c2s → FSM → encode+encrypt s2c → client decodes) end-to-end. Swap the
+/// rules for the captured flow as it's mapped; the plumbing is unchanged.
+pub struct MatchInstance {
+    state: MatchState,
+    s2c_seq: u16,
+}
+
+impl MatchInstance {
+    fn new() -> Self {
+        MatchInstance {
+            state: MatchState::Connecting,
+            s2c_seq: 0,
+        }
+    }
+
+    fn next_seq(&mut self) -> u16 {
+        let s = self.s2c_seq;
+        self.s2c_seq = self.s2c_seq.wrapping_add(1);
+        s
+    }
+
+    fn state_name(&self) -> &'static str {
+        match self.state {
+            MatchState::Connecting => "Connecting",
+            MatchState::InProgress => "InProgress",
+            MatchState::Finished => "Finished",
+        }
+    }
+
+    /// Drive the FSM on a decoded c2s opcode; return `(opcode, body)` pairs to
+    /// emit back to the client as s2c messages.
+    fn on_c2s(&mut self, opcode: u8) -> Vec<(u8, Vec<u8>)> {
+        use GameMessageId as G;
+        match (self.state, GameMessageId::from_u8(opcode)) {
+            // Loadout ready → start the match; greet + spawn the avatar.
+            (MatchState::Connecting, Some(G::PlayerLoadoutReady)) => {
+                self.state = MatchState::InProgress;
+                vec![
+                    (G::PlayerWelcome as u8, vec![]),
+                    (G::PlayerSpawnAvatar as u8, vec![]),
+                ]
+            }
+            // A player command in-match → (placeholder) state-change ack.
+            (MatchState::InProgress, Some(G::PlayerCommand)) => {
+                vec![(G::PlayerStateChange as u8, vec![])]
+            }
+            // Concede → end the match.
+            (MatchState::InProgress, Some(G::ConcedeMatch)) => {
+                self.state = MatchState::Finished;
+                vec![(G::MatchEndMatchMsg as u8, vec![])]
+            }
+            _ => vec![],
+        }
+    }
 }
