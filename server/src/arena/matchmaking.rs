@@ -45,27 +45,33 @@ async fn matchmaking_ws(
                     Some(msg) = stream.next() => {
                         match msg {
                             Ok(AggregatedMessage::Text(_text)) => {
-                                todo!("handle text message");
+                                // v1: the client doesn't drive matchmaking over
+                                // this socket — it's server-push only.
+                                log::debug!("rms: ignoring inbound text frame");
                             }
 
                             Ok(AggregatedMessage::Binary(_bin)) => {
-                                todo!("handle binary message");
+                                log::debug!("rms: ignoring inbound binary frame");
                             }
 
                             Ok(AggregatedMessage::Ping(msg)) => {
                                 // respond to PING frame with PONG frame
-                                session.pong(&msg).await.unwrap();
+                                let _ = session.pong(&msg).await;
                             }
 
                             _ => {}
                         }
                     }
                     _ = sleep(Duration::from_secs(10)) => {
-                        session.ping(b"").await.unwrap();
+                        if session.ping(b"").await.is_err() {
+                            break;
+                        }
                     }
                     Some(msg) = rx.next() => {
-                        match msg {
-
+                        // Serialize and push the matchmaker's message as a binary
+                        // RMS frame (is_text=0, matching the wire capture).
+                        if session.binary(msg.to_rms_json()).await.is_err() {
+                            break;
                         }
                     }
                     else => {

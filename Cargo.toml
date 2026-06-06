@@ -3,4 +3,5 @@ resolver = "3"
 members = [
     "blades_lib",
     "server",
+    "arena_proto",
 ]

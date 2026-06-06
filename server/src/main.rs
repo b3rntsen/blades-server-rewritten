@@ -84,6 +84,7 @@ pub struct ServerGlobal {
     pub session_store: SessionStore,
     pub static_data_path: PathBuf,
     pub game_data: GameData,
+    pub arena: Arc<arena::matchmaker::ArenaGlobal>,
 }
 
 #[main]
@@ -113,11 +114,15 @@ async fn main() -> Result<()> {
                 serde_json::from_reader(&mut game_data_file).unwrap()
             };
 
+            let arena =
+                arena::matchmaker::ArenaGlobal::start(arena::config::ArenaConfig::from_env());
+
             let server_global = Arc::new(ServerGlobal {
                 db_pool,
                 session_store: SessionStore::new(Duration::from_hours(24)),
                 static_data_path: static_data.clone(),
                 game_data,
+                arena,
             });
 
             let static_data_clone = static_data.clone();
@@ -213,6 +218,8 @@ async fn main() -> Result<()> {
                     .service(arena::leaderboards::get_leaderboard)
                     .service(arena::avatar::set_avatar)
                     .service(arena::matchmaking::matchmaking_ws)
+                    .service(arena::matchmaker::create_match)
+                    .service(arena::matchmaker::cancel_match)
                     .service(
                         Files::new(
                             "/bundles.blades.bgs.services/",
