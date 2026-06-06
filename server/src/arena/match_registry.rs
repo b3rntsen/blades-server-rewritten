@@ -23,8 +23,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 
 use arena_proto::{
-    CryptoCtx, GameMessageId, first_opcode_in_plaintext, reconstruct_plaintext, x25519_public,
-    x25519_shared,
+    CryptoCtx, GameMessageId, chacha20_legacy_xor, first_opcode_in_plaintext, reconstruct_plaintext,
+    x25519_public, x25519_shared,
 };
 
 /// A match the matchmaker reserved, awaiting the client's UDP connect.
@@ -137,6 +137,48 @@ impl MatchRegistry {
         })
     }
 
+    /// Live-host (rusty_enet) path. Unlike [`handle_inbound`], the ENet layer
+    /// (rusty_enet) has already deframed the datagram, so `user_data` is the raw
+    /// SEND payload = `chacha20(marker ‖ opcode ‖ body)`. Decrypt it directly (no
+    /// ENet walk), drive the match FSM, and return the s2c replies **as encrypted
+    /// user-data** — ready to hand straight to `Peer::send`, which re-frames them
+    /// as ENet reliable packets. `None` ⇒ the peer is not an active match.
+    ///
+    /// [`handle_inbound`]: Self::handle_inbound
+    pub fn handle_live_user_data(
+        &self,
+        peer: &SocketAddr,
+        user_data: &[u8],
+    ) -> Option<LiveOutcome> {
+        let mut active = self.active.lock().unwrap();
+        let m = active.get_mut(peer)?;
+
+        // Each command resets the ChaCha20 counter to 0 — encrypt and decrypt are
+        // the same XOR against a fresh keystream (spec §4).
+        let mut plain = user_data.to_vec();
+        chacha20_legacy_xor(&mut plain, &m.crypto.key, &m.crypto.nonce);
+        let marker = plain.first().copied();
+        let opcode = plain.get(1).copied(); // user_data[1] = GameMessageId
+
+        let mut replies = Vec::new();
+        if let Some(op) = opcode {
+            for (out_op, body) in m.instance.on_c2s(op) {
+                let mut s2c = Vec::with_capacity(2 + body.len());
+                s2c.push(0xBE); // s2c marker (NetTransportMessage.MAGIC_HEADER)
+                s2c.push(out_op);
+                s2c.extend_from_slice(&body);
+                chacha20_legacy_xor(&mut s2c, &m.crypto.key, &m.crypto.nonce);
+                replies.push(s2c);
+            }
+        }
+        Some(LiveOutcome {
+            opcode,
+            marker,
+            replies,
+            state: m.instance.state_name(),
+        })
+    }
+
     pub fn is_active(&self, peer: &SocketAddr) -> bool {
         self.active.lock().unwrap().contains_key(peer)
     }
@@ -173,6 +215,17 @@ pub(crate) fn gen_nonce() -> [u8; 8] {
 /// resulting state name.
 pub struct InboundOutcome {
     pub opcode: Option<u8>,
+    pub replies: Vec<Vec<u8>>,
+    pub state: &'static str,
+}
+
+/// What a decoded **live-host** (rusty_enet) SEND payload produced. The replies
+/// are encrypted user-data (the ENet framing is rusty_enet's job, not ours).
+pub struct LiveOutcome {
+    pub opcode: Option<u8>,
+    /// The decrypted marker byte (`0x84` c2s / `0xBE` s2c / `0xAC`); a value
+    /// outside that set usually means a wrong key (handshake mismatch).
+    pub marker: Option<u8>,
     pub replies: Vec<Vec<u8>>,
     pub state: &'static str,
 }
