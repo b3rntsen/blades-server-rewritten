@@ -1,5 +1,6 @@
 pub mod avatar;
 pub mod config;
+pub mod enet_host;
 pub mod leaderboards;
 pub mod match_registry;
 pub mod matchmaker;

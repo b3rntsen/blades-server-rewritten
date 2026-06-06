@@ -18,7 +18,7 @@ use actix_web::{
     http::StatusCode,
     web::{self, Json},
 };
-use log::{error, info, warn};
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use uuid::Uuid;
@@ -59,21 +59,9 @@ impl ArenaGlobal {
         actix_web::rt::spawn(async move {
             matchmaker_loop(rx, mm_cfg, mm_reg).await;
         });
-
-        // Arena UDP endpoint — binds + serves on the current arbiter, sharing the
-        // match registry with the matchmaker.
-        let udp_port = config.udp_port;
-        let udp_reg = registry.clone();
-        actix_web::rt::spawn(async move {
-            let bind_addr = format!("0.0.0.0:{udp_port}");
-            match crate::arena::udp::UdpServer::bind(&bind_addr, udp_reg).await {
-                Ok(srv) => {
-                    info!("arena-udp: listening on {bind_addr}");
-                    srv.run().await;
-                }
-                Err(e) => error!("arena-udp: bind {bind_addr} failed: {e}"),
-            }
-        });
+        // The live ENet arena host (tokio-enet) is spawned from main() once
+        // ServerGlobal exists (it needs the shared Arc). `udp.rs`'s raw-socket
+        // UdpServer is the dev/test reference for the crypto + FSM unit tests.
 
         Arc::new(ArenaGlobal {
             config,

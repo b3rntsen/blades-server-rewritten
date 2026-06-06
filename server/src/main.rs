@@ -125,6 +125,14 @@ async fn main() -> Result<()> {
                 arena,
             });
 
+            // Live arena ENet host (real-client path) — needs the shared Arc.
+            let enet_globals = server_global.clone();
+            actix_web::rt::spawn(async move {
+                if let Err(e) = arena::enet_host::run_enet_host(enet_globals).await {
+                    log::error!("arena-enet host exited: {e}");
+                }
+            });
+
             let static_data_clone = static_data.clone();
 
             HttpServer::new(move || {

@@ -48,6 +48,11 @@ pub fn build_send_reliable(channel: u8, seq: u16, crypto: &CryptoCtx, plain: &[u
 
 /// The arena UDP server: one shared socket + a single demux loop over the
 /// shared [`MatchRegistry`].
+///
+/// Dev/test reference: the **live** path is `enet_host` (rusty_enet). This
+/// raw-socket server + its loopback tests prove the crypto/handshake/FSM
+/// pipeline on the wire; keep it as the regression harness.
+#[allow(dead_code)]
 pub struct UdpServer {
     socket: Arc<UdpSocket>,
     registry: Arc<MatchRegistry>,
@@ -56,6 +61,7 @@ pub struct UdpServer {
     tap: Option<UnboundedSender<(SocketAddr, u8)>>,
 }
 
+#[allow(dead_code)]
 impl UdpServer {
     pub async fn bind(addr: &str, registry: Arc<MatchRegistry>) -> io::Result<Arc<Self>> {
         Self::bind_with_tap(addr, registry, None).await

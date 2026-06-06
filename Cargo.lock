@@ -1800,6 +1800,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
+name = "rusty_enet"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1c0b43e27d8d86bb3a15b9eac232b6d78a06afee258a9861deb5a0d15b65c33"
+dependencies = [
+ "js-sys",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1900,6 +1909,7 @@ dependencies = [
  "log",
  "mio",
  "rand 0.10.0",
+ "rusty_enet",
  "serde",
  "serde_json",
  "tokio",
