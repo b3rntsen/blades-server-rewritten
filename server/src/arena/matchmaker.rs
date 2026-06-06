@@ -12,6 +12,7 @@
 //! match instance land in milestone (c)/(d).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use actix_web::{
     HttpResponse, post,
@@ -73,6 +74,10 @@ impl ArenaGlobal {
 
 /// The matchmaker actor. Single owner of the ticket queue — no locks. v1 solo +
 /// bot: each ticket resolves immediately to our configured UDP endpoint.
+/// Seconds a lone ticket waits for an opponent before falling back to a solo
+/// (no-opponent / bot) match, so a single tester isn't stuck "Searching".
+const SOLO_FALLBACK_SECS: u64 = 15;
+
 async fn matchmaker_loop(
     mut rx: UnboundedReceiver<TicketRequest>,
     config: ArenaConfig,
@@ -82,10 +87,30 @@ async fn matchmaker_loop(
         "matchmaker: started (advertise {}:{}, max {} matches)",
         config.advertise_host, config.udp_port, registry.max_matches
     );
-    while let Some(req) = rx.recv().await {
-        info!("matchmaker: ticket {} (user {})", req.ticket_id, req.user_id);
 
-        // Push the captured 3-frame progression.
+    // A single ticket held while it waits for an opponent to pair with.
+    let mut waiting: Option<TicketRequest> = None;
+    loop {
+        // If a ticket is already waiting, race the next ticket against a fallback
+        // timer; otherwise just block for the next ticket.
+        let next = if waiting.is_some() {
+            tokio::select! {
+                r = rx.recv() => r,
+                _ = tokio::time::sleep(Duration::from_secs(SOLO_FALLBACK_SECS)) => {
+                    let lone = waiting.take().expect("waiting is some");
+                    info!("matchmaker: no opponent for ticket {} — solo fallback", lone.ticket_id);
+                    resolve(&registry, &config, &[lone]);
+                    continue;
+                }
+            }
+        } else {
+            rx.recv().await
+        };
+        let Some(req) = next else { break };
+
+        info!("matchmaker: ticket {} (user {})", req.ticket_id, req.user_id);
+        // Push the captured 3-frame progression's first two frames now; the
+        // `Succeeded` frame follows once the match resolves (pair or fallback).
         let _ = req
             .rms
             .send(MatchmakingMessage::Searching { ticket_id: req.ticket_id });
@@ -93,36 +118,53 @@ async fn matchmaker_loop(
             .rms
             .send(MatchmakingMessage::PotentialMatch { ticket_id: req.ticket_id });
 
-        // Reserve a capacity slot keyed by the playerSessionId we advertise; the
-        // UDP layer admits the client that presents this id.
-        let player_session_id = format!("psess-{}", Uuid::new_v4());
-        let game_session_id = Uuid::new_v4();
-        if !registry.allocate(player_session_id.clone(), game_session_id) {
+        match waiting.take() {
+            // A second player arrived → pair the two into ONE shared match.
+            Some(first) => resolve(&registry, &config, &[first, req]),
+            // First player → hold it and wait for an opponent (or the timer above).
+            None => waiting = Some(req),
+        }
+    }
+    warn!("matchmaker: queue closed, actor exiting");
+}
+
+/// Allocate ONE match for these tickets (1 = solo/bot, 2 = a PvP pair) and push
+/// `MatchmakingSucceeded` to each — all sharing one `gameSessionId`, each with its
+/// own `playerSessionId` (the id the UDP layer admits it under).
+fn resolve(registry: &MatchRegistry, config: &ArenaConfig, tickets: &[TicketRequest]) {
+    let game_session_id = Uuid::new_v4();
+    let psids: Vec<String> = tickets
+        .iter()
+        .map(|_| format!("psess-{}", Uuid::new_v4()))
+        .collect();
+
+    if !registry.allocate(&psids, game_session_id) {
+        for t in tickets {
             warn!(
                 "matchmaker: at capacity — ticket {} left unresolved",
-                req.ticket_id
+                t.ticket_id
             );
-            continue;
         }
+        return;
+    }
 
+    for (t, psid) in tickets.iter().zip(psids.iter()) {
         let succeeded = MatchmakingMessage::Succeeded {
-            ticket_id: req.ticket_id,
-            player_session_id,
+            ticket_id: t.ticket_id,
+            player_session_id: psid.clone(),
             game_session_id,
             address: config.advertise_host.clone(),
             port: config.udp_port,
         };
-        if req.rms.send(succeeded).is_err() {
-            // NOTE: the reserved pending slot holds a permit until the client
-            // connects; an abandoned ticket leaks one slot until expiry
-            // (TODO: pending-match deadline sweep — task #10).
+        if t.rms.send(succeeded).is_err() {
+            // The match's capacity permit is held until both players connect; an
+            // abandoned ticket leaks one slot until expiry (TODO: deadline sweep).
             warn!(
                 "matchmaker: ticket {} — client RMS gone before Succeeded",
-                req.ticket_id
+                t.ticket_id
             );
         }
     }
-    warn!("matchmaker: queue closed, actor exiting");
 }
 
 #[derive(Deserialize, Debug)]
@@ -199,4 +241,66 @@ pub async fn cancel_match(
     Ok(HttpResponse::Ok()
         .content_type("application/json")
         .body("null"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::arena::config::ArenaConfig;
+    use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+
+    async fn next_succeeded(rx: &mut UnboundedReceiver<MatchmakingMessage>) -> (Uuid, String) {
+        loop {
+            let msg = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+                .await
+                .expect("matchmaker frame timed out")
+                .expect("rms channel closed");
+            if let MatchmakingMessage::Succeeded {
+                game_session_id,
+                player_session_id,
+                ..
+            } = msg
+            {
+                return (game_session_id, player_session_id);
+            }
+        }
+    }
+
+    /// Two tickets enqueued back-to-back must be PAIRED into one match: both
+    /// clients get `Succeeded` with the SAME gameSessionId and DISTINCT
+    /// playerSessionIds (Gap 3).
+    #[tokio::test]
+    async fn pairs_two_tickets_into_one_match() {
+        let registry = MatchRegistry::new(4);
+        let config = ArenaConfig {
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 4,
+            max_queued_players: 64,
+        };
+        let (tx, rx) = unbounded_channel::<TicketRequest>();
+        tokio::spawn(matchmaker_loop(rx, config, registry.clone()));
+
+        let (rms_a, mut recv_a) = unbounded_channel();
+        let (rms_b, mut recv_b) = unbounded_channel();
+        tx.send(TicketRequest {
+            ticket_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            rms: rms_a,
+        })
+        .unwrap();
+        tx.send(TicketRequest {
+            ticket_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            rms: rms_b,
+        })
+        .unwrap();
+
+        let (gsid_a, psid_a) = next_succeeded(&mut recv_a).await;
+        let (gsid_b, psid_b) = next_succeeded(&mut recv_b).await;
+        assert_eq!(gsid_a, gsid_b, "both players share one gameSessionId");
+        assert_ne!(psid_a, psid_b, "each player gets a distinct playerSessionId");
+        // The paired match is allocated and holds one capacity permit.
+        assert_eq!(registry.available_permits(), 3);
+    }
 }

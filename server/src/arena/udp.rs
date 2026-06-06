@@ -153,7 +153,7 @@ mod tests {
     fn allocate_admit_decode() {
         let reg = MatchRegistry::new(2);
         let psid = "psess-test-1".to_string();
-        assert!(reg.allocate(psid.clone(), Uuid::nil()));
+        assert!(reg.allocate(&[psid.clone()], Uuid::nil()));
 
         let (client_sk, client_pk) = gen_keypair();
         let peer: SocketAddr = "127.0.0.1:5000".parse().unwrap();
@@ -177,8 +177,11 @@ mod tests {
     #[test]
     fn cap_enforced_and_released() {
         let reg = MatchRegistry::new(1);
-        assert!(reg.allocate("a".into(), Uuid::nil()));
-        assert!(!reg.allocate("b".into(), Uuid::nil()), "second exceeds cap");
+        assert!(reg.allocate(&["a".into()], Uuid::nil()));
+        assert!(
+            !reg.allocate(&["b".into()], Uuid::new_v4()),
+            "second exceeds cap"
+        );
 
         let peer: SocketAddr = "127.0.0.1:6000".parse().unwrap();
         reg.admit(peer, "a", &[1u8; 32]).expect("admit a");
@@ -186,7 +189,7 @@ mod tests {
 
         reg.remove(&peer); // disconnect frees the slot
         assert_eq!(reg.available_permits(), 1);
-        assert!(reg.allocate("c".into(), Uuid::nil()), "slot freed");
+        assert!(reg.allocate(&["c".into()], Uuid::new_v4()), "slot freed");
     }
 
     /// Live loopback: real sockets, full allocate→handshake→encrypted frame the
@@ -195,7 +198,7 @@ mod tests {
     async fn loopback_admit_and_decode() {
         let reg = MatchRegistry::new(4);
         let psid = "psess-loop-1".to_string();
-        assert!(reg.allocate(psid.clone(), Uuid::nil())); // simulate the matchmaker
+        assert!(reg.allocate(&[psid.clone()], Uuid::nil())); // simulate the matchmaker
 
         let (tap_tx, mut tap_rx) = tokio::sync::mpsc::unbounded_channel();
         let server = UdpServer::bind_with_tap("127.0.0.1:0", reg.clone(), Some(tap_tx))
@@ -274,7 +277,7 @@ mod tests {
     async fn match_loop_loadout_then_welcome() {
         let reg = MatchRegistry::new(4);
         let psid = "psess-d-1".to_string();
-        assert!(reg.allocate(psid.clone(), Uuid::nil()));
+        assert!(reg.allocate(&[psid.clone()], Uuid::nil()));
         let server = UdpServer::bind("127.0.0.1:0", reg.clone()).await.unwrap();
         let addr = server.local_addr();
         tokio::spawn({
