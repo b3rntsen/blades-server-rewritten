@@ -21,11 +21,11 @@ use diesel_async::{AsyncPgConnection, pooled_connection::AsyncDieselConnectionMa
 use log::debug;
 
 mod abyss;
+mod admin;
 mod analytics;
 mod analytics_events;
 mod announcements;
 mod arena;
-mod arena_import;
 mod authentification;
 mod challenge;
 mod character;
@@ -236,7 +236,7 @@ async fn main() -> Result<()> {
                     .service(arena::matchmaking::matchmaking_ws)
                     .service(arena::matchmaker::create_match)
                     .service(arena::matchmaker::cancel_match)
-                    .service(arena_import::import_character)
+                    .service(admin::import_character)
                     .service(
                         Files::new(
                             "/bundles.blades.bgs.services/",

@@ -1,16 +1,22 @@
-//! DEV-only character import endpoint.
+//! Admin / management endpoints.
 //!
-//! This is **not** part of the Blades client protocol. It exists so our own
-//! tooling can seed a fully-formed, playable character straight into the
-//! `characters` table (and, if needed, a backing `users` row) without going
-//! through the normal create-character flow. The capture -> server data
-//! transform lives elsewhere; this handler accepts the four `blades_lib`
-//! parts (`character`, `data`, `inventory`, `wallet`) directly.
+//! Out-of-band operator endpoints that are **not** part of the Blades client
+//! protocol. They're grouped in one module (rather than scattered among the
+//! game services) so the management surface is easy to find and lock down:
+//! every handler here is dev-token gated, never a game session.
 //!
-//! Auth is a static dev token, NOT a game session: the request must carry an
-//! `Authorization: Bearer <token>` (or `X-Import-Token: <token>`) header that
-//! equals the `ARENA_IMPORT_TOKEN` env var captured at startup. If the env var
-//! is unset the endpoint is disabled (503); a missing/mismatched header is 403.
+//! Auth: each endpoint requires an `Authorization: Bearer <token>` (or
+//! `X-Import-Token: <token>`) header equal to the `ARENA_IMPORT_TOKEN` env var
+//! captured at startup. If the env var is unset the admin surface is disabled
+//! (503); a missing header is 401; a mismatched one is 403.
+//!
+//! Endpoints:
+//!   * [`import_character`] — `POST /…/api/dev/v1/import-character` — seed a
+//!     fully-formed, playable character straight into the `characters` table
+//!     (and a backing `users` row if absent), bypassing the create-character
+//!     flow. The capture -> server transform lives in the capture platform;
+//!     this handler accepts the four `blades_lib` parts (`character`, `data`,
+//!     `inventory`, `wallet`) directly.
 
 use std::sync::Arc;
 
