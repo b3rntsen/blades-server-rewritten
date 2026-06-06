@@ -23,6 +23,7 @@ use log::debug;
 use tokio::select;
 
 mod abyss;
+mod admin;
 mod analytics;
 mod analytics_events;
 mod announcements;
@@ -96,6 +97,10 @@ pub struct ServerGlobal {
     pub enet_listen_addr: SocketAddr,
     //TODO: check the protocol handle IPv6 too.
     pub enet_public_addr: SocketAddr,
+    /// Static dev token gating the admin endpoints (see the [`admin`] module).
+    /// Read from `ARENA_IMPORT_TOKEN` at startup; `None` (unset) disables the
+    /// admin surface entirely (every admin handler returns 503).
+    pub arena_import_token: Option<String>,
 }
 
 #[main]
@@ -127,6 +132,10 @@ async fn main() -> Result<()> {
                 serde_json::from_reader(&mut game_data_file).unwrap()
             };
 
+            // Admin endpoints (see the `admin` module) are gated on this dev
+            // token; leaving ARENA_IMPORT_TOKEN unset disables them.
+            let arena_import_token = std::env::var("ARENA_IMPORT_TOKEN").ok();
+
             let server_global = Arc::new(ServerGlobal {
                 db_pool,
                 session_store: SessionStore::new(Duration::from_hours(24)),
@@ -134,6 +143,7 @@ async fn main() -> Result<()> {
                 game_data,
                 enet_listen_addr: enet_listen_addr.clone(),
                 enet_public_addr: enet_public_addr.clone(),
+                arena_import_token,
             });
 
             let static_data_clone = static_data.clone();
@@ -232,6 +242,7 @@ async fn main() -> Result<()> {
                     .service(arena::avatar::set_avatar)
                     .service(arena::matchmaking::matchmaking_ws)
                     .service(arena::matchmaking::create_matchmaking_session)
+                    .service(admin::import_character)
                     .service(
                         Files::new(
                             "/bundles.blades.bgs.services/",
