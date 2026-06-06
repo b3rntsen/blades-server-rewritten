@@ -25,7 +25,7 @@ use uuid::Uuid;
 
 use crate::{
     BladeApiError, ServerGlobal,
-    arena::{MatchmakingMessage, config::ArenaConfig},
+    arena::{MatchmakingMessage, config::ArenaConfig, match_registry::MatchRegistry},
     session::SessionLookedUpMaybe,
 };
 
@@ -44,23 +44,29 @@ pub struct TicketRequest {
 pub struct ArenaGlobal {
     pub config: ArenaConfig,
     pub matchmaker_tx: UnboundedSender<TicketRequest>,
+    pub registry: Arc<MatchRegistry>,
 }
 
 impl ArenaGlobal {
     /// Build the arena subsystem and spawn the matchmaker actor on the current
     /// arbiter. Returns the shared handle to store in `ServerGlobal`.
     pub fn start(config: ArenaConfig) -> Arc<Self> {
+        let registry = MatchRegistry::new(config.max_concurrent_matches);
+
         let (tx, rx) = unbounded_channel::<TicketRequest>();
-        let cfg = config.clone();
+        let mm_cfg = config.clone();
+        let mm_reg = registry.clone();
         actix_web::rt::spawn(async move {
-            matchmaker_loop(rx, cfg).await;
+            matchmaker_loop(rx, mm_cfg, mm_reg).await;
         });
 
-        // Arena UDP endpoint — binds + serves on the current arbiter.
+        // Arena UDP endpoint — binds + serves on the current arbiter, sharing the
+        // match registry with the matchmaker.
         let udp_port = config.udp_port;
+        let udp_reg = registry.clone();
         actix_web::rt::spawn(async move {
             let bind_addr = format!("0.0.0.0:{udp_port}");
-            match crate::arena::udp::UdpServer::bind(&bind_addr).await {
+            match crate::arena::udp::UdpServer::bind(&bind_addr, udp_reg).await {
                 Ok(srv) => {
                     info!("arena-udp: listening on {bind_addr}");
                     srv.run().await;
@@ -72,16 +78,21 @@ impl ArenaGlobal {
         Arc::new(ArenaGlobal {
             config,
             matchmaker_tx: tx,
+            registry,
         })
     }
 }
 
 /// The matchmaker actor. Single owner of the ticket queue — no locks. v1 solo +
 /// bot: each ticket resolves immediately to our configured UDP endpoint.
-async fn matchmaker_loop(mut rx: UnboundedReceiver<TicketRequest>, config: ArenaConfig) {
+async fn matchmaker_loop(
+    mut rx: UnboundedReceiver<TicketRequest>,
+    config: ArenaConfig,
+    registry: Arc<MatchRegistry>,
+) {
     info!(
-        "matchmaker: started (advertise {}:{})",
-        config.advertise_host, config.udp_port
+        "matchmaker: started (advertise {}:{}, max {} matches)",
+        config.advertise_host, config.udp_port, registry.max_matches
     );
     while let Some(req) = rx.recv().await {
         info!("matchmaker: ticket {} (user {})", req.ticket_id, req.user_id);
@@ -94,14 +105,29 @@ async fn matchmaker_loop(mut rx: UnboundedReceiver<TicketRequest>, config: Arena
             .rms
             .send(MatchmakingMessage::PotentialMatch { ticket_id: req.ticket_id });
 
+        // Reserve a capacity slot keyed by the playerSessionId we advertise; the
+        // UDP layer admits the client that presents this id.
+        let player_session_id = format!("psess-{}", Uuid::new_v4());
+        let game_session_id = Uuid::new_v4();
+        if !registry.allocate(player_session_id.clone(), game_session_id) {
+            warn!(
+                "matchmaker: at capacity — ticket {} left unresolved",
+                req.ticket_id
+            );
+            continue;
+        }
+
         let succeeded = MatchmakingMessage::Succeeded {
             ticket_id: req.ticket_id,
-            player_session_id: format!("psess-{}", Uuid::new_v4()),
-            game_session_id: Uuid::new_v4(),
+            player_session_id,
+            game_session_id,
             address: config.advertise_host.clone(),
             port: config.udp_port,
         };
         if req.rms.send(succeeded).is_err() {
+            // NOTE: the reserved pending slot holds a permit until the client
+            // connects; an abandoned ticket leaks one slot until expiry
+            // (TODO: pending-match deadline sweep — task #10).
             warn!(
                 "matchmaker: ticket {} — client RMS gone before Succeeded",
                 req.ticket_id

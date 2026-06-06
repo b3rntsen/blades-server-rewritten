@@ -1,58 +1,34 @@
-//! Arena UDP endpoint (milestone c): one socket, per-peer match sessions,
-//! X25519 handshake, ChaCha20 decode of inbound ENet frames.
+//! Arena UDP endpoint (milestone c + hardening): one socket, a demux loop over
+//! a capacity-bounded [`MatchRegistry`], X25519 handshake, ChaCha20 decode.
 //!
 //! Built on `arena_proto` (the byte layer proven byte-for-byte against the
-//! production Python decoder). The pure decode/encode/ECDH logic is unit-tested
-//! without sockets; a loopback integration test exercises the live socket loop.
+//! production Python decoder).
 //!
 //! **Dev handshake.** The retail client's connect handshake (how it conveys its
-//! X25519 pubkey + the per-context nonce) is still OPEN — see
-//! `docs/arena-protocol-spec.md` §4 (Q-NONCE) / §9 (Q-PSESS). Since our server
-//! owns both ends (spec §2/§4 "[server impl]"), v1 defines its **own** minimal
-//! handshake for our own client + tests, to validate the UDP/ENet/crypto
-//! plumbing end-to-end now:
-//!   - c2s packet #1 = the client's 32-byte X25519 public key (raw).
-//!   - s2c reply      = server pubkey (32) ‖ chosen nonce (8).
-//!   - thereafter     = ENet datagrams; SEND_* user-data is ChaCha20(key,nonce).
-//! When the retail handshake is decompiled/known, swap this for a `GameLift`
-//! handshake — the decode path (`MatchSession`) is unchanged.
+//! X25519 pubkey + the per-context nonce, and where the `playerSessionId` sits)
+//! is still OPEN — see `docs/arena-protocol-spec.md` §4 (Q-NONCE) / §9
+//! (Q-PSESS). Since our server owns both ends, v1 defines its **own** minimal
+//! handshake (for our own client + tests) so a connecting client is bound to the
+//! match the matchmaker pre-allocated:
+//!   - c2s packet #1 = client X25519 pubkey(32) ‖ `playerSessionId` (UTF-8).
+//!   - the server admits it **iff** the matchmaker pre-allocated that id
+//!     (`registry.admit`), then replies server pubkey(32) ‖ nonce(8).
+//!   - thereafter = ENet datagrams; SEND_* user-data is ChaCha20(key, nonce).
+//! When the retail handshake is known, swap this framing — the registry/decode
+//! path is unchanged.
 
-use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use log::{debug, info, warn};
-use rand::RngExt;
 use tokio::net::UdpSocket;
-use tokio::sync::Mutex;
 use tokio::sync::mpsc::UnboundedSender;
 
 use arena_proto::enet::ENET_CMD_SEND_RELIABLE;
-use arena_proto::{
-    CryptoCtx, chacha20_legacy_xor, first_opcode_in_plaintext, reconstruct_plaintext, x25519_public,
-    x25519_shared,
-};
+use arena_proto::{CryptoCtx, chacha20_legacy_xor};
 
-/// Per-peer match state: the agreed ChaCha20 context for this client.
-pub struct MatchSession {
-    pub crypto: CryptoCtx,
-}
-
-impl MatchSession {
-    /// Decode an inbound ENet datagram to the first GameMessageId opcode (if
-    /// any). Returns `None` for control-only frames or undecodable data.
-    pub fn decode_opcode(&self, datagram: &[u8]) -> Option<u8> {
-        let pt = reconstruct_plaintext(
-            datagram,
-            &self.crypto.key,
-            &self.crypto.nonce,
-            None, // no fragment resolver in v1 single-datagram decode
-            false,
-        )?;
-        first_opcode_in_plaintext(&pt)
-    }
-}
+use crate::arena::match_registry::MatchRegistry;
 
 /// Build a minimal ENet `SEND_RELIABLE` datagram carrying an encrypted message
 /// (`marker ‖ opcode ‖ body`). peerID `0x3000` (no sentTime flag). Used by our
@@ -67,53 +43,36 @@ pub fn build_send_reliable(channel: u8, seq: u16, crypto: &CryptoCtx, plain: &[u
     f
 }
 
-/// Random 32-byte X25519 secret + its public key. (Any 32 bytes is a valid
-/// secret — X25519 clamps internally.)
-fn gen_keypair() -> ([u8; 32], [u8; 32]) {
-    let sk: [u8; 32] = rand::rng().random();
-    let pk = x25519_public(&sk);
-    (sk, pk)
-}
-
-/// Random 8-byte nonce (ChaCha20 counter stays 0; all per-context variation is
-/// in the nonce — spec §4).
-fn gen_nonce() -> [u8; 8] {
-    rand::rng().random()
-}
-
-/// The arena UDP server: one shared socket, a per-peer session table, and a
-/// single demux loop.
+/// The arena UDP server: one shared socket + a single demux loop over the
+/// shared [`MatchRegistry`].
 pub struct UdpServer {
     socket: Arc<UdpSocket>,
-    sessions: Mutex<HashMap<SocketAddr, MatchSession>>,
+    registry: Arc<MatchRegistry>,
     /// Test observability: decoded `(peer, opcode)` are forwarded here. `None`
     /// in production.
     tap: Option<UnboundedSender<(SocketAddr, u8)>>,
 }
 
 impl UdpServer {
-    pub async fn bind(addr: &str) -> io::Result<Arc<Self>> {
-        Self::bind_with_tap(addr, None).await
+    pub async fn bind(addr: &str, registry: Arc<MatchRegistry>) -> io::Result<Arc<Self>> {
+        Self::bind_with_tap(addr, registry, None).await
     }
 
     pub async fn bind_with_tap(
         addr: &str,
+        registry: Arc<MatchRegistry>,
         tap: Option<UnboundedSender<(SocketAddr, u8)>>,
     ) -> io::Result<Arc<Self>> {
         let socket = Arc::new(UdpSocket::bind(addr).await?);
-        Ok(Arc::new(UdpServer {
-            socket,
-            sessions: Mutex::new(HashMap::new()),
-            tap,
-        }))
+        Ok(Arc::new(UdpServer { socket, registry, tap }))
     }
 
     pub fn local_addr(&self) -> SocketAddr {
         self.socket.local_addr().expect("bound socket has a local addr")
     }
 
-    /// Demux loop: handshake new peers, decode frames from known peers. Runs
-    /// until the socket errors fatally. No lock is held across an `.await`.
+    /// Demux loop: decode frames from admitted peers; handshake unknown peers
+    /// against the registry. No lock is held across an `.await`.
     pub async fn run(self: Arc<Self>) {
         let mut buf = vec![0u8; 64 * 1024];
         loop {
@@ -126,40 +85,39 @@ impl UdpServer {
             };
             let data = &buf[..n];
 
-            let known = self.sessions.lock().await.contains_key(&peer);
-            if !known && n == 32 {
-                // Dev handshake: client's X25519 pubkey.
-                let mut client_pub = [0u8; 32];
-                client_pub.copy_from_slice(data);
-                let (server_sk, server_pk) = gen_keypair();
-                let key = x25519_shared(&server_sk, &client_pub);
-                let nonce = gen_nonce();
-                self.sessions
-                    .lock()
-                    .await
-                    .insert(peer, MatchSession { crypto: CryptoCtx { key, nonce } });
-                let mut reply = server_pk.to_vec();
-                reply.extend_from_slice(&nonce);
-                if let Err(e) = self.socket.send_to(&reply, peer).await {
-                    warn!("arena-udp: handshake reply to {peer} failed: {e}");
+            if self.registry.is_active(&peer) {
+                match self.registry.decode(&peer, data) {
+                    Some(op) => {
+                        info!("arena-udp: {peer} → GameMessageId {op}");
+                        if let Some(tap) = &self.tap {
+                            let _ = tap.send((peer, op));
+                        }
+                    }
+                    None => debug!("arena-udp: {peer} frame with no decodable opcode ({n} B)"),
                 }
-                info!("arena-udp: handshake completed with {peer}");
                 continue;
             }
 
-            // Known peer (or non-handshake first packet): decode.
-            let opcode = {
-                let sessions = self.sessions.lock().await;
-                sessions.get(&peer).and_then(|s| s.decode_opcode(data))
-            };
-            match opcode {
-                Some(op) => {
-                    info!("arena-udp: {peer} → GameMessageId {op}");
-                    if let Some(tap) = &self.tap {
-                        let _ = tap.send((peer, op));
+            // Unknown peer ⇒ dev handshake: pubkey(32) ‖ playerSessionId(UTF-8).
+            if n >= 33 {
+                let mut client_pub = [0u8; 32];
+                client_pub.copy_from_slice(&data[..32]);
+                let Ok(psid) = std::str::from_utf8(&data[32..]) else {
+                    debug!("arena-udp: {peer} handshake with non-UTF-8 playerSessionId");
+                    continue;
+                };
+                match self.registry.admit(peer, psid, &client_pub) {
+                    Some((server_pk, nonce)) => {
+                        let mut reply = server_pk.to_vec();
+                        reply.extend_from_slice(&nonce);
+                        if let Err(e) = self.socket.send_to(&reply, peer).await {
+                            warn!("arena-udp: handshake reply to {peer} failed: {e}");
+                        }
                     }
+                    None => debug!("arena-udp: {peer} handshake for unknown psess '{psid}' — ignored"),
                 }
-                None => debug!("arena-udp: {peer} frame with no decodable opcode ({n} B)"),
+            } else {
+                debug!("arena-udp: {peer} {n}B from unknown peer (not a handshake)");
             }
         }
     }
@@ -168,48 +126,75 @@ impl UdpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arena::match_registry::{MatchRegistry, gen_keypair};
+    use arena_proto::x25519_shared;
     use tokio::time::{Duration, timeout};
+    use uuid::Uuid;
 
-    /// Pure (no socket): two parties ECDH to the same key, client encrypts a
-    /// frame, server decodes the opcode. Proves the crypto+ENet+opcode
-    /// integration deterministically.
+    /// allocate → admit → decode, no sockets. Proves the matchmaker→UDP linkage
+    /// + ECDH agreement + opcode decode in one path.
     #[test]
-    fn ecdh_then_decode_opcode() {
-        let (server_sk, server_pk) = gen_keypair();
+    fn allocate_admit_decode() {
+        let reg = MatchRegistry::new(2);
+        let psid = "psess-test-1".to_string();
+        assert!(reg.allocate(psid.clone(), Uuid::nil()));
+
         let (client_sk, client_pk) = gen_keypair();
-        let server_key = x25519_shared(&server_sk, &client_pk);
-        let client_key = x25519_shared(&client_sk, &server_pk);
-        assert_eq!(server_key, client_key, "ECDH must agree");
+        let peer: SocketAddr = "127.0.0.1:5000".parse().unwrap();
+        let (server_pk, nonce) = reg.admit(peer, &psid, &client_pk).expect("admit");
 
-        let nonce = [9u8; 8];
-        let client_crypto = CryptoCtx { key: client_key, nonce };
-        // marker 0xBE (s2c), opcode 50 (ReceiveDamage), + body.
-        let frame = build_send_reliable(2, 7, &client_crypto, &[0xBE, 50, 0x01, 0x02, 0x03]);
-
-        let server = MatchSession {
-            crypto: CryptoCtx { key: server_key, nonce },
+        let crypto = CryptoCtx {
+            key: x25519_shared(&client_sk, &server_pk),
+            nonce,
         };
-        assert_eq!(server.decode_opcode(&frame), Some(50));
+        let frame = build_send_reliable(0, 1, &crypto, &[0xBE, 50, 0x01, 0x02]);
+        assert_eq!(reg.decode(&peer, &frame), Some(50));
+        assert!(reg.is_active(&peer));
     }
 
-    /// Live loopback: real UDP sockets, full handshake, then an encrypted frame
-    /// the server decodes (observed via the tap).
+    /// The Semaphore cap rejects over-capacity allocation and frees on removal.
+    #[test]
+    fn cap_enforced_and_released() {
+        let reg = MatchRegistry::new(1);
+        assert!(reg.allocate("a".into(), Uuid::nil()));
+        assert!(!reg.allocate("b".into(), Uuid::nil()), "second exceeds cap");
+
+        let peer: SocketAddr = "127.0.0.1:6000".parse().unwrap();
+        reg.admit(peer, "a", &[1u8; 32]).expect("admit a");
+        assert_eq!(reg.available_permits(), 0);
+
+        reg.remove(&peer); // disconnect frees the slot
+        assert_eq!(reg.available_permits(), 1);
+        assert!(reg.allocate("c".into(), Uuid::nil()), "slot freed");
+    }
+
+    /// Live loopback: real sockets, full allocate→handshake→encrypted frame the
+    /// server decodes (observed via the tap).
     #[tokio::test]
-    async fn loopback_handshake_and_decode() {
+    async fn loopback_admit_and_decode() {
+        let reg = MatchRegistry::new(4);
+        let psid = "psess-loop-1".to_string();
+        assert!(reg.allocate(psid.clone(), Uuid::nil())); // simulate the matchmaker
+
         let (tap_tx, mut tap_rx) = tokio::sync::mpsc::unbounded_channel();
-        let server = UdpServer::bind_with_tap("127.0.0.1:0", Some(tap_tx))
+        let server = UdpServer::bind_with_tap("127.0.0.1:0", reg.clone(), Some(tap_tx))
             .await
             .unwrap();
         let addr = server.local_addr();
-        let srv = server.clone();
-        tokio::spawn(async move { srv.run().await });
+        tokio::spawn({
+            let s = server.clone();
+            async move { s.run().await }
+        });
 
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         client.connect(addr).await.unwrap();
 
-        // Handshake: send client pubkey, receive server pubkey + nonce.
+        // Handshake: client pubkey ‖ playerSessionId.
         let (client_sk, client_pk) = gen_keypair();
-        client.send(&client_pk).await.unwrap();
+        let mut hs = client_pk.to_vec();
+        hs.extend_from_slice(psid.as_bytes());
+        client.send(&hs).await.unwrap();
+
         let mut buf = [0u8; 64];
         let n = timeout(Duration::from_secs(2), client.recv(&mut buf))
             .await
@@ -225,14 +210,39 @@ mod tests {
             nonce,
         };
 
-        // Send an encrypted SEND_RELIABLE (marker 0xBE, opcode 50).
-        let frame = build_send_reliable(0, 1, &crypto, &[0xBE, 50, 0xDE, 0xAD]);
-        client.send(&frame).await.unwrap();
+        client
+            .send(&build_send_reliable(0, 1, &crypto, &[0xBE, 50, 0xDE, 0xAD]))
+            .await
+            .unwrap();
 
         let (_, op) = timeout(Duration::from_secs(2), tap_rx.recv())
             .await
             .expect("decode tap timed out")
             .unwrap();
-        assert_eq!(op, 50, "server decoded the frame's opcode");
+        assert_eq!(op, 50);
+    }
+
+    /// A handshake for a playerSessionId the matchmaker never allocated gets no
+    /// reply (rejected).
+    #[tokio::test]
+    async fn unknown_psess_rejected() {
+        let reg = MatchRegistry::new(4);
+        let server = UdpServer::bind("127.0.0.1:0", reg.clone()).await.unwrap();
+        let addr = server.local_addr();
+        tokio::spawn({
+            let s = server.clone();
+            async move { s.run().await }
+        });
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client.connect(addr).await.unwrap();
+        let (_, client_pk) = gen_keypair();
+        let mut hs = client_pk.to_vec();
+        hs.extend_from_slice(b"psess-never-allocated");
+        client.send(&hs).await.unwrap();
+
+        let mut buf = [0u8; 64];
+        let r = timeout(Duration::from_millis(400), client.recv(&mut buf)).await;
+        assert!(r.is_err(), "server must not reply to an unallocated psess");
     }
 }

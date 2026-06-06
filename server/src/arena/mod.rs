@@ -1,6 +1,7 @@
 pub mod avatar;
 pub mod config;
 pub mod leaderboards;
+pub mod match_registry;
 pub mod matchmaker;
 pub mod matchmaking;
 pub mod udp;
