@@ -9,3 +9,6 @@ build-app/keys.keystore
 build-app/*.apk.idsig
 build-app/tmpfrida
 build-app/*.apk
+
+# arena deploy secrets (docker-compose.arena.yml --env-file)
+deploy/arena.env

@@ -1,0 +1,36 @@
+[package]
+name = "arena_proto"
+version = "0.1.0"
+edition = "2024"
+description = "Pure byte-layer for the Blades arena UDP protocol (ENet walk, ChaCha20 stream, X25519, fragment reassembly, opcodes). Ported from scripts/arena-decrypt.py + emulator/internal/proto/*.go in the capture repo."
+
+[dependencies]
+# Bare ChaCha20 stream, 8-byte (Bernstein) nonce, counter starts at 0 — exactly
+# what libsodium crypto_stream_chacha20_xor does. We use the 64-bit-nonce
+# `ChaCha20Legacy` type (NOT the IETF 96-bit `ChaCha20`).
+chacha20 = "0.9"
+# X25519 ECDH; the shared secret IS the 32-byte ChaCha20 key (no KDF).
+# `static_secrets` is non-default in 2.x and gates StaticSecret.
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+
+[dev-dependencies]
+hex = "0.4"
+
+# Offline replay/parity harness against a capture-DB snapshot. Gated behind a
+# feature so `cargo test -p arena_proto` (the pure byte-layer) stays fast and
+# doesn't compile SQLite. Build with: cargo run -p arena_proto --features replay --bin replay-arena
+[features]
+replay = ["dep:rusqlite", "dep:base64"]
+
+[dependencies.rusqlite]
+version = "0.32"
+features = ["bundled"]
+optional = true
+
+[dependencies.base64]
+version = "0.22"
+optional = true
+
+[[bin]]
+name = "replay-arena"
+required-features = ["replay"]

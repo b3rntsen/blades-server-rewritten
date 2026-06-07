@@ -23,4 +23,5 @@ futures-util = "0.3.32"
 bb8 = "0.9.1"
 actix-ws = { version = "0.4.0", features = ["serde", "serde-json"] }
 tokio-stream = "0.1.18"
-tokio-enet = "0.1.0"
+arena_proto = { path = "../arena_proto" }
+rusty_enet = "0.4.0"

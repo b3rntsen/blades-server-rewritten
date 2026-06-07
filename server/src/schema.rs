@@ -12,15 +12,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    matchmaking (id) {
-        id -> Uuid,
-        other_id -> Nullable<Uuid>,
-        match_info -> Nullable<Jsonb>,
-        ack_info -> Nullable<Jsonb>,
-    }
-}
-
-diesel::table! {
     quests (id, character_id) {
         id -> Uuid,
         character_id -> Uuid,
@@ -42,4 +33,4 @@ diesel::table! {
 diesel::joinable!(characters -> users (user_id));
 diesel::joinable!(quests -> characters (character_id));
 
-diesel::allow_tables_to_appear_in_same_query!(characters, matchmaking, quests, users,);
+diesel::allow_tables_to_appear_in_same_query!(characters, quests, users,);

@@ -1,6 +1,5 @@
 use std::{
     fs::File,
-    net::SocketAddr,
     path::PathBuf,
     sync::{Arc, atomic::Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -14,15 +13,15 @@ use actix_web::{
     main,
     web::Data,
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use bb8::Pool;
 use blades_lib::game_data::GameData;
 use clap::{Parser, Subcommand};
 use diesel_async::{AsyncPgConnection, pooled_connection::AsyncDieselConnectionManager};
 use log::debug;
-use tokio::select;
 
 mod abyss;
+mod admin;
 mod analytics;
 mod analytics_events;
 mod announcements;
@@ -53,10 +52,7 @@ mod wallet;
 pub use error::BladeApiError;
 use uuid::Uuid;
 
-use crate::{
-    arena::enet_channel::run_enet_channel,
-    session::{SessionLookedUpMaybe, SessionStore},
-};
+use crate::session::{SessionLookedUpMaybe, SessionStore};
 
 #[derive(Parser)]
 #[command(name = "blade")]
@@ -79,10 +75,6 @@ enum Commands {
         port: u16,
         #[arg(long)]
         static_data: PathBuf,
-        #[arg(long)]
-        enet_listen_addr: SocketAddr,
-        #[arg(long)]
-        enet_public_addr: SocketAddr,
     },
 }
 
@@ -93,9 +85,11 @@ pub struct ServerGlobal {
     pub session_store: SessionStore,
     pub static_data_path: PathBuf,
     pub game_data: GameData,
-    pub enet_listen_addr: SocketAddr,
-    //TODO: check the protocol handle IPv6 too.
-    pub enet_public_addr: SocketAddr,
+    pub arena: Arc<arena::matchmaker::ArenaGlobal>,
+    /// Static dev token for the `/api/dev/v1/import-character` endpoint, read
+    /// from `ARENA_IMPORT_TOKEN` at startup. `None` (unset) disables the
+    /// endpoint entirely. Never a game session — this is for our own tooling.
+    pub arena_import_token: Option<String>,
 }
 
 #[main]
@@ -111,8 +105,6 @@ async fn main() -> Result<()> {
             host,
             port,
             static_data,
-            enet_listen_addr,
-            enet_public_addr,
         } => {
             let db_pool = Pool::builder()
                 .build(AsyncDieselConnectionManager::<AsyncPgConnection>::new(
@@ -127,20 +119,31 @@ async fn main() -> Result<()> {
                 serde_json::from_reader(&mut game_data_file).unwrap()
             };
 
+            let arena =
+                arena::matchmaker::ArenaGlobal::start(arena::config::ArenaConfig::from_env());
+
+            let arena_import_token = std::env::var("ARENA_IMPORT_TOKEN").ok();
+
             let server_global = Arc::new(ServerGlobal {
                 db_pool,
                 session_store: SessionStore::new(Duration::from_hours(24)),
                 static_data_path: static_data.clone(),
                 game_data,
-                enet_listen_addr: enet_listen_addr.clone(),
-                enet_public_addr: enet_public_addr.clone(),
+                arena,
+                arena_import_token,
+            });
+
+            // Live arena ENet host (real-client path) — needs the shared Arc.
+            let enet_globals = server_global.clone();
+            actix_web::rt::spawn(async move {
+                if let Err(e) = arena::enet_host::run_enet_host(enet_globals).await {
+                    log::error!("arena-enet host exited: {e}");
+                }
             });
 
             let static_data_clone = static_data.clone();
 
-            let enet_future = tokio::spawn(run_enet_channel(server_global.clone()));
-
-            let srv_future = HttpServer::new(move || {
+            HttpServer::new(move || {
                 App::new()
                     .app_data(Data::new(server_global.clone()))
                     .wrap_fn(|mut req, srv| {
@@ -231,7 +234,9 @@ async fn main() -> Result<()> {
                     .service(arena::leaderboards::get_leaderboard)
                     .service(arena::avatar::set_avatar)
                     .service(arena::matchmaking::matchmaking_ws)
-                    .service(arena::matchmaking::create_matchmaking_session)
+                    .service(arena::matchmaker::create_match)
+                    .service(arena::matchmaker::cancel_match)
+                    .service(admin::import_character)
                     .service(
                         Files::new(
                             "/bundles.blades.bgs.services/",
@@ -242,21 +247,11 @@ async fn main() -> Result<()> {
             })
             .bind((host.as_str(), *port))
             .context("binding server")?
-            .run();
-
-            let srv_handle = srv_future.handle();
-            select! {
-                srv_result = srv_future => {
-                    //TODO: politely close the enet thread
-                    srv_result.context("server error")?;
-                    bail!("actix-web server exited without error?");
-                }
-                enet_result = enet_future => {
-                    srv_handle.stop(true).await;
-                    enet_result.context("enet error")??;
-                    bail!("enet exited without error?");
-                }
-            }
+            .run()
+            .await
+            .context("running the server")?;
         }
     }
+
+    Ok(())
 }

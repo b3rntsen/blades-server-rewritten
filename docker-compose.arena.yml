@@ -1,0 +1,109 @@
+# Newblades arena game server + its Postgres, sized for a SMALL, shared box:
+# both are strictly memory-capped (mem_limit) so they are cgroup-isolated and
+# CANNOT starve a co-located prod stack (e.g. twitter-bookmarks). 2 GB swap on
+# the host is the backstop. NOT auto-deployed — see deploy/README-arena-deploy.md.
+#
+# Build the image OFF the 1.9 GB box (it OOMs a release build); this box only runs it.
+services:
+  arena-db:
+    image: postgres:16-alpine
+    container_name: arena-db
+    restart: always
+    environment:
+      POSTGRES_USER: blades
+      POSTGRES_PASSWORD: ${ARENA_DB_PASSWORD:?set ARENA_DB_PASSWORD in arena.env}
+      POSTGRES_DB: blades
+    # Tuned tiny so it fits the 256m cap on a constrained box.
+    command: >
+      postgres
+      -c shared_buffers=32MB
+      -c max_connections=20
+      -c effective_cache_size=96MB
+      -c work_mem=2MB
+      -c maintenance_work_mem=16MB
+      -c max_wal_size=256MB
+    volumes:
+      - arena-db-data:/var/lib/postgresql/data
+    mem_limit: 256m
+    networks: [arena_net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blades -d blades"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: apply the diesel migrations' up.sql on a FRESH db (idempotent — it
+  # skips if the `users` table already exists), so the server finds its tables.
+  arena-migrate:
+    image: postgres:16-alpine
+    depends_on:
+      arena-db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${ARENA_DB_PASSWORD:?set ARENA_DB_PASSWORD in arena.env}
+    volumes:
+      - ./migrations:/migrations:ro
+    networks: [arena_net]
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        if psql -h arena-db -U blades -d blades -tAc "SELECT to_regclass('public.users')" | grep -q users; then
+          echo "[arena-migrate] schema already present; nothing to do"; exit 0
+        fi
+        for d in $$(ls -d /migrations/*/ | sort); do
+          if [ -f "$$d/up.sql" ]; then
+            echo "[arena-migrate] applying $$d"
+            psql -h arena-db -U blades -d blades -v ON_ERROR_STOP=1 -f "$$d/up.sql"
+          fi
+        done
+        echo "[arena-migrate] done"
+    restart: "no"
+
+  arena-server:
+    image: blades-arena-server
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: arena-server
+    restart: always
+    depends_on:
+      arena-migrate:
+        condition: service_completed_successfully
+    environment:
+      ARENA_IMPORT_TOKEN: ${ARENA_IMPORT_TOKEN:?set ARENA_IMPORT_TOKEN in arena.env}
+      ARENA_ADVERTISE_HOST: ${ARENA_ADVERTISE_HOST:-127.0.0.1}
+      ARENA_UDP_PORT: ${ARENA_UDP_PORT:-7777}
+      ARENA_MAX_MATCHES: ${ARENA_MAX_MATCHES:-2}
+      RUST_LOG: ${RUST_LOG:-info}
+    command:
+      - run
+      - --connection-string
+      - postgres://blades:${ARENA_DB_PASSWORD}@arena-db:5432/blades
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --static-data
+      - /data/static
+    volumes:
+      - ./deploy/static:/data/static:ro
+    ports:
+      # HTTP REST — bound to localhost; the newblades-web container reaches it
+      # over edge_net by service name (http://arena-server:8080), not this port.
+      - "127.0.0.1:8087:8080"
+      # Arena UDP/ENet — clients dial this. Firewall it to just you for now
+      # (security-group / iptables), since the handshake is not yet authenticated.
+      - "${ARENA_UDP_PORT:-7777}:7777/udp"
+    mem_limit: 256m
+    networks: [arena_net, edge_net]
+
+volumes:
+  arena-db-data:
+
+networks:
+  arena_net:
+  # Shared with newblades-web so it can POST imports to http://arena-server:8080.
+  edge_net:
+    external: true
