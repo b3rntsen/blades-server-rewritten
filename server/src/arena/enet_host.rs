@@ -140,7 +140,8 @@ enum Act {
 }
 
 /// Route a received SEND payload: active peer → decrypt + FSM + relay; unknown
-/// peer → the app handshake (pubkey ‖ playerSessionId → admit).
+/// peer → the op-0x38 connect handshake (parse the client pubkey →
+/// `admit_connection` → reply our pubkey + nonce).
 fn handle_packet(
     host: &mut Host<UdpSocket>,
     registry: &MatchRegistry,
@@ -166,26 +167,43 @@ fn handle_packet(
         return;
     }
 
-    // Unknown peer ⇒ the app handshake: client pubkey(32) ‖ playerSessionId.
-    if data.len() >= 33 {
+    // Unknown peer ⇒ the retail connect handshake (op 0x38, PLAINTEXT; spec §4.1):
+    //   BE 38 | conn_id(6) | 00 00 00 00 | 01 20 | client_pubkey(32) [| zero-pad]
+    // rusty_enet has reassembled the (fragmented, ~40 KB-padded) message; we read
+    // only the leading fields. Bind the connection (FIFO — no psid on the wire) +
+    // reply with our pubkey and the session nonce in the same op-0x38 shape;
+    // thereafter the connection's traffic is ChaCha20 (the shared ECDH key + nonce).
+    const MARKER: u8 = 0xBE;
+    const OP_KEYEXCHANGE: u8 = 0x38;
+    if data.len() >= 46
+        && data[0] == MARKER
+        && data[1] == OP_KEYEXCHANGE
+        && data[12] == 0x01
+        && data[13] == 0x20
+    {
+        let conn_id = &data[2..8]; // 6-byte per-connection id, echoed back
         let mut client_pub = [0u8; 32];
-        client_pub.copy_from_slice(&data[..32]);
-        match std::str::from_utf8(&data[32..]) {
-            Ok(psid) => match registry.admit(addr, psid, &client_pub) {
-                Some((server_pk, nonce)) => {
-                    let mut reply = server_pk.to_vec();
-                    reply.extend_from_slice(&nonce);
-                    send_to(host, peer_at, &addr, &reply);
-                    info!("arena-enet: {addr} admitted (psess '{psid}')");
-                }
-                None => debug!("arena-enet: {addr} handshake for unknown/full psess '{psid}'"),
-            },
-            Err(_) => debug!("arena-enet: {addr} handshake with non-UTF-8 playerSessionId"),
+        client_pub.copy_from_slice(&data[14..46]);
+        match registry.admit_connection(addr, &client_pub) {
+            Some((server_pk, nonce)) => {
+                let mut reply = Vec::with_capacity(55);
+                reply.extend_from_slice(&[MARKER, OP_KEYEXCHANGE]);
+                reply.extend_from_slice(conn_id);
+                reply.extend_from_slice(&[0, 0, 0, 1]); // s2c direction (c2s sends 0)
+                reply.extend_from_slice(&[0x01, 0x20]); // pubkey field: tag 0x01, len 32
+                reply.extend_from_slice(&server_pk);
+                reply.push(0x08); // nonce field: len 8
+                reply.extend_from_slice(&nonce);
+                send_to(host, peer_at, &addr, &reply);
+                info!("arena-enet: {addr} admitted (op-0x38 key exchange)");
+            }
+            None => debug!("arena-enet: {addr} op-0x38 handshake but no match has a free slot"),
         }
     } else {
         debug!(
-            "arena-enet: {addr} {}B from an unknown peer (not a handshake)",
-            data.len()
+            "arena-enet: {addr} {}B from an unknown peer (not an op-0x38 handshake; b0={:#04x})",
+            data.len(),
+            data.first().copied().unwrap_or(0)
         );
     }
 }
@@ -279,7 +297,7 @@ mod tests {
         let registry = MatchRegistry::new(4);
         let gsid = Uuid::new_v4();
         let (psid_a, psid_b) = ("psess-a".to_string(), "psess-b".to_string());
-        assert!(registry.allocate(&[psid_a.clone(), psid_b.clone()], gsid)); // matchmaker pairing
+        assert!(registry.allocate(&[psid_a, psid_b], gsid)); // matchmaker pairing (FIFO-bound below)
 
         let server_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         let server_addr = server_sock.local_addr().unwrap();
@@ -312,32 +330,34 @@ mod tests {
         // 1. Both ENet sessions connect.
         pump_until!(a.connected && b.connected, "both clients connect");
 
-        // 2. App handshake (pubkey ‖ psid) → server pubkey ‖ nonce, per client.
+        // 2. op-0x38 connect handshake. c2s: BE 38 | conn_id(6) | 00000000 | 01 20 |
+        //    client_pubkey(32). s2c reply also carries 08 | nonce(8) after the pubkey.
+        //    No psid in the handshake — admit_connection FIFO-binds to the open match.
+        fn hs_c2s(pk: &[u8; 32]) -> Vec<u8> {
+            let mut m = vec![0xBE, 0x38, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0, 0, 0, 0, 0x01, 0x20];
+            m.extend_from_slice(pk);
+            m
+        }
         let (sk_a, pk_a) = gen_keypair();
-        let mut hs_a = pk_a.to_vec();
-        hs_a.extend_from_slice(psid_a.as_bytes());
-        a.send_plain(&hs_a);
         let (sk_b, pk_b) = gen_keypair();
-        let mut hs_b = pk_b.to_vec();
-        hs_b.extend_from_slice(psid_b.as_bytes());
-        b.send_plain(&hs_b);
+        a.send_plain(&hs_c2s(&pk_a));
+        b.send_plain(&hs_c2s(&pk_b));
 
         pump_until!(!a.inbox.is_empty() && !b.inbox.is_empty(), "both get handshake reply");
-        assert_eq!(a.inbox[0].len(), 40, "reply = server pubkey(32) + nonce(8)");
-        let key_a = {
+        assert_eq!(a.inbox[0].len(), 55, "reply = BE 38 + conn(6) + dir(4) + 01 20 + spk(32) + 08 + nonce(8)");
+        assert_eq!(&a.inbox[0][0..2], &[0xBE, 0x38], "reply is op-0x38");
+        // s2c layout: [0..2]=BE 38, [2..8]=conn, [8..12]=dir, [12..14]=01 20,
+        // [14..46]=server pubkey, [46]=08, [47..55]=nonce.
+        let parse = |reply: &[u8]| -> ([u8; 32], [u8; 8]) {
             let (mut spk, mut n) = ([0u8; 32], [0u8; 8]);
-            spk.copy_from_slice(&a.inbox[0][..32]);
-            n.copy_from_slice(&a.inbox[0][32..40]);
-            a.crypto = Some(CryptoCtx { key: x25519_shared(&sk_a, &spk), nonce: n });
-            ()
+            spk.copy_from_slice(&reply[14..46]);
+            n.copy_from_slice(&reply[47..55]);
+            (spk, n)
         };
-        let _ = key_a;
-        {
-            let (mut spk, mut n) = ([0u8; 32], [0u8; 8]);
-            spk.copy_from_slice(&b.inbox[0][..32]);
-            n.copy_from_slice(&b.inbox[0][32..40]);
-            b.crypto = Some(CryptoCtx { key: x25519_shared(&sk_b, &spk), nonce: n });
-        }
+        let (spk_a, n_a) = parse(&a.inbox[0]);
+        a.crypto = Some(CryptoCtx { key: x25519_shared(&sk_a, &spk_a), nonce: n_a });
+        let (spk_b, n_b) = parse(&b.inbox[0]);
+        b.crypto = Some(CryptoCtx { key: x25519_shared(&sk_b, &spk_b), nonce: n_b });
         assert!(registry.is_active(&a.addr()) && registry.is_active(&b.addr()));
         a.inbox.clear();
         b.inbox.clear();

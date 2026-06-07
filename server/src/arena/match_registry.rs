@@ -42,8 +42,11 @@ struct PlayerConn {
 /// A live match: up to `capacity` players sharing one authoritative instance and
 /// one capacity permit (released when the match is dropped — i.e. last player out).
 struct Match {
-    #[allow(dead_code)]
     game_session_id: Uuid,
+    /// Allocation order — `admit_connection` (the real op-0x38 handshake carries
+    /// no playerSessionId on the wire) FIFO-binds a connection to the oldest
+    /// match with a free slot.
+    order: u64,
     capacity: usize,
     players: Vec<PlayerConn>,
     instance: MatchInstance,
@@ -55,6 +58,7 @@ pub struct MatchRegistry {
     pending: Mutex<HashMap<String, Uuid>>, // player_session_id -> game_session_id
     matches: Mutex<HashMap<Uuid, Match>>,  // game_session_id -> Match
     addr_index: Mutex<HashMap<SocketAddr, Uuid>>, // connected peer -> its match
+    next_order: std::sync::atomic::AtomicU64, // monotonic match-allocation order
     pub max_matches: usize,
 }
 
@@ -65,6 +69,7 @@ impl MatchRegistry {
             pending: Mutex::new(HashMap::new()),
             matches: Mutex::new(HashMap::new()),
             addr_index: Mutex::new(HashMap::new()),
+            next_order: std::sync::atomic::AtomicU64::new(0),
             max_matches,
         })
     }
@@ -84,10 +89,14 @@ impl MatchRegistry {
             }
         };
         let capacity = player_session_ids.len().max(1);
+        let order = self
+            .next_order
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.matches.lock().unwrap().insert(
             game_session_id,
             Match {
                 game_session_id,
+                order,
                 capacity,
                 players: Vec::with_capacity(capacity),
                 instance: MatchInstance::new(capacity),
@@ -132,6 +141,46 @@ impl MatchRegistry {
         self.addr_index.lock().unwrap().insert(peer, gsid);
         info!(
             "match registry: admitted {peer} (psess {player_session_id}) into match {gsid} [{}/{}]",
+            m.players.len(),
+            m.capacity
+        );
+        Some((server_pk, nonce))
+    }
+
+    /// Live-host (real op-0x38 handshake) path. The retail connect handshake
+    /// carries only the client's X25519 pubkey — the `playerSessionId` is NOT on
+    /// the wire (it comes later, encrypted; spec §4.1/§9). So bind the connection
+    /// to the **oldest reserved match with a free slot** (FIFO), complete ECDH, and
+    /// return `(server_pubkey, nonce)` for the reply. `None` ⇒ no free slot.
+    ///
+    /// v1 limitation: with several concurrent pending matches this FIFO bind can
+    /// misassign a connection (the disambiguating psid isn't on the wire yet). For
+    /// the low-concurrency first release it's exact; precise binding (from the
+    /// first decrypted PlayerInfo, or a per-match UDP port) is the refinement.
+    pub fn admit_connection(
+        &self,
+        peer: SocketAddr,
+        client_pub: &[u8; 32],
+    ) -> Option<([u8; 32], [u8; 8])> {
+        let mut matches = self.matches.lock().unwrap();
+        let gsid = matches
+            .values()
+            .filter(|m| m.players.len() < m.capacity)
+            .min_by_key(|m| m.order)
+            .map(|m| m.game_session_id)?;
+        let m = matches.get_mut(&gsid).expect("just selected");
+
+        let (server_sk, server_pk) = gen_keypair();
+        let key = x25519_shared(&server_sk, client_pub);
+        let nonce = gen_nonce();
+        m.players.push(PlayerConn {
+            addr: peer,
+            player_session_id: String::new(), // bound later if/when the psid arrives
+            crypto: CryptoCtx { key, nonce },
+        });
+        self.addr_index.lock().unwrap().insert(peer, gsid);
+        info!(
+            "match registry: connection {peer} bound to match {gsid} [{}/{}]",
             m.players.len(),
             m.capacity
         );
