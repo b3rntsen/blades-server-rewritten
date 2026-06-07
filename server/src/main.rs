@@ -90,6 +90,11 @@ pub struct ServerGlobal {
     /// from `ARENA_IMPORT_TOKEN` at startup. `None` (unset) disables the
     /// endpoint entirely. Never a game session — this is for our own tooling.
     pub arena_import_token: Option<String>,
+    /// Dev override: when set (env `ARENA_DEV_LOGIN_USER_ID` = a `users.id` UUID),
+    /// EVERY anonymous login resolves to this user, so a freshly-installed client
+    /// lands on a Transfer'd character instead of a new empty account (there is no
+    /// Bethesda/Google identity to map to). Unset in normal operation.
+    pub dev_login_user_id: Option<uuid::Uuid>,
 }
 
 #[main]
@@ -123,6 +128,10 @@ async fn main() -> Result<()> {
                 arena::matchmaker::ArenaGlobal::start(arena::config::ArenaConfig::from_env());
 
             let arena_import_token = std::env::var("ARENA_IMPORT_TOKEN").ok();
+            // Dev override: pin every anon login to one user (a Transfer'd character).
+            let dev_login_user_id = std::env::var("ARENA_DEV_LOGIN_USER_ID")
+                .ok()
+                .and_then(|s| uuid::Uuid::parse_str(s.trim()).ok());
 
             let server_global = Arc::new(ServerGlobal {
                 db_pool,
@@ -131,6 +140,7 @@ async fn main() -> Result<()> {
                 game_data,
                 arena,
                 arena_import_token,
+                dev_login_user_id,
             });
 
             // Live arena ENet host (real-client path) — needs the shared Arc.
