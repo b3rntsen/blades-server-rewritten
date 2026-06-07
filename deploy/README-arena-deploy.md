@@ -1,65 +1,67 @@
 # Deploying the newblades arena server
 
-One-command-away deploy of the playable arena server (#NB-4) + its Postgres.
-**Held** intentionally: the current prod box is 1.9 GB shared with another prod
-stack — deploy here only with the memory caps below, or after a RAM upgrade.
+Standardised deploy / start / stop via **`deploy/arena.sh`** (a thin wrapper over
+`docker-compose.arena.yml`). The stack: `arena-server` (the Rust game server —
+blades.bgs.services REST + matchmaking + the live `rusty_enet` UDP arena host),
+`arena-db` (tuned Postgres), `arena-migrate` (one-shot, idempotent schema apply).
+Both app containers are memory-capped (256 MB) and cgroup-isolated so they can't
+starve a co-located stack.
 
-## What you get
-- `arena-server` — the Rust game server: blades.bgs.services REST + matchmaking +
-  the live `rusty_enet` UDP arena host. Memory-capped at 256 MB.
-- `arena-db` — a tuned, 256 MB-capped Postgres (the 4-JSONB character store the
-  `/arena` Transfer import writes to).
-- `arena-migrate` — one-shot, idempotent: applies the diesel migrations on a
-  fresh DB so the server finds its tables.
+## Prerequisites
+- **Build host** with Docker + ≥ 4 GB RAM (a release build OOMs the 1.9 GB prod
+  box — build off-box, ship the image).
+- **The prod box has enough RAM** for the stack (the RAM upgrade) before enabling.
+- `deploy/arena.env` (copy from `deploy/arena.env.example`, fill the secrets).
+- **Game data** (`deploy/static/parsed.json`): the committed file is a STUB
+  (empty) — the server boots and **arena/PvP plays fine** (its path is in-memory),
+  but **quests/dungeons return empty** until you drop a real `parsed.json`
+  (generate with `script/data_parser/main.py <decompiled-unity-data> parsed.json`).
 
-Both app containers are cgroup-isolated (`mem_limit`) → they cannot starve a
-co-located stack; the host's 2 GB swap is the backstop.
+## Lifecycle (deploy/arena.sh)
+```
+# on the BUILD host (Docker + >=4GB):
+deploy/arena.sh build           # build the arena-server image
+deploy/arena.sh push            # docker save | ssh → docker load on the box
 
-## Build the image OFF the box
-A release build is memory-hungry and will OOM the 1.9 GB box. Build it anywhere
-with ≥ ~4 GB RAM, then ship the image:
-
-    # on a build machine (x86_64 target = the prod box):
-    docker build -t blades-arena-server .
-    docker save blades-arena-server | gzip > arena-server.img.gz
-    # ship + load on the box:
-    scp -i ~/.ssh/twitter-bookmarks-key.pem arena-server.img.gz ec2-user@newblades.dethele.com:/tmp/
-    ssh … 'gunzip -c /tmp/arena-server.img.gz | sudo docker load'
-
-(If your build machine is arm64, add `--platform linux/amd64` to `docker build`.)
-
-## Configure + run (on the box)
-    cp deploy/arena.env.example deploy/arena.env   # fill in ARENA_DB_PASSWORD, ARENA_IMPORT_TOKEN
-    sudo docker compose --env-file deploy/arena.env -f docker-compose.arena.yml up -d
-    # arena-migrate runs once; arena-server waits for it, then starts.
-
-Verify:
-    sudo docker compose -f docker-compose.arena.yml ps
-    sudo docker logs arena-server --tail 20      # "arena-enet: live host bound udp/7777"
-    curl -fsS http://127.0.0.1:8087/blades.bgs.services/api/status   # or any REST route
+# on the SERVER box (repo dir; deploy/arena.env present):
+deploy/arena.sh up              # start db → migrate → server (idempotent)
+deploy/arena.sh status          # container state + health
+deploy/arena.sh logs arena-server
+deploy/arena.sh verify          # REST reachability + ps
+deploy/arena.sh restart
+deploy/arena.sh down            # stop (keeps the arena-db-data volume)
+deploy/arena.sh migrate         # re-run the idempotent migration if needed
+```
+(Env overrides: `ARENA_ENV`, `ARENA_BOX`, `ARENA_SSH_KEY`.)
 
 ## Wire the web (makes /arena Transfer work)
-On the newblades-web container set (matching the token above):
-    ARENA_SERVER_URL=http://arena-server:8080      # reachable via edge_net by name
-    ARENA_IMPORT_TOKEN=<same as arena.env>
-…then redeploy web (`scripts/deploy.sh web`). Until then, Transfer returns 503
-("ARENA_IMPORT_TOKEN not set") — the correct not-wired state.
+On the `newblades-web` container set (same token as `arena.env`):
+```
+ARENA_SERVER_URL=http://arena-server:8080     # reachable by name over edge_net
+ARENA_IMPORT_TOKEN=<same as ARENA_IMPORT_TOKEN in arena.env>
+```
+then `scripts/deploy.sh web`. Until then `/arena` Transfer returns 503 (the
+correct not-wired state).
+
+## Enable arena play routing (capture platform — separate repo)
+These are OFF by default. Turn on so a WG client (the com.dethele.newblades APK)
+plays on our server instead of Bethesda — all WG-confined:
+1. **Arena redirect** (HTTPS): set `ARENA_REDIRECT=1` (+ `ARENA_HOST`/`ARENA_PORT`)
+   in the mitmproxy env and restart `blades-mitmproxy` — re-points
+   `blades.bgs.services` auth/game/matchmaking/rms to our server (capture CA reused).
+2. **Region-ping responder** (the latency phase): `deploy.sh scripts && deploy.sh
+   systemd` then `sudo systemctl enable --now blades-arena-ping-responder` —
+   answers the GameLift latency probes on `wg0:80` so "Searching" doesn't stall.
+3. Firewall the arena **UDP** port (`ARENA_UDP_PORT`, default 7777) to the WG
+   subnet until the Ed25519/handshake interop is finalised.
 
 ## Reachability
-- REST is bound to `127.0.0.1:8087` on the host (the web reaches the server over
-  `edge_net`, not this port) — not public.
-- The arena **UDP** port (7777) is what clients dial. The handshake is not yet
-  authenticated (Ed25519 swap = #NB-6), so firewall it to just you (security
-  group / iptables) until then.
-
-## Game data
-`deploy/static/parsed.json` is a STUB (empty tables) — the server boots and the
-arena match path (matchmaking + UDP + FSM) is fully in-memory, so it plays. But
-character/dungeon/quest REST data is empty until a real `parsed.json` is
-generated (`script/data_parser/main.py <decompiled-unity-data> parsed.json`).
-Drop the real file at `deploy/static/parsed.json` and restart arena-server.
+REST is bound to `127.0.0.1:8087` on the host (the web reaches the server over
+`edge_net` by name, not this port). The UDP arena port is what clients dial.
 
 ## Notes
-- `deploy/arena.env` holds secrets — keep it out of git.
-- Data persists in the `arena-db-data` volume across restarts/reboots
-  (`restart: always`). Reinstall = rerun the build+load+up steps above.
+- `deploy/arena.env` holds secrets — gitignored, never commit.
+- Data persists in the `arena-db-data` volume across restarts/reboots.
+- Reinstall = rerun `build` → `push` → `up` (+ the routing enable steps).
+- The arena UDP handshake is the proven op-0x38 format (`docs/arena-protocol-spec.md`
+  §4.1) — confirm the server speaks it before real-client testing.
