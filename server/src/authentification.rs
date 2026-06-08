@@ -16,7 +16,10 @@ use crate::{
 #[serde(rename_all = "camelCase")]
 struct AnonLoginInfo {
     user_id: Option<String>,
-    device_id: String,
+    // The retail client sends `deviceId: null` on a first anon login (no
+    // GPGS/device identity yet, e.g. a fresh emulator). Must be Option or serde
+    // rejects null with a 400 deserialize error before the handler even runs.
+    device_id: Option<String>,
     platform: String,
 }
 
@@ -111,7 +114,9 @@ async fn anon_log_in(
         // create a new user
         let mut new_user = UserAccount::new_random();
         if info.0.platform == "gp" {
-            new_user.gp_deviceids.insert(info.0.device_id);
+            if let Some(did) = info.0.device_id {
+                new_user.gp_deviceids.insert(did);
+            }
         } else {
             return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 3, 3)); //INVALID_REQUEST_DEVICE_ID
         }
