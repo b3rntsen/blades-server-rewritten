@@ -2,7 +2,10 @@ use std::{collections::HashMap, sync::Arc};
 
 use actix_web::{http::StatusCode, post, web};
 use blades_lib::user_data::UserAccount;
-use diesel::{ExpressionMethods, QueryDsl, SelectableHelper, associations::HasTable, insert_into};
+use diesel::{
+    ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper, associations::HasTable,
+    insert_into,
+};
 use diesel_async::RunQueryDsl;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -75,6 +78,59 @@ async fn anon_log_in(
     info: web::Json<AnonLoginInfo>,
 ) -> Result<web::Json<SessionResponse>, BladeApiError> {
     use schema::users::dsl::*;
+
+    // Per-player claim link. Record this device's anon login (so the web claim UI
+    // can list "recent devices"), and if the device has already been claimed
+    // (bound to a user via /api/dev/v1/bind-device), log in as THAT user — their
+    // Transfer'd character. Binding takes precedence over the dev-login override
+    // below: claimed devices get their own character, unclaimed ones still fall
+    // back to dev-login (no regression). device_bindings (migration
+    // 2026-06-08_add_device_bindings) is queried with raw SQL to avoid a
+    // timestamp-typed diesel schema (no chrono feature needed).
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    let _ = diesel::sql_query(
+        "INSERT INTO device_bindings (device_id, platform, last_seen) VALUES ($1, $2, now()) \
+         ON CONFLICT (device_id) DO UPDATE SET last_seen = now(), \
+         platform = COALESCE(EXCLUDED.platform, device_bindings.platform)",
+    )
+    .bind::<diesel::sql_types::Text, _>(info.0.device_id.clone())
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some(info.0.platform.clone()))
+    .execute(&mut conn)
+    .await;
+
+    #[derive(diesel::QueryableByName)]
+    struct BoundUser {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        user_id: Uuid,
+    }
+    let bound: Option<BoundUser> = diesel::sql_query(
+        "SELECT user_id FROM device_bindings WHERE device_id = $1 AND user_id IS NOT NULL",
+    )
+    .bind::<diesel::sql_types::Text, _>(info.0.device_id.clone())
+    .get_result(&mut conn)
+    .await
+    .optional()
+    .unwrap_or(None);
+    if let Some(b) = bound {
+        let result = users
+            .select(UserDBEntry::as_select())
+            .filter(id.eq(b.user_id))
+            .load(&mut conn)
+            .await
+            .unwrap();
+        if let Some(user) = result.get(0) {
+            let session = Arc::new(Session::new(
+                user.id,
+                user.secret_id,
+                app_state.session_store.ttl,
+            ));
+            let session_id = app_state.session_store.store_new_session(session.clone());
+            return Ok(web::Json(SessionResponse {
+                session: SessionResponseInner::from_session(session_id, session.as_ref()),
+            }));
+        }
+        // Bound to a now-missing user — fall through to the normal flow.
+    }
 
     // Dev override (ARENA_DEV_LOGIN_USER_ID): resolve EVERY anon login to one
     // configured user — so a freshly-installed client lands on a Transfer'd

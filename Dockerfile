@@ -11,14 +11,23 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 # Copy the whole workspace (blades_lib + server + arena_proto + Cargo.lock).
 COPY . .
-RUN cargo build --release -p server \
- && strip target/release/server
+# CARGO_PROFILE=debug + CARGO_JOBS=1 lets the small (1.9 GB) prod box build it
+# itself without OOMing (debug skips the memory-hungry LLVM release passes); the
+# default (release, all cores) is for a proper >=4 GB build host. See
+# deploy/README-arena-deploy.md.
+ARG CARGO_PROFILE=release
+ARG CARGO_JOBS=
+RUN PROFILE_FLAG=""; [ "$CARGO_PROFILE" = "release" ] && PROFILE_FLAG="--release"; \
+    JOBS_FLAG="";    [ -n "$CARGO_JOBS" ]            && JOBS_FLAG="-j $CARGO_JOBS"; \
+    cargo build $PROFILE_FLAG $JOBS_FLAG -p server \
+ && cp "target/$CARGO_PROFILE/server" /tmp/blades-server \
+ && strip /tmp/blades-server
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-COPY --from=build /src/target/release/server /usr/local/bin/blades-server
+COPY --from=build /tmp/blades-server /usr/local/bin/blades-server
 # HTTP REST (blades.bgs.services API) + the arena UDP/ENet host.
 EXPOSE 8080
 EXPOSE 7777/udp
