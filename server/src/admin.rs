@@ -227,6 +227,90 @@ pub async fn recent_matches(
     Ok(Json(app_state.arena.recent.recent(limit, q.user_id)))
 }
 
+// ---------------------------------------------------------------------------
+// Per-player claim link: bind a device's anon `deviceId` to a Transfer'd
+// character's user, and list recently-seen devices for the web claim UI. Both
+// dev-token gated (same as import). The device_bindings table + the anon_log_in
+// lookup are in migration 2026-06-08_add_device_bindings / authentification.rs.
+// Raw SQL (sql_query) avoids a timestamp-typed diesel schema.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BindDeviceRequest {
+    pub device_id: String,
+    pub user_id: Uuid,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BindDeviceResponse {
+    pub device_id: String,
+    pub user_id: Uuid,
+}
+
+/// `POST /…/api/dev/v1/bind-device` — bind a device to a user (the per-player
+/// claim link); after this the device's `auth/anon` logs in as that user. Upsert
+/// by device_id, so re-claiming moves the binding.
+#[post("/blades.bgs.services/api/dev/v1/bind-device")]
+pub async fn bind_device(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    body: web::Json<BindDeviceRequest>,
+) -> Result<Json<BindDeviceResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let body = body.into_inner();
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO device_bindings (device_id, user_id, bound_at, last_seen) \
+         VALUES ($1, $2, now(), now()) \
+         ON CONFLICT (device_id) DO UPDATE SET user_id = $2, bound_at = now()",
+    )
+    .bind::<diesel::sql_types::Text, _>(body.device_id.clone())
+    .bind::<diesel::sql_types::Uuid, _>(body.user_id)
+    .execute(&mut conn)
+    .await
+    .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 10))?;
+    Ok(Json(BindDeviceResponse {
+        device_id: body.device_id,
+        user_id: body.user_id,
+    }))
+}
+
+/// One recently-seen device, for the claim UI (most-recent first).
+#[derive(Serialize, diesel::QueryableByName)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentDevice {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub device_id: String,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+    pub user_id: Option<Uuid>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    pub platform: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub age_seconds: i64,
+}
+
+/// `GET /…/api/dev/v1/recent-devices` — list recently-seen devices so a player
+/// can pick the one they just launched and claim it.
+#[get("/blades.bgs.services/api/dev/v1/recent-devices")]
+pub async fn recent_devices(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+) -> Result<Json<Vec<RecentDevice>>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    let rows = diesel::sql_query(
+        "SELECT device_id, user_id, platform, \
+         CAST(EXTRACT(epoch FROM (now() - last_seen)) AS BIGINT) AS age_seconds \
+         FROM device_bindings ORDER BY last_seen DESC LIMIT 50",
+    )
+    .get_results::<RecentDevice>(&mut conn)
+    .await
+    .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 11))?;
+    Ok(Json(rows))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
