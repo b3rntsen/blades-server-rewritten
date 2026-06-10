@@ -51,22 +51,37 @@ pub struct CharacterChallengeSeason {
 pub struct CompleteCharacter {
     pub name: String,
     pub tag_id: String,
-    // equippedAbilities
-    // abilities
+    // Town-RPG progression sub-objects. Not modeled when the server was
+    // arena-only (the in-match loadout flows from the client at
+    // PlayerLoadoutReady), but the full-game menu/town load validates them — a
+    // leveled character with these missing is rejected and the client hangs. We
+    // carry them verbatim from the captured character (serde_json::Value), stored
+    // in the existing `character` JSONB. Omitted when null so a fresh character's
+    // wire is unchanged (it never carried them).
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub equipped_abilities: Value,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub abilities: Value,
     pub version: u64,
     pub level: u16,
     pub experience: u64,
-    // completedQuests
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub completed_quests: Value,
     pub maximum_abyss_level_reached: u16,
 
-    pub current_quest_dungeon: Option<()>, // TODO: figure what is actually stored here
+    // Was Option<()> (always null); widened to Value so an in-progress town
+    // dungeon round-trips. Defaults to null and is always emitted (unchanged wire).
+    #[serde(default)]
+    pub current_quest_dungeon: Value,
     pub last_jobs_reset_time: u64,
     pub inventory_level: u16,
     pub stamina_attribute_points: u32,
     pub magicka_attribute_points: u32,
-    // globalShopOffers
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub global_shop_offers: Value,
     pub challenge_season: CharacterChallengeSeason,
-    // loadoutProfiles
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub loadout_profiles: Value,
     pub last_guild_exchange_request_time: u64,
     pub last_guild_exchange_donation_time: u64,
     pub guild_exchange_donation_count: i64,
@@ -99,7 +114,12 @@ impl Default for CompleteCharacter {
             level: 1,
             experience: 1,
             maximum_abyss_level_reached: 0,
-            current_quest_dungeon: None,
+            current_quest_dungeon: Value::Null,
+            equipped_abilities: Value::Null,
+            abilities: Value::Null,
+            completed_quests: Value::Null,
+            global_shop_offers: Value::Null,
+            loadout_profiles: Value::Null,
             last_jobs_reset_time: 0,
             inventory_level: 0,
             stamina_attribute_points: 0,
