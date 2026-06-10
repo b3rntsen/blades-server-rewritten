@@ -79,6 +79,33 @@ async fn anon_log_in(
 ) -> Result<web::Json<SessionResponse>, BladeApiError> {
     use schema::users::dsl::*;
 
+    // Dev override (ARENA_DEV_LOGIN_USER_ID): resolve EVERY anon login to one
+    // configured user — so a freshly-installed client lands on a Transfer'd
+    // character. There is no Bethesda/Google identity on this server to map a
+    // device to; see ServerGlobal.dev_login_user_id. Unset in normal operation.
+    if let Some(dev_uid) = app_state.dev_login_user_id {
+        let mut conn = app_state.db_pool.get().await.unwrap();
+        let result = users
+            .select(UserDBEntry::as_select())
+            .filter(id.eq(dev_uid))
+            .load(&mut conn)
+            .await
+            .unwrap();
+        let user = match result.get(0) {
+            Some(v) => v,
+            None => return Err(BladeApiError::new(StatusCode::NOT_FOUND, 3, 101)),
+        };
+        let session = Arc::new(Session::new(
+            user.id,
+            user.secret_id,
+            app_state.session_store.ttl,
+        ));
+        let session_id = app_state.session_store.store_new_session(session.clone());
+        return Ok(web::Json(SessionResponse {
+            session: SessionResponseInner::from_session(session_id, session.as_ref()),
+        }));
+    }
+
     if let Some(private_user_id) = info.0.user_id {
         // load pre-existing user
         // http code 404 service 3 error code 101 if not found, apparently
