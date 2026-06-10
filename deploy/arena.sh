@@ -11,6 +11,7 @@
 # Subcommands:
 #   build           docker-build the arena-server image
 #   push            save the image + docker-load it on the box over ssh
+#   sync            rsync source to the box for an in-place `build` (deploy/ kept)
 #   up | start      start the stack (arena-db → arena-migrate → arena-server); idempotent
 #   down | stop     stop + remove containers (the arena-db-data volume is kept)
 #   restart         down then up
@@ -39,13 +40,21 @@ dc() {
   sudo docker compose --env-file "$ENVFILE" -f "$COMPOSE" "$@"
 }
 
-usage() { sed -n '3,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 cmd="${1:-}"
 [ $# -gt 0 ] && shift || true
 case "$cmd" in
   build)        docker build -t "$IMAGE" "$ROOT" ;;
   push)         docker save "$IMAGE" | gzip | ssh -i "$SSH_KEY" "$BOX" 'gunzip | sudo docker load' ;;
+  sync)
+    # rsync the SOURCE to the box's compose dir for an in-place `build` (the box
+    # is not a git repo). Never touches deploy/ — its static data + arena.env stay.
+    rsync -az --exclude='target/' -e "ssh -i $SSH_KEY" \
+      "$ROOT"/Cargo.toml "$ROOT"/Cargo.lock "$ROOT"/Dockerfile "$ROOT"/docker-compose.arena.yml \
+      "$ROOT"/server "$ROOT"/blades_lib "$ROOT"/arena_proto "$ROOT"/migrations \
+      "$BOX:/home/ec2-user/blades-server/" \
+      && echo "synced source → $BOX (deploy/ untouched)" ;;
   up|start)     dc up -d && echo "started — check: $0 status" ;;
   down|stop)    dc down ;;
   restart)      dc down; dc up -d ;;
