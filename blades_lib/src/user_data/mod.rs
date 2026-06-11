@@ -94,8 +94,14 @@ pub struct CompleteCharacter {
     pub highest_arena_reached: u64,
     pub highest_level_arena_reached: u64,
     pub number_pvp_match_played: i64,
-    pub trophy_count_modified: i64,
+    pub trophy_count_modifier: i64,
     pub pvp_season_id: Uuid,
+    // The arena / full-game flow validates the character's PvP-season state. A
+    // transferred char must carry its real season history; the import used to
+    // drop it (the struct had no field for it) -> an incoherent season. Carried
+    // verbatim like the progression sub-objects; omitted when null (fresh char).
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub pvp_season_history: Value,
     pub job_difficulty_cycle_index: i64,
     pub validation_flags: u32,
     pub treasury_level: u32,
@@ -144,8 +150,9 @@ impl Default for CompleteCharacter {
             highest_arena_reached: 1,
             highest_level_arena_reached: 1,
             number_pvp_match_played: 0,
-            trophy_count_modified: 0,
+            trophy_count_modifier: 0,
             pvp_season_id: Uuid::default(),
+            pvp_season_history: Value::Null,
             job_difficulty_cycle_index: 0,
             validation_flags: 1,
             treasury_level: 0,
