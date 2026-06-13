@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use actix_web::{
     HttpRequest,
+    get,
     http::StatusCode,
     post,
     web::{self, Json},
@@ -36,6 +37,7 @@ use uuid::Uuid;
 
 use crate::{
     BladeApiError, ServerGlobal,
+    arena::matchmaker::RecentTicketView,
     json_db::JsonDbWrapper,
     models::{CharacterDbAlone, CharacterDbEntry, UserDBEntry},
     schema::{characters, users},
@@ -197,6 +199,32 @@ pub async fn import_character(
         .await?;
 
     Ok(Json(response))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentMatchesQuery {
+    #[serde(default)]
+    user_id: Option<Uuid>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// `GET /…/api/dev/v1/recent-matches?userId=<uuid>&limit=<n>` — the most recent
+/// matchmaking tickets (newest first), so the web /arena page can confirm a
+/// user's match request registered + show recent arena activity. Dev-token
+/// gated. `userId` only sets the per-row `mine` flag (the list is server-wide);
+/// in-memory only (cleared on arena-server restart) — durable history is #NB-3.
+#[get("/blades.bgs.services/api/dev/v1/recent-matches")]
+pub async fn recent_matches(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    query: web::Query<RecentMatchesQuery>,
+) -> Result<Json<Vec<RecentTicketView>>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let q = query.into_inner();
+    let limit = q.limit.unwrap_or(25).min(100);
+    Ok(Json(app_state.arena.recent.recent(limit, q.user_id)))
 }
 
 #[cfg(test)]

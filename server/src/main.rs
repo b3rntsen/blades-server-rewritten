@@ -247,6 +247,7 @@ async fn main() -> Result<()> {
                     .service(arena::matchmaker::create_match)
                     .service(arena::matchmaker::cancel_match)
                     .service(admin::import_character)
+                    .service(admin::recent_matches)
                     .service(
                         Files::new(
                             "/bundles.blades.bgs.services/",
