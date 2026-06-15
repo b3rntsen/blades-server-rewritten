@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use actix_web::{http::StatusCode, post, web};
+use actix_web::{HttpRequest, http::StatusCode, post, web};
 use blades_lib::user_data::UserAccount;
 use diesel::{
     ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper, associations::HasTable,
@@ -77,6 +77,7 @@ struct DeniedFeatureResponse {
 
 #[post("/blades.bgs.services/api/authentication/v1/public/auth/anon")]
 async fn anon_log_in(
+    req: HttpRequest,
     app_state: web::Data<Arc<ServerGlobal>>,
     info: web::Json<AnonLoginInfo>,
 ) -> Result<web::Json<SessionResponse>, BladeApiError> {
@@ -90,10 +91,19 @@ async fn anon_log_in(
     // back to dev-login (no regression). device_bindings (migration
     // 2026-06-08_add_device_bindings) is queried with raw SQL to avoid a
     // timestamp-typed diesel schema (no chrono feature needed).
-    // Only a stable deviceId can be recorded/claimed; the retail client sends
-    // deviceId: null on a first anon login (no device identity yet) — those skip
-    // the claim-link path and fall through to dev-login / create below.
-    if let Some(device_id_val) = info.0.device_id.clone() {
+    // Effective device key: the client-sent deviceId, or — for the fork client,
+    // which sends deviceId: null — the WG peer IP the arena_redirect addon tags
+    // (X-Newblades-Device-Ip). Each newblades WG peer has a unique, stable IP, so
+    // it serves as a per-device identity for the claim link. (A client with
+    // neither still falls through to the dev-login / create path below.)
+    let effective_device_id: Option<String> = info.0.device_id.clone().or_else(|| {
+        req.headers()
+            .get("x-newblades-device-ip")
+            .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+    });
+    if let Some(device_id_val) = effective_device_id {
         let mut conn = app_state.db_pool.get().await.unwrap();
         let _ = diesel::sql_query(
             "INSERT INTO device_bindings (device_id, platform, last_seen) VALUES ($1, $2, now()) \
