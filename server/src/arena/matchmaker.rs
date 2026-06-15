@@ -11,22 +11,22 @@
 //! points at our configured arena UDP endpoint. Real pairing + the live UDP
 //! match instance land in milestone (c)/(d).
 
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 use actix_web::{
     HttpResponse, post,
     http::StatusCode,
     web::{self, Json},
 };
+use diesel_async::RunQueryDsl;
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use uuid::Uuid;
 
 use crate::{
-    BladeApiError, ServerGlobal,
+    BladeApiError, DbPool, ServerGlobal,
     arena::{MatchmakingMessage, config::ArenaConfig, match_registry::MatchRegistry},
     session::SessionLookedUpMaybe,
 };
@@ -40,9 +40,6 @@ pub struct TicketRequest {
     pub rms: UnboundedSender<MatchmakingMessage>,
 }
 
-/// Cap on the in-memory recent-ticket ring buffer (newest N kept).
-const RECENT_LOG_CAP: usize = 100;
-
 /// Status of a recorded matchmaking ticket, for the web /arena activity feed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -51,16 +48,6 @@ pub enum RecentStatus {
     Searching,
     /// Resolved into a match (solo/bot or a PvP pair).
     Matched,
-}
-
-/// One recorded ticket in the ring buffer.
-struct RecentTicket {
-    ticket_id: Uuid,
-    user_id: Uuid,
-    at: Instant,
-    status: RecentStatus,
-    game_session_id: Option<Uuid>,
-    paired: bool,
 }
 
 /// A JSON view of a recent ticket (what the dev `recent-matches` endpoint — and
@@ -79,70 +66,103 @@ pub struct RecentTicketView {
     pub mine: bool,
 }
 
-/// A bounded in-memory log of the most recent matchmaking tickets so the web
-/// /arena page can confirm "your match request registered" + show recent arena
-/// activity. In-memory ONLY (cleared on arena-server restart); durable match
-/// history is #NB-3. The lock is held only for short synchronous sections.
-pub struct RecentMatches {
-    inner: Mutex<VecDeque<RecentTicket>>,
-    cap: usize,
+/// A row of the durable `arena_matches` table (migration 2026-06-16_add_arena_matches),
+/// read back for the `recent-matches` endpoint. `age_seconds` is computed in SQL
+/// (`now() - recorded_at`) so it survives restarts — unlike the old in-memory Instant.
+#[derive(diesel::QueryableByName)]
+struct ArenaMatchRow {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    ticket_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    user_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    status: String,
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    paired: bool,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+    game_session_id: Option<Uuid>,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    age_seconds: i64,
 }
 
-impl RecentMatches {
-    pub fn new(cap: usize) -> Arc<Self> {
-        Arc::new(RecentMatches {
-            inner: Mutex::new(VecDeque::with_capacity(cap)),
-            cap,
+/// Record a newly-queued ticket as `searching` in `arena_matches`. Best-effort:
+/// matchmaking must not block on (or fail from) the DB, so pool/SQL errors are
+/// logged and swallowed. No-op when `db` is None (the unit test has no DB).
+async fn record_match_queued(db: &Option<DbPool>, ticket_id: Uuid, user_id: Uuid) {
+    let Some(db) = db else { return };
+    let Ok(mut conn) = db.get().await else {
+        warn!("arena_matches: db pool unavailable (queued {ticket_id})");
+        return;
+    };
+    if let Err(e) = diesel::sql_query(
+        "INSERT INTO arena_matches (ticket_id, user_id, status, recorded_at) \
+         VALUES ($1, $2, 'searching', now()) ON CONFLICT (ticket_id) DO NOTHING",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(ticket_id)
+    .bind::<diesel::sql_types::Uuid, _>(user_id)
+    .execute(&mut conn)
+    .await
+    {
+        warn!("arena_matches: insert failed ({ticket_id}): {e}");
+    }
+}
+
+/// Mark a ticket `matched` (solo or paired) in `arena_matches`. Best-effort.
+async fn record_match_resolved(
+    db: &Option<DbPool>,
+    ticket_id: Uuid,
+    game_session_id: Uuid,
+    paired: bool,
+) {
+    let Some(db) = db else { return };
+    let Ok(mut conn) = db.get().await else { return };
+    let _ = diesel::sql_query(
+        "UPDATE arena_matches SET status='matched', game_session_id=$2, paired=$3, \
+         resolved_at=now() WHERE ticket_id=$1",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(ticket_id)
+    .bind::<diesel::sql_types::Uuid, _>(game_session_id)
+    .bind::<diesel::sql_types::Bool, _>(paired)
+    .execute(&mut conn)
+    .await;
+}
+
+/// Newest-first view of `arena_matches`, capped at `limit`, marking `mine`
+/// against `filter`. Backs the dev `recent-matches` endpoint; durable across
+/// restarts (#NB-3). Returns empty on a DB error (the endpoint stays up).
+pub async fn query_recent_matches(
+    db: &DbPool,
+    limit: i64,
+    filter: Option<Uuid>,
+) -> Vec<RecentTicketView> {
+    let Ok(mut conn) = db.get().await else { return Vec::new() };
+    let rows: Vec<ArenaMatchRow> = diesel::sql_query(
+        "SELECT ticket_id, user_id, status, paired, game_session_id, \
+         CAST(EXTRACT(epoch FROM (now() - recorded_at)) AS BIGINT) AS age_seconds \
+         FROM arena_matches ORDER BY recorded_at DESC LIMIT $1",
+    )
+    .bind::<diesel::sql_types::BigInt, _>(limit)
+    .get_results(&mut conn)
+    .await
+    .unwrap_or_default();
+    rows.into_iter()
+        .map(|r| {
+            let id_str = r.user_id.to_string();
+            RecentTicketView {
+                ticket_id: r.ticket_id,
+                user_tag: id_str[..8].to_string(),
+                status: if r.status == "matched" {
+                    RecentStatus::Matched
+                } else {
+                    RecentStatus::Searching
+                },
+                paired: r.paired,
+                game_session_id: r.game_session_id,
+                age_seconds: r.age_seconds.max(0) as u64,
+                mine: filter.map(|f| f == r.user_id).unwrap_or(false),
+            }
         })
-    }
-
-    /// Record a newly-queued ticket (status `Searching`).
-    pub fn record_queued(&self, ticket_id: Uuid, user_id: Uuid) {
-        let mut q = self.inner.lock().unwrap();
-        while q.len() >= self.cap {
-            q.pop_front();
-        }
-        q.push_back(RecentTicket {
-            ticket_id,
-            user_id,
-            at: Instant::now(),
-            status: RecentStatus::Searching,
-            game_session_id: None,
-            paired: false,
-        });
-    }
-
-    /// Mark the most recent matching ticket resolved into `game_session_id`.
-    pub fn record_resolved(&self, ticket_id: Uuid, game_session_id: Uuid, paired: bool) {
-        let mut q = self.inner.lock().unwrap();
-        if let Some(t) = q.iter_mut().rev().find(|t| t.ticket_id == ticket_id) {
-            t.status = RecentStatus::Matched;
-            t.game_session_id = Some(game_session_id);
-            t.paired = paired;
-        }
-    }
-
-    /// Newest-first view, capped at `limit`, marking `mine` against `filter`.
-    pub fn recent(&self, limit: usize, filter: Option<Uuid>) -> Vec<RecentTicketView> {
-        let q = self.inner.lock().unwrap();
-        let now = Instant::now();
-        q.iter()
-            .rev()
-            .take(limit)
-            .map(|t| {
-                let id_str = t.user_id.to_string();
-                RecentTicketView {
-                    ticket_id: t.ticket_id,
-                    user_tag: id_str[..8].to_string(),
-                    status: t.status,
-                    paired: t.paired,
-                    game_session_id: t.game_session_id,
-                    age_seconds: now.saturating_duration_since(t.at).as_secs(),
-                    mine: filter.map(|f| f == t.user_id).unwrap_or(false),
-                }
-            })
-            .collect()
-    }
+        .collect()
 }
 
 /// Shared arena state (hung off `ServerGlobal`). Cloning the `UnboundedSender`
@@ -152,23 +172,19 @@ pub struct ArenaGlobal {
     pub config: ArenaConfig,
     pub matchmaker_tx: UnboundedSender<TicketRequest>,
     pub registry: Arc<MatchRegistry>,
-    /// In-memory recent-ticket log surfaced by the dev `recent-matches` endpoint.
-    pub recent: Arc<RecentMatches>,
 }
 
 impl ArenaGlobal {
     /// Build the arena subsystem and spawn the matchmaker actor on the current
     /// arbiter. Returns the shared handle to store in `ServerGlobal`.
-    pub fn start(config: ArenaConfig) -> Arc<Self> {
+    pub fn start(config: ArenaConfig, db_pool: DbPool) -> Arc<Self> {
         let registry = MatchRegistry::new(config.max_concurrent_matches);
-        let recent = RecentMatches::new(RECENT_LOG_CAP);
 
         let (tx, rx) = unbounded_channel::<TicketRequest>();
         let mm_cfg = config.clone();
         let mm_reg = registry.clone();
-        let mm_recent = recent.clone();
         actix_web::rt::spawn(async move {
-            matchmaker_loop(rx, mm_cfg, mm_reg, mm_recent).await;
+            matchmaker_loop(rx, mm_cfg, mm_reg, Some(db_pool)).await;
         });
         // The live ENet arena host (tokio-enet) is spawned from main() once
         // ServerGlobal exists (it needs the shared Arc). `udp.rs`'s raw-socket
@@ -178,7 +194,6 @@ impl ArenaGlobal {
             config,
             matchmaker_tx: tx,
             registry,
-            recent,
         })
     }
 }
@@ -193,7 +208,7 @@ async fn matchmaker_loop(
     mut rx: UnboundedReceiver<TicketRequest>,
     config: ArenaConfig,
     registry: Arc<MatchRegistry>,
-    recent: Arc<RecentMatches>,
+    db: Option<DbPool>,
 ) {
     info!(
         "matchmaker: started (advertise {}:{}, max {} matches)",
@@ -211,7 +226,7 @@ async fn matchmaker_loop(
                 _ = tokio::time::sleep(Duration::from_secs(SOLO_FALLBACK_SECS)) => {
                     let lone = waiting.take().expect("waiting is some");
                     info!("matchmaker: no opponent for ticket {} — solo fallback", lone.ticket_id);
-                    resolve(&registry, &config, &recent, &[lone]);
+                    resolve(&registry, &config, &db, &[lone]).await;
                     continue;
                 }
             }
@@ -221,7 +236,7 @@ async fn matchmaker_loop(
         let Some(req) = next else { break };
 
         info!("matchmaker: ticket {} (user {})", req.ticket_id, req.user_id);
-        recent.record_queued(req.ticket_id, req.user_id);
+        record_match_queued(&db, req.ticket_id, req.user_id).await;
         // Push the captured 3-frame progression's first two frames now; the
         // `Succeeded` frame follows once the match resolves (pair or fallback).
         let _ = req
@@ -233,7 +248,7 @@ async fn matchmaker_loop(
 
         match waiting.take() {
             // A second player arrived → pair the two into ONE shared match.
-            Some(first) => resolve(&registry, &config, &recent, &[first, req]),
+            Some(first) => resolve(&registry, &config, &db, &[first, req]).await,
             // First player → hold it and wait for an opponent (or the timer above).
             None => waiting = Some(req),
         }
@@ -244,10 +259,10 @@ async fn matchmaker_loop(
 /// Allocate ONE match for these tickets (1 = solo/bot, 2 = a PvP pair) and push
 /// `MatchmakingSucceeded` to each — all sharing one `gameSessionId`, each with its
 /// own `playerSessionId` (the id the UDP layer admits it under).
-fn resolve(
+async fn resolve(
     registry: &MatchRegistry,
     config: &ArenaConfig,
-    recent: &RecentMatches,
+    db: &Option<DbPool>,
     tickets: &[TicketRequest],
 ) {
     let game_session_id = Uuid::new_v4();
@@ -284,7 +299,7 @@ fn resolve(
             );
         }
         // Record the resolution so the web /arena page can show "matched".
-        recent.record_resolved(t.ticket_id, game_session_id, paired);
+        record_match_resolved(db, t.ticket_id, game_session_id, paired).await;
     }
 }
 
@@ -400,7 +415,7 @@ mod tests {
             max_queued_players: 64,
         };
         let (tx, rx) = unbounded_channel::<TicketRequest>();
-        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), RecentMatches::new(8)));
+        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
 
         let (rms_a, mut recv_a) = unbounded_channel();
         let (rms_b, mut recv_b) = unbounded_channel();

@@ -78,7 +78,7 @@ enum Commands {
     },
 }
 
-type DbPool = Pool<AsyncDieselConnectionManager<AsyncPgConnection>>;
+pub type DbPool = Pool<AsyncDieselConnectionManager<AsyncPgConnection>>;
 
 pub struct ServerGlobal {
     pub db_pool: DbPool,
@@ -124,8 +124,10 @@ async fn main() -> Result<()> {
                 serde_json::from_reader(&mut game_data_file).unwrap()
             };
 
-            let arena =
-                arena::matchmaker::ArenaGlobal::start(arena::config::ArenaConfig::from_env());
+            let arena = arena::matchmaker::ArenaGlobal::start(
+                arena::config::ArenaConfig::from_env(),
+                db_pool.clone(),
+            );
 
             let arena_import_token = std::env::var("ARENA_IMPORT_TOKEN").ok();
             // Dev override: pin every anon login to one user (a Transfer'd character).

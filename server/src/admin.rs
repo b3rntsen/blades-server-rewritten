@@ -37,7 +37,7 @@ use uuid::Uuid;
 
 use crate::{
     BladeApiError, ServerGlobal,
-    arena::matchmaker::RecentTicketView,
+    arena::matchmaker::{RecentTicketView, query_recent_matches},
     json_db::JsonDbWrapper,
     models::{CharacterDbAlone, CharacterDbEntry, UserDBEntry},
     schema::{characters, users},
@@ -213,8 +213,8 @@ pub struct RecentMatchesQuery {
 /// `GET /…/api/dev/v1/recent-matches?userId=<uuid>&limit=<n>` — the most recent
 /// matchmaking tickets (newest first), so the web /arena page can confirm a
 /// user's match request registered + show recent arena activity. Dev-token
-/// gated. `userId` only sets the per-row `mine` flag (the list is server-wide);
-/// in-memory only (cleared on arena-server restart) — durable history is #NB-3.
+/// gated. `userId` only sets the per-row `mine` flag (the list is server-wide).
+/// Durable: backed by the `arena_matches` table, so it survives restarts (#NB-3).
 #[get("/blades.bgs.services/api/dev/v1/recent-matches")]
 pub async fn recent_matches(
     req: HttpRequest,
@@ -224,7 +224,9 @@ pub async fn recent_matches(
     check_import_token(&app_state, &req)?;
     let q = query.into_inner();
     let limit = q.limit.unwrap_or(25).min(100);
-    Ok(Json(app_state.arena.recent.recent(limit, q.user_id)))
+    Ok(Json(
+        query_recent_matches(&app_state.db_pool, limit as i64, q.user_id).await,
+    ))
 }
 
 // ---------------------------------------------------------------------------
