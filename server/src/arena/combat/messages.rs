@@ -25,6 +25,10 @@ pub const MARKER_S2C: u8 = 0xBE;
 pub const MSGTYPE_USERMESSAGE: u8 = 0x36; // 54
 /// Carrier MessageType for `CombatScreenInfo`.
 pub const MSGTYPE_COMBAT_SCREEN: u8 = 0x37; // 55
+/// Carrier MessageType for the match CLOCK (op58) — the FIRST s2c frame of the
+/// round-start. Without it the client never starts its match timeline and sits at
+/// "Connecting…". [RE'd byte-for-byte from s486.]
+pub const MSGTYPE_CLOCK: u8 = 0x3a; // 58
 
 /// firstPropId selector for a stateName payload: `0x4F` server→client,
 /// `0x50` client→server (the echo). The server only emits the s2c form.
@@ -56,6 +60,18 @@ pub fn flow_state(flow_controller_id: i32, state: FlowState) -> Option<Vec<u8>> 
         .byte(3, STATE_SELECTOR_S2C)
         .string(4, name);
     Some(frame(MSGTYPE_USERMESSAGE, w.finish()))
+}
+
+/// op58 (carrier `0x3a`) — the match CLOCK: two `Long` (.NET `DateTime.Ticks`,
+/// 100 ns since year 1) at propIds 0/1. The retail server sends this **first** at
+/// round-start; the client needs it to start the match timeline — without it the
+/// client sits at "Connecting…" (the 2026-06-17 paired-match stall). s486 carried
+/// the two values ~0.84 s apart (server clock vs match-start ref); both ≈ "now"
+/// works. [RE'd byte-for-byte from s486 / docs §6.2.]
+pub fn clock(tick_clock: i64, tick_match_start: i64) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.long(0, tick_clock).long(1, tick_match_start);
+    frame(MSGTYPE_CLOCK, w.finish())
 }
 
 /// A `CombatScreenInfo` (op55) — a lightweight per-net-object signal carrying
@@ -231,6 +247,20 @@ mod tests {
             0x13, 0x00, // prop4 String len = 19
         ];
         want.extend_from_slice(b"BackendMatchCreated");
+        assert_eq!(got, want);
+    }
+
+    /// Byte-for-byte vs s486 round-start op58 (after `BE 3A`): two Longs
+    /// (.NET DateTime.Ticks) at propIds 0/1 — `01 03 33` then the two LE i64s.
+    #[test]
+    fn clock_matches_s486_capture() {
+        let got = clock(0x08DE_CB13_D7F6_FE1C, 0x08DE_CB13_D807_9C22);
+        let want = [
+            0xBE, 0x3A, // marker + clock carrier (58)
+            0x01, 0x03, 0x33, // maxPropId=1, bitmap {0,1}, type nibbles [Long,Long]
+            0x1C, 0xFE, 0xF6, 0xD7, 0x13, 0xCB, 0xDE, 0x08, // prop0 Long (server clock)
+            0x22, 0x9C, 0x07, 0xD8, 0x13, 0xCB, 0xDE, 0x08, // prop1 Long (match-start ref)
+        ];
         assert_eq!(got, want);
     }
 

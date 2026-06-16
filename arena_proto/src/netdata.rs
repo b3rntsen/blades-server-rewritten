@@ -336,6 +336,9 @@ impl NetDataWriter {
     pub fn ulong(&mut self, p: u8, v: u64) -> &mut Self {
         self.put(p, NetDataValue::ULong(v))
     }
+    pub fn long(&mut self, p: u8, v: i64) -> &mut Self {
+        self.put(p, NetDataValue::Long(v))
+    }
     pub fn float(&mut self, p: u8, v: f32) -> &mut Self {
         self.put(p, NetDataValue::Float(v))
     }

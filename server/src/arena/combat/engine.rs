@@ -123,6 +123,7 @@ impl MatchInstance {
                     self.combat.phase = FlowState::BackendMatchCreated;
                     self.combat.phase_entered = now;
                     self.last_heartbeat = now;
+                    self.broadcast_clock(&mut out);
                     self.broadcast_spawns(&mut out);
                     self.broadcast_profiles(&mut out);
                     self.broadcast_flow(&mut out, FlowState::BackendMatchCreated);
@@ -150,6 +151,24 @@ impl MatchInstance {
             FlowState::NextState | FlowState::RoundEnd | FlowState::Finished => {}
         }
         out
+    }
+
+    /// Broadcast the match CLOCK (op58) to every viewer — the FIRST round-start
+    /// frame the retail server sends. The client needs it to start its match
+    /// timeline; without it the client connects but sits at "Connecting…" (the
+    /// 2026-06-17 paired-match stall). Two .NET-ticks Longs (server clock +
+    /// match-start ref), both ≈ now. [docs §6.2, RE'd from s486.]
+    fn broadcast_clock(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        let unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        // .NET DateTime.Ticks = 100 ns since year 1; Unix epoch = 621355968000000000 ticks.
+        let ticks = 621_355_968_000_000_000i64
+            + (unix.as_secs() as i64) * 10_000_000
+            + (unix.subsec_nanos() as i64) / 100;
+        for slot in 0..self.combat.fighters.len() {
+            out.push((slot, messages::clock(ticks, ticks)));
+        }
     }
 
     fn broadcast_flow(&self, out: &mut Vec<(usize, Vec<u8>)>, state: FlowState) {
