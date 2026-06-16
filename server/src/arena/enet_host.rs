@@ -4,9 +4,10 @@
 //! `tokio-enet` because that crate's socket layer is Linux-only
 //! (`socket2::Type::cloexec`) and fails to build on macOS — blocking local dev.
 //! `rusty_enet` is cross-platform, transport-agnostic (it drives our own UDP
-//! socket), and inspectable — so if Blades' ENet header-flag quirk (`0x4000`
-//! sentTime vs vanilla `0x8000`, per `arena-protocol-spec.md` §5) bites interop,
-//! we can patch the parse. The retail client ships `libenet.so` → standard ENet.
+//! socket), and inspectable — so when Blades' ENet header-flag quirk (`0x4000`
+//! sentTime vs vanilla `0x8000`, per `arena-protocol-spec.md` §5) bit interop, we
+//! patched it on the wire in [`BladesEnetSocket`] (below) instead of forking the
+//! crate. The retail client ships `libenet.so` → otherwise-standard ENet.
 //!
 //! **What this does.** `rusty_enet` owns the ENet protocol (CONNECT/VERIFY,
 //! reliability, ACKs, sequencing, fragmentation, ping/timeout). On top:
@@ -38,10 +39,86 @@ use std::thread;
 use std::time::Duration;
 
 use log::{debug, error, info, warn};
-use rusty_enet::{Event, Host, HostSettings, Packet, PeerID};
+use rusty_enet::{
+    Event, Host, HostSettings, MTU_MAX, Packet, PacketReceived, PeerID, Socket, SocketOptions,
+};
 
 use crate::ServerGlobal;
 use crate::arena::match_registry::MatchRegistry;
+
+/// A [`Socket`] wrapper that translates Blades' ENet protocol-header flag convention
+/// to/from the vanilla ENet that `rusty_enet` implements, transparently on the wire.
+///
+/// Blades' bundled `libenet` places the **SENT_TIME** flag at bit `0x4000`, where
+/// vanilla ENet uses `0x8000` and reads `0x4000` as **COMPRESSED**. Without this,
+/// `rusty_enet` sees every inbound client datagram as "compressed", finds no
+/// decompressor, and silently drops it (`c/protocol.rs`: `return false`) — so the
+/// ENet CONNECT never completes and the client times out ("error 2"). Confirmed on
+/// the wire: the captured CONNECT header is `0x4FFF` (bit `0x4000` = Blades SENT_TIME).
+///
+/// We rewrite ONLY the two flag bits in the header's high byte (the 2-byte big-endian
+/// `peerID|flags`); the session id (`0x30`) and peer-id high nibble (`0x0F`) are
+/// preserved. Applied on every datagram both directions, so `rusty_enet` always sees
+/// vanilla framing and the client always sees Blades. (Blades uses no ENet checksum —
+/// the captured CONNECT has the command byte immediately after the 4-byte header — so
+/// rewriting the flag byte cannot invalidate a checksum.)
+struct BladesEnetSocket(UdpSocket);
+
+/// Inbound (client → server): move Blades SENT_TIME (`0x4000`) to the vanilla
+/// position (`0x8000`). Clearing the old bit also guarantees the vanilla COMPRESSED
+/// flag (`0x4000`) is never left set — we run no decompressor.
+fn header_blades_to_vanilla(b0: u8) -> u8 {
+    (b0 & 0x3F) | ((b0 & 0x40) << 1)
+}
+/// Outbound (server → client): move vanilla SENT_TIME (`0x8000`) back to Blades (`0x4000`).
+fn header_vanilla_to_blades(b0: u8) -> u8 {
+    (b0 & 0x3F) | ((b0 & 0x80) >> 1)
+}
+
+impl BladesEnetSocket {
+    fn new(socket: UdpSocket) -> Self {
+        Self(socket)
+    }
+    #[cfg(test)]
+    fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
+        self.0.local_addr()
+    }
+}
+
+impl Socket for BladesEnetSocket {
+    type Address = std::net::SocketAddr;
+    type Error = std::io::Error;
+
+    fn init(&mut self, options: SocketOptions) -> Result<(), Self::Error> {
+        Socket::init(&mut self.0, options)
+    }
+
+    fn send(&mut self, address: Self::Address, buffer: &[u8]) -> Result<usize, Self::Error> {
+        // rusty_enet hands us vanilla framing; rewrite the flag byte to Blades' before
+        // it goes on the wire. (Copy — `buffer` is owned by rusty_enet.)
+        let mut out = buffer.to_vec();
+        if let Some(b0) = out.first_mut() {
+            *b0 = header_vanilla_to_blades(*b0);
+        }
+        Socket::send(&mut self.0, address, &out)
+    }
+
+    fn receive(
+        &mut self,
+        buffer: &mut [u8; MTU_MAX],
+    ) -> Result<Option<(Self::Address, PacketReceived)>, Self::Error> {
+        let received = Socket::receive(&mut self.0, buffer)?;
+        if let Some((_, PacketReceived::Complete(n))) = &received {
+            if *n >= 1 {
+                buffer[0] = header_blades_to_vanilla(buffer[0]);
+            }
+        }
+        Ok(received)
+    }
+}
+
+/// The arena ENet host: a [`Host`] over the flag-translating [`BladesEnetSocket`].
+type ArenaHost = Host<BladesEnetSocket>;
 
 /// Bind the arena UDP socket and run the ENet host on a dedicated thread.
 pub async fn run_enet_host(globals: Arc<ServerGlobal>) -> anyhow::Result<()> {
@@ -65,7 +142,7 @@ pub async fn run_enet_host(globals: Arc<ServerGlobal>) -> anyhow::Result<()> {
 /// The ENet service loop (own thread): drain queued events each tick, flush, yield.
 fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
     let mut host = match Host::new(
-        socket,
+        BladesEnetSocket::new(socket),
         HostSettings {
             peer_limit,
             ..Default::default()
@@ -111,7 +188,7 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
 /// through the registry and send any replies to their target peers. Returns true
 /// if an event was handled, false when the queue is drained (or on error).
 fn pump(
-    host: &mut Host<UdpSocket>,
+    host: &mut ArenaHost,
     registry: &MatchRegistry,
     peer_at: &mut HashMap<std::net::SocketAddr, PeerID>,
 ) -> bool {
@@ -164,7 +241,7 @@ enum Act {
 /// peer → the op-0x38 connect handshake (parse the client pubkey →
 /// `admit_connection` → reply our pubkey + nonce).
 fn handle_packet(
-    host: &mut Host<UdpSocket>,
+    host: &mut ArenaHost,
     registry: &MatchRegistry,
     peer_at: &HashMap<std::net::SocketAddr, PeerID>,
     addr: std::net::SocketAddr,
@@ -249,7 +326,7 @@ fn handle_packet(
 
 /// Send a reliable channel-0 packet to the peer at `addr` (looked up by PeerID).
 fn send_to(
-    host: &mut Host<UdpSocket>,
+    host: &mut ArenaHost,
     peer_at: &HashMap<std::net::SocketAddr, PeerID>,
     addr: &std::net::SocketAddr,
     bytes: &[u8],
@@ -273,9 +350,37 @@ mod tests {
     use std::net::SocketAddr;
     use uuid::Uuid;
 
+    /// The ENet header-flag translation that unblocks the real client: Blades puts
+    /// SENT_TIME at 0x4000 (= vanilla COMPRESSED), so the flag byte must be rewritten
+    /// both directions. Anchored on the captured CONNECT header high byte 0x4F.
+    #[test]
+    fn enet_header_flag_translation() {
+        // Captured Blades CONNECT: header 0x4FFF, high byte 0x4F (bit 0x40 = Blades
+        // SENT_TIME). rusty_enet must see vanilla 0x8F (bit 0x80 = SENT_TIME).
+        assert_eq!(header_blades_to_vanilla(0x4F), 0x8F);
+        assert_eq!(header_vanilla_to_blades(0x8F), 0x4F);
+
+        // The vanilla COMPRESSED bit (0x40) is NEVER left set after inbound translation,
+        // for any header byte — that is the whole point (we run no decompressor).
+        for b0 in 0u8..=0xFF {
+            assert_eq!(header_blades_to_vanilla(b0) & 0x40, 0, "COMPRESSED clear (b0={b0:#04x})");
+        }
+
+        // Session id (0x30) + peer-id high nibble (0x0F) are preserved; the flag bit
+        // round-trips.
+        let blades = 0x40 | 0x35; // SENT_TIME + session/peer bits
+        let vanilla = header_blades_to_vanilla(blades);
+        assert_eq!(vanilla, 0x80 | 0x35);
+        assert_eq!(header_vanilla_to_blades(vanilla), blades);
+
+        // A header with no flag bits is untouched both directions.
+        assert_eq!(header_blades_to_vanilla(0x2A), 0x2A);
+        assert_eq!(header_vanilla_to_blades(0x2A), 0x2A);
+    }
+
     /// A rusty_enet test client: connect, then send/recv reliable channel-0 frames.
     struct Client {
-        host: Host<UdpSocket>,
+        host: ArenaHost,
         pid: PeerID,
         connected: bool,
         inbox: Vec<Vec<u8>>,
@@ -285,8 +390,11 @@ mod tests {
     impl Client {
         fn connect(server: SocketAddr) -> Self {
             let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
-            let mut host =
-                Host::new(sock, HostSettings { peer_limit: 1, ..Default::default() }).unwrap();
+            let mut host = Host::new(
+                BladesEnetSocket::new(sock),
+                HostSettings { peer_limit: 1, ..Default::default() },
+            )
+            .unwrap();
             let pid = host.connect(server, 2, 0).unwrap().id();
             Client { host, pid, connected: false, inbox: Vec::new(), crypto: None }
         }
@@ -342,8 +450,11 @@ mod tests {
 
         let server_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         let server_addr = server_sock.local_addr().unwrap();
-        let mut server =
-            Host::new(server_sock, HostSettings { peer_limit: 16, ..Default::default() }).unwrap();
+        let mut server = Host::new(
+            BladesEnetSocket::new(server_sock),
+            HostSettings { peer_limit: 16, ..Default::default() },
+        )
+        .unwrap();
         let mut peer_at = HashMap::new();
 
         let mut a = Client::connect(server_addr);
