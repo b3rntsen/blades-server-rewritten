@@ -14,6 +14,8 @@
 
 use std::time::{Duration, Instant};
 
+use log::{debug, info};
+
 use super::damage::{DamageModel, ResolvedDamage, RetailDamageModel};
 use super::input;
 use super::messages;
@@ -43,12 +45,14 @@ pub fn on_c2s_input(
         return Vec::new();
     }
     let Some(target_slot) = combat.opponent_of(sender) else {
-        return Vec::new(); // solo / bot match: no opponent
+        debug!("combat: slot {sender} input ignored — solo/bot match, no opponent");
+        return Vec::new();
     };
     if sender >= combat.fighters.len() || target_slot >= combat.fighters.len() {
         return Vec::new();
     }
     if combat.fighters[target_slot].is_dead() {
+        debug!("combat: slot {sender} input ignored — target slot {target_slot} already dead");
         return Vec::new();
     }
 
@@ -69,6 +73,7 @@ fn resolve_swing(
 ) -> Vec<(usize, Vec<u8>)> {
     if let Some(last) = combat.fighters[sender].last_swing {
         if now.duration_since(last) < SWING_COOLDOWN {
+            debug!("combat: slot {sender} swing throttled (< {SWING_COOLDOWN:?} since last)");
             return Vec::new();
         }
     }
@@ -100,6 +105,7 @@ fn resolve_ability_cast(
     // Cooldown gate (per ability instance).
     if let Some(&until) = combat.fighters[sender].cooldowns.get(&ea.ability_uuid) {
         if now < until {
+            debug!("combat: slot {sender} ability {} on cooldown", ea.ability_uuid);
             return Vec::new();
         }
     }
@@ -122,6 +128,7 @@ fn resolve_ability_cast(
         .find(|a| a.instance_uuid == ea.ability_uuid)
         .map(|a| a.level)
         .unwrap_or(1);
+    debug!("combat: slot {sender} casts ability {} (level {level}) → slot {target_slot}", ea.ability_uuid);
     let resolved = RetailDamageModel.resolve_ability(level, &combat.fighters[target_slot], ActiveSide::Middle);
     out.extend(emit_damage(combat, sender, target_slot, &resolved));
     out
@@ -136,7 +143,15 @@ fn emit_damage(
     resolved: &ResolvedDamage,
 ) -> Vec<(usize, Vec<u8>)> {
     let mut out = Vec::new();
+    let hp_before = combat.fighters[target_slot].health;
     combat.fighters[target_slot].take_damage(resolved.total.round().max(0.0) as u32);
+    let hp_after = combat.fighters[target_slot].health;
+    debug!(
+        "combat damage: slot {attacker_slot} → slot {target_slot} | source {:?} | total {:.1} | HP {hp_before} → {hp_after} (−{})",
+        resolved.source,
+        resolved.total,
+        hp_before.saturating_sub(hp_after),
+    );
 
     let msg = {
         let damaged = &combat.fighters[target_slot];
@@ -175,11 +190,38 @@ fn end_match(combat: &mut MatchCombat, winner: usize) -> Vec<(usize, Vec<u8>)> {
     combat.phase = FlowState::Finished;
     let loser_obj = combat.fighters.get(loser).map(|f| f.net_object_id).unwrap_or(0);
     let winner_obj = combat.fighters.get(winner).map(|f| f.net_object_id).unwrap_or(0);
+
+    // op29 PlayerDead + op49 MatchEnd both have UNVERIFIED wire layouts (never
+    // captured — see messages.rs). Build each once and log the exact emitted bytes:
+    // the builders are infallible, so the failure mode we CAN'T otherwise see is the
+    // client rejecting a malformed frame and hanging at match-end. With these two
+    // lines, the next on-device capture validates the real format against what we
+    // sent, instead of match-end being a silent mystery.
+    let dead_frame = messages::player_dead(loser_obj);
+    let end_frame = messages::match_end(winner_obj);
+    info!(
+        "combat: match end → winner slot {winner} (obj {winner_obj}), loser slot {loser} (obj {loser_obj}); \
+         emitting PlayerDead + MatchEnd to {} player(s)",
+        combat.fighters.len(),
+    );
+    info!("combat op29 PlayerDead [UNVERIFIED layout] {} bytes: {}", dead_frame.len(), hex(&dead_frame));
+    info!("combat op49 MatchEnd  [UNVERIFIED layout] {} bytes: {}", end_frame.len(), hex(&end_frame));
+
     for slot in 0..combat.fighters.len() {
-        out.push((slot, messages::player_dead(loser_obj)));
-        out.push((slot, messages::match_end(winner_obj)));
+        out.push((slot, dead_frame.clone()));
+        out.push((slot, end_frame.clone()));
     }
     out
+}
+
+/// Lowercase hex of an emitted frame, for logging the UNVERIFIED s2c layouts
+/// (op29/op49) so the next capture can validate the exact bytes the server sent.
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
 }
 
 /// Tick-driven combat (DoT ticks, cooldown expiry, channel completion). No-op for

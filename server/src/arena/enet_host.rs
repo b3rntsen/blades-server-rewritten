@@ -80,13 +80,29 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
     // addr -> PeerID, so we can send to the *opponent* (not just the event peer).
     let mut peer_at: HashMap<std::net::SocketAddr, PeerID> = HashMap::new();
 
+    let mut last_housekeep = std::time::Instant::now();
     loop {
         while pump(&mut host, &registry, &mut peer_at) {}
+        let now = std::time::Instant::now();
         // Server-initiated combat output (flow-control heartbeat, damage, etc.).
-        for (addr, bytes) in registry.tick_matches(std::time::Instant::now()) {
+        for (addr, bytes) in registry.tick_matches(now) {
             send_to(&mut host, &peer_at, &addr, &bytes);
         }
         host.flush();
+        // Housekeeping ~every 5 s: reclaim leaked match slots (so the registry
+        // never sticks "at capacity" after abandoned connects) + a liveness line,
+        // so a stuck or zero-connect host is obvious from the logs alone.
+        if now.saturating_duration_since(last_housekeep) >= Duration::from_secs(5) {
+            registry.sweep_expired(now);
+            info!(
+                "arena-enet: alive — peers {}, matches {}, permits {}/{} free",
+                peer_at.len(),
+                registry.active_count(),
+                registry.available_permits(),
+                registry.max_matches
+            );
+            last_housekeep = now;
+        }
         thread::sleep(Duration::from_millis(2));
     }
 }
@@ -121,6 +137,7 @@ fn pump(
             info!("arena-enet: peer connected ({addr:?})");
         }
         Act::Disconnect(addr) => {
+            info!("arena-enet: peer disconnected ({addr:?})");
             if let Some(addr) = addr {
                 registry.remove(&addr);
                 peer_at.remove(&addr);
@@ -157,11 +174,20 @@ fn handle_packet(
         if let Some(out) = registry.handle_live_user_data(&addr, data) {
             match out.opcode {
                 Some(op) => info!("arena-enet: {addr} → GameMessageId {op} [{}]", out.state),
-                None => debug!(
-                    "arena-enet: {addr} frame with no opcode ({} B, marker {:?})",
-                    data.len(),
-                    out.marker
-                ),
+                // c2s=0x84, s2c=0xBE, 0xAC also valid. Any other byte after decrypt ⇒
+                // wrong key (handshake mismatch) or a mis-routed peer (e.g. docker-proxy
+                // SNAT collision) — make it loud instead of a silent drop.
+                None => match out.marker {
+                    Some(m) if !matches!(m, 0x84 | 0xBE | 0xAC) => warn!(
+                        "arena-enet: {addr} frame decrypted to BAD marker {m:#04x} ({} B) — wrong key / mis-routed peer?",
+                        data.len()
+                    ),
+                    _ => debug!(
+                        "arena-enet: {addr} frame with no opcode ({} B, marker {:?})",
+                        data.len(),
+                        out.marker
+                    ),
+                },
             }
             // Deliver each reply to its TARGET peer (may be the opponent).
             for (target_addr, bytes) in &out.replies {
@@ -201,13 +227,22 @@ fn handle_packet(
                 send_to(host, peer_at, &addr, &reply);
                 info!("arena-enet: {addr} admitted (op-0x38 key exchange)");
             }
-            None => debug!("arena-enet: {addr} op-0x38 handshake but no match has a free slot"),
+            None => warn!(
+                "arena-enet: {addr} sent op-0x38 handshake but NO match has a free slot \
+                 (active {}, permits {} free) — match reclaimed, never allocated, or FIFO mis-bind?",
+                registry.active_count(),
+                registry.available_permits()
+            ),
         }
     } else {
-        debug!(
-            "arena-enet: {addr} {}B from an unknown peer (not an op-0x38 handshake; b0={:#04x})",
+        info!(
+            "arena-enet: {addr} {}B from an unknown peer — NOT an op-0x38 handshake \
+             (b0={:#04x} b1={:#04x} b12={:#04x} b13={:#04x})",
             data.len(),
-            data.first().copied().unwrap_or(0)
+            data.first().copied().unwrap_or(0),
+            data.get(1).copied().unwrap_or(0),
+            data.get(12).copied().unwrap_or(0),
+            data.get(13).copied().unwrap_or(0),
         );
     }
 }

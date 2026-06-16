@@ -15,6 +15,7 @@
 use std::time::{Duration, Instant};
 
 use arena_proto::GameMessageId;
+use log::{debug, info};
 
 use super::messages;
 use super::resolve;
@@ -73,6 +74,12 @@ impl MatchInstance {
     /// MessageType ‖ body`) from player `sender`.
     pub fn on_c2s(&mut self, sender: usize, user_data: &[u8], now: Instant) -> Vec<(usize, Vec<u8>)> {
         let mut out = Vec::new();
+        debug!(
+            "combat c2s: slot {sender} carrier 0x{:02x} ({} bytes) in phase {}",
+            user_data.get(1).copied().unwrap_or(0),
+            user_data.len(),
+            self.combat.phase_name(),
+        );
 
         // ConcedeMatch ends the match for everyone. (Heuristic: the concede
         // carrier byte == GameMessageId::ConcedeMatch; refine if a capture shows
@@ -80,6 +87,7 @@ impl MatchInstance {
         if user_data.get(1) == Some(&(GameMessageId::ConcedeMatch as u8))
             && !matches!(self.combat.phase, FlowState::Finished)
         {
+            info!("combat: slot {sender} conceded → match Finished");
             self.combat.phase = FlowState::Finished;
             for slot in 0..self.combat.fighters.len() {
                 if let Some(m) = messages::flow_state(self.combat.flow_controller_id, FlowState::RoundEnd) {
@@ -103,6 +111,10 @@ impl MatchInstance {
             // BackendMatchCreated + the combat screen for every avatar to everyone.
             FlowState::Connecting => {
                 if self.combat.capacity() > 0 && connected >= self.combat.capacity() {
+                    info!(
+                        "combat FSM: Connecting → BackendMatchCreated ({connected}/{} peers connected)",
+                        self.combat.capacity(),
+                    );
                     self.combat.phase = FlowState::BackendMatchCreated;
                     self.combat.phase_entered = now;
                     self.last_heartbeat = now;
@@ -113,6 +125,7 @@ impl MatchInstance {
             // Brief hold, then the round goes live (StateTimeout heartbeat).
             FlowState::BackendMatchCreated => {
                 if now.duration_since(self.combat.phase_entered) >= MATCH_CREATE_HOLD {
+                    info!("combat FSM: BackendMatchCreated → StateTimeout (round 1 live)");
                     self.combat.phase = FlowState::StateTimeout;
                     self.combat.phase_entered = now;
                     self.last_heartbeat = now;

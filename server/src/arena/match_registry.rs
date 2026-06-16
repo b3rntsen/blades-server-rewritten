@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use log::{info, warn};
 use rand::RngExt;
@@ -33,6 +33,15 @@ use arena_proto::{
 };
 
 use crate::arena::combat::{Loadout, MatchInstance};
+
+/// A match whose clients never finish connecting holds its capacity permit
+/// (acquired by the matchmaker in `allocate`); without a sweep that slot leaks
+/// until the process restarts — observed 2026-06-16 as the registry stuck
+/// "at capacity (2 matches)" after a couple of failed connects. `sweep_expired`
+/// reclaims such matches. Conservative first values from the 1–2-player tests
+/// (clients that connect do so within seconds of `Succeeded`); easy to tune.
+const CONNECT_DEADLINE: Duration = Duration::from_secs(45); // under-capacity → reclaim
+const MATCH_MAX_AGE: Duration = Duration::from_secs(600); // absolute safety net
 
 /// A connected player within a match: its peer address + the agreed crypto.
 struct PlayerConn {
@@ -53,6 +62,9 @@ struct Match {
     capacity: usize,
     players: Vec<PlayerConn>,
     instance: MatchInstance,
+    /// When `allocate` reserved this match — `sweep_expired` reclaims abandoned
+    /// matches (clients never connected) so their capacity permit can't leak.
+    created_at: Instant,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -108,6 +120,7 @@ impl MatchRegistry {
                 capacity,
                 players: Vec::with_capacity(capacity),
                 instance: MatchInstance::new(capacity, loadouts, Instant::now()),
+                created_at: Instant::now(),
                 _permit: permit,
             },
         );
@@ -115,6 +128,11 @@ impl MatchRegistry {
         for psid in player_session_ids {
             pending.insert(psid.clone(), game_session_id);
         }
+        info!(
+            "match registry: allocated match {game_session_id} (capacity {capacity}) — {} slot(s) free of {}",
+            self.semaphore.available_permits(),
+            self.max_matches
+        );
         true
     }
 
@@ -186,7 +204,14 @@ impl MatchRegistry {
             player_session_id: String::new(), // bound later if/when the psid arrives
             crypto: CryptoCtx { key, nonce },
         });
-        self.addr_index.lock().unwrap().insert(peer, gsid);
+        if let Some(prev) = self.addr_index.lock().unwrap().insert(peer, gsid) {
+            if prev != gsid {
+                warn!(
+                    "match registry: peer {peer} re-bound {prev} → {gsid} — possible \
+                     docker-proxy SNAT source collision (two clients sharing one source addr)"
+                );
+            }
+        }
         info!(
             "match registry: connection {peer} bound to match {gsid} [{}/{}]",
             m.players.len(),
@@ -314,6 +339,65 @@ impl MatchRegistry {
     }
     pub fn available_permits(&self) -> usize {
         self.semaphore.available_permits()
+    }
+
+    /// Reclaim leaked/abandoned matches + their capacity permits — called
+    /// periodically by the ENet serve loop. The matchmaker acquires a permit in
+    /// `allocate`, but it is otherwise only released when the LAST player
+    /// disconnects (`remove`); a paired match whose clients never ENet-connect
+    /// would hold it forever. Reclaim when under-capacity past `CONNECT_DEADLINE`
+    /// (an opponent never connected — the abandoned-`Succeeded` leak) or older than
+    /// `MATCH_MAX_AGE` (safety net for a stuck full match). Dropping the `Match`
+    /// frees its `Semaphore` slot. Collect-then-purge so the locks never nest.
+    pub fn sweep_expired(&self, now: Instant) {
+        let mut reclaimed: Vec<(Uuid, usize, usize, &'static str, Vec<SocketAddr>)> = Vec::new();
+        {
+            let mut matches = self.matches.lock().unwrap();
+            let dead: Vec<Uuid> = matches
+                .values()
+                .filter(|m| {
+                    let age = now.saturating_duration_since(m.created_at);
+                    (m.players.len() < m.capacity && age > CONNECT_DEADLINE) || age > MATCH_MAX_AGE
+                })
+                .map(|m| m.game_session_id)
+                .collect();
+            for gsid in dead {
+                if let Some(m) = matches.remove(&gsid) {
+                    let reason = if m.players.len() < m.capacity {
+                        "opponent never connected"
+                    } else {
+                        "max age"
+                    };
+                    let addrs: Vec<SocketAddr> = m.players.iter().map(|p| p.addr).collect();
+                    reclaimed.push((gsid, m.players.len(), m.capacity, reason, addrs));
+                    // `m` (with its `_permit`) drops here → a Semaphore slot is freed.
+                }
+            }
+        }
+        if reclaimed.is_empty() {
+            return;
+        }
+        let dead_gsids: std::collections::HashSet<Uuid> =
+            reclaimed.iter().map(|(g, ..)| *g).collect();
+        {
+            let mut addr_index = self.addr_index.lock().unwrap();
+            for (_, _, _, _, addrs) in &reclaimed {
+                for a in addrs {
+                    addr_index.remove(a);
+                }
+            }
+        }
+        self.pending
+            .lock()
+            .unwrap()
+            .retain(|_, gsid| !dead_gsids.contains(gsid));
+        for (gsid, connected, capacity, reason, _) in &reclaimed {
+            warn!(
+                "match registry: reclaimed match {gsid} ({reason}; {connected}/{capacity} connected) — {} slot(s) free of {}",
+                self.semaphore.available_permits(),
+                self.max_matches
+            );
+        }
     }
 
     /// Drive the per-match tick: server-initiated s2c (the flow-control state

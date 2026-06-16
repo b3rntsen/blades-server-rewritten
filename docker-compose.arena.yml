@@ -75,7 +75,7 @@ services:
       ARENA_IMPORT_TOKEN: ${ARENA_IMPORT_TOKEN:?set ARENA_IMPORT_TOKEN in arena.env}
       ARENA_ADVERTISE_HOST: ${ARENA_ADVERTISE_HOST:-127.0.0.1}
       ARENA_UDP_PORT: ${ARENA_UDP_PORT:-7777}
-      ARENA_MAX_MATCHES: ${ARENA_MAX_MATCHES:-2}
+      ARENA_MAX_MATCHES: ${ARENA_MAX_MATCHES:-16}
       # Dev override: pin EVERY anon login to this user (a Transfer'd character),
       # since there's no Bethesda/Google identity. Empty/unset = normal behaviour.
       ARENA_DEV_LOGIN_USER_ID: ${ARENA_DEV_LOGIN_USER_ID:-}

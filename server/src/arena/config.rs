@@ -27,7 +27,7 @@ impl ArenaConfig {
             advertise_host: env::var("ARENA_ADVERTISE_HOST")
                 .unwrap_or_else(|_| "127.0.0.1".to_string()),
             udp_port: parse("ARENA_UDP_PORT", 7777),
-            max_concurrent_matches: parse("ARENA_MAX_MATCHES", 4),
+            max_concurrent_matches: parse("ARENA_MAX_MATCHES", 16),
             max_queued_players: parse("ARENA_MAX_QUEUED", 64),
         }
     }

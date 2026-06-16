@@ -317,6 +317,13 @@ async fn resolve(
         }
         return;
     }
+    info!(
+        "matchmaker: resolved {} ({} player(s), gsid {game_session_id}) — clients dial {}:{}",
+        if paired { "PAIR" } else { "solo/bot" },
+        tickets.len(),
+        config.advertise_host,
+        config.udp_port
+    );
 
     for (t, psid) in tickets.iter().zip(psids.iter()) {
         let succeeded = MatchmakingMessage::Succeeded {
