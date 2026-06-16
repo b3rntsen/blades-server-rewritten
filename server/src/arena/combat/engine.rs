@@ -127,6 +127,28 @@ impl MatchInstance {
                     self.broadcast_spawns(&mut out);
                     self.broadcast_profiles(&mut out);
                     self.broadcast_flow(&mut out, FlowState::BackendMatchCreated);
+                    // Round-start emission audit — confirm what actually goes on the wire:
+                    // carrier→count (58=clock, 50=spawn, 54=profile/flow) + each fighter's
+                    // profile-JSON size (0 ⇒ empty ⇒ broadcast_profiles skipped it ⇒ the
+                    // client can't build its opponent ⇒ "Connecting…" stall).
+                    let mut carriers = std::collections::BTreeMap::new();
+                    for (_, b) in &out {
+                        if b.len() >= 2 {
+                            *carriers.entry(b[1]).or_insert(0u32) += 1;
+                        }
+                    }
+                    let profile_bytes: Vec<usize> = self
+                        .combat
+                        .fighters
+                        .iter()
+                        .map(|f| f.loadout.profile_character_json.len())
+                        .collect();
+                    info!(
+                        "combat round-start emit: {} frames, carriers(dec) {:?}, profile_json_bytes {:?}",
+                        out.len(),
+                        carriers,
+                        profile_bytes
+                    );
                 }
             }
             // Brief hold, then the round goes live (StateTimeout heartbeat).
