@@ -142,6 +142,7 @@ async fn anon_log_in(
                     app_state.session_store.ttl,
                 ));
                 let session_id = app_state.session_store.store_new_session(session.clone());
+                crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
                 return Ok(web::Json(SessionResponse {
                     session: SessionResponseInner::from_session(session_id, session.as_ref()),
                 }));
@@ -172,6 +173,7 @@ async fn anon_log_in(
             app_state.session_store.ttl,
         ));
         let session_id = app_state.session_store.store_new_session(session.clone());
+        crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
         return Ok(web::Json(SessionResponse {
             session: SessionResponseInner::from_session(session_id, session.as_ref()),
         }));
@@ -205,6 +207,7 @@ async fn anon_log_in(
             app_state.session_store.ttl,
         ));
         let session_id = app_state.session_store.store_new_session(session.clone());
+        crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
         return Ok(web::Json(SessionResponse {
             session: SessionResponseInner::from_session(session_id, session.as_ref()),
         }));
@@ -237,6 +240,7 @@ async fn anon_log_in(
             app_state.session_store.ttl,
         ));
         let session_id = app_state.session_store.store_new_session(session.clone());
+        crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
         return Ok(web::Json(SessionResponse {
             session: SessionResponseInner::from_session(session_id, session.as_ref()),
         }));
