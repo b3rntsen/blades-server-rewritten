@@ -15,6 +15,7 @@
 
 pub mod crypto;
 pub mod enet;
+pub mod netdata;
 pub mod opcodes;
 pub mod reassembly;
 
@@ -26,5 +27,6 @@ pub use enet::{
     first_marker_in_plaintext, first_opcode_in_plaintext, reconstruct_plaintext, walk_fragments,
     STREAM_PLAINTEXT_LEADS,
 };
+pub use netdata::{parse_netdata, NetDataParse, NetDataType, NetDataValue, NetDataWriter};
 pub use opcodes::{is_game_message_id, GameMessageId, GAME_MESSAGE_IDS};
 pub use reassembly::{reassemble_session, resolve_fragment, try_assembled, Frame, KeyCandidate};

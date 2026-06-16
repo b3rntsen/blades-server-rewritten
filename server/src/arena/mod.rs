@@ -1,4 +1,5 @@
 pub mod avatar;
+pub mod combat;
 pub mod config;
 pub mod enet_host;
 pub mod leaderboards;

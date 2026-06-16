@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use log::{info, warn};
 use rand::RngExt;
@@ -27,9 +28,11 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 
 use arena_proto::{
-    CryptoCtx, GameMessageId, chacha20_legacy_xor, first_opcode_in_plaintext, reconstruct_plaintext,
+    CryptoCtx, chacha20_legacy_xor, first_opcode_in_plaintext, reconstruct_plaintext,
     x25519_public, x25519_shared,
 };
+
+use crate::arena::combat::{Loadout, MatchInstance};
 
 /// A connected player within a match: its peer address + the agreed crypto.
 struct PlayerConn {
@@ -77,7 +80,12 @@ impl MatchRegistry {
     /// Matchmaker: reserve ONE capacity slot for a new match and register the
     /// `playerSessionId`(s) it will advertise (1 = solo/bot, 2 = a paired PvP
     /// match) against `game_session_id`. Returns false at capacity.
-    pub fn allocate(&self, player_session_ids: &[String], game_session_id: Uuid) -> bool {
+    pub fn allocate(
+        &self,
+        player_session_ids: &[String],
+        loadouts: Vec<Loadout>,
+        game_session_id: Uuid,
+    ) -> bool {
         let permit = match self.semaphore.clone().try_acquire_owned() {
             Ok(p) => p,
             Err(_) => {
@@ -99,7 +107,7 @@ impl MatchRegistry {
                 order,
                 capacity,
                 players: Vec::with_capacity(capacity),
-                instance: MatchInstance::new(capacity),
+                instance: MatchInstance::new(capacity, loadouts, Instant::now()),
                 _permit: permit,
             },
         );
@@ -205,21 +213,20 @@ impl MatchRegistry {
         };
         let opcode = pt.as_deref().and_then(first_opcode_in_plaintext);
 
+        let now = Instant::now();
         let mut replies = Vec::new();
         if let Some(op) = opcode {
-            // The raw path can only answer the addressed peer, so emit only the
-            // s2c the FSM targets at the sender (== all of it for a solo match).
-            for (target, out_op, body) in m.instance.on_c2s(sender, op) {
+            // The raw dev path carries no message body, so synthesize a c2s
+            // (marker ‖ op) — enough for opcode-only transitions (e.g. concede).
+            // It can only answer the addressed peer (== all s2c for a solo match).
+            let synth = [0x84u8, op];
+            for (target, user_data) in m.instance.on_c2s(sender, &synth, now) {
                 if target != sender {
                     continue;
                 }
-                let mut plain = Vec::with_capacity(2 + body.len());
-                plain.push(0xBE);
-                plain.push(out_op);
-                plain.extend_from_slice(&body);
                 let seq = m.instance.next_seq();
                 let c = &m.players[sender].crypto;
-                replies.push(crate::arena::udp::build_send_reliable(0, seq, c, &plain));
+                replies.push(crate::arena::udp::build_send_reliable(0, seq, c, &user_data));
             }
         }
         Some(InboundOutcome {
@@ -256,19 +263,17 @@ impl MatchRegistry {
         let marker = plain.first().copied();
         let opcode = plain.get(1).copied(); // user_data[1] = GameMessageId
 
+        let now = Instant::now();
         let mut replies: Vec<(SocketAddr, Vec<u8>)> = Vec::new();
-        if let Some(op) = opcode {
-            for (target, out_op, body) in m.instance.on_c2s(sender, op) {
-                let Some(tp) = m.players.get(target) else {
-                    continue; // target not connected yet — drop (UDP-correct)
-                };
-                let mut s2c = Vec::with_capacity(2 + body.len());
-                s2c.push(0xBE); // s2c marker (NetTransportMessage.MAGIC_HEADER)
-                s2c.push(out_op);
-                s2c.extend_from_slice(&body);
-                chacha20_legacy_xor(&mut s2c, &tp.crypto.key, &tp.crypto.nonce);
-                replies.push((tp.addr, s2c));
-            }
+        for (target, mut user_data) in m.instance.on_c2s(sender, &plain, now) {
+            let Some(tp) = m.players.get(target) else {
+                continue; // target not connected yet — drop (UDP-correct)
+            };
+            // `user_data` is the full decrypted s2c payload (marker ‖ type ‖ body)
+            // from the engine; encrypt under the TARGET's key — this is where the
+            // A→B relay happens.
+            chacha20_legacy_xor(&mut user_data, &tp.crypto.key, &tp.crypto.nonce);
+            replies.push((tp.addr, user_data));
         }
         Some(LiveOutcome {
             opcode,
@@ -310,6 +315,27 @@ impl MatchRegistry {
     pub fn available_permits(&self) -> usize {
         self.semaphore.available_permits()
     }
+
+    /// Drive the per-match tick: server-initiated s2c (the flow-control state
+    /// machine, plus DoT/cooldown/round logic in Phase C). Called once per ENet
+    /// service-loop iteration. Returns `(target peer addr, encrypted user-data)`
+    /// to send. Same lock discipline as `handle_live_user_data` — short,
+    /// synchronous, never held across `.await`.
+    pub fn tick_matches(&self, now: Instant) -> Vec<(SocketAddr, Vec<u8>)> {
+        let mut matches = self.matches.lock().unwrap();
+        let mut out = Vec::new();
+        for m in matches.values_mut() {
+            let connected = m.players.len();
+            for (target, mut user_data) in m.instance.on_tick(connected, now) {
+                let Some(tp) = m.players.get(target) else {
+                    continue;
+                };
+                chacha20_legacy_xor(&mut user_data, &tp.crypto.key, &tp.crypto.nonce);
+                out.push((tp.addr, user_data));
+            }
+        }
+        out
+    }
 }
 
 /// Random 32-byte X25519 secret + its public key (X25519 clamps internally).
@@ -345,95 +371,9 @@ pub struct LiveOutcome {
     pub state: &'static str,
 }
 
-/// Per-match authoritative state.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum MatchState {
-    Connecting,
-    InProgress,
-    Finished,
-}
-
-/// Per-match state machine, now **multi-player**: `on_c2s` takes the sender's slot
-/// and returns s2c targeted at specific players (self and/or opponent), which is
-/// how A's action reaches B.
-///
-/// NOTE: the exact server→client message *flow* (which s2c follows which c2s, the
-/// body layouts) is still being mapped (`docs/arena-protocol-spec.md` §6). The
-/// rules below are a well-formed PLACEHOLDER that exercises the full two-player
-/// wire path end-to-end (both ready → both spawn; a command relays to the
-/// opponent; concede ends for all). Swap the rules in as the flow is captured;
-/// the pairing/relay plumbing is unchanged.
-pub struct MatchInstance {
-    state: MatchState,
-    capacity: usize,
-    ready: [bool; 2],
-    s2c_seq: u16,
-}
-
-impl MatchInstance {
-    fn new(capacity: usize) -> Self {
-        MatchInstance {
-            state: MatchState::Connecting,
-            capacity,
-            ready: [false; 2],
-            s2c_seq: 0,
-        }
-    }
-
-    fn next_seq(&mut self) -> u16 {
-        let s = self.s2c_seq;
-        self.s2c_seq = self.s2c_seq.wrapping_add(1);
-        s
-    }
-
-    fn state_name(&self) -> &'static str {
-        match self.state {
-            MatchState::Connecting => "Connecting",
-            MatchState::InProgress => "InProgress",
-            MatchState::Finished => "Finished",
-        }
-    }
-
-    /// Drive the FSM on a decoded c2s opcode from player `sender`; return
-    /// `(target_slot, out_op, body)` s2c messages to deliver.
-    fn on_c2s(&mut self, sender: usize, opcode: u8) -> Vec<(usize, u8, Vec<u8>)> {
-        use GameMessageId as G;
-        let mut out = Vec::new();
-        match (self.state, GameMessageId::from_u8(opcode)) {
-            // Loadout ready → mark this player ready; when ALL players are ready,
-            // start the match: greet every player + spawn every avatar to everyone.
-            (MatchState::Connecting, Some(G::PlayerLoadoutReady)) => {
-                if sender < self.ready.len() {
-                    self.ready[sender] = true;
-                }
-                if (0..self.capacity).all(|i| self.ready.get(i).copied().unwrap_or(false)) {
-                    self.state = MatchState::InProgress;
-                    for p in 0..self.capacity {
-                        out.push((p, G::PlayerWelcome as u8, vec![]));
-                        for avatar in 0..self.capacity {
-                            out.push((p, G::PlayerSpawnAvatar as u8, vec![avatar as u8]));
-                        }
-                    }
-                }
-            }
-            // An in-match command → relay it to the opponent(s) as a state change
-            // (carrying the actor's slot); this is the core A→B relay.
-            (MatchState::InProgress, Some(G::PlayerCommand)) => {
-                for p in 0..self.capacity {
-                    if p != sender {
-                        out.push((p, G::PlayerStateChange as u8, vec![sender as u8]));
-                    }
-                }
-            }
-            // Concede → end the match for everyone.
-            (MatchState::InProgress, Some(G::ConcedeMatch)) => {
-                self.state = MatchState::Finished;
-                for p in 0..self.capacity {
-                    out.push((p, G::MatchEndMatchMsg as u8, vec![]));
-                }
-            }
-            _ => {}
-        }
-        out
-    }
-}
+// The per-match state machine now lives in `crate::arena::combat::engine`
+// (`MatchInstance`), driven by the real captured protocol (the flow-control
+// stateName machine + authoritative combat). The placeholder FSM that used to
+// live here — `PlayerLoadoutReady → PlayerWelcome + PlayerSpawnAvatar`,
+// `PlayerCommand → PlayerStateChange`, `ConcedeMatch → MatchEndMatchMsg` — was
+// removed: those opcodes never appear in real captures (see the combat module).

@@ -19,6 +19,7 @@ use actix_web::{
     http::StatusCode,
     web::{self, Json},
 };
+use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::RunQueryDsl;
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,8 @@ use uuid::Uuid;
 use crate::{
     BladeApiError, DbPool, ServerGlobal,
     arena::{MatchmakingMessage, config::ArenaConfig, match_registry::MatchRegistry},
+    models::CharacterDbEntryCharacterWalletInventory,
+    schema::characters,
     session::SessionLookedUpMaybe,
 };
 
@@ -125,6 +128,31 @@ async fn record_match_resolved(
     .bind::<diesel::sql_types::Bool, _>(paired)
     .execute(&mut conn)
     .await;
+}
+
+/// Load a player's combat loadout (equipped abilities + weapon damage enchants)
+/// from their character row. Best-effort: returns a starter loadout when there's
+/// no DB (the unit-test path), no character row, or a query error — matchmaking
+/// must never fail on this.
+async fn load_loadout(db: &Option<DbPool>, user_id: Uuid) -> crate::arena::combat::Loadout {
+    use crate::arena::combat::loadout;
+    let Some(db) = db else {
+        return loadout::starter();
+    };
+    let Ok(mut conn) = db.get().await else {
+        return loadout::starter();
+    };
+    let row = characters::table
+        .filter(characters::user_id.eq(user_id))
+        .select(CharacterDbEntryCharacterWalletInventory::as_select())
+        .load(&mut conn)
+        .await
+        .ok()
+        .and_then(|rows| rows.into_iter().next());
+    match row {
+        Some(r) => loadout::from_character(&r.character.0, &r.inventory.0),
+        None => loadout::starter(),
+    }
 }
 
 /// Newest-first view of `arena_matches`, capped at `limit`, marking `mine`
@@ -272,7 +300,13 @@ async fn resolve(
         .map(|_| format!("psess-{}", Uuid::new_v4()))
         .collect();
 
-    if !registry.allocate(&psids, game_session_id) {
+    // Load each player's combat loadout (equipped abilities + damage enchants)
+    // from their character; falls back to a starter loadout without a DB/row.
+    let mut loadouts = Vec::with_capacity(tickets.len());
+    for t in tickets {
+        loadouts.push(load_loadout(db, t.user_id).await);
+    }
+    if !registry.allocate(&psids, loadouts, game_session_id) {
         for t in tickets {
             warn!(
                 "matchmaker: at capacity — ticket {} left unresolved",

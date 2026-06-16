@@ -82,6 +82,10 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
 
     loop {
         while pump(&mut host, &registry, &mut peer_at) {}
+        // Server-initiated combat output (flow-control heartbeat, damage, etc.).
+        for (addr, bytes) in registry.tick_matches(std::time::Instant::now()) {
+            send_to(&mut host, &peer_at, &addr, &bytes);
+        }
         host.flush();
         thread::sleep(Duration::from_millis(2));
     }
@@ -230,7 +234,7 @@ fn send_to(
 mod tests {
     use super::*;
     use crate::arena::match_registry::{MatchRegistry, gen_keypair};
-    use arena_proto::{CryptoCtx, GameMessageId, chacha20_legacy_xor, x25519_shared};
+    use arena_proto::{CryptoCtx, chacha20_legacy_xor, x25519_shared};
     use std::net::SocketAddr;
     use uuid::Uuid;
 
@@ -277,6 +281,7 @@ mod tests {
                 .send(0, &Packet::reliable(bytes))
                 .unwrap();
         }
+        #[allow(dead_code)] // used by the Phase B combat-input tests
         fn send_enc(&mut self, marker: u8, opcode: u8) {
             let c = self.crypto.clone().expect("keyed");
             let mut ud = vec![marker, opcode];
@@ -285,19 +290,20 @@ mod tests {
         }
     }
 
-    /// Two rusty_enet clients, a shared 2-player match: both CONNECT, handshake,
-    /// both signal PlayerLoadoutReady → both get Welcome + 2×SpawnAvatar; then A
-    /// sends a PlayerCommand and **B receives the relayed PlayerStateChange**.
-    /// Proves pairing (shared match) + the A→B opponent relay end-to-end.
+    /// Two rusty_enet clients, a shared 2-player match: both CONNECT, op-0x38
+    /// handshake, and once both are admitted the TICK drives match-start — each
+    /// client receives `BackendMatchCreated` + a combat-screen per avatar,
+    /// correctly encrypted under its OWN key. Proves pairing (shared match) +
+    /// tick-driven s2c delivery + per-target crypto end-to-end. (Combat-action
+    /// relay returns as real swipe→damage in Phase B.)
     #[test]
-    fn two_player_pairing_and_relay() {
+    fn two_player_pairing_and_match_start() {
         let _ = env_logger::builder().is_test(true).try_init();
-        use GameMessageId as G;
 
         let registry = MatchRegistry::new(4);
         let gsid = Uuid::new_v4();
         let (psid_a, psid_b) = ("psess-a".to_string(), "psess-b".to_string());
-        assert!(registry.allocate(&[psid_a, psid_b], gsid)); // matchmaker pairing (FIFO-bound below)
+        assert!(registry.allocate(&[psid_a, psid_b], Vec::new(), gsid)); // matchmaker pairing (FIFO-bound below)
 
         let server_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         let server_addr = server_sock.local_addr().unwrap();
@@ -309,7 +315,10 @@ mod tests {
         let mut b = Client::connect(server_addr);
 
         // Drive server + both clients until a predicate holds, or panic after budget.
-        macro_rules! pump_until {
+        // Handshake phase: drive I/O only (NO tick) — so match-start doesn't fire
+        // before each client has computed its key (else it'd arrive as ciphertext
+        // and be lost on the inbox clear).
+        macro_rules! pump_io {
             ($cond:expr, $msg:expr) => {{
                 let mut ok = false;
                 for _ in 0..2000 {
@@ -326,9 +335,31 @@ mod tests {
                 assert!(ok, $msg);
             }};
         }
+        // Lifecycle phase: also drive the per-match tick, exactly as the real
+        // serve loop does (this is what emits the flow-control + combat s2c).
+        macro_rules! pump_tick {
+            ($cond:expr, $msg:expr) => {{
+                let mut ok = false;
+                for _ in 0..2000 {
+                    while pump(&mut server, &registry, &mut peer_at) {}
+                    for (addr, bytes) in registry.tick_matches(std::time::Instant::now()) {
+                        send_to(&mut server, &peer_at, &addr, &bytes);
+                    }
+                    server.flush();
+                    a.drain();
+                    b.drain();
+                    if $cond {
+                        ok = true;
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                assert!(ok, $msg);
+            }};
+        }
 
         // 1. Both ENet sessions connect.
-        pump_until!(a.connected && b.connected, "both clients connect");
+        pump_io!(a.connected && b.connected, "both clients connect");
 
         // 2. op-0x38 connect handshake. c2s: BE 38 | conn_id(6) | 00000000 | 01 20 |
         //    client_pubkey(32). s2c reply also carries 08 | nonce(8) after the pubkey.
@@ -343,7 +374,7 @@ mod tests {
         a.send_plain(&hs_c2s(&pk_a));
         b.send_plain(&hs_c2s(&pk_b));
 
-        pump_until!(!a.inbox.is_empty() && !b.inbox.is_empty(), "both get handshake reply");
+        pump_io!(!a.inbox.is_empty() && !b.inbox.is_empty(), "both get handshake reply");
         assert_eq!(a.inbox[0].len(), 55, "reply = BE 38 + conn(6) + dir(4) + 01 20 + spk(32) + 08 + nonce(8)");
         assert_eq!(&a.inbox[0][0..2], &[0xBE, 0x38], "reply is op-0x38");
         // s2c layout: [0..2]=BE 38, [2..8]=conn, [8..12]=dir, [12..14]=01 20,
@@ -362,28 +393,44 @@ mod tests {
         a.inbox.clear();
         b.inbox.clear();
 
-        // 3. Both PlayerLoadoutReady → match starts → both get Welcome + 2 spawns.
-        a.send_enc(0x84, G::PlayerLoadoutReady as u8);
-        b.send_enc(0x84, G::PlayerLoadoutReady as u8);
-        pump_until!(a.inbox.len() >= 3 && b.inbox.len() >= 3, "both get welcome + 2 spawns");
-        let a_ops: Vec<u8> = a.inbox.iter().map(|m| m[1]).collect();
-        assert!(a_ops.contains(&(G::PlayerWelcome as u8)), "A welcomed");
-        assert_eq!(
-            a_ops.iter().filter(|&&o| o == G::PlayerSpawnAvatar as u8).count(),
-            2,
-            "A sees both avatars spawn"
+        // 3. Both admitted → the tick drives match-start: each client receives the
+        //    BackendMatchCreated flow message (decrypted under its OWN key) + a
+        //    combat-screen (MessageType 0x37) for each avatar.
+        pump_tick!(
+            a.inbox.iter().any(|m| m.ends_with(b"BackendMatchCreated"))
+                && b.inbox.iter().any(|m| m.ends_with(b"BackendMatchCreated")),
+            "both clients receive BackendMatchCreated from the tick"
         );
+        assert!(
+            a.inbox.iter().any(|m| m.len() >= 2 && m[1] == 0x37),
+            "A receives a combat-screen message for an avatar"
+        );
+        assert!(
+            a.inbox.iter().all(|m| m.first() == Some(&0xBE)),
+            "every tick s2c decrypts to the 0xBE marker (correct per-target key)"
+        );
+
+        // 4. A's combat input → the server resolves an authoritative hit → B
+        //    receives a ReceiveDamage (carrier 54, NetData propId3=50) with its HP
+        //    pool decremented. The A→B authoritative-combat path, end to end.
         a.inbox.clear();
         b.inbox.clear();
-
-        // 4. A sends a command → relayed to B (the core two-player proof).
-        a.send_enc(0x84, G::PlayerCommand as u8);
-        pump_until!(!b.inbox.is_empty(), "B receives A's relayed action");
-        assert_eq!(
-            b.inbox[0][1],
-            G::PlayerStateChange as u8,
-            "B got A's command relayed as a state change"
+        a.send_enc(0x84, 0x36); // carrier 54 = combat-input family
+        pump_tick!(
+            b.inbox.iter().any(|m| m.len() > 2
+                && m[1] == 0x36
+                && arena_proto::parse_netdata(&m[2..]).int(3) == Some(50)),
+            "B receives a ReceiveDamage from A's input"
         );
-        assert!(a.inbox.is_empty(), "A's own command is not echoed back to A");
+        let dmg = b
+            .inbox
+            .iter()
+            .find(|m| m.len() > 2 && m[1] == 0x36 && arena_proto::parse_netdata(&m[2..]).int(3) == Some(50))
+            .expect("ReceiveDamage present");
+        let packed = match arena_proto::parse_netdata(&dmg[2..]).props.get(&4) {
+            Some(arena_proto::NetDataValue::ULong(v)) => *v,
+            _ => panic!("ReceiveDamage missing packed stats"),
+        };
+        assert_eq!((packed & 0x3ff) as u16, 871, "B's HP dropped by the model-resolved swing (1023-152)");
     }
 }
