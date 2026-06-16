@@ -131,9 +131,11 @@ async fn record_match_resolved(
 }
 
 /// Load a player's combat loadout (equipped abilities + weapon damage enchants)
-/// from their character row. Best-effort: returns a starter loadout when there's
-/// no DB (the unit-test path), no character row, or a query error — matchmaking
-/// must never fail on this.
+/// from their character row. **NOT called from the matchmaker path** — awaiting it
+/// inline on the single matchmaker actor hung all matchmaking (see `resolve`).
+/// Re-enable only OFF the actor: a spawned task, a bounded `tokio::time::timeout`,
+/// and/or a per-user cache, so a slow `characters` query can't stall matches.
+#[allow(dead_code)]
 async fn load_loadout(db: &Option<DbPool>, user_id: Uuid) -> crate::arena::combat::Loadout {
     use crate::arena::combat::loadout;
     let Some(db) = db else {
@@ -300,12 +302,12 @@ async fn resolve(
         .map(|_| format!("psess-{}", Uuid::new_v4()))
         .collect();
 
-    // Load each player's combat loadout (equipped abilities + damage enchants)
-    // from their character; falls back to a starter loadout without a DB/row.
-    let mut loadouts = Vec::with_capacity(tickets.len());
-    for t in tickets {
-        loadouts.push(load_loadout(db, t.user_id).await);
-    }
+    // Per-character loadout loading is DEFERRED: it must NEVER run inline on the
+    // matchmaker actor — awaiting a `characters` query here stalled the single
+    // actor and hung ALL matchmaking → client timeout (regression 2026-06-16).
+    // Fighters use the starter loadout (combat works); re-wire `load_loadout` OFF
+    // the actor (spawned task / bounded timeout / per-user cache) before reusing it.
+    let loadouts: Vec<crate::arena::combat::Loadout> = Vec::new();
     if !registry.allocate(&psids, loadouts, game_session_id) {
         for t in tickets {
             warn!(
