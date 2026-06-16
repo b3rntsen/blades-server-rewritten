@@ -163,7 +163,11 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
         let now = std::time::Instant::now();
         // Server-initiated combat output (flow-control heartbeat, damage, etc.).
         for (addr, bytes) in registry.tick_matches(now) {
-            send_to(&mut host, &peer_at, &addr, &bytes);
+            // The ~28 KB op54 PROFILE rides its own ENet channel (4) in retail
+            // (s486, spec §6.2); small frames (clock/spawns/flow/updates) stay on
+            // channel 0. Route by size+carrier so the client's profile handler sees it.
+            let channel = if bytes.len() > 1000 && bytes.get(1) == Some(&0x36) { 4 } else { 0 };
+            send_to(&mut host, &peer_at, &addr, channel, &bytes);
         }
         host.flush();
         // Housekeeping ~every 5 s: reclaim leaked match slots (so the registry
@@ -268,7 +272,7 @@ fn handle_packet(
             }
             // Deliver each reply to its TARGET peer (may be the opponent).
             for (target_addr, bytes) in &out.replies {
-                send_to(host, peer_at, target_addr, bytes);
+                send_to(host, peer_at, target_addr, 0, bytes);
             }
         }
         return;
@@ -301,7 +305,7 @@ fn handle_packet(
                 reply.extend_from_slice(&server_pk);
                 reply.push(0x08); // nonce field: len 8
                 reply.extend_from_slice(&nonce);
-                send_to(host, peer_at, &addr, &reply);
+                send_to(host, peer_at, &addr, 0, &reply);
                 info!("arena-enet: {addr} admitted (op-0x38 key exchange)");
             }
             None => warn!(
@@ -324,16 +328,18 @@ fn handle_packet(
     }
 }
 
-/// Send a reliable channel-0 packet to the peer at `addr` (looked up by PeerID).
+/// Send a reliable packet on `channel` to the peer at `addr` (looked up by PeerID).
+/// The big op54 profile uses channel 4 (retail/s486); everything else channel 0.
 fn send_to(
     host: &mut ArenaHost,
     peer_at: &HashMap<std::net::SocketAddr, PeerID>,
     addr: &std::net::SocketAddr,
+    channel: u8,
     bytes: &[u8],
 ) {
     if let Some(&pid) = peer_at.get(addr) {
         if let Some(peer) = host.get_peer_mut(pid) {
-            if let Err(e) = peer.send(0, &Packet::reliable(bytes)) {
+            if let Err(e) = peer.send(channel, &Packet::reliable(bytes)) {
                 warn!("arena-enet: send to {addr} failed: {e:?}");
             }
             return;
@@ -489,7 +495,7 @@ mod tests {
                 for _ in 0..2000 {
                     while pump(&mut server, &registry, &mut peer_at) {}
                     for (addr, bytes) in registry.tick_matches(std::time::Instant::now()) {
-                        send_to(&mut server, &peer_at, &addr, &bytes);
+                        send_to(&mut server, &peer_at, &addr, 0, &bytes);
                     }
                     server.flush();
                     a.drain();
