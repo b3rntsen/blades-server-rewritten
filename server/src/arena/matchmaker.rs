@@ -152,7 +152,11 @@ async fn load_loadout(db: &Option<DbPool>, user_id: Uuid) -> crate::arena::comba
         .ok()
         .and_then(|rows| rows.into_iter().next());
     match row {
-        Some(r) => loadout::from_character(&r.character.0, &r.inventory.0),
+        Some(r) => {
+            let mut lo = loadout::from_character(&r.character.0, &r.inventory.0);
+            lo.character_uuid = r.id.to_string(); // the character UUID for the op50 spawn
+            lo
+        }
         None => loadout::starter(),
     }
 }
@@ -302,12 +306,28 @@ async fn resolve(
         .map(|_| format!("psess-{}", Uuid::new_v4()))
         .collect();
 
-    // Per-character loadout loading is DEFERRED: it must NEVER run inline on the
-    // matchmaker actor — awaiting a `characters` query here stalled the single
-    // actor and hung ALL matchmaking → client timeout (regression 2026-06-16).
-    // Fighters use the starter loadout (combat works); re-wire `load_loadout` OFF
-    // the actor (spawned task / bounded timeout / per-user cache) before reusing it.
-    let loadouts: Vec<crate::arena::combat::Loadout> = Vec::new();
+    // Each player's loadout (name/UUID for the round-start op50 spawn + combat stats)
+    // is loaded here, but BOUNDED by a short timeout per player: awaiting an unbounded
+    // `characters` query inline once stalled the single matchmaker actor and hung ALL
+    // matchmaking (regression 2026-06-16). On timeout we degrade to the starter loadout
+    // so a slow query never hangs matchmaking. (Low-volume today; if this becomes hot,
+    // move to a spawned task that injects the loadout before match-start, or a cache.)
+    let mut loadouts: Vec<crate::arena::combat::Loadout> = Vec::with_capacity(tickets.len());
+    for t in tickets {
+        let lo = match tokio::time::timeout(
+            std::time::Duration::from_millis(1500),
+            load_loadout(db, t.user_id),
+        )
+        .await
+        {
+            Ok(lo) => lo,
+            Err(_) => {
+                warn!("matchmaker: loadout load timed out (user {}) — starter", t.user_id);
+                crate::arena::combat::loadout::starter()
+            }
+        };
+        loadouts.push(lo);
+    }
     if !registry.allocate(&psids, loadouts, game_session_id) {
         for t in tickets {
             warn!(

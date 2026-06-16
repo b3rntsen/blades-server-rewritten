@@ -19,7 +19,7 @@ use log::{debug, info};
 
 use super::messages;
 use super::resolve;
-use super::state::{Fighter, FlowState, Loadout, MatchCombat, NetObjectType, NetRole};
+use super::state::{Fighter, FlowState, Loadout, MatchCombat, NetRole};
 
 /// Cadence of the `StateTimeout` flow heartbeat (server→client keepalive while a
 /// phase runs). Captured cadence is sub-second; tunable.
@@ -42,6 +42,7 @@ impl MatchInstance {
         let mut combat = MatchCombat::new(capacity, now);
         for slot in 0..capacity {
             let net_object_id = combat.alloc_net_object_id();
+            let player_net_object_id = combat.alloc_net_object_id();
             // Use the provided loadout if it carries a weapon; else a starter
             // loadout so the damage model produces a real, progressing fight.
             let loadout = loadouts
@@ -49,9 +50,9 @@ impl MatchInstance {
                 .cloned()
                 .filter(|l| !l.weapon.base_by_type.is_empty())
                 .unwrap_or_else(super::loadout::starter);
-            combat
-                .fighters
-                .push(Fighter::new(slot, net_object_id, loadout, now));
+            let mut fighter = Fighter::new(slot, net_object_id, loadout, now);
+            fighter.player_net_object_id = player_net_object_id;
+            combat.fighters.push(fighter);
         }
         MatchInstance {
             combat,
@@ -118,8 +119,8 @@ impl MatchInstance {
                     self.combat.phase = FlowState::BackendMatchCreated;
                     self.combat.phase_entered = now;
                     self.last_heartbeat = now;
+                    self.broadcast_spawns(&mut out);
                     self.broadcast_flow(&mut out, FlowState::BackendMatchCreated);
-                    self.broadcast_combat_screen(&mut out);
                 }
             }
             // Brief hold, then the round goes live (StateTimeout heartbeat).
@@ -154,16 +155,39 @@ impl MatchInstance {
         }
     }
 
-    fn broadcast_combat_screen(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+    /// Broadcast the round-start net-object SPAWNS (op50) to every viewer: each
+    /// fighter's Player + Avatar object, role Autonomous for the viewer's OWN
+    /// fighter and Simulated for the opponent. This is what the client needs to
+    /// construct the fighters and render the match (docs §6.2 / journey-log §6).
+    /// (The op54 per-player PROFILE — gear/customization/stats JSON — is the next
+    /// piece; without it the client may still lack appearance data.)
+    fn broadcast_spawns(&self, out: &mut Vec<(usize, Vec<u8>)>) {
         for viewer in 0..self.combat.fighters.len() {
             for actor in &self.combat.fighters {
+                let role = if actor.slot == viewer {
+                    NetRole::Autonomous
+                } else {
+                    NetRole::Simulated
+                };
+                let name = if actor.loadout.display_name.is_empty() {
+                    "Fighter"
+                } else {
+                    actor.loadout.display_name.as_str()
+                };
                 out.push((
                     viewer,
-                    messages::combat_screen_info(
-                        actor.net_object_id,
-                        NetObjectType::Avatar,
-                        NetRole::Authority,
+                    messages::spawn_player(
+                        actor.player_net_object_id,
+                        role,
+                        name,
+                        &actor.loadout.character_uuid,
+                        actor.loadout.level as i32,
+                        actor.loadout.level as i32,
                     ),
+                ));
+                out.push((
+                    viewer,
+                    messages::spawn_avatar(actor.net_object_id, role, &actor.loadout.character_uuid),
                 ));
             }
         }
@@ -210,9 +234,9 @@ mod tests {
             .filter(|(_, b)| b.ends_with(b"BackendMatchCreated"))
             .count();
         assert_eq!(flow, 2, "BackendMatchCreated to both players");
-        // 2 viewers × 2 avatars = 4 combat-screen messages.
-        let screens = out.iter().filter(|(_, b)| b.len() >= 2 && b[1] == 0x37).count();
-        assert_eq!(screens, 4);
+        // 2 viewers × 2 fighters × (Player + Avatar) = 8 op50 (0x32) spawn messages.
+        let spawns = out.iter().filter(|(_, b)| b.len() >= 2 && b[1] == 0x32).count();
+        assert_eq!(spawns, 8, "op50 Player+Avatar spawns to both viewers");
     }
 
     #[test]

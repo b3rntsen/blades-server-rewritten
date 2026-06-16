@@ -67,6 +67,47 @@ pub fn combat_screen_info(net_object_id: i32, net_object_type: NetObjectType, ro
     frame(MSGTYPE_COMBAT_SCREEN, w.finish())
 }
 
+/// Carrier MessageType for a net-object **SPAWN** (op `0x32` = 50) — the generic
+/// object-registration message the server sends at round start so the client can
+/// construct each Player/Avatar/Match object. Decoded from two-sided + Taheen
+/// captures; see `docs/arena-protocol-spec.md` §6.2 and `docs/arena-journey-log.md` §6.
+pub const MSGTYPE_SPAWN: u8 = 0x32; // 50
+
+/// Spawn a **Player** net-object (the per-player object the client renders + names).
+/// `role`: [`NetRole::Autonomous`] (3) for the viewer's OWN player, [`NetRole::Simulated`]
+/// (2) for the opponent. `rank_a`/`rank_b` are the two trailing ints (arena rank/index —
+/// captured 72/72 for Taheen, 6/7 for flapdroid; exact meaning TBD, non-fatal to render).
+/// Byte-verified against session-486 (Taheen) frame.
+pub fn spawn_player(
+    net_object_id: i32,
+    role: NetRole,
+    name: &str,
+    character_uuid: &str,
+    rank_a: i32,
+    rank_b: i32,
+) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, net_object_id)
+        .byte(1, NetObjectType::Player as u8)
+        .byte(2, role as u8)
+        .string(3, name)
+        .string(4, character_uuid)
+        .int(5, rank_a)
+        .int(6, rank_b);
+    frame(MSGTYPE_SPAWN, w.finish())
+}
+
+/// Spawn an **Avatar** net-object (the in-arena fighter body). Sparse NetData
+/// (props 0,1,2,4 — no display name); links to the character UUID for appearance/gear.
+pub fn spawn_avatar(net_object_id: i32, role: NetRole, character_uuid: &str) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, net_object_id)
+        .byte(1, NetObjectType::Avatar as u8)
+        .byte(2, role as u8)
+        .string(4, character_uuid);
+    frame(MSGTYPE_SPAWN, w.finish())
+}
+
 /// Build a `ReceiveDamage` — the s2c authoritative damage event. Carrier
 /// MessageType `0x36` (54); the real GameMessageId (50) lives at NetData propId 3
 /// (carrier 54 is shared with swipe/ability/etc.). The message describes the
@@ -198,6 +239,46 @@ mod tests {
             got,
             &[0xBE, 0x37, 0x02, 0x07, 0x70, 0x07, 0xB5, 0x01, 0x00, 0x00, 0x37, 0x02]
         );
+    }
+
+    /// Byte-for-byte vs session-486 (Taheen) op50 Player spawn: net_obj 197,
+    /// role Autonomous(3), name "Taheen", char bee74bea-…, ranks 72/72.
+    #[test]
+    fn spawn_player_matches_capture() {
+        let got = spawn_player(
+            197,
+            NetRole::Autonomous,
+            "Taheen",
+            "bee74bea-1ab5-46c0-9eb5-f81e6e25ac05",
+            72,
+            72,
+        );
+        let mut want = vec![
+            0xBE, 0x32, // marker + SPAWN carrier (50)
+            0x06, // maxPropId = 6
+            0x7F, // bitmap: props 0..6 present
+            0x70, 0xA7, 0x0A, 0x00, // type nibbles [Int,Byte,Byte,String,String,Int,Int]
+            0xC5, 0x00, 0x00, 0x00, // p0 netObjectId = 197
+            0x37, // p1 = 55 (Player)
+            0x03, // p2 = 3 (Autonomous = self)
+            0x06, 0x00, // p3 String len = 6
+        ];
+        want.extend_from_slice(b"Taheen");
+        want.extend_from_slice(&[0x24, 0x00]); // p4 String len = 36
+        want.extend_from_slice(b"bee74bea-1ab5-46c0-9eb5-f81e6e25ac05");
+        want.extend_from_slice(&[0x48, 0, 0, 0, 0x48, 0, 0, 0]); // p5,p6 = 72,72
+        assert_eq!(got, want);
+    }
+
+    /// op50 Avatar spawn is sparse (props 0,1,2,4 — no name). s486 net_obj 200.
+    #[test]
+    fn spawn_avatar_is_sparse() {
+        let got = spawn_avatar(200, NetRole::Autonomous, "bee74bea-1ab5-46c0-9eb5-f81e6e25ac05");
+        assert_eq!(&got[0..2], &[0xBE, 0x32], "marker + spawn carrier");
+        assert_eq!(got[2], 0x04, "maxPropId = 4");
+        assert_eq!(got[3], 0x17, "bitmap = props {{0,1,2,4}}");
+        assert_eq!(&got[4..6], &[0x70, 0xA7], "type nibbles [Int,Byte,Byte,String]");
+        assert!(got.ends_with(b"bee74bea-1ab5-46c0-9eb5-f81e6e25ac05"));
     }
 
     /// Byte-for-byte vs session-293 frame 1956589 (s2c ReceiveDamage): an Attack

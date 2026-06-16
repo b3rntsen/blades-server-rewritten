@@ -234,6 +234,11 @@ pub struct Loadout {
     pub has_shield: bool,
     /// Enchant `(damage_type, tier)` contributions, applied in the damage model.
     pub enchants: Vec<(DamageType, u8)>,
+    /// Display name + character UUID for the round-start op50 spawn. Empty for the
+    /// starter loadout (no character row); set by `loadout::from_character` + the
+    /// matchmaker's character load.
+    pub display_name: String,
+    pub character_uuid: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +264,9 @@ pub struct Fighter {
     pub slot: usize,
     /// The Avatar net object id the server assigns and addresses in messages.
     pub net_object_id: i32,
+    /// The Player net object id (distinct from the Avatar id) — addressed by the
+    /// round-start op50 Player spawn. Allocated by `MatchInstance::new`.
+    pub player_net_object_id: i32,
     /// Raw pools (hundreds-to-thousands; Health is ×3 in arena). The WIRE packs a
     /// FRACTION of max — see `packed_stats` / `wire_fraction`, not these raw values.
     pub health: u32,
@@ -292,6 +300,7 @@ impl Fighter {
         Fighter {
             slot,
             net_object_id,
+            player_net_object_id: 0, // assigned by MatchInstance::new
             health: max_health,
             stamina: max_stamina,
             magicka: max_magicka,

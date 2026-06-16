@@ -38,6 +38,8 @@ pub fn starter() -> Loadout {
         },
         has_shield: false,
         enchants: vec![(DamageType::Shock, 2)],
+        display_name: String::new(),
+        character_uuid: String::new(),
     }
 }
 
@@ -69,6 +71,8 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         },
         has_shield: false, // not derivable without item-name data
         enchants,
+        display_name: character.name.clone(),
+        character_uuid: String::new(), // set by the matchmaker (needs the DB row id)
     }
 }
 
