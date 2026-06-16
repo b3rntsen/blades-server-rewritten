@@ -98,6 +98,21 @@ impl MatchRegistry {
         loadouts: Vec<Loadout>,
         game_session_id: Uuid,
     ) -> bool {
+        self.allocate_with_bots(player_session_ids, loadouts, game_session_id, 0)
+    }
+
+    /// Like [`allocate`](Self::allocate), but the match gets `bots` extra
+    /// server-driven fighters with NO UDP peer (a solo-vs-bot match). The combat
+    /// instance has `real_peers + bots` FIGHTERS, but the round starts once the
+    /// `real_peers` human peers connect (`expected_peers`) — the bot fighters are
+    /// pre-present, so the match never hangs waiting for a peer that won't come.
+    pub fn allocate_with_bots(
+        &self,
+        player_session_ids: &[String],
+        loadouts: Vec<Loadout>,
+        game_session_id: Uuid,
+        bots: usize,
+    ) -> bool {
         let permit = match self.semaphore.clone().try_acquire_owned() {
             Ok(p) => p,
             Err(_) => {
@@ -108,7 +123,11 @@ impl MatchRegistry {
                 return false;
             }
         };
+        // `capacity` = real-peer admit slots (a bot has no UDP peer); the combat
+        // instance gets `capacity + bots` fighters but waits for only `capacity`
+        // real peers (expected_peers) before starting the round.
         let capacity = player_session_ids.len().max(1);
+        let fighters = capacity + bots;
         let order = self
             .next_order
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -119,7 +138,7 @@ impl MatchRegistry {
                 order,
                 capacity,
                 players: Vec::with_capacity(capacity),
-                instance: MatchInstance::new(capacity, loadouts, Instant::now()),
+                instance: MatchInstance::new(fighters, capacity, loadouts, Instant::now()),
                 created_at: Instant::now(),
                 _permit: permit,
             },
@@ -129,7 +148,7 @@ impl MatchRegistry {
             pending.insert(psid.clone(), game_session_id);
         }
         info!(
-            "match registry: allocated match {game_session_id} (capacity {capacity}) — {} slot(s) free of {}",
+            "match registry: allocated match {game_session_id} ({capacity} peer slot(s), {fighters} fighter(s), {bots} bot(s)) — {} slot(s) free of {}",
             self.semaphore.available_permits(),
             self.max_matches
         );

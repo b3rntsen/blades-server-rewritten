@@ -352,8 +352,14 @@ impl Fighter {
 #[derive(Debug, Clone)]
 pub struct MatchCombat {
     pub phase: FlowState,
-    /// Intended player count (1 = solo/bot, 2 = PvP); fighters are created up to it.
+    /// Number of FIGHTERS in the match (1 or 2). For a solo-vs-bot match this is 2
+    /// (player + bot) even though only 1 real peer connects — see `expected_peers`.
     pub capacity: usize,
+    /// Real ENet peers to wait for before the round starts (the
+    /// Connecting→BackendMatchCreated gate). Equals `capacity` for PvP; for a
+    /// solo-vs-bot match it's 1 (the bot has no peer) so the match starts on the
+    /// lone player's connect instead of hanging in Connecting forever.
+    pub expected_peers: usize,
     /// 1 or 2 fighters (created at allocation from each player's loadout).
     pub fighters: Vec<Fighter>,
     /// The Control net object that carries flow-control stateName messages
@@ -369,10 +375,11 @@ pub struct MatchCombat {
 }
 
 impl MatchCombat {
-    pub fn new(capacity: usize, now: Instant) -> Self {
+    pub fn new(capacity: usize, expected_peers: usize, now: Instant) -> Self {
         MatchCombat {
             phase: FlowState::Connecting,
             capacity,
+            expected_peers,
             fighters: Vec::with_capacity(capacity),
             flow_controller_id: 560, // matches captured flow-controller id range
             next_net_object_id: 564, // matches captured combat-actor id range
@@ -390,6 +397,12 @@ impl MatchCombat {
 
     pub fn capacity(&self) -> usize {
         self.capacity
+    }
+
+    /// Real ENet peers to wait for before starting (see the field). A solo-vs-bot
+    /// match has `capacity` 2 but `expected_peers` 1.
+    pub fn expected_peers(&self) -> usize {
+        self.expected_peers
     }
 
     pub fn phase_name(&self) -> &'static str {

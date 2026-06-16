@@ -16,6 +16,12 @@ pub struct ArenaConfig {
     pub max_concurrent_matches: usize,
     /// Cap on queued matchmaking tickets before `create` returns 503.
     pub max_queued_players: usize,
+    /// Seconds a lone matchmaking ticket waits for a human opponent before it falls
+    /// back to a solo match against a bot. Tunable via ARENA_SOLO_FALLBACK_SECS:
+    /// shorter = a solo tester gets a bot fight sooner; longer = a wider window for
+    /// two near-simultaneous players to PAIR (coordinated taps pair instantly either
+    /// way, since the 2nd ticket arrives while the 1st is waiting).
+    pub solo_fallback_secs: u64,
 }
 
 impl ArenaConfig {
@@ -29,6 +35,7 @@ impl ArenaConfig {
             udp_port: parse("ARENA_UDP_PORT", 7777),
             max_concurrent_matches: parse("ARENA_MAX_MATCHES", 16),
             max_queued_players: parse("ARENA_MAX_QUEUED", 64),
+            solo_fallback_secs: parse("ARENA_SOLO_FALLBACK_SECS", 20),
         }
     }
 }

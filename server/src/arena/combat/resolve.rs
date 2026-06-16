@@ -224,8 +224,38 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Tick-driven combat (DoT ticks, cooldown expiry, channel completion). No-op for
-/// now — DoT/status ticks plug in here once the status-effect path is wired.
-pub fn on_tick(_combat: &mut MatchCombat, _now: Instant) -> Vec<(usize, Vec<u8>)> {
-    Vec::new()
+/// A bot fighter's auto-swing cadence. Slower than a human's `SWING_COOLDOWN` so the
+/// player wins comfortably but sees real incoming damage — a fight, not a static dummy.
+const BOT_SWING_COOLDOWN: Duration = Duration::from_millis(1800);
+
+/// Tick-driven combat. Drives any BOT fighters (slots at/after `expected_peers`,
+/// which have no real ENet peer — a solo-vs-bot match's 2nd fighter) to auto-swing
+/// at their opponent on `BOT_SWING_COOLDOWN`. Real players are input-driven
+/// (`on_c2s_input`); only bots act on the tick. (DoT/status-effect ticks will also
+/// plug in here once that path is wired.)
+pub fn on_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
+    if !matches!(combat.phase, FlowState::StateTimeout) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let bot_slots: Vec<usize> = (combat.expected_peers..combat.fighters.len()).collect();
+    for bot in bot_slots {
+        if combat.fighters[bot].is_dead() {
+            continue;
+        }
+        let Some(target) = combat.opponent_of(bot) else {
+            continue;
+        };
+        if combat.fighters[target].is_dead() {
+            continue;
+        }
+        let ready = combat.fighters[bot]
+            .last_swing
+            .map(|t| now.duration_since(t) >= BOT_SWING_COOLDOWN)
+            .unwrap_or(true);
+        if ready {
+            out.extend(resolve_swing(combat, bot, target, now));
+        }
+    }
+    out
 }

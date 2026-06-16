@@ -540,16 +540,16 @@ mod tests {
         b.inbox.clear();
 
         // 3. Both admitted → the tick drives match-start: each client receives the
-        //    BackendMatchCreated flow message (decrypted under its OWN key) + a
-        //    combat-screen (MessageType 0x37) for each avatar.
+        //    BackendMatchCreated flow message (decrypted under its OWN key) + the
+        //    op50 (MessageType 0x32) net-object spawns for each fighter.
         pump_tick!(
             a.inbox.iter().any(|m| m.ends_with(b"BackendMatchCreated"))
                 && b.inbox.iter().any(|m| m.ends_with(b"BackendMatchCreated")),
             "both clients receive BackendMatchCreated from the tick"
         );
         assert!(
-            a.inbox.iter().any(|m| m.len() >= 2 && m[1] == 0x37),
-            "A receives a combat-screen message for an avatar"
+            a.inbox.iter().any(|m| m.len() >= 2 && m[1] == 0x32),
+            "A receives an op50 net-object spawn"
         );
         assert!(
             a.inbox.iter().all(|m| m.first() == Some(&0xBE)),

@@ -244,12 +244,10 @@ impl ArenaGlobal {
     }
 }
 
-/// The matchmaker actor. Single owner of the ticket queue — no locks. v1 solo +
-/// bot: each ticket resolves immediately to our configured UDP endpoint.
-/// Seconds a lone ticket waits for an opponent before falling back to a solo
-/// (no-opponent / bot) match, so a single tester isn't stuck "Searching".
-const SOLO_FALLBACK_SECS: u64 = 15;
-
+/// The matchmaker actor. Single owner of the ticket queue — no locks. A lone ticket
+/// waits `config.solo_fallback_secs` for a human opponent to PAIR with; if none
+/// arrives it falls back to a solo match against a server-driven bot, so a single
+/// tester always gets a fight instead of being stuck "Searching".
 async fn matchmaker_loop(
     mut rx: UnboundedReceiver<TicketRequest>,
     config: ArenaConfig,
@@ -269,10 +267,10 @@ async fn matchmaker_loop(
         let next = if waiting.is_some() {
             tokio::select! {
                 r = rx.recv() => r,
-                _ = tokio::time::sleep(Duration::from_secs(SOLO_FALLBACK_SECS)) => {
+                _ = tokio::time::sleep(Duration::from_secs(config.solo_fallback_secs)) => {
                     let lone = waiting.take().expect("waiting is some");
-                    info!("matchmaker: no opponent for ticket {} — solo fallback", lone.ticket_id);
-                    resolve(&registry, &config, &db, &[lone]).await;
+                    info!("matchmaker: no opponent for ticket {} — solo fallback (vs bot)", lone.ticket_id);
+                    resolve(&registry, &config, &db, &[lone], 1).await;
                     continue;
                 }
             }
@@ -293,8 +291,8 @@ async fn matchmaker_loop(
             .send(MatchmakingMessage::PotentialMatch { ticket_id: req.ticket_id });
 
         match waiting.take() {
-            // A second player arrived → pair the two into ONE shared match.
-            Some(first) => resolve(&registry, &config, &db, &[first, req]).await,
+            // A second player arrived → pair the two into ONE shared match (no bot).
+            Some(first) => resolve(&registry, &config, &db, &[first, req], 0).await,
             // First player → hold it and wait for an opponent (or the timer above).
             None => waiting = Some(req),
         }
@@ -310,6 +308,7 @@ async fn resolve(
     config: &ArenaConfig,
     db: &Option<DbPool>,
     tickets: &[TicketRequest],
+    bots: usize,
 ) {
     let game_session_id = Uuid::new_v4();
     let paired = tickets.len() >= 2;
@@ -340,7 +339,7 @@ async fn resolve(
         };
         loadouts.push(lo);
     }
-    if !registry.allocate(&psids, loadouts, game_session_id) {
+    if !registry.allocate_with_bots(&psids, loadouts, game_session_id, bots) {
         for t in tickets {
             warn!(
                 "matchmaker: at capacity — ticket {} left unresolved",
@@ -488,6 +487,7 @@ mod tests {
             udp_port: 7777,
             max_concurrent_matches: 4,
             max_queued_players: 64,
+            solo_fallback_secs: 15,
         };
         let (tx, rx) = unbounded_channel::<TicketRequest>();
         tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));

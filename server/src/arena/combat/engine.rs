@@ -38,8 +38,11 @@ pub struct MatchInstance {
 impl MatchInstance {
     /// Create a match instance with `capacity` fighters, each built from the
     /// matching entry of `loadouts` (missing entries default — bot / un-imported).
-    pub fn new(capacity: usize, loadouts: Vec<Loadout>, now: Instant) -> Self {
-        let mut combat = MatchCombat::new(capacity, now);
+    /// `expected_peers` is how many real ENet peers must connect before the round
+    /// starts (== capacity for PvP; 1 for a solo-vs-bot match, whose 2nd fighter is
+    /// a server-driven bot with no peer).
+    pub fn new(capacity: usize, expected_peers: usize, loadouts: Vec<Loadout>, now: Instant) -> Self {
+        let mut combat = MatchCombat::new(capacity, expected_peers, now);
         for slot in 0..capacity {
             let net_object_id = combat.alloc_net_object_id();
             let player_net_object_id = combat.alloc_net_object_id();
@@ -111,9 +114,10 @@ impl MatchInstance {
             // Wait for everyone to connect, then create the match: announce
             // BackendMatchCreated + the combat screen for every avatar to everyone.
             FlowState::Connecting => {
-                if self.combat.capacity() > 0 && connected >= self.combat.capacity() {
+                if self.combat.expected_peers() > 0 && connected >= self.combat.expected_peers() {
                     info!(
-                        "combat FSM: Connecting → BackendMatchCreated ({connected}/{} peers connected)",
+                        "combat FSM: Connecting → BackendMatchCreated ({connected}/{} peer(s), {} fighter(s))",
+                        self.combat.expected_peers(),
                         self.combat.capacity(),
                     );
                     self.combat.phase = FlowState::BackendMatchCreated;
@@ -240,7 +244,8 @@ mod tests {
 
     fn inst(capacity: usize) -> (MatchInstance, Instant) {
         let now = Instant::now();
-        (MatchInstance::new(capacity, vec![], now), now)
+        // PvP-style: every fighter has a real peer (expected_peers == capacity).
+        (MatchInstance::new(capacity, capacity, vec![], now), now)
     }
 
     #[test]
@@ -262,6 +267,23 @@ mod tests {
         // 2 viewers × 2 fighters × (Player + Avatar) = 8 op50 (0x32) spawn messages.
         let spawns = out.iter().filter(|(_, b)| b.len() >= 2 && b[1] == 0x32).count();
         assert_eq!(spawns, 8, "op50 Player+Avatar spawns to both viewers");
+    }
+
+    #[test]
+    fn solo_bot_match_starts_on_one_peer_and_bot_attacks() {
+        // capacity 2 (player + bot), but only 1 real peer expected → the match must
+        // start when that lone peer connects (the bot has no peer), and the bot must
+        // auto-swing at the player on the tick (a fight, not a static dummy).
+        let now = Instant::now();
+        let mut m = MatchInstance::new(2, 1, vec![], now);
+        m.on_tick(1, now); // one real peer is enough
+        assert_eq!(m.phase(), FlowState::BackendMatchCreated);
+        m.on_tick(1, now + MATCH_CREATE_HOLD); // → round live
+        assert_eq!(m.phase(), FlowState::StateTimeout);
+        let before = m.fighter_health(0);
+        // Past the bot's swing cadence → the bot (slot 1) damages the player (slot 0).
+        m.on_tick(1, now + MATCH_CREATE_HOLD + Duration::from_secs(3));
+        assert!(m.fighter_health(0) < before, "bot should damage the player on tick");
     }
 
     #[test]
