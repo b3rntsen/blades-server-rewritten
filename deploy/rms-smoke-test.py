@@ -104,7 +104,9 @@ def main():
         print("FAIL: matches/create rejected (matchmaking_ws not set / session stale?)")
         sys.exit(1)
 
-    deadline, buf2, ok, seen = time.monotonic() + 22, rest, None, 0
+    # Wait comfortably past the solo fallback (ARENA_SOLO_FALLBACK_SECS, default 20s)
+    # plus margin, so Succeeded reliably lands inside the window.
+    deadline, buf2, ok, seen = time.monotonic() + 32, rest, None, 0
     while time.monotonic() < deadline and ok is None:
         s.settimeout(max(0.5, deadline - time.monotonic()))
         try:
