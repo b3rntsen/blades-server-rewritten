@@ -50,6 +50,7 @@ pub mod loadout;
 pub mod messages;
 pub mod resolve;
 pub mod state;
+pub mod tables;
 
 pub use engine::MatchInstance;
 pub use state::Loadout;

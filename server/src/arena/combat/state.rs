@@ -8,9 +8,33 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-/// Max value of a packed stat (Health/Stamina/Magicka). 10 bits each, so the
-/// three pack into the low 30 bits of the `ReceiveDamage` stats ULong.
+/// Max value of a **packed wire stat** — 10 bits each (Health/Stamina/Magicka pack
+/// into the low 30 bits of the `ReceiveDamage` stats ULong). NOTE: the wire field is
+/// a **fraction of max** (`STAT_MAX` = full), NOT raw HP — raw HP is hundreds-to-
+/// thousands and ×3 in arena exceeds 10 bits. See docs/blades-combat-formulae.md §9.
 pub const STAT_MAX: u16 = 1023;
+
+/// Arena multiplies max HEALTH by this (`PvpDefaultSettings.CHEAT_BASE_HEALTH_MULTIPLIER
+/// = 3`, dump 427012). Stamina/Magicka are NOT multiplied. See formulae doc §10.
+pub const ARENA_HEALTH_MULTIPLIER: u32 = 3;
+
+/// Approximate base max-Health for a level (UESP L50-era curve: 200 + 10/level). Our
+/// build is L100 so this is representative until the real `PlayerStatsData` curve is
+/// wired; validate magnitudes against captures (docs/blades-combat-formulae.md §9).
+pub fn health_for_level(level: u16) -> u32 {
+    200 + 10 * level.saturating_sub(1) as u32
+}
+/// Approximate Stamina/Magicka pool for a level (the player splits one per level).
+pub fn pool_for_level(level: u16) -> u32 {
+    200 + 5 * level.saturating_sub(1) as u32
+}
+/// Encode a raw pool value as its 10-bit wire fraction of max (`STAT_MAX` = full).
+pub fn wire_fraction(cur: u32, max: u32) -> u16 {
+    if max == 0 {
+        return 0;
+    }
+    ((cur.min(max) as u64 * STAT_MAX as u64) / max as u64) as u16
+}
 
 // ---------------------------------------------------------------------------
 // Shared protocol enums (NetObjectInfo + combat)
@@ -153,8 +177,11 @@ impl FlowState {
 // ---------------------------------------------------------------------------
 
 /// `ReceiveDamage` propIds 4/5 pack a player's pools + a sequence id into one
-/// ULong: `lo32 = Health | Stamina<<10 | Magicka<<20` (10 bits each, `STAT_MAX`),
-/// `hi32 = sequenceId`.
+/// ULong. **Layout (verified against captures, s293):** the **HIGH 32 bits** hold
+/// the stat word `Health | Stamina<<10 | Magicka<<20` (10 bits each, `STAT_MAX`),
+/// and the **LOW 32 bits** hold the `sequenceId` (a small rising counter). (The
+/// first-pass RE + the archived `arena-combat-reference.md` had these halves
+/// backwards — a full actor reads 1023 from the HIGH half, not the low.)
 pub struct PackedStats;
 
 impl PackedStats {
@@ -162,15 +189,17 @@ impl PackedStats {
         let h = (health.min(STAT_MAX) as u64) & 0x3ff;
         let s = (stamina.min(STAT_MAX) as u64) & 0x3ff;
         let m = (magicka.min(STAT_MAX) as u64) & 0x3ff;
-        (h | (s << 10) | (m << 20)) | ((seq as u64) << 32)
+        let stats = h | (s << 10) | (m << 20);
+        (stats << 32) | (seq as u64) // stats in the HIGH 32, sequence id in the LOW 32
     }
 
     /// Returns `(health, stamina, magicka, seq)`.
     pub fn unpack(v: u64) -> (u16, u16, u16, u32) {
-        let health = (v & 0x3ff) as u16;
-        let stamina = ((v >> 10) & 0x3ff) as u16;
-        let magicka = ((v >> 20) & 0x3ff) as u16;
-        let seq = (v >> 32) as u32;
+        let stats = (v >> 32) as u32;
+        let health = (stats & 0x3ff) as u16;
+        let stamina = ((stats >> 10) & 0x3ff) as u16;
+        let magicka = ((stats >> 20) & 0x3ff) as u16;
+        let seq = (v & 0xffff_ffff) as u32;
         (health, stamina, magicka, seq)
     }
 }
@@ -198,6 +227,8 @@ pub struct WeaponProfile {
 /// A fighter's combat-relevant equipment, derived from the imported character.
 #[derive(Debug, Clone, Default)]
 pub struct Loadout {
+    /// Character level — drives max-Health/Stamina/Magicka (`health_for_level`).
+    pub level: u16,
     pub abilities: Vec<EquippedAbility>,
     pub weapon: WeaponProfile,
     pub has_shield: bool,
@@ -228,12 +259,14 @@ pub struct Fighter {
     pub slot: usize,
     /// The Avatar net object id the server assigns and addresses in messages.
     pub net_object_id: i32,
-    pub health: u16,
-    pub stamina: u16,
-    pub magicka: u16,
-    pub max_health: u16,
-    pub max_stamina: u16,
-    pub max_magicka: u16,
+    /// Raw pools (hundreds-to-thousands; Health is ×3 in arena). The WIRE packs a
+    /// FRACTION of max — see `packed_stats` / `wire_fraction`, not these raw values.
+    pub health: u32,
+    pub stamina: u32,
+    pub magicka: u32,
+    pub max_health: u32,
+    pub max_stamina: u32,
+    pub max_magicka: u32,
     /// hi32 of the packed-stats ULong; bumped on each `ReceiveDamage`.
     pub stats_seq: u32,
     pub loadout: Loadout,
@@ -251,10 +284,11 @@ pub struct Fighter {
 
 impl Fighter {
     pub fn new(slot: usize, net_object_id: i32, loadout: Loadout, now: Instant) -> Self {
-        // Pool maxima are refined in loadout.rs from level/attributes; start full.
-        let max_health = STAT_MAX;
-        let max_stamina = STAT_MAX;
-        let max_magicka = STAT_MAX;
+        // Raw pools from the character's level. Arena triples HEALTH only
+        // (`ARENA_HEALTH_MULTIPLIER`); Stamina/Magicka are not multiplied.
+        let max_health = health_for_level(loadout.level) * ARENA_HEALTH_MULTIPLIER;
+        let max_stamina = pool_for_level(loadout.level);
+        let max_magicka = pool_for_level(loadout.level);
         Fighter {
             slot,
             net_object_id,
@@ -280,15 +314,21 @@ impl Fighter {
         self.health == 0
     }
 
-    /// Apply `amount` damage to health, clamped at 0, and bump the stats seq.
-    pub fn take_damage(&mut self, amount: u16) {
+    /// Apply `amount` raw damage to health, clamped at 0, and bump the stats seq.
+    pub fn take_damage(&mut self, amount: u32) {
         self.health = self.health.saturating_sub(amount);
         self.stats_seq = self.stats_seq.wrapping_add(1);
     }
 
-    /// The packed-stats ULong for this fighter (for `ReceiveDamage` propId 4/5).
+    /// The packed-stats ULong for `ReceiveDamage` propId 4/5: each pool encoded as
+    /// its 10-bit fraction of max (`STAT_MAX` = full), + the sequence id in the hi32.
     pub fn packed_stats(&self) -> u64 {
-        PackedStats::pack(self.health, self.stamina, self.magicka, self.stats_seq)
+        PackedStats::pack(
+            wire_fraction(self.health, self.max_health),
+            wire_fraction(self.stamina, self.max_stamina),
+            wire_fraction(self.magicka, self.max_magicka),
+            self.stats_seq,
+        )
     }
 }
 
@@ -391,6 +431,24 @@ mod tests {
         assert_eq!(f.health, 0);
         assert!(f.is_dead());
         assert_eq!(f.stats_seq, 1);
+    }
+
+    #[test]
+    fn arena_triples_health_and_wire_is_fraction() {
+        let now = Instant::now();
+        // Level-30 fighter: base 200 + 290 = 490, ×3 arena = 1470 raw HP.
+        let f0 = Fighter::new(0, 564, Loadout { level: 30, ..Default::default() }, now);
+        assert_eq!(f0.max_health, health_for_level(30) * ARENA_HEALTH_MULTIPLIER);
+        assert_eq!(f0.max_health, 1470);
+        // Full pool → wire health fraction == STAT_MAX (full bar).
+        let (h_full, _, _, _) = PackedStats::unpack(f0.packed_stats());
+        assert_eq!(h_full, STAT_MAX);
+        // Half raw HP → ~half the wire fraction (proves the wire packs a FRACTION
+        // of max, not raw HP — 1470 wouldn't fit the 10-bit field).
+        let mut f = f0;
+        f.health = f.max_health / 2;
+        let (h_half, _, _, _) = PackedStats::unpack(f.packed_stats());
+        assert!((h_half as i32 - STAT_MAX as i32 / 2).abs() <= 1, "half HP → ~half wire, got {h_half}");
     }
 
     #[test]

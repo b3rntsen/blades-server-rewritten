@@ -21,15 +21,20 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::state::{DamageType, EquippedAbility, Loadout, WeaponProfile};
+use super::tables;
 
 /// A representative starter loadout (a shock-enchanted blade), used when there is
 /// no character row / no DB.
 pub fn starter() -> Loadout {
     Loadout {
+        level: 30, // representative mid-game level
         abilities: Vec::new(),
         weapon: WeaponProfile {
             primary_type: Some(DamageType::Slashing),
-            base_by_type: vec![(DamageType::Slashing, 60.0)],
+            base_by_type: vec![(
+                DamageType::Slashing,
+                tables::weapon_base_for_level(30, tables::Weight::Heavy),
+            )],
         },
         has_shield: false,
         enchants: vec![(DamageType::Shock, 2)],
@@ -51,10 +56,12 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
 
     let abilities = parse_equipped_abilities(&character.equipped_abilities, &character.abilities);
 
-    // Weapon base/type are not in the fork's data — representative, scaled mildly
-    // by level so higher characters hit harder. (Replace once item game-data lands.)
-    let base = 50.0 + character.level as f32 * 1.5;
+    // Weapon TYPE is not in the fork's data (defaults to Slashing); the base damage
+    // is the UESP additive surface for a level-appropriate Heavy weapon
+    // (`tables::weapon_base_for_level`) until equipped-item data is wired.
+    let base = tables::weapon_base_for_level(character.level, tables::Weight::Heavy);
     Loadout {
+        level: character.level,
         abilities,
         weapon: WeaponProfile {
             primary_type: Some(DamageType::Slashing),

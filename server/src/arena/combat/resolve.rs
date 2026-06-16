@@ -136,7 +136,7 @@ fn emit_damage(
     resolved: &ResolvedDamage,
 ) -> Vec<(usize, Vec<u8>)> {
     let mut out = Vec::new();
-    combat.fighters[target_slot].take_damage(resolved.total.round().max(0.0) as u16);
+    combat.fighters[target_slot].take_damage(resolved.total.round().max(0.0) as u32);
 
     let msg = {
         let damaged = &combat.fighters[target_slot];

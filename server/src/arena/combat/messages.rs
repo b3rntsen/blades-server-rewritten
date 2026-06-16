@@ -213,8 +213,8 @@ mod tests {
         let got = receive_damage(
             65,
             NetObjectType::Avatar as u8,
-            0x39df_ff92_0000_0024, // this(damaged): health 36, seq hi32
-            0x3fff_ffff_0000_0024, // other(attacker)
+            0x39df_ff92_0000_0024, // this(damaged): stat word in hi32 (→ Health 914), seq 36 in lo32
+            0x3fff_ffff_0000_0024, // other(attacker): stat word 0x3fffffff (Health 1023, full)
             DamageSource::Attack,
             0x03, // ShowDamage | HasAttacker
             total,

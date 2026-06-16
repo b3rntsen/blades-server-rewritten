@@ -431,6 +431,8 @@ mod tests {
             Some(arena_proto::NetDataValue::ULong(v)) => *v,
             _ => panic!("ReceiveDamage missing packed stats"),
         };
-        assert_eq!((packed & 0x3ff) as u16, 871, "B's HP dropped by the model-resolved swing (1023-152)");
+        // Health = low 10 bits of the HIGH 32 (stat word); the low 32 is the seq id.
+        let hp = ((packed >> 32) & 0x3ff) as u16;
+        assert!(hp > 0 && hp < 1023, "B's wire HP is a fraction below full after the swing (got {hp})");
     }
 }

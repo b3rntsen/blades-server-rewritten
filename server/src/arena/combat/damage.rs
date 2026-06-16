@@ -23,6 +23,7 @@
 //! drive the formula and the structure/relationships below are what's verified).
 
 use super::state::{ActiveSide, DamageSource, DamageType, Fighter, Loadout};
+use super::tables;
 
 /// A resolved hit: the per-type components (incl. stat drains) + the
 /// health-affecting total + flags + most-resisted, ready for `messages::receive_damage`.
@@ -62,30 +63,25 @@ pub fn is_health_type(t: DamageType) -> bool {
     )
 }
 
-/// `CalculateAttackTypeFactor` (@0x1BD3DF0): the swing/side multiplier added to 1.
-/// Middle (charged) adds the full swing magnitude; Right keeps the source base;
-/// Left/None add nothing beyond the source base.
-fn attack_type_factor(source_base: f32, active_side: ActiveSide, swing_factor: f32) -> f32 {
+/// Swing multiplier by `ActiveSide`, using the representative Heavy-weapon crit/combo
+/// factors (UESP, `tables::Weight`): a charged centre (Middle) swing lands the **crit**
+/// tier, an alternating side (Right) the **combo** tier, Left/None the base. (Real
+/// per-weapon weight comes with equipped-item data; Heavy matches the captured heavy
+/// hits. `CalculateAttackTypeFactor` @0x1BD3DF0 is the in-game source.)
+fn swing_multiplier(active_side: ActiveSide) -> f32 {
+    let (crit, combo) = tables::Weight::Heavy.crit_combo();
     match active_side {
-        ActiveSide::Middle => source_base + swing_factor,
-        ActiveSide::Right => source_base,
-        ActiveSide::Left | ActiveSide::None => 0.0,
+        ActiveSide::Middle => crit,
+        ActiveSide::Right => combo,
+        ActiveSide::Left | ActiveSide::None => 1.0,
     }
 }
 
-/// Per-`DamageSource` base contribution to the attack-type factor (game-data
-/// constant; defaults are representative until wired from item data).
-fn source_base(source: DamageSource) -> f32 {
-    match source {
-        DamageSource::WeaponManeuver | DamageSource::ShieldManeuver => 0.5,
-        DamageSource::Spell | DamageSource::ContinuousSpell => 0.25,
-        _ => 0.0, // plain Attack: factor is just the swing
-    }
-}
-
-/// Enchant magnitude per tier (game-data constant; representative default).
+/// Enchant base magnitude per tier — calibrated so a crit-tier hit reproduces the
+/// captured weapon-enchant tracks (~90–160 Shock/Poison in s223/s257). Additive and
+/// independent of the physical roll (validated: per-family CV 4–10%).
 fn enchant_base(tier: u8) -> f32 {
-    8.0 * tier as f32
+    30.0 * tier as f32
 }
 
 /// Block outcome on a hit: `(flags, damage_multiplier)`. Optimal block (same side
@@ -132,8 +128,7 @@ impl DamageModel for RetailDamageModel {
         active_side: ActiveSide,
         swing_factor: f32,
     ) -> ResolvedDamage {
-        let factor = attack_type_factor(source_base(source), active_side, swing_factor);
-        let scale = 1.0 + factor;
+        let scale = swing_multiplier(active_side) * swing_factor;
 
         let mut components: Vec<(DamageType, f32)> = Vec::new();
         // Base weapon damage, per type, scaled by the attack-type factor.
@@ -177,7 +172,7 @@ impl DamageModel for RetailDamageModel {
         // Representative spell: a Fire component scaled by ability level. The SHAPE
         // (Spell source, a single elemental component) matches the captured fire
         // spells; the exact per-ability magnitude needs ability game-data.
-        let base = 20.0 + 10.0 * ability_level.max(1) as f32;
+        let base = tables::spell_base_for_rank(ability_level);
         let mut components = vec![(DamageType::Fire, base)];
         let (mut hit_flags, mult) = block_outcome(target, active_side);
         hit_flags |= flags::SHOW_DAMAGE | flags::HAS_ATTACKER;

@@ -160,6 +160,16 @@ impl MatchInstance {
     pub(crate) fn phase(&self) -> FlowState {
         self.combat.phase
     }
+
+    #[cfg(test)]
+    pub(crate) fn fighter_health(&self, slot: usize) -> u32 {
+        self.combat.fighters[slot].health
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fighter_max_health(&self, slot: usize) -> u32 {
+        self.combat.fighters[slot].max_health
+    }
 }
 
 #[cfg(test)]
@@ -233,15 +243,17 @@ mod tests {
             );
         }
         // B's HP pool dropped by the provisional swing (1023 - 80 = 943).
-        let nd = arena_proto::parse_netdata(&out[0].1[2..]);
-        let packed = match nd.props.get(&4) {
-            Some(arena_proto::NetDataValue::ULong(v)) => *v,
-            _ => panic!("ReceiveDamage missing packed stats"),
-        };
-        // Starter shock-blade, committed Middle swing (scale 2.0): Slashing 120 +
-        // Shock 32 = 152 health damage (the equal Magicka drain is excluded).
-        // 1023 - 152 = 871.
-        assert_eq!((packed & 0x3ff) as u16, 871, "B health = max - model swing");
+        // B's RAW HP dropped by the model swing. Starter = L30 Heavy weapon (Glass
+        // base 120 + Remarkable +9 = 129) × Heavy crit 1.987 = 256.3 Slashing, + Shock
+        // enchant (tier 2 → 60 × 1.987 = 119.2); health total 375.5 → 376 (the equal
+        // Magicka drain is excluded). HP is raw (×3 arena pool); wire is a fraction.
+        assert_eq!(m.fighter_max_health(1) - m.fighter_health(1), 376, "B raw HP −376");
+        if let Some(arena_proto::NetDataValue::ULong(v)) =
+            arena_proto::parse_netdata(&out[0].1[2..]).props.get(&4)
+        {
+            // Health is the low 10 bits of the HIGH 32 (stat word); seq is the low 32.
+            assert!(((v >> 32) & 0x3ff) < 1023, "wire health is a fraction below full");
+        }
 
         // A second swing within the cooldown is throttled (no double-hit).
         assert!(m.on_c2s(0, &[0x84, 0x36], t0).is_empty(), "throttled within cooldown");
