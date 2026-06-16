@@ -155,6 +155,18 @@ async fn load_loadout(db: &Option<DbPool>, user_id: Uuid) -> crate::arena::comba
         Some(r) => {
             let mut lo = loadout::from_character(&r.character.0, &r.inventory.0);
             lo.character_uuid = r.id.to_string(); // the character UUID for the op50 spawn
+            // op54 round-start PROFILE JSON, serialized faithfully from the stored
+            // character (the structs ARE the game wire format — camelCase + verbatim
+            // Value sub-objects): p4 = {"equippedItems":{…}}, p5 = id + character.
+            lo.profile_equipped_json =
+                serde_json::json!({ "equippedItems": &r.inventory.0.loadout.equipped_items }).to_string();
+            lo.profile_character_json = serde_json::to_string(
+                &blades_lib::user_data::CompleteCharacterWithIdWithoutData {
+                    id: r.id,
+                    character: r.character.0.clone(),
+                },
+            )
+            .unwrap_or_default();
             lo
         }
         None => loadout::starter(),

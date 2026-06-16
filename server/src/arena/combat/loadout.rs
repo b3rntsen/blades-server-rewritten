@@ -40,6 +40,8 @@ pub fn starter() -> Loadout {
         enchants: vec![(DamageType::Shock, 2)],
         display_name: String::new(),
         character_uuid: String::new(),
+        profile_equipped_json: String::new(),
+        profile_character_json: String::new(),
     }
 }
 
@@ -73,6 +75,8 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         enchants,
         display_name: character.name.clone(),
         character_uuid: String::new(), // set by the matchmaker (needs the DB row id)
+        profile_equipped_json: String::new(), // set by the matchmaker (op54 profile)
+        profile_character_json: String::new(),
     }
 }
 

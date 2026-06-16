@@ -120,6 +120,7 @@ impl MatchInstance {
                     self.combat.phase_entered = now;
                     self.last_heartbeat = now;
                     self.broadcast_spawns(&mut out);
+                    self.broadcast_profiles(&mut out);
                     self.broadcast_flow(&mut out, FlowState::BackendMatchCreated);
                 }
             }
@@ -188,6 +189,30 @@ impl MatchInstance {
                 out.push((
                     viewer,
                     messages::spawn_avatar(actor.net_object_id, role, &actor.loadout.character_uuid),
+                ));
+            }
+        }
+    }
+
+    /// Broadcast each fighter's op54 PROFILE (full character + equipped-gear JSON) to
+    /// every viewer, so the client can construct the avatars' appearance/gear/stats —
+    /// the opponent is built from this (`SetupOpponentActor`/`LoadoutJSON`). Large
+    /// (tens of KB) → rusty_enet fragments it. Skipped for fighters with no profile
+    /// (starter loadout / bot). Sent after the op50 spawns, before the flow states
+    /// (docs/arena-protocol-spec.md §6.2).
+    fn broadcast_profiles(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        for viewer in 0..self.combat.fighters.len() {
+            for actor in &self.combat.fighters {
+                if actor.loadout.profile_character_json.is_empty() {
+                    continue;
+                }
+                out.push((
+                    viewer,
+                    messages::player_profile(
+                        actor.player_net_object_id,
+                        &actor.loadout.profile_equipped_json,
+                        &actor.loadout.profile_character_json,
+                    ),
                 ));
             }
         }

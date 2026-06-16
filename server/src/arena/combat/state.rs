@@ -239,6 +239,10 @@ pub struct Loadout {
     /// matchmaker's character load.
     pub display_name: String,
     pub character_uuid: String,
+    /// The two op54 round-start PROFILE JSON blobs (gear + full character), serialized
+    /// from the stored character by the matchmaker; empty for the starter loadout.
+    pub profile_equipped_json: String,
+    pub profile_character_json: String,
 }
 
 // ---------------------------------------------------------------------------

@@ -108,6 +108,26 @@ pub fn spawn_avatar(net_object_id: i32, role: NetRole, character_uuid: &str) -> 
     frame(MSGTYPE_SPAWN, w.finish())
 }
 
+/// op54 (carrier `0x36`) — the per-player **PROFILE**: the full character + equipped
+/// gear as JSON, so the client can construct the (opponent's) avatar — appearance,
+/// gear, abilities, PvP stats. `equipped_items_json` = `{"equippedItems":{…}}`;
+/// `character_json` = the character (`id`+`name`+`tagId`+`equippedAbilities`+
+/// `abilities`+customization+PvP stats). Tens of KB → ENet fragments it (rusty_enet
+/// auto-fragments a reliable packet). Decoded from the reassembled s486 op54
+/// (docs/arena-protocol-spec.md §6.2). NetData: p0=player obj id, p1=55 Player,
+/// p2=1 (Authority), p3=35 (the profile GameMessageId), p4/p5=the JSON, p6=Bool.
+pub fn player_profile(player_net_object_id: i32, equipped_items_json: &str, character_json: &str) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, player_net_object_id)
+        .byte(1, NetObjectType::Player as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, 35) // the profile message's GameMessageId (propId 3)
+        .string(4, equipped_items_json)
+        .string(5, character_json)
+        .bool(6, true);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
 /// Build a `ReceiveDamage` — the s2c authoritative damage event. Carrier
 /// MessageType `0x36` (54); the real GameMessageId (50) lives at NetData propId 3
 /// (carrier 54 is shared with swipe/ability/etc.). The message describes the
@@ -279,6 +299,21 @@ mod tests {
         assert_eq!(got[3], 0x17, "bitmap = props {{0,1,2,4}}");
         assert_eq!(&got[4..6], &[0x70, 0xA7], "type nibbles [Int,Byte,Byte,String]");
         assert!(got.ends_with(b"bee74bea-1ab5-46c0-9eb5-f81e6e25ac05"));
+    }
+
+    /// op54 profile carries the two JSON blobs at p4/p5 + the structural fields.
+    #[test]
+    fn player_profile_structure() {
+        let eq = r#"{"equippedItems":{}}"#;
+        let ch = r#"{"id":"x","name":"Taheen"}"#;
+        let got = player_profile(197, eq, ch);
+        assert_eq!(&got[0..2], &[0xBE, 0x36], "marker + UserMessage carrier");
+        let nd = arena_proto::parse_netdata(&got[2..]);
+        assert_eq!(nd.int(0), Some(197), "p0 player obj id");
+        assert_eq!(nd.int(1), Some(55), "p1 Player");
+        assert_eq!(nd.int(3), Some(35), "p3 profile gameMessageId");
+        assert_eq!(nd.string(4), Some(eq), "p4 equippedItems json");
+        assert_eq!(nd.string(5), Some(ch), "p5 character json");
     }
 
     /// Byte-for-byte vs session-293 frame 1956589 (s2c ReceiveDamage): an Attack
