@@ -157,11 +157,16 @@ async fn load_loadout(db: &Option<DbPool>, user_id: Uuid) -> crate::arena::comba
             lo.character_uuid = r.id.to_string(); // the character UUID for the op50 spawn
             // op54 round-start PROFILE JSON, serialized faithfully from the stored
             // character (the structs ARE the game wire format — camelCase + verbatim
-            // Value sub-objects): p4 = {"equippedItems":{…}}, p5 = id + character.
+            // Value sub-objects): p4 = {"equippedItems":{…}}, p5 = data + id + character.
+            // MUST include `data` (customization) — retail's profile carries it
+            // (data.customization.CharacterUID = the avatar visual); without it the
+            // opponent has no appearance and the client's resource-load hangs at
+            // "connecting" (the 2026-06-17 gate, found via the on-device matchstate probe).
             lo.profile_equipped_json =
                 serde_json::json!({ "equippedItems": &r.inventory.0.loadout.equipped_items }).to_string();
             lo.profile_character_json = serde_json::to_string(
-                &blades_lib::user_data::CompleteCharacterWithIdWithoutData {
+                &blades_lib::user_data::CompleteCharacterWithIdAndData {
+                    data: r.data.0.clone(),
                     id: r.id,
                     character: r.character.0.clone(),
                 },

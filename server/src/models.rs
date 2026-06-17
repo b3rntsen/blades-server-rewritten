@@ -36,6 +36,11 @@ pub struct CharacterDbEntryCharacterWalletInventory {
     pub id: Uuid,
     pub user_id: Uuid,
     pub character: JsonDbWrapper<CompleteCharacter>,
+    // The character's `data` (incl. `customization` → the avatar appearance /
+    // CharacterUID). Needed in the op54 round-start PROFILE so the client can build
+    // the OPPONENT's avatar visual; without it the client's resource-load hangs at
+    // "connecting" (no-frida) / crashes (frida). [arena-journey-log §7]
+    pub data: JsonDbWrapper<CompleteCharacterData>,
     pub wallet: JsonDbWrapper<CompleteWallet>,
     pub inventory: JsonDbWrapper<CompleteInventory>,
 }
