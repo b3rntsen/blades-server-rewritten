@@ -164,9 +164,17 @@ async fn load_loadout(db: &Option<DbPool>, user_id: Uuid) -> crate::arena::comba
             // "connecting" (the 2026-06-17 gate, found via the on-device matchstate probe).
             lo.profile_equipped_json =
                 serde_json::json!({ "equippedItems": &r.inventory.0.loadout.equipped_items }).to_string();
+            // Keep ONLY `customization` (the avatar appearance, ~6 KB); drop `dialog`
+            // (~200 KB of town-RPG dialog state) + `new-flags` — sending the full `data`
+            // bloats the op54 to ~220 KB / 150+ ENet fragments, which the client drops
+            // (→ still "connecting"). Retail's profile `data` is customization-sized.
+            // [journey-log §7]
+            let mut profile_data = r.data.0.clone();
+            profile_data.new_flags = serde_json::json!({});
+            profile_data.dialog = serde_json::json!({});
             lo.profile_character_json = serde_json::to_string(
                 &blades_lib::user_data::CompleteCharacterWithIdAndData {
-                    data: r.data.0.clone(),
+                    data: profile_data,
                     id: r.id,
                     character: r.character.0.clone(),
                 },
