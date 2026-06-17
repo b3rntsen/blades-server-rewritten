@@ -24,9 +24,17 @@ use super::state::{Fighter, FlowState, Loadout, MatchCombat, NetRole};
 /// Cadence of the `StateTimeout` flow heartbeat (server→client keepalive while a
 /// phase runs). Captured cadence is sub-second; tunable.
 const HEARTBEAT: Duration = Duration::from_millis(500);
-/// Hold after `BackendMatchCreated` before the round goes live (the brief
-/// match-create → countdown gap).
-const MATCH_CREATE_HOLD: Duration = Duration::from_millis(750);
+/// Fallback deadline for the round-start loadout exchange. The round normally goes
+/// live the moment every real peer has uploaded its `PlayerLoadoutReady` (the retail
+/// "both ready → fight" gate); this caps the wait so a silent/stuck client can't hang
+/// the match forever.
+const LOADOUT_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(20);
+/// Carrier byte (`user_data[1]`) of the op54 family — both combat swings AND the
+/// loadout-upload handshake ride `0x36` (54); size discriminates them.
+const CARRIER_OP54: u8 = 0x36;
+/// Minimum size of a `PlayerLoadoutReady` op54 c2s upload. The captured upload is
+/// ~1.3 KB; a combat swing is a few dozen bytes, so size alone tells them apart.
+const LOADOUT_UPLOAD_MIN_BYTES: usize = 200;
 
 pub struct MatchInstance {
     combat: MatchCombat,
@@ -103,6 +111,27 @@ impl MatchInstance {
             return out;
         }
 
+        // PlayerLoadoutReady — the client's op54 c2s loadout upload (~1.3 KB, far
+        // larger than a combat swing). This is the round-start handshake: mark the
+        // sender loadout-ready and RELAY its profile to the opponent. The retail server
+        // sends the opponent's profile in RESPONSE to this upload, not pushed upfront
+        // at BackendMatchCreated — sending it early left the client stuck at
+        // "Connecting…", never "Setting up…". [s506 / arena-journey-log §7]
+        if user_data.get(1) == Some(&CARRIER_OP54)
+            && user_data.len() >= LOADOUT_UPLOAD_MIN_BYTES
+            && !matches!(self.combat.phase, FlowState::Finished)
+        {
+            if sender < self.combat.fighters.len() && !self.combat.fighters[sender].loadout_ready {
+                self.combat.fighters[sender].loadout_ready = true;
+                info!(
+                    "combat: slot {sender} PlayerLoadoutReady ({} bytes) → relay profile to opponent",
+                    user_data.len()
+                );
+                self.relay_profile_to_opponent(sender, &mut out);
+            }
+            return out;
+        }
+
         // Everything else (swipe / ability / block / position) → resolution.
         out.extend(resolve::on_c2s_input(&mut self.combat, sender, user_data, now));
         out
@@ -128,13 +157,16 @@ impl MatchInstance {
                     self.broadcast_clock(&mut out);
                     self.broadcast_spawns(&mut out);
                     self.broadcast_stat_updates(&mut out);
-                    self.broadcast_profiles(&mut out);
+                    // Profiles are NOT pushed here. Each fighter's profile is relayed to
+                    // its opponent in RESPONSE to that fighter's PlayerLoadoutReady upload
+                    // (see on_c2s) — pushing upfront stalled the client at "Connecting…".
                     self.broadcast_channeling(&mut out);
                     self.broadcast_flow(&mut out, FlowState::BackendMatchCreated);
                     // Round-start emission audit — confirm what actually goes on the wire:
-                    // carrier→count (58=clock, 50=spawn, 54=profile/flow) + each fighter's
-                    // profile-JSON size (0 ⇒ empty ⇒ broadcast_profiles skipped it ⇒ the
-                    // client can't build its opponent ⇒ "Connecting…" stall).
+                    // carrier→count (58=clock, 50=spawn, 54=stat/flow) + each fighter's
+                    // profile-JSON size. Profiles are no longer in this burst (relayed on
+                    // the PlayerLoadoutReady upload); a 0 here ⇒ that fighter has no profile
+                    // to relay ⇒ its opponent can't build it ⇒ "Connecting…" stall.
                     let mut carriers = std::collections::BTreeMap::new();
                     for (_, b) in &out {
                         if b.len() >= 2 {
@@ -155,10 +187,19 @@ impl MatchInstance {
                     );
                 }
             }
-            // Brief hold, then the round goes live (StateTimeout heartbeat).
+            // The round goes live once every real peer has exchanged loadouts (each
+            // uploaded its PlayerLoadoutReady → profile relayed to its opponent), the
+            // retail "both ready → fight" gate. A fallback timeout starts the round
+            // anyway if a peer never uploads, so a silent/stuck client can't hang it.
             FlowState::BackendMatchCreated => {
-                if now.duration_since(self.combat.phase_entered) >= MATCH_CREATE_HOLD {
-                    info!("combat FSM: BackendMatchCreated → StateTimeout (round 1 live)");
+                let ready = self.combat.fighters.iter().filter(|f| f.loadout_ready).count();
+                let waited = now.duration_since(self.combat.phase_entered);
+                if ready >= self.combat.expected_peers() || waited >= LOADOUT_EXCHANGE_TIMEOUT {
+                    info!(
+                        "combat FSM: BackendMatchCreated → StateTimeout (round 1 live; \
+                         {ready}/{} loadout-ready, waited {waited:?})",
+                        self.combat.expected_peers()
+                    );
                     self.combat.phase = FlowState::StateTimeout;
                     self.combat.phase_entered = now;
                     self.last_heartbeat = now;
@@ -276,40 +317,36 @@ impl MatchInstance {
         }
     }
 
-    /// Broadcast the op54 PROFILE (full character + equipped-gear JSON) a client needs to
-    /// construct the OPPONENT's avatar — appearance/gear/abilities/PvP stats
-    /// (`SetupOpponentActor`/`LoadoutJSON`). Large (tens of KB) → rusty_enet fragments it
-    /// on ENet channel 4. Skipped for fighters with no profile (starter loadout / bot).
-    /// Sent after the op50 spawns, before the flow states (docs/arena-protocol-spec.md §6.2).
+    /// Relay `actor_slot`'s op54 PROFILE to its opponent — the full character +
+    /// equipped-gear JSON the client needs to construct the OPPONENT's avatar
+    /// (appearance / gear / abilities / PvP stats; `SetupOpponentActor` / `LoadoutJSON`).
+    /// Large (tens of KB) → rusty_enet fragments it on ENet channel 4.
     ///
-    /// **Opponent-only — each viewer gets ONLY its opponent's profile, never its own.**
-    /// The retail server never echoes a client its own profile during setup: the client
-    /// already has it (it uploads its own via op54 *c2s*); the server relays only the
-    /// *other* player's. Verified from s506 (video↔capture): the client receives exactly
-    /// one op54 profile = the opponent's (`05:05:38`). Sending a client a profile for its
-    /// OWN (Autonomous) object — an Authority-role op54 it never expects, emitted first —
-    /// stalled the client's profile pipeline so the opponent's profile (sent right after)
-    /// was never applied → the match sat at "Connecting…", never "Setting up…" (the
-    /// 2026-06-17 paired-match stall). [docs/arena-journey-log.md §7]
-    fn broadcast_profiles(&self, out: &mut Vec<(usize, Vec<u8>)>) {
-        for viewer in 0..self.combat.fighters.len() {
-            for actor in &self.combat.fighters {
-                if actor.slot == viewer {
-                    continue; // never send a client its OWN profile (retail: opponent-only)
-                }
-                if actor.loadout.profile_character_json.is_empty() {
-                    continue;
-                }
-                out.push((
-                    viewer,
-                    messages::player_profile(
-                        actor.player_net_object_id,
-                        &actor.loadout.profile_equipped_json,
-                        &actor.loadout.profile_character_json,
-                    ),
-                ));
-            }
+    /// Sent in RESPONSE to the actor's `PlayerLoadoutReady` upload (see `on_c2s`), NOT
+    /// pushed upfront. The retail server relays each client's loadout to the other
+    /// player as the handshake: the client receives exactly one op54 profile = the
+    /// opponent's, right after its own upload (s506 `05:05:36`→`:38`). Pushing it upfront
+    /// at BackendMatchCreated — before the client uploads — left the match stuck at
+    /// "Connecting…", never "Setting up…". [docs/arena-journey-log.md §7]
+    fn relay_profile_to_opponent(&self, actor_slot: usize, out: &mut Vec<(usize, Vec<u8>)>) {
+        let Some(viewer) = self.combat.opponent_of(actor_slot) else {
+            return; // solo / bot match — no opponent to relay to
+        };
+        if actor_slot >= self.combat.fighters.len() {
+            return;
         }
+        let actor = &self.combat.fighters[actor_slot];
+        if actor.loadout.profile_character_json.is_empty() {
+            return; // starter loadout / un-imported — nothing to relay
+        }
+        out.push((
+            viewer,
+            messages::player_profile(
+                actor.player_net_object_id,
+                &actor.loadout.profile_equipped_json,
+                &actor.loadout.profile_character_json,
+            ),
+        ));
     }
 
     #[cfg(test)]
@@ -338,6 +375,28 @@ mod tests {
         (MatchInstance::new(capacity, capacity, vec![], now), now)
     }
 
+    /// A `PlayerLoadoutReady` upload — a large op54 c2s (≥ the loadout threshold),
+    /// distinct from a small combat swing.
+    fn loadout_upload() -> Vec<u8> {
+        let mut v = vec![0x84, CARRIER_OP54];
+        v.resize(2 + LOADOUT_UPLOAD_MIN_BYTES + 8, 0);
+        v
+    }
+
+    /// A match driven to a LIVE round (StateTimeout): every peer connected and every
+    /// peer's loadout exchanged (PlayerLoadoutReady uploaded → profile relayed).
+    fn live_inst(capacity: usize) -> (MatchInstance, Instant) {
+        let now = Instant::now();
+        let mut m = MatchInstance::new(capacity, capacity, vec![], now);
+        m.on_tick(capacity, now); // Connecting → BackendMatchCreated
+        for slot in 0..capacity {
+            m.on_c2s(slot, &loadout_upload(), now); // PlayerLoadoutReady → loadout-ready
+        }
+        m.on_tick(capacity, now); // BackendMatchCreated → StateTimeout (all ready)
+        assert_eq!(m.phase(), FlowState::StateTimeout, "live_inst should reach the live round");
+        (m, now)
+    }
+
     #[test]
     fn match_starts_when_all_connected() {
         let (mut m, t0) = inst(2);
@@ -359,12 +418,12 @@ mod tests {
         assert_eq!(spawns, 8, "op50 Player+Avatar spawns to both viewers");
     }
 
-    /// Round-start sends each viewer ONLY the opponent's op54 profile, never its own —
-    /// retail-faithful (s506). Echoing a client its own profile stalled "Setting up…".
+    /// The opponent's op54 profile is RELAYED in response to that opponent's
+    /// PlayerLoadoutReady upload (not pushed upfront in the connect burst) —
+    /// retail-faithful (s506 `05:05:36`→`:38`).
     #[test]
-    fn round_start_profile_is_opponent_only() {
+    fn loadout_upload_relays_profile_to_opponent() {
         let now = Instant::now();
-        // Two fighters that each carry a (non-empty) profile, so broadcast_profiles emits.
         let mk = |name: &str| {
             let mut l = crate::arena::combat::loadout::starter();
             l.display_name = name.to_string();
@@ -373,21 +432,29 @@ mod tests {
             l
         };
         let mut m = MatchInstance::new(2, 2, vec![mk("Alice"), mk("Bob")], now);
-        let out = m.on_tick(2, now); // Connecting → BackendMatchCreated (round-start emit)
-        // op54 PROFILE = carrier 0x36 with NetData propId3 == 35 (the profile gameMessageId);
-        // distinct from op54-small stat word (p3=65) and flow states (p3=0x4F).
-        let profiles: Vec<&(usize, Vec<u8>)> = out
-            .iter()
-            .filter(|(_, b)| b.len() > 2 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(35))
-            .collect();
-        assert_eq!(profiles.len(), 2, "exactly one op54 profile per viewer (opponent-only, not self)");
-        // viewer 0 must receive slot 1's (Bob's) profile object id, NOT its own (slot 0).
-        let p0 = profiles.iter().find(|(v, _)| *v == 0).expect("viewer 0 profile");
+        // op54 PROFILE = carrier 0x36 with NetData propId3 == 35 (the profile gameMessageId).
+        let is_profile = |b: &[u8]| {
+            b.len() > 2 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(35)
+        };
+        let burst = m.on_tick(2, now); // Connecting → BackendMatchCreated
         assert_eq!(
-            arena_proto::parse_netdata(&p0.1[2..]).int(0),
-            Some(m.combat.fighters[1].player_net_object_id as i64),
-            "viewer 0 receives the OPPONENT's (slot 1) profile, not its own"
+            burst.iter().filter(|(_, b)| is_profile(b)).count(),
+            0,
+            "no op54 profile in the connect burst — it's relayed on upload instead"
         );
+        // Slot 0 (Alice) uploads its loadout → her profile is relayed to slot 1 (Bob).
+        let out = m.on_c2s(0, &loadout_upload(), now);
+        let profiles: Vec<&(usize, Vec<u8>)> = out.iter().filter(|(_, b)| is_profile(b)).collect();
+        assert_eq!(profiles.len(), 1, "exactly one relayed op54 profile (to the opponent)");
+        let (viewer, body) = profiles[0];
+        assert_eq!(*viewer, 1, "Alice's profile is relayed to her opponent (slot 1)");
+        assert_eq!(
+            arena_proto::parse_netdata(&body[2..]).int(0),
+            Some(m.combat.fighters[0].player_net_object_id as i64),
+            "the relayed profile carries the uploader's (slot 0) player object id"
+        );
+        // The loadout upload is NOT resolved as combat — slot 1 takes no damage.
+        assert_eq!(m.fighter_health(1), m.fighter_max_health(1), "loadout upload deals no damage");
     }
 
     #[test]
@@ -397,43 +464,54 @@ mod tests {
         // auto-swing at the player on the tick (a fight, not a static dummy).
         let now = Instant::now();
         let mut m = MatchInstance::new(2, 1, vec![], now);
-        m.on_tick(1, now); // one real peer is enough
+        m.on_tick(1, now); // one real peer connects
         assert_eq!(m.phase(), FlowState::BackendMatchCreated);
-        m.on_tick(1, now + MATCH_CREATE_HOLD); // → round live
+        m.on_c2s(0, &loadout_upload(), now); // the lone peer's PlayerLoadoutReady
+        m.on_tick(1, now); // → round live (expected_peers == 1 satisfied)
         assert_eq!(m.phase(), FlowState::StateTimeout);
         let before = m.fighter_health(0);
         // Past the bot's swing cadence → the bot (slot 1) damages the player (slot 0).
-        m.on_tick(1, now + MATCH_CREATE_HOLD + Duration::from_secs(3));
+        m.on_tick(1, now + Duration::from_secs(3));
         assert!(m.fighter_health(0) < before, "bot should damage the player on tick");
     }
 
     #[test]
-    fn advances_to_round_after_hold() {
+    fn advances_to_round_after_loadout_exchange() {
         let (mut m, t0) = inst(2);
         m.on_tick(2, t0); // → BackendMatchCreated
-        let out = m.on_tick(2, t0 + MATCH_CREATE_HOLD);
+        // One loadout is not enough — the round waits for BOTH peers.
+        m.on_c2s(0, &loadout_upload(), t0);
+        m.on_tick(2, t0);
+        assert_eq!(m.phase(), FlowState::BackendMatchCreated, "still waiting on slot 1");
+        // Both uploaded → the round goes live.
+        m.on_c2s(1, &loadout_upload(), t0);
+        let out = m.on_tick(2, t0);
         assert_eq!(m.phase(), FlowState::StateTimeout);
         assert_eq!(m.combat.round, 1);
         assert!(out.iter().any(|(_, b)| b.ends_with(b"StateTimeout")));
     }
 
     #[test]
-    fn heartbeats_on_cadence() {
+    fn advances_to_round_on_timeout_fallback() {
+        // A peer that never uploads can't hang the match — the round starts anyway
+        // after the fallback deadline.
         let (mut m, t0) = inst(2);
-        m.on_tick(2, t0);
-        let t1 = t0 + MATCH_CREATE_HOLD;
-        m.on_tick(2, t1); // → StateTimeout
-        // Immediately after: no new heartbeat yet.
-        assert!(m.on_tick(2, t1).iter().all(|(_, b)| !b.ends_with(b"StateTimeout")) || true);
-        // After the cadence elapses: a heartbeat to both players.
-        let out = m.on_tick(2, t1 + HEARTBEAT);
+        m.on_tick(2, t0); // → BackendMatchCreated
+        m.on_tick(2, t0 + LOADOUT_EXCHANGE_TIMEOUT);
+        assert_eq!(m.phase(), FlowState::StateTimeout);
+    }
+
+    #[test]
+    fn heartbeats_on_cadence() {
+        let (mut m, t0) = live_inst(2); // already StateTimeout (loadouts exchanged at t0)
+        // After the cadence elapses: a StateTimeout heartbeat to both players.
+        let out = m.on_tick(2, t0 + HEARTBEAT);
         assert_eq!(out.iter().filter(|(_, b)| b.ends_with(b"StateTimeout")).count(), 2);
     }
 
     #[test]
     fn combat_input_damages_opponent() {
-        let (mut m, t0) = inst(2);
-        m.on_tick(2, t0); // match created → combat resolves
+        let (mut m, t0) = live_inst(2); // → live round (loadouts exchanged)
 
         // A (slot 0) sends a combat-input (carrier 54) → B (slot 1) takes damage;
         // a ReceiveDamage goes to both target and attacker.
@@ -466,8 +544,7 @@ mod tests {
 
     #[test]
     fn fight_to_death_ends_match() {
-        let (mut m, t0) = inst(2);
-        m.on_tick(2, t0); // match created
+        let (mut m, t0) = live_inst(2); // → live round
 
         // A keeps swinging (past the cooldown each time) until B dies.
         let mut t = t0;
@@ -489,8 +566,7 @@ mod tests {
 
     #[test]
     fn ability_cast_deals_spell_damage() {
-        let (mut m, t0) = inst(2);
-        m.on_tick(2, t0); // match created
+        let (mut m, t0) = live_inst(2); // → live round
 
         // A casts an ability (op37 RequestExecuteAbility).
         let mut req = vec![

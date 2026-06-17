@@ -165,8 +165,11 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
         for (addr, bytes) in registry.tick_matches(now) {
             // The ~28 KB op54 PROFILE rides its own ENet channel (4) in retail
             // (s486, spec §6.2); small frames (clock/spawns/flow/updates) stay on
-            // channel 0. Route by size+carrier so the client's profile handler sees it.
-            let channel = if bytes.len() > 1000 && bytes.get(1) == Some(&0x36) { 4 } else { 0 };
+            // channel 0. `bytes` is already ENCRYPTED here, so route by LENGTH alone —
+            // XOR preserves length and the profile is the only >1 KB s2c frame. (The
+            // old `&& byte[1]==0x36` check ran on ciphertext, never matched, so the
+            // profile wrongly went on channel 0 where the client's handler missed it.)
+            let channel = if bytes.len() > 1000 { 4 } else { 0 };
             send_to(&mut host, &peer_at, &addr, channel, &bytes);
         }
         host.flush();
@@ -270,9 +273,15 @@ fn handle_packet(
                     ),
                 },
             }
-            // Deliver each reply to its TARGET peer (may be the opponent).
+            // Deliver each reply to its TARGET peer (may be the opponent — e.g. the
+            // relayed op54 profile in response to a PlayerLoadoutReady upload). The big
+            // profile rides ENet channel 4 (retail); route by LENGTH (bytes are
+            // encrypted, but XOR preserves length and the profile is the only >1 KB s2c
+            // frame). Sending it on channel 0 left the client's profile handler blind to
+            // it → the opponent's appearance/gear never loaded → "Connecting…" stall.
             for (target_addr, bytes) in &out.replies {
-                send_to(host, peer_at, target_addr, 0, bytes);
+                let channel = if bytes.len() > 1000 { 4 } else { 0 };
+                send_to(host, peer_at, target_addr, channel, bytes);
             }
         }
         return;

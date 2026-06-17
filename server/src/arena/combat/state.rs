@@ -295,6 +295,11 @@ pub struct Fighter {
     pub blocking_side: ActiveSide,
     /// Time of this fighter's last landed swing (combat throttle / swing cadence).
     pub last_swing: Option<Instant>,
+    /// Set when this fighter's client uploads its `PlayerLoadoutReady` (the op54 c2s
+    /// loadout) — the round-start handshake. The round goes live once every real peer
+    /// is loadout-ready; the upload also triggers relaying this fighter's profile to
+    /// its opponent. [arena-journey-log §7 / s506]
+    pub loadout_ready: bool,
 }
 
 impl Fighter {
@@ -324,6 +329,7 @@ impl Fighter {
             arena_target: 1 - slot.min(1), // 2-player: the other slot
             blocking_side: ActiveSide::None,
             last_swing: None,
+            loadout_ready: false,
         }
     }
 
