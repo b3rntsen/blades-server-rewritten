@@ -276,15 +276,27 @@ impl MatchInstance {
         }
     }
 
-    /// Broadcast each fighter's op54 PROFILE (full character + equipped-gear JSON) to
-    /// every viewer, so the client can construct the avatars' appearance/gear/stats —
-    /// the opponent is built from this (`SetupOpponentActor`/`LoadoutJSON`). Large
-    /// (tens of KB) → rusty_enet fragments it. Skipped for fighters with no profile
-    /// (starter loadout / bot). Sent after the op50 spawns, before the flow states
-    /// (docs/arena-protocol-spec.md §6.2).
+    /// Broadcast the op54 PROFILE (full character + equipped-gear JSON) a client needs to
+    /// construct the OPPONENT's avatar — appearance/gear/abilities/PvP stats
+    /// (`SetupOpponentActor`/`LoadoutJSON`). Large (tens of KB) → rusty_enet fragments it
+    /// on ENet channel 4. Skipped for fighters with no profile (starter loadout / bot).
+    /// Sent after the op50 spawns, before the flow states (docs/arena-protocol-spec.md §6.2).
+    ///
+    /// **Opponent-only — each viewer gets ONLY its opponent's profile, never its own.**
+    /// The retail server never echoes a client its own profile during setup: the client
+    /// already has it (it uploads its own via op54 *c2s*); the server relays only the
+    /// *other* player's. Verified from s506 (video↔capture): the client receives exactly
+    /// one op54 profile = the opponent's (`05:05:38`). Sending a client a profile for its
+    /// OWN (Autonomous) object — an Authority-role op54 it never expects, emitted first —
+    /// stalled the client's profile pipeline so the opponent's profile (sent right after)
+    /// was never applied → the match sat at "Connecting…", never "Setting up…" (the
+    /// 2026-06-17 paired-match stall). [docs/arena-journey-log.md §7]
     fn broadcast_profiles(&self, out: &mut Vec<(usize, Vec<u8>)>) {
         for viewer in 0..self.combat.fighters.len() {
             for actor in &self.combat.fighters {
+                if actor.slot == viewer {
+                    continue; // never send a client its OWN profile (retail: opponent-only)
+                }
                 if actor.loadout.profile_character_json.is_empty() {
                     continue;
                 }
@@ -345,6 +357,37 @@ mod tests {
         // 2 viewers × 2 fighters × (Player + Avatar) = 8 op50 (0x32) spawn messages.
         let spawns = out.iter().filter(|(_, b)| b.len() >= 2 && b[1] == 0x32).count();
         assert_eq!(spawns, 8, "op50 Player+Avatar spawns to both viewers");
+    }
+
+    /// Round-start sends each viewer ONLY the opponent's op54 profile, never its own —
+    /// retail-faithful (s506). Echoing a client its own profile stalled "Setting up…".
+    #[test]
+    fn round_start_profile_is_opponent_only() {
+        let now = Instant::now();
+        // Two fighters that each carry a (non-empty) profile, so broadcast_profiles emits.
+        let mk = |name: &str| {
+            let mut l = crate::arena::combat::loadout::starter();
+            l.display_name = name.to_string();
+            l.profile_equipped_json = r#"{"equippedItems":{}}"#.to_string();
+            l.profile_character_json = format!(r#"{{"name":"{name}"}}"#);
+            l
+        };
+        let mut m = MatchInstance::new(2, 2, vec![mk("Alice"), mk("Bob")], now);
+        let out = m.on_tick(2, now); // Connecting → BackendMatchCreated (round-start emit)
+        // op54 PROFILE = carrier 0x36 with NetData propId3 == 35 (the profile gameMessageId);
+        // distinct from op54-small stat word (p3=65) and flow states (p3=0x4F).
+        let profiles: Vec<&(usize, Vec<u8>)> = out
+            .iter()
+            .filter(|(_, b)| b.len() > 2 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(35))
+            .collect();
+        assert_eq!(profiles.len(), 2, "exactly one op54 profile per viewer (opponent-only, not self)");
+        // viewer 0 must receive slot 1's (Bob's) profile object id, NOT its own (slot 0).
+        let p0 = profiles.iter().find(|(v, _)| *v == 0).expect("viewer 0 profile");
+        assert_eq!(
+            arena_proto::parse_netdata(&p0.1[2..]).int(0),
+            Some(m.combat.fighters[1].player_net_object_id as i64),
+            "viewer 0 receives the OPPONENT's (slot 1) profile, not its own"
+        );
     }
 
     #[test]
