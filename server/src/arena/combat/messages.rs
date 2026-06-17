@@ -74,6 +74,55 @@ pub fn clock(tick_clock: i64, tick_match_start: i64) -> Vec<u8> {
     frame(MSGTYPE_CLOCK, w.finish())
 }
 
+/// Carrier for op53 `PlayerChannelingStateChange` (the channeling-state update on
+/// the type-54 "Match/ability" net object).
+pub const MSGTYPE_CHANNELING: u8 = 0x35; // 53
+
+/// Shared NetData for the round-start type-54 **Match/ability** net object — used by
+/// both the op50 SPAWN and the op53 channeling update (same fields in s486):
+/// `{0:Int id · 1:Byte 54 · 2:Byte 1 · 3:Int 14 · 4:Byte 2 · 5:Byte 5 · 6:Float 10.0 ·
+/// 7:Byte 0 · 8:Byte 3 · 9:String ability-UUID}`. [RE'd byte-exact from s486 op53.]
+fn ability_netdata(net_object_id: i32, ability_uuid: &str) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, net_object_id)
+        .byte(1, 54)
+        .byte(2, 1)
+        .int(3, 14)
+        .byte(4, 2)
+        .byte(5, 5)
+        .float(6, 10.0)
+        .byte(7, 0)
+        .byte(8, 3)
+        .string(9, ability_uuid);
+    w.finish()
+}
+
+/// op50 spawn of the type-54 Match/ability net object (carrier `0x32`). Must precede
+/// the op53 channeling update, which references this object id.
+pub fn spawn_ability(net_object_id: i32, ability_uuid: &str) -> Vec<u8> {
+    frame(MSGTYPE_SPAWN, ability_netdata(net_object_id, ability_uuid))
+}
+
+/// op53 `PlayerChannelingStateChange` (carrier `0x35`) on the Match/ability object.
+pub fn channeling_state(net_object_id: i32, ability_uuid: &str) -> Vec<u8> {
+    frame(MSGTYPE_CHANNELING, ability_netdata(net_object_id, ability_uuid))
+}
+
+/// op54-small (carrier `0x36`) — per-avatar stat/HP word:
+/// `{0:Int avatar_id · 1:Byte 56 (Avatar) · 2:Byte 1 · 3:Byte 65 · 4:ULong (full
+/// Health|Stamina|Magicka in hi32 | seq=1 lo32) · 5:ULong 1}`. Full at round-start.
+/// [RE'd byte-exact from s486.]
+pub fn stat_update(avatar_net_object_id: i32) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, avatar_net_object_id)
+        .byte(1, 56)
+        .byte(2, 1)
+        .byte(3, 65)
+        .ulong(4, 0x3FFF_FFFF_0000_0001)
+        .ulong(5, 1);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
 /// A `CombatScreenInfo` (op55) — a lightweight per-net-object signal carrying
 /// only NetObjectInfo (no payload). Emitted for the relevant player/avatar
 /// objects as the combat screen comes up.
@@ -260,6 +309,42 @@ mod tests {
             0x01, 0x03, 0x33, // maxPropId=1, bitmap {0,1}, type nibbles [Long,Long]
             0x1C, 0xFE, 0xF6, 0xD7, 0x13, 0xCB, 0xDE, 0x08, // prop0 Long (server clock)
             0x22, 0x9C, 0x07, 0xD8, 0x13, 0xCB, 0xDE, 0x08, // prop1 Long (match-start ref)
+        ];
+        assert_eq!(got, want);
+    }
+
+    /// Byte-for-byte vs s486 round-start op53 (after `BE 35`).
+    #[test]
+    fn channeling_state_matches_s486() {
+        let got = channeling_state(86, "54da70b3-6683-4b07-bad5-165a2afd5402");
+        let mut want = vec![
+            0xBE, 0x35, // marker + channeling carrier (53)
+            0x09, 0xFF, 0x03, // maxPropId 9, bitmap {0..9}
+            0x70, 0x07, 0x77, 0x75, 0xA7, // type nibbles
+            0x56, 0x00, 0x00, 0x00, // p0 Int = 86
+            0x36, 0x01, // p1 Byte 54, p2 Byte 1
+            0x0E, 0x00, 0x00, 0x00, // p3 Int = 14
+            0x02, 0x05, // p4 Byte 2, p5 Byte 5
+            0x00, 0x00, 0x20, 0x41, // p6 Float = 10.0
+            0x00, 0x03, // p7 Byte 0, p8 Byte 3
+            0x24, 0x00, // p9 String len = 36
+        ];
+        want.extend_from_slice(b"54da70b3-6683-4b07-bad5-165a2afd5402");
+        assert_eq!(got, want);
+    }
+
+    /// Byte-for-byte vs s486 round-start op54-small (after `BE 36`).
+    #[test]
+    fn stat_update_matches_s486() {
+        let got = stat_update(88);
+        let want = [
+            0xBE, 0x36, // marker + UserMessage carrier
+            0x05, 0x3F, // maxPropId 5, bitmap {0..5}
+            0x70, 0x77, 0x22, // types [Int,Byte,Byte,Byte,ULong,ULong]
+            0x58, 0x00, 0x00, 0x00, // p0 Int = 88
+            0x38, 0x01, 0x41, // p1 Byte 56, p2 Byte 1, p3 Byte 65
+            0x01, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x3F, // p4 ULong full stats
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p5 ULong 1
         ];
         assert_eq!(got, want);
     }

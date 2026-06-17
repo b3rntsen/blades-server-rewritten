@@ -271,6 +271,9 @@ pub struct Fighter {
     /// The Player net object id (distinct from the Avatar id) — addressed by the
     /// round-start op50 Player spawn. Allocated by `MatchInstance::new`.
     pub player_net_object_id: i32,
+    /// The type-54 "Match/ability" net object id (op50 spawn + op53 channeling at
+    /// round-start). Allocated by `MatchInstance::new`.
+    pub ability_net_object_id: i32,
     /// Raw pools (hundreds-to-thousands; Health is ×3 in arena). The WIRE packs a
     /// FRACTION of max — see `packed_stats` / `wire_fraction`, not these raw values.
     pub health: u32,
@@ -305,6 +308,7 @@ impl Fighter {
             slot,
             net_object_id,
             player_net_object_id: 0, // assigned by MatchInstance::new
+            ability_net_object_id: 0, // assigned by MatchInstance::new
             health: max_health,
             stamina: max_stamina,
             magicka: max_magicka,

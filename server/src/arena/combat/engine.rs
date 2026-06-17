@@ -46,6 +46,7 @@ impl MatchInstance {
         for slot in 0..capacity {
             let net_object_id = combat.alloc_net_object_id();
             let player_net_object_id = combat.alloc_net_object_id();
+            let ability_net_object_id = combat.alloc_net_object_id();
             // Use the provided loadout if it carries a weapon; else a starter
             // loadout so the damage model produces a real, progressing fight.
             let loadout = loadouts
@@ -55,6 +56,7 @@ impl MatchInstance {
                 .unwrap_or_else(super::loadout::starter);
             let mut fighter = Fighter::new(slot, net_object_id, loadout, now);
             fighter.player_net_object_id = player_net_object_id;
+            fighter.ability_net_object_id = ability_net_object_id;
             combat.fighters.push(fighter);
         }
         MatchInstance {
@@ -125,7 +127,9 @@ impl MatchInstance {
                     self.last_heartbeat = now;
                     self.broadcast_clock(&mut out);
                     self.broadcast_spawns(&mut out);
+                    self.broadcast_stat_updates(&mut out);
                     self.broadcast_profiles(&mut out);
+                    self.broadcast_channeling(&mut out);
                     self.broadcast_flow(&mut out, FlowState::BackendMatchCreated);
                     // Round-start emission audit — confirm what actually goes on the wire:
                     // carrier→count (58=clock, 50=spawn, 54=profile/flow) + each fighter's
@@ -235,6 +239,39 @@ impl MatchInstance {
                     viewer,
                     messages::spawn_avatar(actor.net_object_id, role, &actor.loadout.character_uuid),
                 ));
+                // op50 spawn of the type-54 Match/ability net object (op53 channeling
+                // rides it). Needs the actor's ability UUID; skip if the loadout has none.
+                if let Some(ab) = actor.loadout.abilities.first() {
+                    out.push((
+                        viewer,
+                        messages::spawn_ability(actor.ability_net_object_id, &ab.instance_uuid),
+                    ));
+                }
+            }
+        }
+    }
+
+    /// op54-small per-avatar stat/HP word (full at round-start) — finalizes each
+    /// actor's health on the client. [s486 round-start]
+    fn broadcast_stat_updates(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        for viewer in 0..self.combat.fighters.len() {
+            for actor in &self.combat.fighters {
+                out.push((viewer, messages::stat_update(actor.net_object_id)));
+            }
+        }
+    }
+
+    /// op53 PlayerChannelingStateChange on each actor's Match/ability object (initial
+    /// state). Skipped if the loadout carries no abilities. [s486 round-start]
+    fn broadcast_channeling(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        for viewer in 0..self.combat.fighters.len() {
+            for actor in &self.combat.fighters {
+                if let Some(ab) = actor.loadout.abilities.first() {
+                    out.push((
+                        viewer,
+                        messages::channeling_state(actor.ability_net_object_id, &ab.instance_uuid),
+                    ));
+                }
             }
         }
     }
