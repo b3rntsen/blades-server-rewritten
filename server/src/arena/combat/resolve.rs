@@ -37,8 +37,11 @@ pub fn on_c2s_input(
     user_data: &[u8],
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
-    // Combat only resolves once the match exists and isn't over.
-    if matches!(combat.phase, FlowState::Connecting | FlowState::Finished) {
+    // Combat resolves ONLY in the live round (StateTimeout). During Connecting /
+    // Spawning / BackendMatchCreated the inbound op54s are round-start handshake
+    // traffic (the client's PlayerLoadoutReady upload, op55, op58) — resolving them as
+    // swings would inject phantom damage before the fight.
+    if !matches!(combat.phase, FlowState::StateTimeout) {
         return Vec::new();
     }
     if user_data.get(1) != Some(&CARRIER_USERMESSAGE) {

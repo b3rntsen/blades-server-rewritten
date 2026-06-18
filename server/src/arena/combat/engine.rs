@@ -24,9 +24,14 @@ use super::state::{Fighter, FlowState, Loadout, MatchCombat, NetRole};
 /// Cadence of the `StateTimeout` flow heartbeat (server→client keepalive while a
 /// phase runs). Captured cadence is sub-second; tunable.
 const HEARTBEAT: Duration = Duration::from_millis(500);
-/// Hold after `BackendMatchCreated` before the round goes live (the brief
-/// match-create → countdown gap).
-const MATCH_CREATE_HOLD: Duration = Duration::from_millis(750);
+/// Hold in the `Spawning` phase between the spawn/profile burst and the
+/// `BackendMatchCreated` flow state. Retail staggers these ~4s (s506: spawns
+/// 05:05:36, BackendMatchCreated 05:05:40); announcing the match in the same tick as
+/// the spawns preempts the client's loadout-upload handshake → "Connecting" hang.
+const SPAWN_HANDSHAKE_HOLD: Duration = Duration::from_secs(4);
+/// Hold after `BackendMatchCreated` before the round goes live (StateTimeout).
+/// Retail s506: BackendMatchCreated 05:05:40 → StateTimeout 05:05:42 (~2s).
+const MATCH_CREATE_HOLD: Duration = Duration::from_secs(2);
 
 pub struct MatchInstance {
     combat: MatchCombat,
@@ -118,19 +123,21 @@ impl MatchInstance {
             FlowState::Connecting => {
                 if self.combat.expected_peers() > 0 && connected >= self.combat.expected_peers() {
                     info!(
-                        "combat FSM: Connecting → BackendMatchCreated ({connected}/{} peer(s), {} fighter(s))",
+                        "combat FSM: Connecting → Spawning ({connected}/{} peer(s), {} fighter(s))",
                         self.combat.expected_peers(),
                         self.combat.capacity(),
                     );
-                    self.combat.phase = FlowState::BackendMatchCreated;
+                    self.combat.phase = FlowState::Spawning;
                     self.combat.phase_entered = now;
                     self.last_heartbeat = now;
+                    // Spawn/profile burst — NO BackendMatchCreated yet. Retail sends the
+                    // spawns + profile first; the client uploads its loadout during the
+                    // Spawning hold; BackendMatchCreated follows ~4s later (s506 stagger).
                     self.broadcast_clock(&mut out);
                     self.broadcast_spawns(&mut out);
                     self.broadcast_stat_updates(&mut out);
                     self.broadcast_profiles(&mut out);
                     self.broadcast_channeling(&mut out);
-                    self.broadcast_flow(&mut out, FlowState::BackendMatchCreated);
                     // Round-start emission audit — confirm what actually goes on the wire:
                     // carrier→count (58=clock, 50=spawn, 54=profile/flow) + each fighter's
                     // profile-JSON size (0 ⇒ empty ⇒ broadcast_profiles skipped it ⇒ the
@@ -153,6 +160,17 @@ impl MatchInstance {
                         carriers,
                         profile_bytes
                     );
+                }
+            }
+            // Hold (retail ~4s) so the client drives its loadout-upload handshake,
+            // THEN announce BackendMatchCreated — never in the same tick as the spawns.
+            FlowState::Spawning => {
+                if now.duration_since(self.combat.phase_entered) >= SPAWN_HANDSHAKE_HOLD {
+                    info!("combat FSM: Spawning → BackendMatchCreated (round-start handshake settled)");
+                    self.combat.phase = FlowState::BackendMatchCreated;
+                    self.combat.phase_entered = now;
+                    self.last_heartbeat = now;
+                    self.broadcast_flow(&mut out, FlowState::BackendMatchCreated);
                 }
             }
             // Brief hold, then the round goes live (StateTimeout heartbeat).
@@ -338,6 +356,18 @@ mod tests {
         (MatchInstance::new(capacity, capacity, vec![], now), now)
     }
 
+    /// A match driven to the LIVE round (StateTimeout): connect → Spawning (spawn
+    /// burst) → BackendMatchCreated (after the stagger hold) → StateTimeout.
+    fn live_inst(capacity: usize) -> (MatchInstance, Instant) {
+        let now = Instant::now();
+        let mut m = MatchInstance::new(capacity, capacity, vec![], now);
+        m.on_tick(capacity, now); // Connecting → Spawning
+        m.on_tick(capacity, now + SPAWN_HANDSHAKE_HOLD); // Spawning → BackendMatchCreated
+        m.on_tick(capacity, now + SPAWN_HANDSHAKE_HOLD + MATCH_CREATE_HOLD); // → StateTimeout
+        assert_eq!(m.phase(), FlowState::StateTimeout, "live_inst reaches the live round");
+        (m, now)
+    }
+
     #[test]
     fn match_starts_when_all_connected() {
         let (mut m, t0) = inst(2);
@@ -347,16 +377,46 @@ mod tests {
 
         // Both connected → BackendMatchCreated + combat-screen for both avatars,
         // delivered to both players (slots 0 and 1).
+        // Both connected → the spawn burst goes out and we enter Spawning; the
+        // BackendMatchCreated flow is STAGGERED ~4s later (retail), NOT in this burst.
         let out = m.on_tick(2, t0);
-        assert_eq!(m.phase(), FlowState::BackendMatchCreated);
-        let flow = out
-            .iter()
-            .filter(|(_, b)| b.ends_with(b"BackendMatchCreated"))
-            .count();
-        assert_eq!(flow, 2, "BackendMatchCreated to both players");
+        assert_eq!(m.phase(), FlowState::Spawning);
+        assert_eq!(
+            out.iter().filter(|(_, b)| b.ends_with(b"BackendMatchCreated")).count(),
+            0,
+            "BackendMatchCreated must NOT ride the spawn burst (retail staggers it)"
+        );
         // 2 viewers × 2 fighters × (Player + Avatar) = 8 op50 (0x32) spawn messages.
         let spawns = out.iter().filter(|(_, b)| b.len() >= 2 && b[1] == 0x32).count();
         assert_eq!(spawns, 8, "op50 Player+Avatar spawns to both viewers");
+    }
+
+    /// Reproduction guard (s506 decode): the round-start is STAGGERED — the spawn /
+    /// profile burst goes out first, and BackendMatchCreated is announced only ~4s
+    /// LATER, never in the same tick as the spawns. Batching them preempts the client's
+    /// loadout-upload (PlayerLoadoutReady) handshake → hang at "Connecting".
+    #[test]
+    fn backend_match_created_is_staggered_after_spawns() {
+        let (mut m, t0) = inst(2);
+        let burst = m.on_tick(2, t0); // → Spawning
+        assert_eq!(m.phase(), FlowState::Spawning);
+        assert!(burst.iter().any(|(_, b)| b.len() >= 2 && b[1] == 0x32), "spawns in the first burst");
+        assert!(
+            !burst.iter().any(|(_, b)| b.ends_with(b"BackendMatchCreated")),
+            "BackendMatchCreated must NOT ride the spawn burst"
+        );
+        // Held right up to the stagger deadline.
+        let held = m.on_tick(2, t0 + SPAWN_HANDSHAKE_HOLD - Duration::from_millis(1));
+        assert!(held.iter().all(|(_, b)| !b.ends_with(b"BackendMatchCreated")));
+        assert_eq!(m.phase(), FlowState::Spawning);
+        // After the hold: BackendMatchCreated to both players.
+        let created = m.on_tick(2, t0 + SPAWN_HANDSHAKE_HOLD);
+        assert_eq!(m.phase(), FlowState::BackendMatchCreated);
+        assert_eq!(
+            created.iter().filter(|(_, b)| b.ends_with(b"BackendMatchCreated")).count(),
+            2,
+            "BackendMatchCreated announced ~4s after the spawns, to both players"
+        );
     }
 
     /// Round-start sends each viewer ONLY the opponent's op54 profile, never its own —
@@ -397,21 +457,25 @@ mod tests {
         // auto-swing at the player on the tick (a fight, not a static dummy).
         let now = Instant::now();
         let mut m = MatchInstance::new(2, 1, vec![], now);
-        m.on_tick(1, now); // one real peer is enough
-        assert_eq!(m.phase(), FlowState::BackendMatchCreated);
-        m.on_tick(1, now + MATCH_CREATE_HOLD); // → round live
+        m.on_tick(1, now); // one real peer is enough → Spawning
+        assert_eq!(m.phase(), FlowState::Spawning);
+        m.on_tick(1, now + SPAWN_HANDSHAKE_HOLD); // Spawning → BackendMatchCreated
+        m.on_tick(1, now + SPAWN_HANDSHAKE_HOLD + MATCH_CREATE_HOLD); // → round live
         assert_eq!(m.phase(), FlowState::StateTimeout);
         let before = m.fighter_health(0);
         // Past the bot's swing cadence → the bot (slot 1) damages the player (slot 0).
-        m.on_tick(1, now + MATCH_CREATE_HOLD + Duration::from_secs(3));
+        m.on_tick(1, now + SPAWN_HANDSHAKE_HOLD + MATCH_CREATE_HOLD + Duration::from_secs(3));
         assert!(m.fighter_health(0) < before, "bot should damage the player on tick");
     }
 
     #[test]
     fn advances_to_round_after_hold() {
         let (mut m, t0) = inst(2);
-        m.on_tick(2, t0); // → BackendMatchCreated
-        let out = m.on_tick(2, t0 + MATCH_CREATE_HOLD);
+        m.on_tick(2, t0); // → Spawning (spawn burst)
+        assert_eq!(m.phase(), FlowState::Spawning);
+        m.on_tick(2, t0 + SPAWN_HANDSHAKE_HOLD); // Spawning → BackendMatchCreated
+        assert_eq!(m.phase(), FlowState::BackendMatchCreated);
+        let out = m.on_tick(2, t0 + SPAWN_HANDSHAKE_HOLD + MATCH_CREATE_HOLD); // → live
         assert_eq!(m.phase(), FlowState::StateTimeout);
         assert_eq!(m.combat.round, 1);
         assert!(out.iter().any(|(_, b)| b.ends_with(b"StateTimeout")));
@@ -419,21 +483,16 @@ mod tests {
 
     #[test]
     fn heartbeats_on_cadence() {
-        let (mut m, t0) = inst(2);
-        m.on_tick(2, t0);
-        let t1 = t0 + MATCH_CREATE_HOLD;
-        m.on_tick(2, t1); // → StateTimeout
-        // Immediately after: no new heartbeat yet.
-        assert!(m.on_tick(2, t1).iter().all(|(_, b)| !b.ends_with(b"StateTimeout")) || true);
-        // After the cadence elapses: a heartbeat to both players.
-        let out = m.on_tick(2, t1 + HEARTBEAT);
+        let (mut m, t0) = live_inst(2); // → StateTimeout (live round)
+        let live = t0 + SPAWN_HANDSHAKE_HOLD + MATCH_CREATE_HOLD; // when it went live
+        // After the cadence elapses: a StateTimeout heartbeat to both players.
+        let out = m.on_tick(2, live + HEARTBEAT);
         assert_eq!(out.iter().filter(|(_, b)| b.ends_with(b"StateTimeout")).count(), 2);
     }
 
     #[test]
     fn combat_input_damages_opponent() {
-        let (mut m, t0) = inst(2);
-        m.on_tick(2, t0); // match created → combat resolves
+        let (mut m, t0) = live_inst(2); // → live round (StateTimeout); combat resolves
 
         // A (slot 0) sends a combat-input (carrier 54) → B (slot 1) takes damage;
         // a ReceiveDamage goes to both target and attacker.
@@ -466,8 +525,7 @@ mod tests {
 
     #[test]
     fn fight_to_death_ends_match() {
-        let (mut m, t0) = inst(2);
-        m.on_tick(2, t0); // match created
+        let (mut m, t0) = live_inst(2); // → live round
 
         // A keeps swinging (past the cooldown each time) until B dies.
         let mut t = t0;
@@ -489,8 +547,7 @@ mod tests {
 
     #[test]
     fn ability_cast_deals_spell_damage() {
-        let (mut m, t0) = inst(2);
-        m.on_tick(2, t0); // match created
+        let (mut m, t0) = live_inst(2); // → live round
 
         // A casts an ability (op37 RequestExecuteAbility).
         let mut req = vec![

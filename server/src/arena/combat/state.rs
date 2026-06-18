@@ -145,6 +145,12 @@ pub enum StatusEffectType {
 pub enum FlowState {
     /// Pre-match: peers connected, not yet greeted into the match.
     Connecting,
+    /// Internal (no wire stateName): the spawn/profile/channeling burst has been sent
+    /// and we hold before `BackendMatchCreated`. Retail staggers the round-start ~4s
+    /// (s506: spawns 05:05:36 → BackendMatchCreated 05:05:40); the client uploads its
+    /// loadout (PlayerLoadoutReady) during this gap. Announcing the match in the same
+    /// tick as the spawns preempts that handshake and hangs the client at "Connecting".
+    Spawning,
     /// `BackendMatchCreated` — the match exists; loadout/spawn happen around here.
     BackendMatchCreated,
     /// `StateTimeout` — periodic heartbeat while a phase runs (the dominant
@@ -167,7 +173,7 @@ impl FlowState {
             FlowState::StateTimeout => "StateTimeout",
             FlowState::NextState => "NextState",
             FlowState::RoundEnd => "RoundEnd",
-            FlowState::Connecting | FlowState::Finished => return None,
+            FlowState::Connecting | FlowState::Spawning | FlowState::Finished => return None,
         })
     }
 }
@@ -412,6 +418,7 @@ impl MatchCombat {
     pub fn phase_name(&self) -> &'static str {
         match self.phase {
             FlowState::Connecting => "Connecting",
+            FlowState::Spawning => "Spawning",
             FlowState::BackendMatchCreated => "BackendMatchCreated",
             FlowState::StateTimeout => "StateTimeout",
             FlowState::NextState => "NextState",
