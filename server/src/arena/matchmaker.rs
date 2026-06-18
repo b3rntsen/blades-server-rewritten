@@ -28,7 +28,12 @@ use uuid::Uuid;
 
 use crate::{
     BladeApiError, DbPool, ServerGlobal,
-    arena::{MatchmakingMessage, config::ArenaConfig, match_registry::MatchRegistry},
+    arena::{
+        MatchmakingMessage,
+        config::ArenaConfig,
+        key_submit::{KeySubmitConfig, KeySubmitter},
+        match_registry::MatchRegistry,
+    },
     models::CharacterDbEntryCharacterWalletInventory,
     schema::characters,
     session::SessionLookedUpMaybe,
@@ -284,7 +289,11 @@ impl ArenaGlobal {
     /// Build the arena subsystem and spawn the matchmaker actor on the current
     /// arbiter. Returns the shared handle to store in `ServerGlobal`.
     pub fn start(config: ArenaConfig, db_pool: DbPool) -> Arc<Self> {
-        let registry = MatchRegistry::new(config.max_concurrent_matches);
+        // Build the per-match key submitter (captures the current tokio runtime
+        // handle — `start` runs under the actix/tokio runtime). `None` when
+        // submission is disabled / unconfigured, in which case admit is a no-op.
+        let key_submitter = KeySubmitter::from_config(KeySubmitConfig::from_env()).map(Arc::new);
+        let registry = MatchRegistry::new_with_submitter(config.max_concurrent_matches, key_submitter);
 
         let (tx, rx) = unbounded_channel::<TicketRequest>();
         let mm_cfg = config.clone();

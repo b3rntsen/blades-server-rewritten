@@ -33,6 +33,7 @@ use arena_proto::{
 };
 
 use crate::arena::combat::{Loadout, MatchInstance};
+use crate::arena::key_submit::KeySubmitter;
 
 /// A match whose clients never finish connecting holds its capacity permit
 /// (acquired by the matchmaker in `allocate`); without a sweep that slot leaks
@@ -75,10 +76,25 @@ pub struct MatchRegistry {
     addr_index: Mutex<HashMap<SocketAddr, Uuid>>, // connected peer -> its match
     next_order: std::sync::atomic::AtomicU64, // monotonic match-allocation order
     pub max_matches: usize,
+    /// When set, every admitted peer's per-match (key, nonce) is fire-and-forget
+    /// POSTed to the capture platform so OUR-server matches become decryptable
+    /// (see [`key_submit`](crate::arena::key_submit)). `None` in tests / when
+    /// submission is disabled — then admit is unchanged.
+    key_submitter: Option<Arc<KeySubmitter>>,
 }
 
 impl MatchRegistry {
+    /// Test/dev constructor: no key submission.
     pub fn new(max_matches: usize) -> Arc<Self> {
+        Self::new_with_submitter(max_matches, None)
+    }
+
+    /// Production constructor: `key_submitter` (if `Some`) receives every
+    /// admitted peer's per-match key for submission to the capture platform.
+    pub fn new_with_submitter(
+        max_matches: usize,
+        key_submitter: Option<Arc<KeySubmitter>>,
+    ) -> Arc<Self> {
         Arc::new(MatchRegistry {
             semaphore: Arc::new(Semaphore::new(max_matches)),
             pending: Mutex::new(HashMap::new()),
@@ -86,7 +102,16 @@ impl MatchRegistry {
             addr_index: Mutex::new(HashMap::new()),
             next_order: std::sync::atomic::AtomicU64::new(0),
             max_matches,
+            key_submitter,
         })
+    }
+
+    /// Fire-and-forget submit of an admitted peer's key+nonce (no-op when the
+    /// submitter is absent). Called from both admit paths.
+    fn submit_key(&self, crypto: &CryptoCtx) {
+        if let Some(s) = &self.key_submitter {
+            s.submit(&crypto.key, &crypto.nonce);
+        }
     }
 
     /// Matchmaker: reserve ONE capacity slot for a new match and register the
@@ -178,10 +203,14 @@ impl MatchRegistry {
         let (server_sk, server_pk) = gen_keypair();
         let key = x25519_shared(&server_sk, client_pub);
         let nonce = gen_nonce();
+        let crypto = CryptoCtx { key, nonce };
+        // Submit this peer's key to the capture platform (fire-and-forget; no-op
+        // when disabled) so the match's captured frames become decryptable.
+        self.submit_key(&crypto);
         m.players.push(PlayerConn {
             addr: peer,
             player_session_id: player_session_id.to_string(),
-            crypto: CryptoCtx { key, nonce },
+            crypto,
         });
         self.addr_index.lock().unwrap().insert(peer, gsid);
         info!(
@@ -218,10 +247,14 @@ impl MatchRegistry {
         let (server_sk, server_pk) = gen_keypair();
         let key = x25519_shared(&server_sk, client_pub);
         let nonce = gen_nonce();
+        let crypto = CryptoCtx { key, nonce };
+        // Submit this peer's key to the capture platform (fire-and-forget; no-op
+        // when disabled) so the match's captured frames become decryptable.
+        self.submit_key(&crypto);
         m.players.push(PlayerConn {
             addr: peer,
             player_session_id: String::new(), // bound later if/when the psid arrives
-            crypto: CryptoCtx { key, nonce },
+            crypto,
         });
         if let Some(prev) = self.addr_index.lock().unwrap().insert(peer, gsid) {
             if prev != gsid {

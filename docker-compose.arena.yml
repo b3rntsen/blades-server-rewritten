@@ -82,6 +82,17 @@ services:
       # Dev override: pin EVERY anon login to this user (a Transfer'd character),
       # since there's no Bethesda/Google identity. Empty/unset = normal behaviour.
       ARENA_DEV_LOGIN_USER_ID: ${ARENA_DEV_LOGIN_USER_ID:-}
+      # Per-match key submission to the capture platform so OUR-server arena
+      # matches become decryptable (POSTs each admitted peer's ChaCha20 key+nonce
+      # to /api/arena/submit-key, reaching newblades-web by service name over the
+      # shared edge_net). ARENA_SUBMIT_KEYS=0 disables it; ARENA_SUBMIT_TOKEN is a
+      # frida_submit_tokens bearer (REQUIRED for submission to actually happen —
+      # mint one for a designated user; empty = submission silently off).
+      ARENA_SUBMIT_KEYS: ${ARENA_SUBMIT_KEYS:-1}
+      ARENA_SUBMIT_TOKEN: ${ARENA_SUBMIT_TOKEN:-}
+      ARENA_SUBMIT_URL: ${ARENA_SUBMIT_URL:-http://newblades-web:3000/api/arena/submit-key}
+      ARENA_SUBMIT_GAMELIFT_IP: ${ARENA_SUBMIT_GAMELIFT_IP:-10.99.0.1}
+      ARENA_SUBMIT_GAMELIFT_PORT: ${ARENA_SUBMIT_GAMELIFT_PORT:-7777}
       RUST_LOG: ${RUST_LOG:-info}
     command:
       - run
