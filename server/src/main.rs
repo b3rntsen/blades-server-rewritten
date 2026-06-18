@@ -42,6 +42,7 @@ mod inventory;
 mod json_db;
 pub mod models;
 mod quest;
+mod repair;
 pub mod schema;
 mod session;
 mod status;
@@ -85,6 +86,12 @@ pub struct ServerGlobal {
     pub session_store: SessionStore,
     pub static_data_path: PathBuf,
     pub game_data: GameData,
+    /// Full ("max") durability per `(itemTemplateId, temperingLevel)`, derived
+    /// from the captures (`item_durability.json`) since `GameData` carries no
+    /// durability. Used by the repair endpoint to restore an item to full.
+    /// Keyed by lowercase UUID string -> tempering-level string -> max durability.
+    /// Empty if the file is missing/invalid (repair then leaves durability as-is).
+    pub item_max_durability: std::collections::HashMap<String, std::collections::HashMap<String, f64>>,
     pub arena: Arc<arena::matchmaker::ArenaGlobal>,
     /// Static dev token for the `/api/dev/v1/import-character` endpoint, read
     /// from `ARENA_IMPORT_TOKEN` at startup. `None` (unset) disables the
@@ -124,6 +131,32 @@ async fn main() -> Result<()> {
                 serde_json::from_reader(&mut game_data_file).unwrap()
             };
 
+            // Repair needs each item's full durability, which `parsed.json` does
+            // not carry — load the captures-derived lookup. Tolerate a missing or
+            // invalid file (empty map → repair leaves durability unchanged rather
+            // than panicking the server at startup).
+            let item_max_durability: std::collections::HashMap<
+                String,
+                std::collections::HashMap<String, f64>,
+            > = {
+                let p = static_data.join("item_durability.json");
+                match File::open(&p) {
+                    Ok(f) => serde_json::from_reader(std::io::BufReader::new(f))
+                        .unwrap_or_else(|e| {
+                            log::warn!(
+                                "[durability] invalid {p:?}: {e}; repair will leave durability unchanged"
+                            );
+                            Default::default()
+                        }),
+                    Err(e) => {
+                        log::warn!(
+                            "[durability] no {p:?}: {e}; repair will leave durability unchanged"
+                        );
+                        Default::default()
+                    }
+                }
+            };
+
             let arena = arena::matchmaker::ArenaGlobal::start(
                 arena::config::ArenaConfig::from_env(),
                 db_pool.clone(),
@@ -140,6 +173,7 @@ async fn main() -> Result<()> {
                 session_store: SessionStore::new(Duration::from_hours(24)),
                 static_data_path: static_data.clone(),
                 game_data,
+                item_max_durability,
                 arena,
                 arena_import_token,
                 dev_login_user_id,
@@ -232,6 +266,7 @@ async fn main() -> Result<()> {
                     .service(abyss::get_abyss)
                     .service(town::get_town)
                     .service(craft::get_crafts)
+                    .service(repair::repair_items)
                     .service(challenge::get_challenges)
                     .service(gameevent::get_game_events)
                     .service(quest::get_quests)

@@ -33,6 +33,7 @@ use blades_lib::user_data::{
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper, insert_into};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
@@ -58,6 +59,11 @@ pub struct ImportCharacterRequest {
     pub data: CompleteCharacterData,
     pub inventory: CompleteInventory,
     pub wallet: CompleteWallet,
+    /// The character's own captured town (arbitrary JSON), served verbatim by
+    /// `get_town`. Optional so older payloads / fresh imports still deserialize;
+    /// when absent the existing stored town (if any) is left untouched.
+    #[serde(default)]
+    pub town: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -167,6 +173,7 @@ pub async fn import_character(
                     data: JsonDbWrapper(body.data),
                     wallet: JsonDbWrapper(body.wallet),
                     inventory: JsonDbWrapper(body.inventory),
+                    town: body.town.map(JsonDbWrapper),
                 };
 
                 if created {
@@ -186,6 +193,15 @@ pub async fn import_character(
                         ))
                         .execute(&mut conn)
                         .await?;
+                    // Town is overwritten only when the payload carries one, so a
+                    // re-import without a captured town doesn't wipe a good one.
+                    if let Some(town) = entry.town {
+                        diesel::update(characters::table)
+                            .filter(characters::id.eq(character_id))
+                            .set(characters::town.eq(town))
+                            .execute(&mut conn)
+                            .await?;
+                    }
                 }
 
                 Ok(ImportCharacterResponse {

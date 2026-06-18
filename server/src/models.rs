@@ -3,6 +3,7 @@ use blades_lib::user_data::{
     DungeonGeneratedData, DungeonState, Quest, UserAccount,
 };
 use diesel::prelude::*;
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{json_db::JsonDbWrapper, util::CharacterHolder};
@@ -27,6 +28,26 @@ pub struct CharacterDbEntry {
     pub data: JsonDbWrapper<CompleteCharacterData>,
     pub wallet: JsonDbWrapper<CompleteWallet>,
     pub inventory: JsonDbWrapper<CompleteInventory>,
+    /// The character's own captured town (arbitrary JSON, served verbatim by
+    /// `get_town`). `None` for fresh/un-transferred characters → the static
+    /// `default_town.json` is served instead.
+    pub town: Option<JsonDbWrapper<Value>>,
+}
+
+/// Thin select for `get_town`: the requesting character's `town` column plus the
+/// `user_id` for the ownership check. Mirrors `CharacterDbEntryInventory`.
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = crate::schema::characters)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct CharacterDbEntryTown {
+    pub user_id: Uuid,
+    pub town: Option<JsonDbWrapper<Value>>,
+}
+
+impl CharacterHolder for CharacterDbEntryTown {
+    fn get_user_id(&self) -> &Uuid {
+        &self.user_id
+    }
 }
 
 #[derive(Queryable, Selectable, AsChangeset)]

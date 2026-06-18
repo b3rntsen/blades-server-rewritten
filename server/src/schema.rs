@@ -8,6 +8,7 @@ diesel::table! {
         data -> Jsonb,
         inventory -> Jsonb,
         wallet -> Jsonb,
+        town -> Nullable<Jsonb>,
     }
 }
 
