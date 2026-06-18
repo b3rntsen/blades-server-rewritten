@@ -381,9 +381,26 @@ async fn resolve(
 ) {
     let game_session_id = Uuid::new_v4();
     let paired = tickets.len() >= 2;
+    // playerSessionId shape (retail GameLift, capture-confirmed s506
+    // `psess-0a7c4b72-0a1c-b2c9-6599-05c28c5ed98e`): the first three UUID groups are
+    // DERIVED FROM the shared `gameSessionId`, so paired players' psess share a common
+    // `psess-<gsid g1>-<gsid g2>-<gsid g3>-…` prefix, and only the last two groups (the
+    // per-player suffix) differ. We previously minted a fully-independent `psess-<new
+    // uuid>` per player, so paired players shared no prefix — a divergence from retail
+    // that any server-side gsid↔psess correlation (e.g. session lookup) would miss.
+    // [docs/arena-journey-log.md §7]
+    let gsid = game_session_id.to_string(); // canonical 8-4-4-4-12 lowercase hyphenated
+    let gsid_prefix: String = gsid.splitn(4, '-').take(3).collect::<Vec<_>>().join("-");
     let psids: Vec<String> = tickets
         .iter()
-        .map(|_| format!("psess-{}", Uuid::new_v4()))
+        .map(|_| {
+            // Per-player suffix = the last two groups of a fresh UUID (4 + 12 hex).
+            let suffix: String = {
+                let u = Uuid::new_v4().to_string();
+                u.splitn(4, '-').skip(3).collect::<Vec<_>>().join("-")
+            };
+            format!("psess-{gsid_prefix}-{suffix}")
+        })
         .collect();
 
     // Each player's loadout (name/UUID for the round-start op50 spawn + combat stats)
@@ -582,6 +599,30 @@ mod tests {
         assert_ne!(psid_a, psid_b, "each player gets a distinct playerSessionId");
         // The paired match is allocated and holds one capacity permit.
         assert_eq!(registry.available_permits(), 3);
+
+        // playerSessionId shape (retail GameLift, capture-confirmed s506): the first
+        // three UUID groups are DERIVED FROM the shared gameSessionId, so paired
+        // players share a common `psess-<gsid g1>-<gsid g2>-<gsid g3>-…` prefix and
+        // differ only in the trailing per-player suffix (the last two groups).
+        let gsid = gsid_a.to_string();
+        let want_prefix =
+            format!("psess-{}", gsid.splitn(4, '-').take(3).collect::<Vec<_>>().join("-"));
+        assert!(
+            psid_a.starts_with(&want_prefix) && psid_b.starts_with(&want_prefix),
+            "both psess derive their first 3 groups from the gsid: prefix {want_prefix}, got {psid_a} / {psid_b}"
+        );
+        // Canonical psess shape: `psess-` + a full 8-4-4-4-12 UUID (5 hyphen groups).
+        for (label, psid) in [("A", &psid_a), ("B", &psid_b)] {
+            let body = psid.strip_prefix("psess-").expect("psess- prefix");
+            assert_eq!(
+                body.split('-').count(),
+                5,
+                "psess {label} is a well-formed UUID body (8-4-4-4-12): {psid}"
+            );
+        }
+        // The per-player suffix (last two groups) differs — the only divergent part.
+        let suffix = |p: &str| p.splitn(4, '-').skip(3).collect::<Vec<_>>().join("-");
+        assert_ne!(suffix(&psid_a), suffix(&psid_b), "per-player suffixes are distinct");
     }
 
     /// The op54 round-start PROFILE character JSON must be schema-identical to

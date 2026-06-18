@@ -30,9 +30,16 @@ pub const MSGTYPE_COMBAT_SCREEN: u8 = 0x37; // 55
 /// "Connecting…". [RE'd byte-for-byte from s486.]
 pub const MSGTYPE_CLOCK: u8 = 0x3a; // 58
 
-/// firstPropId selector for a stateName payload: `0x4F` server→client,
-/// `0x50` client→server (the echo). The server only emits the s2c form.
-const STATE_SELECTOR_S2C: u8 = 0x4F;
+/// The GameMessageId (NetData propId 3) carried by a flow-control stateName frame:
+/// `MatchStateChangeRequest` = 79 (`0x4F`) server→client, `MatchStateChangeAck` =
+/// 80 (`0x50`) client→server (the echo). This is NOT a "selector" — it is the real
+/// GameMessageId (`dump.cs:588371-2`, `MatchStateChangeRequestMessage`/`AckMessage`
+/// each carry one `string _stateTrigger`). The server drives the replicated
+/// `Match.MatchState` purely by sending op79 with the trigger string; the client
+/// Ack's with op80. Capture-proven byte-for-byte vs s506 #3522385/#3522389: an op79
+/// "BackendMatchCreated" then a c2s op80 "BackendMatchCreated". [docs §7]
+const GMID_MATCH_STATE_CHANGE_REQUEST: u8 = 79; // 0x4F, s2c
+const GMID_MATCH_STATE_CHANGE_ACK: u8 = 80; // 0x50, c2s echo
 
 /// Wrap a NetData `body` as a complete s2c `user_data`: `0xBE ‖ msg_type ‖ body`.
 fn frame(msg_type: u8, body: Vec<u8>) -> Vec<u8> {
@@ -43,23 +50,129 @@ fn frame(msg_type: u8, body: Vec<u8>) -> Vec<u8> {
     out
 }
 
+/// Test helper: wrap a raw NetData `body` as a UserMessage (carrier `0x36`) frame —
+/// for synthesizing inbound c2s handshake frames in engine tests.
+#[cfg(test)]
+pub(crate) fn frame_for_test(body: Vec<u8>) -> Vec<u8> {
+    frame(MSGTYPE_USERMESSAGE, body)
+}
+
 /// A flow-control stateName message on the match flow-controller net object —
 /// e.g. `BackendMatchCreated`, `StateTimeout`, `NextState`, `RoundEnd`. This is
-/// how the server drives the match/round state machine (server-authoritative,
-/// `NetRole::None` on the controller, selector `0x4F`).
+/// how the server drives the match/round state machine **and the replicated
+/// `Match.MatchState`**: it's a `MatchStateChangeRequest` (GameMessageId 79) on
+/// the Control net object (`NetRole::None`), carrying the state trigger string the
+/// client maps onto its `MatchState`/`PvpState` machine (e.g. the
+/// `AwaitingClientBackendSynchronization`→`SynchronizingLoadout` advance). The
+/// client echoes a `MatchStateChangeAck` (80). Server-authoritative.
 ///
 /// `flow_controller_id` is the Control net object the server assigns for the
-/// match (s293 used 436). Returns `None` for the synthetic [`FlowState`]s that
-/// have no wire string (`Connecting`/`Finished`).
+/// match (s293 used 436, s506 used 119). Returns `None` for the synthetic
+/// [`FlowState`]s that have no wire string (`Connecting`/`Spawning`/`Finished`).
 pub fn flow_state(flow_controller_id: i32, state: FlowState) -> Option<Vec<u8>> {
-    let name = state.wire_name()?;
+    Some(match_state_change_request(flow_controller_id, state.wire_name()?))
+}
+
+/// op79 `MatchStateChangeRequest` (carrier `0x36`) on the Control net object: the
+/// server's authoritative request to advance the replicated `Match.MatchState` /
+/// the client's `PvpState` machine, identified by a `_stateTrigger` STRING (NOT a
+/// numeric enum on the wire). `dump.cs:590426` (`MatchStateChangeRequestMessage`,
+/// `string _stateTrigger`). NetData `{0:Int controller · 1:Byte 57 Control · 2:Byte
+/// 0 None · 3:Byte 79 · 4:String trigger}`. Byte-for-byte vs s506 #3522385
+/// (trigger "BackendMatchCreated"). The MatchState `AwaitingClientBackendSynchronization`(9)
+/// → `SynchronizingLoadout`(10) promotion the client mirrors is driven by this
+/// message's trigger string (the numeric 9/10 are client-internal `MatchState.State`
+/// values, never serialized — see docs/arena-journey-log.md §7).
+pub fn match_state_change_request(controller_id: i32, trigger: &str) -> Vec<u8> {
     let mut w = NetDataWriter::new();
-    w.int(0, flow_controller_id)
+    w.int(0, controller_id)
         .byte(1, NetObjectType::Control as u8)
         .byte(2, NetRole::None as u8)
-        .byte(3, STATE_SELECTOR_S2C)
-        .string(4, name);
-    Some(frame(MSGTYPE_USERMESSAGE, w.finish()))
+        .byte(3, GMID_MATCH_STATE_CHANGE_REQUEST)
+        .string(4, trigger);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// op80 `MatchStateChangeAck` (carrier `0x36`) — the CLIENT's echo of an op79 on
+/// the Control object (`NetRole::Autonomous`, GameMessageId 80, same trigger
+/// string). `dump.cs:590456`. The server does not normally SEND this (it's the
+/// client→server ack); provided for completeness + the round-start differential.
+/// Byte-for-byte vs s506 #3522389 (c2s ack of "BackendMatchCreated").
+pub fn match_state_change_ack(controller_id: i32, trigger: &str) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, controller_id)
+        .byte(1, NetObjectType::Control as u8)
+        .byte(2, NetRole::Autonomous as u8)
+        .byte(3, GMID_MATCH_STATE_CHANGE_ACK)
+        .string(4, trigger);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// op61 `LoadoutClientBackendSynchronized` (carrier `0x36`) — `dump.cs:590190`
+/// (`LoadoutClientBackendSynchronizedMessage : GameMessage`, single field
+/// `bool HideHelmet`). NetData `{0:Int playerObj · 1:Byte 55 Player · 2:Byte role ·
+/// 3:Byte 61 · 4:Bool HideHelmet}`, on the **Player** net object.
+///
+/// **Direction note (capture-proven):** in EVERY captured retail match (s127, 167,
+/// 293, 385, 486, 503, 504, 506) this message is **client→server only** — the
+/// client reports its own loadout-backend sync (with the helmet-cosmetic flag) at a
+/// round transition; the server NEVER sends it. So this builder exists to (a) decode
+/// the inbound c2s frame (see [`is_loadout_backend_synchronized`]/the engine's
+/// non-combat gate) and (b) round-trip-prove the layout — it is NOT broadcast s2c at
+/// round-start. Byte-for-byte vs s506 #3523229 (c2s, role 3, HideHelmet=true).
+/// [docs/arena-journey-log.md §7]
+pub fn loadout_client_backend_synchronized(
+    player_net_object_id: i32,
+    role: NetRole,
+    hide_helmet: bool,
+) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, player_net_object_id)
+        .byte(1, NetObjectType::Player as u8)
+        .byte(2, role as u8)
+        .byte(3, GameMessageId::LoadoutClientBackendSynchronized as u8)
+        .bool(4, hide_helmet);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// The GameMessageId carried at NetData propId 3 of a carrier-`0x36` user-message
+/// (the real discriminator — carrier `0x36` is shared across the whole UserMessage
+/// family). `None` if the frame isn't carrier `0x36` or has no integral propId 3.
+/// Used by the engine to tell a round-start HANDSHAKE/state frame (op20/22/36/56/61/
+/// 79/80 …) apart from an actual combat swing/ability before resolving damage.
+pub fn user_message_gmid(user_data: &[u8]) -> Option<u8> {
+    if user_data.get(1) != Some(&MSGTYPE_USERMESSAGE) {
+        return None;
+    }
+    arena_proto::parse_netdata(user_data.get(2..)?)
+        .int(3)
+        .and_then(|v| u8::try_from(v).ok())
+}
+
+/// True iff a carrier-`0x36` c2s frame is the client's `LoadoutClientBackendSynchronized`
+/// (op61) — a round-transition handshake signal, NOT a combat input.
+pub fn is_loadout_backend_synchronized(user_data: &[u8]) -> bool {
+    user_message_gmid(user_data) == Some(GameMessageId::LoadoutClientBackendSynchronized as u8)
+}
+
+/// Carrier-`0x36` GameMessageIds that are **round-start / round-transition handshake
+/// or flow-control signals, NOT combat inputs** — the server must NOT resolve them
+/// as a weapon swing or it injects phantom damage during setup / between rounds.
+///
+/// Capture-proven from s506's c2s carrier-`0x36` traffic (a live PvP match): the real
+/// combat inputs are `RequestExecuteAbility`(37), `PlayerCombatInputActivate`(46) and
+/// `PlayerCombatInputPosition`(47); everything else on this carrier is handshake —
+/// `PlayerInfo`(20), `PlayerSpawnAvatar`(22), `PlayerLoadoutReady`(36),
+/// `EquipAbilitiesAndConsumables`(56), `SkipCurrentState`(57),
+/// `LoadoutClientBackendSynchronized`(61), `MatchStateChangeRequest`(79),
+/// `MatchStateChangeAck`(80), emotes (72/73). [docs/arena-journey-log.md §7]
+pub fn is_noncombat_user_message(user_data: &[u8]) -> bool {
+    matches!(
+        user_message_gmid(user_data),
+        Some(
+            20 | 22 | 36 | 56 | 57 | 61 | 72 | 73 | 76 | 79 | 80
+        )
+    )
 }
 
 /// op58 (carrier `0x3a`) — the match CLOCK: two `Long` (.NET `DateTime.Ticks`,
@@ -481,6 +594,102 @@ mod tests {
             0x09, 0x36, 0x87, 0xC3, 0x41, // p17/18 Magicka 24.441
         ];
         assert_eq!(got, want);
+    }
+
+    /// Byte-for-byte vs s506 #3522385 (s2c MatchStateChangeRequest, op79): the flow
+    /// controller (obj 119, type 57 Control, role 0 None) with trigger
+    /// "BackendMatchCreated". This is the SAME bytes `flow_state` emits — op79 IS the
+    /// MatchState advance on the wire (no numeric enum).
+    #[test]
+    fn match_state_change_request_matches_s506() {
+        let got = match_state_change_request(119, "BackendMatchCreated");
+        let mut want = vec![
+            0xBE, 0x36, // marker + UserMessage carrier
+            0x04, 0x1F, // maxPropId=4, bitmap {0,1,2,3,4}
+            0x70, 0x77, 0x0A, // type nibbles [Int,Byte,Byte,Byte,String]
+            0x77, 0x00, 0x00, 0x00, // p0 Int = 119 (flow controller)
+            0x39, // p1 Byte = 57 (Control)
+            0x00, // p2 Byte = 0 (NetRole::None)
+            0x4F, // p3 Byte = 79 (MatchStateChangeRequest)
+            0x13, 0x00, // p4 String len = 19
+        ];
+        want.extend_from_slice(b"BackendMatchCreated");
+        assert_eq!(got, want);
+        // flow_state delegates to it → identical bytes for the same trigger.
+        assert_eq!(flow_state(119, FlowState::BackendMatchCreated).unwrap(), got);
+    }
+
+    /// Byte-for-byte vs s506 #3522389 (c2s MatchStateChangeAck, op80): same controller,
+    /// role 3 (Autonomous), gmid 80, same trigger string.
+    #[test]
+    fn match_state_change_ack_matches_s506() {
+        let got = match_state_change_ack(119, "BackendMatchCreated");
+        let mut want = vec![
+            0xBE, 0x36, 0x04, 0x1F, 0x70, 0x77, 0x0A, //
+            0x77, 0x00, 0x00, 0x00, // p0 = 119
+            0x39, // p1 = 57 (Control)
+            0x03, // p2 = 3 (Autonomous — client echo)
+            0x50, // p3 = 80 (MatchStateChangeAck)
+            0x13, 0x00, // p4 len 19
+        ];
+        want.extend_from_slice(b"BackendMatchCreated");
+        assert_eq!(got, want);
+    }
+
+    /// Byte-for-byte vs s506 #3523229 (c2s op61 LoadoutClientBackendSynchronized):
+    /// Player obj 120, role 3 (Autonomous), gmid 61, HideHelmet=true.
+    #[test]
+    fn loadout_backend_synchronized_matches_s506() {
+        let got = loadout_client_backend_synchronized(120, NetRole::Autonomous, true);
+        let want = [
+            0xBE, 0x36, // marker + UserMessage carrier
+            0x04, 0x1F, // maxPropId=4, bitmap {0,1,2,3,4}
+            0x70, 0x77, 0x06, // type nibbles [Int,Byte,Byte,Byte,Bool]
+            0x78, 0x00, 0x00, 0x00, // p0 Int = 120 (Player obj)
+            0x37, // p1 Byte = 55 (Player)
+            0x03, // p2 Byte = 3 (Autonomous)
+            0x3D, // p3 Byte = 61 (LoadoutClientBackendSynchronized)
+            0x01, // p4 Bool = true (HideHelmet)
+        ];
+        assert_eq!(got, want);
+    }
+
+    /// The carrier-`0x36` GameMessageId reader + the combat/non-combat split that
+    /// keeps round-transition handshake frames from being resolved as swings.
+    #[test]
+    fn user_message_gmid_and_noncombat_split() {
+        // op61 (the s506 c2s bytes, marker patched to the c2s 0x84 — byte 0 unused).
+        let op61 = {
+            let mut f = loadout_client_backend_synchronized(120, NetRole::Autonomous, true);
+            f[0] = 0x84;
+            f
+        };
+        assert_eq!(user_message_gmid(&op61), Some(61));
+        assert!(is_loadout_backend_synchronized(&op61));
+        assert!(is_noncombat_user_message(&op61), "op61 is handshake, not a swing");
+
+        // op80 MatchStateChangeAck + op36 PlayerLoadoutReady are non-combat too.
+        assert!(is_noncombat_user_message(&match_state_change_ack(119, "StateTimeout")));
+        let op36 = {
+            let mut w = NetDataWriter::new();
+            w.int(0, 120).byte(1, 55).byte(2, 3).byte(3, 36);
+            frame(MSGTYPE_USERMESSAGE, w.finish())
+        };
+        assert!(is_noncombat_user_message(&op36), "PlayerLoadoutReady is handshake");
+
+        // A real combat swing/ability is NOT classified as non-combat.
+        // op37 RequestExecuteAbility (real cast) — must fall through to resolution.
+        let mut op37 = vec![
+            0xBE, 0x36, 0x04, 0x1F, 0x70, 0x77, 0x0A, 0x35, 0x02, 0x00, 0x00, 0x38, 0x03, 0x25,
+            0x24, 0x00,
+        ];
+        op37.extend_from_slice(b"7fc15804-1637-40a9-8dcc-3ea1eb0f778d");
+        assert!(!is_noncombat_user_message(&op37), "an ability cast is combat, not handshake");
+        // A bare swipe body (no decodable propId 3) is NOT non-combat → resolves as a swing.
+        assert_eq!(user_message_gmid(&[0x84, 0x36]), None);
+        assert!(!is_noncombat_user_message(&[0x84, 0x36]));
+        // Non-0x36 carriers are never user-messages.
+        assert_eq!(user_message_gmid(&[0x84, 0x3a, 0x00]), None);
     }
 
     /// PerformExecuteAbility (38) is the request (37) with the marker, role, and

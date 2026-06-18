@@ -47,6 +47,17 @@ pub fn on_c2s_input(
     if user_data.get(1) != Some(&CARRIER_USERMESSAGE) {
         return Vec::new();
     }
+    // Carrier 0x36 is shared by combat inputs AND round-transition handshake/flow
+    // signals (op61 LoadoutClientBackendSynchronized, op36 PlayerLoadoutReady, op80
+    // MatchStateChangeAck, op56 EquipAbilities, op20/22/57 …). Those arrive even in
+    // the LIVE round (e.g. at a RoundEnd→NextState transition: s506 #3523229 op61,
+    // #3523274 op36) — resolving them as a swing injects phantom damage. Only real
+    // combat inputs (op37 ability, op46/47 swipe-input) and unstructured swipe bodies
+    // fall through to resolution. [docs/arena-journey-log.md §7]
+    if messages::is_noncombat_user_message(user_data) {
+        debug!("combat: slot {sender} carrier-54 handshake/flow frame (not a swing) — ignored");
+        return Vec::new();
+    }
     let Some(target_slot) = combat.opponent_of(sender) else {
         debug!("combat: slot {sender} input ignored — solo/bot match, no opponent");
         return Vec::new();

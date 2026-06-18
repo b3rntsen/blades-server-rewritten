@@ -123,6 +123,18 @@ impl MatchInstance {
             return out;
         }
 
+        // op61 LoadoutClientBackendSynchronized (c2s) — the client reports its OWN
+        // loadout-backend sync (+ a HideHelmet cosmetic flag) at a round transition.
+        // Capture-proven CLIENT→SERVER only (s506 #3523229 + every retail match); the
+        // server NEVER sends op61 and does NOT need to reply — the client self-advances
+        // its PvpState/MatchState once it has the profile + spawns and emits op54
+        // PlayerLoadoutReady. We simply ACK it into the void (no s2c) so it is never
+        // mis-resolved as a combat swing. [docs/arena-journey-log.md §7]
+        if messages::is_loadout_backend_synchronized(user_data) {
+            debug!("combat c2s: slot {sender} op61 LoadoutClientBackendSynchronized — handshake, no reply");
+            return out;
+        }
+
         // ConcedeMatch ends the match for everyone. (Heuristic: the concede
         // carrier byte == GameMessageId::ConcedeMatch; refine if a capture shows
         // otherwise.)
@@ -596,6 +608,54 @@ mod tests {
             Some(&arena_proto::NetDataValue::Long(0)),
             "malformed token → echo 0 (graceful, never panic)",
         );
+    }
+
+    /// Capture-proven (s506 #3523229): the client sends op61
+    /// `LoadoutClientBackendSynchronized` c2s at a round transition — even while the
+    /// match is LIVE (StateTimeout). The server must treat it as a handshake signal:
+    /// NO s2c reply and NO phantom damage (it rides carrier 0x36, the combat-input
+    /// carrier, so the pre-fix catch-all `resolve_swing` would have hit the opponent).
+    #[test]
+    fn op61_loadout_backend_sync_is_handshake_not_a_swing() {
+        let (mut m, t0) = live_inst(2); // LIVE round (StateTimeout) — combat resolves here
+        let full = m.fighter_health(1);
+
+        // Build the real s506 op61 (Player obj, role Autonomous, HideHelmet), c2s marker.
+        let mut op61 = messages::loadout_client_backend_synchronized(
+            m.combat.fighters[0].player_net_object_id,
+            NetRole::Autonomous,
+            true,
+        );
+        op61[0] = 0x84; // c2s marker (byte 0 is not parsed)
+
+        let out = m.on_c2s(0, &op61, t0);
+        assert!(out.is_empty(), "op61 produces NO s2c (the server never replies to it)");
+        assert_eq!(m.fighter_health(1), full, "op61 must NOT damage the opponent (it's not a swing)");
+        assert_eq!(m.phase(), FlowState::StateTimeout, "op61 does not change the match phase");
+    }
+
+    /// The other carrier-0x36 round-transition handshake frames (op36 PlayerLoadoutReady,
+    /// op80 MatchStateChangeAck) likewise never resolve as combat in the live round.
+    #[test]
+    fn round_transition_handshake_frames_do_no_damage() {
+        let (mut m, t0) = live_inst(2);
+        let full = m.fighter_health(1);
+
+        // op36 PlayerLoadoutReady (c2s).
+        let mut op36 = {
+            let mut w = arena_proto::NetDataWriter::new();
+            w.int(0, m.combat.fighters[0].player_net_object_id).byte(1, 55).byte(2, 3).byte(3, 36);
+            messages::frame_for_test(w.finish())
+        };
+        op36[0] = 0x84;
+        assert!(m.on_c2s(0, &op36, t0).is_empty(), "op36 PlayerLoadoutReady → no s2c");
+
+        // op80 MatchStateChangeAck (c2s echo).
+        let mut op80 = messages::match_state_change_ack(m.combat.flow_controller_id, "StateTimeout");
+        op80[0] = 0x84;
+        assert!(m.on_c2s(0, &op80, t0).is_empty(), "op80 MatchStateChangeAck → no s2c");
+
+        assert_eq!(m.fighter_health(1), full, "no handshake frame damages the opponent");
     }
 
     #[test]
