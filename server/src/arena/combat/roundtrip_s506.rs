@@ -22,7 +22,8 @@
 //! ## Ground truth — s506 round-start s2c (deduped, relative seconds; the DB ts is
 //! second-resolution so gaps are ±1s). Extracted read-only from prod:
 //! ```text
-//!  t+0  op58 clock
+//!  t+0  op58 clock  (the server's REPLY to the client's c2s op58 clock-sync,
+//!                    echoing the client's token — NOT an unsolicited broadcast)
 //!  t+0  op50 spawn  (self player)
 //!  t+0  op50 spawn  (opponent player)
 //!  t+0  op54 stat/profile word (97 B)
@@ -317,9 +318,10 @@ fn round_start_reproduces_s506_sequence_and_stagger() {
     let stto = first_sec(&log, |k| matches!(k, Kind::Flow(n) if n == "StateTimeout"));
 
     let clock = clock.expect(
-        "DIVERGENCE: no op58 CLOCK emitted at round-start. s506 sends the match clock \
-         FIRST; without it the client never starts its match timeline (stalls at \
-         'Connecting'). messages::clock / engine::broadcast_clock is missing.",
+        "DIVERGENCE: no op58 CLOCK emitted at round-start. s506's op58 is the server's \
+         REPLY to the client's c2s op58 clock-sync (echoing the client's token); without \
+         it the client BLOCKS at AwaitingClientBackendSynchronization and never uploads \
+         its loadout (stalls at 'Connecting'). engine::on_c2s op58 branch is missing.",
     );
     let spawn = spawn.expect(
         "DIVERGENCE: no op50 SPAWN emitted at round-start. s506 spawns the Player/Avatar \

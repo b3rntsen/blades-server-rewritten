@@ -446,6 +446,14 @@ mod tests {
             chacha20_legacy_xor(&mut ud, &c.key, &c.nonce);
             self.send_plain(&ud);
         }
+        /// Encrypt + send a full decrypted `user_data` payload under this client's
+        /// key (the round-start op58 clock-sync sends a multi-byte NetData body).
+        fn send_enc_payload(&mut self, plain: &[u8]) {
+            let c = self.crypto.clone().expect("keyed");
+            let mut ud = plain.to_vec();
+            chacha20_legacy_xor(&mut ud, &c.key, &c.nonce);
+            self.send_plain(&ud);
+        }
     }
 
     /// Two rusty_enet clients, a shared 2-player match: both CONNECT, op-0x38
@@ -498,12 +506,21 @@ mod tests {
         }
         // Lifecycle phase: also drive the per-match tick, exactly as the real
         // serve loop does (this is what emits the flow-control + combat s2c).
+        //
+        // The tick clock is VIRTUAL (advances 250 ms per iteration), not wall-clock:
+        // the round-start FSM staggers BackendMatchCreated ~4 s after the spawns and
+        // StateTimeout ~2 s after that (SPAWN_HANDSHAKE_HOLD + MATCH_CREATE_HOLD). A
+        // 1 ms real sleep × 2000 iterations only covers ~2 s of real time — never
+        // enough to reach BackendMatchCreated — so we advance a synthetic `Instant`
+        // instead, reaching the staggered states deterministically without sleeping.
+        let mut vnow = std::time::Instant::now();
         macro_rules! pump_tick {
             ($cond:expr, $msg:expr) => {{
                 let mut ok = false;
                 for _ in 0..2000 {
                     while pump(&mut server, &registry, &mut peer_at) {}
-                    for (addr, bytes) in registry.tick_matches(std::time::Instant::now()) {
+                    vnow += Duration::from_millis(250);
+                    for (addr, bytes) in registry.tick_matches(vnow) {
                         send_to(&mut server, &peer_at, &addr, 0, &bytes);
                     }
                     server.flush();
@@ -554,6 +571,29 @@ mod tests {
         a.inbox.clear();
         b.inbox.clear();
 
+        // 2.5. Round-start op58 CLOCK-SYNC (capture-proven, s506): the client sends
+        //    c2s op58 [clock0=0, token] and BLOCKS until the server replies op58
+        //    [server_clock, token] echoing the SAME token back to that client (before
+        //    it uploads its loadout). A sends its op58 with a known token; the server
+        //    must reply to A ALONE, echoing the token verbatim (decrypted under A's
+        //    own key). End-to-end over real ENet + per-peer crypto.
+        const TOKEN: i64 = 0x08DECC2E11DD1E98u64 as i64;
+        a.send_enc_payload(&crate::arena::combat::messages::clock(0, TOKEN));
+        pump_io!(
+            a.inbox.iter().any(|m| m.len() > 2
+                && m[1] == 0x3a
+                && arena_proto::parse_netdata(&m[2..]).props.get(&1)
+                    == Some(&arena_proto::NetDataValue::Long(TOKEN))),
+            "A receives an op58 clock-sync reply echoing its token (decrypted under A's key)"
+        );
+        // The clock-sync is point-to-point: B must NOT receive A's reply.
+        assert!(
+            !b.inbox.iter().any(|m| m.len() > 2 && m[1] == 0x3a),
+            "the op58 clock-sync reply goes to the SENDER only, not the opponent"
+        );
+        a.inbox.clear();
+        b.inbox.clear();
+
         // 3. Both admitted → the tick drives match-start: each client receives the
         //    BackendMatchCreated flow message (decrypted under its OWN key) + the
         //    op50 (MessageType 0x32) net-object spawns for each fighter.
@@ -574,6 +614,13 @@ mod tests {
         // 4. A's combat input → the server resolves an authoritative hit → B
         //    receives a ReceiveDamage (carrier 54, NetData propId3=50) with its HP
         //    pool decremented. The A→B authoritative-combat path, end to end.
+        //    Combat only resolves once the round is LIVE (the StateTimeout flow
+        //    heartbeat) — BackendMatchCreated (step 3) is still the pre-live hold, and
+        //    resolve drops inputs off StateTimeout. Wait for the live round first.
+        pump_tick!(
+            a.inbox.iter().any(|m| m.ends_with(b"StateTimeout")),
+            "the round goes live (StateTimeout heartbeat) before combat input resolves"
+        );
         a.inbox.clear();
         b.inbox.clear();
         a.send_enc(0x84, 0x36); // carrier 54 = combat-input family

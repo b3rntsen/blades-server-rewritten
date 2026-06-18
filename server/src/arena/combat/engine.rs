@@ -14,13 +14,22 @@
 
 use std::time::{Duration, Instant};
 
-use arena_proto::GameMessageId;
+use arena_proto::{GameMessageId, NetDataValue};
 use log::{debug, info};
 
 use super::messages;
 use super::resolve;
 use super::state::{Fighter, FlowState, Loadout, MatchCombat, NetRole};
 
+/// Carrier MessageType (`user_data[1]`) of the op58 match-CLOCK message — the
+/// round-start clock-sync. The client SENDS this c2s on connect (two Longs:
+/// `[clock0=0, token]`) and BLOCKS in MatchState `AwaitingClientBackendSynchronization`
+/// until the server replies `op58 [server_clock_ticks, token]` echoing the SAME
+/// token back to that one client — only then does it upload its loadout (op54).
+/// Our prior bug shipped op58 only as an UNSOLICITED broadcast (no token echo) and
+/// dropped the client's c2s op58 in `resolve` (early-return off StateTimeout), so
+/// the client hung at "Connecting…". [capture-proven from s506.]
+const CARRIER_CLOCK: u8 = 0x3a; // 58
 /// Cadence of the `StateTimeout` flow heartbeat (server→client keepalive while a
 /// phase runs). Captured cadence is sub-second; tunable.
 const HEARTBEAT: Duration = Duration::from_millis(500);
@@ -92,6 +101,28 @@ impl MatchInstance {
             self.combat.phase_name(),
         );
 
+        // op58 CLOCK-SYNC — answered in ANY phase (the client sends this c2s on
+        // connect and BLOCKS at MatchState `AwaitingClientBackendSynchronization`
+        // until we reply, BEFORE it uploads its loadout — so it lands during
+        // Connecting/Spawning/BackendMatchCreated, all phases `resolve` drops). Reply
+        // to the SENDER ONLY: first Long = the server clock ticks (same .NET-ticks
+        // source `broadcast_clock` uses), second Long = the client's token echoed
+        // verbatim. The client's c2s op58 is two Longs `[clock0=0 @propId0, token
+        // @propId1]`; echoing propId1 unblocks it. [capture-proven from s506:
+        // client token EE3FEB9B2DCCDE08 → reply must echo EE3FEB9B2DCCDE08.]
+        if user_data.get(1) == Some(&CARRIER_CLOCK) {
+            // propId1 is the token (a `Long`); echo it verbatim. Fall back to 0 on a
+            // malformed body so we still reply (never panic, never hang the client).
+            let token = match arena_proto::parse_netdata(&user_data[2..]).props.get(&1) {
+                Some(NetDataValue::Long(v)) => *v,
+                Some(other) => other.as_i64().unwrap_or(0),
+                None => 0,
+            };
+            debug!("combat c2s: slot {sender} op58 clock-sync, echoing token 0x{token:016x}");
+            out.push((sender, messages::clock(Self::clock_ticks(), token)));
+            return out;
+        }
+
         // ConcedeMatch ends the match for everyone. (Heuristic: the concede
         // carrier byte == GameMessageId::ConcedeMatch; refine if a capture shows
         // otherwise.)
@@ -130,10 +161,12 @@ impl MatchInstance {
                     self.combat.phase = FlowState::Spawning;
                     self.combat.phase_entered = now;
                     self.last_heartbeat = now;
-                    // Spawn/profile burst — NO BackendMatchCreated yet. Retail sends the
-                    // spawns + profile first; the client uploads its loadout during the
-                    // Spawning hold; BackendMatchCreated follows ~4s later (s506 stagger).
-                    self.broadcast_clock(&mut out);
+                    // Spawn/profile burst — NO BackendMatchCreated yet, and NO op58
+                    // clock: the s2c op58 is the REPLY to the client's c2s op58
+                    // clock-sync (handled in `on_c2s`), NOT an unsolicited broadcast.
+                    // Retail sends the spawns + profile first; the client uploads its
+                    // loadout during the Spawning hold; BackendMatchCreated follows ~4s
+                    // later (s506 stagger).
                     self.broadcast_spawns(&mut out);
                     self.broadcast_stat_updates(&mut out);
                     self.broadcast_profiles(&mut out);
@@ -197,19 +230,26 @@ impl MatchInstance {
         out
     }
 
-    /// Broadcast the match CLOCK (op58) to every viewer — the FIRST round-start
-    /// frame the retail server sends. The client needs it to start its match
-    /// timeline; without it the client connects but sits at "Connecting…" (the
-    /// 2026-06-17 paired-match stall). Two .NET-ticks Longs (server clock +
-    /// match-start ref), both ≈ now. [docs §6.2, RE'd from s486.]
-    fn broadcast_clock(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+    /// The server match-clock value: `.NET DateTime.Ticks` (100 ns since year 1).
+    /// The single tick source for op58 — used by the c2s clock-sync REPLY (the
+    /// first Long) and by `broadcast_clock`, so both emit the same wall-clock ticks.
+    fn clock_ticks() -> i64 {
         let unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
         // .NET DateTime.Ticks = 100 ns since year 1; Unix epoch = 621355968000000000 ticks.
-        let ticks = 621_355_968_000_000_000i64
+        621_355_968_000_000_000i64
             + (unix.as_secs() as i64) * 10_000_000
-            + (unix.subsec_nanos() as i64) / 100;
+            + (unix.subsec_nanos() as i64) / 100
+    }
+
+    /// Broadcast the match CLOCK (op58) to every viewer. **No longer used in the
+    /// round-start burst** — retail's s2c op58 is the REPLY to the client's c2s
+    /// op58 clock-sync (see `on_c2s`), not an unsolicited broadcast. Retained for
+    /// the builder/tests and any future server-pushed time sync. Two .NET-ticks
+    /// Longs (server clock + match-start ref), both ≈ now. [docs §6.2, RE'd from s486.]
+    fn broadcast_clock(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        let ticks = Self::clock_ticks();
         for slot in 0..self.combat.fighters.len() {
             out.push((slot, messages::clock(ticks, ticks)));
         }
@@ -488,6 +528,74 @@ mod tests {
         // After the cadence elapses: a StateTimeout heartbeat to both players.
         let out = m.on_tick(2, live + HEARTBEAT);
         assert_eq!(out.iter().filter(|(_, b)| b.ends_with(b"StateTimeout")).count(), 2);
+    }
+
+    /// Capture-proven (s506): the round-start op58 clock-sync is a CLIENT-INITIATED
+    /// request/reply. The client sends c2s op58 `[clock0=0, token]` and BLOCKS at
+    /// `AwaitingClientBackendSynchronization` until the server replies op58
+    /// `[server_clock_ticks, token]` — echoing the SAME token back to that one
+    /// client. `on_c2s` must answer it in the round-start phase (Spawning here), to
+    /// the SENDER ONLY, echoing the token verbatim — NOT route it to `resolve`
+    /// (which drops everything off StateTimeout) and NOT broadcast.
+    #[test]
+    fn op58_clock_sync_echoes_client_token() {
+        const TOKEN: i64 = 0x08DECC2E11DD1E98u64 as i64; // s506's 2nd player token (981EDD11…)
+        let now = Instant::now();
+        let mut m = MatchInstance::new(2, 2, vec![], now);
+        m.on_tick(2, now); // Connecting → Spawning (round-start burst)
+        assert_eq!(m.phase(), FlowState::Spawning, "test drives to the round-start phase");
+
+        // Build the client's c2s op58: two Longs [clock0=0 @propId0, token @propId1].
+        // `messages::clock` writes exactly that NetData; patch the marker to the c2s
+        // marker 0x84 so the frame mirrors a real client send (byte 0 is not parsed).
+        let mut c2s = messages::clock(0, TOKEN);
+        c2s[0] = 0x84;
+        assert_eq!(c2s[1], 0x3a, "carrier is op58 (0x3a)");
+
+        let out = m.on_c2s(0, &c2s, now);
+
+        // Exactly one reply, to the SENDER (slot 0), carrier op58.
+        assert_eq!(out.len(), 1, "op58 clock-sync replies to the sender ONLY (not a broadcast)");
+        let (target, reply) = &out[0];
+        assert_eq!(*target, 0, "reply goes back to the sender");
+        assert_eq!(reply[0], messages::MARKER_S2C, "s2c marker 0xBE");
+        assert_eq!(reply[1], 0x3a, "reply carrier is op58 (0x3a)");
+
+        // The reply echoes the client's token verbatim at propId 1, and carries a
+        // real server clock at propId 0 (a plausible .NET DateTime.Ticks, not 0).
+        let nd = arena_proto::parse_netdata(&reply[2..]);
+        assert_eq!(
+            nd.props.get(&1),
+            Some(&arena_proto::NetDataValue::Long(TOKEN)),
+            "propId 1 Long == the client's token, echoed verbatim",
+        );
+        match nd.props.get(&0) {
+            Some(&arena_proto::NetDataValue::Long(ticks)) => {
+                assert!(ticks > 621_355_968_000_000_000, "propId 0 is a real .NET-ticks server clock");
+            }
+            other => panic!("propId 0 must be a Long server clock, got {other:?}"),
+        }
+
+        // Combat resolution did NOT run (no phantom damage from the handshake frame).
+        assert_eq!(m.fighter_health(1), m.fighter_max_health(1), "no damage from a clock-sync");
+    }
+
+    /// A malformed c2s op58 (no parseable token) still gets a reply (token 0) — the
+    /// server must never panic or silently drop it (that would re-hang the client).
+    #[test]
+    fn op58_clock_sync_malformed_replies_token_zero() {
+        let now = Instant::now();
+        let mut m = MatchInstance::new(2, 2, vec![], now);
+        m.on_tick(2, now); // → Spawning
+        // Carrier 0x3a but a truncated/empty NetData body → no propId 1.
+        let out = m.on_c2s(0, &[0x84, 0x3a], now);
+        assert_eq!(out.len(), 1, "still exactly one reply to the sender");
+        let nd = arena_proto::parse_netdata(&out[0].1[2..]);
+        assert_eq!(
+            nd.props.get(&1),
+            Some(&arena_proto::NetDataValue::Long(0)),
+            "malformed token → echo 0 (graceful, never panic)",
+        );
     }
 
     #[test]
