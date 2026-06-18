@@ -52,5 +52,11 @@ pub mod resolve;
 pub mod state;
 pub mod tables;
 
+// Offline reproduction-differential test against retail capture s506 (round-start).
+// Test-only: no production code, just drives the engine over s506's timing and
+// diffs our s2c protocol sequence against the captured one.
+#[cfg(test)]
+mod roundtrip_s506;
+
 pub use engine::MatchInstance;
 pub use state::Loadout;
