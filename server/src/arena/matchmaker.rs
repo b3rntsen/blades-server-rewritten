@@ -162,28 +162,75 @@ async fn load_loadout(db: &Option<DbPool>, user_id: Uuid) -> crate::arena::comba
             // (data.customization.CharacterUID = the avatar visual); without it the
             // opponent has no appearance and the client's resource-load hangs at
             // "connecting" (the 2026-06-17 gate, found via the on-device matchstate probe).
+            // TODO(arena-profile): `equippedItems` shape still diverges from retail
+            // (missing per-item `grade` / `arcaneTier`). Fixing it needs data-model
+            // changes (those fields aren't stored on the item), so it's a separate
+            // follow-up — left as-is for now. The op54 hang is driven by the CHARACTER
+            // JSON schema (below), which this fix makes retail-identical.
             lo.profile_equipped_json =
                 serde_json::json!({ "equippedItems": &r.inventory.0.loadout.equipped_items }).to_string();
-            // Keep ONLY `customization` (the avatar appearance, ~6 KB); drop `dialog`
-            // (~200 KB of town-RPG dialog state) + `new-flags` — sending the full `data`
-            // bloats the op54 to ~220 KB / 150+ ENet fragments, which the client drops
-            // (→ still "connecting"). Retail's profile `data` is customization-sized.
-            // [journey-log §7]
-            let mut profile_data = r.data.0.clone();
-            profile_data.new_flags = serde_json::json!({});
-            profile_data.dialog = serde_json::json!({});
-            lo.profile_character_json = serde_json::to_string(
-                &blades_lib::user_data::CompleteCharacterWithIdAndData {
-                    data: profile_data,
-                    id: r.id,
-                    character: r.character.0.clone(),
-                },
-            )
-            .unwrap_or_default();
+            // op54 round-start PROFILE character JSON, trimmed to retail's schema.
+            lo.profile_character_json =
+                build_profile_character_json(&r.data.0, r.id, &r.character.0);
             lo
         }
         None => loadout::starter(),
     }
+}
+
+/// Build the op54 round-start PROFILE character JSON, **trimmed to retail's
+/// schema**. Retail's opponent profile is rejected by the client's deserializer
+/// when it carries keys retail never sends (capture-proven by the field-diff of
+/// session 506: the client then never loads the opponent's resources and the
+/// match hangs at "Connecting").
+///
+/// We serialize the same `CompleteCharacterWithIdAndData` the rest of the server
+/// uses (the structs ARE the camelCase wire format — see `blades_lib`), then
+/// post-process the JSON `Value` so the profile is schema-identical to retail —
+/// WITHOUT touching the global structs (they back GET /character, transfers,
+/// initial sync, etc.; this transform is profile-specific):
+///   - drop the top-level `challengeSeason` key (retail's profile has none);
+///   - replace `data` with an object containing ONLY `customization` — drop
+///     `dialog` and `new-flags` entirely (retail's `data` is customization-only;
+///     `customization.CharacterUID` = the opponent's avatar appearance and is
+///     preserved verbatim).
+///
+/// On any (unexpected) serialize/shape error this returns whatever serialized,
+/// matching the previous `unwrap_or_default()` behaviour (never panics the actor).
+fn build_profile_character_json(
+    data: &blades_lib::user_data::CompleteCharacterData,
+    id: Uuid,
+    character: &blades_lib::user_data::CompleteCharacter,
+) -> String {
+    let serialized = match serde_json::to_string(
+        &blades_lib::user_data::CompleteCharacterWithIdAndData {
+            data: data.clone(),
+            id,
+            character: character.clone(),
+        },
+    ) {
+        Ok(s) => s,
+        Err(_) => return String::new(),
+    };
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&serialized) else {
+        return serialized;
+    };
+    if let Some(obj) = value.as_object_mut() {
+        // retail's profile has no `challengeSeason`.
+        obj.remove("challengeSeason");
+        // retail's `data` is `customization`-only — rebuild it from scratch so
+        // `dialog` / `new-flags` are dropped, not blanked.
+        let customization = obj
+            .get("data")
+            .and_then(|d| d.get("customization"))
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        obj.insert(
+            "data".to_string(),
+            serde_json::json!({ "customization": customization }),
+        );
+    }
+    serde_json::to_string(&value).unwrap_or(serialized)
 }
 
 /// Newest-first view of `arena_matches`, capped at `limit`, marking `mine`
@@ -526,5 +573,87 @@ mod tests {
         assert_ne!(psid_a, psid_b, "each player gets a distinct playerSessionId");
         // The paired match is allocated and holds one capacity permit.
         assert_eq!(registry.available_permits(), 3);
+    }
+
+    /// The op54 round-start PROFILE character JSON must be schema-identical to
+    /// retail: for a character WITH a `challenge_season` and a non-empty `data`
+    /// (customization + dialog + new-flags), the built JSON must have NO
+    /// top-level `challengeSeason` key, and its `data` must contain ONLY
+    /// `customization` (no `dialog`, no `new-flags`) — with the customization
+    /// (the avatar appearance / CharacterUID) preserved verbatim. Capture-proven
+    /// by the field-diff of session 506.
+    #[test]
+    fn profile_character_json_matches_retail_schema() {
+        use blades_lib::user_data::{
+            CharacterChallengeSeason, CompleteCharacter, CompleteCharacterData,
+        };
+        use serde_json::json;
+
+        // A leveled character WITH a (non-default) challenge_season.
+        let mut character = CompleteCharacter::default();
+        character.name = "Opponent".into();
+        character.level = 86;
+        character.challenge_season = CharacterChallengeSeason {
+            current_session_id: Uuid::new_v4(),
+            rank: 7,
+            rank_rewarded: 3,
+            points: 1234,
+            season_year: 2026,
+            premium: true,
+        };
+
+        // A non-empty `data`: customization (with a CharacterUID) + dialog +
+        // new-flags — exactly the keys our profile used to over-emit.
+        let customization = json!({
+            "CharacterUID": "11111111-2222-3333-4444-555555555555",
+            "appearance": { "hair": 3, "skinTone": 7 }
+        });
+        let data = CompleteCharacterData {
+            customization: customization.clone(),
+            new_flags: json!({ "seenTutorial": true }),
+            dialog: json!({ "npc_a": { "stage": 4 } }),
+        };
+
+        let id = Uuid::new_v4();
+        let out = build_profile_character_json(&data, id, &character);
+        let v: serde_json::Value =
+            serde_json::from_str(&out).expect("profile character JSON must parse");
+        let obj = v.as_object().expect("profile is a JSON object");
+
+        // No top-level `challengeSeason` (retail has none).
+        assert!(
+            !obj.contains_key("challengeSeason"),
+            "challengeSeason must be trimmed; got keys: {:?}",
+            obj.keys().collect::<Vec<_>>()
+        );
+
+        // `data` is customization-ONLY.
+        let data_obj = obj
+            .get("data")
+            .and_then(|d| d.as_object())
+            .expect("`data` must be a JSON object");
+        let data_keys: Vec<&String> = data_obj.keys().collect();
+        assert_eq!(
+            data_keys,
+            vec![&"customization".to_string()],
+            "`data` must contain ONLY `customization`; got {:?}",
+            data_keys
+        );
+        assert!(!data_obj.contains_key("dialog"), "`dialog` must be dropped");
+        assert!(
+            !data_obj.contains_key("new-flags"),
+            "`new-flags` must be dropped"
+        );
+
+        // customization (avatar appearance / CharacterUID) preserved VERBATIM.
+        assert_eq!(
+            data_obj.get("customization"),
+            Some(&customization),
+            "customization must be preserved verbatim"
+        );
+
+        // Sanity: the rest of the profile still serialized (id + a real field).
+        assert_eq!(obj.get("id").and_then(|i| i.as_str()), Some(id.to_string().as_str()));
+        assert_eq!(obj.get("name").and_then(|n| n.as_str()), Some("Opponent"));
     }
 }
