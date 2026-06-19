@@ -102,13 +102,15 @@ impl FromRequest for SessionLookedUpMaybe {
                 }
             };
 
-            let token = match authorization.split('=').skip(1).next() {
+            // A Blades session token is `…=<session_id>|<extra_secret>`. A header
+            // that isn't that shape — notably `Authorization: Bearer <token>` used
+            // by our out-of-band tooling routes (admin import, arena debug-inject)
+            // — is simply "no session": let it through as `None` so the route's own
+            // token check runs, instead of 400-ing every Bearer request in the
+            // global session middleware (which pre-empted those handlers entirely).
+            let token = match authorization.split('=').nth(1) {
                 Some(token) => token,
-                None => {
-                    return Err(actix_web::error::ErrorBadRequest(
-                        "Authorization can’t be parsed (no equal sign present)",
-                    ));
-                }
+                None => return Ok(SessionLookedUpMaybe(None)),
             };
 
             let mut token_splitted = token.split('|');
