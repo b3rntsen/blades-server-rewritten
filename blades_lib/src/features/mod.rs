@@ -8,5 +8,6 @@ pub mod challenges;
 pub mod character_ops;
 pub mod chests;
 pub mod daily_reward;
+pub mod game_events;
 pub mod gifts;
 pub mod global_shop;

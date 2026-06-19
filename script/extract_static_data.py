@@ -150,6 +150,25 @@ def extract_chest_loots(con, cap=40):
     return list(seen.values())
 
 
+def extract_game_events(con):
+    """Distinct daily/Sigil event templates (by the gameEventInstanceId prefix)."""
+    seen = {}
+    for d in responses(con, "%/gameevents"):
+        for e in d.get("gameEvents", []):
+            iid = e.get("gameEventInstanceId", "")
+            event_id = iid.split("::")[0] if "::" in iid else iid
+            if event_id and event_id not in seen and e.get("questId") and e.get("recurrence"):
+                duration = e.get("endTimeSecs", 0) - e.get("startTimeSecs", 0)
+                seen[event_id] = {
+                    "eventId": event_id,
+                    "questId": e["questId"],
+                    "recurrence": e["recurrence"],
+                    "important": e.get("important", False),
+                    "instanceDurationSecs": duration if duration > 0 else 0,
+                }
+    return list(seen.values())
+
+
 EXTRACTORS = {
     "gifts.json": extract_gifts,
     "announcements.json": extract_announcements,
@@ -159,6 +178,7 @@ EXTRACTORS = {
     "challenges.json": extract_challenges,
     "daily_rewards.json": extract_daily_rewards,
     "chest_loots.json": extract_chest_loots,
+    "game_events.json": extract_game_events,
 }
 
 
