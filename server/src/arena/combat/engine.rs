@@ -47,6 +47,14 @@ pub struct MatchInstance {
     /// s2c ENet reliable sequence (used by the raw-socket dev path framing).
     s2c_seq: u16,
     last_heartbeat: Instant,
+    /// **DEBUG (`ARENA_DEBUG_HOLD`).** When set, the FSM still drives the FULL
+    /// round-start burst (Connecting→Spawning→BackendMatchCreated, byte-identical
+    /// to normal) but then HOLDS at `BackendMatchCreated` forever — it never
+    /// transitions to `StateTimeout`, so no combat phase is entered and no bot
+    /// swings (the live round never starts). Lets us hand-inject s2c frames into a
+    /// solo-connected match and watch the client with an unlimited window. OFF
+    /// (false) in all normal operation + tests → existing behavior is unchanged.
+    debug_hold: bool,
 }
 
 impl MatchInstance {
@@ -77,6 +85,9 @@ impl MatchInstance {
             combat,
             s2c_seq: 0,
             last_heartbeat: now,
+            // Read the DEBUG-HOLD flag once at construction. Off (false) when the
+            // env var is unset — i.e. in every test and all normal operation.
+            debug_hold: super::debug_hold_enabled(),
         }
     }
 
@@ -229,6 +240,11 @@ impl MatchInstance {
                 }
             }
             // Brief hold, then the round goes live (StateTimeout heartbeat).
+            // DEBUG-HOLD (`ARENA_DEBUG_HOLD`): stay at BackendMatchCreated forever —
+            // the FULL round-start burst has already gone out (Spawning transition),
+            // but we never advance to StateTimeout, so no combat phase is entered.
+            // This is the freeze window for hand-injecting s2c frames.
+            FlowState::BackendMatchCreated if self.debug_hold => {}
             FlowState::BackendMatchCreated => {
                 if now.duration_since(self.combat.phase_entered) >= MATCH_CREATE_HOLD {
                     info!("combat FSM: BackendMatchCreated → StateTimeout (round 1 live)");
@@ -245,7 +261,8 @@ impl MatchInstance {
                     self.last_heartbeat = now;
                     self.broadcast_flow(&mut out, FlowState::StateTimeout);
                 }
-                out.extend(resolve::on_tick(&mut self.combat, now));
+                let debug_hold = self.debug_hold;
+                out.extend(resolve::on_tick(&mut self.combat, now, debug_hold));
             }
             FlowState::NextState | FlowState::RoundEnd | FlowState::Finished => {}
         }
@@ -395,6 +412,13 @@ impl MatchInstance {
     #[cfg(test)]
     pub(crate) fn phase(&self) -> FlowState {
         self.combat.phase
+    }
+
+    /// Test-only: force the DEBUG-HOLD flag without touching the process env (which
+    /// no test mutates). Mirrors `ARENA_DEBUG_HOLD` being set at construction.
+    #[cfg(test)]
+    pub(crate) fn set_debug_hold(&mut self, hold: bool) {
+        self.debug_hold = hold;
     }
 
     #[cfg(test)]
@@ -745,5 +769,63 @@ mod tests {
 
         // The same ability is on cooldown immediately after.
         assert!(m.on_c2s(0, &req, t0).is_empty(), "ability on cooldown");
+    }
+
+    /// DEBUG-HOLD (`ARENA_DEBUG_HOLD`): the FULL round-start burst still goes out
+    /// (Connecting→Spawning→BackendMatchCreated) but the match then FREEZES at
+    /// BackendMatchCreated forever — it never advances to the live round
+    /// (StateTimeout), no matter how much time elapses. (No bot can swing because
+    /// StateTimeout is never entered; the resolve guard is the belt-and-suspenders.)
+    #[test]
+    fn debug_hold_freezes_at_backend_match_created() {
+        let now = Instant::now();
+        // Solo-vs-bot shape (the prod repro: capacity 2, one real peer expected).
+        let mut m = MatchInstance::new(2, 1, vec![], now);
+        m.set_debug_hold(true);
+
+        m.on_tick(1, now); // Connecting → Spawning (full spawn/profile burst)
+        assert_eq!(m.phase(), FlowState::Spawning);
+        let created = m.on_tick(1, now + SPAWN_HANDSHAKE_HOLD); // Spawning → BackendMatchCreated
+        assert_eq!(m.phase(), FlowState::BackendMatchCreated);
+        assert_eq!(
+            created.iter().filter(|(_, b)| b.ends_with(b"BackendMatchCreated")).count(),
+            2,
+            "the BackendMatchCreated round-start frame is still emitted under HOLD"
+        );
+
+        // Way past every normal hold/heartbeat: still BackendMatchCreated, never
+        // StateTimeout, and the tick produces NOTHING (no flow heartbeat, no bot).
+        let later = now + SPAWN_HANDSHAKE_HOLD + MATCH_CREATE_HOLD + Duration::from_secs(60);
+        let out = m.on_tick(1, later);
+        assert_eq!(m.phase(), FlowState::BackendMatchCreated, "HOLD never advances to the live round");
+        assert!(out.is_empty(), "no s2c is generated while held at BackendMatchCreated");
+        assert_eq!(m.combat.round, 0, "round never goes live under HOLD");
+    }
+
+    /// With HOLD on, the bot does NOT damage the player even if the match is somehow
+    /// in the live round — `resolve::on_tick` short-circuits on the flag (the
+    /// belt-and-suspenders guard from point 2 of the DEBUG-HOLD change).
+    #[test]
+    fn debug_hold_suppresses_bot_swings() {
+        let now = Instant::now();
+        let mut m = MatchInstance::new(2, 1, vec![], now);
+        m.set_debug_hold(true);
+        // Force the live round directly (bypassing the FSM hold) to prove the
+        // resolve-side guard independently: drive the phase, then tick well past the
+        // bot cadence. The player must take ZERO damage.
+        m.combat.phase = FlowState::StateTimeout;
+        m.combat.phase_entered = now;
+        let full = m.fighter_health(0);
+        let out = m.on_tick(1, now + Duration::from_secs(10));
+        assert_eq!(m.fighter_health(0), full, "no bot swing damages the player under HOLD");
+        // The only s2c on a held StateTimeout tick is the flow heartbeat (carrier
+        // 0x36, propId3 == 0x4F); there must be NO ReceiveDamage (carrier 0x36,
+        // propId3 == 50) from a bot swing.
+        assert!(
+            !out.iter().any(|(_, b)| b.len() > 2
+                && b[1] == 0x36
+                && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50)),
+            "no ReceiveDamage (bot swing) emitted under HOLD"
+        );
     }
 }

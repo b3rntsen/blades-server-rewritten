@@ -192,6 +192,31 @@ mod tests {
         assert!(reg.allocate(&["c".into()], Vec::new(), Uuid::new_v4()), "slot freed");
     }
 
+    /// DEBUG-HOLD (`ARENA_DEBUG_HOLD`): the idle/under-capacity sweep is disabled, so
+    /// a solo connected peer with no opponent persists indefinitely (the round-start
+    /// freeze window). Default (HOLD off) still reclaims it. We advance the clock past
+    /// both `MATCH_MAX_AGE` (600 s) and `CONNECT_DEADLINE` (45 s) and check the
+    /// surviving match count.
+    #[test]
+    fn debug_hold_disables_idle_sweep() {
+        use std::time::Instant;
+        let way_later = Instant::now() + std::time::Duration::from_secs(700);
+
+        // HOLD off: a solo (under-capacity, never-admitted) match is reclaimed.
+        let off = MatchRegistry::new_with_debug_hold(4, false);
+        assert!(off.allocate(&["a".into()], Vec::new(), Uuid::new_v4()));
+        assert_eq!(off.active_count(), 1);
+        off.sweep_expired(way_later);
+        assert_eq!(off.active_count(), 0, "HOLD off: idle/under-capacity match swept");
+
+        // HOLD on: the same match survives the sweep indefinitely.
+        let on = MatchRegistry::new_with_debug_hold(4, true);
+        assert!(on.allocate(&["b".into()], Vec::new(), Uuid::new_v4()));
+        assert_eq!(on.active_count(), 1);
+        on.sweep_expired(way_later);
+        assert_eq!(on.active_count(), 1, "HOLD on: match persists, never swept");
+    }
+
     /// Live loopback: real sockets, full allocate→handshake→encrypted frame the
     /// server decodes (observed via the tap).
     #[tokio::test]

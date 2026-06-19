@@ -87,6 +87,13 @@ pub struct MatchRegistry {
     /// [`drain_debug_injections`](Self::drain_debug_injections), encrypting each
     /// under the TARGET peer's `CryptoCtx`. Empty + untouched in normal operation.
     debug_inject_queue: Mutex<Vec<DebugInjection>>,
+    /// **DEBUG (`ARENA_DEBUG_HOLD`).** When set, `sweep_expired` will NOT reclaim a
+    /// match for being under-capacity (a solo peer with no opponent) or for max-age
+    /// — a single connected peer persists indefinitely so we can hold it at the
+    /// round-start and hand-inject s2c frames. A real ENet disconnect still removes
+    /// the peer (`remove`). OFF (false) in all normal operation + tests → the sweep
+    /// is unchanged.
+    debug_hold: bool,
 }
 
 /// **DEBUG/experimental.** One queued packet injection: raw decrypted s2c
@@ -147,6 +154,23 @@ impl MatchRegistry {
         Self::new_with_submitter(max_matches, None)
     }
 
+    /// Test-only: build a registry with the DEBUG-HOLD sweep-disable flag forced
+    /// (the process env is never mutated by tests). Mirrors `ARENA_DEBUG_HOLD`.
+    #[cfg(test)]
+    pub fn new_with_debug_hold(max_matches: usize, hold: bool) -> Arc<Self> {
+        Arc::new(MatchRegistry {
+            semaphore: Arc::new(Semaphore::new(max_matches)),
+            pending: Mutex::new(HashMap::new()),
+            matches: Mutex::new(HashMap::new()),
+            addr_index: Mutex::new(HashMap::new()),
+            next_order: std::sync::atomic::AtomicU64::new(0),
+            max_matches,
+            key_submitter: None,
+            debug_inject_queue: Mutex::new(Vec::new()),
+            debug_hold: hold,
+        })
+    }
+
     /// Production constructor: `key_submitter` (if `Some`) receives every
     /// admitted peer's per-match key for submission to the capture platform.
     pub fn new_with_submitter(
@@ -162,6 +186,9 @@ impl MatchRegistry {
             max_matches,
             key_submitter,
             debug_inject_queue: Mutex::new(Vec::new()),
+            // Read the DEBUG-HOLD freeze flag once at startup (off when unset → all
+            // tests + normal operation). Same parse as the MatchInstance flag.
+            debug_hold: crate::arena::combat::debug_hold_enabled(),
         })
     }
 
@@ -461,6 +488,14 @@ impl MatchRegistry {
     /// `MATCH_MAX_AGE` (safety net for a stuck full match). Dropping the `Match`
     /// frees its `Semaphore` slot. Collect-then-purge so the locks never nest.
     pub fn sweep_expired(&self, now: Instant) {
+        // DEBUG-HOLD (`ARENA_DEBUG_HOLD`): never reclaim a match for being
+        // under-capacity (a solo peer with no opponent) or for max-age — a single
+        // connected peer must persist indefinitely so we can hold it at the
+        // round-start and hand-inject s2c frames. A real ENet disconnect still
+        // removes the peer via `remove`; only the idle/capacity sweep is disabled.
+        if self.debug_hold {
+            return;
+        }
         let mut reclaimed: Vec<(Uuid, usize, usize, &'static str, Vec<SocketAddr>)> = Vec::new();
         {
             let mut matches = self.matches.lock().unwrap();

@@ -93,6 +93,13 @@ services:
       ARENA_SUBMIT_URL: ${ARENA_SUBMIT_URL:-http://newblades-web:3000/api/arena/submit-key}
       ARENA_SUBMIT_GAMELIFT_IP: ${ARENA_SUBMIT_GAMELIFT_IP:-10.99.0.1}
       ARENA_SUBMIT_GAMELIFT_PORT: ${ARENA_SUBMIT_GAMELIFT_PORT:-7777}
+      # DEBUG/experimental freeze: when truthy (1), a connected match sends the full
+      # round-start burst then HOLDS at BackendMatchCreated forever — it never enters
+      # the live combat round, no bot swings, and a solo (under-capacity) peer is NOT
+      # swept/timed-out. Gives an unlimited window to hand-inject s2c frames via
+      # /arena/debug/inject and watch the client. Empty/unset = normal matches.
+      # Recreate the container to apply (no rebuild needed). See engine.rs / resolve.rs.
+      ARENA_DEBUG_HOLD: ${ARENA_DEBUG_HOLD:-}
       RUST_LOG: ${RUST_LOG:-info}
     command:
       - run

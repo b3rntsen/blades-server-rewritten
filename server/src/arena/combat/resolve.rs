@@ -247,7 +247,15 @@ const BOT_SWING_COOLDOWN: Duration = Duration::from_millis(1800);
 /// at their opponent on `BOT_SWING_COOLDOWN`. Real players are input-driven
 /// (`on_c2s_input`); only bots act on the tick. (DoT/status-effect ticks will also
 /// plug in here once that path is wired.)
-pub fn on_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
+///
+/// `debug_hold` is the `ARENA_DEBUG_HOLD` freeze flag: when set, NO bot swings
+/// (return empty). This is belt-and-suspenders — with HOLD on the FSM never reaches
+/// `StateTimeout` so this guard is already satisfied below, but we make the no-bot
+/// intent explicit and robust to any future tick path.
+pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<(usize, Vec<u8>)> {
+    if debug_hold {
+        return Vec::new();
+    }
     if !matches!(combat.phase, FlowState::StateTimeout) {
         return Vec::new();
     }

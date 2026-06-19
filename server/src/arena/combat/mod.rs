@@ -60,3 +60,23 @@ mod roundtrip_s506;
 
 pub use engine::MatchInstance;
 pub use state::Loadout;
+
+/// **DEBUG.** True when `ARENA_DEBUG_HOLD` is set to a truthy value at startup.
+///
+/// When ON, a connected match is FROZEN at the round-start: the full round-start
+/// burst is still sent (the FSM reaches `BackendMatchCreated`), but it never
+/// advances to the live combat round (`StateTimeout`), no bot swings, and the
+/// match registry will not time-out/sweep a solo (under-capacity) peer — giving an
+/// unlimited window to hand-inject s2c frames via `/arena/debug/inject` and watch
+/// the client. Parsed exactly like `ARENA_SUBMIT_KEYS` (any value except
+/// `0/false/no/off`/empty is truthy). OFF by default; the entire feature is inert
+/// when unset, so normal matches are byte-identical.
+pub fn debug_hold_enabled() -> bool {
+    match std::env::var("ARENA_DEBUG_HOLD") {
+        Ok(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off" | ""
+        ),
+        Err(_) => false,
+    }
+}
