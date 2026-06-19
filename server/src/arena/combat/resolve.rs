@@ -30,6 +30,12 @@ const SWING_COOLDOWN: Duration = Duration::from_millis(400);
 /// Per-ability cooldown (representative; per-ability cooldowns come from game-data).
 const ABILITY_COOLDOWN: Duration = Duration::from_millis(3000);
 
+/// How long a `PlayerBlockingStateChange` (41) holds the guard up before it
+/// auto-expires (a fresh op41 refreshes it). The dump's `PvpDefaultSettings`
+/// `BLOCK_OPTIMAL_TIME` is 2.0s (docs/blades-combat-formulae.md §2); we use it as the
+/// block window since the on/off flag isn't byte-pinned from a two-sided capture.
+const BLOCK_WINDOW: Duration = Duration::from_secs(2);
+
 /// Resolve one inbound, decrypted c2s combat input from `sender`.
 pub fn on_c2s_input(
     combat: &mut MatchCombat,
@@ -45,6 +51,32 @@ pub fn on_c2s_input(
         return Vec::new();
     }
     if user_data.get(1) != Some(&CARRIER_USERMESSAGE) {
+        return Vec::new();
+    }
+    // Reconcile any lapsed block windows first (so a stale guard never keeps reducing
+    // damage), using `now`. Cheap; both fighters.
+    for f in combat.fighters.iter_mut() {
+        f.reconcile_block(now);
+    }
+    // op41 PlayerBlockingStateChange (c2s) — the client raised/refreshed its guard.
+    // Apply a BLOCK state on the sender: incoming hits within the block window are
+    // reduced/negated per `damage::block_outcome` (optimal on the matching side,
+    // late/half otherwise). This is the block-as-input wiring (was a resolve.rs TODO).
+    // Bounded by `BLOCK_WINDOW` (the dump's `BLOCK_OPTIMAL_TIME` 2.0s) and auto-expired
+    // by `reconcile_block`, since the on/off flag isn't byte-pinned from a two-sided
+    // capture — a fresh op41 simply refreshes the window. No damage, no s2c (the client
+    // animates its own guard; the opponent learns of the block via the reduced
+    // ReceiveDamage flags when it lands a hit). Handled BEFORE the swing fallback so a
+    // block frame is never mis-resolved as an attack.
+    if messages::is_player_blocking_state_change(user_data) {
+        if sender < combat.fighters.len() {
+            let side = messages::blocking_active_side(user_data).unwrap_or(ActiveSide::Middle);
+            let f = &mut combat.fighters[sender];
+            f.actor_state = super::state::ActorStateType::Blocking;
+            f.blocking_side = side;
+            f.blocking_until = Some(now + BLOCK_WINDOW);
+            debug!("combat: slot {sender} raised guard ({side:?}) for {BLOCK_WINDOW:?}");
+        }
         return Vec::new();
     }
     // Carrier 0x36 is shared by combat inputs AND round-transition handshake/flow
@@ -158,13 +190,19 @@ fn emit_damage(
 ) -> Vec<(usize, Vec<u8>)> {
     let mut out = Vec::new();
     let hp_before = combat.fighters[target_slot].health;
+    let max_hp = combat.fighters[target_slot].max_health;
     combat.fighters[target_slot].take_damage(resolved.total.round().max(0.0) as u32);
     let hp_after = combat.fighters[target_slot].health;
-    debug!(
-        "combat damage: slot {attacker_slot} → slot {target_slot} | source {:?} | total {:.1} | HP {hp_before} → {hp_after} (−{})",
+    // Log the per-hit-damage-vs-maxHP ratio (the anti-one-shot calibration knob): a
+    // basic swing should take a CHUNK (≤25% by the clamp), never one-shot. info-level
+    // so the ghost-verify on the box shows the before→after HP without RUST_LOG=debug.
+    let pct = if max_hp > 0 { 100.0 * resolved.total / max_hp as f32 } else { 0.0 };
+    let total = resolved.total;
+    let dealt = hp_before.saturating_sub(hp_after);
+    info!(
+        "combat damage: slot {attacker_slot} → slot {target_slot} | source {:?} side {:?} | total {total:.1} = {pct:.1}% of {max_hp} maxHP | HP {hp_before} → {hp_after} (−{dealt})",
         resolved.source,
-        resolved.total,
-        hp_before.saturating_sub(hp_after),
+        resolved.active_side,
     );
 
     let msg = {
@@ -188,35 +226,42 @@ fn emit_damage(
     out.push((attacker_slot, msg));
 
     if combat.fighters[target_slot].is_dead() {
-        out.extend(end_match(combat, attacker_slot));
+        out.extend(on_round_ending_death(combat, attacker_slot));
     }
     out
 }
 
-/// `winner` defeated its opponent (the killing blow just landed): emit the
-/// capture-faithful round-end / match-result burst and HAND OFF to the engine's
-/// post-match MatchState walk. This is the fix for the post-InRound "error 3": the
-/// server used to set `phase = Finished` here and stop, so the Match net-object's
-/// `MatchState` stayed at InRound(13) forever and the client timed out. We now mirror
-/// retail s506's final-round end exactly:
+/// `winner` defeated its opponent (the killing blow just landed). Score the round
+/// (`rounds_won[winner] += 1`) then BRANCH on the best-of-3 (`MaxMatchRounds` = 3):
+///
+///   - **Match NOT yet won** (neither fighter at 2 wins) → this is a NON-final round
+///     end: emit the round-end burst, set `MatchState`→`PostRound`(14), and put the
+///     match into `FlowState::NextState` so [`super::engine::MatchInstance::on_tick`]
+///     walks the BETWEEN-ROUNDS MatchState sequence `ChooseLoadout`(8)→
+///     `AwaitingClientBackendSynchronization`(9)→`SynchronizingLoadout`(10)→
+///     `OpponentShowcase`(11)→`PreRound`(12)→`InRound`(13), resets both fighters to
+///     full HP, and re-enters the live round — the match LOOPS to round 2/3. [s506
+///     round-0→round-1: 13→op79 RoundEnd→14 PostRound→8 ChooseLoadout(round=1)→9→10→
+///     11→12→13.]
+///   - **Match won** (a fighter just reached 2 round-wins) → the MATCH ends: same
+///     round-end burst + `PostRound`(14), but `phase = RoundEnd` so the engine walks
+///     the TERMINAL states `BackendMatchEnd(17)→PostMatch(16)→DisconnectingPlayers(19)`
+///     and finishes — the client sees a clean result + returns to the lobby. [s506
+///     final round, the match-ending blow.]
+///
+/// Both branches emit the capture-faithful burst (decoded byte-for-byte from prod
+/// arena_udp_frames s506):
 ///   1. op29 `PlayerDeadStateChange` for the loser (capture-proven props-0-6 layout).
 ///   2. op79 flow `RoundEnd` on the Control net-object (the client echoes op80).
-///   3. op48 `MatchPostRoundInfoMsg` — the real "who won" result message.
+///   3. op48 `MatchPostRoundInfoMsg` — the round result.
 ///   4. Match net-object `MatchState` → `PostRound`(14).
-/// then `phase = RoundEnd`, so [`super::engine::MatchInstance::on_tick`] walks the
-/// terminal states `BackendMatchEnd(17)→PostMatch(16)→DisconnectingPlayers(19)` on the
-/// s506 timer and finishes the match — the client sees a clean result + returns to the
-/// lobby. [decoded byte-for-byte from prod arena_udp_frames s506, the final round of a
-/// best-of-3; round 0's intermediate end loops back to ChooseLoadout(8) for round 1,
-/// but a solo-vs-ghost match's first kill IS the match-ending blow.]
-fn end_match(combat: &mut MatchCombat, winner: usize) -> Vec<(usize, Vec<u8>)> {
+fn on_round_ending_death(combat: &mut MatchCombat, winner: usize) -> Vec<(usize, Vec<u8>)> {
     let mut out = Vec::new();
     let loser = combat.opponent_of(winner).unwrap_or(winner);
     if winner < combat.rounds_won.len() {
         combat.rounds_won[winner] += 1;
     }
-    combat.winner = Some(winner);
-    combat.matchend_step = 0;
+    let match_won = combat.match_is_won();
     let loser_obj = combat.fighters.get(loser).map(|f| f.net_object_id).unwrap_or(0);
     let winner_obj = combat.fighters.get(winner).map(|f| f.net_object_id).unwrap_or(0);
     let loser_stats = combat.fighters.get(loser).map(|f| f.packed_stats()).unwrap_or(0);
@@ -237,7 +282,7 @@ fn end_match(combat: &mut MatchCombat, winner: usize) -> Vec<(usize, Vec<u8>)> {
         &combat.game_session_id,
         3,
     );
-    // 4) Match net-object → PostRound(14), timeout 3.0 (s506 obj 123 final round).
+    // 4) Match net-object → PostRound(14), timeout 3.0 (s506 obj 123 round end).
     let post_round_update = messages::update_match(
         combat.match_net_object_id,
         combat.fighters.len() as u8,
@@ -247,14 +292,34 @@ fn end_match(combat: &mut MatchCombat, winner: usize) -> Vec<(usize, Vec<u8>)> {
         &combat.game_session_id,
     );
     combat.match_state = MatchState::PostRound;
-    combat.phase = FlowState::RoundEnd;
 
-    info!(
-        "combat: round-ending death → winner slot {winner} (obj {winner_obj}), loser slot {loser} (obj {loser_obj}); \
-         emitting op29 PlayerDead + op79 RoundEnd + op48 result + MatchState→PostRound(14) to {} player(s); \
-         engine tick now walks PostRound→BackendMatchEnd→PostMatch→Disconnecting",
-        combat.fighters.len(),
-    );
+    if match_won {
+        // Final round → walk the terminal match-end states next.
+        combat.winner = Some(winner);
+        combat.matchend_step = 0;
+        combat.phase = FlowState::RoundEnd;
+        info!(
+            "combat: MATCH-ending death → winner slot {winner} (obj {winner_obj}) won the match \
+             (score {:?}); emitting op29 + op79 RoundEnd + op48 + MatchState→PostRound(14) to {} player(s); \
+             engine tick now walks PostRound→BackendMatchEnd→PostMatch→Disconnecting",
+            combat.rounds_won,
+            combat.fighters.len(),
+        );
+    } else {
+        // Non-final round → loop to the next round (best-of-3). The engine's NextState
+        // branch walks ChooseLoadout(8)→…→InRound(13) + resets HP + re-enters the round.
+        combat.interround_step = 0;
+        combat.phase = FlowState::NextState;
+        info!(
+            "combat: round-ending death (round {}) → winner slot {winner} (obj {winner_obj}), loser slot {loser} \
+             (obj {loser_obj}); score {:?} (no fighter at {} wins yet) — LOOPING to the next round; \
+             emitting op29 + op79 RoundEnd + op48 + MatchState→PostRound(14), then the engine walks \
+             ChooseLoadout(8)→…→InRound(13) and resets both fighters to full HP",
+            combat.round,
+            combat.rounds_won,
+            super::state::ROUND_WINS_TO_WIN_MATCH,
+        );
+    }
     debug!("combat op29 PlayerDead {} bytes: {}", dead_frame.len(), hex(&dead_frame));
     debug!("combat op48 result {} bytes: {}", result_frame.len(), hex(&result_frame));
 
@@ -304,6 +369,11 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
     }
     if !matches!(combat.phase, FlowState::StateTimeout) {
         return Vec::new();
+    }
+    // Expire any lapsed block windows on the tick too (a human victim of a bot may be
+    // blocking with no inbound input to reconcile it).
+    for f in combat.fighters.iter_mut() {
+        f.reconcile_block(now);
     }
     let mut out = Vec::new();
     let bot_slots: Vec<usize> = (combat.expected_peers..combat.fighters.len()).collect();

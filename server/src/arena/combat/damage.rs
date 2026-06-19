@@ -84,6 +84,48 @@ fn enchant_base(tier: u8) -> f32 {
     30.0 * tier as f32
 }
 
+/// Maximum fraction of the target's **max** HP a SINGLE resolved hit may take —
+/// the anti-one-shot clamp. The structural model (per-type components, enchant
+/// tracks, block, the captured `totalDamage` invariant) is unchanged; this only
+/// bounds the *health total* a single swing/cast can subtract so a round is always
+/// a multi-hit fight, never a 3-second one-shot.
+///
+/// **Why a clamp, not just a smaller base:** the per-hit physical roll is already a
+/// sane ~14–17% of the ×3-arena pool (`docs/blades-combat-formulae.md` §10), but a
+/// high-end character's WEAPON ENCHANT track is unbounded — `from_character`
+/// (`loadout.rs`) sums one `enchant_base(tier)` per damage-enchanted equipped piece,
+/// so a multi-enchant endgame loadout's elemental total alone can exceed the whole
+/// pool (the observed real-2-player ONE-SHOT: gsid afed5428, a single Flappety swing
+/// killed WolfWalker in 3s). Clamping the *resolved* total makes the fix robust to
+/// ANY loadout's enchant pathology, independent of the exact per-tier magnitudes.
+///
+/// 0.25 → a basic swing takes at most ~¼ of max HP, so a round lasts ≥4 landed hits
+/// (more with block / sub-crit sides / armor), matching retail's multi-hit rounds.
+pub const MAX_HIT_FRACTION_OF_MAX_HP: f32 = 0.25;
+
+/// Clamp a resolved hit's health `total` to [`MAX_HIT_FRACTION_OF_MAX_HP`] of
+/// `target_max_health`, scaling every health-affecting component by the same factor
+/// so the wire `totalDamage` (Σ health components) stays consistent with the
+/// per-type breakdown the client renders. Stat-drain components (Stamina/Magicka),
+/// which are excluded from `total`, are left untouched. Returns the (possibly
+/// reduced) total. No-op when the hit is already under the cap.
+fn clamp_hit_to_max_hp(components: &mut [(DamageType, f32)], total: f32, target_max_health: u32) -> f32 {
+    if target_max_health == 0 || total <= 0.0 {
+        return total;
+    }
+    let cap = MAX_HIT_FRACTION_OF_MAX_HP * target_max_health as f32;
+    if total <= cap {
+        return total;
+    }
+    let factor = cap / total;
+    for c in components.iter_mut() {
+        if is_health_type(c.0) {
+            c.1 *= factor;
+        }
+    }
+    cap
+}
+
 /// Block outcome on a hit: `(flags, damage_multiplier)`. Optimal block (same side
 /// the attacker is swinging) nearly negates; a block on the wrong side is "late".
 fn block_outcome(target: &Fighter, active_side: ActiveSide) -> (u8, f32) {
@@ -152,11 +194,14 @@ impl DamageModel for RetailDamageModel {
             }
         }
 
-        let total: f32 = components
+        let raw_total: f32 = components
             .iter()
             .filter(|(t, _)| is_health_type(*t))
             .map(|(_, v)| *v)
             .sum();
+        // Anti-one-shot clamp: bound the health total to a fraction of the target's
+        // max HP (scales the components in place to keep the wire breakdown consistent).
+        let total = clamp_hit_to_max_hp(&mut components, raw_total, target.max_health);
 
         ResolvedDamage {
             source,
@@ -181,11 +226,12 @@ impl DamageModel for RetailDamageModel {
                 c.1 *= mult;
             }
         }
-        let total: f32 = components
+        let raw_total: f32 = components
             .iter()
             .filter(|(t, _)| is_health_type(*t))
             .map(|(_, v)| *v)
             .sum();
+        let total = clamp_hit_to_max_hp(&mut components, raw_total, target.max_health);
         ResolvedDamage {
             source: DamageSource::Spell,
             active_side,
@@ -214,8 +260,12 @@ mod tests {
         }
     }
 
+    /// A target with a large max-HP pool so the structural assertions below
+    /// (side ordering, enchant track, block) exercise the RAW model, not the
+    /// anti-one-shot clamp (which only bites when a single hit exceeds 25% of max
+    /// HP — see `single_hit_never_one_shots`). A L100 fighter ×3 ≈ 3170 HP.
     fn target() -> Fighter {
-        Fighter::new(1, 565, Loadout::default(), Instant::now())
+        Fighter::new(1, 565, Loadout { level: 100, ..Default::default() }, Instant::now())
     }
 
     #[test]
@@ -269,6 +319,49 @@ mod tests {
         let blocked = m.resolve_attack(&shock_blade(), &t, DamageSource::Attack, ActiveSide::Right, 1.0).total;
         let unblocked = m.resolve_attack(&shock_blade(), &target(), DamageSource::Attack, ActiveSide::Right, 1.0).total;
         assert!((blocked - unblocked * 0.5).abs() < 1e-3, "late block halves damage");
+    }
+
+    /// Anti-one-shot guarantee: even a pathological multi-enchant endgame loadout
+    /// (the kind that produced the real-2-player one-shot) can take AT MOST
+    /// `MAX_HIT_FRACTION_OF_MAX_HP` of the target's max HP in a single hit — so a
+    /// round always lasts several hits. The clamp scales the health components so
+    /// the wire `totalDamage` stays == Σ health components (capture invariant).
+    #[test]
+    fn single_hit_never_one_shots() {
+        let m = RetailDamageModel;
+        // A loadout whose RAW total would massively exceed the pool: a Dragonbone
+        // heavy + FOUR tier-10 damage enchants (≈ the worst real `from_character` case).
+        let lethal = Loadout {
+            level: 100,
+            weapon: WeaponProfile {
+                primary_type: Some(DamageType::Slashing),
+                base_by_type: vec![(DamageType::Slashing, 240.0)],
+            },
+            enchants: vec![
+                (DamageType::Shock, 10),
+                (DamageType::Fire, 10),
+                (DamageType::Frost, 10),
+                (DamageType::Poison, 10),
+            ],
+            ..Default::default()
+        };
+        let tgt = target(); // L100 ×3 ≈ 3170 HP
+        let cap = MAX_HIT_FRACTION_OF_MAX_HP * tgt.max_health as f32;
+        let rd = m.resolve_attack(&lethal, &tgt, DamageSource::Attack, ActiveSide::Middle, 1.0);
+        assert!(
+            rd.total <= cap + 1e-3,
+            "a single hit must not exceed {cap:.0} ({}% of {} max HP); got {:.0}",
+            (MAX_HIT_FRACTION_OF_MAX_HP * 100.0) as u32,
+            tgt.max_health,
+            rd.total,
+        );
+        assert!(rd.total < tgt.max_health as f32, "and certainly not a full-HP one-shot");
+        // The clamped components still sum (health types) to the clamped total.
+        let health_sum: f32 = rd.components.iter().filter(|(t, _)| is_health_type(*t)).map(|(_, v)| *v).sum();
+        assert!((health_sum - rd.total).abs() < 1e-2, "clamped components Σ == wire total");
+        // Several such hits are needed to kill (the multi-hit fight): ceil(maxHP/cap) ≥ 4.
+        let hits_to_kill = (tgt.max_health as f32 / rd.total).ceil() as u32;
+        assert!(hits_to_kill >= 4, "a round should last ≥4 hits, got {hits_to_kill}");
     }
 
     #[test]

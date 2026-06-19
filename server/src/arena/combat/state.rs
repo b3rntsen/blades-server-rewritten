@@ -18,6 +18,11 @@ pub const STAT_MAX: u16 = 1023;
 /// = 3`, dump 427012). Stamina/Magicka are NOT multiplied. See formulae doc §10.
 pub const ARENA_HEALTH_MULTIPLIER: u32 = 3;
 
+/// Round-wins needed to win the MATCH — best-of-3 (`MaxMatchRounds` = 3, s506 Match
+/// propId8 / `messages::MATCH_MAX_ROUNDS`). First fighter to 2 round-wins ends the
+/// match; before that, a round-ending death loops to the next round.
+pub const ROUND_WINS_TO_WIN_MATCH: u8 = 2;
+
 /// Approximate base max-Health for a level (UESP L50-era curve: 200 + 10/level). Our
 /// build is L100 so this is representative until the real `PlayerStatsData` curve is
 /// wired; validate magnitudes against captures (docs/blades-combat-formulae.md §9).
@@ -336,6 +341,13 @@ pub struct Fighter {
     /// Slot of the implicit arena target (the opponent) for `RequestExecuteAbility`.
     pub arena_target: usize,
     pub blocking_side: ActiveSide,
+    /// While set and in the future, this fighter is BLOCKING (guard up) until the
+    /// instant — incoming hits are reduced/negated per `damage::block_outcome`. Set
+    /// when the client sends `PlayerBlockingStateChange` (41); auto-expires after the
+    /// block window (`resolve::BLOCK_WINDOW`, the dump's `BLOCK_OPTIMAL_TIME`). `None`
+    /// (or past) ⇒ not blocking. Expiry is reconciled into `actor_state` on each
+    /// input/tick (where `now` is available).
+    pub blocking_until: Option<Instant>,
     /// Time of this fighter's last landed swing (combat throttle / swing cadence).
     pub last_swing: Option<Instant>,
 }
@@ -366,8 +378,23 @@ impl Fighter {
             state_entered: now,
             arena_target: 1 - slot.min(1), // 2-player: the other slot
             blocking_side: ActiveSide::None,
+            blocking_until: None,
             last_swing: None,
         }
+    }
+
+    /// True iff this fighter's guard is up at `now` (a `PlayerBlockingStateChange`
+    /// within the still-open block window). Reconciles `actor_state`/`blocking_side`
+    /// back to Idle/None when the window has lapsed (so a stale block can't reduce
+    /// damage forever).
+    pub fn reconcile_block(&mut self, now: Instant) -> bool {
+        let up = matches!(self.blocking_until, Some(t) if now < t);
+        if !up && self.actor_state == ActorStateType::Blocking {
+            self.actor_state = ActorStateType::Idle;
+            self.blocking_side = ActiveSide::None;
+            self.blocking_until = None;
+        }
+        up
     }
 
     pub fn is_dead(&self) -> bool {
@@ -440,6 +467,13 @@ pub struct MatchCombat {
     /// FSM advances it on per-state timers (s506 obj-123 final-round timing) until the
     /// terminal state is broadcast, then finishes the match. Reset per match.
     pub matchend_step: usize,
+    /// Cursor into [`engine::MATCH_STATE_INTERROUND_PROGRESSION`] while the FSM walks the
+    /// BETWEEN-ROUNDS states (`ChooseLoadout`(8)→…→`InRound`(13)) after a NON-final
+    /// round-ending death (best-of-3, neither player at 2 wins yet). Starts at 0 when the
+    /// match enters `NextState`; the FSM advances it on the s506 round-0→round-1 timers
+    /// until `InRound`(13), then resets both fighters to full HP and re-enters the live
+    /// round (`StateTimeout`). Reset at the start of each between-rounds walk.
+    pub interround_step: usize,
 }
 
 impl MatchCombat {
@@ -459,6 +493,36 @@ impl MatchCombat {
             phase_entered: now,
             winner: None,
             matchend_step: 0,
+            interround_step: 0,
+        }
+    }
+
+    /// True iff some fighter has reached the best-of-3 round-win target (2). When this
+    /// holds at a round-ending death, that death ends the MATCH; otherwise the match
+    /// loops to the next round. `MaxMatchRounds` is 3 (`messages::MATCH_MAX_ROUNDS`,
+    /// s506 Match propId8) → first to `ROUND_WINS_TO_WIN_MATCH` wins.
+    pub fn match_is_won(&self) -> bool {
+        self.rounds_won.iter().any(|&w| w >= ROUND_WINS_TO_WIN_MATCH)
+    }
+
+    /// Reset both fighters to full pools for the next round (best-of-3 loop): HP/
+    /// Stamina/Magicka back to max, clear cooldowns / status effects / block /
+    /// swing-throttle, actor back to Idle. The stats sequence id keeps rising
+    /// (monotonic across the whole match, as the wire expects). `round` is NOT
+    /// touched here — the engine bumps it when the next round goes live.
+    pub fn reset_fighters_for_next_round(&mut self, now: Instant) {
+        for f in &mut self.fighters {
+            f.health = f.max_health;
+            f.stamina = f.max_stamina;
+            f.magicka = f.max_magicka;
+            f.stats_seq = f.stats_seq.wrapping_add(1);
+            f.cooldowns.clear();
+            f.effects.clear();
+            f.actor_state = ActorStateType::Idle;
+            f.state_entered = now;
+            f.blocking_side = ActiveSide::None;
+            f.blocking_until = None;
+            f.last_swing = None;
         }
     }
 
