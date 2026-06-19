@@ -216,6 +216,15 @@ impl MatchInstance {
         self.combat.phase_name()
     }
 
+    /// True once the match has run its full course — the post-match MatchState walk
+    /// reached the terminal `DisconnectingPlayersAfterMatch`(19) and the FSM finished.
+    /// The registry uses this to actively ENet-disconnect the player(s) at match-end
+    /// (the literal meaning of state 19), so the client leaves the result screen and
+    /// returns to the arena lobby instead of holding the connection open.
+    pub fn is_finished(&self) -> bool {
+        matches!(self.combat.phase, FlowState::Finished)
+    }
+
     /// The character display name of the fighter in `slot`, if any (empty for a
     /// starter/bot loadout). Used by the DEBUG peer listing to label a target.
     pub fn fighter_display_name(&self, slot: usize) -> &str {

@@ -577,6 +577,51 @@ impl MatchRegistry {
         out
     }
 
+    /// Collect + RETIRE every match whose FSM has reached the terminal
+    /// `Finished` state (the post-match MatchState walk completed at
+    /// `DisconnectingPlayersAfterMatch`(19)). Returns the peer addresses of those
+    /// matches so the ENet loop can actively DISCONNECT them — which is what the
+    /// `DisconnectingPlayersAfterMatch` state literally is, and what makes the
+    /// client leave the result screen and return to the arena lobby. The match is
+    /// removed here (freeing its `Semaphore` permit + the addr-index entries), so a
+    /// re-FIGHT gets a fresh allocation. Idempotent: a finished match is taken once.
+    /// Same short-lock discipline as `tick_matches`.
+    pub fn take_finished_peers(&self) -> Vec<SocketAddr> {
+        let mut matches = self.matches.lock().unwrap();
+        let finished: Vec<Uuid> = matches
+            .values()
+            .filter(|m| m.instance.is_finished())
+            .map(|m| m.game_session_id)
+            .collect();
+        if finished.is_empty() {
+            return Vec::new();
+        }
+        let mut addrs = Vec::new();
+        for gsid in &finished {
+            if let Some(m) = matches.remove(gsid) {
+                for p in &m.players {
+                    addrs.push(p.addr);
+                }
+                info!(
+                    "match registry: match {gsid} Finished (post-match walk complete) — \
+                     disconnecting {} peer(s), freeing the slot",
+                    m.players.len(),
+                );
+                // `m` (+ its `_permit`) drops here → a Semaphore slot is freed.
+            }
+        }
+        drop(matches);
+        {
+            let mut addr_index = self.addr_index.lock().unwrap();
+            for a in &addrs {
+                addr_index.remove(a);
+            }
+        }
+        let dead: std::collections::HashSet<Uuid> = finished.into_iter().collect();
+        self.pending.lock().unwrap().retain(|_, gsid| !dead.contains(gsid));
+        addrs
+    }
+
     // -----------------------------------------------------------------------
     // DEBUG / experimental packet-injection harness (crate::arena::debug_inject).
     // Token-gated actix routes use these to list live peers and to fire

@@ -179,6 +179,20 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
             }
             send_to(&mut host, &peer_at, &addr, channel, &bytes);
         }
+        // Post-match: a match whose FSM reached the terminal MatchState
+        // (DisconnectingPlayersAfterMatch=19 → Finished) is retired here, and we ENet-
+        // DISCONNECT its peer(s) — the literal meaning of state 19. `disconnect(0)` is
+        // graceful: rusty_enet flushes the already-queued reliable end-of-match frames
+        // (op48 result, the MatchState updates) and THEN tears the connection down, so
+        // the client applies the result and returns to the arena lobby instead of
+        // holding the connection open at the result screen.
+        for addr in registry.take_finished_peers() {
+            if let Some(&pid) = peer_at.get(&addr) {
+                info!("arena-enet: match finished → disconnecting peer {addr}");
+                host.peer_mut(pid).disconnect(0);
+                peer_at.remove(&addr);
+            }
+        }
         // DEBUG/experimental: drain any hand-crafted frames queued by the
         // token-gated /arena/debug/inject route and send them down the SAME
         // encrypt+send path (already encrypted under the target peer's key; the
