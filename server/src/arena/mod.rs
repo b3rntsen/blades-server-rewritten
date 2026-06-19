@@ -1,6 +1,9 @@
 pub mod avatar;
 pub mod combat;
 pub mod config;
+/// DEBUG/experimental packet-injection harness (token-gated). Disable by removing
+/// its two routes from `main.rs` / leaving `ARENA_DEBUG_TOKEN`+`ARENA_IMPORT_TOKEN` unset.
+pub mod debug_inject;
 pub mod enet_host;
 pub mod key_submit;
 pub mod leaderboards;

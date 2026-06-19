@@ -81,6 +81,64 @@ pub struct MatchRegistry {
     /// (see [`key_submit`](crate::arena::key_submit)). `None` in tests / when
     /// submission is disabled — then admit is unchanged.
     key_submitter: Option<Arc<KeySubmitter>>,
+    /// **DEBUG/experimental** packet-injection queue (see
+    /// [`crate::arena::debug_inject`]). Actix debug routes push raw decrypted s2c
+    /// `user_data` here; the ENet serve loop drains it each tick via
+    /// [`drain_debug_injections`](Self::drain_debug_injections), encrypting each
+    /// under the TARGET peer's `CryptoCtx`. Empty + untouched in normal operation.
+    debug_inject_queue: Mutex<Vec<DebugInjection>>,
+}
+
+/// **DEBUG/experimental.** One queued packet injection: raw decrypted s2c
+/// `user_data` (`0xBE ‖ MessageType ‖ body`) to encrypt under the target peer(s)'
+/// key and send. `target` selects which connected peer(s) in the match receive it.
+pub struct DebugInjection {
+    pub gsid: Uuid,
+    pub target: DebugTarget,
+    pub plaintext: Vec<u8>,
+}
+
+/// **DEBUG.** Which connected peer(s) of a match an injection targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DebugTarget {
+    /// A single slot (0 = first-admitted peer, 1 = second).
+    Slot(usize),
+    /// Every connected peer in the match.
+    Both,
+}
+
+/// **DEBUG.** A snapshot of one live match + its peers, for the
+/// `/arena/debug/peers` listing. Read-only; built under the registry lock.
+pub struct DebugMatchView {
+    pub game_session_id: Uuid,
+    pub order: u64,
+    pub capacity: usize,
+    pub phase: &'static str,
+    pub peers: Vec<DebugPeerView>,
+}
+
+/// **DEBUG.** One connected peer within a [`DebugMatchView`].
+pub struct DebugPeerView {
+    pub slot: usize,
+    pub addr: SocketAddr,
+    pub player_session_id: String,
+    /// Character display name from the fighter's loadout (empty if unknown).
+    pub character_name: String,
+    /// Hex of the 8-byte ChaCha20 nonce this peer's s2c stream uses. The cipher
+    /// resets the counter to 0 **per command** (spec §4) — there is no stateful
+    /// send-nonce counter; every frame (both directions) is encrypted under this
+    /// fixed (key, nonce) at counter 0, so an injected frame can never desync the
+    /// stream. Exposed here as the per-peer crypto identity, not a running counter.
+    pub nonce_hex: String,
+}
+
+/// **DEBUG.** What one injected frame produced: the peer it was sent to and the
+/// ciphertext length (== plaintext length — XOR preserves length).
+pub struct DebugInjectResult {
+    pub slot: usize,
+    pub addr: SocketAddr,
+    pub nonce_hex: String,
+    pub ciphertext_len: usize,
 }
 
 impl MatchRegistry {
@@ -103,6 +161,7 @@ impl MatchRegistry {
             next_order: std::sync::atomic::AtomicU64::new(0),
             max_matches,
             key_submitter,
+            debug_inject_queue: Mutex::new(Vec::new()),
         })
     }
 
@@ -472,6 +531,128 @@ impl MatchRegistry {
         }
         out
     }
+
+    // -----------------------------------------------------------------------
+    // DEBUG / experimental packet-injection harness (crate::arena::debug_inject).
+    // Token-gated actix routes use these to list live peers and to fire
+    // hand-crafted, correctly-encrypted s2c frames into a LIVE peer so we can
+    // observe which packet advances the stuck client. Inert in normal operation
+    // (the queue is empty). Disable by removing the debug routes / not setting
+    // ARENA_DEBUG_TOKEN. See docs in `debug_inject.rs`.
+    // -----------------------------------------------------------------------
+
+    /// **DEBUG.** Snapshot every live match + its connected peers (addr, slot,
+    /// character name, the per-peer s2c nonce). Read-only; one short lock.
+    pub fn debug_list(&self) -> Vec<DebugMatchView> {
+        let matches = self.matches.lock().unwrap();
+        let mut out: Vec<DebugMatchView> = matches
+            .values()
+            .map(|m| DebugMatchView {
+                game_session_id: m.game_session_id,
+                order: m.order,
+                capacity: m.capacity,
+                phase: m.instance.state_name(),
+                peers: m
+                    .players
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, p)| DebugPeerView {
+                        slot,
+                        addr: p.addr,
+                        player_session_id: p.player_session_id.clone(),
+                        character_name: m.instance.fighter_display_name(slot).to_string(),
+                        nonce_hex: hex_lower(&p.crypto.nonce),
+                    })
+                    .collect(),
+            })
+            .collect();
+        out.sort_by_key(|m| m.order); // stable display order (allocation order)
+        out
+    }
+
+    /// **DEBUG.** Resolve a match by `gameSessionId` (exact). Returns `None` if no
+    /// such live match. Used by the inject route to validate the target up-front.
+    pub fn debug_match_exists(&self, gsid: &Uuid) -> bool {
+        self.matches.lock().unwrap().contains_key(gsid)
+    }
+
+    /// **DEBUG.** Queue a raw decrypted s2c `user_data` for injection into a live
+    /// match's peer(s) on the next ENet tick. Returns how many connected peers the
+    /// target currently resolves to (so the caller can 404 an empty match), without
+    /// sending yet — the ENet loop owns the encrypt+send (see
+    /// [`drain_debug_injections`](Self::drain_debug_injections)). `None` ⇒ no such match.
+    pub fn debug_enqueue(&self, gsid: Uuid, target: DebugTarget, plaintext: Vec<u8>) -> Option<usize> {
+        let resolved = {
+            let matches = self.matches.lock().unwrap();
+            let m = matches.get(&gsid)?;
+            match target {
+                DebugTarget::Slot(s) => usize::from(s < m.players.len()),
+                DebugTarget::Both => m.players.len(),
+            }
+        };
+        self.debug_inject_queue.lock().unwrap().push(DebugInjection {
+            gsid,
+            target,
+            plaintext,
+        });
+        Some(resolved)
+    }
+
+    /// **DEBUG.** Drain the injection queue, encrypting each queued frame under the
+    /// TARGET peer's `CryptoCtx` — the SAME encrypt path as `tick_matches` /
+    /// `handle_live_user_data` (ChaCha20, counter 0, the peer's fixed nonce). Returns
+    /// `(target peer addr, encrypted user-data)` for the ENet loop to send (routed
+    /// by length, like the normal paths), plus a per-frame [`DebugInjectResult`] for
+    /// the log line. Called once per ENet serve-loop iteration; a no-op (no lock
+    /// contention beyond an empty-vec check) when nothing is queued.
+    pub fn drain_debug_injections(&self) -> Vec<(SocketAddr, Vec<u8>, DebugInjectResult)> {
+        let queued: Vec<DebugInjection> = {
+            let mut q = self.debug_inject_queue.lock().unwrap();
+            if q.is_empty() {
+                return Vec::new();
+            }
+            std::mem::take(&mut *q)
+        };
+        let mut out = Vec::new();
+        let matches = self.matches.lock().unwrap();
+        for inj in queued {
+            let Some(m) = matches.get(&inj.gsid) else {
+                warn!(
+                    "arena DEBUG inject: match {} gone before send — dropping {} B frame",
+                    inj.gsid,
+                    inj.plaintext.len()
+                );
+                continue;
+            };
+            let slots: Vec<usize> = match inj.target {
+                DebugTarget::Slot(s) if s < m.players.len() => vec![s],
+                DebugTarget::Slot(_) => Vec::new(),
+                DebugTarget::Both => (0..m.players.len()).collect(),
+            };
+            for slot in slots {
+                let p = &m.players[slot];
+                let mut ct = inj.plaintext.clone();
+                chacha20_legacy_xor(&mut ct, &p.crypto.key, &p.crypto.nonce);
+                let result = DebugInjectResult {
+                    slot,
+                    addr: p.addr,
+                    nonce_hex: hex_lower(&p.crypto.nonce),
+                    ciphertext_len: ct.len(),
+                };
+                out.push((p.addr, ct, result));
+            }
+        }
+        out
+    }
+}
+
+/// Lowercase-hex a byte slice (DEBUG peer/nonce display; no extra dep).
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
 }
 
 /// Random 32-byte X25519 secret + its public key (X25519 clamps internally).

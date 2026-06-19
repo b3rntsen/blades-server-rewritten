@@ -90,6 +90,16 @@ impl MatchInstance {
         self.combat.phase_name()
     }
 
+    /// The character display name of the fighter in `slot`, if any (empty for a
+    /// starter/bot loadout). Used by the DEBUG peer listing to label a target.
+    pub fn fighter_display_name(&self, slot: usize) -> &str {
+        self.combat
+            .fighters
+            .get(slot)
+            .map(|f| f.loadout.display_name.as_str())
+            .unwrap_or("")
+    }
+
     /// Drive the engine on a decrypted inbound c2s `user_data` (`marker ‖
     /// MessageType ‖ body`) from player `sender`.
     pub fn on_c2s(&mut self, sender: usize, user_data: &[u8], now: Instant) -> Vec<(usize, Vec<u8>)> {

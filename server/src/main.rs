@@ -97,6 +97,11 @@ pub struct ServerGlobal {
     /// from `ARENA_IMPORT_TOKEN` at startup. `None` (unset) disables the
     /// endpoint entirely. Never a game session — this is for our own tooling.
     pub arena_import_token: Option<String>,
+    /// **DEBUG.** Token gating the experimental arena packet-injection routes
+    /// (`/arena/debug/{peers,inject}`), read from `ARENA_DEBUG_TOKEN`. When unset,
+    /// those routes fall back to `arena_import_token`; with neither set they 503
+    /// (disabled). For our own debugging only — never a game session.
+    pub arena_debug_token: Option<String>,
     /// Dev override: when set (env `ARENA_DEV_LOGIN_USER_ID` = a `users.id` UUID),
     /// EVERY anonymous login resolves to this user, so a freshly-installed client
     /// lands on a Transfer'd character instead of a new empty account (there is no
@@ -163,6 +168,9 @@ async fn main() -> Result<()> {
             );
 
             let arena_import_token = std::env::var("ARENA_IMPORT_TOKEN").ok();
+            // DEBUG: dedicated token for the arena packet-injection routes;
+            // falls back to ARENA_IMPORT_TOKEN in the handler when unset.
+            let arena_debug_token = std::env::var("ARENA_DEBUG_TOKEN").ok();
             // Dev override: pin every anon login to one user (a Transfer'd character).
             let dev_login_user_id = std::env::var("ARENA_DEV_LOGIN_USER_ID")
                 .ok()
@@ -176,6 +184,7 @@ async fn main() -> Result<()> {
                 item_max_durability,
                 arena,
                 arena_import_token,
+                arena_debug_token,
                 dev_login_user_id,
             });
 
@@ -283,6 +292,9 @@ async fn main() -> Result<()> {
                     .service(arena::matchmaking::matchmaking_ws)
                     .service(arena::matchmaker::create_match)
                     .service(arena::matchmaker::cancel_match)
+                    // DEBUG/experimental packet-injection harness (token-gated).
+                    .service(arena::debug_inject::debug_peers)
+                    .service(arena::debug_inject::debug_inject)
                     .service(admin::import_character)
                     .service(admin::recent_matches)
                     .service(admin::bind_device)

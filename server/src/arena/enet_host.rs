@@ -172,6 +172,18 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
             let channel = if bytes.len() > 1000 { 4 } else { 0 };
             send_to(&mut host, &peer_at, &addr, channel, &bytes);
         }
+        // DEBUG/experimental: drain any hand-crafted frames queued by the
+        // token-gated /arena/debug/inject route and send them down the SAME
+        // encrypt+send path (already encrypted under the target peer's key; route
+        // by length like everything else). Inert when nothing is queued.
+        for (addr, bytes, res) in registry.drain_debug_injections() {
+            let channel = if bytes.len() > 1000 { 4 } else { 0 };
+            info!(
+                "arena-enet DEBUG inject → {addr} slot {} ({} B, nonce {}, channel {channel})",
+                res.slot, res.ciphertext_len, res.nonce_hex
+            );
+            send_to(&mut host, &peer_at, &addr, channel, &bytes);
+        }
         host.flush();
         // Housekeeping ~every 5 s: reclaim leaked match slots (so the registry
         // never sticks "at capacity" after abandoned connects) + a liveness line,
