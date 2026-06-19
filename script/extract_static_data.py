@@ -64,9 +64,50 @@ def extract_announcements(con):
     return list(seen.values())
 
 
+def extract_global_shop_overrides(con):
+    """Union of all global-shop override offers seen (latest wins), served verbatim."""
+    merged = {}
+    for d in responses(con, "%/catalogoverrides/globalshop"):
+        for offer_id, ov in d.get("globalShopOverrides", {}).items():
+            merged[offer_id] = ov
+    return {"globalShopOverrides": merged}
+
+
+def extract_iap(con):
+    """Union of IAP fulfillment overrides (priced placeholders), served verbatim."""
+    merged = {}
+    for d in responses(con, "%/catalogoverrides/iap"):
+        for product_id, ov in d.get("fulfillmentOverrides", {}).items():
+            merged[product_id] = ov
+    return {"fulfillmentOverrides": merged}
+
+
+def extract_global_shop_grants(con):
+    """`globalShopProductId` -> reward, from purchase request/response pairs."""
+    grants = {}
+    q = (
+        "SELECT request_body, response_body FROM api_captures "
+        "WHERE url LIKE '%/globalshops/current/purchase' AND response_status=200"
+    )
+    for rb, sb in con.execute(q):
+        try:
+            req = json.loads(astext(rb))
+            res = json.loads(astext(sb))
+        except Exception:
+            continue
+        pid = req.get("globalShopProductId")
+        reward = res.get("reward")
+        if pid and reward is not None and pid not in grants:
+            grants[pid] = reward
+    return grants
+
+
 EXTRACTORS = {
     "gifts.json": extract_gifts,
     "announcements.json": extract_announcements,
+    "global_shop_overrides.json": extract_global_shop_overrides,
+    "iap.json": extract_iap,
+    "global_shop_grants.json": extract_global_shop_grants,
 }
 
 

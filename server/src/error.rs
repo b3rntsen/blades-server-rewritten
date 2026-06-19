@@ -50,6 +50,26 @@ impl BladeApiError {
         error!("error while processing a request: {:#?}", error);
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, 1, 100)
     }
+
+    /// Map an economy failure (spending/granting) to an HTTP envelope. Used via
+    /// `.map_err(BladeApiError::from_economy)` — a named method rather than a `From`
+    /// impl because the blanket `From<E: Error>` would otherwise turn every economy
+    /// error into a generic 500. `ECONOMY_SERVICE_ID` is out-of-band (not a real
+    /// Blades service id); the client pre-checks affordability so these rarely fire.
+    pub fn from_economy(e: blades_lib::economy::EconomyError) -> Self {
+        use blades_lib::economy::EconomyError as E;
+        const ECONOMY_SERVICE_ID: u64 = 9001;
+        match e {
+            E::InsufficientFunds { .. } => {
+                Self::new(StatusCode::BAD_REQUEST, ECONOMY_SERVICE_ID, 1)
+            }
+            E::PriceMismatch => Self::new(StatusCode::CONFLICT, ECONOMY_SERVICE_ID, 2),
+            E::ItemNotFound(_) => Self::new(StatusCode::NOT_FOUND, ECONOMY_SERVICE_ID, 3),
+            E::InsufficientStackable { .. } => {
+                Self::new(StatusCode::BAD_REQUEST, ECONOMY_SERVICE_ID, 4)
+            }
+        }
+    }
 }
 
 impl<E: Error> From<E> for BladeApiError {

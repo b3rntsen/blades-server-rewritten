@@ -18,4 +18,7 @@ use uuid::Uuid;
 pub struct ServerState {
     /// How many times each global gift has been claimed (`globalGiftId` -> count).
     pub gift_claims: HashMap<Uuid, u64>,
+    /// How many times each global-shop product has been bought
+    /// (`globalShopProductId` -> count), surfaced by `GET /globalshops/current`.
+    pub global_shop_purchases: HashMap<Uuid, u64>,
 }

@@ -9,9 +9,12 @@
 
 use std::{collections::HashMap, fs::File, io::BufReader, path::Path};
 
+use blades_lib::economy::RewardGrant;
 use blades_lib::static_data::{Announcement, GiftDef, StaticData};
 use log::warn;
 use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
+use uuid::Uuid;
 
 /// Read a JSON file into `T`, falling back to `T::default()` (with a warning) if the
 /// file is missing or invalid.
@@ -32,8 +35,23 @@ pub fn load(dir: &Path) -> StaticData {
     let gifts: Vec<GiftDef> = read_json(&dir.join("gifts.json"));
     let announcements: Vec<Announcement> = read_json(&dir.join("announcements.json"));
 
+    // Served-verbatim catalogs; fall back to the empty wrapper the client expects.
+    let mut global_shop_overrides: Value = read_json(&dir.join("global_shop_overrides.json"));
+    if global_shop_overrides.is_null() {
+        global_shop_overrides = json!({ "globalShopOverrides": {} });
+    }
+    let mut iap: Value = read_json(&dir.join("iap.json"));
+    if iap.is_null() {
+        iap = json!({ "fulfillmentOverrides": {} });
+    }
+    let global_shop_grants: HashMap<Uuid, RewardGrant> =
+        read_json(&dir.join("global_shop_grants.json"));
+
     StaticData {
         gifts: gifts.into_iter().map(|g| (g.global_gift_id, g)).collect::<HashMap<_, _>>(),
         announcements,
+        global_shop_overrides,
+        iap,
+        global_shop_grants,
     }
 }

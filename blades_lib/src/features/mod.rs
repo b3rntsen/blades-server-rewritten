@@ -5,3 +5,4 @@
 //! server handlers are thin: load → call these → persist → serialize.
 
 pub mod gifts;
+pub mod global_shop;

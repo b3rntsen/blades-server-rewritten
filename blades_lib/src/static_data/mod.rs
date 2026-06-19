@@ -8,7 +8,10 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
+
+use crate::economy::RewardGrant;
 
 /// One reward line of a global gift (`{itemTemplateId, quantity}`). The template
 /// may be a currency UUID (Gold/Sigil/Gems), in which case claiming credits the
@@ -57,4 +60,17 @@ pub struct StaticData {
     pub gifts: HashMap<Uuid, GiftDef>,
     /// News entries served by `GET /announcements`.
     pub announcements: Vec<Announcement>,
+    /// The global-shop override catalog (`{globalShopOverrides: {...}}`), served
+    /// verbatim by `GET /catalogoverrides/globalshop`. Opaque JSON — special/limited
+    /// offers with adjusted prices; the base catalog lives in the client's bundles.
+    pub global_shop_overrides: Value,
+    /// The IAP fulfillment overrides (`{fulfillmentOverrides: {...}}`), served
+    /// verbatim by `GET /catalogoverrides/iap`. Real-money SKUs — priced placeholders
+    /// only (all `isActive:false` in captures); we never run a purchase flow.
+    pub iap: Value,
+    /// What each global-shop product grants when bought (`globalShopProductId` ->
+    /// reward), derived from purchase captures. The price comes from the client's
+    /// `expectedPrices` (the base price list lives in the client bundles), so an
+    /// unknown product can be priced but not fulfilled.
+    pub global_shop_grants: HashMap<Uuid, RewardGrant>,
 }
