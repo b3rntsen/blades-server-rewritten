@@ -108,6 +108,36 @@ const MATCH_STATE_ROUND0_PROGRESSION: &[(MatchState, Duration, f32)] = &[
     (MatchState::InRound, Duration::from_secs(5), 120.0),
 ];
 
+/// The retail post-match `MatchState` walk AFTER a round-ending death — the path the
+/// client follows from the kill to a clean result screen + lobby return. Each entry is
+/// `(state, hold_before_this_state, state_timeout_secs)`, same shape as
+/// [`MATCH_STATE_ROUND0_PROGRESSION`]: `hold_before` is the wait (since the PREVIOUS
+/// state was entered) before this state's op55 update; `state_timeout_secs` is the
+/// `CurrentMatchStateTimeout` (Match propId6) the client shows.
+///
+/// **Capture-proven against s506 obj 123 (the FINAL round of a best-of-3), 2026-06-19**
+/// — decoded from prod `arena_udp_frames`. `PostRound`(14) is emitted by `resolve` at
+/// the death itself (with op29 + op79 RoundEnd + op48 result); THIS table is the walk
+/// the FSM does AFTER PostRound:
+/// ```text
+/// 14 PostRound             05:07:01  (3.0)         ← emitted at the death (resolve.rs)
+///    op79 "StateTimeout"   05:07:04  (flow heartbeat, +3s after PostRound)
+/// 17 BackendMatchEnd       05:07:05  (20.0)  +4s   (from PostRound)
+/// 16 PostMatch             05:07:11  (5.0)   +6s
+/// 19 DisconnectingPlayers… 05:07:16  (~0)    +5s   ← terminal → match Finished
+/// ```
+/// Notable: retail **skips Victory(15)** and emits **BackendMatchEnd(17) BEFORE
+/// PostMatch(16)** (the enum order is not the wire order). The inter-state gaps are the
+/// observed wall-clock deltas (4/6/5 s); the timeouts are the exact captured propId6
+/// values. We send an op79 `StateTimeout` flow heartbeat between PostRound and
+/// BackendMatchEnd to mirror the s506 +3s heartbeat (kept simple — the periodic
+/// StateTimeout heartbeat is suppressed in RoundEnd, so this is the only one).
+const MATCH_STATE_MATCHEND_PROGRESSION: &[(MatchState, Duration, f32)] = &[
+    (MatchState::BackendMatchEnd, Duration::from_secs(4), 20.0),
+    (MatchState::PostMatch, Duration::from_secs(6), 5.0),
+    (MatchState::DisconnectingPlayersAfterMatch, Duration::from_secs(5), 0.0),
+];
+
 pub struct MatchInstance {
     combat: MatchCombat,
     /// s2c ENet reliable sequence (used by the raw-socket dev path framing).
@@ -271,7 +301,15 @@ impl MatchInstance {
         }
 
         // Everything else (swipe / ability / block / position) → resolution.
+        let phase_before = self.combat.phase;
         out.extend(resolve::on_c2s_input(&mut self.combat, sender, user_data, now));
+        // A killing blow flips StateTimeout→RoundEnd inside `resolve::end_match`
+        // (emitting op29 + op79 RoundEnd + op48 + MatchState→PostRound). Anchor the
+        // post-match MatchState walk to NOW so its s506 timers run from the death, not
+        // from whenever StateTimeout was entered.
+        if phase_before != FlowState::RoundEnd && self.combat.phase == FlowState::RoundEnd {
+            self.combat.phase_entered = now;
+        }
         out
     }
 
@@ -460,8 +498,49 @@ impl MatchInstance {
                 }
                 let debug_hold = self.debug_hold;
                 out.extend(resolve::on_tick(&mut self.combat, now, debug_hold));
+                // A bot's killing blow on the tick flips StateTimeout→RoundEnd; anchor
+                // the post-match walk to NOW (same as the on_c2s player-kill path).
+                if self.combat.phase == FlowState::RoundEnd {
+                    self.combat.phase_entered = now;
+                }
             }
-            FlowState::NextState | FlowState::RoundEnd | FlowState::Finished => {}
+            // Post-match: a round-ending death just put the Match net-object at
+            // PostRound(14) (resolve.rs emitted op29 + op79 RoundEnd + op48 result +
+            // the PostRound update). Walk the terminal MatchState sequence
+            // BackendMatchEnd(17)→PostMatch(16)→DisconnectingPlayers(19) on the s506
+            // final-round timers, then finish the match — so the client shows a clean
+            // result and returns to the lobby instead of timing out ("error 3").
+            // [MATCH_STATE_MATCHEND_PROGRESSION]
+            FlowState::RoundEnd => {
+                if let Some(&(state, hold_before, timeout)) =
+                    MATCH_STATE_MATCHEND_PROGRESSION.get(self.combat.matchend_step)
+                {
+                    if now.duration_since(self.combat.phase_entered) >= hold_before {
+                        // Mirror the s506 +3s op79 "StateTimeout" flow heartbeat that
+                        // rides between PostRound and BackendMatchEnd (only once, at the
+                        // first terminal step).
+                        if self.combat.matchend_step == 0 {
+                            self.broadcast_flow(&mut out, FlowState::StateTimeout);
+                        }
+                        info!(
+                            "combat FSM: post-match MatchState → {:?}({}) [matchend step {}/{}]",
+                            state,
+                            state as u8,
+                            self.combat.matchend_step + 1,
+                            MATCH_STATE_MATCHEND_PROGRESSION.len(),
+                        );
+                        self.broadcast_match_state(&mut out, state, timeout);
+                        self.combat.matchend_step += 1;
+                        self.combat.phase_entered = now;
+                    }
+                } else {
+                    // The terminal state (DisconnectingPlayersAfterMatch=19) has been
+                    // broadcast; the match is over.
+                    info!("combat FSM: RoundEnd → Finished (post-match walk complete; client returns to lobby)");
+                    self.combat.phase = FlowState::Finished;
+                }
+            }
+            FlowState::NextState | FlowState::Finished => {}
         }
         out
     }
@@ -1184,22 +1263,113 @@ mod tests {
     fn fight_to_death_ends_match() {
         let (mut m, t0) = live_inst(2); // → live round
 
-        // A keeps swinging (past the cooldown each time) until B dies.
+        // A keeps swinging (past the cooldown each time) until B dies. The killing
+        // blow emits the capture-faithful round-end burst: op29 PlayerDead (carrier
+        // 0x36, GMID 29), op79 "RoundEnd", op48 MatchPostRoundInfoMsg (the result),
+        // and the Match net-object → PostRound(14). (Retail s506 sends op48, NOT op49.)
         let mut t = t0;
-        let mut match_ended = false;
+        let mut death_out = Vec::new();
         for _ in 0..20 {
             t += Duration::from_millis(500);
             let out = m.on_c2s(0, &[0x84, 0x36], t);
-            if out.iter().any(|(_, b)| b[1] == GameMessageId::MatchEndMatchMsg as u8) {
-                match_ended = true;
+            let is_op29 = |b: &[u8]| {
+                b.len() > 3 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(29)
+            };
+            if out.iter().any(|(_, b)| is_op29(b)) {
+                death_out = out;
                 break;
             }
         }
-        assert!(match_ended, "A eventually kills B → MatchEndMatchMsg to all");
-        assert_eq!(m.phase(), FlowState::Finished);
+        assert!(!death_out.is_empty(), "A eventually kills B → op29 PlayerDead to all");
+        // The death burst carries op79 "RoundEnd", op48 result (GMID 48), and the
+        // PostRound(14) Match update (carrier 0x35, propId5 == 14).
+        assert!(
+            death_out.iter().any(|(_, b)| b.ends_with(b"RoundEnd")),
+            "op79 RoundEnd flow on the killing blow"
+        );
+        assert!(
+            death_out.iter().any(|(_, b)| b.len() > 3 && b[1] == 0x36
+                && arena_proto::parse_netdata(&b[2..]).int(3) == Some(48)),
+            "op48 MatchPostRoundInfoMsg (the result) on the killing blow"
+        );
+        assert!(
+            death_out.iter().any(|(_, b)| b.len() > 2 && b[1] == 0x35
+                && arena_proto::parse_netdata(&b[2..]).int(5) == Some(14)),
+            "Match net-object → PostRound(14)"
+        );
+        // The match is now walking the terminal states, NOT immediately Finished.
+        assert_eq!(m.phase(), FlowState::RoundEnd, "post-match walk in progress (not Finished yet)");
+        assert_eq!(m.match_state_for_test(), MatchState::PostRound);
 
-        // After the match is finished, further input is ignored.
-        assert!(m.on_c2s(0, &[0x84, 0x36], t + Duration::from_secs(1)).is_empty());
+        // Further combat input is ignored during the post-match walk (RoundEnd is not
+        // a combat phase; resolve only acts in StateTimeout).
+        assert!(m.on_c2s(0, &[0x84, 0x36], t + Duration::from_millis(1)).is_empty());
+    }
+
+    /// The post-InRound terminal walk (the "error 3" fix): after a round-ending death
+    /// the FSM advances the Match net-object's `MatchState` PostRound(14) →
+    /// BackendMatchEnd(17) → PostMatch(16) → DisconnectingPlayers(19) on the s506
+    /// final-round timers, then finishes — so the client shows a clean result and
+    /// returns to the lobby instead of timing out at InRound. [MATCH_STATE_MATCHEND_PROGRESSION]
+    #[test]
+    fn post_match_state_walk_reaches_terminal_then_finishes() {
+        use crate::arena::combat::state::MatchState;
+        let (mut m, t0) = live_inst(2);
+
+        // Kill B → PostRound(14), phase RoundEnd.
+        let mut t = t0;
+        for _ in 0..20 {
+            t += Duration::from_millis(500);
+            let out = m.on_c2s(0, &[0x84, 0x36], t);
+            if out.iter().any(|(_, b)| b.len() > 3 && b[1] == 0x36
+                && arena_proto::parse_netdata(&b[2..]).int(3) == Some(29))
+            {
+                break;
+            }
+        }
+        assert_eq!(m.phase(), FlowState::RoundEnd);
+        assert_eq!(m.match_state_for_test(), MatchState::PostRound);
+
+        // Tick at 250 ms through the whole terminal walk (4 + 6 + 5 s of holds ≈ 15 s).
+        // Record the MatchState updates the FSM emits, in order.
+        let matchend_to_finish = Duration::from_secs(4 + 6 + 5 + 2);
+        let step = Duration::from_millis(250);
+        let n = (matchend_to_finish.as_millis() / step.as_millis()) as u32;
+        let mut states_seen: Vec<u8> = Vec::new();
+        let mut saw_terminal_heartbeat = false;
+        for i in 1..=n {
+            let now = t + step * i;
+            let out = m.on_tick(2, now);
+            for (_, b) in &out {
+                // op55 Match-object update (carrier 0x35), propId5 = the new MatchState.
+                if b.len() > 2 && b[1] == 0x35 {
+                    if let Some(s) = arena_proto::parse_netdata(&b[2..]).int(5) {
+                        if states_seen.last() != Some(&(s as u8)) {
+                            states_seen.push(s as u8);
+                        }
+                    }
+                }
+                if b.ends_with(b"StateTimeout") {
+                    saw_terminal_heartbeat = true;
+                }
+            }
+            if m.phase() == FlowState::Finished {
+                break;
+            }
+        }
+        assert!(saw_terminal_heartbeat, "an op79 StateTimeout heartbeat rides the post-match walk (s506)");
+        // The exact retail terminal sequence (s506 obj 123 final round): 17 → 16 → 19.
+        assert_eq!(
+            states_seen,
+            vec![
+                MatchState::BackendMatchEnd as u8,            // 17
+                MatchState::PostMatch as u8,                  // 16
+                MatchState::DisconnectingPlayersAfterMatch as u8, // 19
+            ],
+            "post-match MatchState walk must be BackendMatchEnd(17)→PostMatch(16)→Disconnecting(19), s506-exact"
+        );
+        assert_eq!(m.phase(), FlowState::Finished, "match Finished after the terminal state");
+        assert_eq!(m.match_state_for_test(), MatchState::DisconnectingPlayersAfterMatch);
     }
 
     #[test]

@@ -65,6 +65,42 @@
 //! via `MATCH_STATE_ROUND0_PROGRESSION`; section (5) of the differential asserts the
 //! emitted MatchState sequence == `[3,4,5,6,7,11,12,13]` and that InRound is reached.
 //!
+//! ## The post-InRound walk — round end + match end (the "error 3" fix)
+//! s506 obj 123 continues PAST InRound(13) when a round ends. **Round 0** (a fighter
+//! reached 0 HP at 05:06:11) ends and LOOPS BACK for round 1 (best-of-3):
+//! ```text
+//! 13 InRound          05:06:02  (120s)   ← the fight
+//!    op79 "RoundEnd"  05:06:13           (Control flow; client op80-echoes)
+//! 14 PostRound        05:06:13  (3.0)    +11s (the killing blow / round timer)
+//!  8 ChooseLoadout    05:06:16  (20)     +3s  round→1  ← between-rounds loadout re-choice
+//!  9 AwaitingClientBackendSynchronization 05:06:36 (10)  +20s
+//! 10 SynchronizingLoadout 05:06:37  (15) +1s
+//! 11 OpponentShowcase 05:06:40  (5.0)    +3s
+//! 12 PreRound         05:06:45  (4.0)    +5s
+//! 13 InRound          05:06:50  (120s)   +5s  ← round 1 fight
+//! ```
+//! **The FINAL round** (round 1; obj 124=Flappety died at 05:07:01) walks to the
+//! terminal state — this is what the solo-vs-ghost match hits (the player's first kill
+//! IS the match-ending blow):
+//! ```text
+//!    op29 PlayerDead  05:07:01           (carrier 0x36, GMID 29, dead obj 124)
+//!    op79 "RoundEnd"  05:07:01
+//! 14 PostRound        05:07:01  (3.0)
+//!    op48 MatchPostRoundInfoMsg 05:07:01 (the RESULT: winner/loser char UUIDs + matchId;
+//!                                         retail sends op48, NEVER op49)
+//!    op79 "StateTimeout" 05:07:04        (a flow heartbeat, +3s)
+//! 17 BackendMatchEnd  05:07:05  (20)     +4s  (Victory(15) is SKIPPED; 17 precedes 16)
+//!    (a big fragmented ResultsJSON rides carriers 0xc2/0xc6 here)
+//! 16 PostMatch        05:07:11  (5.0)    +6s
+//! 19 DisconnectingPlayersAfterMatch 05:07:16 (~0) +5s  ← terminal; client returns to lobby
+//! ```
+//! The engine reproduces the FINAL-round path: `resolve::end_match` emits op29 + op79
+//! RoundEnd + op48 + MatchState→PostRound(14) on the killing blow, then
+//! `MATCH_STATE_MATCHEND_PROGRESSION` walks 17→16→19 and finishes. Covered by
+//! `engine::tests::post_match_state_walk_reaches_terminal_then_finishes` +
+//! `messages::tests::{player_dead,match_post_round_info}_matches_s506`. [decoded from
+//! prod arena_udp_frames s506, 2026-06-19.]
+//!
 //! The c2s round-start uploads (op58 clock echo, op55, the op54 PlayerLoadoutReady
 //! loadout, the op54 flow echoes) are embedded below and replayed at their captured
 //! offsets via [`MatchInstance::on_c2s`] to prove they don't perturb our s2c FSM

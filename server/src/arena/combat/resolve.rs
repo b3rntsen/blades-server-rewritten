@@ -19,7 +19,7 @@ use log::{debug, info};
 use super::damage::{DamageModel, ResolvedDamage, RetailDamageModel};
 use super::input;
 use super::messages;
-use super::state::{ActiveSide, DamageSource, FlowState, MatchCombat, NetObjectType};
+use super::state::{ActiveSide, DamageSource, FlowState, MatchCombat, MatchState, NetObjectType};
 
 /// Carrier MessageType (`user_data[1]`) of the combat-input family — `0x36` (54).
 const CARRIER_USERMESSAGE: u8 = 0x36;
@@ -193,40 +193,86 @@ fn emit_damage(
     out
 }
 
-/// `winner` defeated its opponent: emit `PlayerDeadStateChange` for the loser +
-/// `MatchEndMatchMsg` to everyone, and finish the match.
+/// `winner` defeated its opponent (the killing blow just landed): emit the
+/// capture-faithful round-end / match-result burst and HAND OFF to the engine's
+/// post-match MatchState walk. This is the fix for the post-InRound "error 3": the
+/// server used to set `phase = Finished` here and stop, so the Match net-object's
+/// `MatchState` stayed at InRound(13) forever and the client timed out. We now mirror
+/// retail s506's final-round end exactly:
+///   1. op29 `PlayerDeadStateChange` for the loser (capture-proven props-0-6 layout).
+///   2. op79 flow `RoundEnd` on the Control net-object (the client echoes op80).
+///   3. op48 `MatchPostRoundInfoMsg` — the real "who won" result message.
+///   4. Match net-object `MatchState` → `PostRound`(14).
+/// then `phase = RoundEnd`, so [`super::engine::MatchInstance::on_tick`] walks the
+/// terminal states `BackendMatchEnd(17)→PostMatch(16)→DisconnectingPlayers(19)` on the
+/// s506 timer and finishes the match — the client sees a clean result + returns to the
+/// lobby. [decoded byte-for-byte from prod arena_udp_frames s506, the final round of a
+/// best-of-3; round 0's intermediate end loops back to ChooseLoadout(8) for round 1,
+/// but a solo-vs-ghost match's first kill IS the match-ending blow.]
 fn end_match(combat: &mut MatchCombat, winner: usize) -> Vec<(usize, Vec<u8>)> {
     let mut out = Vec::new();
     let loser = combat.opponent_of(winner).unwrap_or(winner);
     if winner < combat.rounds_won.len() {
         combat.rounds_won[winner] += 1;
     }
-    combat.phase = FlowState::Finished;
+    combat.winner = Some(winner);
+    combat.matchend_step = 0;
     let loser_obj = combat.fighters.get(loser).map(|f| f.net_object_id).unwrap_or(0);
     let winner_obj = combat.fighters.get(winner).map(|f| f.net_object_id).unwrap_or(0);
+    let loser_stats = combat.fighters.get(loser).map(|f| f.packed_stats()).unwrap_or(0);
+    let winner_stats = combat.fighters.get(winner).map(|f| f.packed_stats()).unwrap_or(0);
+    let winner_uuid = combat.fighters.get(winner).map(|f| f.loadout.character_uuid.clone()).unwrap_or_default();
+    let loser_uuid = combat.fighters.get(loser).map(|f| f.loadout.character_uuid.clone()).unwrap_or_default();
 
-    // op29 PlayerDead + op49 MatchEnd both have UNVERIFIED wire layouts (never
-    // captured — see messages.rs). Build each once and log the exact emitted bytes:
-    // the builders are infallible, so the failure mode we CAN'T otherwise see is the
-    // client rejecting a malformed frame and hanging at match-end. With these two
-    // lines, the next on-device capture validates the real format against what we
-    // sent, instead of match-end being a silent mystery.
-    let dead_frame = messages::player_dead(loser_obj);
-    let end_frame = messages::match_end(winner_obj);
+    // 1) op29 PlayerDead for the loser. Carrier 0x36, props 0-6 (NetObjectInfo + the
+    //    two packed-stats ULongs + a cause byte). Cause = WeaponManeuver(3), the s506
+    //    final-blow value. [capture-proven layout — supersedes the old bare guess.]
+    let dead_frame = messages::player_dead(loser_obj, loser_stats, winner_stats, DamageSource::WeaponManeuver as u8);
+    // 3) op48 MatchPostRoundInfoMsg — the result (winner/loser char UUIDs + match id).
+    //    matchId = the gameSessionId (the Match net-object's propId9). result_code 3 (s506).
+    let result_frame = messages::match_post_round_info(
+        combat.match_net_object_id,
+        &winner_uuid,
+        &loser_uuid,
+        &combat.game_session_id,
+        3,
+    );
+    // 4) Match net-object → PostRound(14), timeout 3.0 (s506 obj 123 final round).
+    let post_round_update = messages::update_match(
+        combat.match_net_object_id,
+        combat.fighters.len() as u8,
+        MatchState::PostRound,
+        MATCH_STATE_POST_ROUND_TIMEOUT,
+        combat.round,
+        &combat.game_session_id,
+    );
+    combat.match_state = MatchState::PostRound;
+    combat.phase = FlowState::RoundEnd;
+
     info!(
-        "combat: match end → winner slot {winner} (obj {winner_obj}), loser slot {loser} (obj {loser_obj}); \
-         emitting PlayerDead + MatchEnd to {} player(s)",
+        "combat: round-ending death → winner slot {winner} (obj {winner_obj}), loser slot {loser} (obj {loser_obj}); \
+         emitting op29 PlayerDead + op79 RoundEnd + op48 result + MatchState→PostRound(14) to {} player(s); \
+         engine tick now walks PostRound→BackendMatchEnd→PostMatch→Disconnecting",
         combat.fighters.len(),
     );
-    info!("combat op29 PlayerDead [UNVERIFIED layout] {} bytes: {}", dead_frame.len(), hex(&dead_frame));
-    info!("combat op49 MatchEnd  [UNVERIFIED layout] {} bytes: {}", end_frame.len(), hex(&end_frame));
+    debug!("combat op29 PlayerDead {} bytes: {}", dead_frame.len(), hex(&dead_frame));
+    debug!("combat op48 result {} bytes: {}", result_frame.len(), hex(&result_frame));
 
     for slot in 0..combat.fighters.len() {
         out.push((slot, dead_frame.clone()));
-        out.push((slot, end_frame.clone()));
+        // 2) op79 flow "RoundEnd" on the Control net-object.
+        if let Some(m) = messages::flow_state(combat.flow_controller_id, FlowState::RoundEnd) {
+            out.push((slot, m));
+        }
+        out.push((slot, result_frame.clone()));
+        out.push((slot, post_round_update.clone()));
     }
     out
 }
+
+/// `CurrentMatchStateTimeout` (Match propId6) sent with the `PostRound`(14) update at
+/// a round-ending death — s506 obj 123 final round: 3.0 s.
+const MATCH_STATE_POST_ROUND_TIMEOUT: f32 = 3.0;
 
 /// Lowercase hex of an emitted frame, for logging the UNVERIFIED s2c layouts
 /// (op29/op49) so the next capture can validate the exact bytes the server sent.

@@ -430,6 +430,16 @@ pub struct MatchCombat {
     /// When the current flow phase started (drives StateTimeout heartbeat /
     /// round timers from the tick).
     pub phase_entered: Instant,
+    /// Slot of the fighter that WON the match (the survivor), set by `resolve` when a
+    /// fighter reaches 0 HP and the match ends. Drives the op48 result + the
+    /// post-match MatchState walk. `None` until the match ends.
+    pub winner: Option<usize>,
+    /// Cursor into [`engine::MATCH_STATE_MATCHEND_PROGRESSION`] while the FSM walks the
+    /// terminal post-round states (`BackendMatchEnd`→`PostMatch`→`DisconnectingPlayers`)
+    /// after a round-ending death. Starts at 0 when the match enters `RoundEnd`; the
+    /// FSM advances it on per-state timers (s506 obj-123 final-round timing) until the
+    /// terminal state is broadcast, then finishes the match. Reset per match.
+    pub matchend_step: usize,
 }
 
 impl MatchCombat {
@@ -447,6 +457,8 @@ impl MatchCombat {
             round: 0,
             rounds_won: [0; 2],
             phase_entered: now,
+            winner: None,
+            matchend_step: 0,
         }
     }
 

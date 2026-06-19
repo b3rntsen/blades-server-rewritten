@@ -483,23 +483,92 @@ pub fn receive_damage(
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
-/// `PlayerDeadStateChange` (29) — the addressed avatar died.
+/// `PlayerDeadStateChange` (29) — the addressed avatar died (the killing blow).
 ///
-/// **Layout UNVERIFIED:** op29 never appears in our captures; modeled on the
-/// PlayerStateChange NetObjectInfo shape, carrier = the GameMessageId itself
-/// (non-overloaded messages use their id as `user_data[1]`). Refine when a
-/// death/round-boundary capture lands.
-pub fn player_dead(net_object_id: i32) -> Vec<u8> {
+/// **Capture-proven layout (s506 #3523661, the final-round death):** op29 rides the
+/// UserMessage carrier `0x36` (NOT its own carrier as the old placeholder guessed) —
+/// it is one of the avatar-state-change family on the Avatar net-object, GMID at
+/// propId 3. NetData `{0:Int deadAvatarObj · 1:Byte 56 Avatar · 2:Byte 1 Authority ·
+/// 3:Byte 29 · 4:ULong deadActorPackedStats · 5:ULong otherActorPackedStats ·
+/// 6:Byte cause}` — the same NetObjectInfo + two packed-stats ULong shape as
+/// `ReceiveDamage`/the 41-45/52 state changes, minus the damage components.
+///
+/// `dead_packed_stats`/`other_packed_stats` are the two actors' current packed pools
+/// (`Fighter::packed_stats`); `cause` is a small byte (s506 = 3, the killing blow's
+/// DamageSource — WeaponManeuver — observed; not the binding field). Byte-for-byte vs
+/// s506 #3523661 (obj 124, p6=3). [decoded from prod arena_udp_frames s506 2026-06-19;
+/// supersedes the prior UNVERIFIED bare-NetObjectInfo guess.]
+pub fn player_dead(
+    dead_avatar_net_object_id: i32,
+    dead_packed_stats: u64,
+    other_packed_stats: u64,
+    cause: u8,
+) -> Vec<u8> {
     let mut w = NetDataWriter::new();
-    w.net_object_info(net_object_id, NetObjectType::Avatar as u8, NetRole::Authority as u8);
-    frame(GameMessageId::PlayerDeadStateChange as u8, w.finish())
+    w.int(0, dead_avatar_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GameMessageId::PlayerDeadStateChange as u8)
+        .ulong(4, dead_packed_stats)
+        .ulong(5, other_packed_stats)
+        .byte(6, cause);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
-/// `MatchEndMatchMsg` (49) — the match concluded; `winner_net_object_id` won.
+/// `MatchPostRoundInfoMsg` (48) — the round/match RESULT, sent at the PostRound
+/// transition on the **Match** net-object. **This is the real retail "who won"
+/// message** (s506 sends op48, never op49): the client reads it to show the
+/// result/victory screen.
 ///
-/// **Layout UNVERIFIED:** op49 carries a large fragmented `ResultsJSON` and was
-/// never captured as a walkable command; modeled minimally (match NetObjectInfo +
-/// the winning avatar id at propId 3). Refine on capture; keep ResultsJSON minimal.
+/// **Capture-proven layout (s506 #3523671, the final round of a best-of-3):** carrier
+/// `0x36`, on Match obj 123 (type 54, Authority). NetData
+/// `{0:Int matchObj · 1:Byte 54 · 2:Byte 1 · 3:Byte 48 · 4:Int 3 · 5:String winnerCharUUID
+/// · 6:String loserCharUUID · 7:String winnerCharUUID · 8:String loserCharUUID ·
+/// 9:String "" · 10:String "" · 11:Byte 1 · 12:String winnerCharUUID · 13:String
+/// loserCharUUID · 14:Bool false · 15:Bool true · 16:String winnerCharUUID · 17:Bool
+/// false · 18:String matchId}`. The winner UUID repeats at p5/p7/p12/p16 and the loser
+/// at p6/p8/p13 (the client cross-checks them); p4 = a small Int (s506 = 3, the match's
+/// maxRounds / a result code — near-constant), p18 = the matchId. Byte-for-byte vs s506
+/// #3523671 (winner 1131a037…, loser 38c987fd…). [decoded from prod arena_udp_frames
+/// s506 2026-06-19.]
+#[allow(clippy::too_many_arguments)]
+pub fn match_post_round_info(
+    match_net_object_id: i32,
+    winner_char_uuid: &str,
+    loser_char_uuid: &str,
+    match_id: &str,
+    result_code: i32,
+) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, match_net_object_id)
+        .byte(1, NetObjectType::Match as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GameMessageId::MatchPostRoundInfoMsg as u8)
+        .int(4, result_code)
+        .string(5, winner_char_uuid)
+        .string(6, loser_char_uuid)
+        .string(7, winner_char_uuid)
+        .string(8, loser_char_uuid)
+        .string(9, "")
+        .string(10, "")
+        .byte(11, 1)
+        .string(12, winner_char_uuid)
+        .string(13, loser_char_uuid)
+        .bool(14, false)
+        .bool(15, true)
+        .string(16, winner_char_uuid)
+        .bool(17, false)
+        .string(18, match_id);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// `MatchEndMatchMsg` (49) — **NOT sent by retail at match-end.** Decoded s506
+/// end-to-end: the match RESULT is delivered via [`match_post_round_info`] (op48) at
+/// PostRound, and a large fragmented `ResultsJSON` rides separate carriers (0xc2/0xc6)
+/// during BackendMatchEnd(17). op49 never appears as a discrete command in any
+/// captured match (s127/167/293/385/486/503/504/506). Retained as a minimal builder
+/// (NetObjectInfo + winner id) only for the `GameMessageId` round-trip / tests — it is
+/// **not** emitted by the engine. [decoded from prod arena_udp_frames s506 2026-06-19.]
 pub fn match_end(winner_net_object_id: i32) -> Vec<u8> {
     let mut w = NetDataWriter::new();
     w.net_object_info(winner_net_object_id, NetObjectType::Match as u8, NetRole::Authority as u8)
@@ -906,6 +975,72 @@ mod tests {
             0x01, // p4 Bool = true (HideHelmet)
         ];
         assert_eq!(got, want);
+    }
+
+    /// Byte-for-byte vs s506 #3523661 (the final-round death): op29
+    /// `PlayerDeadStateChange` rides carrier 0x36 on the dead Avatar (obj 124), with
+    /// the two packed-stats ULongs at p4/p5 and a cause byte at p6 (the props-0-6
+    /// avatar-state-change shape the family shares — proven against the captured
+    /// header `0a ff 07 70 77 22 d7`). Supersedes the old bare-NetObjectInfo guess.
+    #[test]
+    fn player_dead_matches_s506() {
+        // s506 #3523661 values: dead obj 124, dead stats 0x000001ec000001ea, other
+        // 0x3b86f83000001ea, cause 3.
+        let got = player_dead(124, 2_113_123_910_122, 4_289_388_580_159_095_274, 3);
+        let want = [
+            0xBE, 0x36, // marker + UserMessage carrier
+            0x06, 0x7F, // maxPropId=6, bitmap {0,1,2,3,4,5,6}
+            0x70, 0x77, 0x22, 0x07, // type nibbles [Int,Byte,Byte,Byte,ULong,ULong,Byte]
+            0x7C, 0x00, 0x00, 0x00, // p0 Int = 124 (dead avatar obj)
+            0x38, // p1 Byte = 56 (Avatar)
+            0x01, // p2 Byte = 1 (Authority)
+            0x1D, // p3 Byte = 29 (PlayerDeadStateChange)
+            0xEA, 0x01, 0x00, 0x00, 0xEC, 0x01, 0x00, 0x00, // p4 ULong dead stats
+            0xEA, 0x01, 0x00, 0x00, 0x30, 0xF8, 0x86, 0x3B, // p5 ULong other stats
+            0x03, // p6 Byte = 3 (cause)
+        ];
+        assert_eq!(got, want, "op29 props 0-6 must byte-match s506 #3523661");
+    }
+
+    /// Byte-for-byte vs s506 #3523671 — op48 `MatchPostRoundInfoMsg`, the real retail
+    /// match-RESULT message (carrier 0x36 on the Match obj 123). winner=Blank
+    /// (1131a037…), loser=Flappety (38c987fd…), matchId 88e9347a…, result code 3.
+    /// This frame self-validates (ENet dataLength 339 == BE36+consumed 337).
+    #[test]
+    fn match_post_round_info_matches_s506() {
+        let got = match_post_round_info(
+            123,
+            "1131a037-716c-49cc-b165-32d8ddc14f49", // winner
+            "38c987fd-c42b-4ea6-b869-c8d4c03055f9", // loser
+            "88e9347a-f060-40d6-b796-a61b8c4d233e", // matchId
+            3,
+        );
+        // Carrier + structural framing, then every field decoded (the captured frame
+        // self-validates: ENet dataLength 339 == BE 36 + the 337-byte NetData).
+        assert_eq!(&got[0..2], &[0xBE, 0x36], "marker + UserMessage carrier");
+        assert_eq!(got.len(), 339, "op48 frame is 339 bytes (BE 36 + 337-byte NetData)");
+        let nd = arena_proto::parse_netdata(&got[2..]);
+        assert_eq!(nd.int(0), Some(123), "p0 Match obj id");
+        assert_eq!(nd.int(1), Some(54), "p1 Match");
+        assert_eq!(nd.int(2), Some(1), "p2 Authority");
+        assert_eq!(nd.int(3), Some(48), "p3 MatchPostRoundInfoMsg gmid");
+        assert_eq!(nd.int(4), Some(3), "p4 result code = 3");
+        let w = "1131a037-716c-49cc-b165-32d8ddc14f49";
+        let l = "38c987fd-c42b-4ea6-b869-c8d4c03055f9";
+        // Winner repeats at p5/p7/p12/p16, loser at p6/p8/p13 (s506 cross-check).
+        for p in [5, 7, 12, 16] {
+            assert_eq!(nd.string(p), Some(w), "p{p} = winner char UUID");
+        }
+        for p in [6, 8, 13] {
+            assert_eq!(nd.string(p), Some(l), "p{p} = loser char UUID");
+        }
+        assert_eq!(nd.string(9), Some(""), "p9 empty");
+        assert_eq!(nd.string(10), Some(""), "p10 empty");
+        assert_eq!(nd.int(11), Some(1), "p11 Byte 1");
+        assert_eq!(nd.props.get(&14), Some(&arena_proto::NetDataValue::Bool(false)), "p14 false");
+        assert_eq!(nd.props.get(&15), Some(&arena_proto::NetDataValue::Bool(true)), "p15 true");
+        assert_eq!(nd.props.get(&17), Some(&arena_proto::NetDataValue::Bool(false)), "p17 false");
+        assert_eq!(nd.string(18), Some("88e9347a-f060-40d6-b796-a61b8c4d233e"), "p18 matchId");
     }
 
     /// The carrier-`0x36` GameMessageId reader + the combat/non-combat split that
