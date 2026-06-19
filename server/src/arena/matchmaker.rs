@@ -249,6 +249,17 @@ fn build_profile_character_json(
     serde_json::to_string(&value).unwrap_or(serialized)
 }
 
+/// True iff the ghost would be a **self-match** against the human — i.e. they
+/// resolve to the SAME (non-empty) character UUID. The client links each Avatar
+/// net-object to its Player by this UUID (the op50 spawn `p4`), so a ghost whose
+/// `CharacterUID` equals the local player's cannot be built as a *distinct*
+/// opponent actor: `PvpEncounter.SpawnOpponent`/`OnOpponentLoaded` never fires and
+/// the match hangs at "Connecting" even though both players' resources load.
+/// (Empty UUIDs — a starter loadout — never count as a self-match.)
+fn is_self_match(human_char_uuid: &str, ghost_char_uuid: &str) -> bool {
+    !ghost_char_uuid.is_empty() && ghost_char_uuid == human_char_uuid
+}
+
 /// Newest-first view of `arena_matches`, capped at `limit`, marking `mine`
 /// against `filter`. Backs the dev `recent-matches` endpoint; durable across
 /// restarts (#NB-3). Returns empty on a DB error (the endpoint stays up).
@@ -449,8 +460,31 @@ async fn resolve(
     // load is bounded by the same 1.5s timeout (a slow query must never hang the
     // single matchmaker actor — regression 2026-06-16). No-op when unset / not a
     // solo-fallback (bots == 0) → today's empty-starter bot.
+    //
+    // SELF-MATCH GUARD (the 2026-06-19 gate): the opponent ACTOR never instantiates
+    // — `PvpEncounter.SpawnOpponent`/`OnOpponentLoaded` never fires + the
+    // `ClientChecklist` never advances — when the ghost is the **same character** as
+    // the lone human. The client links each Avatar net-object to its Player by the
+    // character UUID (the op50 spawn `p4`, identical for self+ghost when both load the
+    // same row), so an opponent whose `CharacterUID` equals the local player's can't be
+    // built as a *distinct* actor → it collapses onto the local one and the match hangs
+    // at "Connecting" even though both players' resources load (frida-confirmed:
+    // OnPlayerResourceLoaded ×2, OnOpponentLoaded never). It is NOT a missing relayed
+    // user-message — retail sends no s2c GMID 22/36 (capture-proven from s506). This is
+    // the documented "self-match spins forever" mode (memory: emulator_character_swap).
+    // So if the configured ghost would load the SAME character UUID as the lone human,
+    // SKIP it (loud warn) rather than ship a known-broken self-match — point
+    // `ARENA_DEBUG_GHOST` at a DIFFERENT character (e.g. Taheen, CharacterUID
+    // 33e66455…, retail s506's actual opponent "Blank"). Compares the loaded
+    // `character_uuid` (= the row id), so it catches the user-id collision AND any two
+    // distinct users that resolve to the same character row.
     if bots > 0 {
         if let Some(ghost_id) = config.debug_ghost_user_id {
+            // The lone human's character UUID (slot 0), to reject a self-match ghost.
+            // (Index, not `.first()`: diesel's `QueryDsl` is in scope and shadows the
+            // slice method on `Vec`.)
+            let human_char_uuid: Option<String> =
+                loadouts.get(0).map(|l| l.character_uuid.clone());
             for i in 0..bots {
                 let lo = match tokio::time::timeout(
                     std::time::Duration::from_millis(1500),
@@ -464,11 +498,30 @@ async fn resolve(
                         crate::arena::combat::loadout::starter()
                     }
                 };
+                // Reject a ghost that is the SAME character as the human (self-match):
+                // a non-empty char UUID that equals slot 0's → the client can't build a
+                // distinct opponent actor and hangs at "Connecting". Skip it loudly.
+                if let Some(human) = &human_char_uuid {
+                    if is_self_match(human, &lo.character_uuid) {
+                        warn!(
+                            "matchmaker: DEBUG ghost SELF-MATCH rejected — ghost user {ghost_id} \
+                             resolves to the SAME character ({}) as the lone human (\"{}\"). The \
+                             opponent actor would never instantiate (OnOpponentLoaded never fires); \
+                             point ARENA_DEBUG_GHOST at a DIFFERENT character. Slot {} left as the \
+                             empty-starter bot.",
+                            lo.character_uuid,
+                            lo.display_name,
+                            tickets.len() + i,
+                        );
+                        continue;
+                    }
+                }
                 info!(
                     "matchmaker: DEBUG ghost — injected bot slot {} loadout for user {ghost_id} \
-                     (\"{}\", profile_character_json {} B → opponent op54 PROFILE will broadcast)",
+                     (\"{}\", char {}, profile_character_json {} B → opponent op54 PROFILE will broadcast)",
                     tickets.len() + i,
                     lo.display_name,
+                    lo.character_uuid,
                     lo.profile_character_json.len()
                 );
                 loadouts.push(lo);
@@ -675,6 +728,26 @@ mod tests {
         // The per-player suffix (last two groups) differs — the only divergent part.
         let suffix = |p: &str| p.splitn(4, '-').skip(3).collect::<Vec<_>>().join("-");
         assert_ne!(suffix(&psid_a), suffix(&psid_b), "per-player suffixes are distinct");
+    }
+
+    /// The DEBUG-ghost self-match guard: a ghost that resolves to the SAME
+    /// character UUID as the lone human is rejected (the opponent actor would never
+    /// instantiate on the client → permanent "Connecting"); a DIFFERENT character is
+    /// accepted; and an empty UUID (starter loadout) is never treated as a self-match.
+    #[test]
+    fn ghost_self_match_is_detected() {
+        let human = "3ef856f9-a624-400a-81f4-0bb3f7238b34"; // WolfWalker (the emu's char)
+        // Same character (the 2026-06-19 self-match bug: ghost == bound human char).
+        assert!(is_self_match(human, human), "same char UUID ⇒ self-match");
+        // A distinct opponent (e.g. Taheen) is fine.
+        assert!(
+            !is_self_match(human, "e0939d05-fc71-5f5e-a79d-fd1cb465efcb"),
+            "different char UUID ⇒ not a self-match"
+        );
+        // An empty ghost UUID (starter loadout / no character) is never a self-match,
+        // even against an empty human UUID — don't reject the legitimate bot fallback.
+        assert!(!is_self_match(human, ""), "empty ghost UUID ⇒ not a self-match");
+        assert!(!is_self_match("", ""), "two empty UUIDs ⇒ not a self-match");
     }
 
     /// The op54 round-start PROFILE character JSON must be schema-identical to
