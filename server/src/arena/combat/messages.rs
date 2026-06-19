@@ -576,6 +576,95 @@ pub fn match_end(winner_net_object_id: i32) -> Vec<u8> {
     frame(GameMessageId::MatchEndMatchMsg as u8, w.finish())
 }
 
+/// `PlayerEmoteStateChange` (73) — the s2c relay of a client's `PlayEmote` (72).
+/// `dump.cs:590906` (`PlayerEmoteStateChangeMessage : PlayerStateChangeMessage`,
+/// fields `ActorStateType.StateId stateId` + `string emoteId`). It is one of the
+/// avatar-state-change family on the EMOTING actor's net-object (the same
+/// NetObjectInfo + StateId shape as the other `Player*StateChange`), carrying the
+/// `emoteId` string the client maps to the emote animation. We relay it to the
+/// OPPONENT so the emote displays on the other player's screen.
+///
+/// NetData `{0:Int actorObj · 1:Byte 56 Avatar · 2:Byte 1 Authority · 3:Byte 73
+/// (PlayerEmoteStateChange gmid) · 4:Byte stateId (Emote=28) · 5:String emoteId}`.
+/// The exact wire prop count of the `PlayerStateChange` base (the optional
+/// `_stateHistory`/`_timeInPreviousState`) is build-specific and not pinned from a
+/// two-sided capture; this minimal NetObjectInfo + StateId + emoteId shape is what
+/// the client needs to render the opponent's emote. [structure from dump.cs; the
+/// raw c2s PlayEmote frame is not byte-decodable from the retained ENet-framed
+/// captures — see the resolve.rs note.]
+pub fn player_emote_state_change(emoting_avatar_net_object_id: i32, emote_id: &str) -> Vec<u8> {
+    use super::state::ActorStateType;
+    let mut w = NetDataWriter::new();
+    w.int(0, emoting_avatar_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GameMessageId::PlayerEmoteStateChange as u8)
+        .byte(4, ActorStateType::Emote as u8)
+        .string(5, emote_id);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// Read the `emoteId` string a client's `PlayEmote` (72) carries. `PlayEmoteMessage`
+/// (`dump.cs:588944`) has a single `string _emoteId`; on the wire that is the first
+/// string property of the carrier-0x36 body. We don't know the exact propId the
+/// client serializes it at across the NetObjectInfo header, so scan for the FIRST
+/// string-typed property after propId 3 (the GameMessageId) and return it. `None`
+/// if the frame isn't a `PlayEmote` or carries no string. (Best-effort decode of an
+/// un-capture-pinned c2s frame; the relay degrades to an empty emoteId if absent.)
+pub fn play_emote_id(user_data: &[u8]) -> Option<String> {
+    if user_message_gmid(user_data) != Some(GameMessageId::PlayEmote as u8) {
+        return None;
+    }
+    let nd = arena_proto::parse_netdata(user_data.get(2..)?);
+    // The emoteId is a string property; take the first string prop id > 3.
+    let mut keys: Vec<&u8> = nd.props.keys().filter(|k| **k > 3).collect();
+    keys.sort();
+    for k in keys {
+        if let Some(s) = nd.string(*k) {
+            return Some(s.to_string());
+        }
+    }
+    Some(String::new()) // a PlayEmote with no decodable string → empty (still relay)
+}
+
+/// True iff a carrier-0x36 c2s frame is the client's `PlayEmote` (72).
+pub fn is_play_emote(user_data: &[u8]) -> bool {
+    user_message_gmid(user_data) == Some(GameMessageId::PlayEmote as u8)
+}
+
+/// True iff a carrier-0x36 c2s frame is a `PlayerBlockingStateChange` (41) — the
+/// client raising/lowering its guard. `dump.cs:590637`
+/// (`PlayerBlockingStateChangeMessage : PlayerStateChangeMessage`). The server reads
+/// it to put the fighter into / out of the Blocking actor-state (so incoming hits
+/// are reduced — see `damage::block_outcome`); it is NOT a swing.
+pub fn is_player_blocking_state_change(user_data: &[u8]) -> bool {
+    user_message_gmid(user_data) == Some(GameMessageId::PlayerBlockingStateChange as u8)
+}
+
+/// Read the `ActiveSide` (guard side) a `PlayerBlockingStateChange` (41) carries, if
+/// present — the `PlayerStateChange` family puts a small side/param byte after the
+/// GameMessageId. Returns the first byte-typed property > 3 (the block side). `None`
+/// when absent → caller defaults to a generic (Middle) guard.
+pub fn blocking_active_side(user_data: &[u8]) -> Option<ActiveSide> {
+    if user_message_gmid(user_data) != Some(GameMessageId::PlayerBlockingStateChange as u8) {
+        return None;
+    }
+    let nd = arena_proto::parse_netdata(user_data.get(2..)?);
+    let mut keys: Vec<&u8> = nd.props.keys().filter(|k| **k > 3).collect();
+    keys.sort();
+    for k in keys {
+        if let Some(v) = nd.int(*k) {
+            return Some(match v {
+                1 => ActiveSide::Middle,
+                2 => ActiveSide::Left,
+                3 => ActiveSide::Right,
+                _ => ActiveSide::None,
+            });
+        }
+    }
+    None
+}
+
 /// `PerformExecuteAbility` (38) — the s2c echo of a `RequestExecuteAbility` (37).
 /// Byte-identical to the request except the s2c marker (`0xBE`), NetRole=Authority,
 /// and gameMessageId=38 (`arena-combat-reference.md` §op37/38). Built by patching
@@ -1079,6 +1168,67 @@ mod tests {
         assert!(!is_noncombat_user_message(&[0x84, 0x36]));
         // Non-0x36 carriers are never user-messages.
         assert_eq!(user_message_gmid(&[0x84, 0x3a, 0x00]), None);
+    }
+
+    /// op73 PlayerEmoteStateChange (the s2c emote relay) carries the emoting avatar's
+    /// NetObjectInfo, the Emote state-id (28), and the emote id string; readable back
+    /// by the c2s `play_emote_id` decoder shape.
+    #[test]
+    fn player_emote_state_change_structure() {
+        let got = player_emote_state_change(124, "emote_taunt");
+        assert_eq!(&got[0..2], &[0xBE, 0x36], "marker + UserMessage carrier");
+        let nd = arena_proto::parse_netdata(&got[2..]);
+        assert_eq!(nd.int(0), Some(124), "p0 emoting avatar obj");
+        assert_eq!(nd.int(1), Some(56), "p1 Avatar");
+        assert_eq!(nd.int(3), Some(73), "p3 PlayerEmoteStateChange gmid");
+        assert_eq!(nd.int(4), Some(28), "p4 stateId = Emote(28)");
+        assert_eq!(nd.string(5), Some("emote_taunt"), "p5 emote id");
+    }
+
+    /// The c2s PlayEmote (72) / PlayerBlockingStateChange (41) classifiers + their
+    /// payload extractors. A PlayEmote's string is read back; a non-emote returns None.
+    #[test]
+    fn play_emote_and_block_decode() {
+        // c2s PlayEmote (72): {0:obj · 1:55 · 2:role · 3:72 · 4:String id}.
+        let emote = {
+            let mut w = NetDataWriter::new();
+            w.int(0, 120).byte(1, 55).byte(2, 3).byte(3, 72).string(4, "emote_wave");
+            let mut f = frame(MSGTYPE_USERMESSAGE, w.finish());
+            f[0] = 0x84;
+            f
+        };
+        assert!(is_play_emote(&emote));
+        assert_eq!(play_emote_id(&emote).as_deref(), Some("emote_wave"));
+        assert!(!is_player_blocking_state_change(&emote));
+
+        // c2s PlayerBlockingStateChange (41), Right side (3).
+        let block = {
+            let mut w = NetDataWriter::new();
+            w.int(0, 120).byte(1, 55).byte(2, 3).byte(3, 41).byte(4, 3);
+            let mut f = frame(MSGTYPE_USERMESSAGE, w.finish());
+            f[0] = 0x84;
+            f
+        };
+        assert!(is_player_blocking_state_change(&block));
+        assert_eq!(blocking_active_side(&block), Some(ActiveSide::Right));
+        assert!(!is_play_emote(&block));
+
+        // A real swing (no propId 3) is neither.
+        assert!(!is_play_emote(&[0x84, 0x36]));
+        assert!(!is_player_blocking_state_change(&[0x84, 0x36]));
+        assert_eq!(play_emote_id(&[0x84, 0x36]), None);
+    }
+
+    /// op72/73 emotes are classified as non-combat (so the resolve fallback never
+    /// treats one as a swing); the engine intercepts op72 for the relay before resolve.
+    #[test]
+    fn emote_is_noncombat() {
+        let emote = {
+            let mut w = NetDataWriter::new();
+            w.int(0, 120).byte(1, 55).byte(2, 3).byte(3, 72).string(4, "x");
+            frame(MSGTYPE_USERMESSAGE, w.finish())
+        };
+        assert!(is_noncombat_user_message(&emote), "PlayEmote (72) is non-combat");
     }
 
     /// PerformExecuteAbility (38) is the request (37) with the marker, role, and

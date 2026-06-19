@@ -138,6 +138,41 @@ const MATCH_STATE_MATCHEND_PROGRESSION: &[(MatchState, Duration, f32)] = &[
     (MatchState::DisconnectingPlayersAfterMatch, Duration::from_secs(5), 0.0),
 ];
 
+/// The retail BETWEEN-ROUNDS `MatchState` walk — the path from a NON-final round end
+/// back into the next live round (best-of-3). Same `(state, hold_before, timeout)`
+/// shape as the round-0 / match-end tables. `PostRound`(14) is emitted by `resolve`
+/// at the death (with op29 + op79 RoundEnd + op48 result); THIS table is the walk the
+/// FSM does AFTER PostRound for an intermediate round.
+///
+/// **Capture-derived from s506's round-0→round-1 transition** (decoded by the
+/// post-match agent from prod `arena_udp_frames`):
+/// ```text
+/// 13 InRound          (round 0 live)
+///    op79 RoundEnd    (emitted at the death, resolve.rs)
+/// 14 PostRound        (emitted at the death, resolve.rs)
+///  8 ChooseLoadout            (round bumped to 1)   ← the between-rounds loadout re-choice…
+///  9 AwaitingClientBackendSynchronization
+/// 10 SynchronizingLoadout
+/// 11 OpponentShowcase
+/// 12 PreRound
+/// 13 InRound          (round 1 live)                ← re-enter the fight
+/// ```
+/// Round 0 SKIPS 8/9/10 (it goes 5→6→7→11→12→13, see [`MATCH_STATE_ROUND0_PROGRESSION`]);
+/// the between-rounds walk ADDS the loadout re-choice 8→9→10 in front of the shared
+/// 11→12→13 tail. The holds mirror the round-0 cadence for the shared states (11:+3s,
+/// 12:+12s, 13:+5s) and use the captured PostRound→ChooseLoadout gap (~3s) for 8 and a
+/// short stagger for the 9/10 sync acks; the timeouts reuse the round-0 propId6 values.
+/// At the final `InRound`(13) the engine resets both fighters to full HP and re-enters
+/// `StateTimeout` (the live round), bumping `combat.round`.
+const MATCH_STATE_INTERROUND_PROGRESSION: &[(MatchState, Duration, f32)] = &[
+    (MatchState::ChooseLoadout, Duration::from_secs(3), 30.0),
+    (MatchState::AwaitingClientBackendSynchronization, Duration::from_secs(1), 10.0),
+    (MatchState::SynchronizingLoadout, Duration::from_secs(1), 10.0),
+    (MatchState::OpponentShowcase, Duration::from_secs(1), 12.0),
+    (MatchState::PreRound, Duration::from_secs(12), 4.0),
+    (MatchState::InRound, Duration::from_secs(5), 120.0),
+];
+
 pub struct MatchInstance {
     combat: MatchCombat,
     /// s2c ENet reliable sequence (used by the raw-socket dev path framing).
@@ -293,6 +328,29 @@ impl MatchInstance {
             return out;
         }
 
+        // op72 PlayEmote (c2s) — the client played an emote. RELAY it to the opponent as
+        // op73 PlayerEmoteStateChange so the emote displays on the other player's screen
+        // (server-authoritative; a client can't fabricate an opponent's emote). Echoed
+        // for the EMOTING actor's Avatar net-object, addressed to the opponent only
+        // (the emoter already sees its own). Intercepted HERE (not in `resolve`) because
+        // op72/73 are classified non-combat — `resolve` would drop them. No damage, no
+        // phase change. Works in any live-ish phase; gated to a real 2-player match.
+        if messages::is_play_emote(user_data) {
+            let emote_id = messages::play_emote_id(user_data).unwrap_or_default();
+            if let Some(opp) = self.combat.opponent_of(sender) {
+                if let Some(emoter) = self.combat.fighters.get(sender) {
+                    let relay = messages::player_emote_state_change(emoter.net_object_id, &emote_id);
+                    info!(
+                        "combat c2s: slot {sender} op72 PlayEmote (\"{emote_id}\") → relaying op73 PlayerEmoteStateChange to opponent slot {opp}"
+                    );
+                    out.push((opp, relay));
+                }
+            } else {
+                debug!("combat c2s: slot {sender} op72 PlayEmote ignored — no opponent (solo/bot)");
+            }
+            return out;
+        }
+
         // ConcedeMatch ends the match for everyone. (Heuristic: the concede
         // carrier byte == GameMessageId::ConcedeMatch; refine if a capture shows
         // otherwise.)
@@ -312,11 +370,13 @@ impl MatchInstance {
         // Everything else (swipe / ability / block / position) → resolution.
         let phase_before = self.combat.phase;
         out.extend(resolve::on_c2s_input(&mut self.combat, sender, user_data, now));
-        // A killing blow flips StateTimeout→RoundEnd inside `resolve::end_match`
-        // (emitting op29 + op79 RoundEnd + op48 + MatchState→PostRound). Anchor the
-        // post-match MatchState walk to NOW so its s506 timers run from the death, not
-        // from whenever StateTimeout was entered.
-        if phase_before != FlowState::RoundEnd && self.combat.phase == FlowState::RoundEnd {
+        // A killing blow flips StateTimeout→RoundEnd (final round → match-end walk) or
+        // StateTimeout→NextState (non-final round → between-rounds walk) inside
+        // `resolve::on_round_ending_death`. Either way, anchor the new walk's s506 timers
+        // to NOW (the death) rather than to whenever StateTimeout was entered.
+        if phase_before == FlowState::StateTimeout
+            && matches!(self.combat.phase, FlowState::RoundEnd | FlowState::NextState)
+        {
             self.combat.phase_entered = now;
         }
         out
@@ -507,9 +567,10 @@ impl MatchInstance {
                 }
                 let debug_hold = self.debug_hold;
                 out.extend(resolve::on_tick(&mut self.combat, now, debug_hold));
-                // A bot's killing blow on the tick flips StateTimeout→RoundEnd; anchor
-                // the post-match walk to NOW (same as the on_c2s player-kill path).
-                if self.combat.phase == FlowState::RoundEnd {
+                // A bot's killing blow on the tick flips StateTimeout→RoundEnd (match-end)
+                // or →NextState (between-rounds); anchor the new walk to NOW (same as the
+                // on_c2s player-kill path).
+                if matches!(self.combat.phase, FlowState::RoundEnd | FlowState::NextState) {
                     self.combat.phase_entered = now;
                 }
             }
@@ -549,7 +610,55 @@ impl MatchInstance {
                     self.combat.phase = FlowState::Finished;
                 }
             }
-            FlowState::NextState | FlowState::Finished => {}
+            // Between rounds (best-of-3): a NON-final round-ending death put the Match
+            // net-object at PostRound(14) (resolve.rs emitted op29 + op79 RoundEnd + op48
+            // + the PostRound update) and the match into NextState. Walk the
+            // between-rounds MatchState sequence ChooseLoadout(8)→…→InRound(13) on the
+            // s506 round-0→round-1 timers; at InRound, reset both fighters to full HP and
+            // re-enter the live round (StateTimeout) for the next round.
+            // [MATCH_STATE_INTERROUND_PROGRESSION]
+            FlowState::NextState => {
+                if let Some(&(state, hold_before, timeout)) =
+                    MATCH_STATE_INTERROUND_PROGRESSION.get(self.combat.interround_step)
+                {
+                    if now.duration_since(self.combat.phase_entered) >= hold_before {
+                        // Bump the round at the FIRST between-rounds step (ChooseLoadout),
+                        // so the round-2/3 MatchState updates + the live round carry the
+                        // new round index (s506: ChooseLoadout(8) is sent with round=1).
+                        if self.combat.interround_step == 0 {
+                            self.combat.round = self.combat.round.saturating_add(1);
+                        }
+                        let is_inround = matches!(state, MatchState::InRound);
+                        info!(
+                            "combat FSM: between-rounds MatchState → {:?}({}) [interround step {}/{}, round {}]",
+                            state,
+                            state as u8,
+                            self.combat.interround_step + 1,
+                            MATCH_STATE_INTERROUND_PROGRESSION.len(),
+                            self.combat.round,
+                        );
+                        self.broadcast_match_state(&mut out, state, timeout);
+                        self.combat.interround_step += 1;
+                        self.combat.phase_entered = now;
+                        // Reaching InRound(13) re-enters the live combat round: reset both
+                        // fighters to full HP and flip to StateTimeout so combat resolves
+                        // again (and bot swings resume). The op55 InRound update already
+                        // went out (broadcast_match_state above).
+                        if is_inround {
+                            self.combat.reset_fighters_for_next_round(now);
+                            self.combat.phase = FlowState::StateTimeout;
+                            self.combat.phase_entered = now;
+                            self.last_heartbeat = now;
+                            info!(
+                                "combat FSM: NextState → StateTimeout (round {} live — both fighters reset to full HP, score {:?})",
+                                self.combat.round, self.combat.rounds_won,
+                            );
+                            self.broadcast_flow(&mut out, FlowState::StateTimeout);
+                        }
+                    }
+                }
+            }
+            FlowState::Finished => {}
         }
         out
     }
@@ -1251,12 +1360,13 @@ mod tests {
                 "real GameMessageId 50 at propId 3"
             );
         }
-        // B's HP pool dropped by the provisional swing (1023 - 80 = 943).
         // B's RAW HP dropped by the model swing. Starter = L30 Heavy weapon (Glass
         // base 120 + Remarkable +9 = 129) × Heavy crit 1.987 = 256.3 Slashing, + Shock
-        // enchant (tier 2 → 60 × 1.987 = 119.2); health total 375.5 → 376 (the equal
-        // Magicka drain is excluded). HP is raw (×3 arena pool); wire is a fraction.
-        assert_eq!(m.fighter_max_health(1) - m.fighter_health(1), 376, "B raw HP −376");
+        // enchant (tier 2 → 60 × 1.987 = 119.2); RAW health total 375.5. The
+        // anti-one-shot clamp (`MAX_HIT_FRACTION_OF_MAX_HP` = 0.25 of the 1470 ×3-arena
+        // pool = 367.5) caps it → 368 (the equal Magicka drain is excluded). HP is raw
+        // (×3 arena pool); wire is a fraction. A starter round is exactly 4 hits.
+        assert_eq!(m.fighter_max_health(1) - m.fighter_health(1), 368, "B raw HP −368 (clamped to 25% of max)");
         if let Some(arena_proto::NetDataValue::ULong(v)) =
             arena_proto::parse_netdata(&out[0].1[2..]).props.get(&4)
         {
@@ -1268,30 +1378,61 @@ mod tests {
         assert!(m.on_c2s(0, &[0x84, 0x36], t0).is_empty(), "throttled within cooldown");
     }
 
-    #[test]
-    fn fight_to_death_ends_match() {
-        let (mut m, t0) = live_inst(2); // → live round
-
-        // A keeps swinging (past the cooldown each time) until B dies. The killing
-        // blow emits the capture-faithful round-end burst: op29 PlayerDead (carrier
-        // 0x36, GMID 29), op79 "RoundEnd", op48 MatchPostRoundInfoMsg (the result),
-        // and the Match net-object → PostRound(14). (Retail s506 sends op48, NOT op49.)
-        let mut t = t0;
-        let mut death_out = Vec::new();
-        for _ in 0..20 {
+    /// Swing `attacker` into its opponent (past the swing cooldown each time, from
+    /// `start`) until a death fires. Returns `(death_burst, time_of_death)`. Panics if
+    /// no death within 40 swings (the cap is generous: clamped hits kill in ≥4).
+    fn swing_until_death(m: &mut MatchInstance, attacker: usize, start: Instant) -> (Vec<(usize, Vec<u8>)>, Instant) {
+        let mut t = start;
+        for _ in 0..40 {
             t += Duration::from_millis(500);
-            let out = m.on_c2s(0, &[0x84, 0x36], t);
+            let out = m.on_c2s(attacker, &[0x84, 0x36], t);
             let is_op29 = |b: &[u8]| {
                 b.len() > 3 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(29)
             };
             if out.iter().any(|(_, b)| is_op29(b)) {
-                death_out = out;
-                break;
+                return (out, t);
             }
         }
-        assert!(!death_out.is_empty(), "A eventually kills B → op29 PlayerDead to all");
-        // The death burst carries op79 "RoundEnd", op48 result (GMID 48), and the
-        // PostRound(14) Match update (carrier 0x35, propId5 == 14).
+        panic!("attacker {attacker} never killed the opponent within 40 swings");
+    }
+
+    /// Drive a between-rounds (NextState) walk to completion: tick at 250 ms until the
+    /// match re-enters the live round (StateTimeout). Returns the MatchState sequence
+    /// the FSM emitted (op55 propId5) + the instant it went live. Panics if it doesn't
+    /// re-enter the round within the expected window.
+    fn drive_interround_to_live(m: &mut MatchInstance, t: Instant) -> (Vec<u8>, Instant) {
+        let total: Duration = MATCH_STATE_INTERROUND_PROGRESSION.iter().map(|(_, h, _)| *h).sum::<Duration>()
+            + Duration::from_secs(2);
+        let step = Duration::from_millis(250);
+        let n = (total.as_millis() / step.as_millis()) as u32;
+        let mut states_seen: Vec<u8> = Vec::new();
+        for i in 1..=n {
+            let now = t + step * i;
+            let out = m.on_tick(2, now);
+            for (_, b) in &out {
+                if b.len() > 2 && b[1] == 0x35 {
+                    if let Some(s) = arena_proto::parse_netdata(&b[2..]).int(5) {
+                        if states_seen.last() != Some(&(s as u8)) {
+                            states_seen.push(s as u8);
+                        }
+                    }
+                }
+            }
+            if m.phase() == FlowState::StateTimeout {
+                return (states_seen, now);
+            }
+        }
+        panic!("between-rounds walk did not re-enter the live round within {total:?}");
+    }
+
+    /// A round-ending death emits the capture-faithful round-end burst — op29
+    /// PlayerDead (GMID 29), op79 "RoundEnd", op48 MatchPostRoundInfoMsg (GMID 48), and
+    /// the Match net-object → PostRound(14) — regardless of whether it ends the match
+    /// or loops. (Retail s506 sends op48, NOT op49.)
+    #[test]
+    fn round_ending_death_emits_burst() {
+        let (mut m, t0) = live_inst(2); // → live round
+        let (death_out, _t) = swing_until_death(&mut m, 0, t0);
         assert!(
             death_out.iter().any(|(_, b)| b.ends_with(b"RoundEnd")),
             "op79 RoundEnd flow on the killing blow"
@@ -1306,13 +1447,79 @@ mod tests {
                 && arena_proto::parse_netdata(&b[2..]).int(5) == Some(14)),
             "Match net-object → PostRound(14)"
         );
-        // The match is now walking the terminal states, NOT immediately Finished.
-        assert_eq!(m.phase(), FlowState::RoundEnd, "post-match walk in progress (not Finished yet)");
         assert_eq!(m.match_state_for_test(), MatchState::PostRound);
+    }
 
-        // Further combat input is ignored during the post-match walk (RoundEnd is not
-        // a combat phase; resolve only acts in StateTimeout).
+    /// BEST-OF-3, round 1 (score 0-0): the first round-ending death does NOT end the
+    /// match — it LOOPS to round 2. The match enters `NextState` (the between-rounds
+    /// walk), the winner has 1 round-win, and combat input is ignored during the walk.
+    /// Then the FSM walks ChooseLoadout(8)→…→InRound(13) and re-enters the live round
+    /// with both fighters at FULL HP (round bumped to 2), peers NOT disconnected.
+    #[test]
+    fn round1_death_loops_to_round2() {
+        let (mut m, t0) = live_inst(2);
+        assert_eq!(m.combat.round, 1, "starts in round 1");
+
+        let (_death, t) = swing_until_death(&mut m, 0, t0);
+        // Slot 0 won round 1; score 1-0; the match is LOOPING (NextState), not ending.
+        assert_eq!(m.combat.rounds_won, [1, 0], "winner (slot 0) has 1 round-win");
+        assert_eq!(m.phase(), FlowState::NextState, "non-final death → between-rounds walk, NOT RoundEnd/Finished");
+        assert_eq!(m.match_state_for_test(), MatchState::PostRound, "PostRound(14) emitted at the death");
+        assert!(!m.is_finished(), "the match is NOT finished after round 1");
+        // Combat input is ignored during the between-rounds walk (not StateTimeout).
         assert!(m.on_c2s(0, &[0x84, 0x36], t + Duration::from_millis(1)).is_empty());
+
+        // Walk the between-rounds MatchState sequence → re-enter the live round.
+        let (states_seen, _live) = drive_interround_to_live(&mut m, t);
+        // s506 round-0→round-1 sequence: ChooseLoadout(8)→Awaiting(9)→Sync(10)→
+        // OpponentShowcase(11)→PreRound(12)→InRound(13).
+        assert_eq!(
+            states_seen,
+            vec![
+                MatchState::ChooseLoadout as u8,                      // 8
+                MatchState::AwaitingClientBackendSynchronization as u8, // 9
+                MatchState::SynchronizingLoadout as u8,               // 10
+                MatchState::OpponentShowcase as u8,                   // 11
+                MatchState::PreRound as u8,                           // 12
+                MatchState::InRound as u8,                            // 13
+            ],
+            "between-rounds MatchState walk must be 8→9→10→11→12→13 (s506 round-0→round-1)"
+        );
+        assert_eq!(m.phase(), FlowState::StateTimeout, "re-entered the live round for round 2");
+        assert_eq!(m.combat.round, 2, "round bumped to 2");
+        // Both fighters reset to FULL HP for the new round.
+        assert_eq!(m.fighter_health(0), m.fighter_max_health(0), "winner reset to full HP");
+        assert_eq!(m.fighter_health(1), m.fighter_max_health(1), "loser reset to full HP");
+        assert!(!m.is_finished(), "peers NOT disconnected — the match continues");
+    }
+
+    /// BEST-OF-3 end: when a fighter reaches 2 round-wins, the NEXT round-ending death
+    /// ENDS the match (terminal walk → Finished), instead of looping. Drive to a 1-1
+    /// score, then a third death must take the winner to 2 and end the match.
+    #[test]
+    fn score_1_1_next_death_ends_match() {
+        let (mut m, t0) = live_inst(2);
+
+        // Round 1: slot 0 kills slot 1 → 1-0, loops to round 2.
+        let (_d1, t1) = swing_until_death(&mut m, 0, t0);
+        assert_eq!(m.combat.rounds_won, [1, 0]);
+        assert_eq!(m.phase(), FlowState::NextState);
+        let (_s1, live2) = drive_interround_to_live(&mut m, t1);
+        assert_eq!(m.combat.round, 2);
+
+        // Round 2: slot 1 kills slot 0 → 1-1, loops to round 3.
+        let (_d2, t2) = swing_until_death(&mut m, 1, live2);
+        assert_eq!(m.combat.rounds_won, [1, 1], "score is now 1-1");
+        assert_eq!(m.phase(), FlowState::NextState, "1-1 still loops (no fighter at 2 wins)");
+        assert!(!m.is_finished());
+        let (_s2, live3) = drive_interround_to_live(&mut m, t2);
+        assert_eq!(m.combat.round, 3);
+
+        // Round 3: slot 0 kills slot 1 → 2-1, the match ENDS (terminal walk).
+        let (_d3, _t3) = swing_until_death(&mut m, 0, live3);
+        assert_eq!(m.combat.rounds_won, [2, 1], "winner reached 2 round-wins");
+        assert_eq!(m.phase(), FlowState::RoundEnd, "2 wins → match-end walk (RoundEnd), NOT another loop");
+        assert_eq!(m.match_state_for_test(), MatchState::PostRound);
     }
 
     /// The post-InRound terminal walk (the "error 3" fix): after a round-ending death
@@ -1325,18 +1532,14 @@ mod tests {
         use crate::arena::combat::state::MatchState;
         let (mut m, t0) = live_inst(2);
 
-        // Kill B → PostRound(14), phase RoundEnd.
-        let mut t = t0;
-        for _ in 0..20 {
-            t += Duration::from_millis(500);
-            let out = m.on_c2s(0, &[0x84, 0x36], t);
-            if out.iter().any(|(_, b)| b.len() > 3 && b[1] == 0x36
-                && arena_proto::parse_netdata(&b[2..]).int(3) == Some(29))
-            {
-                break;
-            }
-        }
-        assert_eq!(m.phase(), FlowState::RoundEnd);
+        // Best-of-3: slot 0 must win TWO rounds to END the match. Round 1 kill → loops;
+        // walk back into round 2; round 2 kill → 2-0 → the MATCH-ending death.
+        let (_d1, t1) = swing_until_death(&mut m, 0, t0);
+        assert_eq!(m.phase(), FlowState::NextState, "round-1 death loops, not ends");
+        let (_s1, live2) = drive_interround_to_live(&mut m, t1);
+        let (_d2, t) = swing_until_death(&mut m, 0, live2);
+        assert_eq!(m.combat.rounds_won, [2, 0], "slot 0 won the match 2-0");
+        assert_eq!(m.phase(), FlowState::RoundEnd, "the match-ending death → terminal walk");
         assert_eq!(m.match_state_for_test(), MatchState::PostRound);
 
         // Tick at 250 ms through the whole terminal walk (4 + 6 + 5 s of holds ≈ 15 s).
@@ -1403,6 +1606,106 @@ mod tests {
 
         // The same ability is on cooldown immediately after.
         assert!(m.on_c2s(0, &req, t0).is_empty(), "ability on cooldown");
+    }
+
+    /// BLOCK as a c2s input (the resolve.rs TODO, now wired): a
+    /// `PlayerBlockingStateChange` (41) raises the sender's guard; a subsequent swing
+    /// against the blocker is reduced/negated per the side. An OPTIMAL block (guard on
+    /// the same side the attacker swings — Middle) fully negates; the block produces no
+    /// damage and no s2c itself. Attack still resolves against an un-guarded target.
+    #[test]
+    fn block_input_reduces_incoming_damage() {
+        let (mut m, t0) = live_inst(2);
+        let full = m.fighter_health(1);
+
+        // Build B's (slot 1) PlayerBlockingStateChange (41), Middle guard. NetData
+        // {0:player obj · 1:55 Player · 2:role · 3:41 · 4:1 (Middle side)}.
+        let mut block = {
+            let mut w = arena_proto::NetDataWriter::new();
+            w.int(0, m.combat.fighters[1].player_net_object_id)
+                .byte(1, 55)
+                .byte(2, 3)
+                .byte(3, 41) // PlayerBlockingStateChange
+                .byte(4, 1); // ActiveSide::Middle
+            messages::frame_for_test(w.finish())
+        };
+        block[0] = 0x84; // c2s marker
+
+        // The block frame itself: no s2c, no damage, and B is now guarding.
+        let out = m.on_c2s(1, &block, t0);
+        assert!(out.is_empty(), "a block input produces no s2c and no damage");
+        assert_eq!(m.fighter_health(1), full, "the block itself deals no damage");
+
+        // A (slot 0) swings Middle into B's Middle guard → OPTIMAL block fully negates.
+        // (resolve_swing defaults to a Middle swing; B guards Middle → optimal.)
+        let dmg = m.on_c2s(0, &[0x84, 0x36], t0 + Duration::from_millis(600));
+        assert!(!dmg.is_empty(), "the swing still resolves (ReceiveDamage emitted)");
+        assert_eq!(m.fighter_health(1), full, "optimal block (same side) fully negates the hit");
+        // The ReceiveDamage carries the WasOptimalBlocking flag (propId 7 bit3).
+        let rd = dmg.iter().find(|(_, b)| b[1] == 0x36
+            && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50)).expect("ReceiveDamage");
+        let flags = arena_proto::parse_netdata(&rd.1[2..]).int(7).unwrap_or(0);
+        assert!(flags & 0b1000 != 0, "WasOptimalBlocking flag set on a same-side block");
+
+        // Sanity: an UN-guarded target still takes full (clamped) damage — a fresh match.
+        let (mut m2, t2) = live_inst(2);
+        let before = m2.fighter_health(1);
+        m2.on_c2s(0, &[0x84, 0x36], t2);
+        assert!(m2.fighter_health(1) < before, "an un-guarded target takes damage (block didn't break attacks)");
+    }
+
+    /// A block window auto-expires: after `BLOCK_WINDOW` a stale guard no longer
+    /// reduces damage (so a one-time block can't make a fighter unkillable).
+    #[test]
+    fn block_window_expires() {
+        let (mut m, t0) = live_inst(2);
+        let mut block = {
+            let mut w = arena_proto::NetDataWriter::new();
+            w.int(0, m.combat.fighters[1].player_net_object_id).byte(1, 55).byte(2, 3).byte(3, 41).byte(4, 1);
+            messages::frame_for_test(w.finish())
+        };
+        block[0] = 0x84;
+        m.on_c2s(1, &block, t0); // B guards Middle
+        let full = m.fighter_health(1);
+        // Well past the 2s window → the guard has lapsed; a Middle swing now lands.
+        let late = t0 + Duration::from_secs(3);
+        m.on_c2s(0, &[0x84, 0x36], late);
+        assert!(m.fighter_health(1) < full, "after the block window expires, the hit lands");
+    }
+
+    /// EMOTE relay: a `PlayEmote` (72) from one player is relayed to the OPPONENT as a
+    /// `PlayerEmoteStateChange` (73) carrying the emote id, so it displays on the other
+    /// screen. No damage; the emoter is not echoed its own emote.
+    #[test]
+    fn emote_relays_to_opponent() {
+        let (mut m, t0) = live_inst(2);
+        let full = m.fighter_health(1);
+
+        // Build A's (slot 0) PlayEmote (72): {0:obj · 1:55 · 2:role · 3:72 · 4:String id}.
+        let mut emote = {
+            let mut w = arena_proto::NetDataWriter::new();
+            w.int(0, m.combat.fighters[0].player_net_object_id)
+                .byte(1, 55)
+                .byte(2, 3)
+                .byte(3, 72) // PlayEmote
+                .string(4, "emote_wave");
+            messages::frame_for_test(w.finish())
+        };
+        emote[0] = 0x84; // c2s marker
+
+        let out = m.on_c2s(0, &emote, t0);
+        // Exactly one s2c, to the OPPONENT (slot 1), an op73 PlayerEmoteStateChange.
+        assert_eq!(out.len(), 1, "emote relays exactly once, to the opponent only");
+        let (viewer, body) = &out[0];
+        assert_eq!(*viewer, 1, "relayed to the opponent (slot 1), not echoed to the emoter");
+        assert_eq!(body[1], 0x36, "carrier 0x36");
+        let nd = arena_proto::parse_netdata(&body[2..]);
+        assert_eq!(nd.int(3), Some(73), "GMID 73 PlayerEmoteStateChange");
+        assert_eq!(nd.int(0), Some(m.combat.fighters[0].net_object_id as i64), "carries the EMOTER's avatar obj");
+        assert_eq!(nd.string(5), Some("emote_wave"), "the emote id is relayed");
+        // No damage from an emote.
+        assert_eq!(m.fighter_health(1), full, "an emote deals no damage");
+        assert_eq!(m.phase(), FlowState::StateTimeout, "emote doesn't change the match phase");
     }
 
     /// DEBUG-HOLD (`ARENA_DEBUG_HOLD`): the FULL round-start burst still goes out
