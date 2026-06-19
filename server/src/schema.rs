@@ -9,6 +9,7 @@ diesel::table! {
         inventory -> Jsonb,
         wallet -> Jsonb,
         town -> Nullable<Jsonb>,
+        server_state -> Jsonb,
     }
 }
 

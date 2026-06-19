@@ -16,6 +16,7 @@ use actix_web::{
 use anyhow::{Context, Result};
 use bb8::Pool;
 use blades_lib::game_data::GameData;
+use blades_lib::static_data::StaticData;
 use clap::{Parser, Subcommand};
 use diesel_async::{AsyncPgConnection, pooled_connection::AsyncDieselConnectionManager};
 use log::debug;
@@ -45,6 +46,7 @@ mod quest;
 mod repair;
 pub mod schema;
 mod session;
+mod static_loader;
 mod status;
 mod town;
 mod util;
@@ -86,6 +88,10 @@ pub struct ServerGlobal {
     pub session_store: SessionStore,
     pub static_data_path: PathBuf,
     pub game_data: GameData,
+    /// Capture-derived static definitions (gifts, announcements, …) loaded at
+    /// startup from JSON files in the `--static-data` directory. Empty parts
+    /// degrade gracefully (see [`static_loader`]).
+    pub static_data: StaticData,
     /// Full ("max") durability per `(itemTemplateId, temperingLevel)`, derived
     /// from the captures (`item_durability.json`) since `GameData` carries no
     /// durability. Used by the repair endpoint to restore an item to full.
@@ -162,6 +168,10 @@ async fn main() -> Result<()> {
                 }
             };
 
+            // Capture-derived static definitions (gifts, announcements, …). Missing
+            // files degrade gracefully (empty → endpoint returns an empty list).
+            let static_data_defs = static_loader::load(&static_data);
+
             let arena = arena::matchmaker::ArenaGlobal::start(
                 arena::config::ArenaConfig::from_env(),
                 db_pool.clone(),
@@ -181,6 +191,7 @@ async fn main() -> Result<()> {
                 session_store: SessionStore::new(Duration::from_hours(24)),
                 static_data_path: static_data.clone(),
                 game_data,
+                static_data: static_data_defs,
                 item_max_durability,
                 arena,
                 arena_import_token,
@@ -284,6 +295,8 @@ async fn main() -> Result<()> {
                     .service(global_shop::get_global_shop_for_character)
                     .service(global_shop::get_iap)
                     .service(global_gift::get_global_gifts)
+                    .service(global_gift::get_global_gift)
+                    .service(global_gift::claim_global_gift)
                     .service(character_data::update_data)
                     .service(daily_reward::get_daily_reward)
                     .service(announcements::get_announcements)

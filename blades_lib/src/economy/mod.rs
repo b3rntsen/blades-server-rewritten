@@ -40,6 +40,15 @@ pub const SIGIL: Uuid = Uuid::from_u128(0xc64bcb53_41f4_41ba_892a_fe2cca423caa);
 /// gems with real money is out of scope (IAP is a priced placeholder only).
 pub const GEMS: Uuid = Uuid::from_u128(0x470c8f58_a8dd_4c07_8c92_843b785e1139);
 
+/// The three global currencies.
+pub const ALL_CURRENCIES: [Uuid; 3] = [GOLD, SIGIL, GEMS];
+
+/// Whether a template UUID is actually a currency (and so should credit the wallet
+/// rather than the backpack — gifts/rewards encode currencies as `itemTemplateId`s).
+pub fn is_currency(id: Uuid) -> bool {
+    ALL_CURRENCIES.contains(&id)
+}
+
 /// Errors from spending/granting. Mapped to a `BladeApiError` envelope at the
 /// handler boundary (the server crate owns the HTTP status / service-id mapping).
 #[derive(Debug, Error, PartialEq, Eq)]

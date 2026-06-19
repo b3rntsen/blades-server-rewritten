@@ -1,3 +1,4 @@
+use blades_lib::server_state::ServerState;
 use blades_lib::user_data::{
     B64EncodedData, CompleteCharacter, CompleteCharacterData, CompleteInventory, CompleteWallet,
     DungeonGeneratedData, DungeonState, Quest, UserAccount,
@@ -64,6 +65,44 @@ pub struct CharacterDbEntryCharacterWalletInventory {
     pub data: JsonDbWrapper<CompleteCharacterData>,
     pub wallet: JsonDbWrapper<CompleteWallet>,
     pub inventory: JsonDbWrapper<CompleteInventory>,
+}
+
+/// Workhorse for the town/RPG economy handlers (shops, crafts, chests, gifts, the
+/// global store, challenges, …): the character + wallet + inventory plus the
+/// server-managed `server_state`. `AsChangeset` so a handler loads it
+/// `for_no_key_update`, mutates the JSONB in place, and writes it all back.
+#[derive(Queryable, Selectable, AsChangeset)]
+#[diesel(table_name = crate::schema::characters)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct CharacterDbEntryEconomy {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub character: JsonDbWrapper<CompleteCharacter>,
+    pub wallet: JsonDbWrapper<CompleteWallet>,
+    pub inventory: JsonDbWrapper<CompleteInventory>,
+    pub server_state: JsonDbWrapper<ServerState>,
+}
+
+impl CharacterHolder for CharacterDbEntryEconomy {
+    fn get_user_id(&self) -> &Uuid {
+        &self.user_id
+    }
+}
+
+/// Read-only thin select for endpoints that only need the server-managed state
+/// (e.g. the claimed-gifts list) plus the ownership check.
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = crate::schema::characters)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct CharacterDbEntryServerState {
+    pub user_id: Uuid,
+    pub server_state: JsonDbWrapper<ServerState>,
+}
+
+impl CharacterHolder for CharacterDbEntryServerState {
+    fn get_user_id(&self) -> &Uuid {
+        &self.user_id
+    }
 }
 
 #[derive(Queryable, Selectable, AsChangeset)]
