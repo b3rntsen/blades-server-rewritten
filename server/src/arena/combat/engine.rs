@@ -258,14 +258,20 @@ impl MatchInstance {
                     // Retail sends the spawns + profile first; the client uploads its
                     // loadout during the Spawning hold; BackendMatchCreated follows ~4s
                     // later (s506 stagger).
+                    // Round-start, retail-faithful order (s506 obj-123 match): the two
+                    // Player spawns + the Match net-object (st 3, pc 1) + the local
+                    // PlayerWelcome go FIRST. The Avatars + the opponent PROFILE + stat
+                    // words come LATER, right after the Match flips to InitialPlayerSetup(4)
+                    // (see the Spawning branch's 3→4 block) — NOT in this burst. This
+                    // ordering is what binds the players: both Player net-objects must be
+                    // registered in PvpClientManager._pvpPlayers before the avatars'
+                    // discovery callbacks look them up (GetPvpPlayer by char-UUID).
                     self.broadcast_spawns(&mut out);
                     // The Match net-object was spawned (in broadcast_spawns) carrying
                     // MatchState=WaitingForPlayers(3); record it so the FSM advances it
                     // 3→4→5 from here (the player-binding gate).
                     self.combat.match_state = MatchState::WaitingForPlayers;
                     self.broadcast_welcome(&mut out);
-                    self.broadcast_stat_updates(&mut out);
-                    self.broadcast_profiles(&mut out);
                     // Round-start emission audit — confirm what actually goes on the wire:
                     // carrier→count (58=clock, 50=spawn, 54=profile/flow) + each fighter's
                     // profile-JSON size (0 ⇒ empty ⇒ broadcast_profiles skipped it ⇒ the
@@ -326,11 +332,25 @@ impl MatchInstance {
                     && elapsed >= MATCH_SETUP_STAGGER
                 {
                     info!("combat FSM: Match state WaitingForPlayers(3) → InitialPlayerSetup(4)");
+                    // Match → InitialPlayerSetup(4), PlayerCount→2 (broadcast_match_state
+                    // passes fighters.len()). s506 obj 123: 3 @05:05:36 → 4 @05:05:37, pc 1→2.
                     self.broadcast_match_state(
                         &mut out,
                         MatchState::InitialPlayerSetup,
                         MATCH_STATE_SETUP_TIMEOUT,
                     );
+                    // NOW (after state-4, retail order) the Avatars + the opponent PROFILE +
+                    // stat words. Retail s506 sends own Avatar(#3522349) → opp PROFILE
+                    // (#3522353) → opp Avatar(#3522368) → avatar stat words — all AFTER the
+                    // Match reaches InitialPlayerSetup(4). Each Avatar's discovery binds its
+                    // player (GetPvpPlayer by char-UUID → _{local,opponent}Info.Player), so
+                    // both Players (sent in the WaitingForPlayers burst above) are already in
+                    // _pvpPlayers by the time these resolve. broadcast_avatars sends BOTH the
+                    // own (Autonomous) AND opponent (Simulated) avatars — the Simulated one is
+                    // what flips HasOpponentPlayer (proven on-device 2026-06-19).
+                    self.broadcast_avatars(&mut out);
+                    self.broadcast_profiles(&mut out);
+                    self.broadcast_stat_updates(&mut out);
                 }
                 if elapsed >= SPAWN_HANDSHAKE_HOLD {
                     info!("combat FSM: Spawning → BackendMatchCreated (round-start handshake settled)");
@@ -448,6 +468,17 @@ impl MatchInstance {
                     actor.loadout.display_name.as_str()
                 };
                 // Player op50 — for BOTH fighters (self Autonomous, opponent Simulated).
+                // Retail s506 sends the two Player spawns FIRST (obj 120 role3, obj 122
+                // role2), BEFORE either Avatar — the Avatars come later (see
+                // `broadcast_avatars`, after the Match→InitialPlayerSetup transition).
+                // Both Player net-objects must be registered in `PvpClientManager._pvpPlayers`
+                // before the avatars' resource-load callbacks run, because the avatar
+                // discovery is what BINDS the player to the encounter:
+                // `PvpEncounter.FinishSpawnLocalAvatar`/`SpawnOpponent` →
+                // `PvpClientManager.GetPvpPlayer(<avatar charUUID>)` → set
+                // `_{local,opponent}Info.Player` (the `HasLocalPlayer`/`HasOpponentPlayer`
+                // gate). [il2cpp RE 2026-06-19: GetPvpPlayer @0x1ADF51C matches a
+                // registered PvpPlayer by the avatar's propId4 character UUID.]
                 out.push((
                     viewer,
                     messages::spawn_player(
@@ -459,37 +490,52 @@ impl MatchInstance {
                         actor.loadout.level as i32,
                     ),
                 ));
-                // Avatar op50 — viewer's OWN (Autonomous) fighter ONLY. The opponent's
-                // avatar is built client-side from the op54 PROFILE, never as a net
-                // object (retail s506: no Simulated Avatar op50 ever). Sending a
-                // Simulated Avatar net-object made the client route its proxy into
-                // PvpEncounter.SpawnOpponent, whose load never completed →
-                // OnOpponentLoaded never fired (the precise gate).
-                if is_own {
-                    out.push((
-                        viewer,
-                        messages::spawn_avatar(actor.net_object_id, role, &actor.loadout.character_uuid),
-                    ));
-                }
             }
             // op50 SPAWN of the single type-54 **Match** net object — the object whose
-            // replicated propId5 = `MatchState` the client reads to BIND its players
-            // (the `HasLocalPlayer` gate). Spawned with `WaitingForPlayers`(3) so the
-            // client enters binding; the FSM advances it 3→4→5 via op55 updates
-            // (`broadcast_match_state`). Retail s506 obj 123: spawn state 3, timeout 20s,
-            // role Simulated. (This replaces the fork's old per-fighter "ability" type-54
-            // spawn, which hard-coded propId5=5 → the client skipped 3/4 and never bound.)
+            // replicated propId5 = `MatchState` the client reads to advance the match.
+            // Spawned with `WaitingForPlayers`(3) + **PlayerCount 1** (retail s506 obj 123
+            // spawn: role 2 Simulated, st 3, pc 1, timeout 20s) — the FSM then flips it to
+            // `InitialPlayerSetup`(4) with **PlayerCount 2** once both players are present
+            // (`broadcast_match_state`), exactly as s506 obj 123 does at its 3→4 update.
             out.push((
                 viewer,
                 messages::spawn_match(
                     self.combat.match_net_object_id,
-                    self.combat.fighters.len() as u8,
+                    1, // retail s506: Match spawns at PlayerCount=1, flips to 2 at state 3→4
                     MatchState::WaitingForPlayers,
                     MATCH_STATE_WAIT_TIMEOUT,
                     self.combat.round,
                     &self.combat.game_session_id,
                 ),
             ));
+        }
+    }
+
+    /// Broadcast the round-start **Avatar** op50 spawns — both the viewer's OWN
+    /// (Autonomous) and the OPPONENT's (Simulated) fighter body. Retail s506 sends
+    /// BOTH (obj 124 role3 + obj 125 role2), AFTER the two Player spawns and AFTER the
+    /// Match net-object reaches `InitialPlayerSetup`(4) (own avatar @ #3522349, opponent
+    /// avatar @ #3522368, interleaved with the opponent profile). **Each avatar's
+    /// discovery is the player-binding trigger** (`HasLocalPlayer`/`HasOpponentPlayer`):
+    /// the client's `PvpEncounter.FinishSpawnLocalAvatar`/`SpawnOpponent` looks the
+    /// avatar's character UUID (NetData propId4) up in `_pvpPlayers` via
+    /// `PvpClientManager.GetPvpPlayer` and sets `_{local,opponent}Info.Player`. Without
+    /// the OPPONENT (Simulated) avatar, `HasOpponentPlayer` never flips — proven
+    /// on-device 2026-06-19: injecting the missing Simulated avatar flipped it 0→1.
+    /// [il2cpp RE: Match.get_HasLocalPlayer @0x178AAF4 → _pvpEncounter._localInfo.Player.]
+    fn broadcast_avatars(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        for viewer in 0..self.combat.fighters.len() {
+            for actor in &self.combat.fighters {
+                let role = if actor.slot == viewer {
+                    NetRole::Autonomous
+                } else {
+                    NetRole::Simulated
+                };
+                out.push((
+                    viewer,
+                    messages::spawn_avatar(actor.net_object_id, role, &actor.loadout.character_uuid),
+                ));
+            }
         }
     }
 
@@ -645,13 +691,20 @@ mod tests {
             0,
             "BackendMatchCreated must NOT ride the spawn burst (retail staggers it)"
         );
-        // Retail-faithful op50 set (s506): per viewer = a Player op50 for BOTH fighters
-        // + an Avatar op50 for the viewer's OWN fighter only (no Simulated opponent
-        // Avatar) + the single type-54 **Match** net-object op50 (its propId5 =
-        // MatchState=WaitingForPlayers, the player-binding gate). 2 viewers × (2 Player
-        // + 1 own-Avatar + 1 Match) = 8 op50 (0x32) spawn messages.
+        // Retail-faithful round-start order (s506 obj-123 match): the FIRST burst
+        // (Connecting→Spawning) sends per viewer = a Player op50 for BOTH fighters + the
+        // single type-54 **Match** net-object op50 (propId5 = WaitingForPlayers, pc 1).
+        // The Avatars come LATER (after the Match→InitialPlayerSetup transition, see
+        // `match_state_progresses_3_4_5`). So this burst = 2 viewers × (2 Player + 1
+        // Match) = 6 op50 (0x32) spawn messages — NO Avatars yet.
         let spawns = out.iter().filter(|(_, b)| b.len() >= 2 && b[1] == 0x32).count();
-        assert_eq!(spawns, 8, "op50 = Player(both) + own-Avatar + Match per viewer");
+        assert_eq!(spawns, 6, "op50 = Player(both) + Match per viewer; avatars come after state 3→4");
+        // No Avatar (type 56) op50 in the first burst (they ride the 3→4 tick).
+        let avatars = out
+            .iter()
+            .filter(|(_, b)| b.len() >= 3 && b[1] == 0x32 && arena_proto::parse_netdata(&b[2..]).int(1) == Some(56))
+            .count();
+        assert_eq!(avatars, 0, "Avatars are NOT in the WaitingForPlayers spawn burst");
         // The Match spawn carries MatchState=WaitingForPlayers(3) — NOT 5 — so the
         // client enters player binding instead of jumping straight to BackendMatchCreation.
         assert_eq!(
@@ -737,7 +790,10 @@ mod tests {
             l
         };
         let mut m = MatchInstance::new(2, 2, vec![mk("Alice"), mk("Bob")], now);
-        let out = m.on_tick(2, now); // Connecting → BackendMatchCreated (round-start emit)
+        m.on_tick(2, now); // Connecting → Spawning (players + Match spawn; NO profile yet)
+        // The profiles ride the Match WaitingForPlayers(3)→InitialPlayerSetup(4) tick
+        // (retail order: opponent PROFILE + avatars after state-4), not the first burst.
+        let out = m.on_tick(2, now + MATCH_SETUP_STAGGER);
         // op54 PROFILE = carrier 0x36 with NetData propId3 == 35 (the profile gameMessageId);
         // distinct from op54-small stat word (p3=65) and flow states (p3=0x4F).
         let profiles: Vec<&(usize, Vec<u8>)> = out
@@ -774,13 +830,16 @@ mod tests {
             b.len() > 2 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(35)
         };
 
+        // The opponent PROFILE rides the Match WaitingForPlayers(3)→InitialPlayerSetup(4)
+        // tick (retail order), not the first Connecting→Spawning burst. So we tick once to
+        // enter Spawning, then again at `+MATCH_SETUP_STAGGER` to drive the 3→4 emit.
         // (a) the BUG: solo-fallback with an EMPTY slot-1 (starter) bot. capacity 2 /
         // expected_peers 1 → one human peer is enough to start. No profile goes out.
         let mut buggy = MatchInstance::new(2, 1, vec![], now);
-        let burst = buggy.on_tick(1, now); // Connecting → Spawning (round-start emit)
-        assert_eq!(buggy.phase(), FlowState::Spawning);
+        buggy.on_tick(1, now); // Connecting → Spawning
+        let setup = buggy.on_tick(1, now + MATCH_SETUP_STAGGER); // 3→4 (avatars + profiles)
         assert_eq!(
-            burst.iter().filter(|(_, b)| is_profile(b)).count(),
+            setup.iter().filter(|(_, b)| is_profile(b)).count(),
             0,
             "empty starter bot → NO opponent profile (reproduces the 'Connecting…' stall)"
         );
@@ -798,10 +857,11 @@ mod tests {
             vec![crate::arena::combat::loadout::starter(), ghost],
             now,
         );
-        let burst = fixed.on_tick(1, now);
+        fixed.on_tick(1, now); // → Spawning
         assert_eq!(fixed.phase(), FlowState::Spawning);
+        let setup = fixed.on_tick(1, now + MATCH_SETUP_STAGGER); // 3→4 emit
         let profiles: Vec<&(usize, Vec<u8>)> =
-            burst.iter().filter(|(_, b)| is_profile(b)).collect();
+            setup.iter().filter(|(_, b)| is_profile(b)).collect();
         assert_eq!(
             profiles.len(),
             1,
@@ -1112,11 +1172,16 @@ mod tests {
     }
 
     /// Round-start op50 spawn OBJECT SET is retail-faithful to s506: the local viewer
-    /// receives a **Player** op50 for BOTH fighters but an **Avatar** op50 ONLY for its
-    /// OWN (Autonomous) fighter — NEVER a Simulated Avatar net-object for the opponent
-    /// (which stalled `PvpEncounter.OnOpponentLoaded`). Guards the 2026-06-19 fix.
+    /// receives a **Player** op50 for BOTH fighters (WaitingForPlayers burst) and, after
+    /// the Match reaches InitialPlayerSetup(4), an **Avatar** op50 for BOTH fighters —
+    /// its OWN (Autonomous) AND the OPPONENT's (Simulated). The Simulated opponent Avatar
+    /// (s506 obj 125, role 2) is what flips `HasOpponentPlayer`: the client's
+    /// `PvpEncounter.SpawnOpponent` looks the avatar's char-UUID up in `_pvpPlayers`
+    /// (`GetPvpPlayer`) and sets `_opponentInfo.Player`. Proven on-device 2026-06-19:
+    /// injecting the missing Simulated avatar flipped `HasOpponentPlayer` 0→1. Guards the
+    /// fix that REVERSED the earlier (wrong) "own-Avatar-only" round-start.
     #[test]
-    fn round_start_no_simulated_opponent_avatar() {
+    fn round_start_spawns_both_avatars() {
         let now = Instant::now();
         let mk = |name: &str, uuid: &str| {
             let mut l = crate::arena::combat::loadout::starter();
@@ -1136,29 +1201,35 @@ mod tests {
             ],
             now,
         );
-        let out = m.on_tick(1, now);
-        // Collect viewer-0 op50 spawns by (type, role).
-        let mut player_roles = Vec::new();
-        let mut avatar_roles = Vec::new();
-        for (viewer, b) in &out {
-            if *viewer != 0 || b.len() < 3 || b[1] != 0x32 {
-                continue;
-            }
-            let nd = arena_proto::parse_netdata(&b[2..]);
-            match nd.int(1) {
-                Some(55) => player_roles.push(nd.int(2)), // Player
-                Some(56) => avatar_roles.push(nd.int(2)), // Avatar
-                _ => {}
-            }
-        }
-        // BOTH players spawn (self Autonomous=3, opponent Simulated=2).
+        // First burst: Players + Match (no avatars yet).
+        let burst = m.on_tick(1, now);
+        let burst_player_roles: Vec<_> = burst
+            .iter()
+            .filter(|(v, b)| *v == 0 && b.len() >= 3 && b[1] == 0x32)
+            .filter_map(|(_, b)| {
+                let nd = arena_proto::parse_netdata(&b[2..]);
+                (nd.int(1) == Some(55)).then(|| nd.int(2))
+            })
+            .collect();
         assert!(
-            player_roles.contains(&Some(3)) && player_roles.contains(&Some(2)),
-            "viewer 0 must get a Player op50 for both fighters (roles seen: {player_roles:?})"
+            burst_player_roles.contains(&Some(3)) && burst_player_roles.contains(&Some(2)),
+            "viewer 0 gets a Player op50 for both fighters (roles seen: {burst_player_roles:?})"
         );
-        // Exactly ONE Avatar op50, and it is the OWN (Autonomous=3) one — never the
-        // Simulated (2) opponent. This is the gate fix: a Simulated Avatar net-object
-        // routes the client into PvpEncounter.SpawnOpponent, whose load never completes.
-        assert_eq!(avatar_roles, vec![Some(3)], "only the OWN (Autonomous) Avatar op50 — no Simulated opponent Avatar");
+        // The 3→4 tick: BOTH avatars (own Autonomous=3 AND opponent Simulated=2).
+        let setup = m.on_tick(1, now + MATCH_SETUP_STAGGER);
+        let mut avatar_roles: Vec<_> = setup
+            .iter()
+            .filter(|(v, b)| *v == 0 && b.len() >= 3 && b[1] == 0x32)
+            .filter_map(|(_, b)| {
+                let nd = arena_proto::parse_netdata(&b[2..]);
+                (nd.int(1) == Some(56)).then(|| nd.int(2))
+            })
+            .collect();
+        avatar_roles.sort();
+        assert_eq!(
+            avatar_roles,
+            vec![Some(2), Some(3)],
+            "viewer 0 gets BOTH Avatar op50: own (Autonomous=3) AND opponent (Simulated=2)"
+        );
     }
 }
