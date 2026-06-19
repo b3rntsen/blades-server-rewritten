@@ -10,6 +10,7 @@
 use std::{collections::HashMap, fs::File, io::BufReader, path::Path};
 
 use blades_lib::economy::RewardGrant;
+use blades_lib::features::challenges::ChallengeTemplate;
 use blades_lib::static_data::{Announcement, GiftDef, StaticData};
 use log::warn;
 use serde::de::DeserializeOwned;
@@ -46,6 +47,7 @@ pub fn load(dir: &Path) -> StaticData {
     }
     let global_shop_grants: HashMap<Uuid, RewardGrant> =
         read_json(&dir.join("global_shop_grants.json"));
+    let challenge_templates: Vec<ChallengeTemplate> = read_json(&dir.join("challenges.json"));
 
     StaticData {
         gifts: gifts.into_iter().map(|g| (g.global_gift_id, g)).collect::<HashMap<_, _>>(),
@@ -53,5 +55,6 @@ pub fn load(dir: &Path) -> StaticData {
         global_shop_overrides,
         iap,
         global_shop_grants,
+        challenge_templates,
     }
 }

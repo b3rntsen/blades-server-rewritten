@@ -1,0 +1,722 @@
+[
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 800.0,
+      "_uid": {
+        "_id": "760c440e-f42a-4409-bc6c-1025689328b5"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 600
+      }
+    },
+    "templateId": "55a4da36-1f45-43d8-8641-ee75768faa53"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 2.0,
+      "_uid": {
+        "_id": "8cef1d84-62f9-47ff-a85f-36318ae22d69"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "470c8f58-a8dd-4c07-8c92-843b785e1139": 2
+      }
+    },
+    "templateId": "8ec2b1a1-62f2-476b-b323-53bade2ab7a5"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 13.0,
+      "_uid": {
+        "_id": "6b1f1337-4b04-43f6-81ca-56e94559923a"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 700
+      }
+    },
+    "templateId": "48efabe0-2138-42f6-9aa7-1d53a4751a1e"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 10.0,
+      "_uid": {
+        "_id": "9abc85ca-6504-46de-9e32-a15a02aff391"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 500
+      }
+    },
+    "templateId": "0bdbeccf-1797-4c42-a005-4c4a2b44e0a0"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 9.0,
+      "_uid": {
+        "_id": "672f46cc-97d7-4831-9d02-b38bf037b76e"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 300
+      }
+    },
+    "templateId": "8925740e-046b-4e7a-b418-a17bd83e035c"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 10.0,
+      "_uid": {
+        "_id": "18759e05-1686-4560-bf99-1c30df143bf3"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 200
+      }
+    },
+    "templateId": "d5631e1c-2698-4bb1-8e15-52433da096e4"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 2.0,
+      "_uid": {
+        "_id": "52715c09-8039-4c95-b431-19ffda9eaf5a"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 300
+      }
+    },
+    "templateId": "86b4119e-6a1b-4bb4-89d6-2184d63a0495"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 8.0,
+      "_uid": {
+        "_id": "2e6004d5-a9e3-41f4-9a23-a0e05ed4a1fe"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "470c8f58-a8dd-4c07-8c92-843b785e1139": 4
+      }
+    },
+    "templateId": "b7c78c4d-1b4a-4183-92c1-6bd5610c763b"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 10.0,
+      "_uid": {
+        "_id": "5c04f9b2-6bf9-4856-b208-7aaac36884e2"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 700
+      }
+    },
+    "templateId": "25de9dc4-dd7e-474a-bf6c-4ff84ff9d4bf"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 6.0,
+      "_uid": {
+        "_id": "84961e36-440a-4dc2-9e46-bdf7158673c6"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "470c8f58-a8dd-4c07-8c92-843b785e1139": 2
+      }
+    },
+    "templateId": "cb497c2f-9354-4545-a3d1-bfdab358579f"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 5.0,
+      "_uid": {
+        "_id": "29ca1f70-2b52-4a25-8ee3-9a45d04c7c1d"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 4250
+      }
+    },
+    "templateId": "ba98f140-5dbb-4b58-b7f2-66c080651d8d"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 13.0,
+      "_uid": {
+        "_id": "ce620a34-ef35-4e42-9993-820f3e9e9bbb"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2500
+      }
+    },
+    "templateId": "a09fa115-7a05-4da3-b59e-a05508e09ad8"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 2850.0,
+      "_uid": {
+        "_id": "43738189-ecf8-4a6e-9d25-3c0a0bdef111"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 400
+      }
+    },
+    "templateId": "cc5c53f6-b5fb-4a7d-840b-6fa3b5e37bd1"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 16.0,
+      "_uid": {
+        "_id": "f27ccf80-561d-45cc-9e2c-94fc398321ce"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "470c8f58-a8dd-4c07-8c92-843b785e1139": 10
+      }
+    },
+    "templateId": "69e9255f-9607-4f0b-8068-091527200dc7"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 14.0,
+      "_uid": {
+        "_id": "80463d1d-994a-44c1-93c5-55fd808fa3e6"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 500
+      }
+    },
+    "templateId": "915ef03b-37e0-43ef-a1ab-78fc30d8451a"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 7.0,
+      "_uid": {
+        "_id": "5c6eb6b6-f36a-424b-bc85-6ddf0570e726"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 400
+      }
+    },
+    "templateId": "62bdd9ce-151b-457d-b729-0b4106cea8e3"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 10.0,
+      "_uid": {
+        "_id": "cefc472f-be65-466a-9e9a-f67354d4ca78"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "470c8f58-a8dd-4c07-8c92-843b785e1139": 6
+      }
+    },
+    "templateId": "3a5372b4-ef82-4c6b-89f7-030912def84c"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 3800.0,
+      "_uid": {
+        "_id": "c62cad80-9c4e-4d73-b78a-da9c88113b7e"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "470c8f58-a8dd-4c07-8c92-843b785e1139": 4
+      }
+    },
+    "templateId": "08c90e81-fd9b-46ef-811c-0cbc796937e1"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 3.0,
+      "_uid": {
+        "_id": "b559de31-013b-4569-a0d5-45ed06ed9e6d"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 1250
+      }
+    },
+    "templateId": "37369d52-10b6-4099-9b09-bb19dd1c8c79"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 11500.0,
+      "_uid": {
+        "_id": "1f3833bd-aa36-4a62-a434-234cd73a4c4e"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 1250
+      }
+    },
+    "templateId": "dbd575e6-e475-4d99-974f-83c1d8b7cd09"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 6.0,
+      "_uid": {
+        "_id": "9a64fd19-dd60-48f1-ad5d-786638798da3"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 700
+      }
+    },
+    "templateId": "6a8a7f7c-0b89-4b9d-b5e3-76eae17631f5"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 5.0,
+      "_uid": {
+        "_id": "ac2eb773-6fd5-4fc1-b7a2-a5508c7ff468"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "470c8f58-a8dd-4c07-8c92-843b785e1139": 2
+      }
+    },
+    "templateId": "7fa1f11d-fbfa-4d39-b090-25b18517668b"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 5.0,
+      "_uid": {
+        "_id": "af57eca9-bcc9-435b-ad08-bbe4f8164f9d"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 1250
+      }
+    },
+    "templateId": "4b7c50c4-fca7-4412-968c-a1d9df8c65b8"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 2.0,
+      "_uid": {
+        "_id": "d6ce5a76-4793-4a39-a6cc-0171abc8cb39"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 500
+      }
+    },
+    "templateId": "d7cd68e9-53d2-4283-b601-360cd342ee86"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 10.0,
+      "_uid": {
+        "_id": "6ade7a4a-153e-4cab-ac4f-97d2bd90a649"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 600
+      }
+    },
+    "templateId": "1f171dd8-8136-4224-9a37-f028e3ea47a4"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 2.0,
+      "_uid": {
+        "_id": "f3b830ce-c2fb-4b5e-8e27-e2c5c8dc34ca"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 600
+      }
+    },
+    "templateId": "52b1c9b9-f49e-4ec4-8bd4-28379b060088"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 1300.0,
+      "_uid": {
+        "_id": "f0069fff-505a-4d74-be74-2994940921c0"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 600
+      }
+    },
+    "templateId": "a1dc0feb-eab1-4ad5-a476-92065101b85a"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 4.0,
+      "_uid": {
+        "_id": "af9d365e-e444-4610-bcfa-e184f42c6dc8"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 1750
+      }
+    },
+    "templateId": "7f5954de-640b-454a-955c-5e1ac4657909"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 1.0,
+      "_uid": {
+        "_id": "8f46a90c-35d1-45c2-9df4-878d3296ab5c"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "470c8f58-a8dd-4c07-8c92-843b785e1139": 2
+      }
+    },
+    "templateId": "bce21d12-8f3b-444b-ad1f-740478f1d0cf"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 12500.0,
+      "_uid": {
+        "_id": "39833203-a3d5-4f11-be0c-021d607bb514"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2250
+      }
+    },
+    "templateId": "6a41201f-f343-424b-bd4a-d8dc589b34df"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 1450.0,
+      "_uid": {
+        "_id": "74faca47-193b-420f-8e9a-4567f8cda379"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 800
+      }
+    },
+    "templateId": "0bbadea3-24cd-46a3-96fd-7e92fe1e9541"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 10.0,
+      "_uid": {
+        "_id": "84d559a0-59dd-45d4-821d-88ca8d5632ab"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 750
+      }
+    },
+    "templateId": "87178258-a19b-474f-8871-efc07d0f3dec"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 25.0,
+      "_uid": {
+        "_id": "01966ab9-7b50-4541-9397-a85980297c28"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "470c8f58-a8dd-4c07-8c92-843b785e1139": 4
+      }
+    },
+    "templateId": "af9d0633-ce19-481b-95d9-5a7752b8cd47"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 12.0,
+      "_uid": {
+        "_id": "f02ee9c1-6748-4c6a-91c0-33e33ded7524"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2250
+      }
+    },
+    "templateId": "50ded8e1-10a8-485e-882e-f8b071f4251d"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 24500.0,
+      "_uid": {
+        "_id": "8e8b02bc-3800-4c72-8a41-beeea8ce290a"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 5000
+      }
+    },
+    "templateId": "4a4bdf52-9c56-4e43-b4be-58bffb6b047c"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 4.0,
+      "_uid": {
+        "_id": "7b554924-dcab-452a-a2aa-38831db073ae"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 750
+      }
+    },
+    "templateId": "078eb667-6ca1-4d8b-901b-ba5208e46232"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 4.0,
+      "_uid": {
+        "_id": "e0dd5295-f54d-4930-b46f-f1d73b0aec3d"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 850
+      }
+    },
+    "templateId": "57e7c6a4-8db6-4bd1-b6d1-473907d5cb71"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 8.0,
+      "_uid": {
+        "_id": "7a0f6ab8-f477-4643-a611-4a0ea11def78"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 800
+      }
+    },
+    "templateId": "90eaac75-9b4a-49d2-9a48-f54fb981f67d"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 6.0,
+      "_uid": {
+        "_id": "79f3db40-10f4-46b7-8b00-b4dce409ef54"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 1750
+      }
+    },
+    "templateId": "9f2f5d39-a15d-465e-9530-40b827102a3b"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 20.0,
+      "_uid": {
+        "_id": "2e8dd7da-e641-420c-8779-497c6b674253"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2000
+      }
+    },
+    "templateId": "f454bf63-ee36-4830-9fd7-f869fc919eed"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 4.0,
+      "_uid": {
+        "_id": "ccdacdf7-9fb1-42db-a94b-bb3dc1bb1c64"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 850
+      }
+    },
+    "templateId": "943cb600-8795-44bf-af33-5565203b1ac2"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 2.0,
+      "_uid": {
+        "_id": "7e81527f-eed5-4672-b015-c8dccec7a7ac"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 950
+      }
+    },
+    "templateId": "b2e8cd6b-610a-499f-a9e4-22181aad208e"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 10.0,
+      "_uid": {
+        "_id": "2d2dc70f-c149-4b71-a319-7d122c2bcc82"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 600
+      }
+    },
+    "templateId": "f99b8abf-8b87-4825-b966-46af328d642b"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 10.0,
+      "_uid": {
+        "_id": "ad199588-2186-40e0-8f38-1ea2ede01d3b"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "470c8f58-a8dd-4c07-8c92-843b785e1139": 10
+      }
+    },
+    "templateId": "78826178-9291-4255-a204-6ac312affda5"
+  },
+  {
+    "objective": {
+      "_location": 1,
+      "_quota": 2750.0,
+      "_uid": {
+        "_id": "15e0f6f3-d7a5-4863-8f14-d5f8d14a1e96"
+      },
+      "type": "Backend.DefaultObjective"
+    },
+    "reward": {
+      "currencies": {
+        "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2000
+      }
+    },
+    "templateId": "5d31a38f-dc3e-4d4b-86b2-de9157838297"
+  }
+]

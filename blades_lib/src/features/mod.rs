@@ -4,5 +4,6 @@
 //! involved — so it is exhaustively unit-testable against captured fixtures. The
 //! server handlers are thin: load → call these → persist → serialize.
 
+pub mod challenges;
 pub mod gifts;
 pub mod global_shop;

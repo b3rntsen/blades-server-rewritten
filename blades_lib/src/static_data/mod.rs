@@ -12,6 +12,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::economy::RewardGrant;
+use crate::features::challenges::ChallengeTemplate;
 
 /// One reward line of a global gift (`{itemTemplateId, quantity}`). The template
 /// may be a currency UUID (Gold/Sigil/Gems), in which case claiming credits the
@@ -73,4 +74,6 @@ pub struct StaticData {
     /// `expectedPrices` (the base price list lives in the client bundles), so an
     /// unknown product can be priced but not fulfilled.
     pub global_shop_grants: HashMap<Uuid, RewardGrant>,
+    /// Challenge templates (objective + reward) the active set is generated from.
+    pub challenge_templates: Vec<ChallengeTemplate>,
 }

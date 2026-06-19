@@ -13,6 +13,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::features::challenges::ChallengeState;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ServerState {
@@ -21,4 +23,6 @@ pub struct ServerState {
     /// How many times each global-shop product has been bought
     /// (`globalShopProductId` -> count), surfaced by `GET /globalshops/current`.
     pub global_shop_purchases: HashMap<Uuid, u64>,
+    /// Active challenge set + rotation cursor + season points.
+    pub challenges: ChallengeState,
 }

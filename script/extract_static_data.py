@@ -102,12 +102,35 @@ def extract_global_shop_grants(con):
     return grants
 
 
+def extract_challenges(con):
+    """Distinct challenge templates (templateId -> objective + reward) from challenge
+    objects in list/progress/complete responses."""
+    seen = {}
+
+    def consider(ch):
+        tid = ch.get("templateId")
+        if tid and tid not in seen and ch.get("objective") and ch.get("reward") is not None:
+            seen[tid] = {
+                "templateId": tid,
+                "objective": ch["objective"],
+                "reward": ch["reward"],
+            }
+
+    for d in responses(con, "%/challenges%"):
+        for ch in (d.get("challengeStatus") or {}).get("active", []):
+            consider(ch)
+        if isinstance(d.get("challenge"), dict):
+            consider(d["challenge"])
+    return list(seen.values())
+
+
 EXTRACTORS = {
     "gifts.json": extract_gifts,
     "announcements.json": extract_announcements,
     "global_shop_overrides.json": extract_global_shop_overrides,
     "iap.json": extract_iap,
     "global_shop_grants.json": extract_global_shop_grants,
+    "challenges.json": extract_challenges,
 }
 
 
