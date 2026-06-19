@@ -21,6 +21,28 @@ use super::messages;
 use super::resolve;
 use super::state::{Fighter, FlowState, Loadout, MatchCombat, NetRole};
 
+/// DIAGNOSTIC: lowercase-hex a byte slice for the op58/op54 wire-byte logging.
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+/// DIAGNOSTIC: render the parsed op58 NetData as `propId=value` Longs (hex+dec) so
+/// the live c2s op58 can be diffed against the retail clock0/token decode.
+fn fmt_netdata_longs(p: &arena_proto::NetDataParse) -> String {
+    let mut parts = Vec::new();
+    for (pid, v) in &p.props {
+        match v {
+            NetDataValue::Long(x) => parts.push(format!("p{pid}=Long(0x{:016x}={x})", *x as u64)),
+            other => parts.push(format!("p{pid}={other:?}")),
+        }
+    }
+    format!("[{}] ok={}", parts.join(", "), p.ok)
+}
+
 /// Carrier MessageType (`user_data[1]`) of the op58 match-CLOCK message — the
 /// round-start clock-sync. The client SENDS this c2s on connect (two Longs:
 /// `[clock0=0, token]`) and BLOCKS in MatchState `AwaitingClientBackendSynchronization`
@@ -134,13 +156,26 @@ impl MatchInstance {
         if user_data.get(1) == Some(&CARRIER_CLOCK) {
             // propId1 is the token (a `Long`); echo it verbatim. Fall back to 0 on a
             // malformed body so we still reply (never panic, never hang the client).
-            let token = match arena_proto::parse_netdata(&user_data[2..]).props.get(&1) {
+            let parsed = arena_proto::parse_netdata(&user_data[2..]);
+            let token = match parsed.props.get(&1) {
                 Some(NetDataValue::Long(v)) => *v,
                 Some(other) => other.as_i64().unwrap_or(0),
                 None => 0,
             };
-            debug!("combat c2s: slot {sender} op58 clock-sync, echoing token 0x{token:016x}");
-            out.push((sender, messages::clock(Self::clock_ticks(), token)));
+            let server_clock = Self::clock_ticks();
+            let reply = messages::clock(server_clock, token);
+            // DIAGNOSTIC (op58 gate, candidate 1): the EXACT inbound op58 bytes, each
+            // parsed NetData Long (propId→value), the reply we emit, and the channel
+            // the enet host will route it on (small → 0). Diffed against retail s506
+            // (server prop0 = own clock-ticks, prop1 = echoed token).
+            info!(
+                "ARENA-DIAG op58 c2s slot {sender}: raw={} | parsed props={} | reply={} | reply channel={}",
+                hex_lower(user_data),
+                fmt_netdata_longs(&parsed),
+                hex_lower(&reply),
+                if reply.len() > 1000 { 4 } else { 0 },
+            );
+            out.push((sender, reply));
             return out;
         }
 
@@ -201,6 +236,7 @@ impl MatchInstance {
                     // loadout during the Spawning hold; BackendMatchCreated follows ~4s
                     // later (s506 stagger).
                     self.broadcast_spawns(&mut out);
+                    self.broadcast_welcome(&mut out);
                     self.broadcast_stat_updates(&mut out);
                     self.broadcast_profiles(&mut out);
                     self.broadcast_channeling(&mut out);
@@ -226,6 +262,30 @@ impl MatchInstance {
                         carriers,
                         profile_bytes
                     );
+                    // DIAGNOSTIC (op54 gate, candidate 2): for EVERY emitted frame, log
+                    // (viewer, carrier, plaintext len, the enet channel it routes to:
+                    // >1000 → ch4 else ch0). For the big op54 PROFILE (carrier 0x36,
+                    // >1000 B) also estimate the rusty_enet fragment count at MTU 1392
+                    // (frag_len ≈ 1372, matching retail's 1372 B/frag). Diff vs retail
+                    // s506: profile = 16 frags on ch4; small frames on ch0/ch1.
+                    const FRAG_LEN: usize = 1372; // rusty_enet HOST_DEFAULT_MTU 1392 − ENet header
+                    for (viewer, b) in &out {
+                        let carrier = b.get(1).copied().unwrap_or(0);
+                        let channel = if b.len() > 1000 { 4 } else { 0 };
+                        if b.len() > 1000 {
+                            let frags = b.len().div_ceil(FRAG_LEN);
+                            info!(
+                                "ARENA-DIAG op54 PROFILE → viewer {viewer}: carrier 0x{carrier:02x}, \
+                                 plaintext {} B → channel {channel}, ~{frags} fragments @ {FRAG_LEN} B/frag",
+                                b.len()
+                            );
+                        } else {
+                            debug!(
+                                "ARENA-DIAG frame → viewer {viewer}: carrier 0x{carrier:02x}, {} B → channel {channel}",
+                                b.len()
+                            );
+                        }
+                    }
                 }
             }
             // Hold (retail ~4s) so the client drives its loadout-upload handshake,
@@ -345,6 +405,21 @@ impl MatchInstance {
                     ));
                 }
             }
+        }
+    }
+
+    /// op21 `PlayerWelcome` to each viewer's OWN Player object — the FIRST
+    /// carrier-0x36 user-message of the round-start (retail s506). The client's
+    /// `PvpPlayer` needs this to enter the user-message / loadout-upload phase;
+    /// without it `NetObjectModule.OnUserMessage` never fires and the client hangs
+    /// at "Connecting…" after ACKing the spawns. Sent ONLY to the viewer about its
+    /// own (Authority) player object. [diffed live 2026-06-19 vs s506: the missing message.]
+    fn broadcast_welcome(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        for viewer in 0..self.combat.fighters.len() {
+            let player_obj = self.combat.fighters[viewer].player_net_object_id;
+            // p4: a small per-player arena-state byte (s506 observed 20/21, semantics
+            // unconfirmed and not the gate). Use the documented default constant.
+            out.push((viewer, messages::player_welcome(player_obj, 20)));
         }
     }
 

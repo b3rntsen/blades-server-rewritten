@@ -236,6 +236,31 @@ pub fn stat_update(avatar_net_object_id: i32) -> Vec<u8> {
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
+/// op21 `PlayerWelcome` (carrier `0x36`) on the viewer's OWN Player net object —
+/// the FIRST carrier-`0x36` user-message of the round-start. The retail server
+/// sends this right after the spawns; the client's `PvpPlayer` needs it to enter
+/// the user-message / loadout-upload phase. Without it the client receives the
+/// op50 spawns (and ACKs them) but `NetObjectModule.OnUserMessage` never fires →
+/// it never uploads its loadout (op54) and hangs at "Connecting…".
+///
+/// NetData `{0:Int playerObj · 1:Byte 55 Player · 2:Byte 1 Authority · 3:Byte 21
+/// (PlayerWelcome gmid) · 4:Byte param}`. Byte-for-byte vs s506 #3522332 (obj 120,
+/// p4=21) / #3521912 (obj 116, p4=20). **p4 semantics UNCONFIRMED** — observed 20/21
+/// across s506+s477, NOT correlated with obj id or level (so not the arena rank);
+/// a small near-constant per-player arena-state byte. Defaulted to the most common
+/// observed value (20); refine if a capture pins its meaning. [diffed 2026-06-19:
+/// op21 is the carrier-0x36 message the fork was MISSING vs retail s506.]
+pub const GMID_PLAYER_WELCOME: u8 = 21;
+pub fn player_welcome(player_net_object_id: i32, param: u8) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, player_net_object_id)
+        .byte(1, NetObjectType::Player as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GMID_PLAYER_WELCOME)
+        .byte(4, param);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
 /// A `CombatScreenInfo` (op55) — a lightweight per-net-object signal carrying
 /// only NetObjectInfo (no payload). Emitted for the relevant player/avatar
 /// objects as the combat screen comes up.
@@ -294,6 +319,11 @@ pub fn spawn_avatar(net_object_id: i32, role: NetRole, character_uuid: &str) -> 
 /// auto-fragments a reliable packet). Decoded from the reassembled s486 op54
 /// (docs/arena-protocol-spec.md §6.2). NetData: p0=player obj id, p1=55 Player,
 /// p2=1 (Authority), p3=35 (the profile GameMessageId), p4/p5=the JSON, p6=Bool.
+///
+/// **p6 = `false`** — capture-proven from the reassembled s506 op54 PROFILE (the
+/// last byte after the closing `}` of the character JSON is `0x00`). The original
+/// implementation guessed `true`; retail sends `false`. [diffed 2026-06-19 against
+/// s506 player B "Blank" profile (16 fragments, 20776 B).]
 pub fn player_profile(player_net_object_id: i32, equipped_items_json: &str, character_json: &str) -> Vec<u8> {
     let mut w = NetDataWriter::new();
     w.int(0, player_net_object_id)
@@ -302,7 +332,7 @@ pub fn player_profile(player_net_object_id: i32, equipped_items_json: &str, char
         .byte(3, 35) // the profile message's GameMessageId (propId 3)
         .string(4, equipped_items_json)
         .string(5, character_json)
-        .bool(6, true);
+        .bool(6, false);
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
@@ -446,6 +476,28 @@ mod tests {
         assert_eq!(got, want);
     }
 
+    /// Byte-for-byte vs s506 #3522332 (s2c op21 PlayerWelcome, player B): the
+    /// viewer's own Player obj 120, role Authority, gmid 21, p4=21.
+    #[test]
+    fn player_welcome_matches_s506() {
+        let got = player_welcome(120, 21);
+        let want = [
+            0xBE, 0x36, // marker + UserMessage carrier
+            0x04, 0x1F, // maxPropId=4, bitmap {0,1,2,3,4}
+            0x70, 0x77, 0x07, // type nibbles [Int,Byte,Byte,Byte,Byte]
+            0x78, 0x00, 0x00, 0x00, // p0 Int = 120 (player obj)
+            0x37, // p1 Byte = 55 (Player)
+            0x01, // p2 Byte = 1 (Authority)
+            0x15, // p3 Byte = 21 (PlayerWelcome gmid)
+            0x15, // p4 Byte = 21 (param)
+        ];
+        assert_eq!(got, want);
+        // Player A's variant (obj 116, p4=20) — same shape, different values.
+        let got_a = player_welcome(116, 20);
+        assert_eq!(&got_a[7..11], &[0x74, 0x00, 0x00, 0x00], "p0 = 116");
+        assert_eq!(got_a[14], 0x14, "p4 = 20");
+    }
+
     /// Byte-for-byte vs s486 round-start op54-small (after `BE 36`).
     #[test]
     fn stat_update_matches_s486() {
@@ -542,6 +594,13 @@ mod tests {
         assert_eq!(nd.int(3), Some(35), "p3 profile gameMessageId");
         assert_eq!(nd.string(4), Some(eq), "p4 equippedItems json");
         assert_eq!(nd.string(5), Some(ch), "p5 character json");
+        // p6 == false (capture-proven vs s506; the reassembled op54 ends `}` then 0x00).
+        assert_eq!(
+            nd.props.get(&6),
+            Some(&arena_proto::NetDataValue::Bool(false)),
+            "p6 Bool must be false (retail s506), not true"
+        );
+        assert_eq!(*got.last().unwrap(), 0x00, "final wire byte is the p6=false bool");
     }
 
     /// Byte-for-byte vs session-293 frame 1956589 (s2c ReceiveDamage): an Attack

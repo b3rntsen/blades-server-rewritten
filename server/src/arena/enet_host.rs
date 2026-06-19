@@ -170,6 +170,15 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
             // old `&& byte[1]==0x36` check ran on ciphertext, never matched, so the
             // profile wrongly went on channel 0 where the client's handler missed it.)
             let channel = if bytes.len() > 1000 { 4 } else { 0 };
+            // DIAGNOSTIC (op54 gate, candidate 2): log the big PROFILE send as it
+            // actually leaves the tick path — addr, channel, ciphertext length (==
+            // plaintext, XOR preserves length). rusty_enet fragments it at MTU 1392.
+            if bytes.len() > 1000 {
+                info!(
+                    "ARENA-DIAG send (tick) → {addr}: {} B on channel {channel} (op54 PROFILE; rusty_enet will fragment)",
+                    bytes.len()
+                );
+            }
             send_to(&mut host, &peer_at, &addr, channel, &bytes);
         }
         // DEBUG/experimental: drain any hand-crafted frames queued by the

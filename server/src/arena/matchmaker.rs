@@ -221,8 +221,19 @@ fn build_profile_character_json(
         return serialized;
     };
     if let Some(obj) = value.as_object_mut() {
-        // retail's profile has no `challengeSeason`.
+        // retail's profile has no `challengeSeason`, `completedQuests`, or
+        // `globalShopOffers` — capture-proven: across ALL 830 op54 PROFILE frames in
+        // the capture DB (s506 etc.) none of these three top-level keys ever appears.
+        // The client's profile deserializer rejects an opponent profile that carries
+        // keys retail never sends, so `OnUserMessage` never fires, the opponent's
+        // loadout/appearance never loads, and the match hangs at "Connecting". Our
+        // profile was 31047 B (34700 B on the wire, 26 ENet fragments) vs retail's
+        // 17008 B (20776 B, 16 fragments); `completedQuests` (~4.9 KB) was the bulk of
+        // the divergence. Dropping these matches retail's exact profile schema.
+        // [diffed live 2026-06-19: WolfWalker s2c op54 vs retail s506 op54 char "Blank".]
         obj.remove("challengeSeason");
+        obj.remove("completedQuests");
+        obj.remove("globalShopOffers");
         // retail's `data` is `customization`-only — rebuild it from scratch so
         // `dialog` / `new-flags` are dropped, not blanked.
         let customization = obj
@@ -680,10 +691,15 @@ mod tests {
         };
         use serde_json::json;
 
-        // A leveled character WITH a (non-default) challenge_season.
+        // A leveled character WITH a (non-default) challenge_season + the
+        // `completed_quests` / `global_shop_offers` fields populated — exactly the
+        // top-level keys our profile used to over-emit but retail's profile never
+        // carries (capture-proven: 0/830 retail op54 profile frames have them).
         let mut character = CompleteCharacter::default();
         character.name = "Opponent".into();
         character.level = 86;
+        character.completed_quests = json!({ "q1": { "completed": true }, "q2": { "completed": true } });
+        character.global_shop_offers = json!([{ "offerId": "x", "price": 100 }]);
         character.challenge_season = CharacterChallengeSeason {
             current_session_id: Uuid::new_v4(),
             rank: 7,
@@ -711,12 +727,15 @@ mod tests {
             serde_json::from_str(&out).expect("profile character JSON must parse");
         let obj = v.as_object().expect("profile is a JSON object");
 
-        // No top-level `challengeSeason` (retail has none).
-        assert!(
-            !obj.contains_key("challengeSeason"),
-            "challengeSeason must be trimmed; got keys: {:?}",
-            obj.keys().collect::<Vec<_>>()
-        );
+        // No top-level `challengeSeason`, `completedQuests`, or `globalShopOffers`
+        // (retail's profile carries none of the three — capture-proven from s506).
+        for forbidden in ["challengeSeason", "completedQuests", "globalShopOffers"] {
+            assert!(
+                !obj.contains_key(forbidden),
+                "{forbidden} must be trimmed from the op54 profile; got keys: {:?}",
+                obj.keys().collect::<Vec<_>>()
+            );
+        }
 
         // `data` is customization-ONLY.
         let data_obj = obj
