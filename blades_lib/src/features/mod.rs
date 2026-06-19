@@ -5,5 +5,6 @@
 //! server handlers are thin: load → call these → persist → serialize.
 
 pub mod challenges;
+pub mod character_ops;
 pub mod gifts;
 pub mod global_shop;

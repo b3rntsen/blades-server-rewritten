@@ -31,6 +31,7 @@ mod authentification;
 mod challenge;
 mod character;
 mod character_data;
+mod character_ops;
 mod craft;
 mod daily_reward;
 mod dungeon;
@@ -291,6 +292,13 @@ async fn main() -> Result<()> {
                     .service(challenge::update_challenge)
                     .service(challenge::complete_challenge)
                     .service(challenge::abandon_challenge)
+                    .service(character_ops::levelup)
+                    .service(character_ops::learn_abilities)
+                    .service(character_ops::respec)
+                    .service(character_ops::upgrade_inventory)
+                    .service(character_ops::destroy_items)
+                    .service(character_ops::save_loadout_profile)
+                    .service(character_ops::update_loadout)
                     .service(gameevent::get_game_events)
                     .service(quest::get_quests)
                     .service(quest::accept_quest)
