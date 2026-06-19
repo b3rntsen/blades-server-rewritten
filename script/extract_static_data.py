@@ -124,6 +124,32 @@ def extract_challenges(con):
     return list(seen.values())
 
 
+def extract_daily_rewards(con):
+    """Distinct daily-reward rotation entries (rewardUid -> {rewardUid, dailyReward})."""
+    seen = {}
+    for d in responses(con, "%/rewards/current"):
+        s = d.get("dailyRewardStatus") or {}
+        uid = s.get("rewardUid")
+        if uid and uid not in seen and s.get("dailyReward") is not None:
+            seen[uid] = {"rewardUid": uid, "dailyReward": s["dailyReward"]}
+    return list(seen.values())
+
+
+def extract_chest_loots(con, cap=40):
+    """Representative chest-collect loot bundles (deduped, capped)."""
+    seen = {}
+    for d in responses(con, "%/chests/%/collect%"):
+        reward = d.get("reward")
+        if reward is None:
+            continue
+        key = json.dumps(reward, sort_keys=True)
+        if key not in seen:
+            seen[key] = reward
+        if len(seen) >= cap:
+            break
+    return list(seen.values())
+
+
 EXTRACTORS = {
     "gifts.json": extract_gifts,
     "announcements.json": extract_announcements,
@@ -131,6 +157,8 @@ EXTRACTORS = {
     "iap.json": extract_iap,
     "global_shop_grants.json": extract_global_shop_grants,
     "challenges.json": extract_challenges,
+    "daily_rewards.json": extract_daily_rewards,
+    "chest_loots.json": extract_chest_loots,
 }
 
 

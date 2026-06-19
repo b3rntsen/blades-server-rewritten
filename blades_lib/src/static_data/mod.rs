@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::economy::RewardGrant;
 use crate::features::challenges::ChallengeTemplate;
+use crate::features::daily_reward::DailyRewardDef;
 
 /// One reward line of a global gift (`{itemTemplateId, quantity}`). The template
 /// may be a currency UUID (Gold/Sigil/Gems), in which case claiming credits the
@@ -76,4 +77,9 @@ pub struct StaticData {
     pub global_shop_grants: HashMap<Uuid, RewardGrant>,
     /// Challenge templates (objective + reward) the active set is generated from.
     pub challenge_templates: Vec<ChallengeTemplate>,
+    /// Daily login reward rotation pool.
+    pub daily_rewards: Vec<DailyRewardDef>,
+    /// Representative chest-loot bundles (one is picked per chest by id), since per-tier
+    /// loot tables aren't captured.
+    pub chest_loots: Vec<RewardGrant>,
 }

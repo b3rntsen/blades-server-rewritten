@@ -32,6 +32,7 @@ mod challenge;
 mod character;
 mod character_data;
 mod character_ops;
+mod chests;
 mod craft;
 mod daily_reward;
 mod dungeon;
@@ -311,6 +312,8 @@ async fn main() -> Result<()> {
                     .service(global_gift::claim_global_gift)
                     .service(character_data::update_data)
                     .service(daily_reward::get_daily_reward)
+                    .service(daily_reward::collect_daily_reward)
+                    .service(chests::collect_chest)
                     .service(announcements::get_announcements)
                     .service(arena::leaderboards::get_leaderboard)
                     .service(arena::avatar::set_avatar)

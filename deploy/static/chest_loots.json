@@ -1,0 +1,982 @@
+[
+  {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 59
+    },
+    "items": [
+      {
+        "durability": 75.0,
+        "id": "a21ba9ec-83fe-4c93-87dc-cb1d288cbe69",
+        "itemTemplateId": "606c8bf6-9dc7-4c5f-b44b-36eb02306c96",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+              "tier": 1
+            },
+            {
+              "id": "8f372d6d-2620-42ab-809b-edb4d5d1e528",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 0
+      }
+    ],
+    "stackableItems": {
+      "05a7d501-f096-41e9-8443-fd6a090d8425": 1,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 27,
+      "b81952e0-c3c8-4a5c-92c0-8215d3eb71af": 20,
+      "f00f350d-97c2-47cd-a554-e1a37c9ff7f2": 15
+    }
+  },
+  {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 58
+    },
+    "items": [
+      {
+        "durability": 75.0,
+        "id": "09be35dc-faf3-49ee-8da5-bb8f57a4cb47",
+        "itemTemplateId": "9814bcf0-a984-49e2-84f6-a8b0f3695f84",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 0
+      }
+    ],
+    "stackableItems": {
+      "05a7d501-f096-41e9-8443-fd6a090d8425": 1,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 27,
+      "b81952e0-c3c8-4a5c-92c0-8215d3eb71af": 19,
+      "f00f350d-97c2-47cd-a554-e1a37c9ff7f2": 17
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 1,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 179
+    },
+    "stackableItems": {
+      "2ce48871-b5c7-4deb-93b1-8e444098f753": 1,
+      "89ece62c-9ff6-470a-a152-d45ef4e0c222": 1
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 2,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 198
+    },
+    "stackableItems": {
+      "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50": 2,
+      "92b77b2f-bd33-469f-8aad-8a228b9537eb": 7,
+      "e7193116-d761-479b-8a20-5633737977f5": 5
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 2,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 201
+    },
+    "stackableItems": {
+      "d5ccf370-0795-4554-9dab-68ccbb97473d": 1,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 4
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 2,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 224
+    },
+    "stackableItems": {
+      "89ece62c-9ff6-470a-a152-d45ef4e0c222": 1,
+      "d5ccf370-0795-4554-9dab-68ccbb97473d": 1
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 1,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 220
+    },
+    "stackableItems": {
+      "55e82826-2d68-469c-8870-753665ca62cd": 8,
+      "9687d83c-aa7b-4cf3-a69f-0bba8204fa61": 3
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 3,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 474
+    },
+    "items": [
+      {
+        "durability": 103.525,
+        "id": "3b9cddac-d1b7-4632-b780-8f84ab166ad6",
+        "itemTemplateId": "a8308cf2-8206-4b3a-9ebb-e3747ea131bb",
+        "temperingLevel": 1
+      }
+    ],
+    "stackableItems": {
+      "2ce48871-b5c7-4deb-93b1-8e444098f753": 2,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 6,
+      "92b77b2f-bd33-469f-8aad-8a228b9537eb": 5,
+      "e7193116-d761-479b-8a20-5633737977f5": 11
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 1,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 230
+    },
+    "items": [
+      {
+        "durability": 103.525,
+        "id": "9dd55518-4c85-456b-87d6-505a5ee37b1a",
+        "itemTemplateId": "a34681fc-31ee-4327-ba48-6fb7c30cdf52",
+        "temperingLevel": 1
+      }
+    ],
+    "stackableItems": {
+      "89ece62c-9ff6-470a-a152-d45ef4e0c222": 1,
+      "e7193116-d761-479b-8a20-5633737977f5": 4
+    }
+  },
+  {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 493
+    },
+    "items": [
+      {
+        "durability": 121.9,
+        "id": "d67f7e33-3fbf-49f2-8fcd-5d4227bc2642",
+        "itemTemplateId": "c02f3a45-52b3-49db-aeac-03da41e41158",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 3
+      }
+    ],
+    "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 6,
+      "55e82826-2d68-469c-8870-753665ca62cd": 7,
+      "d5ccf370-0795-4554-9dab-68ccbb97473d": 1,
+      "e7193116-d761-479b-8a20-5633737977f5": 10
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 2,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 470
+    },
+    "items": [
+      {
+        "durability": 125.0,
+        "id": "36ef969a-f4c6-41b5-b608-656b288a30d0",
+        "itemTemplateId": "239453b0-6b7d-4a8b-bccc-50563d51ccfb",
+        "temperingLevel": 0
+      }
+    ],
+    "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 6,
+      "e7193116-d761-479b-8a20-5633737977f5": 18
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 2,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 244
+    },
+    "stackableItems": {
+      "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1": 3,
+      "e7193116-d761-479b-8a20-5633737977f5": 5
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 1,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 254
+    },
+    "items": [
+      {
+        "durability": 100.0,
+        "id": "c8d9020e-47f8-435c-9848-064069b218a7",
+        "itemTemplateId": "c02f3a45-52b3-49db-aeac-03da41e41158",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "464bedb7-a631-43b6-a2df-f65f089d39da",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 0
+      }
+    ],
+    "stackableItems": {
+      "51f7612f-a797-4417-8a92-493b0aae7f45": 9
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 1,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 251
+    },
+    "items": [
+      {
+        "durability": 100.0,
+        "id": "3f2f8842-5a0e-4101-b267-b28da20322b2",
+        "itemTemplateId": "4a9fd901-aaf8-40bd-941e-971febf4daf8",
+        "temperingLevel": 0
+      }
+    ],
+    "stackableItems": {
+      "51f7612f-a797-4417-8a92-493b0aae7f45": 7
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 2,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 282
+    },
+    "stackableItems": {
+      "10c54e43-a2a1-4833-9491-4c19149f43b5": 3,
+      "89ece62c-9ff6-470a-a152-d45ef4e0c222": 1
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 2,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 711
+    },
+    "items": [
+      {
+        "durability": 103.525,
+        "id": "73e899fc-9b3b-4ae9-b29e-b27c750a7f4b",
+        "itemTemplateId": "295cbc17-a845-4788-8950-3f841b5fc57b",
+        "temperingLevel": 1
+      }
+    ],
+    "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 7,
+      "92b77b2f-bd33-469f-8aad-8a228b9537eb": 5,
+      "b81952e0-c3c8-4a5c-92c0-8215d3eb71af": 5
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 1,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 290
+    },
+    "stackableItems": {
+      "89ece62c-9ff6-470a-a152-d45ef4e0c222": 1,
+      "d5ccf370-0795-4554-9dab-68ccbb97473d": 1
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 2,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 294
+    },
+    "items": [
+      {
+        "durability": 103.525,
+        "id": "f25a9015-4d8a-4656-9d42-e7eb793c8cab",
+        "itemTemplateId": "aadb8911-d7bb-4ea9-a7f4-6aeb99ad8ed3",
+        "temperingLevel": 1
+      }
+    ],
+    "stackableItems": {
+      "92b77b2f-bd33-469f-8aad-8a228b9537eb": 10,
+      "e7193116-d761-479b-8a20-5633737977f5": 3
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 1,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 323
+    },
+    "items": [
+      {
+        "durability": 103.525,
+        "id": "ba5c24b3-22b0-439b-98cd-3ed1e31a1b72",
+        "itemTemplateId": "295cbc17-a845-4788-8950-3f841b5fc57b",
+        "temperingLevel": 1
+      }
+    ],
+    "stackableItems": {
+      "55e82826-2d68-469c-8870-753665ca62cd": 8
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 2,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 801
+    },
+    "items": [
+      {
+        "durability": 55.36,
+        "id": "2d2d21c8-93a6-482e-a2b0-5b60eae3fade",
+        "itemTemplateId": "11565fed-66a0-40a4-ac8d-65c7161c3283",
+        "temperingLevel": 2
+      }
+    ],
+    "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 7,
+      "51f7612f-a797-4417-8a92-493b0aae7f45": 4,
+      "d5ccf370-0795-4554-9dab-68ccbb97473d": 2,
+      "fbf96b07-e9aa-4157-8761-10179fa05138": 9
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 1,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 301
+    },
+    "items": [
+      {
+        "durability": 75.0,
+        "id": "7d0631df-6cda-4a38-975e-20cee0845dcd",
+        "itemTemplateId": "9814bcf0-a984-49e2-84f6-a8b0f3695f84",
+        "temperingLevel": 0
+      }
+    ],
+    "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 3
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 1,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 357
+    },
+    "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 9,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 5
+    }
+  },
+  {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2517
+    },
+    "items": [
+      {
+        "durability": 148.4,
+        "id": "ad66e611-165e-4ee1-acc0-0b45399de4b0",
+        "itemTemplateId": "a6d3d7dd-2193-462b-b28e-1a4b1e902df1",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "f8e9dec5-c6e7-4976-b24b-2155f1921692",
+              "tier": 1
+            },
+            {
+              "id": "3d5b70bb-d2bd-4141-80d5-333ef603a8f2",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 3
+      },
+      {
+        "durability": 79.06,
+        "id": "d5d12697-dfb5-4987-9dda-04f0ca2a859e",
+        "itemTemplateId": "11565fed-66a0-40a4-ac8d-65c7161c3283",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 5
+      }
+    ],
+    "stackableItems": {
+      "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 15,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 16,
+      "819094ad-e749-4c02-9210-38c3bb1ec535": 1,
+      "8ac9076c-cba9-4cf4-a8a5-d2303aab22b0": 15
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 1,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 355
+    },
+    "stackableItems": {
+      "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50": 3,
+      "89ece62c-9ff6-470a-a152-d45ef4e0c222": 1
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 1,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 356
+    },
+    "stackableItems": {
+      "b81952e0-c3c8-4a5c-92c0-8215d3eb71af": 7,
+      "f1c5c03c-5297-48fb-a9d2-5f32bffb467c": 3
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 3,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 889
+    },
+    "items": [
+      {
+        "durability": 77.64,
+        "id": "92e6c7c4-3d71-46a6-8544-93b270650606",
+        "itemTemplateId": "6fe63664-4252-4269-9f51-8546b5f138da",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "874f28f1-cdc3-4af5-af4e-4e4d0e2a4969",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 1
+      }
+    ],
+    "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 8,
+      "e7193116-d761-479b-8a20-5633737977f5": 12,
+      "fbf96b07-e9aa-4157-8761-10179fa05138": 9
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 2,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 1064
+    },
+    "items": [
+      {
+        "durability": 50.0,
+        "id": "f3f3f38d-3bc0-489f-84ff-2751dd3461cd",
+        "itemTemplateId": "cdbabba6-a6a2-46ed-a086-93d77acc274a",
+        "temperingLevel": 0
+      }
+    ],
+    "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 7,
+      "979f5025-b9b8-4b1e-b312-f96f294f97ae": 1,
+      "9d9732a5-cd1c-4a93-8755-0bf92ee65d64": 4,
+      "e7193116-d761-479b-8a20-5633737977f5": 12
+    }
+  },
+  {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 968
+    },
+    "items": [
+      {
+        "durability": 100.0,
+        "id": "fcb13438-110b-4c8c-b9e6-554b6cd1b97f",
+        "itemTemplateId": "d8e5cc8b-eebe-4ab6-bc0c-4360bcbcb4f5",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "f8e9dec5-c6e7-4976-b24b-2155f1921692",
+              "tier": 1
+            },
+            {
+              "id": "2ac1e2f6-8f97-444e-97af-7efd46c71cca",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 0
+      }
+    ],
+    "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 6,
+      "b81952e0-c3c8-4a5c-92c0-8215d3eb71af": 4,
+      "e7193116-d761-479b-8a20-5633737977f5": 10
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 3,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 962
+    },
+    "items": [
+      {
+        "durability": 100.0,
+        "id": "33f216f6-b107-43e3-9b7a-ed270ad883a9",
+        "itemTemplateId": "3d1a4db9-6a16-4c56-af55-7a612ceb2dc3",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "848e02b4-32ae-4e1b-809c-83bca039542a",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 0
+      }
+    ],
+    "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 7,
+      "fbf96b07-e9aa-4157-8761-10179fa05138": 8,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 10
+    }
+  },
+  {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 1065
+    },
+    "items": [
+      {
+        "durability": 103.525,
+        "id": "4fa7b534-c1a2-428b-8d09-cf7e3baed8a3",
+        "itemTemplateId": "3152a7c9-bdbc-46c8-b661-b99c58ce0a01",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "5297713f-c60e-42fd-ade0-500daf0d632e",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 1
+      }
+    ],
+    "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 7,
+      "89ece62c-9ff6-470a-a152-d45ef4e0c222": 1,
+      "b604fd80-25b0-4bfb-8cc3-aad05bef96c0": 4
+    }
+  },
+  {
+    "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 2,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 954
+    },
+    "items": [
+      {
+        "durability": 103.525,
+        "id": "bc13ee11-2e44-41de-8a41-faf464004cb2",
+        "itemTemplateId": "d8e5cc8b-eebe-4ab6-bc0c-4360bcbcb4f5",
+        "temperingLevel": 1
+      }
+    ],
+    "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 7,
+      "9d9732a5-cd1c-4a93-8755-0bf92ee65d64": 4,
+      "d5ccf370-0795-4554-9dab-68ccbb97473d": 2,
+      "fbf96b07-e9aa-4157-8761-10179fa05138": 7
+    }
+  },
+  {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2930
+    },
+    "items": [
+      {
+        "durability": 68.75,
+        "id": "070cece8-49dd-49c5-8d16-b060e2b28568",
+        "itemTemplateId": "cdbabba6-a6a2-46ed-a086-93d77acc274a",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 4
+      },
+      {
+        "durability": 102.36,
+        "id": "44cd8866-d5dc-4a59-899c-f08398ef837f",
+        "itemTemplateId": "ef6f6965-f75d-4443-a992-630709262c0f",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+              "tier": 1
+            },
+            {
+              "id": "fea58213-6a41-4500-9f09-cd9c745bcc1e",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 2
+      }
+    ],
+    "stackableItems": {
+      "423fb9f0-a8fd-4b19-8701-b2bd92afdaaf": 2,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18,
+      "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 13,
+      "e7193116-d761-479b-8a20-5633737977f5": 34
+    }
+  },
+  {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 3257
+    },
+    "items": [
+      {
+        "durability": 103.525,
+        "id": "76b8680c-7ffe-4416-af0a-7ed2dc302893",
+        "itemTemplateId": "3d1a4db9-6a16-4c56-af55-7a612ceb2dc3",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "626121b7-708d-455f-b32f-38e5b68bb80c",
+              "tier": 1
+            },
+            {
+              "id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+              "tier": 1
+            },
+            {
+              "id": "59c3b082-e57a-4243-ace5-9b55475e9b17",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 1
+      },
+      {
+        "durability": 125.0,
+        "id": "4be6a2ba-dcfb-45cd-b703-54fe6f1a1fa3",
+        "itemTemplateId": "a6d3d7dd-2193-462b-b28e-1a4b1e902df1",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "f8e9dec5-c6e7-4976-b24b-2155f1921692",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 0
+      }
+    ],
+    "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 16,
+      "574ab81c-1ba1-4127-a4aa-e9cbba5767ad": 10,
+      "979f5025-b9b8-4b1e-b312-f96f294f97ae": 1,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 36
+    }
+  },
+  {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2896
+    },
+    "items": [
+      {
+        "durability": 180.0,
+        "id": "4cf988a4-6726-416b-bbd2-d9f16a372a13",
+        "itemTemplateId": "3d1a4db9-6a16-4c56-af55-7a612ceb2dc3",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "626121b7-708d-455f-b32f-38e5b68bb80c",
+              "tier": 1
+            },
+            {
+              "id": "2e56b620-15ce-4db2-9eef-2faf139f6185",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 6
+      },
+      {
+        "durability": 136.475,
+        "id": "354cb338-57e0-470b-a7b6-09cbea91e739",
+        "itemTemplateId": "29c8803f-3db9-4949-bd69-d32efde9f714",
+        "temperingLevel": 2
+      }
+    ],
+    "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18,
+      "979f5025-b9b8-4b1e-b312-f96f294f97ae": 2,
+      "b604fd80-25b0-4bfb-8cc3-aad05bef96c0": 16,
+      "f00f350d-97c2-47cd-a554-e1a37c9ff7f2": 14
+    }
+  },
+  {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2992
+    },
+    "items": [
+      {
+        "durability": 136.475,
+        "id": "8d579546-24af-418b-8dde-d13828a52b13",
+        "itemTemplateId": "29c8803f-3db9-4949-bd69-d32efde9f714",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 2
+      },
+      {
+        "durability": 128.775,
+        "id": "66aa9ac0-7fb2-4248-84f0-51236226b5ba",
+        "itemTemplateId": "bd2776db-a5a9-49cd-b1ac-244a3b36a995",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "464bedb7-a631-43b6-a2df-f65f089d39da",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 1
+      }
+    ],
+    "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 17,
+      "819094ad-e749-4c02-9210-38c3bb1ec535": 2,
+      "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 15,
+      "b94c2028-dba7-44bd-b6f9-6f85ab0195b6": 10
+    }
+  },
+  {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 3202
+    },
+    "items": [
+      {
+        "durability": 125.0,
+        "id": "5d20760f-f64e-48a6-b92d-4c5f60ac3d02",
+        "itemTemplateId": "f9176e04-09bd-4785-a473-0110d7129b99",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+              "tier": 1
+            },
+            {
+              "id": "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 0
+      },
+      {
+        "durability": 125.0,
+        "id": "35646e5d-2e8b-4151-b904-876054690720",
+        "itemTemplateId": "94a36621-f4dd-46b6-9475-ea25d314d537",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "848e02b4-32ae-4e1b-809c-83bca039542a",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 0
+      }
+    ],
+    "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 17,
+      "979f5025-b9b8-4b1e-b312-f96f294f97ae": 1,
+      "b604fd80-25b0-4bfb-8cc3-aad05bef96c0": 17,
+      "f00f350d-97c2-47cd-a554-e1a37c9ff7f2": 16
+    }
+  },
+  {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 4357
+    },
+    "items": [
+      {
+        "durability": 170.63,
+        "id": "bd11e779-f80a-4079-8742-2f002fa85f3e",
+        "itemTemplateId": "606c8bf6-9dc7-4c5f-b44b-36eb02306c96",
+        "temperingLevel": 8
+      },
+      {
+        "durability": 89.64,
+        "id": "dc76e4be-4f89-4140-bf23-f8d05ed30feb",
+        "itemTemplateId": "881e91f3-a5bb-4c71-ab42-39614cc4dc33",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 1
+      }
+    ],
+    "stackableItems": {
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 6,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 17,
+      "be886c9f-ed94-4610-b52b-3077152c3c01": 1
+    }
+  },
+  {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 4450
+    },
+    "items": [
+      {
+        "durability": 203.125,
+        "id": "a5df03bb-93a4-49b1-bff8-e3a1963ca403",
+        "itemTemplateId": "bab5c847-7b2f-4b79-9b93-d96b2fa10b80",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "5297713f-c60e-42fd-ade0-500daf0d632e",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 7
+      },
+      {
+        "durability": 158.125,
+        "id": "6b6dee6c-4b83-4ec3-930d-6625b0e48e26",
+        "itemTemplateId": "8d5a227b-9660-4f6a-b3b7-c9e8cb76651a",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+              "tier": 1
+            },
+            {
+              "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+              "tier": 1
+            },
+            {
+              "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 5
+      }
+    ],
+    "stackableItems": {
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 3,
+      "3ca59113-a093-4cc8-8389-0f578ad94851": 3,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 17,
+      "74f091b5-fd88-464b-a98a-f60a5e8a0f25": 11
+    }
+  },
+  {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 4151
+    },
+    "items": [
+      {
+        "durability": 144.38,
+        "id": "fd827c3d-f39f-4eec-9514-b001ccc84a4f",
+        "itemTemplateId": "f263a284-00cb-4c2c-9012-6455df1e8ee3",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+              "tier": 1
+            },
+            {
+              "id": "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 4
+      },
+      {
+        "durability": 158.125,
+        "id": "341d83c8-cd28-4994-b6d6-05763cc7a45d",
+        "itemTemplateId": "bab5c847-7b2f-4b79-9b93-d96b2fa10b80",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+              "tier": 1
+            },
+            {
+              "id": "33f866a5-f2f5-46af-ac13-fa5f02bedfbf",
+              "tier": 1
+            },
+            {
+              "id": "5d3eb782-7789-4f28-81b8-3b547f6633ea",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 5
+      }
+    ],
+    "stackableItems": {
+      "200d62f5-7de2-4a6c-979a-43df30d6fd86": 19,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 16,
+      "74f091b5-fd88-464b-a98a-f60a5e8a0f25": 18,
+      "819094ad-e749-4c02-9210-38c3bb1ec535": 1
+    }
+  },
+  {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 4212
+    },
+    "items": [
+      {
+        "durability": 101.56,
+        "id": "95c5f303-a7aa-4df4-89d2-f698eb2cd88d",
+        "itemTemplateId": "11565fed-66a0-40a4-ac8d-65c7161c3283",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+              "tier": 1
+            },
+            {
+              "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+              "tier": 1
+            },
+            {
+              "id": "fea58213-6a41-4500-9f09-cd9c745bcc1e",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 7
+      },
+      {
+        "durability": 134.46,
+        "id": "dfa2ef03-bca5-4df5-b10c-3c4eb70dd816",
+        "itemTemplateId": "d4e55349-36b7-4adf-b16f-19b35368a7cd",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 1
+      }
+    ],
+    "stackableItems": {
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 3,
+      "3630a528-acb5-4853-8ea0-286a8938ae0c": 2,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 19,
+      "e7193116-d761-479b-8a20-5633737977f5": 50
+    }
+  }
+]

@@ -245,6 +245,33 @@ pub fn consume_stackable(
     }
 }
 
+/// Grant a chest of the given tier/level into the treasury, returning its new id and
+/// marking it in `tracker` so the inventory diff carries it.
+pub fn grant_chest(
+    inventory: &mut CompleteInventory,
+    tier: u64,
+    level: u64,
+    tracker: &mut InventoryChangeTracker,
+) -> String {
+    let id = inventory.treasury.add_chest(tier, level);
+    tracker.modified_treasury.added.push(id.clone());
+    id
+}
+
+/// Remove a treasury chest by id (marking it removed in `tracker`), returning whether
+/// it was present.
+pub fn remove_chest(
+    inventory: &mut CompleteInventory,
+    chest_id: &str,
+    tracker: &mut InventoryChangeTracker,
+) -> bool {
+    let removed = inventory.treasury.remove_chest(chest_id).is_some();
+    if removed {
+        tracker.modified_treasury.removed.push(chest_id.to_string());
+    }
+    removed
+}
+
 /// Remove an instanced item by id from the backpack (not the loadout), erroring if
 /// absent. Marks it removed in `tracker`.
 pub fn remove_backpack_item(

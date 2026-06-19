@@ -11,6 +11,7 @@ use std::{collections::HashMap, fs::File, io::BufReader, path::Path};
 
 use blades_lib::economy::RewardGrant;
 use blades_lib::features::challenges::ChallengeTemplate;
+use blades_lib::features::daily_reward::DailyRewardDef;
 use blades_lib::static_data::{Announcement, GiftDef, StaticData};
 use log::warn;
 use serde::de::DeserializeOwned;
@@ -48,6 +49,8 @@ pub fn load(dir: &Path) -> StaticData {
     let global_shop_grants: HashMap<Uuid, RewardGrant> =
         read_json(&dir.join("global_shop_grants.json"));
     let challenge_templates: Vec<ChallengeTemplate> = read_json(&dir.join("challenges.json"));
+    let daily_rewards: Vec<DailyRewardDef> = read_json(&dir.join("daily_rewards.json"));
+    let chest_loots: Vec<RewardGrant> = read_json(&dir.join("chest_loots.json"));
 
     StaticData {
         gifts: gifts.into_iter().map(|g| (g.global_gift_id, g)).collect::<HashMap<_, _>>(),
@@ -56,5 +59,30 @@ pub fn load(dir: &Path) -> StaticData {
         iap,
         global_shop_grants,
         challenge_templates,
+        daily_rewards,
+        chest_loots,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// The committed `deploy/static/*.json` must deserialize into the `StaticData`
+    /// structs — a no-DB guard that the capture-derived data still matches our types
+    /// (e.g. catches an Item that drops `properties`).
+    #[test]
+    fn committed_static_data_loads_non_empty() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let sd = load(&dir);
+        assert!(!sd.gifts.is_empty(), "gifts.json");
+        assert!(!sd.announcements.is_empty(), "announcements.json");
+        assert!(!sd.global_shop_grants.is_empty(), "global_shop_grants.json");
+        assert!(!sd.challenge_templates.is_empty(), "challenges.json");
+        assert!(!sd.daily_rewards.is_empty(), "daily_rewards.json");
+        assert!(!sd.chest_loots.is_empty(), "chest_loots.json (Item.properties default)");
+        assert!(sd.global_shop_overrides.get("globalShopOverrides").is_some());
+        assert!(sd.iap.get("fulfillmentOverrides").is_some());
     }
 }

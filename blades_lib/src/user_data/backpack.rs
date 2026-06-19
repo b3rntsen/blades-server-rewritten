@@ -74,7 +74,11 @@ pub struct ItemSingleProperty {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct ItemPropertiesAll {
+    // Defaulted so an item carrying only one of the two property kinds (common in
+    // capture-derived rewards) still deserializes.
+    #[serde(default)]
     pub enchanting: Vec<ItemSingleProperty>,
+    #[serde(default)]
     pub grading: Vec<ItemSingleProperty>,
 }
 
@@ -82,9 +86,14 @@ pub struct ItemPropertiesAll {
 #[serde(rename_all = "camelCase")]
 pub struct Item {
     pub item_template_id: Uuid,
+    // Defaulted so capture-derived reward items that omit them (special/consumable
+    // items carrying only a grade) still deserialize; normal gear always sends them.
+    #[serde(default)]
     pub tempering_level: u64,
+    #[serde(default)]
     pub durability: f64,
     //TODO: do not serialize if there is no property
+    #[serde(default)]
     pub properties: ItemPropertiesAll,
 }
 
@@ -194,16 +203,88 @@ impl Loadout {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Chest {
-    // TODO: id is a number stored as a string. put all that in a hashmap with auto string conversion when implementing chests.
-    id: String,
-    tier: u64,
-    level: u64,
+    /// A treasury chest id is a number stored as a string ("1", "2", …).
+    pub id: String,
+    pub tier: u64,
+    pub level: u64,
+}
+
+impl Chest {
+    pub fn new(id: String, tier: u64, level: u64) -> Self {
+        Chest { id, tier, level }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Treasury {
     chests: Vec<Chest>,
+}
+
+impl Treasury {
+    pub fn chests(&self) -> &[Chest] {
+        &self.chests
+    }
+
+    /// Next free numeric chest id (max existing + 1), as a string.
+    fn next_id(&self) -> String {
+        let max = self
+            .chests
+            .iter()
+            .filter_map(|c| c.id.parse::<u64>().ok())
+            .max()
+            .unwrap_or(0);
+        (max + 1).to_string()
+    }
+
+    /// Add a chest of the given tier/level, returning its new id.
+    pub fn add_chest(&mut self, tier: u64, level: u64) -> String {
+        let id = self.next_id();
+        self.chests.push(Chest::new(id.clone(), tier, level));
+        id
+    }
+
+    pub fn get_chest(&self, id: &str) -> Option<&Chest> {
+        self.chests.iter().find(|c| c.id == id)
+    }
+
+    /// Remove a chest by id, returning it if present.
+    pub fn remove_chest(&mut self, id: &str) -> Option<Chest> {
+        let pos = self.chests.iter().position(|c| c.id == id)?;
+        Some(self.chests.remove(pos))
+    }
+}
+
+/// The treasury diff returned to the client: chests added this request (full) and the
+/// ids removed (`removedChests`). Default is `{chests:[]}` — wire-identical to the
+/// previous always-empty `Treasury::default()` the inventory update used to send.
+#[derive(Serialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TreasuryUpdate {
+    pub chests: Vec<Chest>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub removed_chests: Vec<String>,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct TreasuryChangeTracker {
+    /// Ids of chests added this request.
+    pub added: Vec<String>,
+    /// Ids of chests removed this request.
+    pub removed: Vec<String>,
+}
+
+impl Treasury {
+    pub fn generate_client_update(&self, tracker: &TreasuryChangeTracker) -> TreasuryUpdate {
+        TreasuryUpdate {
+            chests: tracker
+                .added
+                .iter()
+                .filter_map(|id| self.get_chest(id).cloned())
+                .collect(),
+            removed_chests: tracker.removed.clone(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -223,8 +304,8 @@ pub struct CompleteInventory {
 pub struct CompleteInventoryUpdate {
     pub backpack: BackpackUpdate,
     pub loadout: LoadoutUpdate,
-    pub treasury: Treasury,
-    pub overflow_treasury: Treasury,
+    pub treasury: TreasuryUpdate,
+    pub overflow_treasury: TreasuryUpdate,
     pub backpack_version: u64,
     pub treasury_version: u64,
 }
@@ -243,8 +324,10 @@ impl CompleteInventory {
             loadout: self
                 .loadout
                 .generate_client_update(&tracker.modified_loadout),
-            treasury: Treasury::default(),
-            overflow_treasury: Treasury::default(),
+            treasury: self
+                .treasury
+                .generate_client_update(&tracker.modified_treasury),
+            overflow_treasury: TreasuryUpdate::default(),
         }
     }
 }
@@ -264,5 +347,5 @@ pub struct LoadoutChangeTracker {
 pub struct InventoryChangeTracker {
     pub modified_loadout: LoadoutChangeTracker,
     pub modified_backpack: BackpackChangeTracker,
-    //TODO: treasury change tracker
+    pub modified_treasury: TreasuryChangeTracker,
 }

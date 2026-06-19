@@ -1,0 +1,64 @@
+[
+  {
+    "dailyReward": {
+      "stackableItems": {
+        "790a188b-3fa0-4f38-99d9-bc8d3675bc46": 2
+      }
+    },
+    "rewardUid": "eefb9db4-0632-49b9-ae35-1da398ca0003"
+  },
+  {
+    "dailyReward": {
+      "chests": [
+        {
+          "level": 1,
+          "tier": 3
+        }
+      ]
+    },
+    "rewardUid": "2c4ba1ff-517d-4a7f-b353-054d635ecd9e"
+  },
+  {
+    "dailyReward": {
+      "stackableItems": {
+        "819094ad-e749-4c02-9210-38c3bb1ec535": 3
+      }
+    },
+    "rewardUid": "d53c3748-9d65-4a29-8cb0-385969c7b672"
+  },
+  {
+    "dailyReward": {
+      "stackableItems": {
+        "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+      }
+    },
+    "rewardUid": "9c66ba16-8a97-4052-8433-b1b21507830b"
+  },
+  {
+    "dailyReward": {
+      "chests": [
+        {
+          "level": 86,
+          "tier": 2
+        }
+      ]
+    },
+    "rewardUid": "6d5b69f7-4d23-4534-b1a8-098f6c16a463"
+  },
+  {
+    "dailyReward": {
+      "stackableItems": {
+        "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 85
+      }
+    },
+    "rewardUid": "9d01f773-31dd-4fed-a692-0a7d28ec2fd9"
+  },
+  {
+    "dailyReward": {
+      "stackableItems": {
+        "05a7d501-f096-41e9-8443-fd6a090d8425": 1
+      }
+    },
+    "rewardUid": "720ca649-a02e-433d-af96-256027d2cde8"
+  }
+]

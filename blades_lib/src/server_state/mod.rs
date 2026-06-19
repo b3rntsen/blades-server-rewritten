@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::features::challenges::ChallengeState;
+use crate::features::daily_reward::DailyRewardState;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -25,4 +26,6 @@ pub struct ServerState {
     pub global_shop_purchases: HashMap<Uuid, u64>,
     /// Active challenge set + rotation cursor + season points.
     pub challenges: ChallengeState,
+    /// Last 24h period the daily login reward was collected.
+    pub daily_reward: DailyRewardState,
 }
