@@ -155,6 +155,46 @@ pub fn is_loadout_backend_synchronized(user_data: &[u8]) -> bool {
     user_message_gmid(user_data) == Some(GameMessageId::LoadoutClientBackendSynchronized as u8)
 }
 
+/// The retail **ENet channel** a given decrypted `user_data` (`marker ‖ MessageType
+/// ‖ body`) must be sent on, matching session 506 byte-for-byte. Blades' client
+/// binds different NetTransport message classes to different ENet channels; if the
+/// server sends a message on the wrong channel the client's per-channel receive
+/// path never dispatches it (`NetObjectModule.OnUserMessage` doesn't fire) and it
+/// hangs at "Connecting…".
+///
+/// Channel map (extracted from s506 round-start, both directions — ENet command
+/// header byte +1 = channelID; client CONNECT negotiates `channelCount=7`, so
+/// ch0–6 are all valid):
+///   - **ch4** — the big `OpponentLoadout` profile (carrier 0x36, GMID 35,
+///     ~20–30 KB, fragmented) and `MatchEndMatchMsg` (GMID 49). [s506 #3521912-ish
+///     ch4 GMID 35 ×2, GMID 49 ×1]
+///   - **ch1** — the per-player stat words: `PlayerStatsUpdate` (GMID 65) and
+///     `PlayerDestroyedStatUpdate` (GMID 75). [s506 ch1 GMID 65 ×8, GMID 75 ×67]
+///   - **ch6** — combat input (`PlayerCombatInputActivate`/`Position`, GMID 46/47);
+///     c2s in retail, mapped for symmetry though the server doesn't emit them.
+///   - **ch0** — EVERYTHING else: spawns (0x32), op55 (0x35/0x37), op58 clock
+///     (0x3a), 0x33/0x39, and carrier-0x36 for all other GMIDs (PlayerWelcome 21,
+///     SpawnAvatar 22, PlayerLoadoutReady 36, state changes 39/79/80, ReceiveDamage
+///     50, …). [s506 ch0, the overwhelming majority both directions]
+///
+/// This replaces the old "route by ciphertext length (>1000 ⇒ ch4 else ch0)"
+/// heuristic in `enet_host.rs`, which never used ch1 — so `PlayerStatsUpdate`
+/// (small, <1000 B) wrongly went on ch0.
+pub fn retail_channel(user_data: &[u8]) -> u8 {
+    // Carrier-0x36 family: discriminate by the GameMessageId at propId 3.
+    if user_data.get(1) == Some(&MSGTYPE_USERMESSAGE) {
+        match user_message_gmid(user_data) {
+            Some(35) | Some(49) => return 4, // OpponentLoadout profile / MatchEnd
+            Some(65) | Some(75) => return 1, // PlayerStatsUpdate / PlayerDestroyedStatUpdate
+            Some(46) | Some(47) => return 6, // combat input (c2s; symmetry only)
+            _ => return 0,
+        }
+    }
+    // All other carriers (spawns 0x32, op55 0x35/0x37, clock 0x3a, 0x33/0x39, …)
+    // ride channel 0 in retail.
+    0
+}
+
 /// Carrier-`0x36` GameMessageIds that are **round-start / round-transition handshake
 /// or flow-control signals, NOT combat inputs** — the server must NOT resolve them
 /// as a weapon swing or it injects phantom damage during setup / between rounds.
@@ -512,6 +552,47 @@ mod tests {
             0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p5 ULong 1
         ];
         assert_eq!(got, want);
+    }
+
+    /// The retail ENet channel map, locked to s506. A carrier-0x36 user-message
+    /// with a small NetData body carrying propId3 = the GameMessageId; assert each
+    /// GMID routes to the channel s506 used.
+    #[test]
+    fn retail_channel_matches_s506_map() {
+        // Helper: build a carrier-0x36 frame whose propId3 (Byte) = `gmid`.
+        let user_msg = |gmid: u8| -> Vec<u8> {
+            let mut w = NetDataWriter::new();
+            w.int(0, 1).byte(1, 55).byte(2, 1).byte(3, gmid);
+            frame(MSGTYPE_USERMESSAGE, w.finish())
+        };
+
+        // ch4: the big OpponentLoadout profile (GMID 35) + MatchEnd (GMID 49).
+        assert_eq!(retail_channel(&user_msg(35)), 4, "OpponentLoadout → ch4");
+        assert_eq!(retail_channel(&user_msg(49)), 4, "MatchEndMatchMsg → ch4");
+        // The real profile builder (large, fragmented) must also land on ch4.
+        assert_eq!(retail_channel(&player_profile(7, "{}", "{}")), 4);
+
+        // ch1: the per-player stat words.
+        assert_eq!(retail_channel(&user_msg(65)), 1, "PlayerStatsUpdate → ch1");
+        assert_eq!(retail_channel(&stat_update(88)), 1, "stat_update (GMID 65) → ch1");
+        assert_eq!(retail_channel(&user_msg(75)), 1, "PlayerDestroyedStatUpdate → ch1");
+
+        // ch6: combat input (c2s in retail; mapped for symmetry).
+        assert_eq!(retail_channel(&user_msg(46)), 6);
+        assert_eq!(retail_channel(&user_msg(47)), 6);
+
+        // ch0: every other carrier-0x36 GMID + every non-0x36 carrier.
+        assert_eq!(retail_channel(&player_welcome(120, 21)), 0, "PlayerWelcome (GMID 21) → ch0");
+        assert_eq!(retail_channel(&user_msg(36)), 0, "PlayerLoadoutReady → ch0");
+        assert_eq!(retail_channel(&user_msg(50)), 0, "ReceiveDamage → ch0");
+        assert_eq!(retail_channel(&user_msg(79)), 0, "MatchStateChangeRequest → ch0");
+        assert_eq!(retail_channel(&clock(0, 0)), 0, "op58 clock (carrier 0x3a) → ch0");
+        assert_eq!(
+            retail_channel(&combat_screen_info(437, NetObjectType::Player, NetRole::Simulated)),
+            0,
+            "op55 CombatScreenInfo (carrier 0x37) → ch0"
+        );
+        assert_eq!(retail_channel(&spawn_avatar(116, NetRole::Simulated, "x")), 0, "spawn (carrier 0x32) → ch0");
     }
 
     #[test]

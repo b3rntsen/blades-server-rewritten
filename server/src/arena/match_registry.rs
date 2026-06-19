@@ -427,16 +427,18 @@ impl MatchRegistry {
         let opcode = plain.get(1).copied(); // user_data[1] = GameMessageId
 
         let now = Instant::now();
-        let mut replies: Vec<(SocketAddr, Vec<u8>)> = Vec::new();
+        let mut replies: Vec<(SocketAddr, u8, Vec<u8>)> = Vec::new();
         for (target, mut user_data) in m.instance.on_c2s(sender, &plain, now) {
             let Some(tp) = m.players.get(target) else {
                 continue; // target not connected yet — drop (UDP-correct)
             };
             // `user_data` is the full decrypted s2c payload (marker ‖ type ‖ body)
-            // from the engine; encrypt under the TARGET's key — this is where the
-            // A→B relay happens.
+            // from the engine. Pick the retail ENet channel from the PLAINTEXT (by
+            // carrier + GameMessageId — s506 map) BEFORE encrypting, then encrypt
+            // under the TARGET's key (this is where the A→B relay happens).
+            let channel = crate::arena::combat::messages::retail_channel(&user_data);
             chacha20_legacy_xor(&mut user_data, &tp.crypto.key, &tp.crypto.nonce);
-            replies.push((tp.addr, user_data));
+            replies.push((tp.addr, channel, user_data));
         }
         Some(LiveOutcome {
             opcode,
@@ -551,7 +553,7 @@ impl MatchRegistry {
     /// service-loop iteration. Returns `(target peer addr, encrypted user-data)`
     /// to send. Same lock discipline as `handle_live_user_data` — short,
     /// synchronous, never held across `.await`.
-    pub fn tick_matches(&self, now: Instant) -> Vec<(SocketAddr, Vec<u8>)> {
+    pub fn tick_matches(&self, now: Instant) -> Vec<(SocketAddr, u8, Vec<u8>)> {
         let mut matches = self.matches.lock().unwrap();
         let mut out = Vec::new();
         for m in matches.values_mut() {
@@ -560,8 +562,11 @@ impl MatchRegistry {
                 let Some(tp) = m.players.get(target) else {
                     continue;
                 };
+                // Retail ENet channel from the PLAINTEXT (carrier + GMID, s506 map)
+                // before encrypting under the TARGET's key.
+                let channel = crate::arena::combat::messages::retail_channel(&user_data);
                 chacha20_legacy_xor(&mut user_data, &tp.crypto.key, &tp.crypto.nonce);
-                out.push((tp.addr, user_data));
+                out.push((tp.addr, channel, user_data));
             }
         }
         out
@@ -640,7 +645,7 @@ impl MatchRegistry {
     /// by length, like the normal paths), plus a per-frame [`DebugInjectResult`] for
     /// the log line. Called once per ENet serve-loop iteration; a no-op (no lock
     /// contention beyond an empty-vec check) when nothing is queued.
-    pub fn drain_debug_injections(&self) -> Vec<(SocketAddr, Vec<u8>, DebugInjectResult)> {
+    pub fn drain_debug_injections(&self) -> Vec<(SocketAddr, u8, Vec<u8>, DebugInjectResult)> {
         let queued: Vec<DebugInjection> = {
             let mut q = self.debug_inject_queue.lock().unwrap();
             if q.is_empty() {
@@ -664,6 +669,8 @@ impl MatchRegistry {
                 DebugTarget::Slot(_) => Vec::new(),
                 DebugTarget::Both => (0..m.players.len()).collect(),
             };
+            // Retail ENet channel from the injected PLAINTEXT (carrier + GMID).
+            let channel = crate::arena::combat::messages::retail_channel(&inj.plaintext);
             for slot in slots {
                 let p = &m.players[slot];
                 let mut ct = inj.plaintext.clone();
@@ -674,7 +681,7 @@ impl MatchRegistry {
                     nonce_hex: hex_lower(&p.crypto.nonce),
                     ciphertext_len: ct.len(),
                 };
-                out.push((p.addr, ct, result));
+                out.push((p.addr, channel, ct, result));
             }
         }
         out
@@ -719,7 +726,8 @@ pub struct LiveOutcome {
     /// The decrypted marker byte (`0x84` c2s / `0xBE` s2c / `0xAC`); a value
     /// outside that set usually means a wrong key (handshake mismatch).
     pub marker: Option<u8>,
-    pub replies: Vec<(SocketAddr, Vec<u8>)>,
+    /// `(target peer addr, retail ENet channel, encrypted user-data)`.
+    pub replies: Vec<(SocketAddr, u8, Vec<u8>)>,
     pub state: &'static str,
 }
 

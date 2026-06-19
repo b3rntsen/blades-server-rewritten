@@ -271,7 +271,7 @@ impl MatchInstance {
                     const FRAG_LEN: usize = 1372; // rusty_enet HOST_DEFAULT_MTU 1392 − ENet header
                     for (viewer, b) in &out {
                         let carrier = b.get(1).copied().unwrap_or(0);
-                        let channel = if b.len() > 1000 { 4 } else { 0 };
+                        let channel = messages::retail_channel(b);
                         if b.len() > 1000 {
                             let frags = b.len().div_ceil(FRAG_LEN);
                             info!(

@@ -162,17 +162,15 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
         while pump(&mut host, &registry, &mut peer_at) {}
         let now = std::time::Instant::now();
         // Server-initiated combat output (flow-control heartbeat, damage, etc.).
-        for (addr, bytes) in registry.tick_matches(now) {
-            // The ~28 KB op54 PROFILE rides its own ENet channel (4) in retail
-            // (s486, spec §6.2); small frames (clock/spawns/flow/updates) stay on
-            // channel 0. `bytes` is already ENCRYPTED here, so route by LENGTH alone —
-            // XOR preserves length and the profile is the only >1 KB s2c frame. (The
-            // old `&& byte[1]==0x36` check ran on ciphertext, never matched, so the
-            // profile wrongly went on channel 0 where the client's handler missed it.)
-            let channel = if bytes.len() > 1000 { 4 } else { 0 };
-            // DIAGNOSTIC (op54 gate, candidate 2): log the big PROFILE send as it
-            // actually leaves the tick path — addr, channel, ciphertext length (==
-            // plaintext, XOR preserves length). rusty_enet fragments it at MTU 1392.
+        // The retail ENet CHANNEL is chosen per-message by (carrier, GameMessageId)
+        // in `messages::retail_channel` and threaded here from the registry (computed
+        // on the PLAINTEXT before encryption). s506 map: the big op54 OpponentLoadout
+        // profile + MatchEnd ride ch4; PlayerStatsUpdate/PlayerDestroyedStatUpdate
+        // (small) ride ch1; everything else ch0. (The old "route by ciphertext length
+        // >1000 ⇒ ch4 else ch0" heuristic NEVER used ch1, so the small stat-word
+        // PlayerStatsUpdate (GMID 65) went on ch0 — a channel the client doesn't read
+        // those on — and the client's `OnUserMessage` receive path stalled.)
+        for (addr, channel, bytes) in registry.tick_matches(now) {
             if bytes.len() > 1000 {
                 info!(
                     "ARENA-DIAG send (tick) → {addr}: {} B on channel {channel} (op54 PROFILE; rusty_enet will fragment)",
@@ -183,10 +181,10 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
         }
         // DEBUG/experimental: drain any hand-crafted frames queued by the
         // token-gated /arena/debug/inject route and send them down the SAME
-        // encrypt+send path (already encrypted under the target peer's key; route
-        // by length like everything else). Inert when nothing is queued.
-        for (addr, bytes, res) in registry.drain_debug_injections() {
-            let channel = if bytes.len() > 1000 { 4 } else { 0 };
+        // encrypt+send path (already encrypted under the target peer's key; the
+        // retail channel is computed from the injected plaintext in the registry).
+        // Inert when nothing is queued.
+        for (addr, channel, bytes, res) in registry.drain_debug_injections() {
             info!(
                 "arena-enet DEBUG inject → {addr} slot {} ({} B, nonce {}, channel {channel})",
                 res.slot, res.ciphertext_len, res.nonce_hex
@@ -295,14 +293,13 @@ fn handle_packet(
                 },
             }
             // Deliver each reply to its TARGET peer (may be the opponent — e.g. the
-            // relayed op54 profile in response to a PlayerLoadoutReady upload). The big
-            // profile rides ENet channel 4 (retail); route by LENGTH (bytes are
-            // encrypted, but XOR preserves length and the profile is the only >1 KB s2c
-            // frame). Sending it on channel 0 left the client's profile handler blind to
-            // it → the opponent's appearance/gear never loaded → "Connecting…" stall.
-            for (target_addr, bytes) in &out.replies {
-                let channel = if bytes.len() > 1000 { 4 } else { 0 };
-                send_to(host, peer_at, target_addr, channel, bytes);
+            // relayed op54 profile in response to a PlayerLoadoutReady upload). The
+            // retail ENet channel was chosen per (carrier, GameMessageId) in the
+            // registry (`messages::retail_channel`, s506 map) on the plaintext before
+            // encryption, and is threaded here — the profile/MatchEnd on ch4, the stat
+            // words (op54-small) on ch1, everything else ch0.
+            for (target_addr, channel, bytes) in &out.replies {
+                send_to(host, peer_at, target_addr, *channel, bytes);
             }
         }
         return;
@@ -431,7 +428,9 @@ mod tests {
                 HostSettings { peer_limit: 1, ..Default::default() },
             )
             .unwrap();
-            let pid = host.connect(server, 2, 0).unwrap().id();
+            // Request 7 channels (ch0–6), matching the retail client's CONNECT
+            // (channelCount=7 in s506) so the server can send on ch1/ch4/ch6.
+            let pid = host.connect(server, 7, 0).unwrap().id();
             Client { host, pid, connected: false, inbox: Vec::new(), crypto: None }
         }
         fn addr(&self) -> SocketAddr {
@@ -541,8 +540,8 @@ mod tests {
                 for _ in 0..2000 {
                     while pump(&mut server, &registry, &mut peer_at) {}
                     vnow += Duration::from_millis(250);
-                    for (addr, bytes) in registry.tick_matches(vnow) {
-                        send_to(&mut server, &peer_at, &addr, 0, &bytes);
+                    for (addr, channel, bytes) in registry.tick_matches(vnow) {
+                        send_to(&mut server, &peer_at, &addr, channel, &bytes);
                     }
                     server.flush();
                     a.drain();
