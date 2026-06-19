@@ -409,7 +409,7 @@ async fn resolve(
     // matchmaking (regression 2026-06-16). On timeout we degrade to the starter loadout
     // so a slow query never hangs matchmaking. (Low-volume today; if this becomes hot,
     // move to a spawned task that injects the loadout before match-start, or a cache.)
-    let mut loadouts: Vec<crate::arena::combat::Loadout> = Vec::with_capacity(tickets.len());
+    let mut loadouts: Vec<crate::arena::combat::Loadout> = Vec::with_capacity(tickets.len() + bots);
     for t in tickets {
         let lo = match tokio::time::timeout(
             std::time::Duration::from_millis(1500),
@@ -425,6 +425,46 @@ async fn resolve(
         };
         loadouts.push(lo);
     }
+
+    // DEBUG GHOST (`ARENA_DEBUG_GHOST`): in the solo-fallback path (bots >= 1) the
+    // bot fighter(s) otherwise fall back to `loadout::starter()`, whose
+    // `profile_character_json` is EMPTY → the engine's `broadcast_profiles` skips it
+    // → the client never receives the opponent's op54 PROFILE (GameMessageId 35) →
+    // `ClientChecklist.OpponentLoadoutReady` never flips → "Connecting…" forever.
+    // When a ghost user_id is configured, load THAT real character into the bot
+    // slot(s) so the 2nd fighter has a NON-EMPTY profile and the existing emit path
+    // broadcasts the full opponent burst (spawns + op54 PROFILE + stat/state +
+    // channeling). Capture-proven fix; see docs/arena-ghost-gap-analysis.md. Each
+    // load is bounded by the same 1.5s timeout (a slow query must never hang the
+    // single matchmaker actor — regression 2026-06-16). No-op when unset / not a
+    // solo-fallback (bots == 0) → today's empty-starter bot.
+    if bots > 0 {
+        if let Some(ghost_id) = config.debug_ghost_user_id {
+            for i in 0..bots {
+                let lo = match tokio::time::timeout(
+                    std::time::Duration::from_millis(1500),
+                    load_loadout(db, ghost_id),
+                )
+                .await
+                {
+                    Ok(lo) => lo,
+                    Err(_) => {
+                        warn!("matchmaker: DEBUG ghost loadout load timed out (user {ghost_id}) — starter");
+                        crate::arena::combat::loadout::starter()
+                    }
+                };
+                info!(
+                    "matchmaker: DEBUG ghost — injected bot slot {} loadout for user {ghost_id} \
+                     (\"{}\", profile_character_json {} B → opponent op54 PROFILE will broadcast)",
+                    tickets.len() + i,
+                    lo.display_name,
+                    lo.profile_character_json.len()
+                );
+                loadouts.push(lo);
+            }
+        }
+    }
+
     if !registry.allocate_with_bots(&psids, loadouts, game_session_id, bots) {
         for t in tickets {
             warn!(
@@ -574,6 +614,7 @@ mod tests {
             max_concurrent_matches: 4,
             max_queued_players: 64,
             solo_fallback_secs: 15,
+            debug_ghost_user_id: None,
         };
         let (tx, rx) = unbounded_channel::<TicketRequest>();
         tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));

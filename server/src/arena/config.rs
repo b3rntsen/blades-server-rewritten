@@ -4,6 +4,8 @@
 
 use std::env;
 
+use uuid::Uuid;
+
 #[derive(Clone, Debug)]
 #[allow(dead_code)] // max_* fields are wired up by the UDP/match layer (milestone c)
 pub struct ArenaConfig {
@@ -22,6 +24,18 @@ pub struct ArenaConfig {
     /// two near-simultaneous players to PAIR (coordinated taps pair instantly either
     /// way, since the 2nd ticket arrives while the 1st is waiting).
     pub solo_fallback_secs: u64,
+    /// **DEBUG (`ARENA_DEBUG_GHOST`).** When set to an arena `characters.user_id`
+    /// UUID, the **solo-fallback** match (one lone human → vs bot) loads THAT
+    /// character's real loadout into the 2nd fighter (slot 1) instead of the empty
+    /// `starter()`. A real loadout has a non-empty `profile_character_json`, so the
+    /// engine's existing `broadcast_profiles` emits the opponent's op54 PROFILE
+    /// (GameMessageId 35) — the frame that flips the client's `ClientChecklist`
+    /// `OpponentLoadoutReady` and crosses "Connecting…" → "Setting up…". Without it,
+    /// the bot falls back to `starter()` (empty profile) and the profile is skipped
+    /// → permanent "Connecting…" (capture-proven, docs/arena-ghost-gap-analysis.md).
+    /// `None` when unset / unparseable → unchanged (today's empty-starter bot). Does
+    /// NOT affect a real PvP pair (both players upload their own profiles).
+    pub debug_ghost_user_id: Option<Uuid>,
 }
 
 impl ArenaConfig {
@@ -36,6 +50,10 @@ impl ArenaConfig {
             max_concurrent_matches: parse("ARENA_MAX_MATCHES", 16),
             max_queued_players: parse("ARENA_MAX_QUEUED", 64),
             solo_fallback_secs: parse("ARENA_SOLO_FALLBACK_SECS", 20),
+            // DEBUG ghost opponent (off when unset / unparseable → normal bot).
+            debug_ghost_user_id: env::var("ARENA_DEBUG_GHOST")
+                .ok()
+                .and_then(|s| Uuid::parse_str(s.trim()).ok()),
         }
     }
 }

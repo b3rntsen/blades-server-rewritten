@@ -536,6 +536,70 @@ mod tests {
         );
     }
 
+    /// DEBUG-GHOST contract (docs/arena-ghost-gap-analysis.md). A **solo-vs-bot**
+    /// match (capacity 2, expected_peers 1 — exactly the matchmaker's solo-fallback
+    /// shape) emits the OPPONENT's op54 PROFILE (GameMessageId 35) to the lone human
+    /// viewer (slot 0) IF AND ONLY IF the 2nd fighter (the bot, slot 1) has a
+    /// NON-EMPTY `profile_character_json`:
+    ///   - empty slot-1 loadout (today's `starter()` bot)  → ZERO opponent profiles
+    ///     (the bug: `broadcast_profiles`' `is_empty()` guard skips it → the client's
+    ///     `OpponentLoadoutReady` never flips → "Connecting…" forever);
+    ///   - ghost slot-1 loadout (a real character's profile) → exactly ONE opponent
+    ///     profile, addressed to slot 1's player object (the fix: `ARENA_DEBUG_GHOST`
+    ///     loads a real char into `loadouts[1]` so this fires).
+    /// The op54 PROFILE = carrier 0x36 with NetData propId3 == 35 (vs the op54-small
+    /// stat word propId3==65 / the flow-state propId3==0x4F).
+    #[test]
+    fn solo_fallback_ghost_yields_broadcastable_opponent_profile() {
+        let now = Instant::now();
+        let is_profile = |b: &[u8]| {
+            b.len() > 2 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(35)
+        };
+
+        // (a) the BUG: solo-fallback with an EMPTY slot-1 (starter) bot. capacity 2 /
+        // expected_peers 1 → one human peer is enough to start. No profile goes out.
+        let mut buggy = MatchInstance::new(2, 1, vec![], now);
+        let burst = buggy.on_tick(1, now); // Connecting → Spawning (round-start emit)
+        assert_eq!(buggy.phase(), FlowState::Spawning);
+        assert_eq!(
+            burst.iter().filter(|(_, b)| is_profile(b)).count(),
+            0,
+            "empty starter bot → NO opponent profile (reproduces the 'Connecting…' stall)"
+        );
+
+        // (b) the FIX: feed slot 1 a real (non-empty-profile) ghost loadout — what
+        // `ARENA_DEBUG_GHOST` makes `load_loadout(ghost)` produce. Slot 0 (the human)
+        // stays an empty starter; the opponent profile must still broadcast.
+        let mut ghost = crate::arena::combat::loadout::starter();
+        ghost.display_name = "WolfWalker".into();
+        ghost.profile_equipped_json = r#"{"equippedItems":{}}"#.into();
+        ghost.profile_character_json = r#"{"name":"WolfWalker","level":89}"#.into();
+        let mut fixed = MatchInstance::new(
+            2,
+            1,
+            vec![crate::arena::combat::loadout::starter(), ghost],
+            now,
+        );
+        let burst = fixed.on_tick(1, now);
+        assert_eq!(fixed.phase(), FlowState::Spawning);
+        let profiles: Vec<&(usize, Vec<u8>)> =
+            burst.iter().filter(|(_, b)| is_profile(b)).collect();
+        assert_eq!(
+            profiles.len(),
+            1,
+            "ghost slot-1 loadout → exactly ONE op54 opponent profile to the lone viewer"
+        );
+        // It is addressed to the lone human viewer (slot 0) and carries the OPPONENT's
+        // (slot 1) player object id — never the viewer's own object.
+        let (viewer, body) = profiles[0];
+        assert_eq!(*viewer, 0, "the profile is delivered to the human viewer (slot 0)");
+        assert_eq!(
+            arena_proto::parse_netdata(&body[2..]).int(0),
+            Some(fixed.combat.fighters[1].player_net_object_id as i64),
+            "the profile addresses the OPPONENT (slot 1) player object"
+        );
+    }
+
     #[test]
     fn solo_bot_match_starts_on_one_peer_and_bot_attacks() {
         // capacity 2 (player + bot), but only 1 real peer expected → the match must

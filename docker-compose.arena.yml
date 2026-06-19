@@ -100,6 +100,14 @@ services:
       # /arena/debug/inject and watch the client. Empty/unset = normal matches.
       # Recreate the container to apply (no rebuild needed). See engine.rs / resolve.rs.
       ARENA_DEBUG_HOLD: ${ARENA_DEBUG_HOLD:-}
+      # DEBUG ghost opponent: set to an arena `characters.user_id` UUID to give the
+      # SOLO-FALLBACK match (one lone human → vs bot) that character's real loadout in
+      # the 2nd fighter, so the engine broadcasts the opponent's op54 PROFILE
+      # (GameMessageId 35). That profile flips the client's ClientChecklist
+      # OpponentLoadoutReady → crosses "Connecting…" → "Setting up…". Empty/unset = a
+      # normal empty-starter bot (no opponent profile). Does NOT affect a real PvP pair.
+      # Recreate the container to apply (no rebuild needed). See matchmaker.rs / config.rs.
+      ARENA_DEBUG_GHOST: ${ARENA_DEBUG_GHOST:-}
       RUST_LOG: ${RUST_LOG:-info}
     command:
       - run
