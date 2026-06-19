@@ -362,16 +362,33 @@ impl MatchInstance {
         }
     }
 
-    /// Broadcast the round-start net-object SPAWNS (op50) to every viewer: each
-    /// fighter's Player + Avatar object, role Autonomous for the viewer's OWN
-    /// fighter and Simulated for the opponent. This is what the client needs to
-    /// construct the fighters and render the match (docs §6.2 / journey-log §6).
-    /// (The op54 per-player PROFILE — gear/customization/stats JSON — is the next
-    /// piece; without it the client may still lack appearance data.)
+    /// Broadcast the round-start net-object SPAWNS (op50) to every viewer.
+    ///
+    /// **Object set is retail-faithful to s506 (proven by a field-by-field byte-diff,
+    /// 2026-06-19):** the local client receives an op50 **Player** for BOTH fighters
+    /// (role Autonomous for its OWN, Simulated for the opponent) but an op50 **Avatar**
+    /// for the viewer's OWN (Autonomous) fighter ONLY. Retail NEVER sends an op50 Avatar
+    /// for the Simulated opponent, and NEVER sends a type-54 ability/Match op50 at
+    /// round-start (s506 emits exactly three op50: self-Player, opp-Player, self-Avatar).
+    ///
+    /// The opponent's avatar is a **client-local actor** the encounter builds from the
+    /// op54 PROFILE (`PvpEncounter.SetupOpponentActor`/`OnOpponentLoadoutReceived`),
+    /// NOT a network object. Spawning a *Simulated Avatar net-object* for the opponent
+    /// made the client route that proxy into `PvpEncounter.SpawnOpponent(proxy)` (frida
+    /// v1 confirmed it fired) but its addressables load never completed →
+    /// `PvpEncounter.OnOpponentLoaded` NEVER fired, `OpponentPlayer`/`OpponentAvatar`
+    /// stayed null, `ClientChecklist` never flipped → "Connecting…" forever (frida-proven:
+    /// `OnPlayerResourceLoaded` fired ×2 but the opponent actor was never built).
+    /// [docs/arena-journey-log.md §8; il2cpp PvpClientManager.OnObjectDiscover →
+    /// PvpEncounter.SpawnOpponent → OnOpponentLoaded]
+    ///
+    /// The op54 PROFILE (gear/customization/stats JSON), broadcast right after, is what
+    /// constructs the opponent — see `broadcast_profiles`.
     fn broadcast_spawns(&self, out: &mut Vec<(usize, Vec<u8>)>) {
         for viewer in 0..self.combat.fighters.len() {
             for actor in &self.combat.fighters {
-                let role = if actor.slot == viewer {
+                let is_own = actor.slot == viewer;
+                let role = if is_own {
                     NetRole::Autonomous
                 } else {
                     NetRole::Simulated
@@ -381,6 +398,7 @@ impl MatchInstance {
                 } else {
                     actor.loadout.display_name.as_str()
                 };
+                // Player op50 — for BOTH fighters (self Autonomous, opponent Simulated).
                 out.push((
                     viewer,
                     messages::spawn_player(
@@ -392,12 +410,24 @@ impl MatchInstance {
                         actor.loadout.level as i32,
                     ),
                 ));
-                out.push((
-                    viewer,
-                    messages::spawn_avatar(actor.net_object_id, role, &actor.loadout.character_uuid),
-                ));
-                // op50 spawn of the type-54 Match/ability net object (op53 channeling
-                // rides it). Needs the actor's ability UUID; skip if the loadout has none.
+                // Avatar op50 — viewer's OWN (Autonomous) fighter ONLY. The opponent's
+                // avatar is built client-side from the op54 PROFILE, never as a net
+                // object (retail s506: no Simulated Avatar op50 ever). Sending a
+                // Simulated Avatar net-object made the client route its proxy into
+                // PvpEncounter.SpawnOpponent, whose load never completed →
+                // OnOpponentLoaded never fired (the precise gate).
+                if is_own {
+                    out.push((
+                        viewer,
+                        messages::spawn_avatar(actor.net_object_id, role, &actor.loadout.character_uuid),
+                    ));
+                }
+                // op50 spawn of the type-54 Match/ability net object (role Authority;
+                // op53 channeling rides it). Retail spawns this via the Match-object
+                // mechanism, not a per-fighter op50, but our channeling/stat pipeline
+                // references it per fighter; an Authority-role object does NOT route to
+                // SpawnOpponent, so keeping it for both fighters is harmless to the gate.
+                // Needs the actor's ability UUID; skip if the loadout has none.
                 if let Some(ab) = actor.loadout.abilities.first() {
                     out.push((
                         viewer,
@@ -547,9 +577,12 @@ mod tests {
             0,
             "BackendMatchCreated must NOT ride the spawn burst (retail staggers it)"
         );
-        // 2 viewers × 2 fighters × (Player + Avatar) = 8 op50 (0x32) spawn messages.
+        // Retail-faithful op50 set (s506): per viewer = a Player op50 for BOTH fighters
+        // + an Avatar op50 for the viewer's OWN fighter only (no Simulated opponent
+        // Avatar). 2 viewers × (2 Player + 1 own-Avatar) = 6 op50 (0x32) spawn messages.
+        // (inst(2)'s starter loadouts carry no ability → no type-54 ability op50.)
         let spawns = out.iter().filter(|(_, b)| b.len() >= 2 && b[1] == 0x32).count();
-        assert_eq!(spawns, 8, "op50 Player+Avatar spawns to both viewers");
+        assert_eq!(spawns, 6, "op50 = Player(both) + own-Avatar per viewer (no Simulated opponent Avatar)");
     }
 
     /// Reproduction guard (s506 decode): the round-start is STAGGERED — the spawn /
@@ -966,5 +999,56 @@ mod tests {
                 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50)),
             "no ReceiveDamage (bot swing) emitted under HOLD"
         );
+    }
+
+    /// Round-start op50 spawn OBJECT SET is retail-faithful to s506: the local viewer
+    /// receives a **Player** op50 for BOTH fighters but an **Avatar** op50 ONLY for its
+    /// OWN (Autonomous) fighter — NEVER a Simulated Avatar net-object for the opponent
+    /// (which stalled `PvpEncounter.OnOpponentLoaded`). Guards the 2026-06-19 fix.
+    #[test]
+    fn round_start_no_simulated_opponent_avatar() {
+        let now = Instant::now();
+        let mk = |name: &str, uuid: &str| {
+            let mut l = crate::arena::combat::loadout::starter();
+            l.display_name = name.to_string();
+            l.character_uuid = uuid.to_string();
+            l.profile_equipped_json = r#"{"equippedItems":{}}"#.to_string();
+            l.profile_character_json = format!(r#"{{"name":"{name}"}}"#);
+            l
+        };
+        // capacity 2, expected_peers 1 — the matchmaker's solo-vs-ghost shape.
+        let mut m = MatchInstance::new(
+            2,
+            1,
+            vec![
+                mk("WolfWalker", "38c987fd-c42b-4ea6-b869-c8d4c03055f9"),
+                mk("Blank", "1131a037-716c-49cc-b165-32d8ddc14f49"),
+            ],
+            now,
+        );
+        let out = m.on_tick(1, now);
+        // Collect viewer-0 op50 spawns by (type, role).
+        let mut player_roles = Vec::new();
+        let mut avatar_roles = Vec::new();
+        for (viewer, b) in &out {
+            if *viewer != 0 || b.len() < 3 || b[1] != 0x32 {
+                continue;
+            }
+            let nd = arena_proto::parse_netdata(&b[2..]);
+            match nd.int(1) {
+                Some(55) => player_roles.push(nd.int(2)), // Player
+                Some(56) => avatar_roles.push(nd.int(2)), // Avatar
+                _ => {}
+            }
+        }
+        // BOTH players spawn (self Autonomous=3, opponent Simulated=2).
+        assert!(
+            player_roles.contains(&Some(3)) && player_roles.contains(&Some(2)),
+            "viewer 0 must get a Player op50 for both fighters (roles seen: {player_roles:?})"
+        );
+        // Exactly ONE Avatar op50, and it is the OWN (Autonomous=3) one — never the
+        // Simulated (2) opponent. This is the gate fix: a Simulated Avatar net-object
+        // routes the client into PvpEncounter.SpawnOpponent, whose load never completes.
+        assert_eq!(avatar_roles, vec![Some(3)], "only the OWN (Autonomous) Avatar op50 — no Simulated opponent Avatar");
     }
 }

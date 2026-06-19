@@ -28,7 +28,9 @@
 //!  t+0  op50 spawn  (opponent player)
 //!  t+0  op54 stat/profile word (97 B)
 //!  t+1  op53 channeling ×2
-//!  t+2  op50 spawn  (opponent avatar, 60 B)
+//!  t+2  op50 spawn  (self avatar, 60 B — role 3 Autonomous, obj 124, self UUID;
+//!                    NOTE there is NO opponent-avatar op50 in s506: the opponent's
+//!                    avatar is a client-local actor built from the op54 PROFILE)
 //!  t+2  op54 PROFILE (opponent, ~1400 B, fragmented JSON)   ← opponent-only
 //!  t+4  op54 stat word ×2 · op53 · FLOW BackendMatchCreated ×2 · op53
 //!  t+6  FLOW StateTimeout ×3   (heartbeat begins)
