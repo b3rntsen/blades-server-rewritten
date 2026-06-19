@@ -26,6 +26,44 @@ pub struct StackableItems(
     HashMap<Uuid, StackableItemStorageEntry>,
 );
 
+impl StackableItems {
+    /// Current count of a stackable template (0 if absent).
+    pub fn count(&self, template: Uuid) -> u64 {
+        self.0.get(&template).map(|e| e.count).unwrap_or(0)
+    }
+
+    /// Grant `count` of a template, returning the new total.
+    pub fn add(&mut self, template: Uuid, count: u64) -> u64 {
+        let entry = self
+            .0
+            .entry(template)
+            .or_insert(StackableItemStorageEntry { count: 0 });
+        entry.count += count;
+        entry.count
+    }
+
+    /// Consume `count` of a template. Returns the remaining count on success, or
+    /// `Err(available)` if there isn't enough. A template consumed to zero is
+    /// removed from the map (so the inventory diff reports it as removed).
+    pub fn remove(&mut self, template: Uuid, count: u64) -> Result<u64, u64> {
+        let have = self.count(template);
+        if have < count {
+            return Err(have);
+        }
+        let entry = self.0.get_mut(&template).expect("checked above");
+        entry.count -= count;
+        let remaining = entry.count;
+        if remaining == 0 {
+            self.0.remove(&template);
+        }
+        Ok(remaining)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemSingleProperty {

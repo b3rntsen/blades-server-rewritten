@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 mod wallet;
-pub use wallet::CompleteWallet;
+pub use wallet::{CompleteWallet, WalletEntry};
 mod backpack;
 pub use backpack::*;
 mod dungeon;
