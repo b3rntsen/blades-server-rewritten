@@ -169,6 +169,30 @@ def extract_game_events(con):
     return list(seen.values())
 
 
+def extract_salvage_recipes(con):
+    """Representative salvage yield per recipeId (first single-item salvage seen).
+    The real yield is randomised; we keep one representative bundle per recipe."""
+    seen = {}
+    q = (
+        "SELECT request_body, response_body FROM api_captures "
+        "WHERE url LIKE '%/salvages' AND response_status=200"
+    )
+    for rb, sb in con.execute(q):
+        try:
+            req = json.loads(astext(rb))
+            res = json.loads(astext(sb))
+        except Exception:
+            continue
+        infos = req.get("salvageInfos", [])
+        if len(infos) != 1:
+            continue
+        rid = infos[0].get("recipeId")
+        mats = (res.get("reward") or {}).get("stackableItems")
+        if rid and mats and rid not in seen:
+            seen[rid] = mats
+    return seen
+
+
 EXTRACTORS = {
     "gifts.json": extract_gifts,
     "announcements.json": extract_announcements,
@@ -179,6 +203,7 @@ EXTRACTORS = {
     "daily_rewards.json": extract_daily_rewards,
     "chest_loots.json": extract_chest_loots,
     "game_events.json": extract_game_events,
+    "salvage_recipes.json": extract_salvage_recipes,
 }
 
 

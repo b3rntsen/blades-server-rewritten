@@ -53,6 +53,8 @@ pub fn load(dir: &Path) -> StaticData {
     let daily_rewards: Vec<DailyRewardDef> = read_json(&dir.join("daily_rewards.json"));
     let chest_loots: Vec<RewardGrant> = read_json(&dir.join("chest_loots.json"));
     let game_events: Vec<EventDef> = read_json(&dir.join("game_events.json"));
+    let salvage_recipes: HashMap<Uuid, HashMap<Uuid, u64>> =
+        read_json(&dir.join("salvage_recipes.json"));
 
     StaticData {
         gifts: gifts.into_iter().map(|g| (g.global_gift_id, g)).collect::<HashMap<_, _>>(),
@@ -64,6 +66,7 @@ pub fn load(dir: &Path) -> StaticData {
         daily_rewards,
         chest_loots,
         game_events,
+        salvage_recipes,
     }
 }
 
@@ -86,6 +89,7 @@ mod tests {
         assert!(!sd.daily_rewards.is_empty(), "daily_rewards.json");
         assert!(!sd.chest_loots.is_empty(), "chest_loots.json (Item.properties default)");
         assert!(!sd.game_events.is_empty(), "game_events.json");
+        assert!(!sd.salvage_recipes.is_empty(), "salvage_recipes.json");
         assert!(sd.global_shop_overrides.get("globalShopOverrides").is_some());
         assert!(sd.iap.get("fulfillmentOverrides").is_some());
     }

@@ -11,3 +11,4 @@ pub mod daily_reward;
 pub mod game_events;
 pub mod gifts;
 pub mod global_shop;
+pub mod salvage;

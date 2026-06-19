@@ -47,6 +47,7 @@ mod json_db;
 pub mod models;
 mod quest;
 mod repair;
+mod salvage;
 pub mod schema;
 mod session;
 mod static_loader;
@@ -290,6 +291,7 @@ async fn main() -> Result<()> {
                     .service(town::get_town)
                     .service(craft::get_crafts)
                     .service(repair::repair_items)
+                    .service(salvage::salvage_items)
                     .service(challenge::get_challenges)
                     .service(challenge::update_challenge)
                     .service(challenge::complete_challenge)

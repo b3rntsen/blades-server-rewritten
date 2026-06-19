@@ -85,4 +85,7 @@ pub struct StaticData {
     pub chest_loots: Vec<RewardGrant>,
     /// Daily / Sigil quest event library (a rotating few are surfaced as active).
     pub game_events: Vec<EventDef>,
+    /// Representative salvage yield per `recipeId` (`recipeId` -> {material -> count}),
+    /// since the real yield is randomised.
+    pub salvage_recipes: HashMap<Uuid, HashMap<Uuid, u64>>,
 }
