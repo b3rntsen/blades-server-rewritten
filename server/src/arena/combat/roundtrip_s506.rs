@@ -4,9 +4,10 @@
 //! **session_id = 506**, ts 05:05:33–05:05:45) into our combat engine and DIFFs
 //! the s2c protocol *sequence* (shape + relative ordering + the round-start
 //! stagger) our [`MatchInstance`] emits against what retail actually sent. It is
-//! the safety net for the round-start "stagger" fix (`SPAWN_HANDSHAKE_HOLD` /
-//! `MATCH_CREATE_HOLD`): if our emission order or timing drifts from s506, this
-//! fails with a message naming the divergence.
+//! the safety net for the round-start "stagger" fix (`SPAWN_HANDSHAKE_HOLD`) AND
+//! the MatchState progression past BackendMatchCreation(5) to InRound(13)
+//! (`MATCH_STATE_ROUND0_PROGRESSION`): if our emission order, the MatchState walk,
+//! or the timing drifts from s506, this fails with a message naming the divergence.
 //!
 //! ## What is (and isn't) compared
 //! We compare the **protocol shape** — each s2c frame's carrier (`user_data[1]`)
@@ -37,11 +38,32 @@
 //!                    correction: the earlier "no opponent-avatar op50" belief was WRONG;
 //!                    re-decoded s506 obj 125 + injection-proved the bind on-device.])
 //!  t+4  op54 stat word ×2 · op53 · FLOW BackendMatchCreated ×2 · op53
-//!  t+6  FLOW StateTimeout ×3   (heartbeat begins)
+//!  t+6  FLOW StateTimeout ×3   (the op79 FLOW-controller heartbeat begins — a
+//!                               SEPARATE state machine from the Match net-object)
 //!  t+9  FLOW StateTimeout …
 //! ```
-//! → **spawns (t+0) → BackendMatchCreated (t+4) ≈ 4 s** == `SPAWN_HANDSHAKE_HOLD`;
-//!   **BackendMatchCreated (t+4) → StateTimeout (t+6) ≈ 2 s** == `MATCH_CREATE_HOLD`.
+//! → **spawns (t+0) → BackendMatchCreated (t+4) ≈ 4 s** == `SPAWN_HANDSHAKE_HOLD`.
+//!
+//! ## The Match net-object MatchState walk (obj 123 prop5) — the LAST gate
+//! Distinct from the op79 FLOW stateName above, the **type-54 Match net-object**'s
+//! replicated `MatchState` (prop5) is what the client reads to leave "Setting up…"
+//! and enter the combat scene. s506 obj 123, ROUND 0 (op55 carrier-0x35 updates,
+//! capture-proven 2026-06-19 — wall-clock and the `CurrentMatchStateTimeout` propId6):
+//! ```text
+//!  3 WaitingForPlayers     05:05:36  (20s)   ← in the op50 SPAWN
+//!  4 InitialPlayerSetup    05:05:37  (30s)
+//!  5 BackendMatchCreation  05:05:40  (10s)
+//!  6 OpponentFoundFeedback 05:05:40  (1.5s)  (same tick as 5)
+//!  7 PreMatch              05:05:42  (3s)
+//! 11 OpponentShowcase      05:05:45  (12s)   (round 0 SKIPS 8/9/10 — between-rounds only)
+//! 12 PreRound              05:05:57  (4s)
+//! 13 InRound               05:06:02  (120s)  ← THE FIGHT (client enters the combat scene)
+//! ```
+//! Every transition is server-timer-driven (each gap ≈ the prior state's timeout);
+//! none waits on a client message (the client uploads its loadout EARLY, c2s op54
+//! gmid20/36 during 3→5, and emits periodic op80 acks). The engine reproduces this
+//! via `MATCH_STATE_ROUND0_PROGRESSION`; section (5) of the differential asserts the
+//! emitted MatchState sequence == `[3,4,5,6,7,11,12,13]` and that InRound is reached.
 //!
 //! The c2s round-start uploads (op58 clock echo, op55, the op54 PlayerLoadoutReady
 //! loadout, the op54 flow echoes) are embedded below and replayed at their captured
@@ -68,7 +90,14 @@ enum Kind {
     Clock,
     /// op50 — a net-object spawn (carrier 0x32: Player / Avatar / Match-ability).
     Spawn,
-    /// op53 — PlayerChannelingStateChange (carrier 0x35).
+    /// op53/op55 carrier-0x35 net-object property UPDATE of the **Match** net-object
+    /// (NetData prop1 == 54): the replicated `MatchState` (prop5) the client reads to
+    /// advance the match. The payload is the MatchState enum value. This is the gate
+    /// the round-start drives 3→4→5→…→13 (s506 obj 123). Distinguished from a generic
+    /// channeling update so the differential can assert the MatchState sequence.
+    MatchState(u8),
+    /// op53 — PlayerChannelingStateChange or any other carrier-0x35 update that is
+    /// NOT the Match net-object.
     Channeling,
     /// op54 flow-control stateName (carrier 0x36 with an ASCII state trailer).
     Flow(String),
@@ -104,9 +133,38 @@ fn user_data<'a>(frame: &'a [u8]) -> Option<(u8, &'a [u8])> {
 fn classify(frame: &[u8]) -> Option<Kind> {
     let (carrier, body) = user_data(frame)?;
     Some(match carrier {
-        0x3a => Kind::Clock,      // op58
-        0x32 => Kind::Spawn,      // op50
-        0x35 => Kind::Channeling, // op53
+        0x3a => Kind::Clock, // op58
+        0x32 => {
+            // op50 SPAWN. The Match net-object (prop1 == 54) is spawned carrying its
+            // INITIAL MatchState (prop5 == WaitingForPlayers=3, s506 obj 123) — surface
+            // it as MatchState(3) so the progression check sees the 3 that arrives in
+            // the spawn (subsequent states arrive via carrier-0x35 updates). All other
+            // spawns (Player/Avatar) stay generic Spawn landmarks.
+            let nd = parse_netdata(body);
+            if nd.int(1) == Some(54) {
+                match nd.int(5) {
+                    Some(state) => Kind::MatchState(state as u8),
+                    None => Kind::Spawn,
+                }
+            } else {
+                Kind::Spawn
+            }
+        }
+        0x35 => {
+            // carrier-0x35 net-object UPDATE. If it carries the Match net-object
+            // (prop1 == 54 == NetObjectType::Match), surface its replicated MatchState
+            // (prop5) — that's the gate the round-start drives 3→4→5→…→13 (s506 obj
+            // 123). Otherwise it's a generic channeling/player update.
+            let nd = parse_netdata(body);
+            if nd.int(1) == Some(54) {
+                match nd.int(5) {
+                    Some(state) => Kind::MatchState(state as u8),
+                    None => Kind::Channeling,
+                }
+            } else {
+                Kind::Channeling
+            }
+        }
         0x36 => {
             // op54 carrier is overloaded: flow stateName vs profile vs stat word.
             if let Some(name) = flow_name(frame) {
@@ -249,11 +307,14 @@ fn drive_s506() -> (MatchInstance, Vec<Emitted>) {
         }
     };
 
-    // 100 ms steps over 9.5 s. `connected = 2` from the start so the
-    // Connecting→Spawning gate opens on the first tick (both peers present).
+    // 100 ms steps over 32 s. `connected = 2` from the start so the
+    // Connecting→Spawning gate opens on the first tick (both peers present). The
+    // window covers the FULL round-0 MatchState progression: spawns (t≈0) →
+    // BackendMatchCreation(5) @t≈4 (SPAWN_HANDSHAKE_HOLD) → the 6→7→11→12→13 walk
+    // (s506 deltas 0/2/3/12/5 s ≈ 22 s) → InRound(13) @t≈26 → StateTimeout (live round).
     let step = Duration::from_millis(100);
     let mut sec_emitted_c2s = std::collections::HashSet::new();
-    for i in 0..=95u64 {
+    for i in 0..=320u64 {
         let now = t0 + step * i as u32;
         let sec = (i * 100) / 1000;
 
@@ -373,11 +434,11 @@ fn round_start_reproduces_s506_sequence_and_stagger() {
     );
 
     // ---- (2) STAGGER TIMING vs s506's measured deltas ----------------------
-    // s506: spawns t+0 → BackendMatchCreated t+4 (Δ≈4s == SPAWN_HANDSHAKE_HOLD);
-    //       BackendMatchCreated t+4 → StateTimeout t+6 (Δ≈2s == MATCH_CREATE_HOLD).
-    // The DB ts is second-resolution, so allow ±1s; assert our staggers match s506.
+    // s506: spawns t+0 → BackendMatchCreated t+4 (Δ≈4s == SPAWN_HANDSHAKE_HOLD). The
+    // round then walks the MatchState progression (5→6→7→11→12→13) into the live
+    // round (StateTimeout) — that ~22s walk is validated in section (5), not here.
+    // The DB ts is second-resolution, so allow ±1s.
     let spawn_to_bmc = bmc - spawn; // seconds
-    let bmc_to_stto = stto - bmc; // seconds
     let near = |got: u64, want: u64| got.abs_diff(want) <= 1;
     assert!(
         near(spawn_to_bmc, 4),
@@ -385,9 +446,8 @@ fn round_start_reproduces_s506_sequence_and_stagger() {
          measured ≈4s (SPAWN_HANDSHAKE_HOLD=4s). Re-tune SPAWN_HANDSHAKE_HOLD to match retail.",
     );
     assert!(
-        near(bmc_to_stto, 2),
-        "DIVERGENCE (STAGGER TIMING): BackendMatchCreated→StateTimeout was {bmc_to_stto}s, but \
-         s506 measured ≈2s (MATCH_CREATE_HOLD=2s). Re-tune MATCH_CREATE_HOLD to match retail.",
+        bmc < stto,
+        "DIVERGENCE: BackendMatchCreated (t+{bmc}) must precede the live round StateTimeout (t+{stto}).",
     );
 
     // ---- (3) SEQUENCE diff — our distinct s2c order must contain s506's landmark
@@ -426,11 +486,60 @@ fn round_start_reproduces_s506_sequence_and_stagger() {
          (t+{spawn}) — it must be held ~4s. Flows seen at the spawn second: {spawn_sec_flows:?}",
     );
 
+    // ---- (5) MatchState PROGRESSION — the round-0 walk past BackendMatchCreation(5)
+    //          to InRound(13), the LAST gate to the fight. The client parks at
+    //          "Setting up…" until the Match net-object's MatchState (obj 123 prop5)
+    //          moves past 5; it enters the combat scene at InRound(13). s506 obj 123
+    //          round 0: 3→4→5→6→7→11→12→13 (8/9/10 are the between-rounds re-choice,
+    //          round 1 only). Our distinct MatchState emissions must reproduce this.
+    // Filter to MatchState emissions in order, then collapse consecutive duplicates
+    // (each state fans out to BOTH viewers → 2 identical copies; and the spawn's
+    // state-3 to viewer 0/1 is split by the interleaved Player spawns, so we dedup the
+    // STATE stream itself rather than the mixed-kind `distinct_sequence`).
+    let states: Vec<u8> = {
+        let raw: Vec<u8> = log
+            .iter()
+            .filter_map(|e| match e.kind {
+                Kind::MatchState(s) => Some(s),
+                _ => None,
+            })
+            .collect();
+        let mut deduped = Vec::new();
+        for s in raw {
+            if deduped.last() != Some(&s) {
+                deduped.push(s);
+            }
+        }
+        deduped
+    };
+    // The exact round-0 sequence (deduped — consecutive repeats collapsed by
+    // distinct_sequence). 3 and 4 are emitted in the Spawning phase; 5→…→13 in the
+    // BackendMatchCreated phase via the progression table.
+    let want_states: Vec<u8> = vec![3, 4, 5, 6, 7, 11, 12, 13];
+    assert_eq!(
+        states, want_states,
+        "DIVERGENCE (MATCHSTATE): the Match net-object's MatchState progression must reproduce \
+         s506 obj-123 round 0 (3→4→5→6→7→11→12→13 — InRound is the LAST gate to the fight).\n  \
+         want: {want_states:?}\n  got:  {states:?}",
+    );
+    // InRound(13) MUST be reached and MUST precede the live round (StateTimeout): the
+    // client only enters the combat scene once MatchState hits 13.
+    let inround = first_sec(&log, |k| matches!(k, Kind::MatchState(13)));
+    let inround = inround.expect(
+        "DIVERGENCE (MATCHSTATE): MatchState never reached InRound(13) — the client stays parked \
+         at 'Setting up…' (BackendMatchCreation=5). This is the gate this task drives past.",
+    );
+    assert!(
+        inround <= stto,
+        "DIVERGENCE: InRound(13) (t+{inround}) must be reached at/before the live round \
+         StateTimeout (t+{stto}) — combat resolution begins only after InRound.",
+    );
+
     // Reference summary (visible with `--nocapture`): our measured deltas vs s506.
     eprintln!(
-        "s506 differential OK — our round-start: clock t+{clock}, spawn t+{spawn}, profile t+{profile}, \
-         BackendMatchCreated t+{bmc} (Δspawn {spawn_to_bmc}s, s506≈4s), StateTimeout t+{stto} \
-         (ΔBMC {bmc_to_stto}s, s506≈2s)",
+        "s506 differential OK — round-start: clock t+{clock}, spawn t+{spawn}, profile t+{profile}, \
+         BackendMatchCreated t+{bmc} (Δspawn {spawn_to_bmc}s, s506≈4s); MatchState walk {states:?} \
+         → InRound t+{inround}; StateTimeout (live round) t+{stto}",
     );
 }
 

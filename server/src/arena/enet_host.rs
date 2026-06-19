@@ -528,11 +528,12 @@ mod tests {
         // serve loop does (this is what emits the flow-control + combat s2c).
         //
         // The tick clock is VIRTUAL (advances 250 ms per iteration), not wall-clock:
-        // the round-start FSM staggers BackendMatchCreated ~4 s after the spawns and
-        // StateTimeout ~2 s after that (SPAWN_HANDSHAKE_HOLD + MATCH_CREATE_HOLD). A
-        // 1 ms real sleep × 2000 iterations only covers ~2 s of real time — never
-        // enough to reach BackendMatchCreated — so we advance a synthetic `Instant`
-        // instead, reaching the staggered states deterministically without sleeping.
+        // the round-start FSM staggers BackendMatchCreation(5) ~4 s after the spawns
+        // (SPAWN_HANDSHAKE_HOLD), then walks the MatchState 6→7→11→12→13 over ~22 s
+        // (MATCH_STATE_ROUND0_PROGRESSION) into the live round (StateTimeout). A 1 ms
+        // real sleep × 2000 iterations only covers ~2 s of real time — never enough to
+        // reach the live round — so we advance a synthetic `Instant` instead (250 ms ×
+        // 2000 = 500 s virtual), reaching the staggered states deterministically.
         let mut vnow = std::time::Instant::now();
         macro_rules! pump_tick {
             ($cond:expr, $msg:expr) => {{

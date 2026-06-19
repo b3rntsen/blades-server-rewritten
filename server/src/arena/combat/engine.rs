@@ -60,9 +60,6 @@ const HEARTBEAT: Duration = Duration::from_millis(500);
 /// 05:05:36, BackendMatchCreated 05:05:40); announcing the match in the same tick as
 /// the spawns preempts the client's loadout-upload handshake → "Connecting" hang.
 const SPAWN_HANDSHAKE_HOLD: Duration = Duration::from_secs(4);
-/// Hold after `BackendMatchCreated` before the round goes live (StateTimeout).
-/// Retail s506: BackendMatchCreated 05:05:40 → StateTimeout 05:05:42 (~2s).
-const MATCH_CREATE_HOLD: Duration = Duration::from_secs(2);
 /// Stagger between the Match-object spawn (`WaitingForPlayers`=3) and the
 /// `InitialPlayerSetup`(4) update. Retail s506 obj 123: state 3 @05:05:36 → state 4
 /// @05:05:37 (~1s). Both 3 and 4 must be SEEN by the client (it binds players across
@@ -75,6 +72,41 @@ const MATCH_STATE_WAIT_TIMEOUT: f32 = 20.0;
 const MATCH_STATE_SETUP_TIMEOUT: f32 = 30.0;
 /// `CurrentMatchStateTimeout` sent with the `BackendMatchCreation`(5) update (s506: 10s).
 const MATCH_STATE_BACKEND_TIMEOUT: f32 = 10.0;
+
+/// The retail round-0 `MatchState` progression AFTER `BackendMatchCreation`(5) —
+/// the path the client walks from "Setting up…" into the live fight. Each entry is
+/// `(state, hold_before_this_state, state_timeout_secs)`: `hold_before` is how long
+/// to wait (since entering the *previous* state) before sending this state's op55
+/// update; `state_timeout_secs` is the `CurrentMatchStateTimeout` value (Match
+/// propId6) the client shows as the countdown for that state.
+///
+/// **Capture-proven against s506 obj 123 (round 0), 2026-06-19** — the decoded op55
+/// (carrier 0x35) MatchState updates and their wall-clock deltas:
+/// ```text
+///  5 BackendMatchCreation    05:05:40  (10s)   ← entered by the FSM (Spawning→BackendMatchCreated)
+///  6 OpponentFoundFeedback   05:05:40  (1.5s)  +0s  (same tick as 5)
+///  7 PreMatch                05:05:42  (3.0s)  +2s
+/// 11 OpponentShowcase        05:05:45  (12.0s) +3s  (round 0 SKIPS 8/9/10 — those are the
+///                                                     between-rounds loadout re-choice, seen
+///                                                     only in round 1)
+/// 12 PreRound                05:05:57  (4.0s)  +12s (== the OpponentShowcase timeout)
+/// 13 InRound                 05:06:02  (120s)  +5s  ← THE FIGHT (client enters the combat scene)
+/// ```
+/// Every transition is **server-timer-driven** (each inter-state gap ≈ the prior
+/// state's `CurrentMatchStateTimeout`); none waits on a specific client message. The
+/// client uploads its loadout EARLY (c2s op54 PlayerLoadoutReady/gmid20 + gmid36 during
+/// states 3→5, before this sequence) and emits periodic op80 `MatchStateChangeAck`
+/// flow echoes (handled as a no-op in `on_c2s`/`resolve`), so the server simply walks
+/// the states on its own clock. Combat inputs (op37/op46) begin only after InRound(13).
+/// The holds below are rounded from the s506 deltas (6:+0s, 7:+2s, 11:+3s, 12:+12s,
+/// 13:+5s); the timeouts are the exact captured propId6 values.
+const MATCH_STATE_ROUND0_PROGRESSION: &[(MatchState, Duration, f32)] = &[
+    (MatchState::OpponentFoundFeedback, Duration::from_secs(0), 1.5),
+    (MatchState::PreMatch, Duration::from_secs(2), 3.0),
+    (MatchState::OpponentShowcase, Duration::from_secs(3), 12.0),
+    (MatchState::PreRound, Duration::from_secs(12), 4.0),
+    (MatchState::InRound, Duration::from_secs(5), 120.0),
+];
 
 pub struct MatchInstance {
     combat: MatchCombat,
@@ -89,6 +121,13 @@ pub struct MatchInstance {
     /// solo-connected match and watch the client with an unlimited window. OFF
     /// (false) in all normal operation + tests → existing behavior is unchanged.
     debug_hold: bool,
+    /// Cursor into [`MATCH_STATE_ROUND0_PROGRESSION`] while the FSM is in the
+    /// `BackendMatchCreated` phase: the index of the NEXT round-0 MatchState to emit
+    /// (`6→7→11→12→13`). Starts at 0 (OpponentFoundFeedback) when `BackendMatchCreated`
+    /// is entered; once it reaches the end (InRound has been broadcast) the FSM enters
+    /// `StateTimeout` (the live combat round). Reset implicitly per match (one
+    /// `MatchInstance` per match).
+    setup_step: usize,
 }
 
 impl MatchInstance {
@@ -126,6 +165,7 @@ impl MatchInstance {
             // Read the DEBUG-HOLD flag once at construction. Off (false) when the
             // env var is unset — i.e. in every test and all normal operation.
             debug_hold: super::debug_hold_enabled(),
+            setup_step: 0,
         }
     }
 
@@ -368,15 +408,43 @@ impl MatchInstance {
                     self.broadcast_flow(&mut out, FlowState::BackendMatchCreated);
                 }
             }
-            // Brief hold, then the round goes live (StateTimeout heartbeat).
-            // DEBUG-HOLD (`ARENA_DEBUG_HOLD`): stay at BackendMatchCreated forever —
+            // Walk the Match net-object's MatchState through the retail round-0
+            // progression — `BackendMatchCreation`(5) → `OpponentFoundFeedback`(6) →
+            // `PreMatch`(7) → `OpponentShowcase`(11) → `PreRound`(12) → `InRound`(13) —
+            // on per-state timers (s506 obj-123, capture-proven), then enter the live
+            // combat round (`StateTimeout`). This is the LAST gate to the fight: the
+            // client parks at "Setting up…" until the Match net-object's MatchState
+            // moves past 5, and enters the combat scene when it reaches InRound(13).
+            // Each step reuses the SAME `broadcast_match_state` mechanism that drove
+            // 3→4→5 (op55 property update on obj 123). [MATCH_STATE_ROUND0_PROGRESSION]
+            //
+            // DEBUG-HOLD (`ARENA_DEBUG_HOLD`): stay at BackendMatchCreation(5) forever —
             // the FULL round-start burst has already gone out (Spawning transition),
-            // but we never advance to StateTimeout, so no combat phase is entered.
+            // but we never advance the MatchState past 5, so no combat phase is entered.
             // This is the freeze window for hand-injecting s2c frames.
             FlowState::BackendMatchCreated if self.debug_hold => {}
             FlowState::BackendMatchCreated => {
-                if now.duration_since(self.combat.phase_entered) >= MATCH_CREATE_HOLD {
-                    info!("combat FSM: BackendMatchCreated → StateTimeout (round 1 live)");
+                // Emit the next round-0 MatchState once its `hold_before` has elapsed
+                // since the previous state was entered (`phase_entered` tracks that).
+                if let Some(&(state, hold_before, timeout)) =
+                    MATCH_STATE_ROUND0_PROGRESSION.get(self.setup_step)
+                {
+                    if now.duration_since(self.combat.phase_entered) >= hold_before {
+                        info!(
+                            "combat FSM: MatchState → {:?}({}) [round-0 setup step {}/{}]",
+                            state,
+                            state as u8,
+                            self.setup_step + 1,
+                            MATCH_STATE_ROUND0_PROGRESSION.len(),
+                        );
+                        self.broadcast_match_state(&mut out, state, timeout);
+                        self.setup_step += 1;
+                        self.combat.phase_entered = now;
+                    }
+                } else {
+                    // The whole progression has been emitted (last state = InRound(13));
+                    // the client is now in the combat scene. Enter the live round.
+                    info!("combat FSM: BackendMatchCreated → StateTimeout (InRound reached — round 1 live)");
                     self.combat.phase = FlowState::StateTimeout;
                     self.combat.phase_entered = now;
                     self.last_heartbeat = now;
@@ -661,16 +729,53 @@ mod tests {
         (MatchInstance::new(capacity, capacity, vec![], now), now)
     }
 
+    /// Total wall-clock the round-start FSM needs to reach the LIVE round from t0:
+    /// the spawn-handshake hold + the full round-0 MatchState walk (5→6→7→11→12→13)
+    /// + one tick to enter StateTimeout. Computed from the constants so it tracks any
+    /// retuning of the progression. (s506: 4s + (0+2+3+12+5)s ≈ 26s.)
+    fn setup_to_live() -> Duration {
+        let walk: Duration = MATCH_STATE_ROUND0_PROGRESSION
+            .iter()
+            .map(|(_, hold, _)| *hold)
+            .sum();
+        SPAWN_HANDSHAKE_HOLD + walk
+    }
+
+    /// Drive an existing match `m` from t0 to the LIVE round (StateTimeout) by ticking
+    /// at 100 ms across the whole setup window (spawn-handshake hold + the MatchState
+    /// walk). `connected` is the peer count to report each tick. Stops on the tick that
+    /// first enters StateTimeout and returns THAT instant (`last_heartbeat` is set then)
+    /// so callers can continue from the live moment without ticking into the past. One
+    /// tick per 100 ms is ≫ enough for the FSM (smallest hold 0s, largest 12s).
+    fn drive_to_live(m: &mut MatchInstance, connected: usize, t0: Instant) -> Instant {
+        let step = Duration::from_millis(100);
+        let total = setup_to_live() + Duration::from_secs(2);
+        let n = (total.as_millis() / step.as_millis()) as u32;
+        for i in 0..=n {
+            let now = t0 + step * i;
+            m.on_tick(connected, now);
+            if m.phase() == FlowState::StateTimeout {
+                return now;
+            }
+        }
+        panic!("drive_to_live did not reach the live round within {total:?}");
+    }
+
     /// A match driven to the LIVE round (StateTimeout): connect → Spawning (spawn
-    /// burst) → BackendMatchCreated (after the stagger hold) → StateTimeout.
+    /// burst) → BackendMatchCreation(5) (after the stagger hold) → the round-0
+    /// MatchState walk 6→7→11→12→13 → StateTimeout. Returns the engine, t0, and the
+    /// instant the round went live (so heartbeat/combat ticks advance from there).
     fn live_inst(capacity: usize) -> (MatchInstance, Instant) {
+        let (m, t0, _live) = live_inst_at(capacity);
+        (m, t0)
+    }
+
+    /// Like [`live_inst`] but also returns the instant the round went live.
+    fn live_inst_at(capacity: usize) -> (MatchInstance, Instant, Instant) {
         let now = Instant::now();
         let mut m = MatchInstance::new(capacity, capacity, vec![], now);
-        m.on_tick(capacity, now); // Connecting → Spawning
-        m.on_tick(capacity, now + SPAWN_HANDSHAKE_HOLD); // Spawning → BackendMatchCreated
-        m.on_tick(capacity, now + SPAWN_HANDSHAKE_HOLD + MATCH_CREATE_HOLD); // → StateTimeout
-        assert_eq!(m.phase(), FlowState::StateTimeout, "live_inst reaches the live round");
-        (m, now)
+        let live = drive_to_live(&mut m, capacity, now);
+        (m, now, live)
     }
 
     #[test]
@@ -887,33 +992,41 @@ mod tests {
         let mut m = MatchInstance::new(2, 1, vec![], now);
         m.on_tick(1, now); // one real peer is enough → Spawning
         assert_eq!(m.phase(), FlowState::Spawning);
-        m.on_tick(1, now + SPAWN_HANDSHAKE_HOLD); // Spawning → BackendMatchCreated
-        m.on_tick(1, now + SPAWN_HANDSHAKE_HOLD + MATCH_CREATE_HOLD); // → round live
+        drive_to_live(&mut m, 1, now); // walk the MatchState progression → live round
         assert_eq!(m.phase(), FlowState::StateTimeout);
         let before = m.fighter_health(0);
         // Past the bot's swing cadence → the bot (slot 1) damages the player (slot 0).
-        m.on_tick(1, now + SPAWN_HANDSHAKE_HOLD + MATCH_CREATE_HOLD + Duration::from_secs(3));
+        m.on_tick(1, now + setup_to_live() + Duration::from_secs(3));
         assert!(m.fighter_health(0) < before, "bot should damage the player on tick");
     }
 
     #[test]
     fn advances_to_round_after_hold() {
-        let (mut m, t0) = inst(2);
-        m.on_tick(2, t0); // → Spawning (spawn burst)
-        assert_eq!(m.phase(), FlowState::Spawning);
-        m.on_tick(2, t0 + SPAWN_HANDSHAKE_HOLD); // Spawning → BackendMatchCreated
-        assert_eq!(m.phase(), FlowState::BackendMatchCreated);
-        let out = m.on_tick(2, t0 + SPAWN_HANDSHAKE_HOLD + MATCH_CREATE_HOLD); // → live
+        // (a) Mid-progression: at +6s into BackendMatchCreation (the MatchState walk
+        // takes ~22s) the match is still NOT live — it's walking 6→7→11→12→13.
+        let (mut mid, t0) = inst(2);
+        mid.on_tick(2, t0); // → Spawning (spawn burst)
+        assert_eq!(mid.phase(), FlowState::Spawning);
+        let step = Duration::from_millis(100);
+        for i in 0..=((SPAWN_HANDSHAKE_HOLD + Duration::from_secs(6)).as_millis() / 100) as u32 {
+            mid.on_tick(2, t0 + step * i);
+        }
+        assert_eq!(mid.phase(), FlowState::BackendMatchCreated, "still walking MatchState, not live yet");
+
+        // (b) The full drive reaches the live round (StateTimeout), round 1, and emits
+        // a StateTimeout heartbeat once live.
+        let (mut m, _t0b, live) = live_inst_at(2);
         assert_eq!(m.phase(), FlowState::StateTimeout);
         assert_eq!(m.combat.round, 1);
+        let out = m.on_tick(2, live + HEARTBEAT);
         assert!(out.iter().any(|(_, b)| b.ends_with(b"StateTimeout")));
     }
 
     #[test]
     fn heartbeats_on_cadence() {
-        let (mut m, t0) = live_inst(2); // → StateTimeout (live round)
-        let live = t0 + SPAWN_HANDSHAKE_HOLD + MATCH_CREATE_HOLD; // when it went live
-        // After the cadence elapses: a StateTimeout heartbeat to both players.
+        let (mut m, _t0, live) = live_inst_at(2); // → StateTimeout (live round)
+        // After the cadence elapses (measured from when it actually went live): a
+        // StateTimeout heartbeat to both players.
         let out = m.on_tick(2, live + HEARTBEAT);
         assert_eq!(out.iter().filter(|(_, b)| b.ends_with(b"StateTimeout")).count(), 2);
     }
@@ -1135,9 +1248,11 @@ mod tests {
             "the BackendMatchCreated round-start frame is still emitted under HOLD"
         );
 
-        // Way past every normal hold/heartbeat: still BackendMatchCreated, never
-        // StateTimeout, and the tick produces NOTHING (no flow heartbeat, no bot).
-        let later = now + SPAWN_HANDSHAKE_HOLD + MATCH_CREATE_HOLD + Duration::from_secs(60);
+        // Way past every normal hold/heartbeat (the full setup walk + a minute): still
+        // BackendMatchCreation(5), never advances the MatchState past 5, never enters
+        // StateTimeout, and the tick produces NOTHING (no MatchState update, no flow
+        // heartbeat, no bot) — the freeze window for hand-injecting s2c frames.
+        let later = now + setup_to_live() + Duration::from_secs(60);
         let out = m.on_tick(1, later);
         assert_eq!(m.phase(), FlowState::BackendMatchCreated, "HOLD never advances to the live round");
         assert!(out.is_empty(), "no s2c is generated while held at BackendMatchCreated");
