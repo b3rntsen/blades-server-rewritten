@@ -242,6 +242,11 @@ impl MatchRegistry {
         let order = self
             .next_order
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut instance = MatchInstance::new(fighters, capacity, loadouts, Instant::now());
+        // The Match net-object propId9 = gameSessionId (s506 obj 123 carried the
+        // match's UUID here). Cosmetic to the binding gate (propId5 MatchState), but
+        // sent for fidelity.
+        instance.set_game_session_id(game_session_id.to_string());
         self.matches.lock().unwrap().insert(
             game_session_id,
             Match {
@@ -249,7 +254,7 @@ impl MatchRegistry {
                 order,
                 capacity,
                 players: Vec::with_capacity(capacity),
-                instance: MatchInstance::new(fighters, capacity, loadouts, Instant::now()),
+                instance,
                 created_at: Instant::now(),
                 _permit: permit,
             },

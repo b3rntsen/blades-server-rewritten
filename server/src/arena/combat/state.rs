@@ -164,6 +164,43 @@ pub enum FlowState {
     Finished,
 }
 
+/// `MatchState.State` (`dump.cs:591661`, TypeDefIndex 12637) — the client's
+/// authoritative match state machine. **It is NOT driven by the op79 `stateName`
+/// trigger strings** (those drive the separate `PvpClientFlowController`). It is a
+/// **replicated property (propId 5) of the type-54 Match net-object** the server
+/// spawns at round start: the client's `Match.OnObjectPropertiesChanged` reads it
+/// and fires `OnMatchStateChanged`, and it binds the local/opponent `PvpPlayer`
+/// during `WaitingForPlayers`(3) / `InitialPlayerSetup`(4). Capture-proven from
+/// s506: the Match object (obj 123) is spawned with propId5 = 3 and advanced via
+/// op55 (0x35) property updates 3→4→5→6→7→11 (the exact enum order, timeouts in
+/// propId6). Spawning the object with state 5 (as the old per-fighter "ability"
+/// spawn did) makes the client jump Idle→5, skip 3/4, and never bind its players
+/// (`HasLocalPlayer`=0) — the "Match net-object frozen at BackendMatchCreation" bug.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MatchState {
+    Idle = 0,
+    ConnectedMatch = 1,
+    ActiveMatch = 2,
+    WaitingForPlayers = 3,
+    InitialPlayerSetup = 4,
+    BackendMatchCreation = 5,
+    OpponentFoundFeedback = 6,
+    PreMatch = 7,
+    ChooseLoadout = 8,
+    AwaitingClientBackendSynchronization = 9,
+    SynchronizingLoadout = 10,
+    OpponentShowcase = 11,
+    PreRound = 12,
+    InRound = 13,
+    PostRound = 14,
+    Victory = 15,
+    PostMatch = 16,
+    BackendMatchEnd = 17,
+    FinalizingMatch = 18,
+    DisconnectingPlayersAfterMatch = 19,
+}
+
 impl FlowState {
     /// The exact ASCII stateName string on the wire, or `None` for the synthetic
     /// pre/post states that aren't themselves a wire string.
@@ -375,6 +412,17 @@ pub struct MatchCombat {
     /// The Control net object that carries flow-control stateName messages
     /// (captures used 560/561 for the round/flow controller).
     pub flow_controller_id: i32,
+    /// The single type-54 **Match** net object id. Its replicated propId5 is the
+    /// `MatchState` the client reads to bind players + advance the match (s506 obj
+    /// 123). Allocated by `MatchInstance::new`.
+    pub match_net_object_id: i32,
+    /// The current replicated `MatchState` on the Match net object (propId5). Starts
+    /// `Idle`; the FSM drives it through `WaitingForPlayers`(3)→`InitialPlayerSetup`(4)
+    /// →`BackendMatchCreation`(5) at round start (the player-binding gate).
+    pub match_state: MatchState,
+    /// The match's `gameSessionId` (Match net-object propId9). Set by `MatchInstance`
+    /// from the registry; a nil UUID until then (the binding gate is propId5, not 9).
+    pub game_session_id: String,
     /// Next Avatar net object id to hand out (captures used 564–566).
     pub next_net_object_id: i32,
     pub round: u8,
@@ -392,6 +440,9 @@ impl MatchCombat {
             expected_peers,
             fighters: Vec::with_capacity(capacity),
             flow_controller_id: 560, // matches captured flow-controller id range
+            match_net_object_id: 0,  // assigned by MatchInstance::new
+            match_state: MatchState::Idle,
+            game_session_id: String::new(), // set by MatchInstance::new from the registry
             next_net_object_id: 564, // matches captured combat-actor id range
             round: 0,
             rounds_won: [0; 2],

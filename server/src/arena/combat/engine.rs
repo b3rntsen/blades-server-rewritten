@@ -19,7 +19,7 @@ use log::{debug, info};
 
 use super::messages;
 use super::resolve;
-use super::state::{Fighter, FlowState, Loadout, MatchCombat, NetRole};
+use super::state::{Fighter, FlowState, Loadout, MatchCombat, MatchState, NetRole};
 
 /// DIAGNOSTIC: lowercase-hex a byte slice for the op58/op54 wire-byte logging.
 fn hex_lower(bytes: &[u8]) -> String {
@@ -63,6 +63,18 @@ const SPAWN_HANDSHAKE_HOLD: Duration = Duration::from_secs(4);
 /// Hold after `BackendMatchCreated` before the round goes live (StateTimeout).
 /// Retail s506: BackendMatchCreated 05:05:40 → StateTimeout 05:05:42 (~2s).
 const MATCH_CREATE_HOLD: Duration = Duration::from_secs(2);
+/// Stagger between the Match-object spawn (`WaitingForPlayers`=3) and the
+/// `InitialPlayerSetup`(4) update. Retail s506 obj 123: state 3 @05:05:36 → state 4
+/// @05:05:37 (~1s). Both 3 and 4 must be SEEN by the client (it binds players across
+/// them); a small hold lets it process the spawn before the 4 update.
+const MATCH_SETUP_STAGGER: Duration = Duration::from_secs(1);
+/// `CurrentMatchStateTimeout` (Match propId6) sent with the `WaitingForPlayers`(3)
+/// spawn / `InitialPlayerSetup`(4) update — capture values from s506 (20s / 30s). The
+/// client uses it for the lobby countdown only; not the binding gate.
+const MATCH_STATE_WAIT_TIMEOUT: f32 = 20.0;
+const MATCH_STATE_SETUP_TIMEOUT: f32 = 30.0;
+/// `CurrentMatchStateTimeout` sent with the `BackendMatchCreation`(5) update (s506: 10s).
+const MATCH_STATE_BACKEND_TIMEOUT: f32 = 10.0;
 
 pub struct MatchInstance {
     combat: MatchCombat,
@@ -103,6 +115,10 @@ impl MatchInstance {
             fighter.ability_net_object_id = ability_net_object_id;
             combat.fighters.push(fighter);
         }
+        // The single type-54 Match net-object id (its replicated propId5 = MatchState
+        // drives player binding). Allocated after the fighters so the per-fighter id
+        // range is unchanged.
+        combat.match_net_object_id = combat.alloc_net_object_id();
         MatchInstance {
             combat,
             s2c_seq: 0,
@@ -111,6 +127,13 @@ impl MatchInstance {
             // env var is unset — i.e. in every test and all normal operation.
             debug_hold: super::debug_hold_enabled(),
         }
+    }
+
+    /// Set the match's `gameSessionId` (the Match net-object propId9). Called by the
+    /// registry right after allocation. Defaults to empty (the binding gate is the
+    /// MatchState at propId5, not the session id).
+    pub fn set_game_session_id(&mut self, game_session_id: impl Into<String>) {
+        self.combat.game_session_id = game_session_id.into();
     }
 
     pub fn next_seq(&mut self) -> u16 {
@@ -236,10 +259,13 @@ impl MatchInstance {
                     // loadout during the Spawning hold; BackendMatchCreated follows ~4s
                     // later (s506 stagger).
                     self.broadcast_spawns(&mut out);
+                    // The Match net-object was spawned (in broadcast_spawns) carrying
+                    // MatchState=WaitingForPlayers(3); record it so the FSM advances it
+                    // 3→4→5 from here (the player-binding gate).
+                    self.combat.match_state = MatchState::WaitingForPlayers;
                     self.broadcast_welcome(&mut out);
                     self.broadcast_stat_updates(&mut out);
                     self.broadcast_profiles(&mut out);
-                    self.broadcast_channeling(&mut out);
                     // Round-start emission audit — confirm what actually goes on the wire:
                     // carrier→count (58=clock, 50=spawn, 54=profile/flow) + each fighter's
                     // profile-JSON size (0 ⇒ empty ⇒ broadcast_profiles skipped it ⇒ the
@@ -291,11 +317,34 @@ impl MatchInstance {
             // Hold (retail ~4s) so the client drives its loadout-upload handshake,
             // THEN announce BackendMatchCreated — never in the same tick as the spawns.
             FlowState::Spawning => {
-                if now.duration_since(self.combat.phase_entered) >= SPAWN_HANDSHAKE_HOLD {
+                let elapsed = now.duration_since(self.combat.phase_entered);
+                // ~1s after the spawn (which carried MatchState=WaitingForPlayers=3),
+                // advance the Match net-object to InitialPlayerSetup(4). The client binds
+                // its local/opponent PvpPlayer across states 3→4 (the HasLocalPlayer gate);
+                // retail s506 obj 123: 3 @05:05:36 → 4 @05:05:37.
+                if self.combat.match_state == MatchState::WaitingForPlayers
+                    && elapsed >= MATCH_SETUP_STAGGER
+                {
+                    info!("combat FSM: Match state WaitingForPlayers(3) → InitialPlayerSetup(4)");
+                    self.broadcast_match_state(
+                        &mut out,
+                        MatchState::InitialPlayerSetup,
+                        MATCH_STATE_SETUP_TIMEOUT,
+                    );
+                }
+                if elapsed >= SPAWN_HANDSHAKE_HOLD {
                     info!("combat FSM: Spawning → BackendMatchCreated (round-start handshake settled)");
                     self.combat.phase = FlowState::BackendMatchCreated;
                     self.combat.phase_entered = now;
                     self.last_heartbeat = now;
+                    // MatchState → BackendMatchCreation(5) (the Match net-object update),
+                    // alongside the op79 stateName "BackendMatchCreated" on the flow
+                    // controller. s506 obj 123: state 5 @05:05:40, same tick as the op79.
+                    self.broadcast_match_state(
+                        &mut out,
+                        MatchState::BackendMatchCreation,
+                        MATCH_STATE_BACKEND_TIMEOUT,
+                    );
                     self.broadcast_flow(&mut out, FlowState::BackendMatchCreated);
                 }
             }
@@ -422,19 +471,47 @@ impl MatchInstance {
                         messages::spawn_avatar(actor.net_object_id, role, &actor.loadout.character_uuid),
                     ));
                 }
-                // op50 spawn of the type-54 Match/ability net object (role Authority;
-                // op53 channeling rides it). Retail spawns this via the Match-object
-                // mechanism, not a per-fighter op50, but our channeling/stat pipeline
-                // references it per fighter; an Authority-role object does NOT route to
-                // SpawnOpponent, so keeping it for both fighters is harmless to the gate.
-                // Needs the actor's ability UUID; skip if the loadout has none.
-                if let Some(ab) = actor.loadout.abilities.first() {
-                    out.push((
-                        viewer,
-                        messages::spawn_ability(actor.ability_net_object_id, &ab.instance_uuid),
-                    ));
-                }
             }
+            // op50 SPAWN of the single type-54 **Match** net object — the object whose
+            // replicated propId5 = `MatchState` the client reads to BIND its players
+            // (the `HasLocalPlayer` gate). Spawned with `WaitingForPlayers`(3) so the
+            // client enters binding; the FSM advances it 3→4→5 via op55 updates
+            // (`broadcast_match_state`). Retail s506 obj 123: spawn state 3, timeout 20s,
+            // role Simulated. (This replaces the fork's old per-fighter "ability" type-54
+            // spawn, which hard-coded propId5=5 → the client skipped 3/4 and never bound.)
+            out.push((
+                viewer,
+                messages::spawn_match(
+                    self.combat.match_net_object_id,
+                    self.combat.fighters.len() as u8,
+                    MatchState::WaitingForPlayers,
+                    MATCH_STATE_WAIT_TIMEOUT,
+                    self.combat.round,
+                    &self.combat.game_session_id,
+                ),
+            ));
+        }
+    }
+
+    /// Broadcast a type-54 Match net-object **property update** (op55) that advances
+    /// the replicated `MatchState` (propId5) to `state`. The client's
+    /// `Match.OnObjectPropertiesChanged` applies it and fires `OnMatchStateChanged`,
+    /// binding the local/opponent `PvpPlayer` during `WaitingForPlayers`(3) /
+    /// `InitialPlayerSetup`(4). Also records the state on `MatchCombat`. [s506 obj 123]
+    fn broadcast_match_state(&mut self, out: &mut Vec<(usize, Vec<u8>)>, state: MatchState, timeout_secs: f32) {
+        self.combat.match_state = state;
+        for viewer in 0..self.combat.fighters.len() {
+            out.push((
+                viewer,
+                messages::update_match(
+                    self.combat.match_net_object_id,
+                    self.combat.fighters.len() as u8,
+                    state,
+                    timeout_secs,
+                    self.combat.round,
+                    &self.combat.game_session_id,
+                ),
+            ));
         }
     }
 
@@ -459,21 +536,6 @@ impl MatchInstance {
         for viewer in 0..self.combat.fighters.len() {
             for actor in &self.combat.fighters {
                 out.push((viewer, messages::stat_update(actor.net_object_id)));
-            }
-        }
-    }
-
-    /// op53 PlayerChannelingStateChange on each actor's Match/ability object (initial
-    /// state). Skipped if the loadout carries no abilities. [s486 round-start]
-    fn broadcast_channeling(&self, out: &mut Vec<(usize, Vec<u8>)>) {
-        for viewer in 0..self.combat.fighters.len() {
-            for actor in &self.combat.fighters {
-                if let Some(ab) = actor.loadout.abilities.first() {
-                    out.push((
-                        viewer,
-                        messages::channeling_state(actor.ability_net_object_id, &ab.instance_uuid),
-                    ));
-                }
             }
         }
     }
@@ -517,6 +579,12 @@ impl MatchInstance {
     #[cfg(test)]
     pub(crate) fn phase(&self) -> FlowState {
         self.combat.phase
+    }
+
+    /// Test-only: the current replicated `MatchState` on the Match net object.
+    #[cfg(test)]
+    pub(crate) fn match_state_for_test(&self) -> MatchState {
+        self.combat.match_state
     }
 
     /// Test-only: force the DEBUG-HOLD flag without touching the process env (which
@@ -579,10 +647,18 @@ mod tests {
         );
         // Retail-faithful op50 set (s506): per viewer = a Player op50 for BOTH fighters
         // + an Avatar op50 for the viewer's OWN fighter only (no Simulated opponent
-        // Avatar). 2 viewers × (2 Player + 1 own-Avatar) = 6 op50 (0x32) spawn messages.
-        // (inst(2)'s starter loadouts carry no ability → no type-54 ability op50.)
+        // Avatar) + the single type-54 **Match** net-object op50 (its propId5 =
+        // MatchState=WaitingForPlayers, the player-binding gate). 2 viewers × (2 Player
+        // + 1 own-Avatar + 1 Match) = 8 op50 (0x32) spawn messages.
         let spawns = out.iter().filter(|(_, b)| b.len() >= 2 && b[1] == 0x32).count();
-        assert_eq!(spawns, 6, "op50 = Player(both) + own-Avatar per viewer (no Simulated opponent Avatar)");
+        assert_eq!(spawns, 8, "op50 = Player(both) + own-Avatar + Match per viewer");
+        // The Match spawn carries MatchState=WaitingForPlayers(3) — NOT 5 — so the
+        // client enters player binding instead of jumping straight to BackendMatchCreation.
+        assert_eq!(
+            m.match_state_for_test(),
+            crate::arena::combat::state::MatchState::WaitingForPlayers,
+            "Match net-object spawns at WaitingForPlayers(3), the binding-gate state"
+        );
     }
 
     /// Reproduction guard (s506 decode): the round-start is STAGGERED — the spawn /
@@ -610,6 +686,40 @@ mod tests {
             created.iter().filter(|(_, b)| b.ends_with(b"BackendMatchCreated")).count(),
             2,
             "BackendMatchCreated announced ~4s after the spawns, to both players"
+        );
+    }
+
+    /// The Match net-object's replicated `MatchState` (propId5) progresses
+    /// WaitingForPlayers(3) → InitialPlayerSetup(4) → BackendMatchCreation(5),
+    /// mirroring retail s506 obj 123 — instead of the old jump straight to 5. This is
+    /// the player-binding gate: the client binds its local/opponent `PvpPlayer` across
+    /// states 3/4, so `HasLocalPlayer` only flips when 3 and 4 are seen.
+    #[test]
+    fn match_state_progresses_3_4_5() {
+        use crate::arena::combat::state::MatchState;
+        let (mut m, t0) = inst(2);
+        // Spawn burst → MatchState spawned at WaitingForPlayers(3).
+        m.on_tick(2, t0);
+        assert_eq!(m.match_state_for_test(), MatchState::WaitingForPlayers);
+        // ~1s later → InitialPlayerSetup(4), delivered as an op55 (0x35) update to both.
+        let setup = m.on_tick(2, t0 + MATCH_SETUP_STAGGER);
+        assert_eq!(m.match_state_for_test(), MatchState::InitialPlayerSetup);
+        let setup_updates = setup
+            .iter()
+            .filter(|(_, b)| b.len() >= 2 && b[1] == 0x35)
+            .count();
+        assert_eq!(setup_updates, 2, "InitialPlayerSetup(4) → op55 update to both viewers");
+        // After the stagger hold → BackendMatchCreation(5), again an op55 update.
+        let created = m.on_tick(2, t0 + SPAWN_HANDSHAKE_HOLD);
+        assert_eq!(m.match_state_for_test(), MatchState::BackendMatchCreation);
+        assert!(
+            created.iter().any(|(_, b)| b.len() >= 2 && b[1] == 0x35),
+            "BackendMatchCreation(5) → op55 Match-object update"
+        );
+        // …and the op79 stateName "BackendMatchCreated" rides the SAME tick (flow controller).
+        assert_eq!(
+            created.iter().filter(|(_, b)| b.ends_with(b"BackendMatchCreated")).count(),
+            2,
         );
     }
 

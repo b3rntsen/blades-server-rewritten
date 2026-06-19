@@ -15,7 +15,7 @@
 
 use arena_proto::{GameMessageId, NetDataWriter};
 
-use super::state::{ActiveSide, DamageSource, DamageType, FlowState, NetObjectType, NetRole};
+use super::state::{ActiveSide, DamageSource, DamageType, FlowState, MatchState, NetObjectType, NetRole};
 
 /// `NetTransportMessage.MAGIC_HEADER` — present on every message, both directions.
 pub const MARKER_S2C: u8 = 0xBE;
@@ -227,38 +227,104 @@ pub fn clock(tick_clock: i64, tick_match_start: i64) -> Vec<u8> {
     frame(MSGTYPE_CLOCK, w.finish())
 }
 
-/// Carrier for op53 `PlayerChannelingStateChange` (the channeling-state update on
-/// the type-54 "Match/ability" net object).
-pub const MSGTYPE_CHANNELING: u8 = 0x35; // 53
+/// Carrier for a type-54 Match net-object **property update** (op `0x35`). The
+/// client's `Match.OnObjectPropertiesChanged` applies the new NetData to the
+/// already-spawned Match object — this is how the replicated `MatchState` advances.
+pub const MSGTYPE_NETOBJ_UPDATE: u8 = 0x35; // 53/55 family — net-object property change
 
-/// Shared NetData for the round-start type-54 **Match/ability** net object — used by
-/// both the op50 SPAWN and the op53 channeling update (same fields in s486):
-/// `{0:Int id · 1:Byte 54 · 2:Byte 1 · 3:Int 14 · 4:Byte 2 · 5:Byte 5 · 6:Float 10.0 ·
-/// 7:Byte 0 · 8:Byte 3 · 9:String ability-UUID}`. [RE'd byte-exact from s486 op53.]
-fn ability_netdata(net_object_id: i32, ability_uuid: &str) -> Vec<u8> {
+/// `MaxMatchRounds` — the Match net-object's propId8 (s506: 3, a best-of-3 arena).
+pub const MATCH_MAX_ROUNDS: u8 = 3;
+/// The Match net-object's propId3 — a constant `Int 21` in every s506 Match frame
+/// (purpose unconfirmed; near-constant, not the binding gate). Kept verbatim.
+const MATCH_PROP3: i32 = 21;
+
+/// NetData for the single type-54 **Match** net object (s506 obj 123) — the object
+/// whose **propId5 = `MatchState`** the client reads to bind its players and advance
+/// the match. Capture-proven field layout (byte-diffed against s506 obj 123 across
+/// its spawn + every op55 update): `{0:Int id · 1:Byte 54 (Match) · 2:Byte role ·
+/// 3:Int 21 · 4:Byte playerCount · 5:Byte MatchState · 6:Float stateTimeoutSeconds ·
+/// 7:Byte currentRound · 8:Byte maxRounds · 9:String gameSessionId}`.
+///
+/// This REPLACES the fork's old per-fighter "ability" type-54 object, which used the
+/// same wire shape but hard-coded propId5 = 5 (`BackendMatchCreation`) and a per-
+/// fighter ability UUID at propId9. That made the client jump `MatchState` Idle→5,
+/// skip `WaitingForPlayers`(3)/`InitialPlayerSetup`(4), and never bind its players.
+#[allow(clippy::too_many_arguments)]
+fn match_netdata(
+    net_object_id: i32,
+    role: NetRole,
+    player_count: u8,
+    state: MatchState,
+    state_timeout_secs: f32,
+    current_round: u8,
+    game_session_id: &str,
+) -> Vec<u8> {
     let mut w = NetDataWriter::new();
     w.int(0, net_object_id)
-        .byte(1, 54)
-        .byte(2, 1)
-        .int(3, 14)
-        .byte(4, 2)
-        .byte(5, 5)
-        .float(6, 10.0)
-        .byte(7, 0)
-        .byte(8, 3)
-        .string(9, ability_uuid);
+        .byte(1, NetObjectType::Match as u8)
+        .byte(2, role as u8)
+        .int(3, MATCH_PROP3)
+        .byte(4, player_count)
+        .byte(5, state as u8)
+        .float(6, state_timeout_secs)
+        .byte(7, current_round)
+        .byte(8, MATCH_MAX_ROUNDS)
+        .string(9, game_session_id);
     w.finish()
 }
 
-/// op50 spawn of the type-54 Match/ability net object (carrier `0x32`). Must precede
-/// the op53 channeling update, which references this object id.
-pub fn spawn_ability(net_object_id: i32, ability_uuid: &str) -> Vec<u8> {
-    frame(MSGTYPE_SPAWN, ability_netdata(net_object_id, ability_uuid))
+/// op50 SPAWN (carrier `0x32`) of the type-54 Match net object. Spawned at round
+/// start with `MatchState::WaitingForPlayers`(3) so the client constructs its `Match`
+/// object and begins binding the local/opponent `PvpPlayer` (s506: spawn role 2
+/// Simulated, propId5 = 3, propId6 = 20s). Subsequent state changes use
+/// [`update_match`].
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_match(
+    net_object_id: i32,
+    player_count: u8,
+    state: MatchState,
+    state_timeout_secs: f32,
+    current_round: u8,
+    game_session_id: &str,
+) -> Vec<u8> {
+    frame(
+        MSGTYPE_SPAWN,
+        match_netdata(
+            net_object_id,
+            NetRole::Simulated,
+            player_count,
+            state,
+            state_timeout_secs,
+            current_round,
+            game_session_id,
+        ),
+    )
 }
 
-/// op53 `PlayerChannelingStateChange` (carrier `0x35`) on the Match/ability object.
-pub fn channeling_state(net_object_id: i32, ability_uuid: &str) -> Vec<u8> {
-    frame(MSGTYPE_CHANNELING, ability_netdata(net_object_id, ability_uuid))
+/// op55 (carrier `0x35`) Match net-object **property update** — advances the
+/// replicated `MatchState` (propId5) on the already-spawned Match object. s506
+/// drives 3→4→5→6→7→11 with this; role flips to 1 (Authority) on updates.
+#[allow(clippy::too_many_arguments)]
+pub fn update_match(
+    net_object_id: i32,
+    player_count: u8,
+    state: MatchState,
+    state_timeout_secs: f32,
+    current_round: u8,
+    game_session_id: &str,
+) -> Vec<u8> {
+    frame(
+        MSGTYPE_NETOBJ_UPDATE,
+        match_netdata(
+            net_object_id,
+            NetRole::Authority,
+            player_count,
+            state,
+            state_timeout_secs,
+            current_round,
+            game_session_id,
+        ),
+    )
 }
 
 /// op54-small (carrier `0x36`) — per-avatar stat/HP word:
@@ -496,24 +562,72 @@ mod tests {
         assert_eq!(got, want);
     }
 
-    /// Byte-for-byte vs s486 round-start op53 (after `BE 35`).
+    /// Byte-for-byte vs s506 #3522332 — the type-54 **Match** net-object SPAWN (after
+    /// `BE 32`): obj 123, role 2 (Simulated), p3 Int 21, p4 Byte 1 (PlayerCount),
+    /// **p5 Byte 3 (MatchState::WaitingForPlayers)**, p6 Float 20.0 (timeout), p7
+    /// Byte 0 (round), p8 Byte 3 (maxRounds), p9 String gameSessionId. This is the
+    /// object whose propId5 the client reads to bind its players — the gate the old
+    /// per-fighter "ability" spawn broke by hard-coding p5 = 5.
     #[test]
-    fn channeling_state_matches_s486() {
-        let got = channeling_state(86, "54da70b3-6683-4b07-bad5-165a2afd5402");
+    fn spawn_match_matches_s506() {
+        let got = spawn_match(
+            123,
+            1,
+            MatchState::WaitingForPlayers,
+            20.0,
+            0,
+            "5b764e61-8851-4703-8fea-3d8e589ed24f",
+        );
         let mut want = vec![
-            0xBE, 0x35, // marker + channeling carrier (53)
+            0xBE, 0x32, // marker + SPAWN carrier (op50)
             0x09, 0xFF, 0x03, // maxPropId 9, bitmap {0..9}
-            0x70, 0x07, 0x77, 0x75, 0xA7, // type nibbles
-            0x56, 0x00, 0x00, 0x00, // p0 Int = 86
-            0x36, 0x01, // p1 Byte 54, p2 Byte 1
-            0x0E, 0x00, 0x00, 0x00, // p3 Int = 14
-            0x02, 0x05, // p4 Byte 2, p5 Byte 5
-            0x00, 0x00, 0x20, 0x41, // p6 Float = 10.0
-            0x00, 0x03, // p7 Byte 0, p8 Byte 3
+            0x70, 0x07, 0x77, 0x75, 0xA7, // type nibbles [Int,Byte,Byte,Int,Byte,Byte,Float,Byte,Byte,String]
+            0x7B, 0x00, 0x00, 0x00, // p0 Int = 123 (Match obj)
+            0x36, // p1 Byte = 54 (Match)
+            0x02, // p2 Byte = 2 (Simulated)
+            0x15, 0x00, 0x00, 0x00, // p3 Int = 21
+            0x01, // p4 Byte = 1 (PlayerCount)
+            0x03, // p5 Byte = 3 (MatchState::WaitingForPlayers)
+            0x00, 0x00, 0xA0, 0x41, // p6 Float = 20.0 (timeout)
+            0x00, // p7 Byte = 0 (round)
+            0x03, // p8 Byte = 3 (maxRounds)
             0x24, 0x00, // p9 String len = 36
         ];
-        want.extend_from_slice(b"54da70b3-6683-4b07-bad5-165a2afd5402");
-        assert_eq!(got, want);
+        want.extend_from_slice(b"5b764e61-8851-4703-8fea-3d8e589ed24f");
+        assert_eq!(got, want, "Match spawn must byte-match s506 obj 123 (p5=WaitingForPlayers)");
+    }
+
+    /// Byte-for-byte vs s506 #3522339 — the Match net-object **property UPDATE** (op55,
+    /// after `BE 35`) that advances `MatchState` to InitialPlayerSetup(4): obj 123,
+    /// role 1 (Authority), p5 Byte 4, p6 Float 30.0 (timeout). Same NetData shape as
+    /// the spawn; only the carrier (0x35), role, p5 and p6 differ.
+    #[test]
+    fn update_match_matches_s506() {
+        let got = update_match(
+            123,
+            2,
+            MatchState::InitialPlayerSetup,
+            30.0,
+            0,
+            "5b764e61-8851-4703-8fea-3d8e589ed24f",
+        );
+        let mut want = vec![
+            0xBE, 0x35, // marker + net-object UPDATE carrier (op55)
+            0x09, 0xFF, 0x03, // maxPropId 9, bitmap {0..9}
+            0x70, 0x07, 0x77, 0x75, 0xA7, // type nibbles
+            0x7B, 0x00, 0x00, 0x00, // p0 Int = 123
+            0x36, // p1 Byte = 54 (Match)
+            0x01, // p2 Byte = 1 (Authority — updates flip to Authority)
+            0x15, 0x00, 0x00, 0x00, // p3 Int = 21
+            0x02, // p4 Byte = 2 (PlayerCount)
+            0x04, // p5 Byte = 4 (MatchState::InitialPlayerSetup)
+            0x00, 0x00, 0xF0, 0x41, // p6 Float = 30.0 (timeout)
+            0x00, // p7 Byte = 0
+            0x03, // p8 Byte = 3
+            0x24, 0x00, // p9 String len = 36
+        ];
+        want.extend_from_slice(b"5b764e61-8851-4703-8fea-3d8e589ed24f");
+        assert_eq!(got, want, "Match update must byte-match s506 obj 123 (p5=InitialPlayerSetup)");
     }
 
     /// Byte-for-byte vs s506 #3522332 (s2c op21 PlayerWelcome, player B): the
