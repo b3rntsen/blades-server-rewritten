@@ -41,6 +41,7 @@ mod error;
 mod gameevent;
 mod global_gift;
 mod global_shop;
+mod guild;
 mod inventory;
 mod json_db;
 pub mod models;
@@ -314,6 +315,18 @@ async fn main() -> Result<()> {
                     .service(daily_reward::get_daily_reward)
                     .service(daily_reward::collect_daily_reward)
                     .service(chests::collect_chest)
+                    // Guild: literal paths (current/search/leaderboard/…) MUST precede
+                    // the generic `/guilds/{guild_id}` so they aren't captured by it.
+                    .service(guild::get_current_guild)
+                    .service(guild::search_guilds)
+                    .service(guild::guild_leaderboard)
+                    .service(guild::get_messages)
+                    .service(guild::post_message)
+                    .service(guild::leave_guild)
+                    .service(guild::kick_member)
+                    .service(guild::create_guild)
+                    .service(guild::join_guild)
+                    .service(guild::get_guild)
                     .service(announcements::get_announcements)
                     .service(arena::leaderboards::get_leaderboard)
                     .service(arena::avatar::set_avatar)
