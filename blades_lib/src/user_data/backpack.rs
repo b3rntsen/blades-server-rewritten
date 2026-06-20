@@ -120,7 +120,12 @@ pub struct Backpack {
     pub items: Items,
 }
 
+// camelCase is REQUIRED: the client reads `removedItems`/`stackableItems`/
+// `removedStackableItems` from the inventory diff. Serializing snake_case meant the
+// client never saw removed items → backpack desync → the screen hung on any inventory
+// mutation (temper/craft/buy/sell/repair/salvage). Matches the captured wire shape.
 #[derive(Serialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct BackpackUpdate {
     pub stackable_items: StackableItems,
     pub items: Items,
@@ -177,6 +182,7 @@ pub struct Loadout {
 }
 
 #[derive(Serialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct LoadoutUpdate {
     pub equipped_items: EquippedItems,
     pub unequipped_item_slots: HashSet<Uuid>,
