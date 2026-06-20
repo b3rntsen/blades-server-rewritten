@@ -290,6 +290,9 @@ async fn main() -> Result<()> {
                     .service(dungeon_update::dungeon_update)
                     .service(abyss::get_abyss)
                     .service(town::get_town)
+                    // Crafting: finish (specific path) BEFORE create (bare /crafts).
+                    .service(craft::finish_craft)
+                    .service(craft::create_craft)
                     .service(craft::get_crafts)
                     .service(repair::repair_items)
                     .service(salvage::salvage_items)

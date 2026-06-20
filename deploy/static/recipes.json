@@ -1,0 +1,79 @@
+{
+  "32c68b36-4a68-4c35-b39b-dcd9def5e650": {
+    "craftingTypeId": "a47707e6-59e9-43b0-a29f-6d703acd8171",
+    "durationMs": 25199872,
+    "results": {
+      "items": [
+        {
+          "durability": 150.0,
+          "id": "a37b3a2b-77f8-4678-8336-b36e64d9a2ae",
+          "itemTemplateId": "570c2405-ca30-4cdb-89f1-cca98a2f772c",
+          "temperingLevel": 0
+        }
+      ]
+    }
+  },
+  "5004cd2f-12bf-49d8-97ca-544a1662c895": {
+    "craftingTypeId": "a47707e6-59e9-43b0-a29f-6d703acd8171",
+    "durationMs": 7219885,
+    "results": {
+      "items": [
+        {
+          "durability": 75.0,
+          "id": "f3aa855c-df1a-41f9-8d97-d6aa11064c17",
+          "itemTemplateId": "606c8bf6-9dc7-4c5f-b44b-36eb02306c96",
+          "temperingLevel": 0
+        }
+      ]
+    }
+  },
+  "6d164b3d-6532-4c4b-adcc-b4b8bc75f2dd": {
+    "craftingTypeId": "5c48b46e-e539-4a70-81dd-0bad8b8a0e0e",
+    "durationMs": 14399877,
+    "results": {
+      "stackableItems": {
+        "d25c8faa-5943-4ab1-99d2-aab025ecb581": 1
+      }
+    }
+  },
+  "e0d48d1a-8d8e-4c76-bfeb-970d80f9b838": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 16199870,
+    "results": {
+      "items": [
+        {
+          "arcaneTier": 2,
+          "durability": 325.0,
+          "id": "9251f895-fd8e-4460-beba-d62f293b28c1",
+          "itemTemplateId": "dad106ff-62e9-4d23-b7a7-e897b554bd5d",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+                "tier": 10
+              },
+              {
+                "id": "8f372d6d-2620-42ab-809b-edb4d5d1e528",
+                "tier": 10
+              },
+              {
+                "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 0
+        }
+      ]
+    }
+  },
+  "e8034051-4d5d-4f2d-8213-ee10a9787c12": {
+    "craftingTypeId": "c9d3b3aa-6f27-4869-9523-c10861f3e292",
+    "durationMs": 8399874,
+    "results": {
+      "stackableItems": {
+        "0fe77237-aa0b-4469-9cca-053c118797e2": 1
+      }
+    }
+  }
+}

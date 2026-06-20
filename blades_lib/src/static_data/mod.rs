@@ -119,6 +119,20 @@ pub struct ShopBundle {
     pub grant: RewardGrant,
 }
 
+/// A craft recipe definition (capture-derived). Holds the `craftingTypeId` and the
+/// verbatim `results` object (either `{"items":[...]}` or `{"stackableItems":{...}}`).
+/// `duration_ms` is how long the job runs before `/finish` is needed (0 = instant).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Recipe {
+    pub crafting_type_id: Uuid,
+    /// Verbatim captured `results` object — kept as raw `Value` to avoid re-modelling
+    /// the items/stackableItems union; the craft handlers deserialize it at use time.
+    pub results: Value,
+    #[serde(default)]
+    pub duration_ms: i64,
+}
+
 /// All capture-derived static definitions, loaded once at startup. Fields are added
 /// per feature; each is independently optional (a missing/!invalid data file leaves
 /// its field empty rather than failing startup).
@@ -157,4 +171,6 @@ pub struct StaticData {
     pub shop_data: ShopData,
     /// What each shop bundle costs + grants when bought (`bundleId` -> price/grant).
     pub shop_bundles: HashMap<Uuid, ShopBundle>,
+    /// Craft recipes keyed by `recipeId` (capture-derived from `POST /crafts`).
+    pub recipes: HashMap<Uuid, Recipe>,
 }
