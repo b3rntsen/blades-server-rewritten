@@ -36,34 +36,55 @@ impl Weight {
     }
 
     /// Per-step combo multiplier (the factor each *chained alternating* side-swing
-    /// COMPOUNDS by) and the combo ceiling, for [`combo_factor`].
-    ///
-    /// **Light is capture-calibrated to s506** (`docs/arena-combat-reproduction-spec.md`
-    /// §4.2): the recorded Dragonbone-dagger combo ramped Slashing ×1.00 → ×1.45 →
-    /// (deep) ×2.65 → ×4.12 against a combo-0 base of 113.82. `1.45^count` reproduces
-    /// that within the spec's stated charge/swingFactor variation (1.45^{0,1,2,3,4} =
-    /// {1.00, 1.45, 2.10, 3.05, 4.42}); capped at **4.12** (the recorded ceiling). The
-    /// first step 1.45 is the EMPIRICAL value (the table `combo` factor 1.540 is the
-    /// nominal one — the spec notes "×1.45 ≈ the Light combo factor 1.540").
+    /// COMPOUNDS by) and the combo ceiling, for the GEOMETRIC fallback in
+    /// [`combo_factor`] (used for weights WITHOUT a capture-pinned per-depth table).
     ///
     /// **Versatile / Heavy steps + caps are GUESSES** (those weights aren't in the
     /// recorded match): step = the weight's nominal `combo` factor, cap = step^4. A
     /// Heavy weapon combos slowly (1.186/step) and leans on charged `Middle` crits
     /// instead — flagged for calibration when a heavy-weapon match is captured.
+    /// **Light** does NOT use this geometric model — it uses the capture-pinned
+    /// per-depth anchor table [`LIGHT_COMBO_RAMP`] (the recorded ramp is irregular, not
+    /// geometric — see [`combo_factor`]).
     pub fn combo_step_cap(self) -> (f32, f32) {
         match self {
-            Weight::Light => (1.45, 4.12),                 // capture-calibrated (s506)
+            // Light's geometric params are kept only as the >ceiling fallback; the
+            // measured ramp is the explicit LIGHT_COMBO_RAMP table.
+            Weight::Light => (1.45, 4.12),                 // capture-calibrated (s506); table-driven
             Weight::Versatile => (1.250, 1.250_f32.powi(4)), // GUESS (no capture)
             Weight::Heavy => (1.186, 1.186_f32.powi(4)),     // GUESS (no capture)
         }
     }
 }
 
+/// The **capture-pinned** Light-weapon combo ramp, indexed by chain depth (0 = the
+/// fresh post-reset swing). These are the s506 recorded per-depth Slashing factors
+/// against the combo-0 base of 113.82 (`docs/arena-combat-reproduction-spec.md` §2a/§4.2):
+/// the recorded chain ramped ×1.00 → ×1.45 → ~×1.50 → ×2.65 → ×4.12 (seq 277/287 →
+/// 375/420 → 436 → 452). The ramp is **irregular** (NOT a clean `1.45^n`: the
+/// step-to-step ratios are 1.45 / 1.03 / 1.77 / 1.55), so it is reproduced as an
+/// explicit table rather than a geometric series — `1.45^3 = 3.05` overshot the
+/// recorded ×2.65 deep step by ~15%. Depths past the table HOLD at the ×4.12 ceiling
+/// (`LIGHT_COMBO_CAP`). [calibration: the four magnitudes are capture-pinned to s506.]
+pub const LIGHT_COMBO_RAMP: [f32; 5] = [1.00, 1.45, 1.50, 2.65, 4.12];
+/// The recorded Light combo ceiling (×4.12, seq 452) — depths beyond [`LIGHT_COMBO_RAMP`]
+/// stay capped here (a runaway chain can't exceed the recorded maximum).
+pub const LIGHT_COMBO_CAP: f32 = 4.12;
+
 /// The combo multiplier for a normal swing at chain depth `count` (0 = the fresh,
-/// post-reset swing). Compounds `combo_step_cap().0` per chained alternating swing,
-/// capped at `combo_step_cap().1`. `combo_factor(_, 0) == 1.0` for every weight
-/// (a fresh swing is the un-combo'd base). [`docs/arena-combat-reproduction-spec.md` §4.2]
+/// post-reset swing). `combo_factor(_, 0) == 1.0` for every weight (a fresh swing is
+/// the un-combo'd base). For **Light** (the only capture-calibrated weight) this reads
+/// the explicit s506 [`LIGHT_COMBO_RAMP`] anchor table (holding at [`LIGHT_COMBO_CAP`]
+/// beyond it) — the recorded ramp is irregular, not geometric. Other weights compound
+/// `combo_step_cap().0` per chained swing, capped at `combo_step_cap().1` (uncaptured
+/// GUESS). [`docs/arena-combat-reproduction-spec.md` §4.2]
 pub fn combo_factor(weight: Weight, count: u32) -> f32 {
+    if weight == Weight::Light {
+        return LIGHT_COMBO_RAMP
+            .get(count as usize)
+            .copied()
+            .unwrap_or(LIGHT_COMBO_CAP);
+    }
     let (step, cap) = weight.combo_step_cap();
     (step.powi(count as i32)).min(cap)
 }
@@ -142,18 +163,22 @@ mod tests {
         assert_eq!(smithy_level_for_char_level(86), 10); // Dragonbone
     }
 
-    /// The Light combo ramp reproduces the s506 anchors (combo 0→1.00, 1→1.45,
-    /// deep→~2.65/4.12) and is capped at 4.12 — `docs/arena-combat-reproduction-spec.md` §4.2.
+    /// The Light combo ramp reproduces the s506 recorded per-depth anchors EXACTLY
+    /// (combo 0→1.00, 1→1.45, 2→1.50, 3→2.65, 4→4.12) and holds at the ×4.12 ceiling
+    /// beyond — `docs/arena-combat-reproduction-spec.md` §2a/§4.2. (The earlier
+    /// geometric `1.45^n` overshot the recorded ×2.65 deep step; the ramp is irregular.)
     #[test]
     fn light_combo_ramp_matches_s506() {
         assert_eq!(combo_factor(Weight::Light, 0), 1.0, "fresh swing = un-combo'd base");
-        assert!((combo_factor(Weight::Light, 1) - 1.45).abs() < 1e-3, "first chained step ≈1.45 (165.1/113.8)");
-        // Deep combos land in the recorded 2.65 / 4.12 band (count 2→2.10, 3→3.05, 4→cap 4.12).
-        assert!(combo_factor(Weight::Light, 3) > 2.65, "deep combo exceeds the ×2.65 recorded mid-step");
+        assert!((combo_factor(Weight::Light, 1) - 1.45).abs() < 1e-3, "first chained step 1.45 (165.1/113.8)");
+        assert!((combo_factor(Weight::Light, 2) - 1.50).abs() < 1e-3, "second step ~1.50 (171.8/113.8)");
+        // The recorded deep steps are EXACT now (table-driven, not geometric).
+        assert!((combo_factor(Weight::Light, 3) - 2.65).abs() < 1e-3, "deep combo = recorded ×2.65 (301.8/113.8)");
+        assert!((combo_factor(Weight::Light, 4) - 4.12).abs() < 1e-3, "deeper combo = recorded ×4.12 (469.3/113.8)");
         assert_eq!(combo_factor(Weight::Light, 4), 4.12, "combo is capped at the recorded ×4.12 ceiling");
         assert_eq!(combo_factor(Weight::Light, 9), 4.12, "and stays capped past the ceiling");
         // Monotonic non-decreasing ramp.
-        for c in 0..6 {
+        for c in 0..8 {
             assert!(combo_factor(Weight::Light, c + 1) >= combo_factor(Weight::Light, c));
         }
     }
