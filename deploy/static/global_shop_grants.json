@@ -1,0 +1,990 @@
+{
+  "01b0466e-f11d-4f41-91be-93b5e904b0dd": {
+    "stackableItems": {
+      "9687d83c-aa7b-4cf3-a69f-0bba8204fa61": 30
+    },
+    "townXp": 0
+  },
+  "086b359d-f6a3-4e04-9baf-cd22e6f112ec": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 21417
+    },
+    "items": [
+      {
+        "durability": 82.5,
+        "id": "14131285-0f7f-4cba-849f-42e79fdfaaf9",
+        "itemTemplateId": "c469682f-6fb5-4323-b06e-b20c21d0ad44",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+              "tier": 1
+            },
+            {
+              "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+              "tier": 1
+            },
+            {
+              "id": "8f372d6d-2620-42ab-809b-edb4d5d1e528",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 4
+      },
+      {
+        "durability": 265.625,
+        "id": "c763a130-2667-482f-b831-8a5f6f5f8176",
+        "itemTemplateId": "6edb4102-9986-4bbb-80bf-283cb4a7aa53",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "464bedb7-a631-43b6-a2df-f65f089d39da",
+              "tier": 1
+            },
+            {
+              "id": "c02cf339-2c63-4456-bdd1-f4ad1e25bf3f",
+              "tier": 1
+            },
+            {
+              "id": "d12b80eb-1c2e-42a3-b939-b92e308f1b22",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 7
+      }
+    ],
+    "stackableItems": {
+      "05a7d501-f096-41e9-8443-fd6a090d8425": 8,
+      "3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5": 4,
+      "423fb9f0-a8fd-4b19-8701-b2bd92afdaaf": 3,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 50,
+      "4d6fd144-02a3-42ef-a50c-e4f53d9fc6ae": 3,
+      "51cd14b5-d44e-4183-bc8a-d0b975bc310d": 3,
+      "819094ad-e749-4c02-9210-38c3bb1ec535": 3,
+      "9df9233f-e7b9-47e8-bc75-f37707917759": 15,
+      "b604fd80-25b0-4bfb-8cc3-aad05bef96c0": 144,
+      "be886c9f-ed94-4610-b52b-3077152c3c01": 3,
+      "cf4b1b42-a736-4aa1-99b8-baca9f9c2276": 4,
+      "d826ea12-e583-47c1-a50f-4de608281735": 2,
+      "e7193116-d761-479b-8a20-5633737977f5": 56,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 106
+    },
+    "townXp": 0
+  },
+  "0ccaf37b-a829-404f-8b8d-e0de711b4f2c": {
+    "stackableItems": {
+      "8b7d0044-3a38-4ee0-af45-d2892b0f508d": 30
+    },
+    "townXp": 0
+  },
+  "11102495-fde7-4e77-b6c4-d13b9303f1f5": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 9153
+    },
+    "items": [
+      {
+        "durability": 165.0,
+        "id": "6b46517b-d5e8-49a9-857a-89390717ccf9",
+        "itemTemplateId": "239453b0-6b7d-4a8b-bccc-50563d51ccfb",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "626121b7-708d-455f-b32f-38e5b68bb80c",
+              "tier": 1
+            },
+            {
+              "id": "59c3b082-e57a-4243-ace5-9b55475e9b17",
+              "tier": 1
+            },
+            {
+              "id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 4
+      },
+      {
+        "durability": 152.34,
+        "id": "c72caf0a-e23e-41bb-ba02-5ddff694a08f",
+        "itemTemplateId": "606c8bf6-9dc7-4c5f-b44b-36eb02306c96",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+              "tier": 1
+            },
+            {
+              "id": "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+              "tier": 1
+            },
+            {
+              "id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 7
+      }
+    ],
+    "stackableItems": {
+      "05a7d501-f096-41e9-8443-fd6a090d8425": 6,
+      "3ca59113-a093-4cc8-8389-0f578ad94851": 12,
+      "3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5": 2,
+      "423fb9f0-a8fd-4b19-8701-b2bd92afdaaf": 5,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 38,
+      "819094ad-e749-4c02-9210-38c3bb1ec535": 3,
+      "979f5025-b9b8-4b1e-b312-f96f294f97ae": 2,
+      "9d9732a5-cd1c-4a93-8755-0bf92ee65d64": 243,
+      "9df9233f-e7b9-47e8-bc75-f37707917759": 9,
+      "b81952e0-c3c8-4a5c-92c0-8215d3eb71af": 238,
+      "d826ea12-e583-47c1-a50f-4de608281735": 6
+    },
+    "townXp": 0
+  },
+  "1185efd6-bb85-44d3-ae0d-e14272b2f8eb": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 600000
+    },
+    "stackableItems": {
+      "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 200,
+      "3bedef8a-2a4b-4953-81fa-0d38a8b97634": 6,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 1000,
+      "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 400,
+      "e7193116-d761-479b-8a20-5633737977f5": 2500,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 2500
+    },
+    "townXp": 56
+  },
+  "11b322d2-1b5e-4e90-bb41-a8d90ca9548b": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 1351
+    },
+    "items": [
+      {
+        "durability": 165.0,
+        "id": "6985bb75-4af9-4459-9c95-3b5e6b996917",
+        "itemTemplateId": "f9a87486-39c1-49f8-9024-0c08ee090165",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "5297713f-c60e-42fd-ade0-500daf0d632e",
+              "tier": 1
+            },
+            {
+              "id": "c02cf339-2c63-4456-bdd1-f4ad1e25bf3f",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 4
+      },
+      {
+        "durability": 136.475,
+        "id": "b08fb9f4-8ece-4090-ae42-d5f41ec86561",
+        "itemTemplateId": "6d0224b0-28ad-4802-84ea-48044570c419",
+        "temperingLevel": 2
+      }
+    ],
+    "stackableItems": {
+      "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 13,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 33,
+      "89ece62c-9ff6-470a-a152-d45ef4e0c222": 3
+    },
+    "townXp": 0
+  },
+  "16d100ba-e553-496f-b938-9e75e2a39a7c": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 5580
+    },
+    "items": [
+      {
+        "durability": 128.775,
+        "id": "d4adf031-6ee0-4df7-ab12-c7cc95bfb010",
+        "itemTemplateId": "b3ba11cd-21c6-46de-9e63-7564f437363c",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "af1e56bf-1974-452c-aa70-36b2140cbb07",
+              "tier": 1
+            },
+            {
+              "id": "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+              "tier": 1
+            },
+            {
+              "id": "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 1
+      },
+      {
+        "durability": 186.875,
+        "id": "8ab810cd-5dd3-4384-87e1-7912c3388ab2",
+        "itemTemplateId": "a6d3d7dd-2193-462b-b28e-1a4b1e902df1",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "f8e9dec5-c6e7-4976-b24b-2155f1921692",
+              "tier": 1
+            },
+            {
+              "id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 5
+      }
+    ],
+    "stackableItems": {
+      "05a7d501-f096-41e9-8443-fd6a090d8425": 3,
+      "3ca59113-a093-4cc8-8389-0f578ad94851": 3,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 23,
+      "d826ea12-e583-47c1-a50f-4de608281735": 2,
+      "e7193116-d761-479b-8a20-5633737977f5": 61,
+      "f00f350d-97c2-47cd-a554-e1a37c9ff7f2": 90
+    },
+    "townXp": 0
+  },
+  "20f2be5e-f9d8-44fa-9ec2-c104a5020816": {
+    "stackableItems": {
+      "68d7941e-8c8d-47bf-9f66-becb058f1817": 3
+    },
+    "townXp": 0
+  },
+  "22fc3846-6688-45ac-975d-67593f081632": {
+    "items": [
+      {
+        "arcaneTier": 2,
+        "durability": 325.0,
+        "id": "15faf756-e626-4e93-be27-bda5aea35cd9",
+        "itemTemplateId": "dad106ff-62e9-4d23-b7a7-e897b554bd5d",
+        "temperingLevel": 0
+      }
+    ],
+    "townXp": 0
+  },
+  "270790b7-74ac-470e-9f5f-fb49128bbea6": {
+    "stackableItems": {
+      "402869e4-94a9-46e7-8fca-ff71e8116f6c": 1
+    },
+    "townXp": 0
+  },
+  "3cb3c2ee-35e4-43b7-bf1d-03c45d65d9c1": {
+    "stackableItems": {
+      "05b4dd6b-796f-4088-a772-0e33ea3db976": 30
+    },
+    "townXp": 0
+  },
+  "3dc3bced-e583-4fc6-b79c-17ec3cd9ae5b": {
+    "items": [
+      {
+        "durability": 507.0,
+        "id": "b74afa64-63b6-49de-8358-14fea487e378",
+        "itemTemplateId": "2f49aa6b-dc14-4e07-887e-9068a752ce5f",
+        "temperingLevel": 0
+      }
+    ],
+    "townXp": 0
+  },
+  "4de7b916-77b2-44bb-ac11-6a0082ca69af": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 15304
+    },
+    "items": [
+      {
+        "durability": 247.5,
+        "id": "555807ca-ac5f-4f0e-84ef-aaf2349e6282",
+        "itemTemplateId": "c5a677d0-5451-45cd-a290-85dfa629d76e",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "464bedb7-a631-43b6-a2df-f65f089d39da",
+              "tier": 1
+            },
+            {
+              "id": "10f57d40-98e9-4181-972b-d654f81afc27",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 4
+      },
+      {
+        "durability": 247.5,
+        "id": "13236dd2-76d6-4475-a803-5d0561a898aa",
+        "itemTemplateId": "74450631-90d1-4ac4-a3f2-6b42aaf1890f",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "2b253847-5061-4a07-acfe-fbdc3c702922",
+              "tier": 1
+            },
+            {
+              "id": "3d5b70bb-d2bd-4141-80d5-333ef603a8f2",
+              "tier": 1
+            },
+            {
+              "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 4
+      }
+    ],
+    "stackableItems": {
+      "014606cd-8898-4c1d-8029-63220a179c47": 1,
+      "05a7d501-f096-41e9-8443-fd6a090d8425": 3,
+      "163d7b43-c246-4943-90b0-35410aee3d19": 2,
+      "1e12dc39-9029-4cfa-a7f1-9eebfbe240cf": 2,
+      "2fd05225-9375-487c-a440-45269ca67102": 2,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 42,
+      "cf4b1b42-a736-4aa1-99b8-baca9f9c2276": 8,
+      "dba6adde-b1f3-4146-8155-91426652495a": 42,
+      "e7193116-d761-479b-8a20-5633737977f5": 155,
+      "f11fb90b-b441-4d72-a33f-50d14d3d6778": 49
+    },
+    "townXp": 0
+  },
+  "4f7b557a-375d-4751-aa19-16812db690a9": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 18321
+    },
+    "items": [
+      {
+        "durability": 280.9,
+        "id": "38177588-435f-4d70-a4cd-ee8663dc1b69",
+        "itemTemplateId": "e8579306-4543-4bc8-8a03-1999ffe60204",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "464bedb7-a631-43b6-a2df-f65f089d39da",
+              "tier": 3
+            },
+            {
+              "id": "e8e0bb26-2751-4cac-bd20-effdec8dea4d",
+              "tier": 3
+            }
+          ]
+        },
+        "temperingLevel": 3
+      },
+      {
+        "durability": 239.475,
+        "id": "941115d1-f7fe-478a-8385-14bb4f9f4ff1",
+        "itemTemplateId": "244ab654-adfd-4b63-acdd-80793d9bb8e7",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+              "tier": 3
+            },
+            {
+              "id": "8f372d6d-2620-42ab-809b-edb4d5d1e528",
+              "tier": 3
+            },
+            {
+              "id": "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+              "tier": 3
+            }
+          ]
+        },
+        "temperingLevel": 2
+      }
+    ],
+    "stackableItems": {
+      "014606cd-8898-4c1d-8029-63220a179c47": 6,
+      "05a7d501-f096-41e9-8443-fd6a090d8425": 3,
+      "16e102fb-b1c0-42de-8106-0aa27e77f7f0": 1,
+      "1ba210b4-8cca-4f2f-b942-8fab80a52fd8": 14,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 49,
+      "4d1231be-d3fa-4282-81b2-0f7bed4aabff": 1,
+      "af316825-826d-4fba-8554-a99d2fe291e9": 4,
+      "e7193116-d761-479b-8a20-5633737977f5": 103,
+      "f6498f35-f963-4468-949a-6a5752b93bca": 2,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 100
+    },
+    "townXp": 0
+  },
+  "4f967fcd-37c8-433b-83dd-d34e17d6ce70": {
+    "stackableItems": {
+      "9fa4b89e-f738-425e-9fae-4af65ccb0604": 1
+    },
+    "townXp": 142
+  },
+  "522a71be-6f47-4d5c-9608-518cb0c6dab5": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 20000
+    },
+    "stackableItems": {
+      "16e102fb-b1c0-42de-8106-0aa27e77f7f0": 20,
+      "32ef7be4-88aa-4a0b-a198-fa88d484a41d": 10,
+      "34ddfe0e-5119-4e52-8eef-a77b6bc810a7": 60,
+      "71bb8562-07ad-4f18-855a-96f9156b8e6b": 40,
+      "75112030-b248-49b0-9c70-0da8dea150d1": 50,
+      "85ed5500-3581-4699-8095-4b5ff6514355": 50,
+      "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95": 20,
+      "c1abc963-c03c-4cd9-84d7-433ed8ab3877": 10,
+      "d523932f-8c7f-4192-9112-5dbd60883c2b": 60,
+      "f9181a67-b094-4c37-a145-ced9dfe610d6": 50
+    },
+    "townXp": 0
+  },
+  "5d4a230c-43c8-498f-9534-659fe9389476": {
+    "stackableItems": {
+      "f1c5c03c-5297-48fb-a9d2-5f32bffb467c": 30
+    },
+    "townXp": 0
+  },
+  "6135f729-1402-424c-b6c6-efcbc4e59955": {
+    "stackableItems": {
+      "927fa594-634b-4fb8-b98c-c53b1e09fd9a": 1,
+      "a654c0e8-bef2-4d9e-8384-642a68eba019": 1
+    },
+    "townXp": 0
+  },
+  "6324182a-c722-4059-89d0-040ba500b4f8": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 30000
+    },
+    "stackableItems": {
+      "3852a530-c661-4ecc-b3b3-30ae7932efdf": 2,
+      "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 50,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 340,
+      "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 100,
+      "939df0a7-d349-4601-943c-29c834bc2280": 2,
+      "d092b411-aaa6-46f8-b935-dd5e41d90de1": 2,
+      "e7193116-d761-479b-8a20-5633737977f5": 850,
+      "fa47b31f-3782-4562-800f-b4fe81116ce7": 2,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 850
+    },
+    "townXp": 82
+  },
+  "67b7a1eb-05fb-417d-b013-1e5fc037acc0": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 5000
+    },
+    "stackableItems": {
+      "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 25,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 100,
+      "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 50,
+      "e7193116-d761-479b-8a20-5633737977f5": 250,
+      "ea5b4d2c-61cc-49e6-acaa-e41d6dd4adc9": 1,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 250
+    },
+    "townXp": 59
+  },
+  "6ec8f67f-2cef-41aa-a7fc-f46237ae809c": {
+    "stackableItems": {
+      "05b4dd6b-796f-4088-a772-0e33ea3db976": 50,
+      "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1": 100,
+      "10c54e43-a2a1-4833-9491-4c19149f43b5": 100,
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 40,
+      "68d7941e-8c8d-47bf-9f66-becb058f1817": 24,
+      "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50": 50,
+      "8b7d0044-3a38-4ee0-af45-d2892b0f508d": 100,
+      "9687d83c-aa7b-4cf3-a69f-0bba8204fa61": 50,
+      "a3351353-f613-4368-bac7-05783f857b07": 48,
+      "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb": 12,
+      "f1c5c03c-5297-48fb-a9d2-5f32bffb467c": 100
+    },
+    "townXp": 0
+  },
+  "723c6b1c-e029-461d-8531-0637875c8c49": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 15000
+    },
+    "stackableItems": {
+      "05a7d501-f096-41e9-8443-fd6a090d8425": 7,
+      "0e59a8f9-8a47-48a0-afac-8c3053cc778c": 20,
+      "21e6557f-17ca-4bd3-9379-00184efe0edc": 2,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 30,
+      "e7193116-d761-479b-8a20-5633737977f5": 125,
+      "f00f350d-97c2-47cd-a554-e1a37c9ff7f2": 40,
+      "fbf96b07-e9aa-4157-8761-10179fa05138": 80,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 125
+    },
+    "townXp": 0
+  },
+  "757d3098-4e05-4c07-b49d-e69d8b22e640": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 5000
+    },
+    "stackableItems": {
+      "3ca59113-a093-4cc8-8389-0f578ad94851": 10,
+      "3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5": 5,
+      "51f7612f-a797-4417-8a92-493b0aae7f45": 25,
+      "55e82826-2d68-469c-8870-753665ca62cd": 25,
+      "89ece62c-9ff6-470a-a152-d45ef4e0c222": 12,
+      "92b77b2f-bd33-469f-8aad-8a228b9537eb": 12,
+      "9df9233f-e7b9-47e8-bc75-f37707917759": 5,
+      "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 45,
+      "b81952e0-c3c8-4a5c-92c0-8215d3eb71af": 45
+    },
+    "townXp": 0
+  },
+  "7760614b-8f31-4638-bca4-9170e0ee4e95": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 5000
+    },
+    "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 50,
+      "e7193116-d761-479b-8a20-5633737977f5": 120,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 120
+    },
+    "townXp": 0
+  },
+  "7a4a92f9-6ace-4cc6-a10c-056f0c108fc3": {
+    "stackableItems": {
+      "e2abb80c-7045-4d95-a842-59d4e5525906": 1
+    },
+    "townXp": 0
+  },
+  "7bfbb4d3-a6cb-4b26-a53c-09869facff3d": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 9000
+    },
+    "stackableItems": {
+      "05a7d501-f096-41e9-8443-fd6a090d8425": 4,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 20,
+      "e7193116-d761-479b-8a20-5633737977f5": 90,
+      "f00f350d-97c2-47cd-a554-e1a37c9ff7f2": 20,
+      "f9d2869a-a517-4080-abac-be6af47e5556": 2,
+      "fbf96b07-e9aa-4157-8761-10179fa05138": 40,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 90
+    },
+    "townXp": 0
+  },
+  "864e1916-847d-4389-9e0b-60776a293657": {
+    "stackableItems": {
+      "bcbbcf70-765d-4246-a3db-4c5c7cb743c3": 4
+    },
+    "townXp": 12
+  },
+  "8e2ebf29-ef95-4d93-b49f-4bc483ee46d8": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 10000
+    },
+    "stackableItems": {
+      "05a7d501-f096-41e9-8443-fd6a090d8425": 4,
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 10,
+      "3ca59113-a093-4cc8-8389-0f578ad94851": 10,
+      "3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5": 10,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 75,
+      "790a188b-3fa0-4f38-99d9-bc8d3675bc46": 5,
+      "9df9233f-e7b9-47e8-bc75-f37707917759": 10
+    },
+    "townXp": 0
+  },
+  "8e35aa43-0e1c-4abd-9db2-3a908f851669": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 850000
+    },
+    "stackableItems": {
+      "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 250,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 1300,
+      "606494ef-e0e2-4ec3-bcbb-0c12b79fe7cb": 1,
+      "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 500,
+      "e7193116-d761-479b-8a20-5633737977f5": 3300,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 3300
+    },
+    "townXp": 168
+  },
+  "8fc556fb-cd90-4c5a-a37e-9fbadba4d908": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 20000
+    },
+    "stackableItems": {
+      "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 30,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 120,
+      "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 30,
+      "e7193116-d761-479b-8a20-5633737977f5": 400,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 400
+    },
+    "townXp": 0
+  },
+  "915f8476-f191-4486-81e8-f9d9fb8ae9c0": {
+    "stackableItems": {
+      "68d7941e-8c8d-47bf-9f66-becb058f1817": 6,
+      "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb": 4,
+      "d94bab85-53d5-4c9c-a637-acd94fc66c98": 1
+    },
+    "townXp": 0
+  },
+  "9aa5f781-3182-4a38-97a1-ef671f821acd": {
+    "items": [
+      {
+        "durability": 450.0,
+        "id": "532d352f-b588-404e-becb-b2ec783e4b64",
+        "itemTemplateId": "657f9abf-11bf-4278-938d-2cc3e1573ef1",
+        "temperingLevel": 0
+      }
+    ],
+    "townXp": 0
+  },
+  "9e4dc391-422e-4b25-ba90-faab39e0769f": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 3233
+    },
+    "items": [
+      {
+        "durability": 165.0,
+        "id": "0d4a340f-632a-4abc-89a3-50a17c609b16",
+        "itemTemplateId": "19bf17ce-784c-4ab6-b1a4-e517f0e5f2b7",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "464bedb7-a631-43b6-a2df-f65f089d39da",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 4
+      },
+      {
+        "grade": 5,
+        "id": "9c3e5535-064c-4449-a85f-1b531bfcf4c6",
+        "itemTemplateId": "ef55a000-ff34-41b0-a12a-b439c2d47b06",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "d1e286a7-7c90-4e1b-aaaa-fa04b607e698",
+              "tier": 1
+            },
+            {
+              "id": "98757a01-33b8-40ea-bb45-6acd89811ae3",
+              "tier": 1
+            }
+          ],
+          "GRADING": [
+            {
+              "id": "0e570b97-87ba-4967-a7fa-cf51f40065fb",
+              "tier": 2
+            },
+            {
+              "id": "ff35b37f-7bc3-455f-81d7-3a2b60417ab5",
+              "tier": 2
+            },
+            {
+              "id": "8687fa52-155a-4777-8e94-e3a4332ec093",
+              "tier": 1
+            }
+          ]
+        }
+      }
+    ],
+    "stackableItems": {
+      "05a7d501-f096-41e9-8443-fd6a090d8425": 2,
+      "3ca59113-a093-4cc8-8389-0f578ad94851": 3,
+      "3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5": 1,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 49,
+      "4d6fd144-02a3-42ef-a50c-e4f53d9fc6ae": 2,
+      "9d9732a5-cd1c-4a93-8755-0bf92ee65d64": 46,
+      "9df9233f-e7b9-47e8-bc75-f37707917759": 1,
+      "d826ea12-e583-47c1-a50f-4de608281735": 2,
+      "e7193116-d761-479b-8a20-5633737977f5": 31,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24
+    },
+    "townXp": 0
+  },
+  "ab94a2e0-9770-4fee-9f7f-8d9a34946750": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 80000
+    },
+    "stackableItems": {
+      "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 100,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 520,
+      "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 200,
+      "ddbfda14-263b-46cd-8baa-866addf222d8": 1,
+      "e7193116-d761-479b-8a20-5633737977f5": 1300,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 1300
+    },
+    "townXp": 86
+  },
+  "afc71167-0544-4112-ad28-7cd1b2ea95d1": {
+    "stackableItems": {
+      "9fa4b89e-f738-425e-9fae-4af65ccb0604": 1
+    },
+    "townXp": 142
+  },
+  "b186af0b-685a-4ef4-a507-435d5cb78a54": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 5000
+    },
+    "stackableItems": {
+      "05a7d501-f096-41e9-8443-fd6a090d8425": 2,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 15,
+      "aa52a6a4-6500-44b5-ad74-9eb1d58e38c7": 2,
+      "e7193116-d761-479b-8a20-5633737977f5": 50,
+      "fbf96b07-e9aa-4157-8761-10179fa05138": 20,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 50
+    },
+    "townXp": 0
+  },
+  "b77ed0a4-b347-4d20-82d1-75ad32b90dfb": {
+    "stackableItems": {
+      "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50": 30
+    },
+    "townXp": 0
+  },
+  "bb5631a5-e68d-4455-a01e-bc3080bcf054": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 1000000
+    },
+    "stackableItems": {
+      "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 300,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 1800,
+      "48fad7a1-3f32-4dad-811a-c33312717176": 1,
+      "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 600,
+      "e7193116-d761-479b-8a20-5633737977f5": 4500,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 4500
+    },
+    "townXp": 133
+  },
+  "c18127a3-57f0-4b5f-aa7d-54b3095e97ff": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 50000
+    },
+    "stackableItems": {
+      "05a7d501-f096-41e9-8443-fd6a090d8425": 8,
+      "16e102fb-b1c0-42de-8106-0aa27e77f7f0": 10,
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 50,
+      "32ef7be4-88aa-4a0b-a198-fa88d484a41d": 5,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 150,
+      "68d7941e-8c8d-47bf-9f66-becb058f1817": 25,
+      "70f2c013-813e-4f63-8b29-7a54a13b5e58": 10,
+      "71bb8562-07ad-4f18-855a-96f9156b8e6b": 20,
+      "91c40a5d-36b8-4ed9-9c07-209b52ebc732": 3,
+      "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95": 10,
+      "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb": 20,
+      "c1abc963-c03c-4cd9-84d7-433ed8ab3877": 5,
+      "d94bab85-53d5-4c9c-a637-acd94fc66c98": 5
+    },
+    "townXp": 0
+  },
+  "c3e6017f-d0ad-453d-bdea-61000ede2978": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 44034
+    },
+    "items": [
+      {
+        "durability": 300.0,
+        "id": "0951f38c-f3f6-479a-b402-2623fb9c18fb",
+        "itemTemplateId": "40d31be2-28c6-41dd-9e36-1e6e0b6487db",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 6
+      },
+      {
+        "durability": 206.25,
+        "id": "014203a8-a1db-4ebf-be7c-227069cc488e",
+        "itemTemplateId": "ade3e935-3882-44bc-9c3f-583c6da7c5fb",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
+              "tier": 4
+            },
+            {
+              "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+              "tier": 4
+            },
+            {
+              "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+              "tier": 4
+            }
+          ]
+        },
+        "temperingLevel": 4
+      }
+    ],
+    "stackableItems": {
+      "014606cd-8898-4c1d-8029-63220a179c47": 13,
+      "05a7d501-f096-41e9-8443-fd6a090d8425": 8,
+      "0de08119-d316-4933-a5d3-8ef702d4efdc": 175,
+      "16e102fb-b1c0-42de-8106-0aa27e77f7f0": 1,
+      "185a9de9-e5df-4cfe-994b-88270622b137": 3,
+      "1ba210b4-8cca-4f2f-b942-8fab80a52fd8": 20,
+      "21e6557f-17ca-4bd3-9379-00184efe0edc": 6,
+      "34988d74-de88-43af-adea-445def4949be": 3,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 80,
+      "4312b0ed-e397-4815-9693-a511ecda71de": 122,
+      "4d1231be-d3fa-4282-81b2-0f7bed4aabff": 2,
+      "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95": 2,
+      "b563ebe6-83b2-430d-bd55-3409f1bb9fb9": 3,
+      "dba6adde-b1f3-4146-8155-91426652495a": 103
+    },
+    "townXp": 0
+  },
+  "c54f6e79-d856-4ee3-8244-884986c0f327": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 9363
+    },
+    "items": [
+      {
+        "durability": 162.225,
+        "id": "e516b019-faf2-442b-9cc0-df0925a14bea",
+        "itemTemplateId": "887cbbef-19df-47e2-a226-4d5776e06e37",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "464bedb7-a631-43b6-a2df-f65f089d39da",
+              "tier": 1
+            },
+            {
+              "id": "e8e0bb26-2751-4cac-bd20-effdec8dea4d",
+              "tier": 1
+            },
+            {
+              "id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 2
+      },
+      {
+        "durability": 265.625,
+        "id": "e90f0a21-117c-41c4-ad2a-2ed61ae8be97",
+        "itemTemplateId": "d3182227-5ec3-487c-a94d-8df708de76f5",
+        "properties": {
+          "ENCHANTING": [
+            {
+              "id": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+              "tier": 1
+            }
+          ]
+        },
+        "temperingLevel": 7
+      }
+    ],
+    "stackableItems": {
+      "05a7d501-f096-41e9-8443-fd6a090d8425": 3,
+      "0e59a8f9-8a47-48a0-afac-8c3053cc778c": 42,
+      "200d62f5-7de2-4a6c-979a-43df30d6fd86": 40,
+      "3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5": 6,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 29,
+      "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 50,
+      "c308c33e-1a00-48ed-a8d8-b6e516ddffaa": 2,
+      "cf4b1b42-a736-4aa1-99b8-baca9f9c2276": 1,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 53
+    },
+    "townXp": 0
+  },
+  "c820b311-5b84-4bd6-be6c-a76cf0a5c57b": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 200000
+    },
+    "stackableItems": {
+      "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 150,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 740,
+      "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 300,
+      "885f9882-ac5f-44bb-9f0f-6a3c72f375bb": 1,
+      "e7193116-d761-479b-8a20-5633737977f5": 1850,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 1850
+    },
+    "townXp": 72
+  },
+  "e29703dd-2b85-44b8-9eb4-e681a4a4636b": {
+    "stackableItems": {
+      "2d9dc86b-0ba5-4d09-a16d-91baeb4b6dd2": 1
+    },
+    "townXp": 0
+  },
+  "ec5fa669-3e38-432c-9b44-19e543fcb39b": {
+    "stackableItems": {
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 6,
+      "790a188b-3fa0-4f38-99d9-bc8d3675bc46": 3
+    },
+    "townXp": 0
+  },
+  "ef234f68-8ee2-4fdd-8fbe-a8f9bf70fc21": {
+    "stackableItems": {
+      "05b4dd6b-796f-4088-a772-0e33ea3db976": 20,
+      "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1": 45,
+      "10c54e43-a2a1-4833-9491-4c19149f43b5": 45,
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 40,
+      "1ba210b4-8cca-4f2f-b942-8fab80a52fd8": 20,
+      "3932e499-441e-4c6d-b671-9a03131ebe6f": 10,
+      "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50": 20,
+      "8b7d0044-3a38-4ee0-af45-d2892b0f508d": 45,
+      "9687d83c-aa7b-4cf3-a69f-0bba8204fa61": 20,
+      "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029": 40,
+      "f1c5c03c-5297-48fb-a9d2-5f32bffb467c": 45
+    },
+    "townXp": 0
+  },
+  "f38f8e2b-447b-480f-98de-b24daff32f52": {
+    "items": [
+      {
+        "arcaneTier": 2,
+        "durability": 225.0,
+        "id": "03dec691-ca6c-4e71-9b5d-95f5887c1824",
+        "itemTemplateId": "f42c7165-635f-4430-9490-7cf0799ffb32",
+        "temperingLevel": 0
+      }
+    ],
+    "townXp": 0
+  },
+  "f3f5a1c7-0f37-4a3c-a2db-977c35349dad": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 10000
+    },
+    "stackableItems": {
+      "014606cd-8898-4c1d-8029-63220a179c47": 12,
+      "16e102fb-b1c0-42de-8106-0aa27e77f7f0": 8,
+      "4312b0ed-e397-4815-9693-a511ecda71de": 35,
+      "71bb8562-07ad-4f18-855a-96f9156b8e6b": 15,
+      "75112030-b248-49b0-9c70-0da8dea150d1": 55,
+      "85ed5500-3581-4699-8095-4b5ff6514355": 55,
+      "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95": 8,
+      "e80bee76-f92c-4005-9eff-20d1e8c64d24": 35
+    },
+    "townXp": 0
+  },
+  "f7807aca-96fe-4418-8000-372d01410eff": {
+    "stackableItems": {
+      "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1": 30
+    },
+    "townXp": 0
+  },
+  "fbd06bea-34f2-4ca0-b6af-b983e56084dd": {
+    "stackableItems": {
+      "2140fccc-4383-459d-921e-52db23b513df": 3,
+      "227afa4e-2657-4072-9c53-1c75d5f4393a": 3,
+      "4426e305-dd30-46ae-83d2-bafe7e28dd0e": 3,
+      "4a4e9960-5db8-40e3-bd93-65f8062c8bf8": 3,
+      "7ae85d4b-5e60-4926-887a-bc434d6176b4": 3,
+      "c4e0de4f-813c-45b9-9ed7-943b4ac2e729": 3,
+      "d058474f-1fd4-4f5b-93d0-d292922aa8a8": 3,
+      "eb90bc1a-382c-4366-aad4-026b9b25e10f": 3
+    },
+    "townXp": 0
+  },
+  "fd022c2e-a06c-4271-aa66-4424b1a8a7ab": {
+    "currencies": {
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 10000
+    },
+    "stackableItems": {
+      "285326c5-f9d2-4f74-b93e-528ae618d1f2": 1,
+      "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 40,
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 200,
+      "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 80,
+      "e7193116-d761-479b-8a20-5633737977f5": 500,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 500
+    },
+    "townXp": 143
+  }
+}

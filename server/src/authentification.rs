@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use actix_web::{http::StatusCode, post, web};
+use actix_web::{HttpRequest, http::StatusCode, post, web};
 use blades_lib::user_data::UserAccount;
 use diesel::{
     ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper, associations::HasTable,
@@ -19,7 +19,10 @@ use crate::{
 #[serde(rename_all = "camelCase")]
 struct AnonLoginInfo {
     user_id: Option<String>,
-    device_id: String,
+    // The retail client sends `deviceId: null` on a first anon login (no
+    // GPGS/device identity yet, e.g. a fresh emulator). Must be Option or serde
+    // rejects null with a 400 deserialize error before the handler even runs.
+    device_id: Option<String>,
     platform: String,
 }
 
@@ -74,6 +77,7 @@ struct DeniedFeatureResponse {
 
 #[post("/blades.bgs.services/api/authentication/v1/public/auth/anon")]
 async fn anon_log_in(
+    req: HttpRequest,
     app_state: web::Data<Arc<ServerGlobal>>,
     info: web::Json<AnonLoginInfo>,
 ) -> Result<web::Json<SessionResponse>, BladeApiError> {
@@ -87,49 +91,64 @@ async fn anon_log_in(
     // back to dev-login (no regression). device_bindings (migration
     // 2026-06-08_add_device_bindings) is queried with raw SQL to avoid a
     // timestamp-typed diesel schema (no chrono feature needed).
-    let mut conn = app_state.db_pool.get().await.unwrap();
-    let _ = diesel::sql_query(
-        "INSERT INTO device_bindings (device_id, platform, last_seen) VALUES ($1, $2, now()) \
-         ON CONFLICT (device_id) DO UPDATE SET last_seen = now(), \
-         platform = COALESCE(EXCLUDED.platform, device_bindings.platform)",
-    )
-    .bind::<diesel::sql_types::Text, _>(info.0.device_id.clone())
-    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some(info.0.platform.clone()))
-    .execute(&mut conn)
-    .await;
+    // Effective device key: the client-sent deviceId, or — for the fork client,
+    // which sends deviceId: null — the WG peer IP the arena_redirect addon tags
+    // (X-Newblades-Device-Ip). Each newblades WG peer has a unique, stable IP, so
+    // it serves as a per-device identity for the claim link. (A client with
+    // neither still falls through to the dev-login / create path below.)
+    let effective_device_id: Option<String> = info.0.device_id.clone().or_else(|| {
+        req.headers()
+            .get("x-newblades-device-ip")
+            .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+    });
+    if let Some(device_id_val) = effective_device_id {
+        let mut conn = app_state.db_pool.get().await.unwrap();
+        let _ = diesel::sql_query(
+            "INSERT INTO device_bindings (device_id, platform, last_seen) VALUES ($1, $2, now()) \
+             ON CONFLICT (device_id) DO UPDATE SET last_seen = now(), \
+             platform = COALESCE(EXCLUDED.platform, device_bindings.platform)",
+        )
+        .bind::<diesel::sql_types::Text, _>(device_id_val.clone())
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some(info.0.platform.clone()))
+        .execute(&mut conn)
+        .await;
 
-    #[derive(diesel::QueryableByName)]
-    struct BoundUser {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        user_id: Uuid,
-    }
-    let bound: Option<BoundUser> = diesel::sql_query(
-        "SELECT user_id FROM device_bindings WHERE device_id = $1 AND user_id IS NOT NULL",
-    )
-    .bind::<diesel::sql_types::Text, _>(info.0.device_id.clone())
-    .get_result(&mut conn)
-    .await
-    .optional()
-    .unwrap_or(None);
-    if let Some(b) = bound {
-        let result = users
-            .select(UserDBEntry::as_select())
-            .filter(id.eq(b.user_id))
-            .load(&mut conn)
-            .await
-            .unwrap();
-        if let Some(user) = result.get(0) {
-            let session = Arc::new(Session::new(
-                user.id,
-                user.secret_id,
-                app_state.session_store.ttl,
-            ));
-            let session_id = app_state.session_store.store_new_session(session.clone());
-            return Ok(web::Json(SessionResponse {
-                session: SessionResponseInner::from_session(session_id, session.as_ref()),
-            }));
+        #[derive(diesel::QueryableByName)]
+        struct BoundUser {
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            user_id: Uuid,
         }
-        // Bound to a now-missing user — fall through to the normal flow.
+        let bound: Option<BoundUser> = diesel::sql_query(
+            "SELECT user_id FROM device_bindings WHERE device_id = $1 AND user_id IS NOT NULL",
+        )
+        .bind::<diesel::sql_types::Text, _>(device_id_val)
+        .get_result(&mut conn)
+        .await
+        .optional()
+        .unwrap_or(None);
+        if let Some(b) = bound {
+            let result = users
+                .select(UserDBEntry::as_select())
+                .filter(id.eq(b.user_id))
+                .load(&mut conn)
+                .await
+                .unwrap();
+            if let Some(user) = result.get(0) {
+                let session = Arc::new(Session::new(
+                    user.id,
+                    user.secret_id,
+                    app_state.session_store.ttl,
+                ));
+                let session_id = app_state.session_store.store_new_session(session.clone());
+                crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
+                return Ok(web::Json(SessionResponse {
+                    session: SessionResponseInner::from_session(session_id, session.as_ref()),
+                }));
+            }
+            // Bound to a now-missing user — fall through to the normal flow.
+        }
     }
 
     // Dev override (ARENA_DEV_LOGIN_USER_ID): resolve EVERY anon login to one
@@ -154,6 +173,7 @@ async fn anon_log_in(
             app_state.session_store.ttl,
         ));
         let session_id = app_state.session_store.store_new_session(session.clone());
+        crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
         return Ok(web::Json(SessionResponse {
             session: SessionResponseInner::from_session(session_id, session.as_ref()),
         }));
@@ -187,6 +207,7 @@ async fn anon_log_in(
             app_state.session_store.ttl,
         ));
         let session_id = app_state.session_store.store_new_session(session.clone());
+        crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
         return Ok(web::Json(SessionResponse {
             session: SessionResponseInner::from_session(session_id, session.as_ref()),
         }));
@@ -194,7 +215,9 @@ async fn anon_log_in(
         // create a new user
         let mut new_user = UserAccount::new_random();
         if info.0.platform == "gp" {
-            new_user.gp_deviceids.insert(info.0.device_id);
+            if let Some(did) = info.0.device_id {
+                new_user.gp_deviceids.insert(did);
+            }
         } else {
             return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 3, 3)); //INVALID_REQUEST_DEVICE_ID
         }
@@ -217,6 +240,7 @@ async fn anon_log_in(
             app_state.session_store.ttl,
         ));
         let session_id = app_state.session_store.store_new_session(session.clone());
+        crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
         return Ok(web::Json(SessionResponse {
             session: SessionResponseInner::from_session(session_id, session.as_ref()),
         }));

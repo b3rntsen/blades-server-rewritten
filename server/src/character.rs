@@ -204,6 +204,8 @@ async fn create_characters(
         data: JsonDbWrapper(new_data),
         wallet: JsonDbWrapper(CompleteWallet::default()),
         inventory: JsonDbWrapper(inventory.clone()),
+        // Fresh character → no captured town; get_town serves default_town.json.
+        town: None,
     };
 
     let mut conn = app_state.db_pool.get().await.unwrap();

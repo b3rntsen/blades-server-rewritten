@@ -1,0 +1,166 @@
+{
+  "fulfillmentOverrides": {
+    "51455067-37b0-4763-8ca7-c7e1d733f536": {
+      "maxPurchaseLimits": [
+        {
+          "limit": 0,
+          "purchaseTrackingId": "51455067-37b0-4763-8ca7-c7e1d733f536::override::ed2b7eac-e852-464d-990c-590368a7d76f"
+        },
+        {
+          "limit": 0,
+          "purchaseTrackingId": "51455067-37b0-4763-8ca7-c7e1d733f536"
+        },
+        {
+          "limit": 3,
+          "purchaseTrackingId": "51455067-37b0-4763-8ca7-c7e1d733f536::override::ed2b7eac-e852-464d-990c-590368a7d76f::1780117200"
+        }
+      ],
+      "maxPurchases": 0,
+      "purchaseTrackingId": null,
+      "skuDataAndroid": {
+        "activeEndDate": 1780289940,
+        "activeStartDate": 1780117200,
+        "isActive": false,
+        "isVersionActive": false
+      },
+      "skuDataBnet": {
+        "activeEndDate": 1780289940,
+        "activeStartDate": 1780117200,
+        "isActive": false,
+        "isVersionActive": false
+      },
+      "skuDataEpic": {
+        "activeEndDate": 1780289940,
+        "activeStartDate": 1780117200,
+        "isActive": false,
+        "isVersionActive": false
+      },
+      "skuDataIOS": {
+        "activeEndDate": 1780289940,
+        "activeStartDate": 1780117200,
+        "isActive": false,
+        "isVersionActive": false
+      },
+      "skuDataSteam": {
+        "activeEndDate": 1780289940,
+        "activeStartDate": 1780117200,
+        "isActive": false,
+        "isVersionActive": false
+      },
+      "skuDataSwitch": {
+        "activeEndDate": 1780289940,
+        "activeStartDate": 1780117200,
+        "isActive": false,
+        "isVersionActive": false
+      }
+    },
+    "564345ba-7306-459d-8ecd-ec152e6c0a5d": {
+      "maxPurchaseLimits": [
+        {
+          "limit": 0,
+          "purchaseTrackingId": "564345ba-7306-459d-8ecd-ec152e6c0a5d::override::c0ff18fc-e452-4c4b-90d2-6f2ccbb03640"
+        },
+        {
+          "limit": 0,
+          "purchaseTrackingId": "564345ba-7306-459d-8ecd-ec152e6c0a5d"
+        },
+        {
+          "limit": 3,
+          "purchaseTrackingId": "564345ba-7306-459d-8ecd-ec152e6c0a5d::override::c0ff18fc-e452-4c4b-90d2-6f2ccbb03640::1779685200"
+        }
+      ],
+      "maxPurchases": 0,
+      "purchaseTrackingId": null,
+      "skuDataAndroid": {
+        "activeEndDate": 1780117140,
+        "activeStartDate": 1779685200,
+        "isActive": false,
+        "isVersionActive": false
+      },
+      "skuDataBnet": {
+        "activeEndDate": 1780117140,
+        "activeStartDate": 1779685200,
+        "isActive": false,
+        "isVersionActive": false
+      },
+      "skuDataEpic": {
+        "activeEndDate": 1780117140,
+        "activeStartDate": 1779685200,
+        "isActive": false,
+        "isVersionActive": false
+      },
+      "skuDataIOS": {
+        "activeEndDate": 1780117140,
+        "activeStartDate": 1779685200,
+        "isActive": false,
+        "isVersionActive": false
+      },
+      "skuDataSteam": {
+        "activeEndDate": 1780117140,
+        "activeStartDate": 1779685200,
+        "isActive": false,
+        "isVersionActive": false
+      },
+      "skuDataSwitch": {
+        "activeEndDate": 1780117140,
+        "activeStartDate": 1779685200,
+        "isActive": false,
+        "isVersionActive": false
+      }
+    },
+    "9dafab61-2b05-458d-a1a8-7d0a5023e500": {
+      "maxPurchaseLimits": [
+        {
+          "limit": 0,
+          "purchaseTrackingId": "9dafab61-2b05-458d-a1a8-7d0a5023e500::override::ca860b49-ff4d-44fa-87ae-0a61bc2944c4"
+        },
+        {
+          "limit": 0,
+          "purchaseTrackingId": "9dafab61-2b05-458d-a1a8-7d0a5023e500"
+        },
+        {
+          "limit": 3,
+          "purchaseTrackingId": "9dafab61-2b05-458d-a1a8-7d0a5023e500::override::ca860b49-ff4d-44fa-87ae-0a61bc2944c4::1780117200"
+        }
+      ],
+      "maxPurchases": 0,
+      "purchaseTrackingId": null,
+      "skuDataAndroid": {
+        "activeEndDate": 1780289940,
+        "activeStartDate": 1780117200,
+        "isActive": false,
+        "isVersionActive": false
+      },
+      "skuDataBnet": {
+        "activeEndDate": 1780289940,
+        "activeStartDate": 1780117200,
+        "isActive": false,
+        "isVersionActive": false
+      },
+      "skuDataEpic": {
+        "activeEndDate": 1780289940,
+        "activeStartDate": 1780117200,
+        "isActive": false,
+        "isVersionActive": false
+      },
+      "skuDataIOS": {
+        "activeEndDate": 1780289940,
+        "activeStartDate": 1780117200,
+        "isActive": false,
+        "isVersionActive": false
+      },
+      "skuDataSteam": {
+        "activeEndDate": 1780289940,
+        "activeStartDate": 1780117200,
+        "isActive": false,
+        "isVersionActive": false
+      },
+      "skuDataSwitch": {
+        "activeEndDate": 1780289940,
+        "activeStartDate": 1780117200,
+        "isActive": false,
+        "isVersionActive": false
+      }
+    }
+  }
+}

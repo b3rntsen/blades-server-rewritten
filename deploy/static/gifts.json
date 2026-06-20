@@ -1,0 +1,25 @@
+[
+  {
+    "claimCountLimit": 1,
+    "description": "Sunset Gift",
+    "endTime": 1782878400,
+    "globalGiftId": "32d4f977-5438-457d-9b48-69e5eaf70eb0",
+    "items": [
+      {
+        "itemTemplateId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+        "quantity": 50000
+      },
+      {
+        "itemTemplateId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+        "quantity": 1000
+      }
+    ],
+    "startTime": 1774584000
+  },
+  {
+    "claimCountLimit": 1,
+    "endTime": 0,
+    "globalGiftId": "ca35eb60-6988-4fa9-a42c-f932dc863ec4",
+    "startTime": 0
+  }
+]

@@ -1,0 +1,2063 @@
+//! The per-match combat engine — replaces the old placeholder `MatchInstance`.
+//!
+//! Owns a [`MatchCombat`] (authoritative state) and exposes the two entry points
+//! the match layer drives:
+//!   - [`MatchInstance::on_c2s`] — an inbound decrypted client message.
+//!   - [`MatchInstance::on_tick`] — the per-loop tick (server-initiated messages:
+//!     the flow-control state machine, plus DoT/cooldown/round logic in Phase C).
+//!
+//! Both return `(target_slot, full_user_data)` pairs — the **complete** decrypted
+//! s2c payload (`0xBE ‖ MessageType ‖ body`), which the match layer encrypts under
+//! the target peer's key. (The old tuple returned a bare body + a separate op byte;
+//! returning the full payload is honest about MessageType-vs-GameMessageId and lets
+//! `messages::*` builders own the framing.)
+
+use std::time::{Duration, Instant};
+
+use arena_proto::{GameMessageId, NetDataValue};
+use log::{debug, info};
+
+use super::messages;
+use super::resolve;
+use super::state::{Fighter, FlowState, Loadout, MatchCombat, MatchState, NetRole};
+
+/// DIAGNOSTIC: lowercase-hex a byte slice for the op58/op54 wire-byte logging.
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+/// DIAGNOSTIC: render the parsed op58 NetData as `propId=value` Longs (hex+dec) so
+/// the live c2s op58 can be diffed against the retail clock0/token decode.
+fn fmt_netdata_longs(p: &arena_proto::NetDataParse) -> String {
+    let mut parts = Vec::new();
+    for (pid, v) in &p.props {
+        match v {
+            NetDataValue::Long(x) => parts.push(format!("p{pid}=Long(0x{:016x}={x})", *x as u64)),
+            other => parts.push(format!("p{pid}={other:?}")),
+        }
+    }
+    format!("[{}] ok={}", parts.join(", "), p.ok)
+}
+
+/// Carrier MessageType (`user_data[1]`) of the op58 match-CLOCK message — the
+/// round-start clock-sync. The client SENDS this c2s on connect (two Longs:
+/// `[clock0=0, token]`) and BLOCKS in MatchState `AwaitingClientBackendSynchronization`
+/// until the server replies `op58 [server_clock_ticks, token]` echoing the SAME
+/// token back to that one client — only then does it upload its loadout (op54).
+/// Our prior bug shipped op58 only as an UNSOLICITED broadcast (no token echo) and
+/// dropped the client's c2s op58 in `resolve` (early-return off StateTimeout), so
+/// the client hung at "Connecting…". [capture-proven from s506.]
+const CARRIER_CLOCK: u8 = 0x3a; // 58
+/// Cadence of the `StateTimeout` flow heartbeat (server→client keepalive while a
+/// phase runs). Captured cadence is sub-second; tunable.
+const HEARTBEAT: Duration = Duration::from_millis(500);
+/// Hold in the `Spawning` phase between the spawn/profile burst and the
+/// `BackendMatchCreated` flow state. Retail staggers these ~4s (s506: spawns
+/// 05:05:36, BackendMatchCreated 05:05:40); announcing the match in the same tick as
+/// the spawns preempts the client's loadout-upload handshake → "Connecting" hang.
+const SPAWN_HANDSHAKE_HOLD: Duration = Duration::from_secs(4);
+/// Stagger between the Match-object spawn (`WaitingForPlayers`=3) and the
+/// `InitialPlayerSetup`(4) update. Retail s506 obj 123: state 3 @05:05:36 → state 4
+/// @05:05:37 (~1s). Both 3 and 4 must be SEEN by the client (it binds players across
+/// them); a small hold lets it process the spawn before the 4 update.
+const MATCH_SETUP_STAGGER: Duration = Duration::from_secs(1);
+/// `CurrentMatchStateTimeout` (Match propId6) sent with the `WaitingForPlayers`(3)
+/// spawn / `InitialPlayerSetup`(4) update — capture values from s506 (20s / 30s). The
+/// client uses it for the lobby countdown only; not the binding gate.
+const MATCH_STATE_WAIT_TIMEOUT: f32 = 20.0;
+const MATCH_STATE_SETUP_TIMEOUT: f32 = 30.0;
+/// `CurrentMatchStateTimeout` sent with the `BackendMatchCreation`(5) update (s506: 10s).
+const MATCH_STATE_BACKEND_TIMEOUT: f32 = 10.0;
+
+/// The retail round-0 `MatchState` progression AFTER `BackendMatchCreation`(5) —
+/// the path the client walks from "Setting up…" into the live fight. Each entry is
+/// `(state, hold_before_this_state, state_timeout_secs)`: `hold_before` is how long
+/// to wait (since entering the *previous* state) before sending this state's op55
+/// update; `state_timeout_secs` is the `CurrentMatchStateTimeout` value (Match
+/// propId6) the client shows as the countdown for that state.
+///
+/// **Capture-proven against s506 obj 123 (round 0), 2026-06-19** — the decoded op55
+/// (carrier 0x35) MatchState updates and their wall-clock deltas:
+/// ```text
+///  5 BackendMatchCreation    05:05:40  (10s)   ← entered by the FSM (Spawning→BackendMatchCreated)
+///  6 OpponentFoundFeedback   05:05:40  (1.5s)  +0s  (same tick as 5)
+///  7 PreMatch                05:05:42  (3.0s)  +2s
+/// 11 OpponentShowcase        05:05:45  (12.0s) +3s  (round 0 SKIPS 8/9/10 — those are the
+///                                                     between-rounds loadout re-choice, seen
+///                                                     only in round 1)
+/// 12 PreRound                05:05:57  (4.0s)  +12s (== the OpponentShowcase timeout)
+/// 13 InRound                 05:06:02  (120s)  +5s  ← THE FIGHT (client enters the combat scene)
+/// ```
+/// Every transition is **server-timer-driven** (each inter-state gap ≈ the prior
+/// state's `CurrentMatchStateTimeout`); none waits on a specific client message. The
+/// client uploads its loadout EARLY (c2s op54 PlayerLoadoutReady/gmid20 + gmid36 during
+/// states 3→5, before this sequence) and emits periodic op80 `MatchStateChangeAck`
+/// flow echoes (handled as a no-op in `on_c2s`/`resolve`), so the server simply walks
+/// the states on its own clock. Combat inputs (op37/op46) begin only after InRound(13).
+/// The holds below are rounded from the s506 deltas (6:+0s, 7:+2s, 11:+3s, 12:+12s,
+/// 13:+5s); the timeouts are the exact captured propId6 values.
+const MATCH_STATE_ROUND0_PROGRESSION: &[(MatchState, Duration, f32)] = &[
+    (MatchState::OpponentFoundFeedback, Duration::from_secs(0), 1.5),
+    (MatchState::PreMatch, Duration::from_secs(2), 3.0),
+    (MatchState::OpponentShowcase, Duration::from_secs(3), 12.0),
+    (MatchState::PreRound, Duration::from_secs(12), 4.0),
+    (MatchState::InRound, Duration::from_secs(5), 120.0),
+];
+
+/// The retail post-match `MatchState` walk AFTER a round-ending death — the path the
+/// client follows from the kill to a clean result screen + lobby return. Each entry is
+/// `(state, hold_before_this_state, state_timeout_secs)`, same shape as
+/// [`MATCH_STATE_ROUND0_PROGRESSION`]: `hold_before` is the wait (since the PREVIOUS
+/// state was entered) before this state's op55 update; `state_timeout_secs` is the
+/// `CurrentMatchStateTimeout` (Match propId6) the client shows.
+///
+/// **Capture-proven against s506 obj 123 (the FINAL round of a best-of-3), 2026-06-19**
+/// — decoded from prod `arena_udp_frames`. `PostRound`(14) is emitted by `resolve` at
+/// the death itself (with op29 + op79 RoundEnd + op48 result); THIS table is the walk
+/// the FSM does AFTER PostRound:
+/// ```text
+/// 14 PostRound             05:07:01  (3.0)         ← emitted at the death (resolve.rs)
+///    op79 "StateTimeout"   05:07:04  (flow heartbeat, +3s after PostRound)
+/// 17 BackendMatchEnd       05:07:05  (20.0)  +4s   (from PostRound)
+/// 16 PostMatch             05:07:11  (5.0)   +6s
+/// 19 DisconnectingPlayers… 05:07:16  (~0)    +5s   ← terminal → match Finished
+/// ```
+/// Notable: retail **skips Victory(15)** and emits **BackendMatchEnd(17) BEFORE
+/// PostMatch(16)** (the enum order is not the wire order). The inter-state gaps are the
+/// observed wall-clock deltas (4/6/5 s); the timeouts are the exact captured propId6
+/// values. We send an op79 `StateTimeout` flow heartbeat between PostRound and
+/// BackendMatchEnd to mirror the s506 +3s heartbeat (kept simple — the periodic
+/// StateTimeout heartbeat is suppressed in RoundEnd, so this is the only one).
+const MATCH_STATE_MATCHEND_PROGRESSION: &[(MatchState, Duration, f32)] = &[
+    (MatchState::BackendMatchEnd, Duration::from_secs(4), 20.0),
+    (MatchState::PostMatch, Duration::from_secs(6), 5.0),
+    (MatchState::DisconnectingPlayersAfterMatch, Duration::from_secs(5), 0.0),
+];
+
+/// op49 ResultsJSON reward magnitudes — simple win/loss deltas
+/// (`docs/arena-match-end-spec.md` §5 step 2: "the magnitude doesn't gate the screen";
+/// retail's exact per-match formula isn't in the captures). The card animates these; the
+/// trophy values are post-match snapshots the client diffs vs its pre-match totals.
+/// **Flagged as placeholder magnitudes** (calibrate against a winning capture if exact
+/// deltas are ever needed — the op49 SHAPE is what matters).
+const MATCH_END_WIN_GOLD: i64 = 4047; // s506-era order of magnitude
+const MATCH_END_LOSS_GOLD: i64 = 302; // s127/s167 loss value
+const MATCH_END_WIN_XP: i64 = 280;
+const MATCH_END_LOSS_XP: i64 = 16;
+const MATCH_END_WIN_TROPHIES: i64 = 30; // a representative trophy gain on a win
+const MATCH_END_LOSS_TROPHIES: i64 = 0;
+/// The op49/op48 result_code (s506 = 3; near-constant, ≈ maxRounds/result enum).
+const MATCH_END_RESULT_CODE: i32 = 3;
+
+/// The retail BETWEEN-ROUNDS `MatchState` walk — the path from a NON-final round end
+/// back into the next live round (best-of-3). Same `(state, hold_before, timeout)`
+/// shape as the round-0 / match-end tables. `PostRound`(14) is emitted by `resolve`
+/// at the death (with op29 + op79 RoundEnd + op48 result); THIS table is the walk the
+/// FSM does AFTER PostRound for an intermediate round.
+///
+/// **Capture-derived from s506's round-0→round-1 transition** (decoded by the
+/// post-match agent from prod `arena_udp_frames`):
+/// ```text
+/// 13 InRound          (round 0 live)
+///    op79 RoundEnd    (emitted at the death, resolve.rs)
+/// 14 PostRound        (emitted at the death, resolve.rs)
+///  8 ChooseLoadout            (round bumped to 1)   ← the between-rounds loadout re-choice…
+///  9 AwaitingClientBackendSynchronization
+/// 10 SynchronizingLoadout
+/// 11 OpponentShowcase
+/// 12 PreRound
+/// 13 InRound          (round 1 live)                ← re-enter the fight
+/// ```
+/// Round 0 SKIPS 8/9/10 (it goes 5→6→7→11→12→13, see [`MATCH_STATE_ROUND0_PROGRESSION`]);
+/// the between-rounds walk ADDS the loadout re-choice 8→9→10 in front of the shared
+/// 11→12→13 tail. The holds mirror the round-0 cadence for the shared states (11:+3s,
+/// 12:+12s, 13:+5s) and use the captured PostRound→ChooseLoadout gap (~3s) for 8 and a
+/// short stagger for the 9/10 sync acks; the timeouts reuse the round-0 propId6 values.
+/// At the final `InRound`(13) the engine resets both fighters to full HP and re-enters
+/// `StateTimeout` (the live round), bumping `combat.round`.
+const MATCH_STATE_INTERROUND_PROGRESSION: &[(MatchState, Duration, f32)] = &[
+    (MatchState::ChooseLoadout, Duration::from_secs(3), 30.0),
+    (MatchState::AwaitingClientBackendSynchronization, Duration::from_secs(1), 10.0),
+    (MatchState::SynchronizingLoadout, Duration::from_secs(1), 10.0),
+    (MatchState::OpponentShowcase, Duration::from_secs(1), 12.0),
+    (MatchState::PreRound, Duration::from_secs(12), 4.0),
+    (MatchState::InRound, Duration::from_secs(5), 120.0),
+];
+
+pub struct MatchInstance {
+    combat: MatchCombat,
+    /// s2c ENet reliable sequence (used by the raw-socket dev path framing).
+    s2c_seq: u16,
+    last_heartbeat: Instant,
+    /// **DEBUG (`ARENA_DEBUG_HOLD`).** When set, the FSM still drives the FULL
+    /// round-start burst (Connecting→Spawning→BackendMatchCreated, byte-identical
+    /// to normal) but then HOLDS at `BackendMatchCreated` forever — it never
+    /// transitions to `StateTimeout`, so no combat phase is entered and no bot
+    /// swings (the live round never starts). Lets us hand-inject s2c frames into a
+    /// solo-connected match and watch the client with an unlimited window. OFF
+    /// (false) in all normal operation + tests → existing behavior is unchanged.
+    debug_hold: bool,
+    /// Cursor into [`MATCH_STATE_ROUND0_PROGRESSION`] while the FSM is in the
+    /// `BackendMatchCreated` phase: the index of the NEXT round-0 MatchState to emit
+    /// (`6→7→11→12→13`). Starts at 0 (OpponentFoundFeedback) when `BackendMatchCreated`
+    /// is entered; once it reaches the end (InRound has been broadcast) the FSM enters
+    /// `StateTimeout` (the live combat round). Reset implicitly per match (one
+    /// `MatchInstance` per match).
+    setup_step: usize,
+}
+
+impl MatchInstance {
+    /// Create a match instance with `capacity` fighters, each built from the
+    /// matching entry of `loadouts` (missing entries default — bot / un-imported).
+    /// `expected_peers` is how many real ENet peers must connect before the round
+    /// starts (== capacity for PvP; 1 for a solo-vs-bot match, whose 2nd fighter is
+    /// a server-driven bot with no peer).
+    pub fn new(capacity: usize, expected_peers: usize, loadouts: Vec<Loadout>, now: Instant) -> Self {
+        let mut combat = MatchCombat::new(capacity, expected_peers, now);
+        for slot in 0..capacity {
+            let net_object_id = combat.alloc_net_object_id();
+            let player_net_object_id = combat.alloc_net_object_id();
+            let ability_net_object_id = combat.alloc_net_object_id();
+            // Use the provided loadout if it carries a weapon; else a starter
+            // loadout so the damage model produces a real, progressing fight.
+            let loadout = loadouts
+                .get(slot)
+                .cloned()
+                .filter(|l| !l.weapon.base_by_type.is_empty())
+                .unwrap_or_else(super::loadout::starter);
+            let mut fighter = Fighter::new(slot, net_object_id, loadout, now);
+            fighter.player_net_object_id = player_net_object_id;
+            fighter.ability_net_object_id = ability_net_object_id;
+            combat.fighters.push(fighter);
+        }
+        // The single type-54 Match net-object id (its replicated propId5 = MatchState
+        // drives player binding). Allocated after the fighters so the per-fighter id
+        // range is unchanged.
+        combat.match_net_object_id = combat.alloc_net_object_id();
+        MatchInstance {
+            combat,
+            s2c_seq: 0,
+            last_heartbeat: now,
+            // Read the DEBUG-HOLD flag once at construction. Off (false) when the
+            // env var is unset — i.e. in every test and all normal operation.
+            debug_hold: super::debug_hold_enabled(),
+            setup_step: 0,
+        }
+    }
+
+    /// Set the match's `gameSessionId` (the Match net-object propId9). Called by the
+    /// registry right after allocation. Defaults to empty (the binding gate is the
+    /// MatchState at propId5, not the session id).
+    pub fn set_game_session_id(&mut self, game_session_id: impl Into<String>) {
+        self.combat.game_session_id = game_session_id.into();
+    }
+
+    pub fn next_seq(&mut self) -> u16 {
+        let s = self.s2c_seq;
+        self.s2c_seq = self.s2c_seq.wrapping_add(1);
+        s
+    }
+
+    pub fn state_name(&self) -> &'static str {
+        self.combat.phase_name()
+    }
+
+    /// True once the match has run its full course — the post-match MatchState walk
+    /// reached the terminal `DisconnectingPlayersAfterMatch`(19) and the FSM finished.
+    /// The registry uses this to actively ENet-disconnect the player(s) at match-end
+    /// (the literal meaning of state 19), so the client leaves the result screen and
+    /// returns to the arena lobby instead of holding the connection open.
+    pub fn is_finished(&self) -> bool {
+        matches!(self.combat.phase, FlowState::Finished)
+    }
+
+    /// The character display name of the fighter in `slot`, if any (empty for a
+    /// starter/bot loadout). Used by the DEBUG peer listing to label a target.
+    pub fn fighter_display_name(&self, slot: usize) -> &str {
+        self.combat
+            .fighters
+            .get(slot)
+            .map(|f| f.loadout.display_name.as_str())
+            .unwrap_or("")
+    }
+
+    /// Drive the engine on a decrypted inbound c2s `user_data` (`marker ‖
+    /// MessageType ‖ body`) from player `sender`.
+    pub fn on_c2s(&mut self, sender: usize, user_data: &[u8], now: Instant) -> Vec<(usize, Vec<u8>)> {
+        let mut out = Vec::new();
+        debug!(
+            "combat c2s: slot {sender} carrier 0x{:02x} ({} bytes) in phase {}",
+            user_data.get(1).copied().unwrap_or(0),
+            user_data.len(),
+            self.combat.phase_name(),
+        );
+
+        // op58 CLOCK-SYNC — answered in ANY phase (the client sends this c2s on
+        // connect and BLOCKS at MatchState `AwaitingClientBackendSynchronization`
+        // until we reply, BEFORE it uploads its loadout — so it lands during
+        // Connecting/Spawning/BackendMatchCreated, all phases `resolve` drops). Reply
+        // to the SENDER ONLY: first Long = the server clock ticks (same .NET-ticks
+        // source `broadcast_clock` uses), second Long = the client's token echoed
+        // verbatim. The client's c2s op58 is two Longs `[clock0=0 @propId0, token
+        // @propId1]`; echoing propId1 unblocks it. [capture-proven from s506:
+        // client token EE3FEB9B2DCCDE08 → reply must echo EE3FEB9B2DCCDE08.]
+        if user_data.get(1) == Some(&CARRIER_CLOCK) {
+            // propId1 is the token (a `Long`); echo it verbatim. Fall back to 0 on a
+            // malformed body so we still reply (never panic, never hang the client).
+            let parsed = arena_proto::parse_netdata(&user_data[2..]);
+            let token = match parsed.props.get(&1) {
+                Some(NetDataValue::Long(v)) => *v,
+                Some(other) => other.as_i64().unwrap_or(0),
+                None => 0,
+            };
+            let server_clock = Self::clock_ticks();
+            let reply = messages::clock(server_clock, token);
+            // DIAGNOSTIC (op58 gate, candidate 1): the EXACT inbound op58 bytes, each
+            // parsed NetData Long (propId→value), the reply we emit, and the channel
+            // the enet host will route it on (small → 0). Diffed against retail s506
+            // (server prop0 = own clock-ticks, prop1 = echoed token).
+            info!(
+                "ARENA-DIAG op58 c2s slot {sender}: raw={} | parsed props={} | reply={} | reply channel={}",
+                hex_lower(user_data),
+                fmt_netdata_longs(&parsed),
+                hex_lower(&reply),
+                if reply.len() > 1000 { 4 } else { 0 },
+            );
+            out.push((sender, reply));
+            return out;
+        }
+
+        // op61 LoadoutClientBackendSynchronized (c2s) — the client reports its OWN
+        // loadout-backend sync (+ a HideHelmet cosmetic flag) at a round transition.
+        // Capture-proven CLIENT→SERVER only (s506 #3523229 + every retail match); the
+        // server NEVER sends op61 and does NOT need to reply — the client self-advances
+        // its PvpState/MatchState once it has the profile + spawns and emits op54
+        // PlayerLoadoutReady. We simply ACK it into the void (no s2c) so it is never
+        // mis-resolved as a combat swing. [docs/arena-journey-log.md §7]
+        if messages::is_loadout_backend_synchronized(user_data) {
+            debug!("combat c2s: slot {sender} op61 LoadoutClientBackendSynchronized — handshake, no reply");
+            return out;
+        }
+
+        // op72 PlayEmote (c2s) — the client played an emote. RELAY it to the opponent as
+        // op73 PlayerEmoteStateChange so the emote displays on the other player's screen
+        // (server-authoritative; a client can't fabricate an opponent's emote). Echoed
+        // for the EMOTING actor's Avatar net-object, addressed to the opponent only
+        // (the emoter already sees its own). Intercepted HERE (not in `resolve`) because
+        // op72/73 are classified non-combat — `resolve` would drop them. No damage, no
+        // phase change. Works in any live-ish phase; gated to a real 2-player match.
+        if messages::is_play_emote(user_data) {
+            let emote_id = messages::play_emote_id(user_data).unwrap_or_default();
+            if let Some(opp) = self.combat.opponent_of(sender) {
+                if let Some(emoter) = self.combat.fighters.get(sender) {
+                    let relay = messages::player_emote_state_change(emoter.net_object_id, &emote_id);
+                    info!(
+                        "combat c2s: slot {sender} op72 PlayEmote (\"{emote_id}\") → relaying op73 PlayerEmoteStateChange to opponent slot {opp}"
+                    );
+                    out.push((opp, relay));
+                }
+            } else {
+                debug!("combat c2s: slot {sender} op72 PlayEmote ignored — no opponent (solo/bot)");
+            }
+            return out;
+        }
+
+        // ConcedeMatch ends the match for everyone. (Heuristic: the concede
+        // carrier byte == GameMessageId::ConcedeMatch; refine if a capture shows
+        // otherwise.)
+        if user_data.get(1) == Some(&(GameMessageId::ConcedeMatch as u8))
+            && !matches!(self.combat.phase, FlowState::Finished)
+        {
+            info!("combat: slot {sender} conceded → match Finished");
+            self.combat.phase = FlowState::Finished;
+            for slot in 0..self.combat.fighters.len() {
+                if let Some(m) = messages::flow_state(self.combat.flow_controller_id, FlowState::RoundEnd) {
+                    out.push((slot, m));
+                }
+            }
+            return out;
+        }
+
+        // Everything else (swipe / ability / block / position) → resolution.
+        let phase_before = self.combat.phase;
+        out.extend(resolve::on_c2s_input(&mut self.combat, sender, user_data, now));
+        // A killing blow flips StateTimeout→RoundEnd (final round → match-end walk) or
+        // StateTimeout→NextState (non-final round → between-rounds walk) inside
+        // `resolve::on_round_ending_death`. Either way, anchor the new walk's s506 timers
+        // to NOW (the death) rather than to whenever StateTimeout was entered.
+        if phase_before == FlowState::StateTimeout
+            && matches!(self.combat.phase, FlowState::RoundEnd | FlowState::NextState)
+        {
+            self.combat.phase_entered = now;
+        }
+        out
+    }
+
+    /// Server-initiated messages for this tick. `connected` is the number of
+    /// peers that have completed the handshake (from the match's player list).
+    pub fn on_tick(&mut self, connected: usize, now: Instant) -> Vec<(usize, Vec<u8>)> {
+        let mut out = Vec::new();
+        match self.combat.phase {
+            // Wait for everyone to connect, then create the match: announce
+            // BackendMatchCreated + the combat screen for every avatar to everyone.
+            FlowState::Connecting => {
+                if self.combat.expected_peers() > 0 && connected >= self.combat.expected_peers() {
+                    info!(
+                        "combat FSM: Connecting → Spawning ({connected}/{} peer(s), {} fighter(s))",
+                        self.combat.expected_peers(),
+                        self.combat.capacity(),
+                    );
+                    self.combat.phase = FlowState::Spawning;
+                    self.combat.phase_entered = now;
+                    self.last_heartbeat = now;
+                    // Spawn/profile burst — NO BackendMatchCreated yet, and NO op58
+                    // clock: the s2c op58 is the REPLY to the client's c2s op58
+                    // clock-sync (handled in `on_c2s`), NOT an unsolicited broadcast.
+                    // Retail sends the spawns + profile first; the client uploads its
+                    // loadout during the Spawning hold; BackendMatchCreated follows ~4s
+                    // later (s506 stagger).
+                    // Round-start, retail-faithful order (s506 obj-123 match): the two
+                    // Player spawns + the Match net-object (st 3, pc 1) + the local
+                    // PlayerWelcome go FIRST. The Avatars + the opponent PROFILE + stat
+                    // words come LATER, right after the Match flips to InitialPlayerSetup(4)
+                    // (see the Spawning branch's 3→4 block) — NOT in this burst. This
+                    // ordering is what binds the players: both Player net-objects must be
+                    // registered in PvpClientManager._pvpPlayers before the avatars'
+                    // discovery callbacks look them up (GetPvpPlayer by char-UUID).
+                    self.broadcast_spawns(&mut out);
+                    // The Match net-object was spawned (in broadcast_spawns) carrying
+                    // MatchState=WaitingForPlayers(3); record it so the FSM advances it
+                    // 3→4→5 from here (the player-binding gate).
+                    self.combat.match_state = MatchState::WaitingForPlayers;
+                    self.broadcast_welcome(&mut out);
+                    // Round-start emission audit — confirm what actually goes on the wire:
+                    // carrier→count (58=clock, 50=spawn, 54=profile/flow) + each fighter's
+                    // profile-JSON size (0 ⇒ empty ⇒ broadcast_profiles skipped it ⇒ the
+                    // client can't build its opponent ⇒ "Connecting…" stall).
+                    let mut carriers = std::collections::BTreeMap::new();
+                    for (_, b) in &out {
+                        if b.len() >= 2 {
+                            *carriers.entry(b[1]).or_insert(0u32) += 1;
+                        }
+                    }
+                    let profile_bytes: Vec<usize> = self
+                        .combat
+                        .fighters
+                        .iter()
+                        .map(|f| f.loadout.profile_character_json.len())
+                        .collect();
+                    info!(
+                        "combat round-start emit: {} frames, carriers(dec) {:?}, profile_json_bytes {:?}",
+                        out.len(),
+                        carriers,
+                        profile_bytes
+                    );
+                    // DIAGNOSTIC (op54 gate, candidate 2): for EVERY emitted frame, log
+                    // (viewer, carrier, plaintext len, the enet channel it routes to:
+                    // >1000 → ch4 else ch0). For the big op54 PROFILE (carrier 0x36,
+                    // >1000 B) also estimate the rusty_enet fragment count at MTU 1392
+                    // (frag_len ≈ 1372, matching retail's 1372 B/frag). Diff vs retail
+                    // s506: profile = 16 frags on ch4; small frames on ch0/ch1.
+                    const FRAG_LEN: usize = 1372; // rusty_enet HOST_DEFAULT_MTU 1392 − ENet header
+                    for (viewer, b) in &out {
+                        let carrier = b.get(1).copied().unwrap_or(0);
+                        let channel = messages::retail_channel(b);
+                        if b.len() > 1000 {
+                            let frags = b.len().div_ceil(FRAG_LEN);
+                            info!(
+                                "ARENA-DIAG op54 PROFILE → viewer {viewer}: carrier 0x{carrier:02x}, \
+                                 plaintext {} B → channel {channel}, ~{frags} fragments @ {FRAG_LEN} B/frag",
+                                b.len()
+                            );
+                        } else {
+                            debug!(
+                                "ARENA-DIAG frame → viewer {viewer}: carrier 0x{carrier:02x}, {} B → channel {channel}",
+                                b.len()
+                            );
+                        }
+                    }
+                }
+            }
+            // Hold (retail ~4s) so the client drives its loadout-upload handshake,
+            // THEN announce BackendMatchCreated — never in the same tick as the spawns.
+            FlowState::Spawning => {
+                let elapsed = now.duration_since(self.combat.phase_entered);
+                // ~1s after the spawn (which carried MatchState=WaitingForPlayers=3),
+                // advance the Match net-object to InitialPlayerSetup(4). The client binds
+                // its local/opponent PvpPlayer across states 3→4 (the HasLocalPlayer gate);
+                // retail s506 obj 123: 3 @05:05:36 → 4 @05:05:37.
+                if self.combat.match_state == MatchState::WaitingForPlayers
+                    && elapsed >= MATCH_SETUP_STAGGER
+                {
+                    info!("combat FSM: Match state WaitingForPlayers(3) → InitialPlayerSetup(4)");
+                    // Match → InitialPlayerSetup(4), PlayerCount→2 (broadcast_match_state
+                    // passes fighters.len()). s506 obj 123: 3 @05:05:36 → 4 @05:05:37, pc 1→2.
+                    self.broadcast_match_state(
+                        &mut out,
+                        MatchState::InitialPlayerSetup,
+                        MATCH_STATE_SETUP_TIMEOUT,
+                    );
+                    // NOW (after state-4, retail order) the Avatars + the opponent PROFILE +
+                    // stat words. Retail s506 sends own Avatar(#3522349) → opp PROFILE
+                    // (#3522353) → opp Avatar(#3522368) → avatar stat words — all AFTER the
+                    // Match reaches InitialPlayerSetup(4). Each Avatar's discovery binds its
+                    // player (GetPvpPlayer by char-UUID → _{local,opponent}Info.Player), so
+                    // both Players (sent in the WaitingForPlayers burst above) are already in
+                    // _pvpPlayers by the time these resolve. broadcast_avatars sends BOTH the
+                    // own (Autonomous) AND opponent (Simulated) avatars — the Simulated one is
+                    // what flips HasOpponentPlayer (proven on-device 2026-06-19).
+                    self.broadcast_avatars(&mut out);
+                    self.broadcast_profiles(&mut out);
+                    self.broadcast_stat_updates(&mut out);
+                }
+                if elapsed >= SPAWN_HANDSHAKE_HOLD {
+                    info!("combat FSM: Spawning → BackendMatchCreated (round-start handshake settled)");
+                    self.combat.phase = FlowState::BackendMatchCreated;
+                    self.combat.phase_entered = now;
+                    self.last_heartbeat = now;
+                    // MatchState → BackendMatchCreation(5) (the Match net-object update),
+                    // alongside the op79 stateName "BackendMatchCreated" on the flow
+                    // controller. s506 obj 123: state 5 @05:05:40, same tick as the op79.
+                    self.broadcast_match_state(
+                        &mut out,
+                        MatchState::BackendMatchCreation,
+                        MATCH_STATE_BACKEND_TIMEOUT,
+                    );
+                    self.broadcast_flow(&mut out, FlowState::BackendMatchCreated);
+                }
+            }
+            // Walk the Match net-object's MatchState through the retail round-0
+            // progression — `BackendMatchCreation`(5) → `OpponentFoundFeedback`(6) →
+            // `PreMatch`(7) → `OpponentShowcase`(11) → `PreRound`(12) → `InRound`(13) —
+            // on per-state timers (s506 obj-123, capture-proven), then enter the live
+            // combat round (`StateTimeout`). This is the LAST gate to the fight: the
+            // client parks at "Setting up…" until the Match net-object's MatchState
+            // moves past 5, and enters the combat scene when it reaches InRound(13).
+            // Each step reuses the SAME `broadcast_match_state` mechanism that drove
+            // 3→4→5 (op55 property update on obj 123). [MATCH_STATE_ROUND0_PROGRESSION]
+            //
+            // DEBUG-HOLD (`ARENA_DEBUG_HOLD`): stay at BackendMatchCreation(5) forever —
+            // the FULL round-start burst has already gone out (Spawning transition),
+            // but we never advance the MatchState past 5, so no combat phase is entered.
+            // This is the freeze window for hand-injecting s2c frames.
+            FlowState::BackendMatchCreated if self.debug_hold => {}
+            FlowState::BackendMatchCreated => {
+                // Emit the next round-0 MatchState once its `hold_before` has elapsed
+                // since the previous state was entered (`phase_entered` tracks that).
+                if let Some(&(state, hold_before, timeout)) =
+                    MATCH_STATE_ROUND0_PROGRESSION.get(self.setup_step)
+                {
+                    if now.duration_since(self.combat.phase_entered) >= hold_before {
+                        info!(
+                            "combat FSM: MatchState → {:?}({}) [round-0 setup step {}/{}]",
+                            state,
+                            state as u8,
+                            self.setup_step + 1,
+                            MATCH_STATE_ROUND0_PROGRESSION.len(),
+                        );
+                        self.broadcast_match_state(&mut out, state, timeout);
+                        self.setup_step += 1;
+                        self.combat.phase_entered = now;
+                    }
+                } else {
+                    // The whole progression has been emitted (last state = InRound(13));
+                    // the client is now in the combat scene. Enter the live round.
+                    info!("combat FSM: BackendMatchCreated → StateTimeout (InRound reached — round 1 live)");
+                    self.combat.phase = FlowState::StateTimeout;
+                    self.combat.phase_entered = now;
+                    self.last_heartbeat = now;
+                    self.combat.round = 1;
+                    self.broadcast_flow(&mut out, FlowState::StateTimeout);
+                }
+            }
+            // Round running: periodic StateTimeout heartbeat + combat resolution.
+            FlowState::StateTimeout => {
+                if now.duration_since(self.last_heartbeat) >= HEARTBEAT {
+                    self.last_heartbeat = now;
+                    self.broadcast_flow(&mut out, FlowState::StateTimeout);
+                }
+                let debug_hold = self.debug_hold;
+                out.extend(resolve::on_tick(&mut self.combat, now, debug_hold));
+                // A bot's killing blow on the tick flips StateTimeout→RoundEnd (match-end)
+                // or →NextState (between-rounds); anchor the new walk to NOW (same as the
+                // on_c2s player-kill path).
+                if matches!(self.combat.phase, FlowState::RoundEnd | FlowState::NextState) {
+                    self.combat.phase_entered = now;
+                }
+            }
+            // Post-match: a round-ending death just put the Match net-object at
+            // PostRound(14) (resolve.rs emitted op29 + op79 RoundEnd + op48 result +
+            // the PostRound update). Walk the terminal MatchState sequence
+            // BackendMatchEnd(17)→PostMatch(16)→DisconnectingPlayers(19) on the s506
+            // final-round timers, then finish the match — so the client shows a clean
+            // result and returns to the lobby instead of timing out ("error 3").
+            // [MATCH_STATE_MATCHEND_PROGRESSION]
+            FlowState::RoundEnd => {
+                if let Some(&(state, hold_before, timeout)) =
+                    MATCH_STATE_MATCHEND_PROGRESSION.get(self.combat.matchend_step)
+                {
+                    if now.duration_since(self.combat.phase_entered) >= hold_before {
+                        // Mirror the s506 +3s op79 "StateTimeout" flow heartbeat that
+                        // rides between PostRound and BackendMatchEnd (only once, at the
+                        // first terminal step).
+                        if self.combat.matchend_step == 0 {
+                            self.broadcast_flow(&mut out, FlowState::StateTimeout);
+                            // …then the per-recipient op49 MatchEndMatchMsg (the victory
+                            // CARD): one PER PLAYER, right after the heartbeat, as
+                            // BackendMatchEnd is about to be emitted — matching s506's
+                            // op49 at 05:07:06 (just after the 05:07:04 StateTimeout). The
+                            // `matchend_step == 0` guard sends it exactly ONCE, only on the
+                            // FINAL round (this branch runs only when the match was won).
+                            self.broadcast_match_end_results(&mut out);
+                        }
+                        info!(
+                            "combat FSM: post-match MatchState → {:?}({}) [matchend step {}/{}]",
+                            state,
+                            state as u8,
+                            self.combat.matchend_step + 1,
+                            MATCH_STATE_MATCHEND_PROGRESSION.len(),
+                        );
+                        self.broadcast_match_state(&mut out, state, timeout);
+                        self.combat.matchend_step += 1;
+                        self.combat.phase_entered = now;
+                    }
+                } else {
+                    // The terminal state (DisconnectingPlayersAfterMatch=19) has been
+                    // broadcast; the match is over.
+                    info!("combat FSM: RoundEnd → Finished (post-match walk complete; client returns to lobby)");
+                    self.combat.phase = FlowState::Finished;
+                }
+            }
+            // Between rounds (best-of-3): a NON-final round-ending death put the Match
+            // net-object at PostRound(14) (resolve.rs emitted op29 + op79 RoundEnd + op48
+            // + the PostRound update) and the match into NextState. Walk the
+            // between-rounds MatchState sequence ChooseLoadout(8)→…→InRound(13) on the
+            // s506 round-0→round-1 timers; at InRound, reset both fighters to full HP and
+            // re-enter the live round (StateTimeout) for the next round.
+            // [MATCH_STATE_INTERROUND_PROGRESSION]
+            FlowState::NextState => {
+                if let Some(&(state, hold_before, timeout)) =
+                    MATCH_STATE_INTERROUND_PROGRESSION.get(self.combat.interround_step)
+                {
+                    if now.duration_since(self.combat.phase_entered) >= hold_before {
+                        // Bump the round at the FIRST between-rounds step (ChooseLoadout),
+                        // so the round-2/3 MatchState updates + the live round carry the
+                        // new round index (s506: ChooseLoadout(8) is sent with round=1).
+                        if self.combat.interround_step == 0 {
+                            self.combat.round = self.combat.round.saturating_add(1);
+                        }
+                        let is_inround = matches!(state, MatchState::InRound);
+                        info!(
+                            "combat FSM: between-rounds MatchState → {:?}({}) [interround step {}/{}, round {}]",
+                            state,
+                            state as u8,
+                            self.combat.interround_step + 1,
+                            MATCH_STATE_INTERROUND_PROGRESSION.len(),
+                            self.combat.round,
+                        );
+                        self.broadcast_match_state(&mut out, state, timeout);
+                        self.combat.interround_step += 1;
+                        self.combat.phase_entered = now;
+                        // Reaching InRound(13) re-enters the live combat round: reset both
+                        // fighters to full HP and flip to StateTimeout so combat resolves
+                        // again (and bot swings resume). The op55 InRound update already
+                        // went out (broadcast_match_state above).
+                        if is_inround {
+                            self.combat.reset_fighters_for_next_round(now);
+                            self.combat.phase = FlowState::StateTimeout;
+                            self.combat.phase_entered = now;
+                            self.last_heartbeat = now;
+                            info!(
+                                "combat FSM: NextState → StateTimeout (round {} live — both fighters reset to full HP, score {:?})",
+                                self.combat.round, self.combat.rounds_won,
+                            );
+                            self.broadcast_flow(&mut out, FlowState::StateTimeout);
+                        }
+                    }
+                }
+            }
+            FlowState::Finished => {}
+        }
+        out
+    }
+
+    /// The server match-clock value: `.NET DateTime.Ticks` (100 ns since year 1).
+    /// The single tick source for op58 — used by the c2s clock-sync REPLY (the
+    /// first Long) and by `broadcast_clock`, so both emit the same wall-clock ticks.
+    fn clock_ticks() -> i64 {
+        let unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        // .NET DateTime.Ticks = 100 ns since year 1; Unix epoch = 621355968000000000 ticks.
+        621_355_968_000_000_000i64
+            + (unix.as_secs() as i64) * 10_000_000
+            + (unix.subsec_nanos() as i64) / 100
+    }
+
+    /// Broadcast the match CLOCK (op58) to every viewer. **No longer used in the
+    /// round-start burst** — retail's s2c op58 is the REPLY to the client's c2s
+    /// op58 clock-sync (see `on_c2s`), not an unsolicited broadcast. Retained for
+    /// the builder/tests and any future server-pushed time sync. Two .NET-ticks
+    /// Longs (server clock + match-start ref), both ≈ now. [docs §6.2, RE'd from s486.]
+    fn broadcast_clock(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        let ticks = Self::clock_ticks();
+        for slot in 0..self.combat.fighters.len() {
+            out.push((slot, messages::clock(ticks, ticks)));
+        }
+    }
+
+    fn broadcast_flow(&self, out: &mut Vec<(usize, Vec<u8>)>, state: FlowState) {
+        if let Some(msg) = messages::flow_state(self.combat.flow_controller_id, state) {
+            for slot in 0..self.combat.fighters.len() {
+                out.push((slot, msg.clone()));
+            }
+        }
+    }
+
+    /// Broadcast the round-start net-object SPAWNS (op50) to every viewer.
+    ///
+    /// **Object set is retail-faithful to s506 (proven by a field-by-field byte-diff,
+    /// 2026-06-19):** the local client receives an op50 **Player** for BOTH fighters
+    /// (role Autonomous for its OWN, Simulated for the opponent) but an op50 **Avatar**
+    /// for the viewer's OWN (Autonomous) fighter ONLY. Retail NEVER sends an op50 Avatar
+    /// for the Simulated opponent, and NEVER sends a type-54 ability/Match op50 at
+    /// round-start (s506 emits exactly three op50: self-Player, opp-Player, self-Avatar).
+    ///
+    /// The opponent's avatar is a **client-local actor** the encounter builds from the
+    /// op54 PROFILE (`PvpEncounter.SetupOpponentActor`/`OnOpponentLoadoutReceived`),
+    /// NOT a network object. Spawning a *Simulated Avatar net-object* for the opponent
+    /// made the client route that proxy into `PvpEncounter.SpawnOpponent(proxy)` (frida
+    /// v1 confirmed it fired) but its addressables load never completed →
+    /// `PvpEncounter.OnOpponentLoaded` NEVER fired, `OpponentPlayer`/`OpponentAvatar`
+    /// stayed null, `ClientChecklist` never flipped → "Connecting…" forever (frida-proven:
+    /// `OnPlayerResourceLoaded` fired ×2 but the opponent actor was never built).
+    /// [docs/arena-journey-log.md §8; il2cpp PvpClientManager.OnObjectDiscover →
+    /// PvpEncounter.SpawnOpponent → OnOpponentLoaded]
+    ///
+    /// The op54 PROFILE (gear/customization/stats JSON), broadcast right after, is what
+    /// constructs the opponent — see `broadcast_profiles`.
+    fn broadcast_spawns(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        for viewer in 0..self.combat.fighters.len() {
+            for actor in &self.combat.fighters {
+                let is_own = actor.slot == viewer;
+                let role = if is_own {
+                    NetRole::Autonomous
+                } else {
+                    NetRole::Simulated
+                };
+                let name = if actor.loadout.display_name.is_empty() {
+                    "Fighter"
+                } else {
+                    actor.loadout.display_name.as_str()
+                };
+                // Player op50 — for BOTH fighters (self Autonomous, opponent Simulated).
+                // Retail s506 sends the two Player spawns FIRST (obj 120 role3, obj 122
+                // role2), BEFORE either Avatar — the Avatars come later (see
+                // `broadcast_avatars`, after the Match→InitialPlayerSetup transition).
+                // Both Player net-objects must be registered in `PvpClientManager._pvpPlayers`
+                // before the avatars' resource-load callbacks run, because the avatar
+                // discovery is what BINDS the player to the encounter:
+                // `PvpEncounter.FinishSpawnLocalAvatar`/`SpawnOpponent` →
+                // `PvpClientManager.GetPvpPlayer(<avatar charUUID>)` → set
+                // `_{local,opponent}Info.Player` (the `HasLocalPlayer`/`HasOpponentPlayer`
+                // gate). [il2cpp RE 2026-06-19: GetPvpPlayer @0x1ADF51C matches a
+                // registered PvpPlayer by the avatar's propId4 character UUID.]
+                out.push((
+                    viewer,
+                    messages::spawn_player(
+                        actor.player_net_object_id,
+                        role,
+                        name,
+                        &actor.loadout.character_uuid,
+                        actor.loadout.level as i32,
+                        actor.loadout.level as i32,
+                    ),
+                ));
+            }
+            // op50 SPAWN of the single type-54 **Match** net object — the object whose
+            // replicated propId5 = `MatchState` the client reads to advance the match.
+            // Spawned with `WaitingForPlayers`(3) + **PlayerCount 1** (retail s506 obj 123
+            // spawn: role 2 Simulated, st 3, pc 1, timeout 20s) — the FSM then flips it to
+            // `InitialPlayerSetup`(4) with **PlayerCount 2** once both players are present
+            // (`broadcast_match_state`), exactly as s506 obj 123 does at its 3→4 update.
+            out.push((
+                viewer,
+                messages::spawn_match(
+                    self.combat.match_net_object_id,
+                    1, // retail s506: Match spawns at PlayerCount=1, flips to 2 at state 3→4
+                    MatchState::WaitingForPlayers,
+                    MATCH_STATE_WAIT_TIMEOUT,
+                    self.combat.round,
+                    &self.combat.game_session_id,
+                ),
+            ));
+        }
+    }
+
+    /// Broadcast the round-start **Avatar** op50 spawns — both the viewer's OWN
+    /// (Autonomous) and the OPPONENT's (Simulated) fighter body. Retail s506 sends
+    /// BOTH (obj 124 role3 + obj 125 role2), AFTER the two Player spawns and AFTER the
+    /// Match net-object reaches `InitialPlayerSetup`(4) (own avatar @ #3522349, opponent
+    /// avatar @ #3522368, interleaved with the opponent profile). **Each avatar's
+    /// discovery is the player-binding trigger** (`HasLocalPlayer`/`HasOpponentPlayer`):
+    /// the client's `PvpEncounter.FinishSpawnLocalAvatar`/`SpawnOpponent` looks the
+    /// avatar's character UUID (NetData propId4) up in `_pvpPlayers` via
+    /// `PvpClientManager.GetPvpPlayer` and sets `_{local,opponent}Info.Player`. Without
+    /// the OPPONENT (Simulated) avatar, `HasOpponentPlayer` never flips — proven
+    /// on-device 2026-06-19: injecting the missing Simulated avatar flipped it 0→1.
+    /// [il2cpp RE: Match.get_HasLocalPlayer @0x178AAF4 → _pvpEncounter._localInfo.Player.]
+    fn broadcast_avatars(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        for viewer in 0..self.combat.fighters.len() {
+            for actor in &self.combat.fighters {
+                let role = if actor.slot == viewer {
+                    NetRole::Autonomous
+                } else {
+                    NetRole::Simulated
+                };
+                out.push((
+                    viewer,
+                    messages::spawn_avatar(actor.net_object_id, role, &actor.loadout.character_uuid),
+                ));
+            }
+        }
+    }
+
+    /// Broadcast a type-54 Match net-object **property update** (op55) that advances
+    /// the replicated `MatchState` (propId5) to `state`. The client's
+    /// `Match.OnObjectPropertiesChanged` applies it and fires `OnMatchStateChanged`,
+    /// binding the local/opponent `PvpPlayer` during `WaitingForPlayers`(3) /
+    /// `InitialPlayerSetup`(4). Also records the state on `MatchCombat`. [s506 obj 123]
+    fn broadcast_match_state(&mut self, out: &mut Vec<(usize, Vec<u8>)>, state: MatchState, timeout_secs: f32) {
+        self.combat.match_state = state;
+        for viewer in 0..self.combat.fighters.len() {
+            out.push((
+                viewer,
+                messages::update_match(
+                    self.combat.match_net_object_id,
+                    self.combat.fighters.len() as u8,
+                    state,
+                    timeout_secs,
+                    self.combat.round,
+                    &self.combat.game_session_id,
+                ),
+            ));
+        }
+    }
+
+    /// Broadcast the per-recipient op49 `MatchEndMatchMsg` (the victory/results CARD) —
+    /// ONE PER PLAYER at match-end (`docs/arena-match-end-spec.md` §5 step 3). Each
+    /// player gets their OWN ResultsJSON (their character snapshot + reward + wallet);
+    /// the winner/loser identity for the card comes from the op49 HEADER (p5/p6), not the
+    /// JSON. The reward magnitudes use simple win/loss deltas — retail's exact formula
+    /// isn't in the captures, and the magnitude doesn't gate the card (§5 step 2). ENet
+    /// auto-fragments the ~4 KB frame on ch4. Sent exactly once (the `matchend_step == 0`
+    /// guard at the call site), only on the FINAL round.
+    fn broadcast_match_end_results(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        let (winner_uuid, loser_uuid) = self.combat.winner_loser_uuids();
+        for slot in 0..self.combat.fighters.len() {
+            let f = &self.combat.fighters[slot];
+            let is_winner = self.combat.winner == Some(slot);
+            // Simple, faithful-enough per-match deltas (win > loss); the card animates
+            // these but doesn't depend on the exact values. Trophy/rank are post-match
+            // snapshots the client diffs against its pre-match values.
+            let reward = if is_winner {
+                messages::MatchEndReward {
+                    gold: MATCH_END_WIN_GOLD,
+                    character_xp: MATCH_END_WIN_XP,
+                    wallet_gold: MATCH_END_WIN_GOLD,
+                    pvp_trophies: MATCH_END_WIN_TROPHIES,
+                    matchmaking_pvp_trophies: MATCH_END_WIN_TROPHIES,
+                    challenge_rank: 1,
+                }
+            } else {
+                messages::MatchEndReward {
+                    gold: MATCH_END_LOSS_GOLD,
+                    character_xp: MATCH_END_LOSS_XP,
+                    wallet_gold: MATCH_END_LOSS_GOLD,
+                    pvp_trophies: MATCH_END_LOSS_TROPHIES,
+                    matchmaking_pvp_trophies: MATCH_END_LOSS_TROPHIES,
+                    challenge_rank: 1,
+                }
+            };
+            let rj = messages::results_json(
+                &f.loadout.character_uuid,
+                &f.loadout.profile_character_json,
+                &f.loadout.profile_equipped_json,
+                &reward,
+                0,
+            );
+            let frame = messages::match_end_match(
+                self.combat.match_net_object_id,
+                &winner_uuid,
+                &loser_uuid,
+                MATCH_END_RESULT_CODE,
+                &rj,
+            );
+            info!(
+                "combat: op49 MatchEndMatchMsg → slot {slot} ({}), ResultsJSON {} B (gold {}, xp {})",
+                if is_winner { "winner" } else { "loser" },
+                rj.len(),
+                reward.gold,
+                reward.character_xp,
+            );
+            out.push((slot, frame));
+        }
+    }
+
+    /// op21 `PlayerWelcome` to each viewer's OWN Player object — the FIRST
+    /// carrier-0x36 user-message of the round-start (retail s506). The client's
+    /// `PvpPlayer` needs this to enter the user-message / loadout-upload phase;
+    /// without it `NetObjectModule.OnUserMessage` never fires and the client hangs
+    /// at "Connecting…" after ACKing the spawns. Sent ONLY to the viewer about its
+    /// own (Authority) player object. [diffed live 2026-06-19 vs s506: the missing message.]
+    fn broadcast_welcome(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        for viewer in 0..self.combat.fighters.len() {
+            let player_obj = self.combat.fighters[viewer].player_net_object_id;
+            // p4: a small per-player arena-state byte (s506 observed 20/21, semantics
+            // unconfirmed and not the gate). Use the documented default constant.
+            out.push((viewer, messages::player_welcome(player_obj, 20)));
+        }
+    }
+
+    /// op54-small per-avatar stat/HP word (full at round-start) — finalizes each
+    /// actor's health on the client. [s486 round-start]
+    fn broadcast_stat_updates(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        for viewer in 0..self.combat.fighters.len() {
+            for actor in &self.combat.fighters {
+                out.push((viewer, messages::stat_update(actor.net_object_id)));
+            }
+        }
+    }
+
+    /// Broadcast the op54 PROFILE (full character + equipped-gear JSON) a client needs to
+    /// construct the OPPONENT's avatar — appearance/gear/abilities/PvP stats
+    /// (`SetupOpponentActor`/`LoadoutJSON`). Large (tens of KB) → rusty_enet fragments it
+    /// on ENet channel 4. Skipped for fighters with no profile (starter loadout / bot).
+    /// Sent after the op50 spawns, before the flow states (docs/arena-protocol-spec.md §6.2).
+    ///
+    /// **Opponent-only — each viewer gets ONLY its opponent's profile, never its own.**
+    /// The retail server never echoes a client its own profile during setup: the client
+    /// already has it (it uploads its own via op54 *c2s*); the server relays only the
+    /// *other* player's. Verified from s506 (video↔capture): the client receives exactly
+    /// one op54 profile = the opponent's (`05:05:38`). Sending a client a profile for its
+    /// OWN (Autonomous) object — an Authority-role op54 it never expects, emitted first —
+    /// stalled the client's profile pipeline so the opponent's profile (sent right after)
+    /// was never applied → the match sat at "Connecting…", never "Setting up…" (the
+    /// 2026-06-17 paired-match stall). [docs/arena-journey-log.md §7]
+    fn broadcast_profiles(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        for viewer in 0..self.combat.fighters.len() {
+            for actor in &self.combat.fighters {
+                if actor.slot == viewer {
+                    continue; // never send a client its OWN profile (retail: opponent-only)
+                }
+                if actor.loadout.profile_character_json.is_empty() {
+                    continue;
+                }
+                out.push((
+                    viewer,
+                    messages::player_profile(
+                        actor.player_net_object_id,
+                        &actor.loadout.profile_equipped_json,
+                        &actor.loadout.profile_character_json,
+                    ),
+                ));
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn phase(&self) -> FlowState {
+        self.combat.phase
+    }
+
+    /// Test-only: the current replicated `MatchState` on the Match net object.
+    #[cfg(test)]
+    pub(crate) fn match_state_for_test(&self) -> MatchState {
+        self.combat.match_state
+    }
+
+    /// Test-only: force the DEBUG-HOLD flag without touching the process env (which
+    /// no test mutates). Mirrors `ARENA_DEBUG_HOLD` being set at construction.
+    #[cfg(test)]
+    pub(crate) fn set_debug_hold(&mut self, hold: bool) {
+        self.debug_hold = hold;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fighter_health(&self, slot: usize) -> u32 {
+        self.combat.fighters[slot].health
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fighter_max_health(&self, slot: usize) -> u32 {
+        self.combat.fighters[slot].max_health
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn inst(capacity: usize) -> (MatchInstance, Instant) {
+        let now = Instant::now();
+        // PvP-style: every fighter has a real peer (expected_peers == capacity).
+        (MatchInstance::new(capacity, capacity, vec![], now), now)
+    }
+
+    /// Total wall-clock the round-start FSM needs to reach the LIVE round from t0:
+    /// the spawn-handshake hold + the full round-0 MatchState walk (5→6→7→11→12→13)
+    /// + one tick to enter StateTimeout. Computed from the constants so it tracks any
+    /// retuning of the progression. (s506: 4s + (0+2+3+12+5)s ≈ 26s.)
+    fn setup_to_live() -> Duration {
+        let walk: Duration = MATCH_STATE_ROUND0_PROGRESSION
+            .iter()
+            .map(|(_, hold, _)| *hold)
+            .sum();
+        SPAWN_HANDSHAKE_HOLD + walk
+    }
+
+    /// Drive an existing match `m` from t0 to the LIVE round (StateTimeout) by ticking
+    /// at 100 ms across the whole setup window (spawn-handshake hold + the MatchState
+    /// walk). `connected` is the peer count to report each tick. Stops on the tick that
+    /// first enters StateTimeout and returns THAT instant (`last_heartbeat` is set then)
+    /// so callers can continue from the live moment without ticking into the past. One
+    /// tick per 100 ms is ≫ enough for the FSM (smallest hold 0s, largest 12s).
+    fn drive_to_live(m: &mut MatchInstance, connected: usize, t0: Instant) -> Instant {
+        let step = Duration::from_millis(100);
+        let total = setup_to_live() + Duration::from_secs(2);
+        let n = (total.as_millis() / step.as_millis()) as u32;
+        for i in 0..=n {
+            let now = t0 + step * i;
+            m.on_tick(connected, now);
+            if m.phase() == FlowState::StateTimeout {
+                return now;
+            }
+        }
+        panic!("drive_to_live did not reach the live round within {total:?}");
+    }
+
+    /// A match driven to the LIVE round (StateTimeout): connect → Spawning (spawn
+    /// burst) → BackendMatchCreation(5) (after the stagger hold) → the round-0
+    /// MatchState walk 6→7→11→12→13 → StateTimeout. Returns the engine, t0, and the
+    /// instant the round went live (so heartbeat/combat ticks advance from there).
+    fn live_inst(capacity: usize) -> (MatchInstance, Instant) {
+        let (m, t0, _live) = live_inst_at(capacity);
+        (m, t0)
+    }
+
+    /// Like [`live_inst`] but also returns the instant the round went live.
+    fn live_inst_at(capacity: usize) -> (MatchInstance, Instant, Instant) {
+        let now = Instant::now();
+        let mut m = MatchInstance::new(capacity, capacity, vec![], now);
+        let live = drive_to_live(&mut m, capacity, now);
+        (m, now, live)
+    }
+
+    #[test]
+    fn match_starts_when_all_connected() {
+        let (mut m, t0) = inst(2);
+        // Only one connected → still Connecting, no output.
+        assert!(m.on_tick(1, t0).is_empty());
+        assert_eq!(m.phase(), FlowState::Connecting);
+
+        // Both connected → BackendMatchCreated + combat-screen for both avatars,
+        // delivered to both players (slots 0 and 1).
+        // Both connected → the spawn burst goes out and we enter Spawning; the
+        // BackendMatchCreated flow is STAGGERED ~4s later (retail), NOT in this burst.
+        let out = m.on_tick(2, t0);
+        assert_eq!(m.phase(), FlowState::Spawning);
+        assert_eq!(
+            out.iter().filter(|(_, b)| b.ends_with(b"BackendMatchCreated")).count(),
+            0,
+            "BackendMatchCreated must NOT ride the spawn burst (retail staggers it)"
+        );
+        // Retail-faithful round-start order (s506 obj-123 match): the FIRST burst
+        // (Connecting→Spawning) sends per viewer = a Player op50 for BOTH fighters + the
+        // single type-54 **Match** net-object op50 (propId5 = WaitingForPlayers, pc 1).
+        // The Avatars come LATER (after the Match→InitialPlayerSetup transition, see
+        // `match_state_progresses_3_4_5`). So this burst = 2 viewers × (2 Player + 1
+        // Match) = 6 op50 (0x32) spawn messages — NO Avatars yet.
+        let spawns = out.iter().filter(|(_, b)| b.len() >= 2 && b[1] == 0x32).count();
+        assert_eq!(spawns, 6, "op50 = Player(both) + Match per viewer; avatars come after state 3→4");
+        // No Avatar (type 56) op50 in the first burst (they ride the 3→4 tick).
+        let avatars = out
+            .iter()
+            .filter(|(_, b)| b.len() >= 3 && b[1] == 0x32 && arena_proto::parse_netdata(&b[2..]).int(1) == Some(56))
+            .count();
+        assert_eq!(avatars, 0, "Avatars are NOT in the WaitingForPlayers spawn burst");
+        // The Match spawn carries MatchState=WaitingForPlayers(3) — NOT 5 — so the
+        // client enters player binding instead of jumping straight to BackendMatchCreation.
+        assert_eq!(
+            m.match_state_for_test(),
+            crate::arena::combat::state::MatchState::WaitingForPlayers,
+            "Match net-object spawns at WaitingForPlayers(3), the binding-gate state"
+        );
+    }
+
+    /// Reproduction guard (s506 decode): the round-start is STAGGERED — the spawn /
+    /// profile burst goes out first, and BackendMatchCreated is announced only ~4s
+    /// LATER, never in the same tick as the spawns. Batching them preempts the client's
+    /// loadout-upload (PlayerLoadoutReady) handshake → hang at "Connecting".
+    #[test]
+    fn backend_match_created_is_staggered_after_spawns() {
+        let (mut m, t0) = inst(2);
+        let burst = m.on_tick(2, t0); // → Spawning
+        assert_eq!(m.phase(), FlowState::Spawning);
+        assert!(burst.iter().any(|(_, b)| b.len() >= 2 && b[1] == 0x32), "spawns in the first burst");
+        assert!(
+            !burst.iter().any(|(_, b)| b.ends_with(b"BackendMatchCreated")),
+            "BackendMatchCreated must NOT ride the spawn burst"
+        );
+        // Held right up to the stagger deadline.
+        let held = m.on_tick(2, t0 + SPAWN_HANDSHAKE_HOLD - Duration::from_millis(1));
+        assert!(held.iter().all(|(_, b)| !b.ends_with(b"BackendMatchCreated")));
+        assert_eq!(m.phase(), FlowState::Spawning);
+        // After the hold: BackendMatchCreated to both players.
+        let created = m.on_tick(2, t0 + SPAWN_HANDSHAKE_HOLD);
+        assert_eq!(m.phase(), FlowState::BackendMatchCreated);
+        assert_eq!(
+            created.iter().filter(|(_, b)| b.ends_with(b"BackendMatchCreated")).count(),
+            2,
+            "BackendMatchCreated announced ~4s after the spawns, to both players"
+        );
+    }
+
+    /// The Match net-object's replicated `MatchState` (propId5) progresses
+    /// WaitingForPlayers(3) → InitialPlayerSetup(4) → BackendMatchCreation(5),
+    /// mirroring retail s506 obj 123 — instead of the old jump straight to 5. This is
+    /// the player-binding gate: the client binds its local/opponent `PvpPlayer` across
+    /// states 3/4, so `HasLocalPlayer` only flips when 3 and 4 are seen.
+    #[test]
+    fn match_state_progresses_3_4_5() {
+        use crate::arena::combat::state::MatchState;
+        let (mut m, t0) = inst(2);
+        // Spawn burst → MatchState spawned at WaitingForPlayers(3).
+        m.on_tick(2, t0);
+        assert_eq!(m.match_state_for_test(), MatchState::WaitingForPlayers);
+        // ~1s later → InitialPlayerSetup(4), delivered as an op55 (0x35) update to both.
+        let setup = m.on_tick(2, t0 + MATCH_SETUP_STAGGER);
+        assert_eq!(m.match_state_for_test(), MatchState::InitialPlayerSetup);
+        let setup_updates = setup
+            .iter()
+            .filter(|(_, b)| b.len() >= 2 && b[1] == 0x35)
+            .count();
+        assert_eq!(setup_updates, 2, "InitialPlayerSetup(4) → op55 update to both viewers");
+        // After the stagger hold → BackendMatchCreation(5), again an op55 update.
+        let created = m.on_tick(2, t0 + SPAWN_HANDSHAKE_HOLD);
+        assert_eq!(m.match_state_for_test(), MatchState::BackendMatchCreation);
+        assert!(
+            created.iter().any(|(_, b)| b.len() >= 2 && b[1] == 0x35),
+            "BackendMatchCreation(5) → op55 Match-object update"
+        );
+        // …and the op79 stateName "BackendMatchCreated" rides the SAME tick (flow controller).
+        assert_eq!(
+            created.iter().filter(|(_, b)| b.ends_with(b"BackendMatchCreated")).count(),
+            2,
+        );
+    }
+
+    /// Round-start sends each viewer ONLY the opponent's op54 profile, never its own —
+    /// retail-faithful (s506). Echoing a client its own profile stalled "Setting up…".
+    #[test]
+    fn round_start_profile_is_opponent_only() {
+        let now = Instant::now();
+        // Two fighters that each carry a (non-empty) profile, so broadcast_profiles emits.
+        let mk = |name: &str| {
+            let mut l = crate::arena::combat::loadout::starter();
+            l.display_name = name.to_string();
+            l.profile_equipped_json = r#"{"equippedItems":{}}"#.to_string();
+            l.profile_character_json = format!(r#"{{"name":"{name}"}}"#);
+            l
+        };
+        let mut m = MatchInstance::new(2, 2, vec![mk("Alice"), mk("Bob")], now);
+        m.on_tick(2, now); // Connecting → Spawning (players + Match spawn; NO profile yet)
+        // The profiles ride the Match WaitingForPlayers(3)→InitialPlayerSetup(4) tick
+        // (retail order: opponent PROFILE + avatars after state-4), not the first burst.
+        let out = m.on_tick(2, now + MATCH_SETUP_STAGGER);
+        // op54 PROFILE = carrier 0x36 with NetData propId3 == 35 (the profile gameMessageId);
+        // distinct from op54-small stat word (p3=65) and flow states (p3=0x4F).
+        let profiles: Vec<&(usize, Vec<u8>)> = out
+            .iter()
+            .filter(|(_, b)| b.len() > 2 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(35))
+            .collect();
+        assert_eq!(profiles.len(), 2, "exactly one op54 profile per viewer (opponent-only, not self)");
+        // viewer 0 must receive slot 1's (Bob's) profile object id, NOT its own (slot 0).
+        let p0 = profiles.iter().find(|(v, _)| *v == 0).expect("viewer 0 profile");
+        assert_eq!(
+            arena_proto::parse_netdata(&p0.1[2..]).int(0),
+            Some(m.combat.fighters[1].player_net_object_id as i64),
+            "viewer 0 receives the OPPONENT's (slot 1) profile, not its own"
+        );
+    }
+
+    /// DEBUG-GHOST contract (docs/arena-ghost-gap-analysis.md). A **solo-vs-bot**
+    /// match (capacity 2, expected_peers 1 — exactly the matchmaker's solo-fallback
+    /// shape) emits the OPPONENT's op54 PROFILE (GameMessageId 35) to the lone human
+    /// viewer (slot 0) IF AND ONLY IF the 2nd fighter (the bot, slot 1) has a
+    /// NON-EMPTY `profile_character_json`:
+    ///   - empty slot-1 loadout (today's `starter()` bot)  → ZERO opponent profiles
+    ///     (the bug: `broadcast_profiles`' `is_empty()` guard skips it → the client's
+    ///     `OpponentLoadoutReady` never flips → "Connecting…" forever);
+    ///   - ghost slot-1 loadout (a real character's profile) → exactly ONE opponent
+    ///     profile, addressed to slot 1's player object (the fix: `ARENA_DEBUG_GHOST`
+    ///     loads a real char into `loadouts[1]` so this fires).
+    /// The op54 PROFILE = carrier 0x36 with NetData propId3 == 35 (vs the op54-small
+    /// stat word propId3==65 / the flow-state propId3==0x4F).
+    #[test]
+    fn solo_fallback_ghost_yields_broadcastable_opponent_profile() {
+        let now = Instant::now();
+        let is_profile = |b: &[u8]| {
+            b.len() > 2 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(35)
+        };
+
+        // The opponent PROFILE rides the Match WaitingForPlayers(3)→InitialPlayerSetup(4)
+        // tick (retail order), not the first Connecting→Spawning burst. So we tick once to
+        // enter Spawning, then again at `+MATCH_SETUP_STAGGER` to drive the 3→4 emit.
+        // (a) the BUG: solo-fallback with an EMPTY slot-1 (starter) bot. capacity 2 /
+        // expected_peers 1 → one human peer is enough to start. No profile goes out.
+        let mut buggy = MatchInstance::new(2, 1, vec![], now);
+        buggy.on_tick(1, now); // Connecting → Spawning
+        let setup = buggy.on_tick(1, now + MATCH_SETUP_STAGGER); // 3→4 (avatars + profiles)
+        assert_eq!(
+            setup.iter().filter(|(_, b)| is_profile(b)).count(),
+            0,
+            "empty starter bot → NO opponent profile (reproduces the 'Connecting…' stall)"
+        );
+
+        // (b) the FIX: feed slot 1 a real (non-empty-profile) ghost loadout — what
+        // `ARENA_DEBUG_GHOST` makes `load_loadout(ghost)` produce. Slot 0 (the human)
+        // stays an empty starter; the opponent profile must still broadcast.
+        let mut ghost = crate::arena::combat::loadout::starter();
+        ghost.display_name = "WolfWalker".into();
+        ghost.profile_equipped_json = r#"{"equippedItems":{}}"#.into();
+        ghost.profile_character_json = r#"{"name":"WolfWalker","level":89}"#.into();
+        let mut fixed = MatchInstance::new(
+            2,
+            1,
+            vec![crate::arena::combat::loadout::starter(), ghost],
+            now,
+        );
+        fixed.on_tick(1, now); // → Spawning
+        assert_eq!(fixed.phase(), FlowState::Spawning);
+        let setup = fixed.on_tick(1, now + MATCH_SETUP_STAGGER); // 3→4 emit
+        let profiles: Vec<&(usize, Vec<u8>)> =
+            setup.iter().filter(|(_, b)| is_profile(b)).collect();
+        assert_eq!(
+            profiles.len(),
+            1,
+            "ghost slot-1 loadout → exactly ONE op54 opponent profile to the lone viewer"
+        );
+        // It is addressed to the lone human viewer (slot 0) and carries the OPPONENT's
+        // (slot 1) player object id — never the viewer's own object.
+        let (viewer, body) = profiles[0];
+        assert_eq!(*viewer, 0, "the profile is delivered to the human viewer (slot 0)");
+        assert_eq!(
+            arena_proto::parse_netdata(&body[2..]).int(0),
+            Some(fixed.combat.fighters[1].player_net_object_id as i64),
+            "the profile addresses the OPPONENT (slot 1) player object"
+        );
+    }
+
+    #[test]
+    fn solo_bot_match_starts_on_one_peer_and_bot_attacks() {
+        // capacity 2 (player + bot), but only 1 real peer expected → the match must
+        // start when that lone peer connects (the bot has no peer), and the bot must
+        // auto-swing at the player on the tick (a fight, not a static dummy).
+        let now = Instant::now();
+        let mut m = MatchInstance::new(2, 1, vec![], now);
+        m.on_tick(1, now); // one real peer is enough → Spawning
+        assert_eq!(m.phase(), FlowState::Spawning);
+        drive_to_live(&mut m, 1, now); // walk the MatchState progression → live round
+        assert_eq!(m.phase(), FlowState::StateTimeout);
+        let before = m.fighter_health(0);
+        // Past the bot's swing cadence → the bot (slot 1) damages the player (slot 0).
+        m.on_tick(1, now + setup_to_live() + Duration::from_secs(3));
+        assert!(m.fighter_health(0) < before, "bot should damage the player on tick");
+    }
+
+    #[test]
+    fn advances_to_round_after_hold() {
+        // (a) Mid-progression: at +6s into BackendMatchCreation (the MatchState walk
+        // takes ~22s) the match is still NOT live — it's walking 6→7→11→12→13.
+        let (mut mid, t0) = inst(2);
+        mid.on_tick(2, t0); // → Spawning (spawn burst)
+        assert_eq!(mid.phase(), FlowState::Spawning);
+        let step = Duration::from_millis(100);
+        for i in 0..=((SPAWN_HANDSHAKE_HOLD + Duration::from_secs(6)).as_millis() / 100) as u32 {
+            mid.on_tick(2, t0 + step * i);
+        }
+        assert_eq!(mid.phase(), FlowState::BackendMatchCreated, "still walking MatchState, not live yet");
+
+        // (b) The full drive reaches the live round (StateTimeout), round 1, and emits
+        // a StateTimeout heartbeat once live.
+        let (mut m, _t0b, live) = live_inst_at(2);
+        assert_eq!(m.phase(), FlowState::StateTimeout);
+        assert_eq!(m.combat.round, 1);
+        let out = m.on_tick(2, live + HEARTBEAT);
+        assert!(out.iter().any(|(_, b)| b.ends_with(b"StateTimeout")));
+    }
+
+    #[test]
+    fn heartbeats_on_cadence() {
+        let (mut m, _t0, live) = live_inst_at(2); // → StateTimeout (live round)
+        // After the cadence elapses (measured from when it actually went live): a
+        // StateTimeout heartbeat to both players.
+        let out = m.on_tick(2, live + HEARTBEAT);
+        assert_eq!(out.iter().filter(|(_, b)| b.ends_with(b"StateTimeout")).count(), 2);
+    }
+
+    /// Capture-proven (s506): the round-start op58 clock-sync is a CLIENT-INITIATED
+    /// request/reply. The client sends c2s op58 `[clock0=0, token]` and BLOCKS at
+    /// `AwaitingClientBackendSynchronization` until the server replies op58
+    /// `[server_clock_ticks, token]` — echoing the SAME token back to that one
+    /// client. `on_c2s` must answer it in the round-start phase (Spawning here), to
+    /// the SENDER ONLY, echoing the token verbatim — NOT route it to `resolve`
+    /// (which drops everything off StateTimeout) and NOT broadcast.
+    #[test]
+    fn op58_clock_sync_echoes_client_token() {
+        const TOKEN: i64 = 0x08DECC2E11DD1E98u64 as i64; // s506's 2nd player token (981EDD11…)
+        let now = Instant::now();
+        let mut m = MatchInstance::new(2, 2, vec![], now);
+        m.on_tick(2, now); // Connecting → Spawning (round-start burst)
+        assert_eq!(m.phase(), FlowState::Spawning, "test drives to the round-start phase");
+
+        // Build the client's c2s op58: two Longs [clock0=0 @propId0, token @propId1].
+        // `messages::clock` writes exactly that NetData; patch the marker to the c2s
+        // marker 0x84 so the frame mirrors a real client send (byte 0 is not parsed).
+        let mut c2s = messages::clock(0, TOKEN);
+        c2s[0] = 0x84;
+        assert_eq!(c2s[1], 0x3a, "carrier is op58 (0x3a)");
+
+        let out = m.on_c2s(0, &c2s, now);
+
+        // Exactly one reply, to the SENDER (slot 0), carrier op58.
+        assert_eq!(out.len(), 1, "op58 clock-sync replies to the sender ONLY (not a broadcast)");
+        let (target, reply) = &out[0];
+        assert_eq!(*target, 0, "reply goes back to the sender");
+        assert_eq!(reply[0], messages::MARKER_S2C, "s2c marker 0xBE");
+        assert_eq!(reply[1], 0x3a, "reply carrier is op58 (0x3a)");
+
+        // The reply echoes the client's token verbatim at propId 1, and carries a
+        // real server clock at propId 0 (a plausible .NET DateTime.Ticks, not 0).
+        let nd = arena_proto::parse_netdata(&reply[2..]);
+        assert_eq!(
+            nd.props.get(&1),
+            Some(&arena_proto::NetDataValue::Long(TOKEN)),
+            "propId 1 Long == the client's token, echoed verbatim",
+        );
+        match nd.props.get(&0) {
+            Some(&arena_proto::NetDataValue::Long(ticks)) => {
+                assert!(ticks > 621_355_968_000_000_000, "propId 0 is a real .NET-ticks server clock");
+            }
+            other => panic!("propId 0 must be a Long server clock, got {other:?}"),
+        }
+
+        // Combat resolution did NOT run (no phantom damage from the handshake frame).
+        assert_eq!(m.fighter_health(1), m.fighter_max_health(1), "no damage from a clock-sync");
+    }
+
+    /// A malformed c2s op58 (no parseable token) still gets a reply (token 0) — the
+    /// server must never panic or silently drop it (that would re-hang the client).
+    #[test]
+    fn op58_clock_sync_malformed_replies_token_zero() {
+        let now = Instant::now();
+        let mut m = MatchInstance::new(2, 2, vec![], now);
+        m.on_tick(2, now); // → Spawning
+        // Carrier 0x3a but a truncated/empty NetData body → no propId 1.
+        let out = m.on_c2s(0, &[0x84, 0x3a], now);
+        assert_eq!(out.len(), 1, "still exactly one reply to the sender");
+        let nd = arena_proto::parse_netdata(&out[0].1[2..]);
+        assert_eq!(
+            nd.props.get(&1),
+            Some(&arena_proto::NetDataValue::Long(0)),
+            "malformed token → echo 0 (graceful, never panic)",
+        );
+    }
+
+    /// Capture-proven (s506 #3523229): the client sends op61
+    /// `LoadoutClientBackendSynchronized` c2s at a round transition — even while the
+    /// match is LIVE (StateTimeout). The server must treat it as a handshake signal:
+    /// NO s2c reply and NO phantom damage (it rides carrier 0x36, the combat-input
+    /// carrier, so the pre-fix catch-all `resolve_swing` would have hit the opponent).
+    #[test]
+    fn op61_loadout_backend_sync_is_handshake_not_a_swing() {
+        let (mut m, t0) = live_inst(2); // LIVE round (StateTimeout) — combat resolves here
+        let full = m.fighter_health(1);
+
+        // Build the real s506 op61 (Player obj, role Autonomous, HideHelmet), c2s marker.
+        let mut op61 = messages::loadout_client_backend_synchronized(
+            m.combat.fighters[0].player_net_object_id,
+            NetRole::Autonomous,
+            true,
+        );
+        op61[0] = 0x84; // c2s marker (byte 0 is not parsed)
+
+        let out = m.on_c2s(0, &op61, t0);
+        assert!(out.is_empty(), "op61 produces NO s2c (the server never replies to it)");
+        assert_eq!(m.fighter_health(1), full, "op61 must NOT damage the opponent (it's not a swing)");
+        assert_eq!(m.phase(), FlowState::StateTimeout, "op61 does not change the match phase");
+    }
+
+    /// The other carrier-0x36 round-transition handshake frames (op36 PlayerLoadoutReady,
+    /// op80 MatchStateChangeAck) likewise never resolve as combat in the live round.
+    #[test]
+    fn round_transition_handshake_frames_do_no_damage() {
+        let (mut m, t0) = live_inst(2);
+        let full = m.fighter_health(1);
+
+        // op36 PlayerLoadoutReady (c2s).
+        let mut op36 = {
+            let mut w = arena_proto::NetDataWriter::new();
+            w.int(0, m.combat.fighters[0].player_net_object_id).byte(1, 55).byte(2, 3).byte(3, 36);
+            messages::frame_for_test(w.finish())
+        };
+        op36[0] = 0x84;
+        assert!(m.on_c2s(0, &op36, t0).is_empty(), "op36 PlayerLoadoutReady → no s2c");
+
+        // op80 MatchStateChangeAck (c2s echo).
+        let mut op80 = messages::match_state_change_ack(m.combat.flow_controller_id, "StateTimeout");
+        op80[0] = 0x84;
+        assert!(m.on_c2s(0, &op80, t0).is_empty(), "op80 MatchStateChangeAck → no s2c");
+
+        assert_eq!(m.fighter_health(1), full, "no handshake frame damages the opponent");
+    }
+
+    #[test]
+    fn combat_input_damages_opponent() {
+        let (mut m, t0) = live_inst(2); // → live round (StateTimeout); combat resolves
+
+        // A (slot 0) sends a combat-input (carrier 54) → B (slot 1) takes damage;
+        // a ReceiveDamage goes to both target and attacker.
+        let out = m.on_c2s(0, &[0x84, 0x36], t0);
+        assert_eq!(out.len(), 2, "ReceiveDamage to both target and attacker");
+        for (_, ud) in &out {
+            assert_eq!(ud[1], 0x36, "carrier 54");
+            assert_eq!(
+                arena_proto::parse_netdata(&ud[2..]).int(3),
+                Some(50),
+                "real GameMessageId 50 at propId 3"
+            );
+        }
+        // B's RAW HP dropped by the model swing. Starter = L30 **Light** weapon (the new
+        // default, not Heavy): base = (heavy_base(7)=120 + QUALITY_BONUS[3]=9) × 0.60 =
+        // 77.4 Slashing at combo-0 (the FIRST swing is Right, ×1.0). + a Shock enchant
+        // (tier 2 → 13.73×2 = 27.46, amp ×1.0). Health total = 77.4 + 27.46 ≈ 104.86 →
+        // round 105 (the equal Magicka drain is excluded). NO 25% clamp anymore (§4.5):
+        // the hit is the honest model value. HP is raw (×3 arena pool); wire is a fraction.
+        assert_eq!(m.fighter_max_health(1) - m.fighter_health(1), 105, "B raw HP −105 (combo-0 Light swing, un-clamped)");
+        if let Some(arena_proto::NetDataValue::ULong(v)) =
+            arena_proto::parse_netdata(&out[0].1[2..]).props.get(&4)
+        {
+            // Health is the low 10 bits of the HIGH 32 (stat word); seq is the low 32.
+            assert!(((v >> 32) & 0x3ff) < 1023, "wire health is a fraction below full");
+        }
+
+        // A second swing within the cooldown is throttled (no double-hit).
+        assert!(m.on_c2s(0, &[0x84, 0x36], t0).is_empty(), "throttled within cooldown");
+    }
+
+    /// Swing `attacker` into its opponent (past the swing cooldown each time, from
+    /// `start`) until a death fires. Returns `(death_burst, time_of_death)`. Panics if
+    /// no death within 40 swings (the cap is generous: clamped hits kill in ≥4).
+    fn swing_until_death(m: &mut MatchInstance, attacker: usize, start: Instant) -> (Vec<(usize, Vec<u8>)>, Instant) {
+        let mut t = start;
+        for _ in 0..40 {
+            t += Duration::from_millis(500);
+            let out = m.on_c2s(attacker, &[0x84, 0x36], t);
+            let is_op29 = |b: &[u8]| {
+                b.len() > 3 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(29)
+            };
+            if out.iter().any(|(_, b)| is_op29(b)) {
+                return (out, t);
+            }
+        }
+        panic!("attacker {attacker} never killed the opponent within 40 swings");
+    }
+
+    /// Drive a between-rounds (NextState) walk to completion: tick at 250 ms until the
+    /// match re-enters the live round (StateTimeout). Returns the MatchState sequence
+    /// the FSM emitted (op55 propId5) + the instant it went live. Panics if it doesn't
+    /// re-enter the round within the expected window.
+    fn drive_interround_to_live(m: &mut MatchInstance, t: Instant) -> (Vec<u8>, Instant) {
+        let total: Duration = MATCH_STATE_INTERROUND_PROGRESSION.iter().map(|(_, h, _)| *h).sum::<Duration>()
+            + Duration::from_secs(2);
+        let step = Duration::from_millis(250);
+        let n = (total.as_millis() / step.as_millis()) as u32;
+        let mut states_seen: Vec<u8> = Vec::new();
+        for i in 1..=n {
+            let now = t + step * i;
+            let out = m.on_tick(2, now);
+            for (_, b) in &out {
+                if b.len() > 2 && b[1] == 0x35 {
+                    if let Some(s) = arena_proto::parse_netdata(&b[2..]).int(5) {
+                        if states_seen.last() != Some(&(s as u8)) {
+                            states_seen.push(s as u8);
+                        }
+                    }
+                }
+            }
+            if m.phase() == FlowState::StateTimeout {
+                return (states_seen, now);
+            }
+        }
+        panic!("between-rounds walk did not re-enter the live round within {total:?}");
+    }
+
+    /// A round-ending death emits the capture-faithful round-end burst — op29
+    /// PlayerDead (GMID 29), op79 "RoundEnd", op48 MatchPostRoundInfoMsg (GMID 48), and
+    /// the Match net-object → PostRound(14) — regardless of whether it ends the match
+    /// or loops. (Retail s506 sends op48, NOT op49.)
+    #[test]
+    fn round_ending_death_emits_burst() {
+        let (mut m, t0) = live_inst(2); // → live round
+        let (death_out, _t) = swing_until_death(&mut m, 0, t0);
+        assert!(
+            death_out.iter().any(|(_, b)| b.ends_with(b"RoundEnd")),
+            "op79 RoundEnd flow on the killing blow"
+        );
+        assert!(
+            death_out.iter().any(|(_, b)| b.len() > 3 && b[1] == 0x36
+                && arena_proto::parse_netdata(&b[2..]).int(3) == Some(48)),
+            "op48 MatchPostRoundInfoMsg (the result) on the killing blow"
+        );
+        assert!(
+            death_out.iter().any(|(_, b)| b.len() > 2 && b[1] == 0x35
+                && arena_proto::parse_netdata(&b[2..]).int(5) == Some(14)),
+            "Match net-object → PostRound(14)"
+        );
+        assert_eq!(m.match_state_for_test(), MatchState::PostRound);
+    }
+
+    /// BEST-OF-3, round 1 (score 0-0): the first round-ending death does NOT end the
+    /// match — it LOOPS to round 2. The match enters `NextState` (the between-rounds
+    /// walk), the winner has 1 round-win, and combat input is ignored during the walk.
+    /// Then the FSM walks ChooseLoadout(8)→…→InRound(13) and re-enters the live round
+    /// with both fighters at FULL HP (round bumped to 2), peers NOT disconnected.
+    #[test]
+    fn round1_death_loops_to_round2() {
+        let (mut m, t0) = live_inst(2);
+        assert_eq!(m.combat.round, 1, "starts in round 1");
+
+        let (_death, t) = swing_until_death(&mut m, 0, t0);
+        // Slot 0 won round 1; score 1-0; the match is LOOPING (NextState), not ending.
+        assert_eq!(m.combat.rounds_won, [1, 0], "winner (slot 0) has 1 round-win");
+        assert_eq!(m.phase(), FlowState::NextState, "non-final death → between-rounds walk, NOT RoundEnd/Finished");
+        assert_eq!(m.match_state_for_test(), MatchState::PostRound, "PostRound(14) emitted at the death");
+        assert!(!m.is_finished(), "the match is NOT finished after round 1");
+        // Combat input is ignored during the between-rounds walk (not StateTimeout).
+        assert!(m.on_c2s(0, &[0x84, 0x36], t + Duration::from_millis(1)).is_empty());
+
+        // Walk the between-rounds MatchState sequence → re-enter the live round.
+        let (states_seen, _live) = drive_interround_to_live(&mut m, t);
+        // s506 round-0→round-1 sequence: ChooseLoadout(8)→Awaiting(9)→Sync(10)→
+        // OpponentShowcase(11)→PreRound(12)→InRound(13).
+        assert_eq!(
+            states_seen,
+            vec![
+                MatchState::ChooseLoadout as u8,                      // 8
+                MatchState::AwaitingClientBackendSynchronization as u8, // 9
+                MatchState::SynchronizingLoadout as u8,               // 10
+                MatchState::OpponentShowcase as u8,                   // 11
+                MatchState::PreRound as u8,                           // 12
+                MatchState::InRound as u8,                            // 13
+            ],
+            "between-rounds MatchState walk must be 8→9→10→11→12→13 (s506 round-0→round-1)"
+        );
+        assert_eq!(m.phase(), FlowState::StateTimeout, "re-entered the live round for round 2");
+        assert_eq!(m.combat.round, 2, "round bumped to 2");
+        // Both fighters reset to FULL HP for the new round.
+        assert_eq!(m.fighter_health(0), m.fighter_max_health(0), "winner reset to full HP");
+        assert_eq!(m.fighter_health(1), m.fighter_max_health(1), "loser reset to full HP");
+        assert!(!m.is_finished(), "peers NOT disconnected — the match continues");
+    }
+
+    /// BEST-OF-3 end: when a fighter reaches 2 round-wins, the NEXT round-ending death
+    /// ENDS the match (terminal walk → Finished), instead of looping. Drive to a 1-1
+    /// score, then a third death must take the winner to 2 and end the match.
+    #[test]
+    fn score_1_1_next_death_ends_match() {
+        let (mut m, t0) = live_inst(2);
+
+        // Round 1: slot 0 kills slot 1 → 1-0, loops to round 2.
+        let (_d1, t1) = swing_until_death(&mut m, 0, t0);
+        assert_eq!(m.combat.rounds_won, [1, 0]);
+        assert_eq!(m.phase(), FlowState::NextState);
+        let (_s1, live2) = drive_interround_to_live(&mut m, t1);
+        assert_eq!(m.combat.round, 2);
+
+        // Round 2: slot 1 kills slot 0 → 1-1, loops to round 3.
+        let (_d2, t2) = swing_until_death(&mut m, 1, live2);
+        assert_eq!(m.combat.rounds_won, [1, 1], "score is now 1-1");
+        assert_eq!(m.phase(), FlowState::NextState, "1-1 still loops (no fighter at 2 wins)");
+        assert!(!m.is_finished());
+        let (_s2, live3) = drive_interround_to_live(&mut m, t2);
+        assert_eq!(m.combat.round, 3);
+
+        // Round 3: slot 0 kills slot 1 → 2-1, the match ENDS (terminal walk).
+        let (_d3, _t3) = swing_until_death(&mut m, 0, live3);
+        assert_eq!(m.combat.rounds_won, [2, 1], "winner reached 2 round-wins");
+        assert_eq!(m.phase(), FlowState::RoundEnd, "2 wins → match-end walk (RoundEnd), NOT another loop");
+        assert_eq!(m.match_state_for_test(), MatchState::PostRound);
+    }
+
+    /// The post-InRound terminal walk (the "error 3" fix): after a round-ending death
+    /// the FSM advances the Match net-object's `MatchState` PostRound(14) →
+    /// BackendMatchEnd(17) → PostMatch(16) → DisconnectingPlayers(19) on the s506
+    /// final-round timers, then finishes — so the client shows a clean result and
+    /// returns to the lobby instead of timing out at InRound. [MATCH_STATE_MATCHEND_PROGRESSION]
+    #[test]
+    fn post_match_state_walk_reaches_terminal_then_finishes() {
+        use crate::arena::combat::state::MatchState;
+        let (mut m, t0) = live_inst(2);
+
+        // Best-of-3: slot 0 must win TWO rounds to END the match. Round 1 kill → loops;
+        // walk back into round 2; round 2 kill → 2-0 → the MATCH-ending death.
+        let (_d1, t1) = swing_until_death(&mut m, 0, t0);
+        assert_eq!(m.phase(), FlowState::NextState, "round-1 death loops, not ends");
+        let (_s1, live2) = drive_interround_to_live(&mut m, t1);
+        let (_d2, t) = swing_until_death(&mut m, 0, live2);
+        assert_eq!(m.combat.rounds_won, [2, 0], "slot 0 won the match 2-0");
+        assert_eq!(m.phase(), FlowState::RoundEnd, "the match-ending death → terminal walk");
+        assert_eq!(m.match_state_for_test(), MatchState::PostRound);
+
+        // Tick at 250 ms through the whole terminal walk (4 + 6 + 5 s of holds ≈ 15 s).
+        // Record the MatchState updates the FSM emits, in order.
+        let matchend_to_finish = Duration::from_secs(4 + 6 + 5 + 2);
+        let step = Duration::from_millis(250);
+        let n = (matchend_to_finish.as_millis() / step.as_millis()) as u32;
+        let mut states_seen: Vec<u8> = Vec::new();
+        let mut saw_terminal_heartbeat = false;
+        for i in 1..=n {
+            let now = t + step * i;
+            let out = m.on_tick(2, now);
+            for (_, b) in &out {
+                // op55 Match-object update (carrier 0x35), propId5 = the new MatchState.
+                if b.len() > 2 && b[1] == 0x35 {
+                    if let Some(s) = arena_proto::parse_netdata(&b[2..]).int(5) {
+                        if states_seen.last() != Some(&(s as u8)) {
+                            states_seen.push(s as u8);
+                        }
+                    }
+                }
+                if b.ends_with(b"StateTimeout") {
+                    saw_terminal_heartbeat = true;
+                }
+            }
+            if m.phase() == FlowState::Finished {
+                break;
+            }
+        }
+        assert!(saw_terminal_heartbeat, "an op79 StateTimeout heartbeat rides the post-match walk (s506)");
+        // The exact retail terminal sequence (s506 obj 123 final round): 17 → 16 → 19.
+        assert_eq!(
+            states_seen,
+            vec![
+                MatchState::BackendMatchEnd as u8,            // 17
+                MatchState::PostMatch as u8,                  // 16
+                MatchState::DisconnectingPlayersAfterMatch as u8, // 19
+            ],
+            "post-match MatchState walk must be BackendMatchEnd(17)→PostMatch(16)→Disconnecting(19), s506-exact"
+        );
+        assert_eq!(m.phase(), FlowState::Finished, "match Finished after the terminal state");
+        assert_eq!(m.match_state_for_test(), MatchState::DisconnectingPlayersAfterMatch);
+    }
+
+    /// MATCH-END op49 (the victory CARD, `docs/arena-match-end-spec.md`): on the FINAL
+    /// round-ending death, the FSM emits ONE op49 `MatchEndMatchMsg` PER PLAYER (right
+    /// after the post-PostRound StateTimeout heartbeat), each carrying a ResultsJSON with
+    /// `reward.currencies` + `reward.characterXp`, addressed to that player's slot. NOT
+    /// emitted on an intermediate (looping) round.
+    #[test]
+    fn match_end_emits_op49_per_player_on_final_round() {
+        let now = Instant::now();
+        // Two named fighters (distinct UUIDs) so the op49 header carries real winner/loser.
+        let mk = |name: &str, uuid: &str| {
+            let mut l = crate::arena::combat::loadout::starter();
+            l.display_name = name.into();
+            l.character_uuid = uuid.into();
+            l.profile_character_json = format!(r#"{{"id":"{uuid}","name":"{name}","level":86}}"#);
+            l.profile_equipped_json = r#"{"equippedItems":{}}"#.into();
+            l
+        };
+        let mut m = MatchInstance::new(
+            2,
+            2,
+            vec![
+                mk("Flappety", "38c987fd-c42b-4ea6-b869-c8d4c03055f9"),
+                mk("Blank", "1131a037-716c-49cc-b165-32d8ddc14f49"),
+            ],
+            now,
+        );
+        let live = drive_to_live(&mut m, 2, now);
+
+        let is_op49 = |b: &[u8]| {
+            b.len() > 3 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(49)
+        };
+
+        // Round 1 death LOOPS (best-of-3) — NO op49 on an intermediate round.
+        let (d1, t1) = swing_until_death(&mut m, 0, live);
+        assert!(!d1.iter().any(|(_, b)| is_op49(b)), "no op49 on the looping round-1 death");
+        assert_eq!(m.phase(), FlowState::NextState);
+        let (_s1, live2) = drive_interround_to_live(&mut m, t1);
+
+        // Round 2 death → 2-0 → the MATCH ends. Tick the terminal walk; the op49 burst
+        // rides the matchend_step==0 tick (with the StateTimeout heartbeat).
+        let (_d2, t) = swing_until_death(&mut m, 0, live2);
+        assert_eq!(m.combat.rounds_won, [2, 0], "slot 0 won the match 2-0");
+        assert_eq!(m.phase(), FlowState::RoundEnd);
+
+        let mut op49s: Vec<(usize, Vec<u8>)> = Vec::new();
+        let step = Duration::from_millis(250);
+        for i in 1..=80u32 {
+            let out = m.on_tick(2, t + step * i);
+            for (slot, b) in out {
+                if is_op49(&b) {
+                    op49s.push((slot, b));
+                }
+            }
+            if m.phase() == FlowState::Finished {
+                break;
+            }
+        }
+        // Exactly ONE op49 per player (2), one to each slot.
+        assert_eq!(op49s.len(), 2, "one op49 MatchEndMatchMsg per player at match-end");
+        let slots: std::collections::BTreeSet<usize> = op49s.iter().map(|(s, _)| *s).collect();
+        assert_eq!(slots.into_iter().collect::<Vec<_>>(), vec![0, 1], "one op49 to each slot");
+
+        // Each op49 header has the right winner/loser, and its ResultsJSON parses with
+        // the reward fields the card animates.
+        for (_, b) in &op49s {
+            let nd = arena_proto::parse_netdata(&b[2..]);
+            assert_eq!(nd.int(3), Some(49), "GMID 49");
+            assert_eq!(nd.string(5), Some("38c987fd-c42b-4ea6-b869-c8d4c03055f9"), "winner = slot 0 (Flappety)");
+            assert_eq!(nd.string(6), Some("1131a037-716c-49cc-b165-32d8ddc14f49"), "loser = slot 1 (Blank)");
+            let rj = nd.string(13).expect("ResultsJSON at propId 13");
+            let v: serde_json::Value = serde_json::from_str(rj).expect("ResultsJSON parses");
+            assert!(v["reward"]["currencies"].is_object(), "ResultsJSON has reward.currencies");
+            assert!(v["reward"]["characterXp"].is_number(), "ResultsJSON has reward.characterXp");
+        }
+    }
+
+    /// PARALYSE (§5.4): a poison-heavy attacker accumulates poison on the target's
+    /// sliding window; once it crosses the absolute paralyse threshold the target enters
+    /// the `Paralyzed` actor-state (op51 status 9 emitted) and its combat inputs LOCK.
+    #[test]
+    fn poison_accumulation_paralyses_and_locks_inputs() {
+        use crate::arena::combat::state::{ActorStateType, DamageType, WeaponProfile};
+        use crate::arena::combat::tables::Weight;
+        let now = Instant::now();
+        // A heavy-poison dagger so a few swings cross the paralyse threshold.
+        let poison = {
+            let mut l = crate::arena::combat::loadout::starter();
+            l.weapon = WeaponProfile {
+                primary_type: Some(DamageType::Slashing),
+                base_by_type: vec![(DamageType::Slashing, 60.0)],
+                weight: Some(Weight::Light),
+            };
+            l.enchants = vec![(DamageType::Poison, 10)]; // ~137/swing, amplifying with stacks
+            l
+        };
+        let mut m = MatchInstance::new(2, 2, vec![poison, crate::arena::combat::loadout::starter()], now);
+        let live = drive_to_live(&mut m, 2, now);
+
+        // Slot 0 (poison) swings slot 1 repeatedly. Within the 5 s window the poison
+        // accumulates and eventually paralyses slot 1 (op51 status 9 to both players).
+        let is_op51_paralyze = |b: &[u8]| {
+            b.len() > 5
+                && b[1] == 0x36
+                && arena_proto::parse_netdata(&b[2..]).int(3) == Some(51)
+                && arena_proto::parse_netdata(&b[2..]).int(5) == Some(9)
+        };
+        let mut saw_paralyze = false;
+        let mut t = live;
+        for _ in 0..12 {
+            t += Duration::from_millis(500); // > SWING_COOLDOWN, < the 5 s window
+            let out = m.on_c2s(0, &[0x84, 0x36], t);
+            if out.iter().any(|(_, b)| is_op51_paralyze(b)) {
+                saw_paralyze = true;
+                break;
+            }
+            if m.combat.fighters[1].is_dead() {
+                break;
+            }
+        }
+        assert!(saw_paralyze, "poison accumulation must land Paralyzed (op51 status 9) within the window");
+        assert_eq!(
+            m.combat.fighters[1].actor_state,
+            ActorStateType::Paralyzed,
+            "the target is in the Paralyzed actor-state"
+        );
+        // A paralysed fighter's combat inputs are LOCKED (no damage dealt back).
+        let attacker_full = m.fighter_health(0);
+        let out = m.on_c2s(1, &[0x84, 0x36], t + Duration::from_millis(600));
+        assert!(out.is_empty(), "a paralysed fighter's swing is dropped (inputs locked)");
+        assert_eq!(m.fighter_health(0), attacker_full, "paralysed target dealt no damage");
+    }
+
+    #[test]
+    fn ability_cast_deals_spell_damage() {
+        let (mut m, t0) = live_inst(2); // → live round
+
+        // A casts an ability (op37 RequestExecuteAbility).
+        let mut req = vec![
+            0xBE, 0x36, 0x04, 0x1F, 0x70, 0x77, 0x0A, 0x35, 0x02, 0x00, 0x00, 0x38, 0x03, 0x25, 0x24, 0x00,
+        ];
+        req.extend_from_slice(b"7fc15804-1637-40a9-8dcc-3ea1eb0f778d");
+        let out = m.on_c2s(0, &req, t0);
+
+        // PerformExecuteAbility (38) echoed (gmid byte at sep+5 = index 13).
+        assert!(out.iter().any(|(_, b)| b.get(13) == Some(&38)), "PerformExecuteAbility echoed");
+        // A ReceiveDamage with Spell source (propId 6 = 2).
+        let rd = out
+            .iter()
+            .find(|(_, b)| b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50))
+            .expect("ReceiveDamage present");
+        assert_eq!(arena_proto::parse_netdata(&rd.1[2..]).int(6), Some(2), "Spell damage source");
+
+        // The same ability is on cooldown immediately after.
+        assert!(m.on_c2s(0, &req, t0).is_empty(), "ability on cooldown");
+    }
+
+    /// BLOCK as a c2s input, with the CORRECTED asymmetric model (§4.4): a
+    /// `PlayerBlockingStateChange` (41) raises the sender's guard; a subsequent swing on
+    /// the SAME side is an OPTIMAL block that NEGATES physical (×0) but only HALVES
+    /// elemental (×0.5) — so a poison/shock weapon still lands its halved elemental.
+    /// (The attacker's first auto-swing is Right, so B must guard Right for optimal.)
+    #[test]
+    fn block_input_reduces_incoming_damage() {
+        let (mut m, t0) = live_inst(2);
+        let full = m.fighter_health(1);
+
+        // The starter weapon's per-swing physical vs elemental split (Light, combo-0):
+        // Slashing = weapon_base_for_level(30, Light) ≈ 77.4; Shock = 13.73×2 = 27.46.
+        // An UN-guarded reference hit (fresh match) → total ≈ 105.
+        let (mut m_open, t_open) = live_inst(2);
+        let open_before = m_open.fighter_health(1);
+        m_open.on_c2s(0, &[0x84, 0x36], t_open);
+        let open_dealt = open_before - m_open.fighter_health(1);
+        assert!(open_dealt >= 100, "un-guarded reference hit is the full ~105, got {open_dealt}");
+
+        // Build B's (slot 1) PlayerBlockingStateChange (41), guarding RIGHT (the side the
+        // attacker's first auto-swing uses). NetData {0:player obj · 1:55 · 2:role · 3:41
+        // · 4:3 (ActiveSide::Right)}.
+        let mut block = {
+            let mut w = arena_proto::NetDataWriter::new();
+            w.int(0, m.combat.fighters[1].player_net_object_id)
+                .byte(1, 55)
+                .byte(2, 3)
+                .byte(3, 41) // PlayerBlockingStateChange
+                .byte(4, 3); // ActiveSide::Right
+            messages::frame_for_test(w.finish())
+        };
+        block[0] = 0x84; // c2s marker
+
+        // The block frame itself: no s2c, no damage, and B is now guarding.
+        let out = m.on_c2s(1, &block, t0);
+        assert!(out.is_empty(), "a block input produces no s2c and no damage");
+        assert_eq!(m.fighter_health(1), full, "the block itself deals no damage");
+
+        // A (slot 0) swings Right into B's Right guard → OPTIMAL block: physical NEGATED,
+        // elemental HALVED. So B takes only the halved Shock (~14), NOT 0 and NOT the full 105.
+        let dmg = m.on_c2s(0, &[0x84, 0x36], t0 + Duration::from_millis(600));
+        assert!(!dmg.is_empty(), "the swing still resolves (ReceiveDamage emitted)");
+        let opt_dealt = full - m.fighter_health(1);
+        assert!(opt_dealt > 0, "optimal block still lets the HALVED elemental through (not ×0 overall)");
+        assert!(
+            opt_dealt < open_dealt / 2,
+            "optimal block negates physical: {opt_dealt} << the open hit {open_dealt} (only ~halved Shock lands)"
+        );
+        // ~halved Shock ≈ 14 (27.46 × 0.5 = 13.73 → 14 after rounding).
+        assert!((opt_dealt as i32 - 14).abs() <= 1, "only the halved elemental (~14) lands, got {opt_dealt}");
+        // The ReceiveDamage carries the WasOptimalBlocking flag (propId 7 bit3).
+        let rd = dmg.iter().find(|(_, b)| b[1] == 0x36
+            && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50)).expect("ReceiveDamage");
+        let flags = arena_proto::parse_netdata(&rd.1[2..]).int(7).unwrap_or(0);
+        assert!(flags & 0b1000 != 0, "WasOptimalBlocking flag set on a same-side block");
+
+        // Sanity: an UN-guarded target still takes full damage — a fresh match.
+        let (mut m2, t2) = live_inst(2);
+        let before = m2.fighter_health(1);
+        m2.on_c2s(0, &[0x84, 0x36], t2);
+        assert!(m2.fighter_health(1) < before, "an un-guarded target takes damage (block didn't break attacks)");
+    }
+
+    /// A block window auto-expires: after `BLOCK_WINDOW` a stale guard no longer
+    /// reduces damage (so a one-time block can't make a fighter unkillable).
+    #[test]
+    fn block_window_expires() {
+        let (mut m, t0) = live_inst(2);
+        let mut block = {
+            let mut w = arena_proto::NetDataWriter::new();
+            w.int(0, m.combat.fighters[1].player_net_object_id).byte(1, 55).byte(2, 3).byte(3, 41).byte(4, 1);
+            messages::frame_for_test(w.finish())
+        };
+        block[0] = 0x84;
+        m.on_c2s(1, &block, t0); // B guards Middle
+        let full = m.fighter_health(1);
+        // Well past the 2s window → the guard has lapsed; a Middle swing now lands.
+        let late = t0 + Duration::from_secs(3);
+        m.on_c2s(0, &[0x84, 0x36], late);
+        assert!(m.fighter_health(1) < full, "after the block window expires, the hit lands");
+    }
+
+    /// EMOTE relay: a `PlayEmote` (72) from one player is relayed to the OPPONENT as a
+    /// `PlayerEmoteStateChange` (73) carrying the emote id, so it displays on the other
+    /// screen. No damage; the emoter is not echoed its own emote.
+    #[test]
+    fn emote_relays_to_opponent() {
+        let (mut m, t0) = live_inst(2);
+        let full = m.fighter_health(1);
+
+        // Build A's (slot 0) PlayEmote (72): {0:obj · 1:55 · 2:role · 3:72 · 4:String id}.
+        let mut emote = {
+            let mut w = arena_proto::NetDataWriter::new();
+            w.int(0, m.combat.fighters[0].player_net_object_id)
+                .byte(1, 55)
+                .byte(2, 3)
+                .byte(3, 72) // PlayEmote
+                .string(4, "emote_wave");
+            messages::frame_for_test(w.finish())
+        };
+        emote[0] = 0x84; // c2s marker
+
+        let out = m.on_c2s(0, &emote, t0);
+        // Exactly one s2c, to the OPPONENT (slot 1), an op73 PlayerEmoteStateChange.
+        assert_eq!(out.len(), 1, "emote relays exactly once, to the opponent only");
+        let (viewer, body) = &out[0];
+        assert_eq!(*viewer, 1, "relayed to the opponent (slot 1), not echoed to the emoter");
+        assert_eq!(body[1], 0x36, "carrier 0x36");
+        let nd = arena_proto::parse_netdata(&body[2..]);
+        assert_eq!(nd.int(3), Some(73), "GMID 73 PlayerEmoteStateChange");
+        assert_eq!(nd.int(0), Some(m.combat.fighters[0].net_object_id as i64), "carries the EMOTER's avatar obj");
+        assert_eq!(nd.string(5), Some("emote_wave"), "the emote id is relayed");
+        // No damage from an emote.
+        assert_eq!(m.fighter_health(1), full, "an emote deals no damage");
+        assert_eq!(m.phase(), FlowState::StateTimeout, "emote doesn't change the match phase");
+    }
+
+    /// DEBUG-HOLD (`ARENA_DEBUG_HOLD`): the FULL round-start burst still goes out
+    /// (Connecting→Spawning→BackendMatchCreated) but the match then FREEZES at
+    /// BackendMatchCreated forever — it never advances to the live round
+    /// (StateTimeout), no matter how much time elapses. (No bot can swing because
+    /// StateTimeout is never entered; the resolve guard is the belt-and-suspenders.)
+    #[test]
+    fn debug_hold_freezes_at_backend_match_created() {
+        let now = Instant::now();
+        // Solo-vs-bot shape (the prod repro: capacity 2, one real peer expected).
+        let mut m = MatchInstance::new(2, 1, vec![], now);
+        m.set_debug_hold(true);
+
+        m.on_tick(1, now); // Connecting → Spawning (full spawn/profile burst)
+        assert_eq!(m.phase(), FlowState::Spawning);
+        let created = m.on_tick(1, now + SPAWN_HANDSHAKE_HOLD); // Spawning → BackendMatchCreated
+        assert_eq!(m.phase(), FlowState::BackendMatchCreated);
+        assert_eq!(
+            created.iter().filter(|(_, b)| b.ends_with(b"BackendMatchCreated")).count(),
+            2,
+            "the BackendMatchCreated round-start frame is still emitted under HOLD"
+        );
+
+        // Way past every normal hold/heartbeat (the full setup walk + a minute): still
+        // BackendMatchCreation(5), never advances the MatchState past 5, never enters
+        // StateTimeout, and the tick produces NOTHING (no MatchState update, no flow
+        // heartbeat, no bot) — the freeze window for hand-injecting s2c frames.
+        let later = now + setup_to_live() + Duration::from_secs(60);
+        let out = m.on_tick(1, later);
+        assert_eq!(m.phase(), FlowState::BackendMatchCreated, "HOLD never advances to the live round");
+        assert!(out.is_empty(), "no s2c is generated while held at BackendMatchCreated");
+        assert_eq!(m.combat.round, 0, "round never goes live under HOLD");
+    }
+
+    /// With HOLD on, the bot does NOT damage the player even if the match is somehow
+    /// in the live round — `resolve::on_tick` short-circuits on the flag (the
+    /// belt-and-suspenders guard from point 2 of the DEBUG-HOLD change).
+    #[test]
+    fn debug_hold_suppresses_bot_swings() {
+        let now = Instant::now();
+        let mut m = MatchInstance::new(2, 1, vec![], now);
+        m.set_debug_hold(true);
+        // Force the live round directly (bypassing the FSM hold) to prove the
+        // resolve-side guard independently: drive the phase, then tick well past the
+        // bot cadence. The player must take ZERO damage.
+        m.combat.phase = FlowState::StateTimeout;
+        m.combat.phase_entered = now;
+        let full = m.fighter_health(0);
+        let out = m.on_tick(1, now + Duration::from_secs(10));
+        assert_eq!(m.fighter_health(0), full, "no bot swing damages the player under HOLD");
+        // The only s2c on a held StateTimeout tick is the flow heartbeat (carrier
+        // 0x36, propId3 == 0x4F); there must be NO ReceiveDamage (carrier 0x36,
+        // propId3 == 50) from a bot swing.
+        assert!(
+            !out.iter().any(|(_, b)| b.len() > 2
+                && b[1] == 0x36
+                && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50)),
+            "no ReceiveDamage (bot swing) emitted under HOLD"
+        );
+    }
+
+    /// Round-start op50 spawn OBJECT SET is retail-faithful to s506: the local viewer
+    /// receives a **Player** op50 for BOTH fighters (WaitingForPlayers burst) and, after
+    /// the Match reaches InitialPlayerSetup(4), an **Avatar** op50 for BOTH fighters —
+    /// its OWN (Autonomous) AND the OPPONENT's (Simulated). The Simulated opponent Avatar
+    /// (s506 obj 125, role 2) is what flips `HasOpponentPlayer`: the client's
+    /// `PvpEncounter.SpawnOpponent` looks the avatar's char-UUID up in `_pvpPlayers`
+    /// (`GetPvpPlayer`) and sets `_opponentInfo.Player`. Proven on-device 2026-06-19:
+    /// injecting the missing Simulated avatar flipped `HasOpponentPlayer` 0→1. Guards the
+    /// fix that REVERSED the earlier (wrong) "own-Avatar-only" round-start.
+    #[test]
+    fn round_start_spawns_both_avatars() {
+        let now = Instant::now();
+        let mk = |name: &str, uuid: &str| {
+            let mut l = crate::arena::combat::loadout::starter();
+            l.display_name = name.to_string();
+            l.character_uuid = uuid.to_string();
+            l.profile_equipped_json = r#"{"equippedItems":{}}"#.to_string();
+            l.profile_character_json = format!(r#"{{"name":"{name}"}}"#);
+            l
+        };
+        // capacity 2, expected_peers 1 — the matchmaker's solo-vs-ghost shape.
+        let mut m = MatchInstance::new(
+            2,
+            1,
+            vec![
+                mk("WolfWalker", "38c987fd-c42b-4ea6-b869-c8d4c03055f9"),
+                mk("Blank", "1131a037-716c-49cc-b165-32d8ddc14f49"),
+            ],
+            now,
+        );
+        // First burst: Players + Match (no avatars yet).
+        let burst = m.on_tick(1, now);
+        let burst_player_roles: Vec<_> = burst
+            .iter()
+            .filter(|(v, b)| *v == 0 && b.len() >= 3 && b[1] == 0x32)
+            .filter_map(|(_, b)| {
+                let nd = arena_proto::parse_netdata(&b[2..]);
+                (nd.int(1) == Some(55)).then(|| nd.int(2))
+            })
+            .collect();
+        assert!(
+            burst_player_roles.contains(&Some(3)) && burst_player_roles.contains(&Some(2)),
+            "viewer 0 gets a Player op50 for both fighters (roles seen: {burst_player_roles:?})"
+        );
+        // The 3→4 tick: BOTH avatars (own Autonomous=3 AND opponent Simulated=2).
+        let setup = m.on_tick(1, now + MATCH_SETUP_STAGGER);
+        let mut avatar_roles: Vec<_> = setup
+            .iter()
+            .filter(|(v, b)| *v == 0 && b.len() >= 3 && b[1] == 0x32)
+            .filter_map(|(_, b)| {
+                let nd = arena_proto::parse_netdata(&b[2..]);
+                (nd.int(1) == Some(56)).then(|| nd.int(2))
+            })
+            .collect();
+        avatar_roles.sort();
+        assert_eq!(
+            avatar_roles,
+            vec![Some(2), Some(3)],
+            "viewer 0 gets BOTH Avatar op50: own (Autonomous=3) AND opponent (Simulated=2)"
+        );
+    }
+}

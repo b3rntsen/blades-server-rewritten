@@ -3,7 +3,8 @@ use log::error;
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
-    future::{self, ready},
+    future::Future,
+    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -16,7 +17,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
-use crate::{BladeApiError, ServerGlobal, arena::MatchmakingMessage};
+use crate::{BladeApiError, DbPool, ServerGlobal, arena::MatchmakingMessage};
 
 pub struct Session {
     pub user_id: Uuid,
@@ -74,79 +75,94 @@ impl SessionLookedUpMaybe {
 
 impl FromRequest for SessionLookedUpMaybe {
     type Error = actix_web::Error;
-    type Future = future::Ready<Result<Self, Self::Error>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self, Self::Error>>>>;
 
     //TODO: use BladeApiError instead
     fn from_request(
         req: &actix_web::HttpRequest,
         _payload: &mut actix_web::dev::Payload,
     ) -> Self::Future {
-        let authorization = if let Some(authorization) = req.headers().get("Authorization") {
-            if let Ok(token) = authorization.to_str() {
-                token
-            } else {
-                return ready(Err(actix_web::error::ErrorBadRequest(
-                    "Authorization header can’t be parsed as str",
-                )));
-            }
-        } else {
-            return ready(Ok(SessionLookedUpMaybe(None)));
-        };
-
-        let token = if let Some(token) = authorization.split('=').skip(1).next() {
-            token
-        } else {
-            return ready(Err(actix_web::error::ErrorBadRequest(
-                "Authorization can’t be parsed (no equal sign present)",
-            )));
-        };
-
-        let mut token_splitted = token.split('|');
-        let (session_id, extra_secret) = if let Some(session_id) = token_splitted.next()
-            && let Some(extra_secret) = token_splitted.next()
-        {
-            let session_id = match Uuid::parse_str(session_id) {
-                Ok(v) => v,
-                Err(_err) => {
-                    return ready(Err(actix_web::error::ErrorBadRequest(
-                        "can’t parse session id part of the token",
-                    )));
-                }
-            };
-            let extra_secret = match Uuid::parse_str(extra_secret) {
-                Ok(v) => v,
-                Err(_err) => {
-                    return ready(Err(actix_web::error::ErrorBadRequest(
-                        "can’t parse extra secret part of the token",
-                    )));
-                }
-            };
-            (session_id, extra_secret)
-        } else {
-            return ready(Err(actix_web::error::ErrorBadRequest(
-                "Invalid token format (no |)",
-            )));
-        };
-
+        // Clone the cheap handles out BEFORE the async move (can't hold &req across .await).
+        let authorization = req.headers().get("Authorization").cloned();
         let global = req
             .app_data::<web::Data<Arc<ServerGlobal>>>()
-            .expect("server global not in app_data (for extracting a Session)");
-        let session = if let Some(v) = global.session_store.get(session_id) {
-            v
-        } else {
-            // most likely the token expired. Should we return something specific in such case?
-            return ready(Ok(SessionLookedUpMaybe(None)));
-        };
-        if session.extra_secret == extra_secret {
-            return ready(Ok(SessionLookedUpMaybe(Some(SessionLookedUp {
-                session_id,
-                session,
-            }))));
-        } else {
-            return ready(Err(actix_web::error::ErrorUnauthorized(
-                "Invalid token (extra secret mismatch)",
-            )));
-        }
+            .expect("server global not in app_data (for extracting a Session)")
+            .clone();
+
+        Box::pin(async move {
+            let Some(authorization) = authorization else {
+                return Ok(SessionLookedUpMaybe(None));
+            };
+            let authorization = match authorization.to_str() {
+                Ok(token) => token,
+                Err(_) => {
+                    return Err(actix_web::error::ErrorBadRequest(
+                        "Authorization header can’t be parsed as str",
+                    ));
+                }
+            };
+
+            // A Blades session token is `…=<session_id>|<extra_secret>`. A header
+            // that isn't that shape — notably `Authorization: Bearer <token>` used
+            // by our out-of-band tooling routes (admin import, arena debug-inject)
+            // — is simply "no session": let it through as `None` so the route's own
+            // token check runs, instead of 400-ing every Bearer request in the
+            // global session middleware (which pre-empted those handlers entirely).
+            let token = match authorization.split('=').nth(1) {
+                Some(token) => token,
+                None => return Ok(SessionLookedUpMaybe(None)),
+            };
+
+            let mut token_splitted = token.split('|');
+            let (session_id, extra_secret) = if let Some(session_id) = token_splitted.next()
+                && let Some(extra_secret) = token_splitted.next()
+            {
+                let session_id = match Uuid::parse_str(session_id) {
+                    Ok(v) => v,
+                    Err(_err) => {
+                        return Err(actix_web::error::ErrorBadRequest(
+                            "can’t parse session id part of the token",
+                        ));
+                    }
+                };
+                let extra_secret = match Uuid::parse_str(extra_secret) {
+                    Ok(v) => v,
+                    Err(_err) => {
+                        return Err(actix_web::error::ErrorBadRequest(
+                            "can’t parse extra secret part of the token",
+                        ));
+                    }
+                };
+                (session_id, extra_secret)
+            } else {
+                return Err(actix_web::error::ErrorBadRequest(
+                    "Invalid token format (no |)",
+                ));
+            };
+
+            // In-memory first; on a cold miss (e.g. just after a restart emptied the map)
+            // fall back to the persisted `sessions` table and repopulate, so an
+            // arena-server rebuild no longer logs everyone out.
+            let session = match global.session_store.get(session_id) {
+                Some(v) => v,
+                None => match load_persisted_session(&global.db_pool, session_id).await {
+                    Some(s) => global
+                        .session_store
+                        .insert_existing(session_id, Arc::new(s)),
+                    None => return Ok(SessionLookedUpMaybe(None)),
+                },
+            };
+            if session.extra_secret == extra_secret {
+                Ok(SessionLookedUpMaybe(Some(SessionLookedUp {
+                    session_id,
+                    session,
+                })))
+            } else {
+                Err(actix_web::error::ErrorUnauthorized(
+                    "Invalid token (extra secret mismatch)",
+                ))
+            }
+        })
     }
 }
 
@@ -194,6 +210,18 @@ impl SessionStore {
         self.map.lock().unwrap().get(&session_id).cloned()
     }
 
+    /// Insert a session under a KNOWN id (cold-path repopulation from the DB after a
+    /// restart — see load_persisted_session). Idempotent: if a concurrent request
+    /// already repopulated it, keep that Arc so request_count/matchmaking_ws stay coherent.
+    pub fn insert_existing(&self, session_id: Uuid, session: Arc<Session>) -> Arc<Session> {
+        self.map
+            .lock()
+            .unwrap()
+            .entry(session_id)
+            .or_insert(session)
+            .clone()
+    }
+
     pub fn store_new_session(&self, session: Arc<Session>) -> Uuid {
         let now_instant = Instant::now();
         let clear_before_instant = now_instant - self.ttl;
@@ -216,6 +244,71 @@ impl SessionStore {
         }
         return id;
     }
+}
+
+#[derive(diesel::QueryableByName)]
+struct SessionRow {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    user_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    secret_user_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    extra_secret: Uuid,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    expires_at_secs: i64,
+}
+
+/// Persist a freshly-created session so it survives an arena-server restart (the
+/// `sessions` migration). Best-effort: a DB hiccup must NOT fail login — the session
+/// still works in-memory this run; only cross-restart survival is lost.
+pub async fn persist_session(db: &DbPool, session_id: Uuid, session: &Session) {
+    use diesel_async::RunQueryDsl; // scoped here so it doesn't shadow AtomicU64::load in `sync`
+    let mut conn = match db.get().await {
+        Ok(c) => c,
+        Err(_) => {
+            error!("sessions: db pool unavailable (persist {session_id})");
+            return;
+        }
+    };
+    if let Err(e) = diesel::sql_query(
+        "INSERT INTO sessions (session_id, user_id, secret_user_id, extra_secret, expires_at) \
+         VALUES ($1, $2, $3, $4, to_timestamp($5)) ON CONFLICT (session_id) DO NOTHING",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(session_id)
+    .bind::<diesel::sql_types::Uuid, _>(session.user_id)
+    .bind::<diesel::sql_types::Uuid, _>(session.secret_user_id)
+    .bind::<diesel::sql_types::Uuid, _>(session.extra_secret)
+    .bind::<diesel::sql_types::BigInt, _>(session.expire_unix_timestamp as i64)
+    .execute(&mut conn)
+    .await
+    {
+        error!("sessions: persist insert failed ({session_id}): {e}");
+    }
+}
+
+/// Reconstruct a session from the `sessions` table on a cold lookup (after a restart
+/// emptied the in-memory map). Filters expired rows. request_count resets to 1;
+/// matchmaking_ws is re-established when the client reconnects the rms WebSocket.
+async fn load_persisted_session(db: &DbPool, session_id: Uuid) -> Option<Session> {
+    use diesel_async::RunQueryDsl; // scoped (see persist_session)
+    let mut conn = db.get().await.ok()?;
+    let row: SessionRow = diesel::sql_query(
+        "SELECT user_id, secret_user_id, extra_secret, \
+         CAST(EXTRACT(epoch FROM expires_at) AS BIGINT) AS expires_at_secs \
+         FROM sessions WHERE session_id = $1 AND expires_at > now()",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(session_id)
+    .get_result(&mut conn)
+    .await
+    .ok()?;
+    Some(Session {
+        user_id: row.user_id,
+        secret_user_id: row.secret_user_id,
+        extra_secret: row.extra_secret,
+        expire_unix_timestamp: row.expires_at_secs.max(0) as u64,
+        request_count: AtomicU64::new(1),
+        matchmaking_ws: Mutex::new(None),
+    })
 }
 
 #[derive(Serialize)]

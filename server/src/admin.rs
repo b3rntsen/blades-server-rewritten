@@ -33,10 +33,12 @@ use blades_lib::user_data::{
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper, insert_into};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
     BladeApiError, ServerGlobal,
+    arena::matchmaker::{RecentTicketView, query_recent_matches},
     json_db::JsonDbWrapper,
     models::{CharacterDbAlone, CharacterDbEntry, UserDBEntry},
     schema::{characters, users},
@@ -57,6 +59,11 @@ pub struct ImportCharacterRequest {
     pub data: CompleteCharacterData,
     pub inventory: CompleteInventory,
     pub wallet: CompleteWallet,
+    /// The character's own captured town (arbitrary JSON), served verbatim by
+    /// `get_town`. Optional so older payloads / fresh imports still deserialize;
+    /// when absent the existing stored town (if any) is left untouched.
+    #[serde(default)]
+    pub town: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -166,6 +173,7 @@ pub async fn import_character(
                     data: JsonDbWrapper(body.data),
                     wallet: JsonDbWrapper(body.wallet),
                     inventory: JsonDbWrapper(body.inventory),
+                    town: body.town.map(JsonDbWrapper),
                 };
 
                 if created {
@@ -185,6 +193,15 @@ pub async fn import_character(
                         ))
                         .execute(&mut conn)
                         .await?;
+                    // Town is overwritten only when the payload carries one, so a
+                    // re-import without a captured town doesn't wipe a good one.
+                    if let Some(town) = entry.town {
+                        diesel::update(characters::table)
+                            .filter(characters::id.eq(character_id))
+                            .set(characters::town.eq(town))
+                            .execute(&mut conn)
+                            .await?;
+                    }
                 }
 
                 Ok(ImportCharacterResponse {
@@ -198,6 +215,34 @@ pub async fn import_character(
         .await?;
 
     Ok(Json(response))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentMatchesQuery {
+    #[serde(default)]
+    user_id: Option<Uuid>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// `GET /…/api/dev/v1/recent-matches?userId=<uuid>&limit=<n>` — the most recent
+/// matchmaking tickets (newest first), so the web /arena page can confirm a
+/// user's match request registered + show recent arena activity. Dev-token
+/// gated. `userId` only sets the per-row `mine` flag (the list is server-wide).
+/// Durable: backed by the `arena_matches` table, so it survives restarts (#NB-3).
+#[get("/blades.bgs.services/api/dev/v1/recent-matches")]
+pub async fn recent_matches(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    query: web::Query<RecentMatchesQuery>,
+) -> Result<Json<Vec<RecentTicketView>>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let q = query.into_inner();
+    let limit = q.limit.unwrap_or(25).min(100);
+    Ok(Json(
+        query_recent_matches(&app_state.db_pool, limit as i64, q.user_id).await,
+    ))
 }
 
 // ---------------------------------------------------------------------------

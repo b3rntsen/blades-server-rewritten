@@ -75,10 +75,39 @@ services:
       ARENA_IMPORT_TOKEN: ${ARENA_IMPORT_TOKEN:?set ARENA_IMPORT_TOKEN in arena.env}
       ARENA_ADVERTISE_HOST: ${ARENA_ADVERTISE_HOST:-127.0.0.1}
       ARENA_UDP_PORT: ${ARENA_UDP_PORT:-7777}
-      ARENA_MAX_MATCHES: ${ARENA_MAX_MATCHES:-2}
+      ARENA_MAX_MATCHES: ${ARENA_MAX_MATCHES:-16}
+      # Seconds a lone matchmaking ticket waits for a human opponent before falling
+      # back to a solo match vs a bot. Tunable without a rebuild (recreate to apply).
+      ARENA_SOLO_FALLBACK_SECS: ${ARENA_SOLO_FALLBACK_SECS:-20}
       # Dev override: pin EVERY anon login to this user (a Transfer'd character),
       # since there's no Bethesda/Google identity. Empty/unset = normal behaviour.
       ARENA_DEV_LOGIN_USER_ID: ${ARENA_DEV_LOGIN_USER_ID:-}
+      # Per-match key submission to the capture platform so OUR-server arena
+      # matches become decryptable (POSTs each admitted peer's ChaCha20 key+nonce
+      # to /api/arena/submit-key, reaching newblades-web by service name over the
+      # shared edge_net). ARENA_SUBMIT_KEYS=0 disables it; ARENA_SUBMIT_TOKEN is a
+      # frida_submit_tokens bearer (REQUIRED for submission to actually happen —
+      # mint one for a designated user; empty = submission silently off).
+      ARENA_SUBMIT_KEYS: ${ARENA_SUBMIT_KEYS:-1}
+      ARENA_SUBMIT_TOKEN: ${ARENA_SUBMIT_TOKEN:-}
+      ARENA_SUBMIT_URL: ${ARENA_SUBMIT_URL:-http://newblades-web:3000/api/arena/submit-key}
+      ARENA_SUBMIT_GAMELIFT_IP: ${ARENA_SUBMIT_GAMELIFT_IP:-10.99.0.1}
+      ARENA_SUBMIT_GAMELIFT_PORT: ${ARENA_SUBMIT_GAMELIFT_PORT:-7777}
+      # DEBUG/experimental freeze: when truthy (1), a connected match sends the full
+      # round-start burst then HOLDS at BackendMatchCreated forever — it never enters
+      # the live combat round, no bot swings, and a solo (under-capacity) peer is NOT
+      # swept/timed-out. Gives an unlimited window to hand-inject s2c frames via
+      # /arena/debug/inject and watch the client. Empty/unset = normal matches.
+      # Recreate the container to apply (no rebuild needed). See engine.rs / resolve.rs.
+      ARENA_DEBUG_HOLD: ${ARENA_DEBUG_HOLD:-}
+      # DEBUG ghost opponent: set to an arena `characters.user_id` UUID to give the
+      # SOLO-FALLBACK match (one lone human → vs bot) that character's real loadout in
+      # the 2nd fighter, so the engine broadcasts the opponent's op54 PROFILE
+      # (GameMessageId 35). That profile flips the client's ClientChecklist
+      # OpponentLoadoutReady → crosses "Connecting…" → "Setting up…". Empty/unset = a
+      # normal empty-starter bot (no opponent profile). Does NOT affect a real PvP pair.
+      # Recreate the container to apply (no rebuild needed). See matchmaker.rs / config.rs.
+      ARENA_DEBUG_GHOST: ${ARENA_DEBUG_GHOST:-}
       RUST_LOG: ${RUST_LOG:-info}
     command:
       - run

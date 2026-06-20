@@ -16,6 +16,7 @@ use actix_web::{
 use anyhow::{Context, Result};
 use bb8::Pool;
 use blades_lib::game_data::GameData;
+use blades_lib::static_data::StaticData;
 use clap::{Parser, Subcommand};
 use diesel_async::{AsyncPgConnection, pooled_connection::AsyncDieselConnectionManager};
 use log::debug;
@@ -30,6 +31,8 @@ mod authentification;
 mod challenge;
 mod character;
 mod character_data;
+mod character_ops;
+mod chests;
 mod craft;
 mod daily_reward;
 mod dungeon;
@@ -38,12 +41,16 @@ mod error;
 mod gameevent;
 mod global_gift;
 mod global_shop;
+mod guild;
 mod inventory;
 mod json_db;
 pub mod models;
 mod quest;
+mod repair;
+mod salvage;
 pub mod schema;
 mod session;
+mod static_loader;
 mod status;
 mod town;
 mod util;
@@ -78,18 +85,33 @@ enum Commands {
     },
 }
 
-type DbPool = Pool<AsyncDieselConnectionManager<AsyncPgConnection>>;
+pub type DbPool = Pool<AsyncDieselConnectionManager<AsyncPgConnection>>;
 
 pub struct ServerGlobal {
     pub db_pool: DbPool,
     pub session_store: SessionStore,
     pub static_data_path: PathBuf,
     pub game_data: GameData,
+    /// Capture-derived static definitions (gifts, announcements, …) loaded at
+    /// startup from JSON files in the `--static-data` directory. Empty parts
+    /// degrade gracefully (see [`static_loader`]).
+    pub static_data: StaticData,
+    /// Full ("max") durability per `(itemTemplateId, temperingLevel)`, derived
+    /// from the captures (`item_durability.json`) since `GameData` carries no
+    /// durability. Used by the repair endpoint to restore an item to full.
+    /// Keyed by lowercase UUID string -> tempering-level string -> max durability.
+    /// Empty if the file is missing/invalid (repair then leaves durability as-is).
+    pub item_max_durability: std::collections::HashMap<String, std::collections::HashMap<String, f64>>,
     pub arena: Arc<arena::matchmaker::ArenaGlobal>,
     /// Static dev token for the `/api/dev/v1/import-character` endpoint, read
     /// from `ARENA_IMPORT_TOKEN` at startup. `None` (unset) disables the
     /// endpoint entirely. Never a game session — this is for our own tooling.
     pub arena_import_token: Option<String>,
+    /// **DEBUG.** Token gating the experimental arena packet-injection routes
+    /// (`/arena/debug/{peers,inject}`), read from `ARENA_DEBUG_TOKEN`. When unset,
+    /// those routes fall back to `arena_import_token`; with neither set they 503
+    /// (disabled). For our own debugging only — never a game session.
+    pub arena_debug_token: Option<String>,
     /// Dev override: when set (env `ARENA_DEV_LOGIN_USER_ID` = a `users.id` UUID),
     /// EVERY anonymous login resolves to this user, so a freshly-installed client
     /// lands on a Transfer'd character instead of a new empty account (there is no
@@ -124,10 +146,45 @@ async fn main() -> Result<()> {
                 serde_json::from_reader(&mut game_data_file).unwrap()
             };
 
-            let arena =
-                arena::matchmaker::ArenaGlobal::start(arena::config::ArenaConfig::from_env());
+            // Repair needs each item's full durability, which `parsed.json` does
+            // not carry — load the captures-derived lookup. Tolerate a missing or
+            // invalid file (empty map → repair leaves durability unchanged rather
+            // than panicking the server at startup).
+            let item_max_durability: std::collections::HashMap<
+                String,
+                std::collections::HashMap<String, f64>,
+            > = {
+                let p = static_data.join("item_durability.json");
+                match File::open(&p) {
+                    Ok(f) => serde_json::from_reader(std::io::BufReader::new(f))
+                        .unwrap_or_else(|e| {
+                            log::warn!(
+                                "[durability] invalid {p:?}: {e}; repair will leave durability unchanged"
+                            );
+                            Default::default()
+                        }),
+                    Err(e) => {
+                        log::warn!(
+                            "[durability] no {p:?}: {e}; repair will leave durability unchanged"
+                        );
+                        Default::default()
+                    }
+                }
+            };
+
+            // Capture-derived static definitions (gifts, announcements, …). Missing
+            // files degrade gracefully (empty → endpoint returns an empty list).
+            let static_data_defs = static_loader::load(&static_data);
+
+            let arena = arena::matchmaker::ArenaGlobal::start(
+                arena::config::ArenaConfig::from_env(),
+                db_pool.clone(),
+            );
 
             let arena_import_token = std::env::var("ARENA_IMPORT_TOKEN").ok();
+            // DEBUG: dedicated token for the arena packet-injection routes;
+            // falls back to ARENA_IMPORT_TOKEN in the handler when unset.
+            let arena_debug_token = std::env::var("ARENA_DEBUG_TOKEN").ok();
             // Dev override: pin every anon login to one user (a Transfer'd character).
             let dev_login_user_id = std::env::var("ARENA_DEV_LOGIN_USER_ID")
                 .ok()
@@ -138,8 +195,11 @@ async fn main() -> Result<()> {
                 session_store: SessionStore::new(Duration::from_hours(24)),
                 static_data_path: static_data.clone(),
                 game_data,
+                static_data: static_data_defs,
+                item_max_durability,
                 arena,
                 arena_import_token,
+                arena_debug_token,
                 dev_login_user_id,
             });
 
@@ -230,23 +290,56 @@ async fn main() -> Result<()> {
                     .service(abyss::get_abyss)
                     .service(town::get_town)
                     .service(craft::get_crafts)
+                    .service(repair::repair_items)
+                    .service(salvage::salvage_items)
                     .service(challenge::get_challenges)
+                    .service(challenge::update_challenge)
+                    .service(challenge::complete_challenge)
+                    .service(challenge::abandon_challenge)
+                    .service(character_ops::levelup)
+                    .service(character_ops::learn_abilities)
+                    .service(character_ops::respec)
+                    .service(character_ops::upgrade_inventory)
+                    .service(character_ops::destroy_items)
+                    .service(character_ops::save_loadout_profile)
+                    .service(character_ops::update_loadout)
                     .service(gameevent::get_game_events)
                     .service(quest::get_quests)
                     .service(quest::accept_quest)
                     .service(global_shop::get_override)
                     .service(global_shop::get_global_shop_for_character)
                     .service(global_shop::get_iap)
+                    .service(global_shop::purchase_global_shop)
                     .service(global_gift::get_global_gifts)
+                    .service(global_gift::get_global_gift)
+                    .service(global_gift::claim_global_gift)
                     .service(character_data::update_data)
                     .service(daily_reward::get_daily_reward)
+                    .service(daily_reward::collect_daily_reward)
+                    .service(chests::collect_chest)
+                    // Guild: literal paths (current/search/leaderboard/…) MUST precede
+                    // the generic `/guilds/{guild_id}` so they aren't captured by it.
+                    .service(guild::get_current_guild)
+                    .service(guild::search_guilds)
+                    .service(guild::guild_leaderboard)
+                    .service(guild::get_messages)
+                    .service(guild::post_message)
+                    .service(guild::leave_guild)
+                    .service(guild::kick_member)
+                    .service(guild::create_guild)
+                    .service(guild::join_guild)
+                    .service(guild::get_guild)
                     .service(announcements::get_announcements)
                     .service(arena::leaderboards::get_leaderboard)
                     .service(arena::avatar::set_avatar)
                     .service(arena::matchmaking::matchmaking_ws)
                     .service(arena::matchmaker::create_match)
                     .service(arena::matchmaker::cancel_match)
+                    // DEBUG/experimental packet-injection harness (token-gated).
+                    .service(arena::debug_inject::debug_peers)
+                    .service(arena::debug_inject::debug_inject)
                     .service(admin::import_character)
+                    .service(admin::recent_matches)
                     .service(admin::bind_device)
                     .service(admin::recent_devices)
                     .service(

@@ -153,7 +153,7 @@ mod tests {
     fn allocate_admit_decode() {
         let reg = MatchRegistry::new(2);
         let psid = "psess-test-1".to_string();
-        assert!(reg.allocate(&[psid.clone()], Uuid::nil()));
+        assert!(reg.allocate(&[psid.clone()], Vec::new(), Uuid::nil()));
 
         let (client_sk, client_pk) = gen_keypair();
         let peer: SocketAddr = "127.0.0.1:5000".parse().unwrap();
@@ -177,9 +177,9 @@ mod tests {
     #[test]
     fn cap_enforced_and_released() {
         let reg = MatchRegistry::new(1);
-        assert!(reg.allocate(&["a".into()], Uuid::nil()));
+        assert!(reg.allocate(&["a".into()], Vec::new(), Uuid::nil()));
         assert!(
-            !reg.allocate(&["b".into()], Uuid::new_v4()),
+            !reg.allocate(&["b".into()], Vec::new(), Uuid::new_v4()),
             "second exceeds cap"
         );
 
@@ -189,7 +189,32 @@ mod tests {
 
         reg.remove(&peer); // disconnect frees the slot
         assert_eq!(reg.available_permits(), 1);
-        assert!(reg.allocate(&["c".into()], Uuid::new_v4()), "slot freed");
+        assert!(reg.allocate(&["c".into()], Vec::new(), Uuid::new_v4()), "slot freed");
+    }
+
+    /// DEBUG-HOLD (`ARENA_DEBUG_HOLD`): the idle/under-capacity sweep is disabled, so
+    /// a solo connected peer with no opponent persists indefinitely (the round-start
+    /// freeze window). Default (HOLD off) still reclaims it. We advance the clock past
+    /// both `MATCH_MAX_AGE` (600 s) and `CONNECT_DEADLINE` (45 s) and check the
+    /// surviving match count.
+    #[test]
+    fn debug_hold_disables_idle_sweep() {
+        use std::time::Instant;
+        let way_later = Instant::now() + std::time::Duration::from_secs(700);
+
+        // HOLD off: a solo (under-capacity, never-admitted) match is reclaimed.
+        let off = MatchRegistry::new_with_debug_hold(4, false);
+        assert!(off.allocate(&["a".into()], Vec::new(), Uuid::new_v4()));
+        assert_eq!(off.active_count(), 1);
+        off.sweep_expired(way_later);
+        assert_eq!(off.active_count(), 0, "HOLD off: idle/under-capacity match swept");
+
+        // HOLD on: the same match survives the sweep indefinitely.
+        let on = MatchRegistry::new_with_debug_hold(4, true);
+        assert!(on.allocate(&["b".into()], Vec::new(), Uuid::new_v4()));
+        assert_eq!(on.active_count(), 1);
+        on.sweep_expired(way_later);
+        assert_eq!(on.active_count(), 1, "HOLD on: match persists, never swept");
     }
 
     /// Live loopback: real sockets, full allocate→handshake→encrypted frame the
@@ -198,7 +223,7 @@ mod tests {
     async fn loopback_admit_and_decode() {
         let reg = MatchRegistry::new(4);
         let psid = "psess-loop-1".to_string();
-        assert!(reg.allocate(&[psid.clone()], Uuid::nil())); // simulate the matchmaker
+        assert!(reg.allocate(&[psid.clone()], Vec::new(), Uuid::nil())); // simulate the matchmaker
 
         let (tap_tx, mut tap_rx) = tokio::sync::mpsc::unbounded_channel();
         let server = UdpServer::bind_with_tap("127.0.0.1:0", reg.clone(), Some(tap_tx))
@@ -270,14 +295,17 @@ mod tests {
         assert!(r.is_err(), "server must not reply to an unallocated psess");
     }
 
-    /// Milestone (d): a scripted client connects, sends PlayerLoadoutReady (36);
-    /// the server transitions Connecting→InProgress and emits PlayerWelcome (21)
-    /// + PlayerSpawnAvatar (22), which the client decodes.
+    /// The raw dev path is a crypto/opcode-decode harness: a c2s message decodes
+    /// cleanly and yields NO synchronous s2c. The match-start lifecycle
+    /// (BackendMatchCreated → spawn → StateTimeout heartbeat) is tick-driven on
+    /// the LIVE host (covered by `combat::engine` unit tests); the old placeholder
+    /// `PlayerLoadoutReady → Welcome + SpawnAvatar` flow is gone (those opcodes
+    /// never appear in real captures).
     #[tokio::test]
-    async fn match_loop_loadout_then_welcome() {
+    async fn raw_path_decodes_c2s_without_reply() {
         let reg = MatchRegistry::new(4);
         let psid = "psess-d-1".to_string();
-        assert!(reg.allocate(&[psid.clone()], Uuid::nil()));
+        assert!(reg.allocate(&[psid.clone()], Vec::new(), Uuid::nil()));
         let server = UdpServer::bind("127.0.0.1:0", reg.clone()).await.unwrap();
         let addr = server.local_addr();
         tokio::spawn({
@@ -307,33 +335,16 @@ mod tests {
             nonce,
         };
 
-        // c2s PlayerLoadoutReady (36); c2s marker 0x84.
+        // c2s PlayerLoadoutReady (36); c2s marker 0x84 — decoded, no fabricated s2c.
         client
             .send(&build_send_reliable(0, 1, &crypto, &[0x84, 36]))
             .await
             .unwrap();
 
-        let mut got = Vec::new();
-        for _ in 0..2 {
-            let n = timeout(Duration::from_secs(2), client.recv(&mut buf))
-                .await
-                .expect("s2c reply timed out")
-                .unwrap();
-            let pt = arena_proto::reconstruct_plaintext(
-                &buf[..n],
-                &crypto.key,
-                &crypto.nonce,
-                None,
-                false,
-            )
-            .expect("decode s2c");
-            got.push(arena_proto::first_opcode_in_plaintext(&pt));
-        }
-        got.sort();
-        assert_eq!(
-            got,
-            vec![Some(21), Some(22)],
-            "PlayerWelcome + PlayerSpawnAvatar"
+        let r = timeout(Duration::from_millis(400), client.recv(&mut buf)).await;
+        assert!(
+            r.is_err(),
+            "raw path must not fabricate a reply (lifecycle is tick-driven on the live host)"
         );
     }
 }
