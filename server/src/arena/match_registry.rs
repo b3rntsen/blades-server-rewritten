@@ -67,6 +67,17 @@ struct Match {
     /// matches (clients never connected) so their capacity permit can't leak.
     created_at: Instant,
     _permit: OwnedSemaphorePermit,
+    /// `playerSessionId → fighter slot` — populated at allocation so that when the
+    /// client's encrypted PlayerInfo (op20) arrives, we can bind its peer address to
+    /// the correct fighter slot (rather than the FIFO admission order, which may not
+    /// match ticket order — see arena-multiplayer Bug 4 / slot inversion).
+    /// Example: psids[0] = Flappety's psid → slot 0, psids[1] = WolfWalker's psid → slot 1.
+    psid_to_slot: HashMap<String, usize>,
+    /// `peer address → fighter slot` — lazily populated in `handle_live_user_data`
+    /// once the peer's PlayerInfo (op20) is decrypted and its psid extracted. Until
+    /// then, falls back to the FIFO `m.players` index (the old behaviour). After this
+    /// is set, every inbound message from `peer` resolves against the CORRECT fighter.
+    peer_to_slot: HashMap<SocketAddr, usize>,
 }
 
 pub struct MatchRegistry {
@@ -247,6 +258,15 @@ impl MatchRegistry {
         // match's UUID here). Cosmetic to the binding gate (propId5 MatchState), but
         // sent for fidelity.
         instance.set_game_session_id(game_session_id.to_string());
+        // psid → fighter slot: psids[i] was allocated for ticket[i] which becomes
+        // fighter slot i. Store this so handle_live_user_data can remap the peer's
+        // ENet slot (connection order) to the correct fighter slot once the psid
+        // is extracted from the client's first encrypted PlayerInfo (op20) message.
+        let psid_to_slot: HashMap<String, usize> = player_session_ids
+            .iter()
+            .enumerate()
+            .map(|(i, psid)| (psid.clone(), i))
+            .collect();
         self.matches.lock().unwrap().insert(
             game_session_id,
             Match {
@@ -257,6 +277,8 @@ impl MatchRegistry {
                 instance,
                 created_at: Instant::now(),
                 _permit: permit,
+                psid_to_slot,
+                peer_to_slot: HashMap::new(),
             },
         );
         let mut pending = self.pending.lock().unwrap();
@@ -419,23 +441,56 @@ impl MatchRegistry {
         let gsid = *self.addr_index.lock().unwrap().get(peer)?;
         let mut matches = self.matches.lock().unwrap();
         let m = matches.get_mut(&gsid)?;
-        let sender = m.players.iter().position(|p| &p.addr == peer)?;
+        // ENet-admission index (FIFO connection order) — used to look up this peer's
+        // crypto key. May NOT equal the fighter slot if connection order ≠ ticket order.
+        let enet_slot = m.players.iter().position(|p| &p.addr == peer)?;
 
         // Each command resets the ChaCha20 counter to 0 — encrypt and decrypt are
         // the same XOR against a fresh keystream (spec §4). Decrypt with sender key.
         let mut plain = user_data.to_vec();
         {
-            let c = &m.players[sender].crypto;
+            let c = &m.players[enet_slot].crypto;
             chacha20_legacy_xor(&mut plain, &c.key, &c.nonce);
         }
         let marker = plain.first().copied();
         let opcode = plain.get(1).copied(); // user_data[1] = GameMessageId
 
+        // Fighter-slot resolution (Bug 4 fix): if this peer hasn't been mapped to
+        // its correct fighter slot yet, try to extract the playerSessionId from a
+        // PlayerInfo (op20 / carrier 0x36 / GMID 20) message and use the
+        // `psid_to_slot` table (built at allocation: psids[i] → fighter slot i).
+        // Until the mapping is established, fall back to the FIFO ENet index — the
+        // old behaviour, which is CORRECT for a solo match and for PvP when both
+        // players happen to connect in ticket order.
+        if !m.peer_to_slot.contains_key(peer) {
+            if let Some(slot) = extract_fighter_slot_from_playerinfo(&plain, &m.psid_to_slot) {
+                info!(
+                    "match registry: peer {peer} (enet_slot {enet_slot}) → fighter slot {slot} \
+                     (psid extracted from PlayerInfo op20)"
+                );
+                m.peer_to_slot.insert(*peer, slot);
+            }
+        }
+        // Use the psid-derived fighter slot if available, else FIFO index.
+        let sender = m.peer_to_slot.get(peer).copied().unwrap_or(enet_slot);
+
         let now = Instant::now();
         let mut replies: Vec<(SocketAddr, u8, Vec<u8>)> = Vec::new();
         for (target, mut user_data) in m.instance.on_c2s(sender, &plain, now) {
-            let Some(tp) = m.players.get(target) else {
+            // Resolve the engine's target FIGHTER SLOT to a connected PEER. If
+            // peer_to_slot is populated, reverse it to find the peer for `target`;
+            // otherwise fall back to m.players[target] (FIFO, old behaviour).
+            let target_peer_addr: Option<&SocketAddr> = m
+                .peer_to_slot
+                .iter()
+                .find(|&(_, &s)| s == target)
+                .map(|(a, _)| a)
+                .or_else(|| m.players.get(target).map(|p| &p.addr));
+            let Some(target_addr) = target_peer_addr else {
                 continue; // target not connected yet — drop (UDP-correct)
+            };
+            let Some(tp) = m.players.iter().find(|p| &p.addr == target_addr) else {
+                continue;
             };
             // `user_data` is the full decrypted s2c payload (marker ‖ type ‖ body)
             // from the engine. Pick the retail ENet channel from the PLAINTEXT (by
@@ -564,14 +619,27 @@ impl MatchRegistry {
         for m in matches.values_mut() {
             let connected = m.players.len();
             for (target, mut user_data) in m.instance.on_tick(connected, now) {
-                let Some(tp) = m.players.get(target) else {
+                // Resolve fighter slot → peer addr (same logic as handle_live_user_data).
+                let target_addr: Option<SocketAddr> = m
+                    .peer_to_slot
+                    .iter()
+                    .find(|&(_, &s)| s == target)
+                    .map(|(a, _)| *a)
+                    .or_else(|| m.players.get(target).map(|p| p.addr));
+                let Some(target_addr) = target_addr else {
+                    continue;
+                };
+                let Some(tp) = m.players.iter().find(|p| p.addr == target_addr) else {
                     continue;
                 };
                 // Retail ENet channel from the PLAINTEXT (carrier + GMID, s506 map)
                 // before encrypting under the TARGET's key.
                 let channel = crate::arena::combat::messages::retail_channel(&user_data);
-                chacha20_legacy_xor(&mut user_data, &tp.crypto.key, &tp.crypto.nonce);
-                out.push((tp.addr, channel, user_data));
+                let key = tp.crypto.key;
+                let nonce = tp.crypto.nonce;
+                let addr = tp.addr;
+                chacha20_legacy_xor(&mut user_data, &key, &nonce);
+                out.push((addr, channel, user_data));
             }
         }
         out
@@ -781,9 +849,121 @@ pub struct LiveOutcome {
     pub state: &'static str,
 }
 
+/// Fighter-slot resolution from a decrypted PlayerInfo (op20) payload.
+///
+/// The client sends a GMID-20 PlayerInfo early in the session (carrier 0x84,
+/// opcode byte = 20) that carries the playerSessionId as a string property.
+/// By scanning the plaintext for a UTF-8 string that matches one of the keys in
+/// `psid_to_slot` we can bind the peer's ENet admission slot → the correct
+/// fighter slot (allocated by the matchmaker, which owns the psid→slot mapping).
+///
+/// The encoding used by Blades is a Pascal-style varint-length-prefixed UTF-8
+/// string embedded in a serialised protobuf-like structure.  We do NOT have the
+/// full schema, so instead we scan the payload for any substring that matches a
+/// known psid exactly (they are 36-char UUIDs with dashes — unambiguous). If
+/// found, return the fighter slot for that psid; otherwise None.
+///
+/// Safety: we hold the registry lock while this runs, so it is synchronous and
+/// must be fast. The payload is at most a few hundred bytes — a linear scan is
+/// perfectly acceptable.
+fn extract_fighter_slot_from_playerinfo(
+    plain: &[u8],
+    psid_to_slot: &HashMap<String, usize>,
+) -> Option<usize> {
+    // Only attempt extraction on GMID 20 (PlayerInfo) messages.
+    // Retail wire: carrier = 0x84 (c2s), then GMID byte.
+    if plain.get(1).copied() != Some(20) {
+        return None;
+    }
+    // psids are 36-char UUID strings ("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx").
+    // Scan the plaintext as a byte slice; look for each known psid as a substring.
+    for (psid, &slot) in psid_to_slot {
+        let needle = psid.as_bytes();
+        if needle.len() > plain.len() {
+            continue;
+        }
+        if plain.windows(needle.len()).any(|w| w == needle) {
+            return Some(slot);
+        }
+    }
+    None
+}
+
 // The per-match state machine now lives in `crate::arena::combat::engine`
 // (`MatchInstance`), driven by the real captured protocol (the flow-control
 // stateName machine + authoritative combat). The placeholder FSM that used to
 // live here — `PlayerLoadoutReady → PlayerWelcome + PlayerSpawnAvatar`,
 // `PlayerCommand → PlayerStateChange`, `ConcedeMatch → MatchEndMatchMsg` — was
 // removed: those opcodes never appear in real captures (see the combat module).
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn psid_map(pairs: &[(&str, usize)]) -> HashMap<String, usize> {
+        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    /// A fake op20 PlayerInfo plaintext: marker 0x84, GMID 20, then some bytes
+    /// that embed the psid as a UTF-8 substring (simulating the wire encoding).
+    fn fake_op20(psid: &str, extra_prefix: &[u8]) -> Vec<u8> {
+        let mut buf = vec![0x84u8, 20u8];
+        buf.extend_from_slice(extra_prefix);
+        buf.extend_from_slice(psid.as_bytes());
+        buf.extend_from_slice(b"\x00\x00trailing bytes");
+        buf
+    }
+
+    #[test]
+    fn psid_in_op20_resolves_correct_slot() {
+        let psid0 = "aaaaaaaa-0000-0000-0000-000000000000";
+        let psid1 = "bbbbbbbb-1111-1111-1111-111111111111";
+        let map = psid_map(&[(psid0, 0), (psid1, 1)]);
+
+        let plain = fake_op20(psid1, b"\x01\x02\x03");
+        let slot = extract_fighter_slot_from_playerinfo(&plain, &map);
+        assert_eq!(slot, Some(1), "psid1 should map to fighter slot 1");
+    }
+
+    #[test]
+    fn psid_in_op20_slot0_works() {
+        let psid0 = "cccccccc-2222-2222-2222-222222222222";
+        let psid1 = "dddddddd-3333-3333-3333-333333333333";
+        let map = psid_map(&[(psid0, 0), (psid1, 1)]);
+
+        let plain = fake_op20(psid0, &[]);
+        let slot = extract_fighter_slot_from_playerinfo(&plain, &map);
+        assert_eq!(slot, Some(0), "psid0 should map to fighter slot 0");
+    }
+
+    #[test]
+    fn non_op20_returns_none() {
+        let psid = "eeeeeeee-4444-4444-4444-444444444444";
+        let map = psid_map(&[(psid, 0)]);
+
+        // GMID = 22, not 20 — should NOT extract even if psid is present
+        let mut plain = fake_op20(psid, &[]);
+        plain[1] = 22;
+        let slot = extract_fighter_slot_from_playerinfo(&plain, &map);
+        assert_eq!(slot, None, "non-op20 messages should return None");
+    }
+
+    #[test]
+    fn unknown_psid_returns_none() {
+        let known_psid = "ffffffff-5555-5555-5555-555555555555";
+        let map = psid_map(&[(known_psid, 0)]);
+
+        // op20 but carries a DIFFERENT psid not in the map
+        let other_psid = "00000000-9999-9999-9999-999999999999";
+        let plain = fake_op20(other_psid, &[]);
+        let slot = extract_fighter_slot_from_playerinfo(&plain, &map);
+        assert_eq!(slot, None, "unknown psid should return None");
+    }
+
+    #[test]
+    fn empty_payload_returns_none() {
+        let map = psid_map(&[("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", 0)]);
+        let slot = extract_fighter_slot_from_playerinfo(&[], &map);
+        assert_eq!(slot, None);
+    }
+}
