@@ -58,6 +58,13 @@ pub mod tables;
 #[cfg(test)]
 mod roundtrip_s506;
 
+// Offline reproduction-differential test for the DAMAGE model against s506 (per-hit
+// magnitudes / combo ramp / asymmetric block / poison amp / paralyse threshold).
+// Test-only: replays the §2a damage table through RetailDamageModel + Fighter and
+// diffs computed vs recorded damage. The companion to `roundtrip_s506` (protocol).
+#[cfg(test)]
+mod roundtrip_s506_damage;
+
 pub use engine::MatchInstance;
 pub use state::Loadout;
 
