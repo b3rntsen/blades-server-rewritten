@@ -428,24 +428,29 @@ const PARALYZE_DURATION_SECS: f32 = 3.1;
 /// DoT tick cadence — 1 tick per second (s506 packet timestamps confirm 1s intervals).
 const DOT_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Regen tick cadence. We regen once per second and apply the UESP-approximate per-
-/// second rates. A fractional tick (e.g. regen 25.0 stamina/s from a 625 pool at L86)
+/// Regen tick cadence. We regen once per second and apply the video-ground-truth per-
+/// second rates. A fractional tick (e.g. regen ~31 stamina/s from a 625 pool at L86)
 /// is rounded to nearest integer to avoid float drift.
 const REGEN_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
 /// In-combat stamina/magicka regen rate as a fraction of the pool per second.
-/// **UESP-approximate** (blades-combat-formulae.md §9): `4 %/s` in combat, `8 %/s`
-/// out-of-combat. The arena is always in-combat. Rates are CDN `[ExcelVariable]`
-/// (`PlayerStats._staminaRegenRate` / `_magickaRegenRate`); these UESP values are the
-/// best available until the CDN data is obtained. [calibration flag]
-const STAMINA_REGEN_RATE_PER_S: f32 = 0.04;
-const MAGICKA_REGEN_RATE_PER_S: f32 = 0.04;
+/// **Video ground-truth (s293)**: stamina and magicka both recover at ~5 %/s during
+/// passive recovery phases (t=50..52 clean window: 5%→10%→15% over 2s).  The earlier
+/// UESP figure of 4 %/s was slightly low; 5 %/s matches the observed HUD data.
+/// Rates are CDN `[ExcelVariable]` (`PlayerStats._staminaRegenRate` / `_magickaRegenRate`);
+/// 5 %/s is the video-pinned value and supersedes the UESP 4 %/s estimate.
+/// [ground-truth: /tmp/arena-video-groundtruth.md §1; calibration flag]
+const STAMINA_REGEN_RATE_PER_S: f32 = 0.05;
+const MAGICKA_REGEN_RATE_PER_S: f32 = 0.05;
 
-/// In-combat health regen rate as a fraction of the BASE (pre-arena-×3) max-HP per
-/// second. UESP `0.5 %/s`; arena triples raw HP but healing/regen are NOT tripled —
-/// so use 0.5% of the BASE max (pre-×3), not of the tripled pool.
-/// [spec §2: "HP regen = 0.5% of BASE max (pre-×3) = 5.25/s at L86"; calibration flag]
-const HEALTH_REGEN_RATE_PER_S: f32 = 0.005; // 0.5% of BASE max per second
+/// In-combat health regen: **ZERO** — video ground-truth (s293) shows NO passive HP
+/// recovery during a fight; health only changes on hits.  Between rounds the server
+/// already calls `reset_fighters_for_next_round` (full HP reset), so no in-round regen
+/// is needed.  The old UESP-derived 0.5 %/s figure was wrong for arena PvP.
+/// `BlockHealthRegen` status suppression is kept (still correct to gate any future
+/// out-of-arena regen path).
+/// [ground-truth: §1 "Health regen: 0 in-round; full reset between rounds"]
+const HEALTH_REGEN_RATE_PER_S: f32 = 0.0; // NO in-round health regen (video-proven)
 
 /// `_percentHealthDamage` default for elemental DoT effects (game-data-driven; flagged
 /// as a calibration guess). Derived from s506's dominant Poison DoT value of 3.87/tick
@@ -877,17 +882,21 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Per-second HP/Stamina/Magicka regen for all alive fighters. Called from `on_tick`
-/// once per `REGEN_TICK_INTERVAL`.  Rates are UESP-approximate (spec §2 calibration
-/// flag); exact values are CDN `[ExcelVariable]` not in the APK.
+/// Per-second Stamina/Magicka regen for all alive fighters. Called from `on_tick`
+/// once per `REGEN_TICK_INTERVAL`.
+///
+/// **Video ground-truth (s293):** health has ZERO in-round passive regen — HP only
+/// changes on hits.  Stamina and magicka recover at ~5 %/s (video-pinned from t=50..52
+/// and the t=113..117 confirming window).  Between-round HP reset is handled separately
+/// by `reset_fighters_for_next_round`; no in-round HP regen is applied here.
 ///
 /// Block-regen status effects suppress per-stat regen:
-///   - `BlockHealthRegen`(50) → no HP regen (On Fire / conditioning)
+///   - `BlockHealthRegen`(50) — kept for future out-of-arena paths; no-op here (0.0 rate)
 ///   - `BlockStaminaRegen`(51) → no stamina regen (Frozen)
 ///   - `BlockMagickaRegen`(52) → no magicka regen (Enervated)
 ///
 /// After all fighters are ticked, emits `PlayerStatsUpdate`(65) for any fighter
-/// whose pools changed. [spec §2 / docs/blades-combat-formulae.md §9]
+/// whose pools changed. [video-ground-truth §1; /tmp/arena-video-groundtruth.md]
 fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
     use super::state::StatusEffectType;
 
@@ -900,9 +909,7 @@ fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u
         }
 
         // Check which regen channels are suppressed by active status effects.
-        let block_hp = f.effects.iter().any(|e| {
-            e.effect == StatusEffectType::BlockHealthRegen && now < e.expires_at
-        });
+        // BlockHealthRegen(50) is kept for future use but has no effect (rate = 0.0).
         let block_stam = f.effects.iter().any(|e| {
             e.effect == StatusEffectType::BlockStaminaRegen && now < e.expires_at
         });
@@ -910,37 +917,31 @@ fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u
             e.effect == StatusEffectType::BlockMagickaRegen && now < e.expires_at
         });
 
-        let before_h = f.health;
         let before_s = f.stamina;
         let before_m = f.magicka;
 
-        // HP regen: 0.5% of BASE max per second (pre-arena-×3).
-        // Arena triples max_health so we un-triple to get the base pool for the rate.
-        if !block_hp && f.health < f.max_health {
-            let base_max = f.max_health / super::state::ARENA_HEALTH_MULTIPLIER;
-            let regen = ((HEALTH_REGEN_RATE_PER_S * base_max as f32).round() as u32).max(1);
-            f.health = (f.health + regen).min(f.max_health);
-        }
-        // Stamina regen: 4% of pool per second.
+        // Health regen: NONE in-round (HEALTH_REGEN_RATE_PER_S = 0.0).
+        // Video ground-truth: HP only changes on hits; full reset happens between rounds.
+
+        // Stamina regen: 5% of pool per second (video-pinned, s293 §1).
         if !block_stam && f.stamina < f.max_stamina {
             let regen = ((STAMINA_REGEN_RATE_PER_S * f.max_stamina as f32).round() as u32).max(1);
             f.stamina = (f.stamina + regen).min(f.max_stamina);
         }
-        // Magicka regen: 4% of pool per second.
+        // Magicka regen: 5% of pool per second (video-pinned, s293 §1).
         if !block_mag && f.magicka < f.max_magicka {
             let regen = ((MAGICKA_REGEN_RATE_PER_S * f.max_magicka as f32).round() as u32).max(1);
             f.magicka = (f.magicka + regen).min(f.max_magicka);
         }
 
-        let changed = f.health != before_h || f.stamina != before_s || f.magicka != before_m;
+        let changed = f.stamina != before_s || f.magicka != before_m;
         if changed {
             f.stats_seq = f.stats_seq.wrapping_add(1);
             let packed = f.packed_stats();
             let obj_id = f.net_object_id;
             let frame = messages::player_stats_update(obj_id, packed);
             debug!(
-                "combat regen: slot {slot} hp {before_h}→{}/{} stam {before_s}→{}/{} mag {before_m}→{}/{}",
-                combat.fighters[slot].health, combat.fighters[slot].max_health,
+                "combat regen: slot {slot} stam {before_s}→{}/{} mag {before_m}→{}/{}",
                 combat.fighters[slot].stamina, combat.fighters[slot].max_stamina,
                 combat.fighters[slot].magicka, combat.fighters[slot].max_magicka,
             );
@@ -1149,14 +1150,13 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Bug 1 / spec §2: Regen tick raises stamina
+    // Regen tick: 5%/s stamina+magicka, ZERO in-round health regen (video-proven)
     // -----------------------------------------------------------------------
 
-    /// A regen tick must raise stamina (and magicka) for a fighter whose pool is
-    /// depleted — running `on_tick` with `now + REGEN_TICK_INTERVAL` must increase
-    /// the fighter's stamina and emit op65 PlayerStatsUpdate frames. [spec §2]
+    /// Video ground-truth (s293 §1): stamina and magicka recover at ~5 %/s.
+    /// One regen tick on a half-depleted pool must add ≈5% of max and emit op65.
     #[test]
-    fn regen_tick_raises_stamina_and_emits_op65() {
+    fn regen_tick_raises_stamina_at_5pct_per_second() {
         let now = Instant::now();
         let mut combat = make_live_combat(now);
 
@@ -1172,11 +1172,12 @@ mod tests {
         let out = apply_regen_tick(&mut combat, tick_now);
 
         let stam_after = combat.fighters[0].stamina;
-        assert!(
-            stam_after > stam_before,
-            "regen tick must raise stamina from {} → got {}",
-            stam_before,
-            stam_after,
+        // Must increase by ~5% of max (±1 for rounding).
+        let expected_regen = ((STAMINA_REGEN_RATE_PER_S * max_stam as f32).round() as u32).max(1);
+        assert_eq!(
+            stam_after - stam_before, expected_regen,
+            "regen tick must add ~5% of max stamina ({} expected), stam {stam_before}→{stam_after}",
+            expected_regen,
         );
 
         // op65 PlayerStatsUpdate must be emitted (HUD update for both players).
@@ -1189,6 +1190,52 @@ mod tests {
             has_op65,
             "regen tick must emit at least one PlayerStatsUpdate (op65)"
         );
+    }
+
+    /// Video ground-truth (s293 §1): magicka recovers at ~5 %/s, symmetric with stamina.
+    #[test]
+    fn regen_tick_raises_magicka_at_5pct_per_second() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+
+        let max_mag = combat.fighters[0].max_magicka;
+        combat.fighters[0].magicka = max_mag / 4; // 25% of max
+        let mag_before = combat.fighters[0].magicka;
+
+        let tick_now = now + REGEN_TICK_INTERVAL;
+        let out = apply_regen_tick(&mut combat, tick_now);
+
+        let mag_after = combat.fighters[0].magicka;
+        let expected_regen = ((MAGICKA_REGEN_RATE_PER_S * max_mag as f32).round() as u32).max(1);
+        assert_eq!(
+            mag_after - mag_before, expected_regen,
+            "regen tick must add ~5% of max magicka ({expected_regen} expected), mag {mag_before}→{mag_after}",
+        );
+        let _ = out; // op65 emission already verified in the stamina test
+    }
+
+    /// Video ground-truth (s293 §1): health has ZERO in-round passive regen.
+    /// A regen tick must NOT increase health, even when the fighter is damaged.
+    #[test]
+    fn regen_tick_does_not_regen_health() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+
+        // Damage the fighter so health is below max.
+        let max_hp = combat.fighters[0].max_health;
+        combat.fighters[0].health = max_hp / 2;
+        let hp_before = combat.fighters[0].health;
+
+        let tick_now = now + REGEN_TICK_INTERVAL;
+        let out = apply_regen_tick(&mut combat, tick_now);
+
+        let hp_after = combat.fighters[0].health;
+        assert_eq!(
+            hp_after, hp_before,
+            "in-round health must NOT regen (video-proven zero): hp was {hp_before}, got {hp_after}"
+        );
+        // The tick may still emit op65 if stamina/magicka changed, but HP must be static.
+        let _ = out;
     }
 
     // -----------------------------------------------------------------------
