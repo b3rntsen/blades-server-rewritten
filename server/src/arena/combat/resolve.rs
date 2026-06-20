@@ -30,6 +30,7 @@ use super::damage::{DamageModel, ResolvedDamage, RetailDamageModel};
 use super::input;
 use super::messages;
 use super::state::{ActiveSide, DamageSource, FlowState, MatchCombat, MatchState, NetObjectType};
+use super::tables;
 
 /// Carrier MessageType (`user_data[1]`) of the combat-input family — `0x36` (54).
 const CARRIER_USERMESSAGE: u8 = 0x36;
@@ -75,20 +76,6 @@ fn ability_cooldown(ability_uuid: &str) -> Duration {
         _ => return ABILITY_COOLDOWN,
     };
     Duration::from_millis(ms)
-}
-
-#[cfg(test)]
-mod cooldown_data_tests {
-    use super::*;
-
-    #[test]
-    fn authoritative_per_ability_cooldowns() {
-        assert_eq!(ability_cooldown("d07a8d30-9a1c-49b0-866d-97a8aa1534cf"), Duration::from_millis(3540)); // Fireball
-        assert_eq!(ability_cooldown("7fc15804-1637-40a9-8dcc-3ea1eb0f778d"), Duration::from_millis(500)); // Lightning Bolt (channel)
-        assert_eq!(ability_cooldown("ce6b63e9-9f18-49c4-aee0-51f7985f9892"), Duration::from_millis(8090)); // Power Attack
-        assert_eq!(ability_cooldown("65ede044-d68a-4b2b-8f0c-02075ad133cc"), Duration::from_millis(7500)); // Ward
-        assert_eq!(ability_cooldown("not-a-real-uuid"), ABILITY_COOLDOWN); // fallback
-    }
 }
 
 /// How long a `PlayerBlockingStateChange` (41) holds the guard up before it
@@ -230,8 +217,9 @@ fn resolve_swing(
     emit_damage(combat, sender, target_slot, &resolved, now)
 }
 
-/// A spell/ability cast: cooldown-gated, echoes `PerformExecuteAbility`, applies
-/// Spell-source damage.
+/// A spell/ability cast: cooldown-gated, resource-gated (stamina for maneuvers /
+/// magicka for spells), echoes `PerformExecuteAbility`, applies Spell-source damage,
+/// deducts the resource cost, and emits `PlayerStatsUpdate`(65) to both players.
 fn resolve_ability_cast(
     combat: &mut MatchCombat,
     sender: usize,
@@ -247,18 +235,9 @@ fn resolve_ability_cast(
             return Vec::new();
         }
     }
-    combat
-        .fighters[sender]
-        .cooldowns
-        .insert(ea.ability_uuid.clone(), now + ability_cooldown(&ea.ability_uuid));
 
-    let mut out = Vec::new();
-    // PerformExecuteAbility (38) echo to both — the cast confirmation/visual.
-    let perform = messages::perform_execute_ability(user_data, ea.sep_offset);
-    out.push((sender, perform.clone()));
-    out.push((target_slot, perform));
-
-    // Look up the ability tag and level from the equipped loadout.
+    // Look up the ability tag and level from the equipped loadout (needed for cost +
+    // tag routing below; default to level=1/Generic for unrecognised abilities).
     let (level, tag) = combat.fighters[sender]
         .loadout
         .abilities
@@ -266,6 +245,71 @@ fn resolve_ability_cast(
         .find(|a| a.instance_uuid == ea.ability_uuid)
         .map(|a| (a.level, a.tag))
         .unwrap_or((1, super::state::AbilityTag::Generic));
+
+    // Resource gate (spec §1, bug 2): reject the cast (no effect, no cooldown set,
+    // no damage) if the caster lacks the required stamina (maneuvers) or magicka
+    // (spells).  `ability_cost` returns APK-authoritative costs; unknown UUIDs
+    // return (0,0) — no gate applies (backward-compatible: unrecognised spells still
+    // fire). The rank (1-based, from the equipped level) drives the linear cost ramp.
+    let (stam_cost, mag_cost) = tables::ability_cost(&ea.ability_uuid, level);
+    if stam_cost > 0 && combat.fighters[sender].stamina < stam_cost {
+        debug!(
+            "combat: slot {sender} ability {} REJECTED — insufficient stamina ({} < {} required)",
+            ea.ability_uuid, combat.fighters[sender].stamina, stam_cost,
+        );
+        return Vec::new(); // no cooldown set; client retries when stamina is up
+    }
+    if mag_cost > 0 && combat.fighters[sender].magicka < mag_cost {
+        debug!(
+            "combat: slot {sender} ability {} REJECTED — insufficient magicka ({} < {} required)",
+            ea.ability_uuid, combat.fighters[sender].magicka, mag_cost,
+        );
+        return Vec::new();
+    }
+
+    // Resource gate passed → commit: set cooldown and deduct the cost.
+    combat
+        .fighters[sender]
+        .cooldowns
+        .insert(ea.ability_uuid.clone(), now + ability_cooldown(&ea.ability_uuid));
+
+    // Deduct stamina/magicka and emit op65 PlayerStatsUpdate to both players so the
+    // HUD bars reflect the new pools immediately.  `stats_seq` is bumped inside
+    // `packed_stats` as a monotonic counter (shared with `take_damage`).
+    let stat_frames: Vec<(usize, Vec<u8>)> = if stam_cost > 0 || mag_cost > 0 {
+        combat.fighters[sender].stamina =
+            combat.fighters[sender].stamina.saturating_sub(stam_cost);
+        combat.fighters[sender].magicka =
+            combat.fighters[sender].magicka.saturating_sub(mag_cost);
+        combat.fighters[sender].stats_seq =
+            combat.fighters[sender].stats_seq.wrapping_add(1);
+        info!(
+            "combat: slot {sender} ability {} deducted stam={stam_cost} mag={mag_cost} → \
+             stam={}/{} mag={}/{}",
+            ea.ability_uuid,
+            combat.fighters[sender].stamina,
+            combat.fighters[sender].max_stamina,
+            combat.fighters[sender].magicka,
+            combat.fighters[sender].max_magicka,
+        );
+        let packed = combat.fighters[sender].packed_stats();
+        let obj_id = combat.fighters[sender].net_object_id;
+        let frame = messages::player_stats_update(obj_id, packed);
+        (0..combat.fighters.len()).map(|s| (s, frame.clone())).collect()
+    } else {
+        Vec::new()
+    };
+
+    let mut out = Vec::new();
+    // PerformExecuteAbility (38) echo to both — the cast confirmation/visual.
+    let perform = messages::perform_execute_ability(user_data, ea.sep_offset);
+    out.push((sender, perform.clone()));
+    out.push((target_slot, perform));
+
+    // Emit the stat update (after the cast echo so the client sees the visual before
+    // the bar drop — matches retail ordering).
+    out.extend(stat_frames);
+
     debug!("combat: slot {sender} casts ability {} (tag {tag:?}, level {level}) → slot {target_slot}", ea.ability_uuid);
 
     // Route Ward and ResistElements to their specific handlers (no direct damage).
@@ -383,6 +427,25 @@ const PARALYZE_DURATION_SECS: f32 = 3.1;
 
 /// DoT tick cadence — 1 tick per second (s506 packet timestamps confirm 1s intervals).
 const DOT_TICK_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Regen tick cadence. We regen once per second and apply the UESP-approximate per-
+/// second rates. A fractional tick (e.g. regen 25.0 stamina/s from a 625 pool at L86)
+/// is rounded to nearest integer to avoid float drift.
+const REGEN_TICK_INTERVAL: Duration = Duration::from_secs(1);
+
+/// In-combat stamina/magicka regen rate as a fraction of the pool per second.
+/// **UESP-approximate** (blades-combat-formulae.md §9): `4 %/s` in combat, `8 %/s`
+/// out-of-combat. The arena is always in-combat. Rates are CDN `[ExcelVariable]`
+/// (`PlayerStats._staminaRegenRate` / `_magickaRegenRate`); these UESP values are the
+/// best available until the CDN data is obtained. [calibration flag]
+const STAMINA_REGEN_RATE_PER_S: f32 = 0.04;
+const MAGICKA_REGEN_RATE_PER_S: f32 = 0.04;
+
+/// In-combat health regen rate as a fraction of the BASE (pre-arena-×3) max-HP per
+/// second. UESP `0.5 %/s`; arena triples raw HP but healing/regen are NOT tripled —
+/// so use 0.5% of the BASE max (pre-×3), not of the tripled pool.
+/// [spec §2: "HP regen = 0.5% of BASE max (pre-×3) = 5.25/s at L86"; calibration flag]
+const HEALTH_REGEN_RATE_PER_S: f32 = 0.005; // 0.5% of BASE max per second
 
 /// `_percentHealthDamage` default for elemental DoT effects (game-data-driven; flagged
 /// as a calibration guess). Derived from s506's dominant Poison DoT value of 3.87/tick
@@ -814,6 +877,81 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
+/// Per-second HP/Stamina/Magicka regen for all alive fighters. Called from `on_tick`
+/// once per `REGEN_TICK_INTERVAL`.  Rates are UESP-approximate (spec §2 calibration
+/// flag); exact values are CDN `[ExcelVariable]` not in the APK.
+///
+/// Block-regen status effects suppress per-stat regen:
+///   - `BlockHealthRegen`(50) → no HP regen (On Fire / conditioning)
+///   - `BlockStaminaRegen`(51) → no stamina regen (Frozen)
+///   - `BlockMagickaRegen`(52) → no magicka regen (Enervated)
+///
+/// After all fighters are ticked, emits `PlayerStatsUpdate`(65) for any fighter
+/// whose pools changed. [spec §2 / docs/blades-combat-formulae.md §9]
+fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
+    use super::state::StatusEffectType;
+
+    let mut out = Vec::new();
+
+    for slot in 0..combat.fighters.len() {
+        let f = &mut combat.fighters[slot];
+        if f.is_dead() {
+            continue;
+        }
+
+        // Check which regen channels are suppressed by active status effects.
+        let block_hp = f.effects.iter().any(|e| {
+            e.effect == StatusEffectType::BlockHealthRegen && now < e.expires_at
+        });
+        let block_stam = f.effects.iter().any(|e| {
+            e.effect == StatusEffectType::BlockStaminaRegen && now < e.expires_at
+        });
+        let block_mag = f.effects.iter().any(|e| {
+            e.effect == StatusEffectType::BlockMagickaRegen && now < e.expires_at
+        });
+
+        let before_h = f.health;
+        let before_s = f.stamina;
+        let before_m = f.magicka;
+
+        // HP regen: 0.5% of BASE max per second (pre-arena-×3).
+        // Arena triples max_health so we un-triple to get the base pool for the rate.
+        if !block_hp && f.health < f.max_health {
+            let base_max = f.max_health / super::state::ARENA_HEALTH_MULTIPLIER;
+            let regen = ((HEALTH_REGEN_RATE_PER_S * base_max as f32).round() as u32).max(1);
+            f.health = (f.health + regen).min(f.max_health);
+        }
+        // Stamina regen: 4% of pool per second.
+        if !block_stam && f.stamina < f.max_stamina {
+            let regen = ((STAMINA_REGEN_RATE_PER_S * f.max_stamina as f32).round() as u32).max(1);
+            f.stamina = (f.stamina + regen).min(f.max_stamina);
+        }
+        // Magicka regen: 4% of pool per second.
+        if !block_mag && f.magicka < f.max_magicka {
+            let regen = ((MAGICKA_REGEN_RATE_PER_S * f.max_magicka as f32).round() as u32).max(1);
+            f.magicka = (f.magicka + regen).min(f.max_magicka);
+        }
+
+        let changed = f.health != before_h || f.stamina != before_s || f.magicka != before_m;
+        if changed {
+            f.stats_seq = f.stats_seq.wrapping_add(1);
+            let packed = f.packed_stats();
+            let obj_id = f.net_object_id;
+            let frame = messages::player_stats_update(obj_id, packed);
+            debug!(
+                "combat regen: slot {slot} hp {before_h}→{}/{} stam {before_s}→{}/{} mag {before_m}→{}/{}",
+                combat.fighters[slot].health, combat.fighters[slot].max_health,
+                combat.fighters[slot].stamina, combat.fighters[slot].max_stamina,
+                combat.fighters[slot].magicka, combat.fighters[slot].max_magicka,
+            );
+            for dest in 0..combat.fighters.len() {
+                out.push((dest, frame.clone()));
+            }
+        }
+    }
+    out
+}
+
 /// A bot fighter's auto-swing cadence. Slower than a human's `SWING_COOLDOWN` so the
 /// player wins comfortably but sees real incoming damage — a fight, not a static dummy.
 const BOT_SWING_COOLDOWN: Duration = Duration::from_millis(1800);
@@ -851,6 +989,14 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
         return out;
     }
 
+    // Regen tick — once per second, regenerate HP/Stamina/Magicka for all alive
+    // fighters. Runs AFTER DoT (DoT damage may deplete a pool; regen brings it back up).
+    // Guarded against DoT-ending the round (the RoundEnd/NextState check above).
+    if now.duration_since(combat.last_regen_tick) >= REGEN_TICK_INTERVAL {
+        combat.last_regen_tick = now;
+        out.extend(apply_regen_tick(combat, now));
+    }
+
     let bot_slots: Vec<usize> = (combat.expected_peers..combat.fighters.len()).collect();
     for bot in bot_slots {
         if combat.fighters[bot].is_dead() {
@@ -871,4 +1017,241 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
         }
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests (spec §IMPLEMENT: focused tests)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::messages::{self, frame_for_test};
+    use super::super::state::{EquippedAbility, AbilityTag, Fighter, FlowState, MatchCombat, DamageType};
+    use arena_proto::NetDataWriter;
+
+    // -----------------------------------------------------------------------
+    // Bug 3: Block input must emit ZERO damage
+    // -----------------------------------------------------------------------
+
+    /// A `PlayerBlockingStateChange` (41) c2s frame must set the block state and return
+    /// NO s2c damage frames — raising the shield must never produce a ReceiveDamage. [spec bug 3]
+    #[test]
+    fn block_input_emits_zero_damage() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+
+        // Build a realistic c2s op41 PlayerBlockingStateChange (Right side = 3).
+        let block_frame = {
+            let mut w = NetDataWriter::new();
+            w.int(0, 120).byte(1, 55).byte(2, 3).byte(3, 41).byte(4, 3);
+            let mut f = frame_for_test(w.finish());
+            f[0] = 0x84; // c2s marker
+            f
+        };
+
+        let out = on_c2s_input(&mut combat, 0, &block_frame, now);
+
+        // A block MUST produce zero outbound frames (no damage, no error, no phantom swing).
+        assert!(
+            out.is_empty(),
+            "block input must emit zero s2c frames (no damage), got {} frame(s)",
+            out.len()
+        );
+        // And the fighter should now be in the Blocking state.
+        assert_eq!(
+            combat.fighters[0].actor_state,
+            super::super::state::ActorStateType::Blocking,
+            "block input must put fighter 0 into Blocking state"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 2: Under-funded ability cast is rejected
+    // -----------------------------------------------------------------------
+
+    /// An ability cast when the caster has LESS stamina than required must be silently
+    /// rejected — no cooldown set, no damage emitted. [spec bug 2 / §1 cost gate]
+    #[test]
+    fn underfunded_cast_is_rejected_no_damage_no_cooldown() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+
+        // Give fighter 0 a Quick Strikes (eb0cb7e6…, R1 cost = 150 stamina).
+        // Then DRAIN stamina to zero so it can't afford the cast.
+        let qs_uuid = "eb0cb7e6-47cf-48e7-8cc9-dbf80fc77f13";
+        combat.fighters[0].loadout.abilities.push(EquippedAbility {
+            instance_uuid: qs_uuid.to_string(),
+            level: 1,
+            tag: AbilityTag::Generic,
+        });
+        combat.fighters[0].stamina = 0; // completely empty
+
+        let ability_frame = make_ability_frame(120, qs_uuid);
+        let out = on_c2s_input(&mut combat, 0, &ability_frame, now);
+
+        assert!(
+            out.is_empty(),
+            "underfunded cast must emit zero frames (rejected), got {} frame(s)",
+            out.len()
+        );
+        // Cooldown must NOT be set — the cast was rejected before the commit point.
+        assert!(
+            combat.fighters[0].cooldowns.get(qs_uuid).is_none(),
+            "rejected cast must not set the ability cooldown"
+        );
+    }
+
+    /// An ability cast when the caster HAS enough stamina succeeds: cooldown is set,
+    /// stamina is deducted, an op65 PlayerStatsUpdate (ch1) is emitted. [spec §1]
+    #[test]
+    fn funded_cast_deducts_stamina_and_emits_op65() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+
+        let qs_uuid = "eb0cb7e6-47cf-48e7-8cc9-dbf80fc77f13"; // Quick Strikes R1 = 150 stam
+        combat.fighters[0].loadout.abilities.push(EquippedAbility {
+            instance_uuid: qs_uuid.to_string(),
+            level: 1,
+            tag: AbilityTag::Generic,
+        });
+        // Ensure full stamina (set by Fighter::new from pool_for_level).
+        let stam_before = combat.fighters[0].stamina;
+        assert!(stam_before >= 150, "fighter must have ≥ 150 stamina for this test");
+
+        let ability_frame = make_ability_frame(120, qs_uuid);
+        let out = on_c2s_input(&mut combat, 0, &ability_frame, now);
+
+        // Stamina must be deducted by the R1 cost (150).
+        let stam_after = combat.fighters[0].stamina;
+        assert_eq!(
+            stam_before - stam_after,
+            150,
+            "Quick Strikes R1 must cost exactly 150 stamina"
+        );
+
+        // Cooldown must be set.
+        assert!(
+            combat.fighters[0].cooldowns.contains_key(qs_uuid),
+            "funded cast must set the ability cooldown"
+        );
+
+        // At least one op65 PlayerStatsUpdate (GMID 65) must be emitted.
+        let has_op65 = out.iter().any(|(_, frame)| {
+            frame.len() >= 2
+                && frame[1] == 0x36
+                && messages::user_message_gmid(frame) == Some(65)
+        });
+        assert!(
+            has_op65,
+            "funded cast must emit at least one PlayerStatsUpdate (op65) to update HUD bars"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 1 / spec §2: Regen tick raises stamina
+    // -----------------------------------------------------------------------
+
+    /// A regen tick must raise stamina (and magicka) for a fighter whose pool is
+    /// depleted — running `on_tick` with `now + REGEN_TICK_INTERVAL` must increase
+    /// the fighter's stamina and emit op65 PlayerStatsUpdate frames. [spec §2]
+    #[test]
+    fn regen_tick_raises_stamina_and_emits_op65() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+
+        // Drain stamina to simulate a spent ability.
+        let max_stam = combat.fighters[0].max_stamina;
+        combat.fighters[0].stamina = max_stam / 2;
+        let stam_before = combat.fighters[0].stamina;
+
+        // Advance time by exactly one regen interval.
+        let tick_now = now + REGEN_TICK_INTERVAL;
+        combat.last_regen_tick = now; // ensure the tick fires
+
+        let out = apply_regen_tick(&mut combat, tick_now);
+
+        let stam_after = combat.fighters[0].stamina;
+        assert!(
+            stam_after > stam_before,
+            "regen tick must raise stamina from {} → got {}",
+            stam_before,
+            stam_after,
+        );
+
+        // op65 PlayerStatsUpdate must be emitted (HUD update for both players).
+        let has_op65 = out.iter().any(|(_, frame)| {
+            frame.len() >= 2
+                && frame[1] == 0x36
+                && messages::user_message_gmid(frame) == Some(65)
+        });
+        assert!(
+            has_op65,
+            "regen tick must emit at least one PlayerStatsUpdate (op65)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    /// Build a minimal 2-player `MatchCombat` already in the live `StateTimeout` phase.
+    fn make_live_combat(now: Instant) -> MatchCombat {
+        use super::super::loadout::starter;
+        let mut combat = MatchCombat::new(2, 2, now);
+        for slot in 0..2 {
+            let obj_id = combat.alloc_net_object_id();
+            let mut f = Fighter::new(slot, obj_id, starter(), now);
+            // Give fighters full weapon base so damage resolves properly.
+            f.loadout.weapon = super::super::state::WeaponProfile {
+                primary_type: Some(DamageType::Slashing),
+                base_by_type: vec![(DamageType::Slashing, 113.82)],
+                weight: Some(super::super::tables::Weight::Light),
+            };
+            combat.fighters.push(f);
+        }
+        combat.match_net_object_id = combat.alloc_net_object_id();
+        combat.phase = FlowState::StateTimeout;
+        combat.phase_entered = now;
+        combat
+    }
+
+    /// Build a synthetic `RequestExecuteAbility` (GMID 37) c2s frame for the given
+    /// ability `uuid`. Matches the exact binary layout that `input::parse_execute_ability`
+    /// scans: `marker(0x84) + carrier(0x36) + [prefix NetObjectInfo bytes] + 02 00 00 +
+    /// [type_nibble] + [role_byte=3] + [gmid_byte=37] + [u16-LE len=36] + [UUID ASCII]`.
+    /// Derived from the `op37_frame` worked example in input.rs tests.
+    fn make_ability_frame(_obj_id: i32, uuid: &str) -> Vec<u8> {
+        assert_eq!(uuid.len(), 36, "UUID must be 36 chars for this builder");
+        let mut frame = Vec::new();
+        // marker + carrier
+        frame.push(0x84u8); // c2s marker
+        frame.push(0x36u8); // UserMessage carrier
+        // A minimal NetObjectInfo prefix (6 bytes from the op37 worked example).
+        frame.extend_from_slice(&[0x04, 0x1F, 0x70, 0x77, 0x0A, 0x35]);
+        // Separator + encoding
+        frame.extend_from_slice(&[
+            0x02, 0x00, 0x00, // separator @ offset (frame.len()-2 from carrier)
+            0x38,             // type nibble byte
+            0x03,             // role = Autonomous
+            0x25,             // gmid = 37 (RequestExecuteAbility)
+            0x24, 0x00,       // u16-LE length = 36
+        ]);
+        frame.extend_from_slice(uuid.as_bytes());
+        frame
+    }
+}
+
+#[cfg(test)]
+mod cooldown_data_tests {
+    use super::*;
+
+    #[test]
+    fn authoritative_per_ability_cooldowns() {
+        assert_eq!(ability_cooldown("d07a8d30-9a1c-49b0-866d-97a8aa1534cf"), Duration::from_millis(3540)); // Fireball
+        assert_eq!(ability_cooldown("7fc15804-1637-40a9-8dcc-3ea1eb0f778d"), Duration::from_millis(500)); // Lightning Bolt (channel)
+        assert_eq!(ability_cooldown("ce6b63e9-9f18-49c4-aee0-51f7985f9892"), Duration::from_millis(8090)); // Power Attack
+        assert_eq!(ability_cooldown("65ede044-d68a-4b2b-8f0c-02075ad133cc"), Duration::from_millis(7500)); // Ward
+        assert_eq!(ability_cooldown("not-a-real-uuid"), ABILITY_COOLDOWN); // fallback
+    }
 }

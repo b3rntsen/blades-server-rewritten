@@ -210,7 +210,12 @@ pub fn is_noncombat_user_message(user_data: &[u8]) -> bool {
     matches!(
         user_message_gmid(user_data),
         Some(
-            20 | 22 | 36 | 56 | 57 | 61 | 72 | 73 | 76 | 79 | 80
+            // Shield / block raise (41) must never reach resolve_swing — belt-and-
+            // suspenders alongside the dedicated `is_player_blocking_state_change`
+            // early-return in `resolve::on_c2s_input`. If the GMID decode mismatches
+            // on a live device, this fallback prevents the block frame from being
+            // treated as a weapon swing and dealing damage. [spec bug 3]
+            20 | 22 | 36 | 41 | 56 | 57 | 61 | 72 | 73 | 76 | 79 | 80
         )
     )
 }
@@ -338,6 +343,24 @@ pub fn stat_update(avatar_net_object_id: i32) -> Vec<u8> {
         .byte(2, 1)
         .byte(3, 65)
         .ulong(4, 0x3FFF_FFFF_0000_0001)
+        .ulong(5, 1);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// `PlayerStatsUpdate` (GMID 65, carrier `0x36`, **ENet channel 1**) — carries the
+/// current Health/Stamina/Magicka fractions of an avatar as a packed ULong (same
+/// layout as `ReceiveDamage` propId 4/5: `Health|Stamina<<10|Magicka<<20` in the
+/// HIGH 32 bits, `seq` in the LOW 32 bits). Emitted after a regen tick, an ability
+/// cost deduction, or a DoT/potion stat change so the HUD bars update. [s506 ch1]
+///
+/// `packed` is the result of `Fighter::packed_stats()`.
+pub fn player_stats_update(avatar_net_object_id: i32, packed: u64) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, avatar_net_object_id)
+        .byte(1, super::state::NetObjectType::Avatar as u8)
+        .byte(2, 1) // role byte (Authority=1 — same as stat_update round-start)
+        .byte(3, 65)
+        .ulong(4, packed)
         .ulong(5, 1);
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }

@@ -159,7 +159,11 @@ pub enum StatusEffectType {
     Ward = 15,
     /// Absorb negation buff (damage→heal pool). [§4.1]
     Absorb = 17,
+    /// No HP regen while active (On Fire / conditioning). [status-resistance-spec §Mechanic-2]
+    BlockHealthRegen = 50,
     BlockStaminaRegen = 51,
+    /// No magicka regen while active (Enervated). [status-resistance-spec §Mechanic-2]
+    BlockMagickaRegen = 52,
     /// Resist-Elements 4-tuple (FireResistance 60 … PoisonResistance 63, 11.5 s). [§4.3]
     FireResistance = 60,
     FrostResistance = 61,
@@ -877,6 +881,9 @@ pub struct MatchCombat {
     /// until `InRound`(13), then resets both fighters to full HP and re-enters the live
     /// round (`StateTimeout`). Reset at the start of each between-rounds walk.
     pub interround_step: usize,
+    /// When the last stat-regen tick fired. Initialised to the match's `phase_entered`
+    /// so the first tick fires 1s into the live round. [spec §2]
+    pub last_regen_tick: std::time::Instant,
 }
 
 impl MatchCombat {
@@ -897,6 +904,7 @@ impl MatchCombat {
             winner: None,
             matchend_step: 0,
             interround_step: 0,
+            last_regen_tick: now,
         }
     }
 
@@ -933,6 +941,8 @@ impl MatchCombat {
             f.negation_pools.clear();
             f.transient_resistances.clear();
         }
+        // Anchor the regen timer to now so the next round's first tick fires 1s in.
+        self.last_regen_tick = now;
     }
 
     pub fn alloc_net_object_id(&mut self) -> i32 {
