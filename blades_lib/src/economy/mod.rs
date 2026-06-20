@@ -93,6 +93,20 @@ impl Price {
     }
 }
 
+/// A chest included directly in a reward (tier + level; the server assigns a new id
+/// when granting it into the treasury). Matches the `"chests":[{id,tier,level}]`
+/// captured inside quest/dungeon completion rewards.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RewardChest {
+    /// The chest id stored in the capture (ignored when granting — the treasury
+    /// assigns a fresh numeric id to avoid collisions across players).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub tier: u64,
+    pub level: u64,
+}
+
 impl CompleteWallet {
     /// Balance of a currency (0 if the player has never held it).
     pub fn balance(&self, currency: Uuid) -> u64 {
@@ -174,6 +188,11 @@ pub struct RewardGrant {
     pub stackable_items: HashMap<Uuid, u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<RewardItem>,
+    /// Treasury chests granted by this reward (quest/dungeon completions). Carried
+    /// verbatim from capture-derived `quest_rewards.json`; the handler calls
+    /// `grant_chest` for each entry and bumps `treasury_version`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chests: Vec<RewardChest>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub character_xp: u64,
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -185,6 +204,7 @@ impl RewardGrant {
         self.currencies.is_empty()
             && self.stackable_items.is_empty()
             && self.items.is_empty()
+            && self.chests.is_empty()
             && self.character_xp == 0
             && self.town_xp == 0
     }
@@ -386,6 +406,7 @@ mod tests {
                 id: instanced,
                 item: item(template),
             }],
+            chests: vec![],
             character_xp: 700,
             town_xp: 10,
         };

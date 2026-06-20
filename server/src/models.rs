@@ -207,3 +207,12 @@ pub struct QuestDbEntryDungeonStateAndGeneratedData {
     pub dungeon_state: Option<JsonDbWrapper<DungeonState>>,
     pub generated_data: JsonDbWrapper<Option<DungeonGeneratedData>>,
 }
+
+/// Thin changeset for `POST /quests/{id}/complete` and `POST /quests/{id}/objectives`:
+/// only the `info` column (the `Quest` state) is updated.
+#[derive(AsChangeset)]
+#[diesel(table_name = crate::schema::quests)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct QuestDbEntryInfo {
+    pub info: JsonDbWrapper<Quest>,
+}

@@ -209,4 +209,8 @@ pub struct StaticData {
     /// Temper/enchant recipes keyed by `recipeId` — the `POST /crafts` requests that
     /// carry an `itemId` and modify an existing item (vs `recipes`, which mint a new one).
     pub item_mod_recipes: HashMap<Uuid, ItemModRecipe>,
+    /// Capture-derived quest completion rewards, keyed by quest/`gldQuestId` UUID.
+    /// Used by `POST /quests/{id}/complete` to grant the reward without re-running the
+    /// quest logic. Lenient: an unknown quest id returns an empty reward.
+    pub quest_rewards: HashMap<Uuid, crate::economy::RewardGrant>,
 }

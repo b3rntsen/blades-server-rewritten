@@ -315,6 +315,10 @@ async fn main() -> Result<()> {
                     .service(gameevent::get_game_events)
                     .service(quest::get_quests)
                     .service(quest::accept_quest)
+                    // Quest completion and objective progress must come AFTER accept
+                    // (longer path → won't shadow the bare /quests POST).
+                    .service(quest::complete_quest)
+                    .service(quest::update_quest_objectives)
                     .service(global_shop::get_override)
                     .service(global_shop::get_global_shop_for_character)
                     .service(global_shop::get_iap)

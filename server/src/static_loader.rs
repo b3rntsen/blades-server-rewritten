@@ -62,6 +62,8 @@ pub fn load(dir: &Path) -> StaticData {
     let recipes: HashMap<Uuid, Recipe> = read_json(&dir.join("recipes.json"));
     let item_mod_recipes: HashMap<Uuid, ItemModRecipe> =
         read_json(&dir.join("item_mod_recipes.json"));
+    let quest_rewards: HashMap<Uuid, RewardGrant> =
+        read_json(&dir.join("quest_rewards.json"));
 
     StaticData {
         gifts: gifts.into_iter().map(|g| (g.global_gift_id, g)).collect::<HashMap<_, _>>(),
@@ -78,6 +80,7 @@ pub fn load(dir: &Path) -> StaticData {
         shop_bundles,
         recipes,
         item_mod_recipes,
+        quest_rewards,
     }
 }
 
@@ -108,5 +111,6 @@ mod tests {
         assert!(!sd.item_mod_recipes.is_empty(), "item_mod_recipes.json");
         assert!(sd.global_shop_overrides.get("globalShopOverrides").is_some());
         assert!(sd.iap.get("fulfillmentOverrides").is_some());
+        assert!(!sd.quest_rewards.is_empty(), "quest_rewards.json");
     }
 }
