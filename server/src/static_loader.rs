@@ -14,7 +14,8 @@ use blades_lib::features::challenges::ChallengeTemplate;
 use blades_lib::features::daily_reward::DailyRewardDef;
 use blades_lib::features::game_events::EventDef;
 use blades_lib::static_data::{
-    Announcement, GiftDef, ItemModRecipe, Recipe, ShopBundle, ShopData, StaticData,
+    Announcement, AbyssStaticData, GiftDef, ItemModRecipe, Recipe, ShopBundle, ShopData,
+    StaticData,
 };
 use log::warn;
 use serde::de::DeserializeOwned;
@@ -64,6 +65,7 @@ pub fn load(dir: &Path) -> StaticData {
         read_json(&dir.join("item_mod_recipes.json"));
     let quest_rewards: HashMap<Uuid, RewardGrant> =
         read_json(&dir.join("quest_rewards.json"));
+    let abyss: AbyssStaticData = read_json(&dir.join("abyss.json"));
 
     StaticData {
         gifts: gifts.into_iter().map(|g| (g.global_gift_id, g)).collect::<HashMap<_, _>>(),
@@ -81,6 +83,7 @@ pub fn load(dir: &Path) -> StaticData {
         recipes,
         item_mod_recipes,
         quest_rewards,
+        abyss,
     }
 }
 
@@ -112,5 +115,7 @@ mod tests {
         assert!(sd.global_shop_overrides.get("globalShopOverrides").is_some());
         assert!(sd.iap.get("fulfillmentOverrides").is_some());
         assert!(!sd.quest_rewards.is_empty(), "quest_rewards.json");
+        assert!(!sd.abyss.fixed_slices.is_empty(), "abyss.json fixedSlices");
+        assert!(!sd.abyss.random_pool.is_empty(), "abyss.json randomPool");
     }
 }

@@ -166,6 +166,45 @@ pub struct ItemModRecipe {
     pub outcomes: Vec<EnchantOutcome>,
 }
 
+/// One fixed floor entry for the abyss (floors 1–24, captured from prod).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AbyssFixedSlice {
+    pub dungeon_settings_id: Uuid,
+    pub difficulty_level: u32,
+}
+
+/// One future-reward threshold: reaching `score` grants these stackable items.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AbyssFutureRewardDef {
+    pub score: u32,
+    #[serde(default)]
+    pub stackable_items: HashMap<Uuid, u64>,
+}
+
+/// Static abyss definitions loaded from `deploy/static/abyss.json`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AbyssStaticData {
+    /// The 24 fixed floors served verbatim for every run (indices 0–23).
+    #[serde(default)]
+    pub fixed_slices: Vec<AbyssFixedSlice>,
+    /// Pool of dungeon-settings UUIDs used to extend the run beyond floor 24
+    /// (all at difficultyLevel 100, cycled via `(seed + floor) % pool.len()`).
+    #[serde(default)]
+    pub random_pool: Vec<Uuid>,
+    /// Score thresholds that trigger in-run reward grants.
+    #[serde(default)]
+    pub future_rewards: Vec<AbyssFutureRewardDef>,
+    /// Captured `algorithmVersion` baked into every generated run.
+    #[serde(default)]
+    pub algorithm_version: u32,
+    /// How many floors the prod server pre-generated per run (informational).
+    #[serde(default)]
+    pub total_pregen_floors: u32,
+}
+
 /// All capture-derived static definitions, loaded once at startup. Fields are added
 /// per feature; each is independently optional (a missing/!invalid data file leaves
 /// its field empty rather than failing startup).
@@ -213,4 +252,6 @@ pub struct StaticData {
     /// Used by `POST /quests/{id}/complete` to grant the reward without re-running the
     /// quest logic. Lenient: an unknown quest id returns an empty reward.
     pub quest_rewards: HashMap<Uuid, crate::economy::RewardGrant>,
+    /// Abyss static definitions (floor list + random pool + future rewards).
+    pub abyss: AbyssStaticData,
 }

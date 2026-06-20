@@ -17,6 +17,41 @@ use uuid::Uuid;
 use crate::features::challenges::ChallengeState;
 use crate::features::daily_reward::DailyRewardState;
 
+/// One floor entry in an active abyss run. Mirrors the client wire shape exactly so
+/// the server can reconstruct the full `abyss.slices` list on `/current` and `/start`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AbyssSliceEntry {
+    pub dungeon_settings_id: Uuid,
+    pub difficulty_level: u32,
+    pub hardcore: bool,
+    pub slice_index: u32,
+    pub floor_index: u32,
+    pub completed: bool,
+    pub enemy_killed: bool,
+}
+
+/// Server-tracked state for an in-progress abyss run. Stored in
+/// `server_state.abyss`; cleared on `/end`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AbyssRun {
+    /// The full pre-generated slice list (floors 1–N), faithfully matching prod.
+    pub slices: Vec<AbyssSliceEntry>,
+    /// Number of revives used so far.
+    pub revive_count: u32,
+    /// Player level at run start (used for difficulty/XP scaling).
+    pub initial_player_level: u32,
+    /// Pseudo-random seed for client-side generation.
+    pub seed: i64,
+    /// Cumulative score (enemy kills count toward future reward thresholds).
+    pub score: f64,
+    pub algorithm_version: u32,
+    pub version: u32,
+    /// Index of the current active floor (0-based into `slices`).
+    pub current_floor_index: usize,
+}
+
 /// An in-progress craft job, persisted in `server_state.craft_jobs`. Created by
 /// `POST /crafts`, consumed (and results granted) by `POST /crafts/{id}/finish`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,4 +84,8 @@ pub struct ServerState {
     /// field deserialize cleanly as an empty list.
     #[serde(default)]
     pub craft_jobs: Vec<CraftJob>,
+    /// Active abyss run, if any. `None` means no run in progress. Set by `/start`,
+    /// updated by `/update`, cleared by `/end`.
+    #[serde(default)]
+    pub abyss: Option<AbyssRun>,
 }

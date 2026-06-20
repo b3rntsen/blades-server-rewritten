@@ -1,0 +1,50 @@
+{
+  "fixedSlices": [
+    {"dungeonSettingsId": "663053f0-3a46-4012-b004-6cb2e907f33c", "difficultyLevel": 1},
+    {"dungeonSettingsId": "4de80b69-fe4e-4ed5-a556-71e5b7c82ed0", "difficultyLevel": 2},
+    {"dungeonSettingsId": "1396d90c-c38e-47c6-a9da-6e98c49788e5", "difficultyLevel": 3},
+    {"dungeonSettingsId": "fe22c3c8-e4c9-491c-bd85-7c0ba9dc6b31", "difficultyLevel": 4},
+    {"dungeonSettingsId": "44e0d7cd-26a1-4183-996b-056a484a5e2e", "difficultyLevel": 5},
+    {"dungeonSettingsId": "5cc26070-12ac-4adc-b55d-da6fed6934ee", "difficultyLevel": 6},
+    {"dungeonSettingsId": "cc9c27fd-1917-4b0a-a62e-87cfb07e7c6d", "difficultyLevel": 7},
+    {"dungeonSettingsId": "d30de853-68ca-4360-b060-81aaf182d940", "difficultyLevel": 8},
+    {"dungeonSettingsId": "84e70169-4e8c-4820-936d-18976b871c8d", "difficultyLevel": 9},
+    {"dungeonSettingsId": "7924c82d-f6b3-4eb6-9edb-9b1349a1da84", "difficultyLevel": 10},
+    {"dungeonSettingsId": "ad7a91a8-c47e-47ab-b78f-f7559123a879", "difficultyLevel": 12},
+    {"dungeonSettingsId": "73aa75cb-1109-4e96-b7a2-73e55aaa99a2", "difficultyLevel": 14},
+    {"dungeonSettingsId": "0ec5e913-6074-4490-abaa-f1802827b007", "difficultyLevel": 16},
+    {"dungeonSettingsId": "2c0e2b66-2642-409c-a7c9-2184c6c51c6c", "difficultyLevel": 20},
+    {"dungeonSettingsId": "28ffdb77-161e-49a4-897e-7a8f679264d6", "difficultyLevel": 24},
+    {"dungeonSettingsId": "4c793f15-aa4b-406f-be88-9689085fdc05", "difficultyLevel": 28},
+    {"dungeonSettingsId": "0b82053f-958e-42e9-b1b7-9232b25a81ef", "difficultyLevel": 34},
+    {"dungeonSettingsId": "028dcf09-7006-499f-8cc7-09bb20a7adea", "difficultyLevel": 42},
+    {"dungeonSettingsId": "4aee4783-c32c-4dd2-8fa9-2cec42ca32e4", "difficultyLevel": 50},
+    {"dungeonSettingsId": "ceaa6f04-eee8-4167-a617-d35810f3b2b1", "difficultyLevel": 60},
+    {"dungeonSettingsId": "c211c8e2-fef1-45ae-95ea-9b7295271a17", "difficultyLevel": 70},
+    {"dungeonSettingsId": "4a31b6b7-3c62-4f7d-bd80-5d77f0a5065d", "difficultyLevel": 82},
+    {"dungeonSettingsId": "717d4768-decf-4b5c-abd4-6679c9e120e3", "difficultyLevel": 94},
+    {"dungeonSettingsId": "34655edb-5b0e-483e-aaf6-f3186d99ed10", "difficultyLevel": 100}
+  ],
+  "randomPool": [
+    "d06c756d-aeb6-4184-99e8-546f27670c6d",
+    "0e5671ac-c415-4c6e-affc-44fdca610f1e",
+    "4e682650-cddc-4326-bf45-3ecefc09bf0e",
+    "7234cbba-986e-450f-b605-c876a8658013",
+    "b1ea02bb-fc98-4209-9f00-8cd828945cdb",
+    "a1db3158-30ea-449a-98e1-ea91830f9a08",
+    "f00dea4c-025d-4233-a503-8ab28ef53c80",
+    "717d4768-decf-4b5c-abd4-6679c9e120e3",
+    "04fed881-1f7b-42e9-bae7-4977a8cd02cc",
+    "4a31b6b7-3c62-4f7d-bd80-5d77f0a5065d",
+    "3b41a23d-7b3c-45b0-bed4-743373d6a630",
+    "028dcf09-7006-499f-8cc7-09bb20a7adea",
+    "f85ce072-5597-48bc-bdd6-3371e05b1258",
+    "34655edb-5b0e-483e-aaf6-f3186d99ed10",
+    "eeca6c54-42a1-4fba-bf1d-9ecfbd243f59"
+  ],
+  "futureRewards": [
+    {"score": 35, "stackableItems": {"f1c5c03c-5297-48fb-a9d2-5f32bffb467c": 1}}
+  ],
+  "algorithmVersion": 1,
+  "totalPregenFloors": 150
+}

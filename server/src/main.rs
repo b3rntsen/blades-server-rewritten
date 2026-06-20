@@ -288,6 +288,10 @@ async fn main() -> Result<()> {
                     .service(dungeon::get_dungeons)
                     .service(dungeon::enter_quest_dungeon)
                     .service(dungeon_update::dungeon_update)
+                    // Abyss: specific sub-paths (start/update/end) BEFORE the bare /current.
+                    .service(abyss::start_abyss)
+                    .service(abyss::update_abyss)
+                    .service(abyss::end_abyss)
                     .service(abyss::get_abyss)
                     .service(town::get_town)
                     // Crafting: finish (specific path) BEFORE create (bare /crafts).
