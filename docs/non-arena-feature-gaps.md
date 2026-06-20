@@ -48,11 +48,25 @@ representatively or left lenient — never invented silently.
 | **Guild** | create/view/search/leaderboard/join/leave/kick/chat | ✅ Done | New tables; full social CRUD + typed message board. Exchange ("gift") deferred — see below. |
 | **Salvage** | `POST /salvages` | ✅ Done* | Remove gear → grant materials. *Representative yield (retail randomises). 122 recipes. |
 | **Repair** | `POST /repairs` | ✅ Pre-existing | Restores durability; **no gold charge** (cost not captured). |
-| **Town vendor shops** | `POST /shops/{id}`(+`/sell`,`/purchase`,`/buybacks/{id}`,`/auth/refreshloot`) | ⛔ Deferred | See plan below. |
-| **Crafting / temper / enchant** | `GET/POST /crafts`, `/crafts/{id}/finish` | ⛔ Deferred | See plan below. |
-| **Guild exchange ("gift")** | `GET/POST /guilds/current/exchanges`(+`/donate`,`/redeem`) | ⛔ Deferred | See plan below. |
-| **Abyss** | `POST /abysses/current`(+`/start`,`/update`,`/end`) | ⛔ Deferred | See plan below. |
-| **Town building** | `POST /towns/current/buildings`(+`/{id}/{upgrade,complete,destroy,styles/{id}}`,`/props`,`/name`) | ⛔ Deferred | See plan below. |
+| **Town vendor shops** | `POST /shops/{id}`(+`/sell`,`/purchase`,`/auth/refreshloot`) | ✅ Done+deployed | open/refresh serve a capture-derived catalog (30 templates, shopId→template, default fallback; FUTURE expiration so the client doesn't refetch-loop). buy charges gold + grants (5 known bundles); sell = nominal gold. **Fixed the smith empty-list + timeout.** |
+| **Crafting / temper / enchant** | `GET/POST /crafts`, `/crafts/{id}/finish` | ✅ Done* | create mints a timed craft job (`server_state.craft_jobs`, 5 recipes); finish grants the output. *Input/gold cost lenient (not captured); temper/enchant of an existing item is a `// TODO` (captures only show base crafts). |
+| **Guild exchange ("gift")** | `GET/POST /guilds/current/exchanges`(+`/donate`,`/redeem`) | ✅ Done | `guild_exchanges` table; create request, donate (debits donor stackable), redeem (credits requester the donated sum). |
+| **Abyss** | `POST /abysses/current`(+`/start`,`/update`,`/end`) | ⛔ Asset-blocked | Endless-dungeon generation must match the client (seed+defs); needs the **Unity asset export** (dungeon/floor defs) — see "Resources" note. |
+| **Event-quest *playing*** | (existing accept→dungeon→complete flow) | ⛔ Asset-blocked | `/gameevents` advertises the library; *playing* a quest needs `parsed.json` quest/dungeon defs so `generate_quest_data` matches the client — needs the **Unity asset export**. |
+| **Town building** | `POST /towns/current/buildings`(+`/{id}/{upgrade,complete,destroy,styles/{id}}`,`/props`,`/name`) | ⛔ Documented | Capture-derivable but mutates the **opaque nested town JSONB** (`districts[].segments[].buildings[]`, client-validated) → high risk; outside the original stated scope. Shapes below. |
+
+## Resources & the asset-export blocker
+
+Resources used: captured traffic (`api_captures`), the **IL2CPP code dump**
+(`reference/il2cpp/dump.cs` — structures, enums, IDs), and the **raw APK**
+(`reference/apk/blades.apk`). **Not located on disk:** the decompiled Unity **asset
+export** (`LevelData.asset`, `InteractableItemData.asset`, `common.unity`) that
+`script/data_parser/main.py` consumes to build a real `parsed.json`. **Abyss
+generation + event-quest *playing* are blocked on it** — their dungeon generation
+must reproduce the client's (seed + defs), and captured *instances* are lossy for
+re-deriving the spawn *definitions*. To unblock: point `data_parser` at the
+decompiled Unity assets (or an AssetRipper export of the APK) → `parsed.json` → both
+features become implementable.
 
 ## Deferred features — captured shapes + implementation plan
 
