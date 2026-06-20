@@ -432,6 +432,11 @@ async fn matchmaker_loop(
                 r = rx.recv() => r,
                 _ = tokio::time::sleep(Duration::from_secs(config.solo_fallback_secs)) => {
                     let lone = waiting.take().expect("waiting is some");
+                    // Don't spin up a bot match for a client that's already gone.
+                    if lone.rms.is_closed() {
+                        info!("matchmaker: waiting ticket {} abandoned (RMS closed) — dropped, no fallback", lone.ticket_id);
+                        continue;
+                    }
                     info!("matchmaker: no opponent for ticket {} — solo fallback (vs bot)", lone.ticket_id);
                     resolve(&registry, &config, &db, &[lone], 1).await;
                     continue;
@@ -454,8 +459,24 @@ async fn matchmaker_loop(
             .send(MatchmakingMessage::PotentialMatch { ticket_id: req.ticket_id });
 
         match waiting.take() {
-            // A second player arrived → pair the two into ONE shared match (no bot).
-            Some(first) => resolve(&registry, &config, &db, &[first, req], 0).await,
+            // A LIVE second player is already waiting → pair the two into ONE shared
+            // match (no bot).
+            Some(first) if !first.rms.is_closed() => {
+                resolve(&registry, &config, &db, &[first, req], 0).await
+            }
+            // The waiting ticket's client is gone — its RMS feed closed (it cancelled,
+            // timed out and retried, or disconnected). Pairing against it mints a ghost
+            // match the opponent never connects to ("opponent never connected; 1/2"),
+            // which is exactly the emu-vs-pixel failure: each device kept pairing against
+            // the other's stale cancelled ticket. DISCARD it and let the fresh, live
+            // ticket wait for a live opponent instead.
+            Some(stale) => {
+                info!(
+                    "matchmaker: discarded stale waiting ticket {} (RMS closed); {} now waiting",
+                    stale.ticket_id, req.ticket_id
+                );
+                waiting = Some(req);
+            }
             // First player → hold it and wait for an opponent (or the timer above).
             None => waiting = Some(req),
         }
@@ -830,6 +851,45 @@ mod tests {
         assert!(no_succeeded(&got_b), "no Succeeded for an empty-UUID paired match (appearance guard)");
         // The capacity permit was returned (no match allocated), so all 4 are free.
         assert_eq!(registry.available_permits(), 4, "the refused pair holds no capacity permit");
+    }
+
+    /// A waiting ticket whose client has gone (its RMS feed closed — cancelled, timed
+    /// out + retried, or disconnected) must NOT be bot-matched on the solo-fallback
+    /// timer (nor paired against). Before the liveness fix it lingered in `waiting`, so
+    /// the next ticket paired with the dead one → a ghost match the opponent never
+    /// connected to (the emu-vs-pixel "opponent never connected; 1/2" failure).
+    #[tokio::test]
+    async fn stale_waiting_ticket_is_dropped_not_bot_matched() {
+        let registry = MatchRegistry::new(4);
+        let config = ArenaConfig {
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 4,
+            max_queued_players: 64,
+            solo_fallback_secs: 1,
+            debug_ghost_user_id: None,
+        };
+        let (tx, rx) = unbounded_channel::<TicketRequest>();
+        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+
+        // The client goes away immediately: drop the RMS receiver so is_closed() == true.
+        let (rms_a, recv_a) = unbounded_channel();
+        drop(recv_a);
+        tx.send(TicketRequest {
+            ticket_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            rms: rms_a,
+        })
+        .unwrap();
+
+        // Past the solo-fallback timer: the dead ticket is dropped, not bot-matched, so
+        // no capacity permit is consumed.
+        tokio::time::sleep(Duration::from_millis(1400)).await;
+        assert_eq!(
+            registry.available_permits(),
+            4,
+            "a dead waiting ticket must not consume a match permit (dropped, not bot-matched)"
+        );
     }
 
     /// The DEBUG-ghost self-match guard: a ghost that resolves to the SAME
