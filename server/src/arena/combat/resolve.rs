@@ -37,8 +37,59 @@ const CARRIER_USERMESSAGE: u8 = 0x36;
 /// Minimum spacing between landed swings per attacker (stand-in for swipe-commit).
 const SWING_COOLDOWN: Duration = Duration::from_millis(400);
 
-/// Per-ability cooldown (representative; per-ability cooldowns come from game-data).
+/// Fallback ability cooldown for abilities without authoritative game-data.
 const ABILITY_COOLDOWN: Duration = Duration::from_millis(3000);
+
+/// Authoritative per-ability cooldown, keyed by the ability *definition* UUID
+/// carried in the cast. Values are `_cooldown` (seconds → ms) read from the APK's
+/// `ActiveAbility` ScriptableObjects (rank-independent; extracted via UnityPy —
+/// see docs/arena-cooldowns-authoritative.md). Unknown UUIDs fall back to
+/// `ABILITY_COOLDOWN`. NOTE: Lightning Bolt's 0.5s is the channeled re-fire
+/// interval (not a between-cast gate); `_initialCooldown` (round-start delay) and
+/// the 10 never-captured abilities are not yet applied.
+fn ability_cooldown(ability_uuid: &str) -> Duration {
+    let ms: u64 = match ability_uuid {
+        "d07a8d30-9a1c-49b0-866d-97a8aa1534cf" => 3540, // Fireball
+        "7fc15804-1637-40a9-8dcc-3ea1eb0f778d" => 500,  // Lightning Bolt (channeled re-fire)
+        "cfee0b02-6d91-4d34-869c-a7e54329060d" => 5230, // Ice Spike
+        "4be1d681-c35d-4540-b255-c2910ac80664" => 8090, // Frostbite
+        "e07f9b1a-64db-44ef-ba25-0e4378789ddc" => 8090, // Consuming Inferno
+        "dfb8d247-1333-42eb-9730-a1c16d10584f" => 6580, // Delayed Lightning Bolt
+        "66bdc017-30c5-4b5e-9753-215c45056f6a" => 6580, // Poison Cloud
+        "9fdc4d52-ce90-44f8-9b5d-21f31e27dbda" => 8090, // Paralyze
+        "4e760726-b012-4b25-bc92-0cd6312d6601" => 6000, // Absorb
+        "c4b48518-e847-4f3d-81a2-2856bdb4ed98" => 7500, // Blizzard Armor
+        "91078132-ef5c-492a-97f2-ac69be5140a8" => 8000, // Resist Elements
+        "65ede044-d68a-4b2b-8f0c-02075ad133cc" => 7500, // Ward
+        "eb0cb7e6-47cf-48e7-8cc9-dbf80fc77f13" => 5830, // Quick Strikes
+        "cdab44fb-6ff6-4701-a4ec-d19cce79e49f" => 5830, // Piercing Strikes
+        "ce6b63e9-9f18-49c4-aee0-51f7985f9892" => 8090, // Power Attack
+        "69ffa3fd-deb7-4824-bab6-ac6450f19676" => 6700, // Harrying Bash
+        "9b915ec3-c63b-4b62-b417-4c5436d45fc1" => 6700, // Staggering Bash
+        "f9a2373b-a84f-4716-90ce-165baa2dd6ed" => 6700, // Shield Bash
+        "ba61ce46-163f-4a61-8ede-f5b7ae365e40" => 6700, // Reflecting Bash
+        "1e7f0dd6-6015-4f65-b811-3246e407e330" => 8650, // Dodging Strike
+        "be56c560-a4ba-47ad-8513-f24c342ca594" => 8650, // Adrenaline Dodge
+        "e08f95de-85bb-4829-ba7e-cf45bc6fb422" => 8750, // Recovery Strikes
+        "cc768bae-a063-4885-8207-f39c6542fb36" => 8090, // Guardbreaker
+        _ => return ABILITY_COOLDOWN,
+    };
+    Duration::from_millis(ms)
+}
+
+#[cfg(test)]
+mod cooldown_data_tests {
+    use super::*;
+
+    #[test]
+    fn authoritative_per_ability_cooldowns() {
+        assert_eq!(ability_cooldown("d07a8d30-9a1c-49b0-866d-97a8aa1534cf"), Duration::from_millis(3540)); // Fireball
+        assert_eq!(ability_cooldown("7fc15804-1637-40a9-8dcc-3ea1eb0f778d"), Duration::from_millis(500)); // Lightning Bolt (channel)
+        assert_eq!(ability_cooldown("ce6b63e9-9f18-49c4-aee0-51f7985f9892"), Duration::from_millis(8090)); // Power Attack
+        assert_eq!(ability_cooldown("65ede044-d68a-4b2b-8f0c-02075ad133cc"), Duration::from_millis(7500)); // Ward
+        assert_eq!(ability_cooldown("not-a-real-uuid"), ABILITY_COOLDOWN); // fallback
+    }
+}
 
 /// How long a `PlayerBlockingStateChange` (41) holds the guard up before it
 /// auto-expires (a fresh op41 refreshes it). The dump's `PvpDefaultSettings`
@@ -199,7 +250,7 @@ fn resolve_ability_cast(
     combat
         .fighters[sender]
         .cooldowns
-        .insert(ea.ability_uuid.clone(), now + ABILITY_COOLDOWN);
+        .insert(ea.ability_uuid.clone(), now + ability_cooldown(&ea.ability_uuid));
 
     let mut out = Vec::new();
     // PerformExecuteAbility (38) echo to both — the cast confirmation/visual.
