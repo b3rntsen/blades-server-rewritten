@@ -174,17 +174,13 @@ pub async fn create_craft(
     let req = body.into_inner();
     let globals = app_state.get_ref().clone();
 
-    // A plain craft (no itemId) needs a `recipes.json` recipe up front; a temper/enchant
-    // (itemId present) modifies an existing item and uses `item_mod_recipes.json`.
+    // A plain craft (no itemId) looks up `recipes.json`; a temper/enchant (itemId
+    // present) modifies an existing item and uses `item_mod_recipes.json`. The captured
+    // recipe set is PARTIAL, so an unknown plain-craft recipe must NOT 404 — that crashed
+    // the client mid-craft (user repro: "craft a potion → error + game restarted").
+    // Unknown recipe → lenient empty job (handled in the transaction below).
     let plain_recipe = if req.item_id.is_none() {
-        Some(
-            globals
-                .static_data
-                .recipes
-                .get(&req.recipe_id)
-                .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 4))?
-                .clone(),
-        )
+        globals.static_data.recipes.get(&req.recipe_id).cloned()
     } else {
         None
     };
@@ -217,10 +213,15 @@ pub async fn create_craft(
                     .unwrap_or((recipe_id, 0));
                 (results, ctid, dur)
             } else {
-                // ── plain craft: mint a new item from the recipe ──
-                let recipe = plain_recipe.expect("plain recipe resolved above");
-                let results = apply_tempering_to_results(&recipe.results, tempering_level);
-                (results, recipe.crafting_type_id, recipe.duration_ms)
+                // ── plain craft: mint from the recipe; unknown recipe → lenient empty
+                //    job (never 404 — a 404 here crashed the client mid-craft) ──
+                match &plain_recipe {
+                    Some(recipe) => {
+                        let results = apply_tempering_to_results(&recipe.results, tempering_level);
+                        (results, recipe.crafting_type_id, recipe.duration_ms)
+                    }
+                    None => (serde_json::json!({}), recipe_id, 0),
+                }
             };
 
             let completed_at_ms = now_ms() + duration_ms;

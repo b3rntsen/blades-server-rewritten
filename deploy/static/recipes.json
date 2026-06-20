@@ -1,7 +1,151 @@
 {
+  "0341cd23-5665-4c0c-8048-bb7401ab5d30": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999894,
+    "results": {
+      "items": [
+        {
+          "durability": 675.0,
+          "id": "b6466890-7043-442f-9bf8-7d6a8916b255",
+          "itemTemplateId": "4edb65be-0ebc-4698-bb97-2a012656c238",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 10
+        }
+      ]
+    }
+  },
+  "05f457a4-aeb3-4b35-adca-247eea08972b": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999861,
+    "results": {
+      "items": [
+        {
+          "arcaneTier": 2,
+          "grade": 2,
+          "id": "0d9b84ce-e297-42aa-9130-71d319a4efe8",
+          "itemTemplateId": "240eb001-fe3e-4899-b0cc-dd87cb8a72b6",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "2b8fd511-80da-4128-81b1-bd7ab6023223",
+                "tier": 10
+              },
+              {
+                "id": "59c3b082-e57a-4243-ace5-9b55475e9b17",
+                "tier": 10
+              },
+              {
+                "id": "98757a01-33b8-40ea-bb45-6acd89811ae3",
+                "tier": 10
+              }
+            ],
+            "GRADING": [
+              {
+                "id": "f3adab07-7e2c-43a9-855e-66c1f4511a4c",
+                "tier": 1
+              },
+              {
+                "id": "d5676014-c4f7-4da6-a6e7-3a5e3d495da9",
+                "tier": 1
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "15c7765a-01b7-4f12-9857-d39cd8c9284a": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999889,
+    "results": {
+      "items": [
+        {
+          "durability": 325.0,
+          "id": "2265d6a6-e8ff-4062-b858-ceb3ff5927f0",
+          "itemTemplateId": "63130cda-c55b-4dac-b0f7-580c4da34cfc",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "848e02b4-32ae-4e1b-809c-83bca039542a",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 0
+        }
+      ]
+    }
+  },
+  "1b2c8deb-df06-4b0f-b5c7-4752c1aa4a2a": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999873,
+    "results": {
+      "items": [
+        {
+          "durability": 595.0,
+          "id": "7b65fdd0-222b-4cac-990d-c3850707e5f0",
+          "itemTemplateId": "edb7414d-1672-4f34-aa23-a5f5e5b9dd94",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "94aa3774-cd7e-400c-9d17-a4652fb88a93",
+                "tier": 10
+              },
+              {
+                "id": "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+                "tier": 10
+              },
+              {
+                "id": "1d85511d-66bf-46ad-87b5-bd7a115afafd",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 9
+        }
+      ]
+    }
+  },
+  "29f0e1ed-eb5a-4235-9bd4-5d0b161a54f1": {
+    "craftingTypeId": "06c8087b-ede4-4ce7-8103-6c2067d18498",
+    "durationMs": 17399877,
+    "results": {
+      "items": [
+        {
+          "durability": 675.0,
+          "id": "a65b1ff8-1762-474e-a411-e7d073f0e722",
+          "itemTemplateId": "919009b4-e38c-408b-a972-b873831204bf",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "464bedb7-a631-43b6-a2df-f65f089d39da",
+                "tier": 10
+              },
+              {
+                "id": "10f57d40-98e9-4181-972b-d654f81afc27",
+                "tier": 10
+              },
+              {
+                "id": "d8638848-d706-4ddd-b096-2a56e7696436",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 10
+        }
+      ]
+    }
+  },
   "32c68b36-4a68-4c35-b39b-dcd9def5e650": {
     "craftingTypeId": "a47707e6-59e9-43b0-a29f-6d703acd8171",
-    "durationMs": 25199872,
+    "durationMs": 17999872,
     "results": {
       "items": [
         {
@@ -13,9 +157,69 @@
       ]
     }
   },
+  "441ac895-b30f-46c0-9346-bd77bd267f6d": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999887,
+    "results": {
+      "items": [
+        {
+          "durability": 162.5,
+          "id": "697e584c-5616-40ae-955b-4f013c50f8a9",
+          "itemTemplateId": "03b1e366-3d2a-48b8-99f2-f06be005e207",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
+                "tier": 10
+              },
+              {
+                "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+                "tier": 10
+              },
+              {
+                "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 0
+        }
+      ]
+    }
+  },
+  "4f5fbabd-27cf-46db-9f0c-6117c30c9639": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999870,
+    "results": {
+      "items": [
+        {
+          "durability": 446.25,
+          "id": "79eb72e3-a1f8-4b32-93d6-6f11c1c761b7",
+          "itemTemplateId": "3567538a-18ea-4101-9380-8997b36cb65e",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "08ea75d0-5cf1-44a9-9816-d3c6740c4191",
+                "tier": 10
+              },
+              {
+                "id": "fea58213-6a41-4500-9f09-cd9c745bcc1e",
+                "tier": 10
+              },
+              {
+                "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 9
+        }
+      ]
+    }
+  },
   "5004cd2f-12bf-49d8-97ca-544a1662c895": {
     "craftingTypeId": "a47707e6-59e9-43b0-a29f-6d703acd8171",
-    "durationMs": 7219885,
+    "durationMs": 19885,
     "results": {
       "items": [
         {
@@ -27,18 +231,513 @@
       ]
     }
   },
+  "5d89180f-b4fc-4e57-b440-c9d018a4f55f": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999882,
+    "results": {
+      "items": [
+        {
+          "durability": 325.0,
+          "id": "167f04ea-1081-411b-8e32-de42425df613",
+          "itemTemplateId": "167ce4ec-a043-48ae-bd9c-037ad90f15b4",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+                "tier": 10
+              },
+              {
+                "id": "10f57d40-98e9-4181-972b-d654f81afc27",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 0
+        }
+      ]
+    }
+  },
+  "60d63333-ada4-4256-90e2-013ee42c5bc6": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 3599887,
+    "results": {
+      "items": [
+        {
+          "durability": 131.25,
+          "id": "7c963dc1-36f2-460e-9303-125270c3a281",
+          "itemTemplateId": "d4e55349-36b7-4adf-b16f-19b35368a7cd",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
+                "tier": 6
+              }
+            ]
+          },
+          "temperingLevel": 0
+        }
+      ]
+    }
+  },
+  "63dba2e6-def3-49eb-b9f0-11e6453a0103": {
+    "craftingTypeId": "5c48b46e-e539-4a70-81dd-0bad8b8a0e0e",
+    "durationMs": 9889,
+    "results": {
+      "stackableItems": {
+        "ecb89216-a1f5-4b7c-ae3c-af45d8fbd44c": 1
+      }
+    }
+  },
   "6d164b3d-6532-4c4b-adcc-b4b8bc75f2dd": {
     "craftingTypeId": "5c48b46e-e539-4a70-81dd-0bad8b8a0e0e",
-    "durationMs": 14399877,
+    "durationMs": 7199877,
     "results": {
       "stackableItems": {
         "d25c8faa-5943-4ab1-99d2-aab025ecb581": 1
       }
     }
   },
+  "7a9179ee-2fef-4181-9ef9-6870c6c3d995": {
+    "craftingTypeId": "c9d3b3aa-6f27-4869-9523-c10861f3e292",
+    "durationMs": 35999875,
+    "results": {
+      "stackableItems": {
+        "8da5101c-2e7c-446b-b3bd-d1b9aa5c44f6": 5
+      }
+    }
+  },
+  "8ae47a45-b935-4f27-a082-3b0b2dd9f6d2": {
+    "craftingTypeId": "06c8087b-ede4-4ce7-8103-6c2067d18498",
+    "durationMs": 20879870,
+    "results": {
+      "items": [
+        {
+          "durability": 675.0,
+          "id": "37f631d4-a6ae-43f8-8653-8beccd61e68e",
+          "itemTemplateId": "d124bb0d-4653-40fc-be7c-076811540157",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+                "tier": 10
+              },
+              {
+                "id": "e8e0bb26-2751-4cac-bd20-effdec8dea4d",
+                "tier": 10
+              },
+              {
+                "id": "d12b80eb-1c2e-42a3-b939-b92e308f1b22",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 10
+        }
+      ]
+    }
+  },
+  "94c7abd4-d6a6-4b04-9b79-a38c95e53753": {
+    "craftingTypeId": "a47707e6-59e9-43b0-a29f-6d703acd8171",
+    "durationMs": 10799877,
+    "results": {
+      "items": [
+        {
+          "grade": 5,
+          "id": "8da851cf-6512-470c-9780-549df84e761a",
+          "itemTemplateId": "40e8b7f7-17fd-49bf-8305-d0c27a758b2e",
+          "properties": {
+            "GRADING": [
+              {
+                "id": "9f68a947-4b4c-434f-95ee-9aad4990e813",
+                "tier": 2
+              },
+              {
+                "id": "4792e8b7-4adb-4ee0-9f74-11d4246eb6b0",
+                "tier": 2
+              },
+              {
+                "id": "0f7b4dcc-da92-4133-b716-b06a1afd6aaa",
+                "tier": 1
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "96bf0e89-b05d-462f-a07b-306348feec15": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999861,
+    "results": {
+      "items": [
+        {
+          "arcaneTier": 2,
+          "grade": 4,
+          "id": "08049e6f-3ed5-4d76-829a-438daea0c30c",
+          "itemTemplateId": "54a7fc91-93e7-4908-a29a-0667d0b07179",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "ef292fb2-27ad-4b47-9eb8-2f0ffbfd66c4",
+                "tier": 10
+              },
+              {
+                "id": "0717438e-41e0-4414-913c-a089a60666c0",
+                "tier": 10
+              },
+              {
+                "id": "59c3b082-e57a-4243-ace5-9b55475e9b17",
+                "tier": 10
+              }
+            ],
+            "GRADING": [
+              {
+                "id": "8687fa52-155a-4777-8e94-e3a4332ec093",
+                "tier": 2
+              },
+              {
+                "id": "360e3a3b-307f-401a-b357-e674d01dc834",
+                "tier": 1
+              },
+              {
+                "id": "7ed4d49b-5053-4a5d-bbac-b32a96871a85",
+                "tier": 1
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "99fda883-1a62-4cef-beae-63045857a2a9": {
+    "craftingTypeId": "c9d3b3aa-6f27-4869-9523-c10861f3e292",
+    "durationMs": 11999867,
+    "results": {
+      "stackableItems": {
+        "a60bc580-cd03-46b0-b7b4-d479b52a3e0b": 5
+      }
+    }
+  },
+  "9ec63d07-f53c-460e-86ad-4c28d94ea46c": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999865,
+    "results": {
+      "items": [
+        {
+          "durability": 325.0,
+          "id": "bc6c467d-bd11-4c37-9d8b-5d3a9366d72b",
+          "itemTemplateId": "edb7414d-1672-4f34-aa23-a5f5e5b9dd94",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "652d5ac9-3076-405b-a163-dde1a950fb26",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 0
+        }
+      ]
+    }
+  },
+  "a0ea1e5b-bc3e-4781-85b0-adc911155afa": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999866,
+    "results": {
+      "items": [
+        {
+          "arcaneTier": 2,
+          "grade": 4,
+          "id": "46a2d345-83fa-45e5-8f68-0ff61f68fae3",
+          "itemTemplateId": "54a7fc91-93e7-4908-a29a-0667d0b07179",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "d1e286a7-7c90-4e1b-aaaa-fa04b607e698",
+                "tier": 10
+              },
+              {
+                "id": "d8638848-d706-4ddd-b096-2a56e7696436",
+                "tier": 10
+              },
+              {
+                "id": "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+                "tier": 10
+              }
+            ],
+            "GRADING": [
+              {
+                "id": "7ed4d49b-5053-4a5d-bbac-b32a96871a85",
+                "tier": 2
+              },
+              {
+                "id": "2fc55741-1c89-46cd-85e2-a8a27f6cea38",
+                "tier": 1
+              },
+              {
+                "id": "5af1b056-7d44-4e02-a653-bc538569b4e6",
+                "tier": 1
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "a4dfdf4f-cf18-4be5-b706-91aadb0c1bea": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999878,
+    "results": {
+      "items": [
+        {
+          "durability": 325.0,
+          "id": "f88037a0-3ad8-422f-8420-0727ac5ddfec",
+          "itemTemplateId": "616b64ef-4184-4efb-af55-1a3f122431dc",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "38ca6ee2-1765-4122-a5e5-d036a7d31fe3",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 0
+        }
+      ]
+    }
+  },
+  "aff19f1a-48d9-47c2-b819-1dd3976b4132": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999885,
+    "results": {
+      "items": [
+        {
+          "arcaneTier": 2,
+          "grade": 5,
+          "id": "8c296eb0-9bbe-4347-86c3-95cbcebe4fe3",
+          "itemTemplateId": "240eb001-fe3e-4899-b0cc-dd87cb8a72b6",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "626121b7-708d-455f-b32f-38e5b68bb80c",
+                "tier": 10
+              },
+              {
+                "id": "98757a01-33b8-40ea-bb45-6acd89811ae3",
+                "tier": 10
+              },
+              {
+                "id": "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+                "tier": 10
+              }
+            ],
+            "GRADING": [
+              {
+                "id": "40215e5f-767a-45b8-bf92-9012f66217bb",
+                "tier": 2
+              },
+              {
+                "id": "7f66e203-4e89-47fc-8287-7e27590ad673",
+                "tier": 2
+              },
+              {
+                "id": "266ac7c0-b53f-4345-8646-8cc5939944f6",
+                "tier": 1
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "b01ce11d-70a3-485e-874d-25d66d0f28f0": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999875,
+    "results": {
+      "items": [
+        {
+          "durability": 595.0,
+          "id": "ace84bfd-2a2a-48b8-8c43-81321cf01d5f",
+          "itemTemplateId": "b0af182d-d15f-4fed-8be5-b09a3ee02eb2",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "da0ebf22-6d7b-4504-bfc1-b78b674c7c5c",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 9
+        }
+      ]
+    }
+  },
+  "b218b780-4d81-4046-b5ab-c07cf8bf5a37": {
+    "craftingTypeId": "5c48b46e-e539-4a70-81dd-0bad8b8a0e0e",
+    "durationMs": 14399880,
+    "results": {
+      "stackableItems": {
+        "6245c808-6b5b-4db0-ac35-1d0f91961c85": 1
+      }
+    }
+  },
+  "b546d4e9-ceb0-4c3f-80e8-4a5fdfb0e179": {
+    "craftingTypeId": "06c8087b-ede4-4ce7-8103-6c2067d18498",
+    "durationMs": 34799874,
+    "results": {
+      "items": [
+        {
+          "arcaneTier": 2,
+          "durability": 675.0,
+          "id": "92662085-106b-41a9-9993-887f77ceb61f",
+          "itemTemplateId": "4edb65be-0ebc-4698-bb97-2a012656c238",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+                "tier": 10
+              },
+              {
+                "id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+                "tier": 10
+              },
+              {
+                "id": "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 10
+        }
+      ]
+    }
+  },
+  "b6e4dfaf-0d5b-470b-a26b-dd423222f435": {
+    "craftingTypeId": "06c8087b-ede4-4ce7-8103-6c2067d18498",
+    "durationMs": 17399879,
+    "results": {
+      "items": [
+        {
+          "durability": 675.0,
+          "id": "e9c57825-1ee7-4189-ba9a-f6f3b1424bd1",
+          "itemTemplateId": "a9f2aefa-2e20-4293-afd1-a5779cfce68d",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "e4d9f320-6a0d-4dd3-947a-9ab887e2a866",
+                "tier": 10
+              },
+              {
+                "id": "334f4ed9-5402-4a5a-981c-44772c799b88",
+                "tier": 10
+              },
+              {
+                "id": "e8e0bb26-2751-4cac-bd20-effdec8dea4d",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 10
+        }
+      ]
+    }
+  },
+  "bfea6067-1e43-405a-8e14-9f39c36305c2": {
+    "craftingTypeId": "5c48b46e-e539-4a70-81dd-0bad8b8a0e0e",
+    "durationMs": 1199890,
+    "results": {
+      "stackableItems": {
+        "1a466dc4-5c0a-4076-a0e3-cb0f26e2889d": 1
+      }
+    }
+  },
+  "ca73eac6-7ab6-4301-b9f4-f172c89ad9ac": {
+    "craftingTypeId": "a47707e6-59e9-43b0-a29f-6d703acd8171",
+    "durationMs": 4499866,
+    "results": {
+      "items": [
+        {
+          "durability": 131.25,
+          "id": "7c963dc1-36f2-460e-9303-125270c3a281",
+          "itemTemplateId": "d4e55349-36b7-4adf-b16f-19b35368a7cd",
+          "temperingLevel": 0
+        }
+      ]
+    }
+  },
+  "d13a1b9c-51ec-4693-88c2-1e1b0696c7e5": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999864,
+    "results": {
+      "items": [
+        {
+          "durability": 162.5,
+          "id": "765b2a05-9012-4bd9-b4c4-a548dbaa2ac5",
+          "itemTemplateId": "05ac826b-fb7f-4c5d-b17c-648ca1d6ee1d",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 0
+        }
+      ]
+    }
+  },
+  "d4a0b763-c0cd-4345-926d-aa305c55adb0": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999882,
+    "results": {
+      "items": [
+        {
+          "durability": 595.0,
+          "id": "5700f82d-4f29-4200-9a3d-c13375e6a998",
+          "itemTemplateId": "dad106ff-62e9-4d23-b7a7-e897b554bd5d",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 9
+        }
+      ]
+    }
+  },
+  "dd693007-752d-4022-87d1-892dc7ee96be": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999889,
+    "results": {
+      "items": [
+        {
+          "durability": 325.0,
+          "id": "83c82876-daa5-4f03-a5ca-32f8f5286e06",
+          "itemTemplateId": "63130cda-c55b-4dac-b0f7-580c4da34cfc",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "23746263-41c1-4023-8859-41e698dcf49d",
+                "tier": 10
+              },
+              {
+                "id": "59c3b082-e57a-4243-ace5-9b55475e9b17",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 0
+        }
+      ]
+    }
+  },
   "e0d48d1a-8d8e-4c76-bfeb-970d80f9b838": {
     "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
-    "durationMs": 16199870,
+    "durationMs": 8999870,
     "results": {
       "items": [
         {
@@ -69,11 +768,33 @@
   },
   "e8034051-4d5d-4f2d-8213-ee10a9787c12": {
     "craftingTypeId": "c9d3b3aa-6f27-4869-9523-c10861f3e292",
-    "durationMs": 8399874,
+    "durationMs": 1199874,
     "results": {
       "stackableItems": {
         "0fe77237-aa0b-4469-9cca-053c118797e2": 1
       }
+    }
+  },
+  "f45da46c-3118-4181-83c3-b4df2741e471": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999882,
+    "results": {
+      "items": [
+        {
+          "durability": 325.0,
+          "id": "d46b4d4f-0cc7-4341-8da4-71e731840233",
+          "itemTemplateId": "616b64ef-4184-4efb-af55-1a3f122431dc",
+          "properties": {
+            "ENCHANTING": [
+              {
+                "id": "338ec948-d1b7-4390-8a88-ab6ac11841aa",
+                "tier": 10
+              }
+            ]
+          },
+          "temperingLevel": 0
+        }
+      ]
     }
   }
 }

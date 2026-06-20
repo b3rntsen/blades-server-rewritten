@@ -84,15 +84,20 @@ fn build_open(app_state: &ServerGlobal, shop_id: Uuid) -> OpenShopResponse {
         .cloned()
         .unwrap_or_default();
     let start = now_ms();
+    // The client binds the shop to its catalog by id: `shop.catalogId` MUST equal
+    // `catalog.id` (verified in captures — both are the same value per open). Using two
+    // independent UUIDs here left the client unable to resolve the catalog → every
+    // vendor (smith/enchanter/alchemist) rendered an EMPTY shop/craft/temper/repair list.
+    let catalog_id = Uuid::new_v4();
     OpenShopResponse {
         shop: ShopStateWire {
             id: shop_id,
-            catalog_id: Uuid::new_v4(),
+            catalog_id,
             sales: vec![],
             revenue: vec![],
         },
         catalog: CatalogWire {
-            id: Uuid::new_v4(),
+            id: catalog_id,
             template_id,
             bundles: cat.bundles,
             wallet: cat.wallet,
