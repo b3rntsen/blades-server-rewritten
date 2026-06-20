@@ -260,6 +260,78 @@ fn is_self_match(human_char_uuid: &str, ghost_char_uuid: &str) -> bool {
     !ghost_char_uuid.is_empty() && ghost_char_uuid == human_char_uuid
 }
 
+/// Derive one `playerSessionId` per player for a match, sharing the `gameSessionId`.
+///
+/// playerSessionId shape (retail GameLift, capture-confirmed s506
+/// `psess-0a7c4b72-0a1c-b2c9-6599-05c28c5ed98e`): the first three UUID groups are
+/// DERIVED FROM the shared `gameSessionId`, so paired players' psess share a common
+/// `psess-<gsid g1>-<gsid g2>-<gsid g3>-…` prefix, and only the last two groups (the
+/// per-player suffix) differ. We previously minted a fully-independent `psess-<new
+/// uuid>` per player, so paired players shared no prefix — a divergence from retail
+/// that any server-side gsid↔psess correlation (e.g. session lookup) would miss.
+/// [docs/arena-journey-log.md §7]
+fn derive_player_session_ids(game_session_id: Uuid, count: usize) -> Vec<String> {
+    let gsid = game_session_id.to_string(); // canonical 8-4-4-4-12 lowercase hyphenated
+    let gsid_prefix: String = gsid.splitn(4, '-').take(3).collect::<Vec<_>>().join("-");
+    (0..count)
+        .map(|_| {
+            // Per-player suffix = the last two groups of a fresh UUID (4 + 12 hex).
+            let suffix: String = {
+                let u = Uuid::new_v4().to_string();
+                u.splitn(4, '-').skip(3).collect::<Vec<_>>().join("-")
+            };
+            format!("psess-{gsid_prefix}-{suffix}")
+        })
+        .collect()
+}
+
+/// Validate a REAL-PAIRED (human-vs-human) match's per-fighter binding UUIDs before
+/// allocation — the appearance-swap guard (`docs/arena-appearance-bug-spec.md`).
+///
+/// The client binds each opponent's APPEARANCE entirely by the avatar net-object's
+/// `propId4` character-UUID (`PvpClientManager.GetPvpPlayer(<avatar.propId4>)` →
+/// that player's op54 customization), but binds NAMES off the Player object directly
+/// — so a broken avatar→player UUID binding corrupts appearance while leaving names
+/// intact (exactly the reported symptom). The binding collapses (both avatars resolve
+/// to the LOCAL `PvpPlayer`) whenever the two fighters carry the SAME — or an EMPTY —
+/// `character_uuid`:
+///   - **two equal non-empty UUIDs** (both peers resolved to the same `characters`
+///     row) → `GetPvpPlayer` returns the first-registered (local) player for BOTH
+///     avatars → each client renders the opponent with its OWN appearance;
+///   - **an empty UUID** (a `starter()` fallback on a slow/missing `load_loadout`)
+///     → `spawn_avatar` emits `propId4 = ""`, which can't bind a distinct opponent
+///     AND drops the opponent profile (`broadcast_profiles` skips empty profiles).
+///
+/// Mirrors the existing ghost-path [`is_self_match`] guard, but for the human pair.
+/// `Ok(())` when every fighter has a distinct, non-empty `character_uuid`; otherwise
+/// `Err(reason)` so the caller can refuse to ship a known-collapsed match. Bots are
+/// excluded (a solo-vs-bot match is the ghost path's concern, not this one).
+fn check_paired_uuids_distinct(loadouts: &[crate::arena::combat::Loadout]) -> Result<(), String> {
+    for (i, lo) in loadouts.iter().enumerate() {
+        if lo.character_uuid.is_empty() {
+            return Err(format!(
+                "fighter {i} (\"{}\") has an EMPTY character_uuid — its avatar's propId4 would \
+                 be \"\", which can't bind a distinct opponent (appearance collapses to the local \
+                 char) and drops its op54 profile. A paired fighter must carry its own non-empty \
+                 character UUID before round-start.",
+                lo.display_name,
+            ));
+        }
+        for (j, other) in loadouts.iter().enumerate().skip(i + 1) {
+            if lo.character_uuid == other.character_uuid {
+                return Err(format!(
+                    "fighters {i} (\"{}\") and {j} (\"{}\") share character_uuid {} — both avatars' \
+                     propId4 would be identical, so GetPvpPlayer collapses both onto the local \
+                     PvpPlayer and each client renders the opponent with its OWN appearance \
+                     (names stay correct). The two peers resolved to the SAME characters row.",
+                    lo.display_name, other.display_name, lo.character_uuid,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Newest-first view of `arena_matches`, capped at `limit`, marking `mine`
 /// against `filter`. Backs the dev `recent-matches` endpoint; durable across
 /// restarts (#NB-3). Returns empty on a DB error (the endpoint stays up).
@@ -411,19 +483,7 @@ async fn resolve(
     // uuid>` per player, so paired players shared no prefix — a divergence from retail
     // that any server-side gsid↔psess correlation (e.g. session lookup) would miss.
     // [docs/arena-journey-log.md §7]
-    let gsid = game_session_id.to_string(); // canonical 8-4-4-4-12 lowercase hyphenated
-    let gsid_prefix: String = gsid.splitn(4, '-').take(3).collect::<Vec<_>>().join("-");
-    let psids: Vec<String> = tickets
-        .iter()
-        .map(|_| {
-            // Per-player suffix = the last two groups of a fresh UUID (4 + 12 hex).
-            let suffix: String = {
-                let u = Uuid::new_v4().to_string();
-                u.splitn(4, '-').skip(3).collect::<Vec<_>>().join("-")
-            };
-            format!("psess-{gsid_prefix}-{suffix}")
-        })
-        .collect();
+    let psids: Vec<String> = derive_player_session_ids(game_session_id, tickets.len());
 
     // Each player's loadout (name/UUID for the round-start op50 spawn + combat stats)
     // is loaded here, but BOUNDED by a short timeout per player: awaiting an unbounded
@@ -526,6 +586,47 @@ async fn resolve(
                 );
                 loadouts.push(lo);
             }
+        }
+    }
+
+    // APPEARANCE GUARD (docs/arena-appearance-bug-spec.md). Log each fighter's
+    // binding UUID at allocation — the client binds opponent appearance by the
+    // avatar's propId4 = this `character_uuid`, so distinctness here is what keeps the
+    // two avatars from collapsing onto one PvpPlayer (the appearance-swap bug). Logged
+    // for EVERY match (paired or bot) so a collision is visible on the wire during
+    // bring-up (the spec's verification path).
+    let uuids: Vec<&str> = loadouts.iter().map(|l| l.character_uuid.as_str()).collect();
+    info!(
+        "matchmaker: allocating gsid {game_session_id} — loadouts[*].character_uuid = {uuids:?} \
+         ({} fighter(s): {} player(s) + {bots} bot(s))",
+        loadouts.len(),
+        tickets.len(),
+    );
+
+    // For a REAL PAIRED (human-vs-human) match, refuse to ship a known-collapsed
+    // appearance: two fighters with the same — or an empty — `character_uuid` make
+    // every per-peer opponent-avatar `propId4` equal the local avatar's, so the client
+    // dresses the opponent body in the LOCAL char's customization (names stay correct).
+    // Mirror the ghost path's `is_self_match` skip, but for the human pair: drop the
+    // match rather than ship the swap (the two devices can't be visually distinguished).
+    // Bots are excluded (`bots == 0` on the paired path; the solo-vs-bot collapse is
+    // the ARENA_DEBUG_GHOST guard's concern). [Fix 1 + Fix 2 of the spec.]
+    if paired && bots == 0 {
+        if let Err(reason) = check_paired_uuids_distinct(&loadouts) {
+            warn!(
+                "matchmaker: PAIRED-MATCH APPEARANCE COLLAPSE rejected (gsid {game_session_id}) — {reason} \
+                 Refusing to allocate: the client would render both fighters with one appearance \
+                 (the avatar→PvpPlayer UUID binding collapses). Tickets left unresolved; re-check \
+                 that the two peers resolve to DIFFERENT characters rows (and that load_loadout did \
+                 not time out → empty-UUID starter)."
+            );
+            for t in tickets {
+                warn!(
+                    "matchmaker: ticket {} unresolved (paired-match appearance guard)",
+                    t.ticket_id
+                );
+            }
+            return;
         }
     }
 
@@ -647,30 +748,51 @@ pub async fn cancel_match(
 mod tests {
     use super::*;
     use crate::arena::config::ArenaConfig;
-    use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+    use tokio::sync::mpsc::unbounded_channel;
 
-    async fn next_succeeded(rx: &mut UnboundedReceiver<MatchmakingMessage>) -> (Uuid, String) {
-        loop {
-            let msg = tokio::time::timeout(Duration::from_secs(2), rx.recv())
-                .await
-                .expect("matchmaker frame timed out")
-                .expect("rms channel closed");
-            if let MatchmakingMessage::Succeeded {
-                game_session_id,
-                player_session_id,
-                ..
-            } = msg
-            {
-                return (game_session_id, player_session_id);
-            }
+    /// playerSessionId derivation (Gap 3 + retail s506 shape): all players in a match
+    /// share the gameSessionId-derived first-three-group prefix, differ only in the
+    /// per-player suffix, and each is a well-formed `psess-`+UUID. Pure (no DB / actor),
+    /// so it covers the psess contract independently of the matchmaker loop (which, for a
+    /// real PAIR, now needs distinct non-empty character UUIDs — see
+    /// `pairs_two_distinct_tickets` / the appearance guard).
+    #[test]
+    fn psess_derived_from_gsid() {
+        let gsid = Uuid::new_v4();
+        let psids = derive_player_session_ids(gsid, 2);
+        assert_eq!(psids.len(), 2);
+        let (psid_a, psid_b) = (&psids[0], &psids[1]);
+        assert_ne!(psid_a, psid_b, "each player gets a distinct playerSessionId");
+
+        let gsid_s = gsid.to_string();
+        let want_prefix =
+            format!("psess-{}", gsid_s.splitn(4, '-').take(3).collect::<Vec<_>>().join("-"));
+        assert!(
+            psid_a.starts_with(&want_prefix) && psid_b.starts_with(&want_prefix),
+            "both psess derive their first 3 groups from the gsid: prefix {want_prefix}, got {psid_a} / {psid_b}"
+        );
+        for (label, psid) in [("A", psid_a), ("B", psid_b)] {
+            let body = psid.strip_prefix("psess-").expect("psess- prefix");
+            assert_eq!(
+                body.split('-').count(),
+                5,
+                "psess {label} is a well-formed UUID body (8-4-4-4-12): {psid}"
+            );
         }
+        let suffix = |p: &str| p.splitn(4, '-').skip(3).collect::<Vec<_>>().join("-");
+        assert_ne!(suffix(psid_a), suffix(psid_b), "per-player suffixes are distinct");
     }
 
-    /// Two tickets enqueued back-to-back must be PAIRED into one match: both
-    /// clients get `Succeeded` with the SAME gameSessionId and DISTINCT
-    /// playerSessionIds (Gap 3).
+    /// Two tickets enqueued back-to-back form ONE shared match — but a DB-less pair
+    /// (both `load_loadout`s fall back to the empty-UUID `starter()`) is now REFUSED by
+    /// the paired-match appearance guard (`docs/arena-appearance-bug-spec.md`): two
+    /// empty `character_uuid`s would collapse both avatars onto the local PvpPlayer
+    /// (the appearance-swap bug). So no `Succeeded` is sent and the capacity permit is
+    /// returned. (In production each real user resolves to a DISTINCT characters row →
+    /// distinct non-empty UUIDs → the pair is allocated; the gsid/psess shape itself is
+    /// covered by `psess_derived_from_gsid`.)
     #[tokio::test]
-    async fn pairs_two_tickets_into_one_match() {
+    async fn pairs_two_tickets_refused_when_uuids_collapse() {
         let registry = MatchRegistry::new(4);
         let config = ArenaConfig {
             advertise_host: "127.0.0.1".into(),
@@ -698,36 +820,16 @@ mod tests {
         })
         .unwrap();
 
-        let (gsid_a, psid_a) = next_succeeded(&mut recv_a).await;
-        let (gsid_b, psid_b) = next_succeeded(&mut recv_b).await;
-        assert_eq!(gsid_a, gsid_b, "both players share one gameSessionId");
-        assert_ne!(psid_a, psid_b, "each player gets a distinct playerSessionId");
-        // The paired match is allocated and holds one capacity permit.
-        assert_eq!(registry.available_permits(), 3);
-
-        // playerSessionId shape (retail GameLift, capture-confirmed s506): the first
-        // three UUID groups are DERIVED FROM the shared gameSessionId, so paired
-        // players share a common `psess-<gsid g1>-<gsid g2>-<gsid g3>-…` prefix and
-        // differ only in the trailing per-player suffix (the last two groups).
-        let gsid = gsid_a.to_string();
-        let want_prefix =
-            format!("psess-{}", gsid.splitn(4, '-').take(3).collect::<Vec<_>>().join("-"));
-        assert!(
-            psid_a.starts_with(&want_prefix) && psid_b.starts_with(&want_prefix),
-            "both psess derive their first 3 groups from the gsid: prefix {want_prefix}, got {psid_a} / {psid_b}"
-        );
-        // Canonical psess shape: `psess-` + a full 8-4-4-4-12 UUID (5 hyphen groups).
-        for (label, psid) in [("A", &psid_a), ("B", &psid_b)] {
-            let body = psid.strip_prefix("psess-").expect("psess- prefix");
-            assert_eq!(
-                body.split('-').count(),
-                5,
-                "psess {label} is a well-formed UUID body (8-4-4-4-12): {psid}"
-            );
-        }
-        // The per-player suffix (last two groups) differs — the only divergent part.
-        let suffix = |p: &str| p.splitn(4, '-').skip(3).collect::<Vec<_>>().join("-");
-        assert_ne!(suffix(&psid_a), suffix(&psid_b), "per-player suffixes are distinct");
+        // No `Succeeded` arrives on either channel (the empty-UUID pair is refused).
+        let got_a = tokio::time::timeout(Duration::from_millis(500), recv_a.recv()).await;
+        let got_b = tokio::time::timeout(Duration::from_millis(500), recv_b.recv()).await;
+        let no_succeeded = |r: &Result<Option<MatchmakingMessage>, _>| {
+            !matches!(r, Ok(Some(MatchmakingMessage::Succeeded { .. })))
+        };
+        assert!(no_succeeded(&got_a), "no Succeeded for an empty-UUID paired match (appearance guard)");
+        assert!(no_succeeded(&got_b), "no Succeeded for an empty-UUID paired match (appearance guard)");
+        // The capacity permit was returned (no match allocated), so all 4 are free.
+        assert_eq!(registry.available_permits(), 4, "the refused pair holds no capacity permit");
     }
 
     /// The DEBUG-ghost self-match guard: a ghost that resolves to the SAME
@@ -748,6 +850,47 @@ mod tests {
         // even against an empty human UUID — don't reject the legitimate bot fallback.
         assert!(!is_self_match(human, ""), "empty ghost UUID ⇒ not a self-match");
         assert!(!is_self_match("", ""), "two empty UUIDs ⇒ not a self-match");
+    }
+
+    /// The PAIRED-match appearance guard (docs/arena-appearance-bug-spec.md): two
+    /// real fighters must have DISTINCT, non-empty `character_uuid`s, or the client's
+    /// avatar→PvpPlayer binding collapses both avatars onto the local player (the
+    /// appearance-swap bug; names stay correct). `check_paired_uuids_distinct` accepts
+    /// distinct non-empty UUIDs and rejects (a) two equal UUIDs and (b) any empty UUID.
+    #[test]
+    fn paired_uuid_distinctness_guard() {
+        use crate::arena::combat::loadout::starter;
+        let with_uuid = |uuid: &str, name: &str| {
+            let mut l = starter();
+            l.character_uuid = uuid.to_string();
+            l.display_name = name.to_string();
+            l
+        };
+
+        // Distinct, non-empty UUIDs → OK (the WolfWalker-vs-Blank happy path).
+        let ok = vec![
+            with_uuid("38c987fd-c42b-4ea6-b869-c8d4c03055f9", "Flappety"),
+            with_uuid("1131a037-716c-49cc-b165-32d8ddc14f49", "Blank"),
+        ];
+        assert!(check_paired_uuids_distinct(&ok).is_ok(), "distinct non-empty UUIDs must pass");
+
+        // Two equal non-empty UUIDs → rejected (both peers resolved to the same row →
+        // appearance collapse). This is the WolfWalker-vs-Flappety reported symptom.
+        let same = vec![
+            with_uuid("38c987fd-c42b-4ea6-b869-c8d4c03055f9", "WolfWalker"),
+            with_uuid("38c987fd-c42b-4ea6-b869-c8d4c03055f9", "Flappety"),
+        ];
+        let err = check_paired_uuids_distinct(&same).expect_err("shared UUID must be rejected");
+        assert!(err.contains("share character_uuid"), "rejection names the shared-UUID collapse: {err}");
+
+        // An empty UUID (a starter() fallback on a slow load_loadout) → rejected: its
+        // avatar propId4 would be "" → can't bind a distinct opponent, drops the profile.
+        let empty = vec![
+            with_uuid("38c987fd-c42b-4ea6-b869-c8d4c03055f9", "Flappety"),
+            with_uuid("", "DegradedToStarter"),
+        ];
+        let err = check_paired_uuids_distinct(&empty).expect_err("empty UUID must be rejected");
+        assert!(err.contains("EMPTY character_uuid"), "rejection names the empty-UUID collapse: {err}");
     }
 
     /// The op54 round-start PROFILE character JSON must be schema-identical to
