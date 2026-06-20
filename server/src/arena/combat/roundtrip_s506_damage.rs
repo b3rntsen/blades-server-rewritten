@@ -118,7 +118,7 @@ fn s506_combo_ramp_reproduces_recorded_slashing() {
     // charge/swingFactor band (the deep steps carry the most variation).
     for &(count, recorded) in S506_COMBO_RAMP {
         let side = if count % 2 == 0 { ActiveSide::Right } else { ActiveSide::Left };
-        let rd = m.resolve_attack(&lo, &blank(), DamageSource::Attack, side, 1.0, count);
+        let rd = m.resolve_attack(&lo, &blank(), DamageSource::Attack, side, 1.0, count, Instant::now());
         let got = slash_of(&rd);
         // The model is exactly S506_SLASH_BASE × the recorded LIGHT_COMBO_RAMP factor, so
         // it reproduces each recorded step TIGHTLY (±2% absorbs the recorded-value
@@ -134,12 +134,13 @@ fn s506_combo_ramp_reproduces_recorded_slashing() {
     }
     // The two anchor steps must be TIGHT (these are the calibration pins, not deep-combo
     // charge-variable hits): combo-0 = 113.82, combo-1 = 113.82×1.45 = 165.04.
-    let c0 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0));
-    let c1 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Left, 1.0, 1));
+    let now = Instant::now();
+    let c0 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now));
+    let c1 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Left, 1.0, 1, now));
     assert!((c0 - 113.82).abs() < 0.5, "combo-0 anchor {c0:.2} != recorded 113.82");
     assert!((c1 - 165.07).abs() < 1.0, "combo-1 anchor {c1:.2} != recorded 165.07 (×1.45)");
     // The combo is CAPPED at the recorded ×4.12 ceiling — a runaway chain can't exceed it.
-    let c9 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 9));
+    let c9 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 9, now));
     assert!((c9 - 113.82 * 4.12).abs() < 1.0, "deep combo capped at ×4.12 ({:.1}), got {c9:.1}", 113.82 * 4.12);
 }
 
@@ -153,7 +154,7 @@ fn s506_middle_maneuver_lands_in_recorded_band() {
     // assert the spread covers the recorded maneuver values.
     let modeled: Vec<f32> = [1.0, 1.5, 1.8]
         .iter()
-        .map(|&sf| slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Middle, sf, 0)))
+        .map(|&sf| slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Middle, sf, 0, Instant::now())))
         .collect();
     let lo_m = *modeled.iter().min_by(|a, b| a.total_cmp(b)).unwrap();
     let hi_m = *modeled.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
@@ -180,7 +181,8 @@ fn s506_poison_base_and_amplification_ramp() {
     let lo = flappety_dagger();
 
     // Fresh (no conditioning) → amp ×1.0 → the recorded fresh base 137.32.
-    let fresh = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0);
+    let now = Instant::now();
+    let fresh = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
     assert!(
         (poison_of(&fresh) - S506_POISON_BASE).abs() < 1.0,
         "DIVERGENCE (ENCHANT §4.3): fresh Poison {:.1} vs recorded base {S506_POISON_BASE} \
@@ -206,7 +208,7 @@ fn s506_poison_base_and_amplification_ramp() {
     for _ in 0..8 {
         tgt.record_element_damage(DamageType::Poison, S506_POISON_BASE, now);
     }
-    let amped = m.resolve_attack(&lo, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0);
+    let amped = m.resolve_attack(&lo, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
     let recorded_amped = 205.36; // §4.3 endpoint (seq 452 Poison)
     let ceiling = S506_POISON_BASE * ELEMENT_AMP_MAX; // 137.32 × 1.5 = 205.98
     assert!(
@@ -237,10 +239,13 @@ fn s506_optimal_block_negates_physical_halves_elemental() {
     let lo = flappety_dagger();
     // s506 seq 323: a connected optimal block on a Right swing → Slashing 113.82→0.77
     // (≈0), Poison 137.32→68.65 (=÷2.0). The defender guards the MATCHING side.
+    let now = Instant::now();
     let mut def = blank();
     def.actor_state = ActorStateType::Blocking;
     def.blocking_side = ActiveSide::Right;
-    let blocked = m.resolve_attack(&lo, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0);
+    def.block_raised_at = Some(now); // freshly raised → OPTIMAL phase
+    def.blocking_until = Some(now + std::time::Duration::from_secs(2));
+    let blocked = m.resolve_attack(&lo, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
     assert!(blocked.flags & flags::WAS_OPTIMAL_BLOCKING != 0, "optimal-block flag set");
     assert_eq!(slash_of(&blocked), 0.0, "DIVERGENCE (BLOCK §4.4): optimal block must NEGATE physical (×0), got {}", slash_of(&blocked));
     let recorded_blocked_poison = 68.65; // seq 323
@@ -270,7 +275,7 @@ fn s506_deep_combo_unclamped_and_kill_arithmetic() {
     for _ in 0..8 {
         amped.record_element_damage(DamageType::Poison, S506_POISON_BASE, now);
     }
-    let big = m.resolve_attack(&lo, &amped, DamageSource::Attack, ActiveSide::Right, 1.0, 4);
+    let big = m.resolve_attack(&lo, &amped, DamageSource::Attack, ActiveSide::Right, 1.0, 4, now);
     let recorded_total = 674.66;
     assert!(
         (big.total - recorded_total).abs() < 12.0,
@@ -345,7 +350,7 @@ fn s506_full_chain_through_engine_reproduces_ramp_and_resets_on_block() {
         let side = if step % 2 == 0 { ActiveSide::Right } else { ActiveSide::Left };
         let depth = attacker.register_combo_swing(side);
         assert_eq!(depth, step, "alternating swings increment the combo each step");
-        let rd = m.resolve_attack(&lo, &blank(), DamageSource::Attack, side, 1.0, depth);
+        let rd = m.resolve_attack(&lo, &blank(), DamageSource::Attack, side, 1.0, depth, Instant::now());
         let s = slash_of(&rd);
         if step > 0 {
             assert!(s >= last_slash, "the combo ramp is monotonic non-decreasing (step {step})");
@@ -363,6 +368,6 @@ fn s506_full_chain_through_engine_reproduces_ramp_and_resets_on_block() {
     attacker.reset_combo();
     let depth_after = attacker.register_combo_swing(ActiveSide::Right);
     assert_eq!(depth_after, 0, "after a block-reset the chain restarts at combo 0");
-    let fresh = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, depth_after));
+    let fresh = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, depth_after, Instant::now()));
     assert!((fresh - S506_SLASH_BASE).abs() < 0.5, "post-reset swing is the fresh 113.82 base, got {fresh:.2}");
 }

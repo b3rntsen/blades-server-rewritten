@@ -20,7 +20,7 @@ use blades_lib::user_data::{CompleteCharacter, CompleteInventory};
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::state::{DamageType, EquippedAbility, Loadout, StatusEffectType, WeaponProfile};
+use super::state::{AbilityTag, DamageType, EquippedAbility, Loadout, StatusEffectType, WeaponProfile};
 use super::tables;
 
 /// A representative starter loadout (a shock-enchanted blade), used when there is
@@ -195,9 +195,32 @@ fn enchant_damage_type(id: &Uuid) -> Option<DamageType> {
     })
 }
 
+/// Map an ability TEMPLATE UUID prefix → its [`AbilityTag`]. Template UUIDs identify
+/// the ABILITY CLASS (not the per-character instance). The relevant classes here are:
+///   - `WardAbility` subclasses (Ward/SpellbreakerAbility) — template UUIDs from
+///     prod `uuid_labels` Ward entries (first group only; matches the instantiation
+///     UUIDs observed in character JSON).
+///   - `ResistElementsAbility` — the Resist-Elements spell.
+///
+/// **CALIBRATION FLAG**: these prefixes are from prod `uuid_labels` WHERE label LIKE
+/// '%ward%' OR label LIKE '%resist%elem%'. The full UUID table is NOT in the fork, so
+/// only the first group (8 hex chars) is matched for safety. Update with the complete
+/// list once the full uuid_labels table is available.
+fn ability_tag_for_template(uuid_str: &str) -> AbilityTag {
+    let prefix = uuid_str.split('-').next().unwrap_or("");
+    match prefix {
+        // Resist Elements (ResistElementsAbility) — s506 Flappety slot1 UUID 91078132.
+        "91078132" => AbilityTag::ResistElements,
+        // Ward ability family — common Ward spell prefix from uuid_labels.
+        // Add further Ward template prefixes here as they are confirmed.
+        _ => AbilityTag::Generic,
+    }
+}
+
 /// `equippedAbilities` is `{slot: uuid}` — take the VALUES (the ability instance
 /// UUIDs, NOT the slot keys); level each from `abilities` (`{uuid: level}`),
 /// defaulting to 1. (The values-not-keys gotcha is documented project-wide.)
+/// The `tag` is derived from the ability template UUID for Ward/ResistElements routing.
 fn parse_equipped_abilities(equipped: &Value, levels: &Value) -> Vec<EquippedAbility> {
     let mut out = Vec::new();
     let Some(slots) = equipped.as_object() else {
@@ -211,9 +234,11 @@ fn parse_equipped_abilities(equipped: &Value, levels: &Value) -> Vec<EquippedAbi
                 .and_then(Value::as_u64)
                 .unwrap_or(1)
                 .min(u8::MAX as u64) as u8;
+            let tag = ability_tag_for_template(uuid);
             out.push(EquippedAbility {
                 instance_uuid: uuid.to_string(),
                 level,
+                tag,
             });
         }
     }
