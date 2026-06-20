@@ -1,0 +1,1430 @@
+{
+  "0341cd23-5665-4c0c-8048-bb7401ab5d30": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999894,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+            "tier": 10
+          },
+          {
+            "id": "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+            "tier": 10
+          },
+          {
+            "id": "fea58213-6a41-4500-9f09-cd9c745bcc1e",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          },
+          {
+            "id": "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+            "tier": 10
+          },
+          {
+            "id": "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+            "tier": 10
+          },
+          {
+            "id": "8f372d6d-2620-42ab-809b-edb4d5d1e528",
+            "tier": 10
+          },
+          {
+            "id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+            "tier": 10
+          },
+          {
+            "id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+            "tier": 10
+          },
+          {
+            "id": "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+            "tier": 10
+          },
+          {
+            "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+            "tier": 10
+          },
+          {
+            "id": "8f372d6d-2620-42ab-809b-edb4d5d1e528",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+            "tier": 10
+          },
+          {
+            "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+            "tier": 10
+          },
+          {
+            "id": "fea58213-6a41-4500-9f09-cd9c745bcc1e",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          },
+          {
+            "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+            "tier": 10
+          },
+          {
+            "id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+            "tier": 10
+          },
+          {
+            "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          },
+          {
+            "id": "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+            "tier": 10
+          },
+          {
+            "id": "8f372d6d-2620-42ab-809b-edb4d5d1e528",
+            "tier": 10
+          },
+          {
+            "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+            "tier": 10
+          },
+          {
+            "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+            "tier": 10
+          },
+          {
+            "id": "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "05f457a4-aeb3-4b35-adca-247eea08972b": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999861,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "2b8fd511-80da-4128-81b1-bd7ab6023223",
+            "tier": 10
+          },
+          {
+            "id": "59c3b082-e57a-4243-ace5-9b55475e9b17",
+            "tier": 10
+          },
+          {
+            "id": "98757a01-33b8-40ea-bb45-6acd89811ae3",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "2b8fd511-80da-4128-81b1-bd7ab6023223",
+            "tier": 10
+          },
+          {
+            "id": "be17fe64-c8f9-47e1-8803-49227119c2b3",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "2b8fd511-80da-4128-81b1-bd7ab6023223",
+            "tier": 10
+          },
+          {
+            "id": "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "2b8fd511-80da-4128-81b1-bd7ab6023223",
+            "tier": 10
+          },
+          {
+            "id": "262ece9b-bd65-4876-b698-5926ca4422be",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "15c7765a-01b7-4f12-9857-d39cd8c9284a": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999889,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "848e02b4-32ae-4e1b-809c-83bca039542a",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "1b2c8deb-df06-4b0f-b5c7-4752c1aa4a2a": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999873,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "94aa3774-cd7e-400c-9d17-a4652fb88a93",
+            "tier": 10
+          },
+          {
+            "id": "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+            "tier": 10
+          },
+          {
+            "id": "1d85511d-66bf-46ad-87b5-bd7a115afafd",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "29f0e1ed-eb5a-4235-9bd4-5d0b161a54f1": {
+    "craftingTypeId": "06c8087b-ede4-4ce7-8103-6c2067d18498",
+    "durationMs": 17399877,
+    "kind": "temper",
+    "outcomes": []
+  },
+  "441ac895-b30f-46c0-9346-bd77bd267f6d": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999887,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
+            "tier": 10
+          },
+          {
+            "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "4f5fbabd-27cf-46db-9f0c-6117c30c9639": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999870,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "08ea75d0-5cf1-44a9-9816-d3c6740c4191",
+            "tier": 10
+          },
+          {
+            "id": "fea58213-6a41-4500-9f09-cd9c745bcc1e",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "08ea75d0-5cf1-44a9-9816-d3c6740c4191",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          },
+          {
+            "id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "08ea75d0-5cf1-44a9-9816-d3c6740c4191",
+            "tier": 10
+          },
+          {
+            "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "5d89180f-b4fc-4e57-b440-c9d018a4f55f": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999882,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+            "tier": 10
+          },
+          {
+            "id": "10f57d40-98e9-4181-972b-d654f81afc27",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+            "tier": 10
+          },
+          {
+            "id": "33f866a5-f2f5-46af-ac13-fa5f02bedfbf",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+            "tier": 10
+          },
+          {
+            "id": "10f57d40-98e9-4181-972b-d654f81afc27",
+            "tier": 10
+          },
+          {
+            "id": "d8638848-d706-4ddd-b096-2a56e7696436",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "60d63333-ada4-4256-90e2-013ee42c5bc6": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 3599887,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
+            "tier": 6
+          }
+        ]
+      }
+    ]
+  },
+  "8ae47a45-b935-4f27-a082-3b0b2dd9f6d2": {
+    "craftingTypeId": "06c8087b-ede4-4ce7-8103-6c2067d18498",
+    "durationMs": 20879870,
+    "kind": "temper",
+    "outcomes": []
+  },
+  "96bf0e89-b05d-462f-a07b-306348feec15": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999861,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "ef292fb2-27ad-4b47-9eb8-2f0ffbfd66c4",
+            "tier": 10
+          },
+          {
+            "id": "0717438e-41e0-4414-913c-a089a60666c0",
+            "tier": 10
+          },
+          {
+            "id": "59c3b082-e57a-4243-ace5-9b55475e9b17",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "9ec63d07-f53c-460e-86ad-4c28d94ea46c": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999865,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "652d5ac9-3076-405b-a163-dde1a950fb26",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "652d5ac9-3076-405b-a163-dde1a950fb26",
+            "tier": 10
+          },
+          {
+            "id": "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+            "tier": 10
+          },
+          {
+            "id": "1d85511d-66bf-46ad-87b5-bd7a115afafd",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "a0ea1e5b-bc3e-4781-85b0-adc911155afa": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999866,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "d1e286a7-7c90-4e1b-aaaa-fa04b607e698",
+            "tier": 10
+          },
+          {
+            "id": "d8638848-d706-4ddd-b096-2a56e7696436",
+            "tier": 10
+          },
+          {
+            "id": "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "a4dfdf4f-cf18-4be5-b706-91aadb0c1bea": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999878,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "38ca6ee2-1765-4122-a5e5-d036a7d31fe3",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "38ca6ee2-1765-4122-a5e5-d036a7d31fe3",
+            "tier": 10
+          },
+          {
+            "id": "3d5b70bb-d2bd-4141-80d5-333ef603a8f2",
+            "tier": 10
+          },
+          {
+            "id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "aff19f1a-48d9-47c2-b819-1dd3976b4132": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999885,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "626121b7-708d-455f-b32f-38e5b68bb80c",
+            "tier": 10
+          },
+          {
+            "id": "98757a01-33b8-40ea-bb45-6acd89811ae3",
+            "tier": 10
+          },
+          {
+            "id": "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "626121b7-708d-455f-b32f-38e5b68bb80c",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "b01ce11d-70a3-485e-874d-25d66d0f28f0": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999875,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "da0ebf22-6d7b-4504-bfc1-b78b674c7c5c",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "da0ebf22-6d7b-4504-bfc1-b78b674c7c5c",
+            "tier": 10
+          },
+          {
+            "id": "c02cf339-2c63-4456-bdd1-f4ad1e25bf3f",
+            "tier": 10
+          },
+          {
+            "id": "10f57d40-98e9-4181-972b-d654f81afc27",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "da0ebf22-6d7b-4504-bfc1-b78b674c7c5c",
+            "tier": 10
+          },
+          {
+            "id": "e8e0bb26-2751-4cac-bd20-effdec8dea4d",
+            "tier": 10
+          },
+          {
+            "id": "10f57d40-98e9-4181-972b-d654f81afc27",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "da0ebf22-6d7b-4504-bfc1-b78b674c7c5c",
+            "tier": 10
+          },
+          {
+            "id": "10f57d40-98e9-4181-972b-d654f81afc27",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "da0ebf22-6d7b-4504-bfc1-b78b674c7c5c",
+            "tier": 10
+          },
+          {
+            "id": "c02cf339-2c63-4456-bdd1-f4ad1e25bf3f",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "da0ebf22-6d7b-4504-bfc1-b78b674c7c5c",
+            "tier": 10
+          },
+          {
+            "id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "b546d4e9-ceb0-4c3f-80e8-4a5fdfb0e179": {
+    "craftingTypeId": "06c8087b-ede4-4ce7-8103-6c2067d18498",
+    "durationMs": 34799874,
+    "kind": "temper",
+    "outcomes": []
+  },
+  "b6e4dfaf-0d5b-470b-a26b-dd423222f435": {
+    "craftingTypeId": "06c8087b-ede4-4ce7-8103-6c2067d18498",
+    "durationMs": 17399879,
+    "kind": "temper",
+    "outcomes": []
+  },
+  "d13a1b9c-51ec-4693-88c2-1e1b0696c7e5": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999864,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
+            "tier": 10
+          },
+          {
+            "id": "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+            "tier": 10
+          },
+          {
+            "id": "fea58213-6a41-4500-9f09-cd9c745bcc1e",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "d4a0b763-c0cd-4345-926d-aa305c55adb0": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999882,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          },
+          {
+            "id": "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+            "tier": 10
+          },
+          {
+            "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+            "tier": 10
+          },
+          {
+            "id": "8f372d6d-2620-42ab-809b-edb4d5d1e528",
+            "tier": 10
+          },
+          {
+            "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+            "tier": 10
+          },
+          {
+            "id": "8f372d6d-2620-42ab-809b-edb4d5d1e528",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          },
+          {
+            "id": "fea58213-6a41-4500-9f09-cd9c745bcc1e",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+            "tier": 10
+          },
+          {
+            "id": "8f372d6d-2620-42ab-809b-edb4d5d1e528",
+            "tier": 10
+          },
+          {
+            "id": "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          },
+          {
+            "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+            "tier": 10
+          },
+          {
+            "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+            "tier": 10
+          },
+          {
+            "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "dd693007-752d-4022-87d1-892dc7ee96be": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999889,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "23746263-41c1-4023-8859-41e698dcf49d",
+            "tier": 10
+          },
+          {
+            "id": "59c3b082-e57a-4243-ace5-9b55475e9b17",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "e0d48d1a-8d8e-4c76-bfeb-970d80f9b838": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999870,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "8f372d6d-2620-42ab-809b-edb4d5d1e528",
+            "tier": 10
+          },
+          {
+            "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          },
+          {
+            "id": "fea58213-6a41-4500-9f09-cd9c745bcc1e",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+            "tier": 10
+          },
+          {
+            "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+            "tier": 10
+          },
+          {
+            "id": "fea58213-6a41-4500-9f09-cd9c745bcc1e",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          },
+          {
+            "id": "8f372d6d-2620-42ab-809b-edb4d5d1e528",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "fea58213-6a41-4500-9f09-cd9c745bcc1e",
+            "tier": 10
+          },
+          {
+            "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+            "tier": 10
+          },
+          {
+            "id": "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+            "tier": 10
+          },
+          {
+            "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+            "tier": 10
+          },
+          {
+            "id": "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "fea58213-6a41-4500-9f09-cd9c745bcc1e",
+            "tier": 10
+          },
+          {
+            "id": "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          },
+          {
+            "id": "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+            "tier": 10
+          },
+          {
+            "id": "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "8f372d6d-2620-42ab-809b-edb4d5d1e528",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "8f372d6d-2620-42ab-809b-edb4d5d1e528",
+            "tier": 10
+          },
+          {
+            "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+            "tier": 10
+          },
+          {
+            "id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+            "tier": 10
+          },
+          {
+            "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          },
+          {
+            "id": "a869f868-c23f-45bb-9159-d62b42236a4a",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+            "tier": 10
+          },
+          {
+            "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "bf107d7d-8777-4411-b07a-56819a58a709",
+            "tier": 10
+          },
+          {
+            "id": "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": 2,
+        "enchanting": [
+          {
+            "id": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+            "tier": 10
+          },
+          {
+            "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+            "tier": 10
+          },
+          {
+            "id": "fea58213-6a41-4500-9f09-cd9c745bcc1e",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  },
+  "f45da46c-3118-4181-83c3-b4df2741e471": {
+    "craftingTypeId": "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+    "durationMs": 8999882,
+    "kind": "enchant",
+    "outcomes": [
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "338ec948-d1b7-4390-8a88-ab6ac11841aa",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "338ec948-d1b7-4390-8a88-ab6ac11841aa",
+            "tier": 10
+          },
+          {
+            "id": "3d5b70bb-d2bd-4141-80d5-333ef603a8f2",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "338ec948-d1b7-4390-8a88-ab6ac11841aa",
+            "tier": 10
+          },
+          {
+            "id": "2ac1e2f6-8f97-444e-97af-7efd46c71cca",
+            "tier": 10
+          }
+        ]
+      },
+      {
+        "arcaneTier": null,
+        "enchanting": [
+          {
+            "id": "338ec948-d1b7-4390-8a88-ab6ac11841aa",
+            "tier": 10
+          },
+          {
+            "id": "1674a05b-355a-4c01-9994-7a28e2654d4c",
+            "tier": 10
+          }
+        ]
+      }
+    ]
+  }
+}

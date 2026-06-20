@@ -8,9 +8,12 @@
 //! TODO: recipe input cost not captured; lenient.
 //!
 //! ## Temper / enchant
-//! Captures only show base crafts (temperingLevel = 0). `create_craft` applies the
-//! requested `temperingLevel` to produced instanced items.
-//! TODO: temper/enchant of an existing item not in captures.
+//! A `POST /crafts` request that carries an `itemId` MODIFIES an existing backpack item
+//! rather than minting a new one: the item is pulled from the backpack into a timed job
+//! and re-added (mutated) by `/finish`. `temperingLevel > 0` tempers (sets the level,
+//! keeping existing enchants); otherwise it enchants — applying one of the recipe's
+//! observed `ENCHANTING` outcomes (`item_mod_recipes.json`), picked deterministically per
+//! item. `arcaneTier` is not modelled on `Item` (the server drops it for every item).
 
 use std::{
     sync::Arc,
@@ -21,8 +24,9 @@ use actix_web::{
     get, http::StatusCode, post,
     web::{self, Json},
 };
-use blades_lib::economy::{RewardGrant, RewardItem, apply_reward};
+use blades_lib::economy::{RewardGrant, RewardItem, apply_reward, remove_backpack_item};
 use blades_lib::server_state::CraftJob;
+use blades_lib::static_data::ItemModRecipe;
 use blades_lib::user_data::{
     CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
     InventoryChangeTracker, Item, ItemPropertiesAll,
@@ -126,6 +130,10 @@ struct CreateCraftRequest {
     building_id: Uuid,
     #[serde(default)]
     tempering_level: u64,
+    /// Present for temper/enchant — the existing backpack item to modify. Absent for a
+    /// plain craft (which mints a new item).
+    #[serde(default)]
+    item_id: Option<Uuid>,
     #[serde(default)]
     #[allow(dead_code)]
     gems_payment: bool,
@@ -142,11 +150,15 @@ struct CreateCraftResponse {
     wallet: CompleteWallet,
 }
 
-/// `POST /crafts` — start a craft job.
+/// `POST /crafts` — start a craft job. Two captured shapes:
 ///
-/// Looks up the recipe from `static_data.recipes`; mints a new `CraftJob` with a
-/// fresh id and stores it in `server_state.craft_jobs`. Returns the job wire-shape,
-/// an empty inventory diff, and the wallet.
+/// - **plain craft** (no `itemId`): look up the recipe in `static_data.recipes`, mint a
+///   new `CraftJob` whose `results` is the recipe output (with the requested
+///   `temperingLevel` applied to produced items).
+/// - **temper / enchant** (`itemId` present): pull that item out of the backpack and
+///   store the MUTATED item as the job's `results` — temper sets `temperingLevel`
+///   (keeping enchants), enchant applies one of the recipe's observed `ENCHANTING`
+///   outcomes (`item_mod_recipes.json`). `/finish` re-adds the mutated item.
 ///
 /// TODO: recipe input cost not captured; lenient (no materials/gold charged).
 #[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/crafts")]
@@ -162,49 +174,69 @@ pub async fn create_craft(
     let req = body.into_inner();
     let globals = app_state.get_ref().clone();
 
-    // Look up the recipe before entering the transaction.
-    let recipe = globals
-        .static_data
-        .recipes
-        .get(&req.recipe_id)
-        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 4))?
-        .clone();
+    // A plain craft (no itemId) needs a `recipes.json` recipe up front; a temper/enchant
+    // (itemId present) modifies an existing item and uses `item_mod_recipes.json`.
+    let plain_recipe = if req.item_id.is_none() {
+        Some(
+            globals
+                .static_data
+                .recipes
+                .get(&req.recipe_id)
+                .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 4))?
+                .clone(),
+        )
+    } else {
+        None
+    };
+    let mod_recipe = globals.static_data.item_mod_recipes.get(&req.recipe_id).cloned();
 
-    let tempering_level: u64 = req.tempering_level;
-    let building_id = req.building_id;
     let recipe_id = req.recipe_id;
+    let building_id = req.building_id;
+    let tempering_level: u64 = req.tempering_level;
+    let item_id = req.item_id;
 
     let mut conn = app_state.db_pool.get().await.unwrap();
 
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
-            let tracker = InventoryChangeTracker::default();
+            let mut tracker = InventoryChangeTracker::default();
 
-            // Apply the requested temperingLevel to any instanced item in the results.
-            let results = apply_tempering_to_results(&recipe.results, tempering_level);
+            let (results, crafting_type_id, duration_ms) = if let Some(item_id) = item_id {
+                // ── temper / enchant: modify an existing backpack item ──
+                let existing =
+                    remove_backpack_item(&mut entry.inventory.0, item_id, &mut tracker)
+                        .map_err(BladeApiError::from_economy)?;
+                let mutated = apply_item_mod(&existing, tempering_level, mod_recipe.as_ref(), item_id);
+                entry.inventory.0.backpack_version += 1;
+                let reward_item = RewardItem { id: item_id, item: mutated };
+                let results = serde_json::json!({ "items": [reward_item] });
+                let (ctid, dur) = mod_recipe
+                    .as_ref()
+                    .map(|m| (m.crafting_type_id, m.duration_ms))
+                    .unwrap_or((recipe_id, 0));
+                (results, ctid, dur)
+            } else {
+                // ── plain craft: mint a new item from the recipe ──
+                let recipe = plain_recipe.expect("plain recipe resolved above");
+                let results = apply_tempering_to_results(&recipe.results, tempering_level);
+                (results, recipe.crafting_type_id, recipe.duration_ms)
+            };
 
-            let now = now_ms();
-            let completed_at_ms = now + recipe.duration_ms;
-
+            let completed_at_ms = now_ms() + duration_ms;
             let job = CraftJob {
                 id: Uuid::new_v4(),
                 recipe_id,
                 building_id,
-                crafting_type_id: recipe.crafting_type_id,
+                crafting_type_id,
                 completed_at_ms,
                 results,
             };
-
             entry.server_state.0.craft_jobs.push(job.clone());
 
-            let craft_wire = serde_json::to_value(CraftJobWire::from_job(
-                &job,
-                user_id,
-                character_id,
-            ))
-            .unwrap_or(Value::Null);
-
+            let craft_wire =
+                serde_json::to_value(CraftJobWire::from_job(&job, user_id, character_id))
+                    .unwrap_or(Value::Null);
             let inventory = entry.inventory.0.generate_client_update(&tracker);
             let wallet = entry.wallet.0.clone();
             write_back(&mut conn, entry).await?;
@@ -323,6 +355,34 @@ fn apply_tempering_to_results(results: &Value, tempering_level: u64) -> Value {
     out
 }
 
+/// Apply a temper or enchant to an existing item, returning the mutated copy.
+///
+/// - `tempering_level > 0` → **temper**: set `temperingLevel`, keeping everything else
+///   (including existing enchants — matches the captured temper response).
+/// - otherwise → **enchant**: replace `properties.enchanting` with one of the recipe's
+///   observed `ENCHANTING` outcomes, picked deterministically by `item_id` (retail rolls
+///   randomly from a pool; we pick a real observed outcome). With no recipe / no
+///   outcomes the item is returned unchanged (lenient).
+fn apply_item_mod(
+    existing: &Item,
+    tempering_level: u64,
+    recipe: Option<&ItemModRecipe>,
+    item_id: Uuid,
+) -> Item {
+    let mut item = existing.clone();
+    if tempering_level > 0 {
+        item.tempering_level = tempering_level;
+        return item;
+    }
+    if let Some(rec) = recipe {
+        if !rec.outcomes.is_empty() {
+            let idx = (item_id.as_u128() % rec.outcomes.len() as u128) as usize;
+            item.properties.enchanting = rec.outcomes[idx].enchanting.clone();
+        }
+    }
+    item
+}
+
 /// Build a `RewardGrant` from a craft job's stored `results` value. Instanced items
 /// get fresh `Uuid::new_v4()` ids so they never collide with the placeholder ids
 /// stored in the recipe. Stackable items are carried over verbatim.
@@ -400,4 +460,80 @@ async fn write_back(
         .execute(conn)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use blades_lib::static_data::EnchantOutcome;
+    use blades_lib::user_data::{ItemPropertiesAll, ItemSingleProperty};
+
+    fn prop(n: u128) -> ItemSingleProperty {
+        ItemSingleProperty { id: Uuid::from_u128(n), tier: 10 }
+    }
+
+    fn item_with(tempering: u64, enchants: Vec<ItemSingleProperty>) -> Item {
+        Item {
+            item_template_id: Uuid::from_u128(0xABCD),
+            tempering_level: tempering,
+            durability: 300.0,
+            properties: ItemPropertiesAll { enchanting: enchants, grading: vec![] },
+        }
+    }
+
+    fn enchant_recipe(outcomes: Vec<EnchantOutcome>) -> ItemModRecipe {
+        ItemModRecipe {
+            crafting_type_id: Uuid::from_u128(0x1),
+            duration_ms: 0,
+            kind: "enchant".into(),
+            outcomes,
+        }
+    }
+
+    #[test]
+    fn temper_sets_level_and_keeps_enchants() {
+        let existing = item_with(0, vec![prop(1), prop(2)]);
+        let out = apply_item_mod(&existing, 10, None, Uuid::from_u128(0x99));
+        assert_eq!(out.tempering_level, 10);
+        assert_eq!(out.properties.enchanting.len(), 2, "existing enchants preserved");
+        assert_eq!(out.durability, 300.0);
+        assert_eq!(out.item_template_id, existing.item_template_id);
+    }
+
+    #[test]
+    fn enchant_applies_outcome_and_keeps_tempering() {
+        let existing = item_with(5, vec![]);
+        let recipe = enchant_recipe(vec![EnchantOutcome {
+            enchanting: vec![prop(0xAA), prop(0xBB), prop(0xCC)],
+            arcane_tier: Some(2),
+        }]);
+        let out = apply_item_mod(&existing, 0, Some(&recipe), Uuid::from_u128(0x7));
+        assert_eq!(out.properties.enchanting.len(), 3, "enchants applied from outcome");
+        assert_eq!(out.tempering_level, 5, "tempering preserved on enchant");
+    }
+
+    #[test]
+    fn enchant_pick_is_deterministic_per_item() {
+        let recipe = enchant_recipe(vec![
+            EnchantOutcome { enchanting: vec![prop(1)], arcane_tier: None },
+            EnchantOutcome { enchanting: vec![prop(2), prop(3)], arcane_tier: None },
+        ]);
+        let existing = item_with(0, vec![]);
+        // idx = item_id % 2 → id 0 picks outcome 0 (len 1), id 1 picks outcome 1 (len 2)
+        let a = apply_item_mod(&existing, 0, Some(&recipe), Uuid::from_u128(0));
+        let b = apply_item_mod(&existing, 0, Some(&recipe), Uuid::from_u128(1));
+        assert_eq!(a.properties.enchanting.len(), 1);
+        assert_eq!(b.properties.enchanting.len(), 2);
+        // same id → same outcome (deterministic, no state)
+        let a2 = apply_item_mod(&existing, 0, Some(&recipe), Uuid::from_u128(0));
+        assert_eq!(a2.properties.enchanting.len(), 1);
+    }
+
+    #[test]
+    fn enchant_without_recipe_is_lenient_noop() {
+        let existing = item_with(3, vec![prop(1)]);
+        let out = apply_item_mod(&existing, 0, None, Uuid::from_u128(0x5));
+        assert_eq!(out.tempering_level, 3);
+        assert_eq!(out.properties.enchanting.len(), 1, "unchanged when no recipe");
+    }
 }

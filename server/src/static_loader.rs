@@ -13,7 +13,9 @@ use blades_lib::economy::RewardGrant;
 use blades_lib::features::challenges::ChallengeTemplate;
 use blades_lib::features::daily_reward::DailyRewardDef;
 use blades_lib::features::game_events::EventDef;
-use blades_lib::static_data::{Announcement, GiftDef, Recipe, ShopBundle, ShopData, StaticData};
+use blades_lib::static_data::{
+    Announcement, GiftDef, ItemModRecipe, Recipe, ShopBundle, ShopData, StaticData,
+};
 use log::warn;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -58,6 +60,8 @@ pub fn load(dir: &Path) -> StaticData {
     let shop_data: ShopData = read_json(&dir.join("shops.json"));
     let shop_bundles: HashMap<Uuid, ShopBundle> = read_json(&dir.join("shop_bundles.json"));
     let recipes: HashMap<Uuid, Recipe> = read_json(&dir.join("recipes.json"));
+    let item_mod_recipes: HashMap<Uuid, ItemModRecipe> =
+        read_json(&dir.join("item_mod_recipes.json"));
 
     StaticData {
         gifts: gifts.into_iter().map(|g| (g.global_gift_id, g)).collect::<HashMap<_, _>>(),
@@ -73,6 +77,7 @@ pub fn load(dir: &Path) -> StaticData {
         shop_data,
         shop_bundles,
         recipes,
+        item_mod_recipes,
     }
 }
 
@@ -100,6 +105,7 @@ mod tests {
         assert!(sd.shop_data.default.is_some(), "shops.json default");
         assert!(!sd.shop_bundles.is_empty(), "shop_bundles.json");
         assert!(!sd.recipes.is_empty(), "recipes.json");
+        assert!(!sd.item_mod_recipes.is_empty(), "item_mod_recipes.json");
         assert!(sd.global_shop_overrides.get("globalShopOverrides").is_some());
         assert!(sd.iap.get("fulfillmentOverrides").is_some());
     }

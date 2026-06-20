@@ -283,6 +283,72 @@ def extract_recipes(con):
     return seen
 
 
+def extract_item_mod_recipes(con):
+    """recipeId -> {craftingTypeId, durationMs, kind, outcomes} for the temper/enchant
+    crafts — `POST /crafts` requests that carry an `itemId` (they MODIFY an existing
+    backpack item rather than mint a new one, so they are distinct from `recipes.json`).
+
+    - kind "temper": the request's `temperingLevel` (>0) is applied to the item; no
+      outcome table is needed (the new level is driven by the request).
+    - kind "enchant": the recipe rolls a set of enchants. We keep the distinct observed
+      `ENCHANTING` outcomes (+ `arcaneTier`) so the server can apply a faithful enchant —
+      retail rolls randomly from a pool; the server picks one observed outcome
+      deterministically per item.
+    """
+    import datetime
+
+    def derive_duration(ts_raw, completed_at):
+        if not (completed_at and ts_raw):
+            return 0
+        try:
+            ts_str = str(ts_raw).replace(" ", "T")
+            if "+" in ts_str:
+                ts_str = ts_str.split("+")[0]
+            elif ts_str.endswith("Z"):
+                ts_str = ts_str[:-1]
+            cap_ms = int(datetime.datetime.fromisoformat(ts_str).timestamp() * 1000)
+            return max(0, completed_at - cap_ms)
+        except Exception:
+            return 0
+
+    recipes = {}
+    q = (
+        "SELECT timestamp, request_body, response_body FROM api_captures "
+        "WHERE url LIKE '%/crafts' AND method='POST' AND response_status=200"
+    )
+    for ts_raw, rb, sb in con.execute(q):
+        try:
+            req = json.loads(astext(rb))
+            res = json.loads(astext(sb))
+        except Exception:
+            continue
+        if not isinstance(req, dict) or "itemId" not in req:
+            continue  # only item-modifying crafts (temper/enchant)
+        rid = req.get("recipeId")
+        craft = res.get("craft") or {}
+        ctid = craft.get("craftingTypeId")
+        items = (craft.get("results") or {}).get("items") or []
+        if not (rid and ctid and items):
+            continue
+        item = items[0]
+        rec = recipes.setdefault(
+            rid,
+            {"craftingTypeId": ctid, "durationMs": 0, "kind": "enchant", "outcomes": []},
+        )
+        if not rec["durationMs"]:
+            rec["durationMs"] = derive_duration(ts_raw, craft.get("completedAt"))
+        tl_req = req.get("temperingLevel") or 0
+        if tl_req > 0:
+            rec["kind"] = "temper"
+            continue
+        ench = (item.get("properties") or {}).get("ENCHANTING")
+        if ench:
+            outcome = {"enchanting": ench, "arcaneTier": item.get("arcaneTier")}
+            if outcome not in rec["outcomes"] and len(rec["outcomes"]) < 24:
+                rec["outcomes"].append(outcome)
+    return recipes
+
+
 def extract_shop_bundles(con):
     """bundleId -> {currencyId, price-per-unit, grant}, from single-bundle buy captures.
     revenue = price paid; the granted item is the inventory backpack delta."""
@@ -336,6 +402,7 @@ EXTRACTORS = {
     "shops.json": extract_shops,
     "shop_bundles.json": extract_shop_bundles,
     "recipes.json": extract_recipes,
+    "item_mod_recipes.json": extract_item_mod_recipes,
 }
 
 

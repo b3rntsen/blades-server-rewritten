@@ -12,6 +12,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::economy::RewardGrant;
+use crate::user_data::ItemSingleProperty;
 use crate::features::challenges::ChallengeTemplate;
 use crate::features::daily_reward::DailyRewardDef;
 use crate::features::game_events::EventDef;
@@ -133,6 +134,38 @@ pub struct Recipe {
     pub duration_ms: i64,
 }
 
+/// One observed enchant outcome — the `ENCHANTING` property set a recipe applied to an
+/// item (+ the item's resulting `arcaneTier`). Retail rolls a random set from a pool;
+/// we keep every distinct observed outcome and the server picks one deterministically.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnchantOutcome {
+    #[serde(default)]
+    pub enchanting: Vec<ItemSingleProperty>,
+    /// Arcane tier the item ends at. Not modelled on [`crate::user_data::Item`] (the
+    /// server drops `arcaneTier` for every item), kept here for completeness.
+    #[serde(default)]
+    pub arcane_tier: Option<u64>,
+}
+
+/// A temper/enchant recipe — a `POST /crafts` request carrying an `itemId` that MODIFIES
+/// an existing backpack item, rather than minting a new one (see [`Recipe`]).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemModRecipe {
+    #[serde(default)]
+    pub crafting_type_id: Uuid,
+    #[serde(default)]
+    pub duration_ms: i64,
+    /// `"temper"` (the request's `temperingLevel` drives it) or `"enchant"` (one of
+    /// `outcomes` is applied).
+    #[serde(default)]
+    pub kind: String,
+    /// Observed enchant outcomes (enchant recipes only; empty for temper).
+    #[serde(default)]
+    pub outcomes: Vec<EnchantOutcome>,
+}
+
 /// All capture-derived static definitions, loaded once at startup. Fields are added
 /// per feature; each is independently optional (a missing/!invalid data file leaves
 /// its field empty rather than failing startup).
@@ -173,4 +206,7 @@ pub struct StaticData {
     pub shop_bundles: HashMap<Uuid, ShopBundle>,
     /// Craft recipes keyed by `recipeId` (capture-derived from `POST /crafts`).
     pub recipes: HashMap<Uuid, Recipe>,
+    /// Temper/enchant recipes keyed by `recipeId` — the `POST /crafts` requests that
+    /// carry an `itemId` and modify an existing item (vs `recipes`, which mint a new one).
+    pub item_mod_recipes: HashMap<Uuid, ItemModRecipe>,
 }
