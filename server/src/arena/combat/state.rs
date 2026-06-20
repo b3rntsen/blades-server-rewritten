@@ -168,6 +168,24 @@ pub enum StatusEffectType {
     // …
 }
 
+/// `BLOCK_OPTIMAL_TIME` (dump.cs 427014): how long (seconds) the shield can be held
+/// at OPTIMAL efficiency before degrading to LATE.
+pub const BLOCK_OPTIMAL_TIME_SECS: f32 = 2.0;
+
+/// `OPTIMAL_BLOCK_RECOVERY_TIME` (dump.cs 427015): cooldown (seconds) after dropping
+/// the block before a new OPTIMAL window can begin. Re-raising within this window
+/// starts as LATE, not OPTIMAL.
+pub const OPTIMAL_BLOCK_RECOVERY_SECS: f32 = 0.8;
+
+/// The block phase for a defending fighter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockPhase {
+    /// Guard just raised — within `BLOCK_OPTIMAL_TIME_SECS` (phys ×0, elem ×0.5).
+    Optimal,
+    /// Guard held too long — after `BLOCK_OPTIMAL_TIME_SECS` (phys ÷1.6, elem ÷1.23).
+    Late,
+}
+
 /// The status condition an elemental [`DamageType`] accumulates toward (the
 /// conditioning rule, §5). `Fire→Burning`, `Frost→Frozen`, `Shock→Enervated`,
 /// `Poison→Poisoned`; non-elemental types have no condition.
@@ -307,12 +325,29 @@ impl PackedStats {
 // Loadout (initialized from the imported character; refined in combat/loadout.rs)
 // ---------------------------------------------------------------------------
 
+/// High-level ability classification for abilities that need special server-side
+/// handling beyond the generic spell-damage path. Set by `loadout::from_character`
+/// when the imported character's ability template UUID matches a known class
+/// (`ward_ability_uuids`, `resist_elements_ability_uuids` in loadout.rs). Keeps the
+/// generic damage path working without game-data for unrecognized abilities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AbilityTag {
+    #[default]
+    /// Generic damage spell — handled by the default `resolve_ability` path.
+    Generic,
+    /// `WardAbility` subclass: apply Ward negation pool + armor. [§Mechanic-4]
+    Ward,
+    /// `ResistElementsAbility`: apply 4-tuple elemental resistance. [§Mechanic-3]
+    ResistElements,
+}
+
 /// One equipped ability: its instance UUID (as referenced by
 /// `RequestExecuteAbility`) and its level (drives scaling/cooldown).
 #[derive(Debug, Clone)]
 pub struct EquippedAbility {
     pub instance_uuid: String,
     pub level: u8,
+    pub tag: AbilityTag,
 }
 
 /// The weapon's base damage profile (per-type), filled from game data / RE.
@@ -377,8 +412,18 @@ pub struct ActiveEffect {
     pub damage_type: DamageType,
     /// Per-tick magnitude (DoT) or flat magnitude (buff).
     pub value: f32,
+    /// `_percentHealthDamage × maxHP` per tick (DoT); 0.0 for non-DoT effects.
+    /// Game-data-driven — the observed s506 range is 1.25–7.73 damage/tick.
+    /// **CALIBRATION FLAG**: the exact `_percentHealthDamage` requires the game's
+    /// Excel data. Current default: 0.003 of max HP per tick (≈ 3.87/tick at L86
+    /// arena×3 HP ≈ 1290 maxHP — the dominant s506 Poison DoT value).
+    pub per_tick_damage: f32,
     pub expires_at: Instant,
     pub last_tick: Instant,
+    /// True for a Resist-Elements transient resistance — these are carried in
+    /// `ActiveEffect` rather than the permanent `Loadout.resistances` so they
+    /// auto-expire and are cleaned up without touching the loadout.
+    pub is_transient_resist: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -422,6 +467,12 @@ pub struct Fighter {
     /// (or past) ⇒ not blocking. Expiry is reconciled into `actor_state` on each
     /// input/tick (where `now` is available).
     pub blocking_until: Option<Instant>,
+    /// The `Instant` when the current guard was raised (for OPTIMAL→LATE timeout).
+    /// `None` when not blocking. Set alongside `blocking_until` on op41.
+    pub block_raised_at: Option<Instant>,
+    /// The `Instant` the last block was DROPPED (for the OPTIMAL-recovery cooldown).
+    /// Guards raised within `OPTIMAL_BLOCK_RECOVERY_SECS` after dropping start as LATE.
+    pub last_block_dropped_at: Option<Instant>,
     /// Time of this fighter's last landed swing (combat throttle / swing cadence).
     pub last_swing: Option<Instant>,
     /// **Combo state** (`docs/arena-combat-reproduction-spec.md` §4.2). The number of
@@ -449,6 +500,12 @@ pub struct Fighter {
     pub can_be_paralyzed: bool,
     /// Active negation pools (Ward/Absorb/Dodge), drained per hit before damage lands.
     pub negation_pools: Vec<NegationPool>,
+    /// Transient per-type flat resistances from Resist-Elements casts.  These are held
+    /// separately from `loadout.resistances` so they expire cleanly without modifying the
+    /// loadout. Drained by `transient_resistance_against` which is called from the damage
+    /// pipeline AFTER block (same insertion point as loadout resistances). Duration = 11.5s
+    /// (`ResistElementsAbility._resistanceDuration` from multi-session op51 analysis).
+    pub transient_resistances: Vec<(DamageType, f32, Instant)>, // (type, flat_amount, expires_at)
 }
 
 /// A damage-negation pool (Ward/Absorb/Dodge) on a fighter — a quantity of
@@ -509,12 +566,15 @@ impl Fighter {
             arena_target: 1 - slot.min(1), // 2-player: the other slot
             blocking_side: ActiveSide::None,
             blocking_until: None,
+            block_raised_at: None,
+            last_block_dropped_at: None,
             last_swing: None,
             combo_count: 0,
             last_combo_side: ActiveSide::None,
             damage_history: HashMap::new(),
             can_be_paralyzed: true, // players can be paralysed (vs boss innate immunity)
             negation_pools: Vec::new(),
+            transient_resistances: Vec::new(),
         }
     }
 
@@ -549,15 +609,57 @@ impl Fighter {
     /// True iff this fighter's guard is up at `now` (a `PlayerBlockingStateChange`
     /// within the still-open block window). Reconciles `actor_state`/`blocking_side`
     /// back to Idle/None when the window has lapsed (so a stale block can't reduce
-    /// damage forever).
+    /// damage forever). Records `last_block_dropped_at` on expiry for the OPTIMAL
+    /// recovery cooldown.
     pub fn reconcile_block(&mut self, now: Instant) -> bool {
         let up = matches!(self.blocking_until, Some(t) if now < t);
         if !up && self.actor_state == ActorStateType::Blocking {
             self.actor_state = ActorStateType::Idle;
             self.blocking_side = ActiveSide::None;
             self.blocking_until = None;
+            self.block_raised_at = None;
+            self.last_block_dropped_at = Some(now);
         }
         up
+    }
+
+    /// The current OPTIMAL/LATE block phase for `now`, given the dump.cs constants:
+    /// - OPTIMAL iff the guard has been up for < `BLOCK_OPTIMAL_TIME_SECS` **and**
+    ///   the last block was dropped more than `OPTIMAL_BLOCK_RECOVERY_SECS` ago (or
+    ///   was never dropped — first block of the match is always OPTIMAL);
+    /// - LATE otherwise (held too long, or re-raised inside the recovery window).
+    ///
+    /// Returns `None` when the guard is not up.
+    pub fn block_phase(&self, now: Instant) -> Option<BlockPhase> {
+        let raised = self.block_raised_at?;
+        // Guard must still be up.
+        if !matches!(self.blocking_until, Some(until) if now < until) {
+            return None;
+        }
+        let held_secs = now.duration_since(raised).as_secs_f32();
+        if held_secs >= BLOCK_OPTIMAL_TIME_SECS {
+            return Some(BlockPhase::Late);
+        }
+        // Within the 2s optimal window: check recovery cooldown.
+        let in_recovery = self.last_block_dropped_at
+            .map(|t| now.duration_since(t).as_secs_f32() < OPTIMAL_BLOCK_RECOVERY_SECS)
+            .unwrap_or(false);
+        Some(if in_recovery { BlockPhase::Late } else { BlockPhase::Optimal })
+    }
+
+    /// Return the sum of transient Resist-Elements resistances for `ty` (non-expired
+    /// only). Called by the damage pipeline to add to loadout resistances. [§4.3]
+    pub fn transient_resistance_against(&self, ty: DamageType, now: Instant) -> f32 {
+        self.transient_resistances
+            .iter()
+            .filter(|(t, _, exp)| *t == ty && now < *exp)
+            .map(|(_, v, _)| *v)
+            .sum()
+    }
+
+    /// Prune expired transient resistances.
+    pub fn prune_transient_resistances(&mut self, now: Instant) {
+        self.transient_resistances.retain(|(_, _, exp)| now < *exp);
     }
 
     pub fn is_dead(&self) -> bool {
@@ -584,10 +686,9 @@ impl Fighter {
     // ----- Conditioning / resistance / negation (status-resistance-spec §2/§4/§5) -----
 
     /// The flat resistance this fighter applies against an incoming `ty` component:
-    /// summed `resistances` of that type, with ELEMENTAL resistance scaled by the
-    /// attacker's `(1 − elem_resist_piercing)`, MINUS any matching `weaknesses` (a
-    /// weakness reduces the effective resistance, i.e. lets more through). Returns a
-    /// non-negative flat amount to subtract from the post-block component. [§2.1/§2.3]
+    /// summed `resistances` of that type (permanent loadout resistances), with ELEMENTAL
+    /// resistance scaled by the attacker's `(1 − elem_resist_piercing)`, MINUS any
+    /// matching `weaknesses`. Returns a non-negative flat amount. [§2.1/§2.3]
     pub fn resistance_against(&self, ty: DamageType, attacker_elem_pierce: f32) -> f32 {
         let mut resist: f32 = self
             .loadout
@@ -607,6 +708,15 @@ impl Fighter {
             .map(|(_, v)| *v)
             .sum();
         (resist - weakness).max(0.0)
+    }
+
+    /// Combined flat resistance including transient Resist-Elements buffs (timed via
+    /// `now`). The damage pipeline calls this instead of `resistance_against` so that
+    /// the Resist-Elements flat reduction is applied AFTER block in the same step.
+    pub fn total_resistance_against(&self, ty: DamageType, attacker_elem_pierce: f32, now: Instant) -> f32 {
+        let perm = self.resistance_against(ty, attacker_elem_pierce);
+        let transient = self.transient_resistance_against(ty, now);
+        perm + transient
     }
 
     /// The per-condition land threshold (absolute HP) for `condition`: the base
@@ -815,10 +925,13 @@ impl MatchCombat {
             f.state_entered = now;
             f.blocking_side = ActiveSide::None;
             f.blocking_until = None;
+            f.block_raised_at = None;
+            f.last_block_dropped_at = None;
             f.last_swing = None;
             f.reset_combo();
             f.damage_history.clear(); // ClearDamageHistory on round reset (§5.5)
             f.negation_pools.clear();
+            f.transient_resistances.clear();
         }
     }
 
@@ -991,5 +1104,156 @@ mod tests {
         // A weakness reduces effective resist (floored at 0).
         f.loadout.weaknesses = vec![(DamageType::Poison, 50.0)];
         assert_eq!(f.resistance_against(DamageType::Poison, 0.0), 0.0, "weakness > resist → 0 (more gets through)");
+    }
+
+    // -----------------------------------------------------------------------
+    // Mechanic 1: BLOCK OPTIMAL→LATE timeout [§Mechanic-1]
+    // -----------------------------------------------------------------------
+
+    /// Block phase is OPTIMAL when the guard was just raised (within 2.0s window, no
+    /// recovery cooldown). After 2.0s of continuous holding it degrades to LATE.
+    /// [PvpDefaultSettings BLOCK_OPTIMAL_TIME=2.0 / OPTIMAL_BLOCK_RECOVERY_TIME=0.8]
+    #[test]
+    fn block_degrades_from_optimal_to_late_after_2s() {
+        let now = Instant::now();
+        let mut f = Fighter::new(0, 564, Loadout { level: 50, ..Default::default() }, now);
+        let block_window = std::time::Duration::from_secs(5); // long window so it doesn't expire
+
+        // Fresh block: raised just now → OPTIMAL.
+        f.actor_state = ActorStateType::Blocking;
+        f.blocking_side = ActiveSide::Right;
+        f.blocking_until = Some(now + block_window);
+        f.block_raised_at = Some(now);
+        assert_eq!(
+            f.block_phase(now),
+            Some(BlockPhase::Optimal),
+            "freshly raised block is OPTIMAL"
+        );
+
+        // Still within 2.0s window → OPTIMAL.
+        let within = now + std::time::Duration::from_millis(1500);
+        assert_eq!(
+            f.block_phase(within),
+            Some(BlockPhase::Optimal),
+            "1.5s hold is still OPTIMAL (< 2.0s)"
+        );
+
+        // After 2.0s → LATE.
+        let after = now + std::time::Duration::from_millis(2001);
+        assert_eq!(
+            f.block_phase(after),
+            Some(BlockPhase::Late),
+            "2.0s+ hold degrades to LATE"
+        );
+    }
+
+    /// A block re-raised within the OPTIMAL_BLOCK_RECOVERY_TIME (0.8s) window starts as
+    /// LATE (not OPTIMAL) — the recovery cooldown prevents rapid OPTIMAL chaining.
+    #[test]
+    fn block_reraise_within_recovery_window_is_late() {
+        let now = Instant::now();
+        let mut f = Fighter::new(0, 564, Loadout { level: 50, ..Default::default() }, now);
+        let block_window = std::time::Duration::from_secs(5);
+
+        // Drop the block (record last_block_dropped_at = now).
+        f.last_block_dropped_at = Some(now);
+
+        // Re-raise immediately (0.3s after drop — inside the 0.8s recovery window).
+        let reraise = now + std::time::Duration::from_millis(300);
+        f.actor_state = ActorStateType::Blocking;
+        f.blocking_side = ActiveSide::Right;
+        f.blocking_until = Some(reraise + block_window);
+        f.block_raised_at = Some(reraise);
+
+        assert_eq!(
+            f.block_phase(reraise),
+            Some(BlockPhase::Late),
+            "re-raised within 0.8s recovery → starts as LATE, not OPTIMAL"
+        );
+
+        // After the recovery cooldown passes (>0.8s), a fresh raise is OPTIMAL again.
+        let after_recovery = now + std::time::Duration::from_millis(900);
+        f.block_raised_at = Some(after_recovery);
+        f.blocking_until = Some(after_recovery + block_window);
+        assert_eq!(
+            f.block_phase(after_recovery),
+            Some(BlockPhase::Optimal),
+            "re-raised after 0.8s recovery → OPTIMAL"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Mechanic 3: RESIST ELEMENTS transient resistance [§Mechanic-3]
+    // -----------------------------------------------------------------------
+
+    /// Resist-Elements adds a transient flat resistance for all four elemental types;
+    /// it is included in `total_resistance_against` and expires after 11.5s.
+    #[test]
+    fn resist_elements_flat_subtraction_after_block_via_transient() {
+        let now = Instant::now();
+        let mut f = Fighter::new(1, 565, Loadout { level: 50, ..Default::default() }, now);
+        let expires = now + std::time::Duration::from_secs(12);
+
+        // Push Resist-Elements transient resistances for all four element types (50 each).
+        for ty in [DamageType::Fire, DamageType::Frost, DamageType::Shock, DamageType::Poison] {
+            f.transient_resistances.push((ty, 50.0, expires));
+        }
+
+        // Each elemental type has 50 flat resist NOW; expires AFTER now.
+        assert!((f.total_resistance_against(DamageType::Poison, 0.0, now) - 50.0).abs() < 1e-3,
+            "transient Poison resist = 50");
+        assert!((f.total_resistance_against(DamageType::Fire, 0.0, now) - 50.0).abs() < 1e-3,
+            "transient Fire resist = 50");
+        // Physical is NOT covered by Resist-Elements (only elemental four).
+        assert_eq!(f.total_resistance_against(DamageType::Slashing, 0.0, now), 0.0,
+            "Slashing has no transient resist from Resist-Elements");
+
+        // After expiry the transient resist disappears.
+        let after = now + std::time::Duration::from_secs(13);
+        assert_eq!(f.total_resistance_against(DamageType::Poison, 0.0, after), 0.0,
+            "transient resist expires after its duration");
+    }
+
+    // -----------------------------------------------------------------------
+    // Mechanic 4: DoT concurrent stacking [§Mechanic-4]
+    // -----------------------------------------------------------------------
+
+    /// Multiple concurrent DoT ActiveEffect instances on the same fighter tick
+    /// INDEPENDENTLY — their `last_tick` and `per_tick_damage` are independent.
+    #[test]
+    fn dot_concurrent_instances_stack_independently() {
+        let now = Instant::now();
+        let expires = now + std::time::Duration::from_secs(5);
+        let mut f = Fighter::new(1, 565, Loadout { level: 50, ..Default::default() }, now);
+
+        // Push two concurrent Poisoned effects with different per-tick magnitudes
+        // (mimics s506: Flappety had 1.25/tick + 4.42/tick concurrently).
+        f.effects.push(ActiveEffect {
+            effect: StatusEffectType::Poisoned,
+            damage_type: DamageType::Poison,
+            value: 1.25,
+            per_tick_damage: 1.25,
+            expires_at: expires,
+            last_tick: now,
+            is_transient_resist: false,
+        });
+        f.effects.push(ActiveEffect {
+            effect: StatusEffectType::Poisoned,
+            damage_type: DamageType::Poison,
+            value: 4.42,
+            per_tick_damage: 4.42,
+            expires_at: expires,
+            last_tick: now,
+            is_transient_resist: false,
+        });
+
+        assert_eq!(f.effects.len(), 2, "two independent DoT instances");
+        let total_per_tick: f32 = f.effects.iter().map(|e| e.per_tick_damage).sum();
+        assert!((total_per_tick - 5.67).abs() < 1e-3,
+            "combined tick = 1.25 + 4.42 = 5.67 (concurrent, not refreshed/merged)");
+
+        // Verify they expire at the same time (both created simultaneously).
+        assert!(f.effects.iter().all(|e| e.expires_at == expires),
+            "both instances share the same expiry");
     }
 }
