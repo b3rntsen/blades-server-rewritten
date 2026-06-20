@@ -332,6 +332,7 @@ fn profiled(name: &str) -> Loadout {
     l.abilities.push(super::state::EquippedAbility {
         instance_uuid: "5b764e61-8851-4703-8fea-3d8e589ed24f".to_string(),
         level: 1,
+        tag: super::state::AbilityTag::Generic,
     });
     l.profile_equipped_json = r#"{"equippedItems":{}}"#.to_string();
     l.profile_character_json = format!(r#"{{"name":"{name}"}}"#);

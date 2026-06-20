@@ -84,9 +84,15 @@ pub fn on_c2s_input(
         if sender < combat.fighters.len() {
             let side = messages::blocking_active_side(user_data).unwrap_or(ActiveSide::Middle);
             let f = &mut combat.fighters[sender];
+            // Record block-raise instant for OPTIMAL→LATE timeout logic.
+            // If the fighter re-raises within the recovery window (`last_block_dropped_at`
+            // + OPTIMAL_BLOCK_RECOVERY_SECS), the new block starts as LATE (not OPTIMAL).
+            // `block_phase()` in damage::block_outcome handles this via `block_raised_at` +
+            // `last_block_dropped_at`. [PvpDefaultSettings dump.cs 427014-427015]
             f.actor_state = super::state::ActorStateType::Blocking;
             f.blocking_side = side;
             f.blocking_until = Some(now + BLOCK_WINDOW);
+            f.block_raised_at = Some(now);
             debug!("combat: slot {sender} raised guard ({side:?}) for {BLOCK_WINDOW:?}");
         }
         return Vec::new();
@@ -163,6 +169,7 @@ fn resolve_swing(
         next_side,
         1.0,
         combo_count,
+        now,
     );
     // A connected OPTIMAL block on the target RESETS the attacker's combo (§4.2: a block
     // breaks the chain — the next swing starts fresh at ×1.0).
@@ -200,17 +207,30 @@ fn resolve_ability_cast(
     out.push((sender, perform.clone()));
     out.push((target_slot, perform));
 
-    // Spell damage (level from the equipped ability if we know it; else 1).
-    let level = combat.fighters[sender]
+    // Look up the ability tag and level from the equipped loadout.
+    let (level, tag) = combat.fighters[sender]
         .loadout
         .abilities
         .iter()
         .find(|a| a.instance_uuid == ea.ability_uuid)
-        .map(|a| a.level)
-        .unwrap_or(1);
-    debug!("combat: slot {sender} casts ability {} (level {level}) → slot {target_slot}", ea.ability_uuid);
-    let resolved = RetailDamageModel.resolve_ability(level, &combat.fighters[target_slot], ActiveSide::Middle);
-    out.extend(emit_damage(combat, sender, target_slot, &resolved, now));
+        .map(|a| (a.level, a.tag))
+        .unwrap_or((1, super::state::AbilityTag::Generic));
+    debug!("combat: slot {sender} casts ability {} (tag {tag:?}, level {level}) → slot {target_slot}", ea.ability_uuid);
+
+    // Route Ward and ResistElements to their specific handlers (no direct damage).
+    // Generic abilities go through the standard spell-damage path.
+    match tag {
+        super::state::AbilityTag::Ward => {
+            out.extend(apply_ward(combat, sender, now));
+        }
+        super::state::AbilityTag::ResistElements => {
+            out.extend(apply_resist_elements(combat, sender, now));
+        }
+        super::state::AbilityTag::Generic => {
+            let resolved = RetailDamageModel.resolve_ability(level, &combat.fighters[target_slot], ActiveSide::Middle, now);
+            out.extend(emit_damage(combat, sender, target_slot, &resolved, now));
+        }
+    }
     out
 }
 
@@ -310,6 +330,45 @@ const CONDITION_DURATION_SECS: f32 = 5.0;
 /// `Paralyzed` status duration = `ParalyzeAbility._duration` (s506 op51 = 3.1 s). [§5.4]
 const PARALYZE_DURATION_SECS: f32 = 3.1;
 
+/// DoT tick cadence — 1 tick per second (s506 packet timestamps confirm 1s intervals).
+const DOT_TICK_INTERVAL: Duration = Duration::from_secs(1);
+
+/// `_percentHealthDamage` default for elemental DoT effects (game-data-driven; flagged
+/// as a calibration guess). Derived from s506's dominant Poison DoT value of 3.87/tick
+/// at ~L86 arena×3 maxHP ≈ 1290 HP → 3.87/1290 ≈ 0.003. Range observed: 1.25–7.73/tick.
+/// **CALIBRATION FLAG**: the exact per-ability `_percentHealthDamage` requires the game's
+/// Excel data. [docs/arena-combat-fidelity-iteration.md §Mechanic-4]
+const DOT_PERCENT_HEALTH_PER_TICK: f32 = 0.003;
+
+/// Resist-Elements status duration (11.5s), measured from op51 apply events across
+/// sessions s127, s167, s293, s385 (multi-session analysis). Applies to all four
+/// resistance types simultaneously. [docs/arena-combat-fidelity-iteration.md §Mechanic-3]
+const RESIST_ELEMENTS_DURATION_SECS: f32 = 11.5;
+
+/// Flat resistance value per element for Resist-Elements. Game-data-driven
+/// (`ResistElementsAbility._resistanceAmount`). **CALIBRATION FLAG**: no direct
+/// measurement from captures (no Resist-Elements hits in s506). Representative value
+/// chosen so that a typical Poison hit (137 base) is partially reduced without full
+/// negation. Calibrate against a session that has op51 ResistElements + matching
+/// ReceiveDamage hits.
+const RESIST_ELEMENTS_FLAT_AMOUNT: f32 = 50.0;
+
+/// Ward `_wardArmor` default physical reduction (flat armor, subtracted from
+/// incoming physical damage). Game-data from `WardAbility._wardArmor`. **CALIBRATION
+/// FLAG**: the exact value requires game-data extraction. Representative: ~20 flat
+/// physical armor (reduces a 113-base Slashing hit by ~18%).
+const WARD_ARMOR_FLAT: f32 = 20.0;
+
+/// Ward `_wardHealth` default negation pool size (HP-equivalent). Game-data from
+/// `WardAbility._wardHealth`. **CALIBRATION FLAG**. Representative: 300 HP pool
+/// (absorbs ~2 average hits before draining). [arena-status-resistance-spec §4.2]
+const WARD_HEALTH_POOL: f32 = 300.0;
+
+/// Ward duration — pool-managed (not time-managed); op51 events have duration=0 in
+/// captures. We give it a generously long hard cap so the pool can drain naturally
+/// before it expires. Retail: pool hits 0 → DamageNegated emitted and Ward removed.
+const WARD_DURATION_SECS: f32 = 60.0;
+
 /// Record this hit's elemental components into the target's sliding `damage_history`
 /// window, then run `CheckStatusEffectApplication` per element (§5.2): when accumulated
 /// [element] damage crosses the condition threshold, the condition LANDS → emit op51
@@ -355,12 +414,16 @@ fn apply_status_conditioning(
                 .iter()
                 .any(|e| e.effect == condition && now < e.expires_at);
             if !already {
+                let max_hp = combat.fighters[target_slot].max_health;
+                let per_tick = DOT_PERCENT_HEALTH_PER_TICK * max_hp as f32;
                 combat.fighters[target_slot].effects.push(super::state::ActiveEffect {
                     effect: condition,
                     damage_type: *ty,
-                    value: 0.0, // DoT tick magnitude (wired with the on-tick DoT later)
+                    value: per_tick,
+                    per_tick_damage: per_tick,
                     expires_at: now + Duration::from_secs_f32(CONDITION_DURATION_SECS),
                     last_tick: now,
+                    is_transient_resist: false,
                 });
                 let frame = messages::change_combat_status_effect(
                     target_obj, true, condition, CONDITION_DURATION_SECS, 0,
@@ -410,6 +473,176 @@ fn reconcile_paralysis(f: &mut super::state::Fighter, now: Instant) {
     {
         f.actor_state = ActorStateType::Idle;
     }
+}
+
+/// Drive DoT ticks for all active elemental conditions on all fighters. For each
+/// `Burning/Frozen/Enervated/Poisoned` `ActiveEffect` whose `last_tick` is ≥
+/// `DOT_TICK_INTERVAL` ago, emit a `ReceiveDamage` with `DamageSource::StatusEffect`
+/// and the condition's elemental type. Multiple concurrent instances of the SAME
+/// element tick INDEPENDENTLY (stack, do not refresh). Expired effects are dropped.
+/// Returns `(target_slot, frame)` pairs — one `ReceiveDamage` per eligible tick.
+///
+/// **DoT tick magnitude**: `per_tick_damage` (= `_percentHealthDamage × maxHP`),
+/// game-data-driven at `DOT_PERCENT_HEALTH_PER_TICK`. [§Mechanic-4 calibration flag]
+fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
+    use super::state::{DamageSource as DS, StatusEffectType};
+    let mut out = Vec::new();
+
+    for slot in 0..combat.fighters.len() {
+        // Prune expired effects.
+        combat.fighters[slot].effects.retain(|e| now < e.expires_at);
+        // Prune expired transient resistances.
+        combat.fighters[slot].prune_transient_resistances(now);
+
+        let opp_slot = combat.fighters[slot].arena_target;
+        if combat.fighters[slot].is_dead() {
+            continue;
+        }
+
+        // Collect ticking DoT indices + their damage so we can split the borrow.
+        let ticking: Vec<(usize, f32, super::state::DamageType)> = combat.fighters[slot]
+            .effects
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                matches!(
+                    e.effect,
+                    StatusEffectType::Burning
+                        | StatusEffectType::Frozen
+                        | StatusEffectType::Enervated
+                        | StatusEffectType::Poisoned
+                ) && now.duration_since(e.last_tick) >= DOT_TICK_INTERVAL
+            })
+            .map(|(i, e)| (i, e.per_tick_damage, e.damage_type))
+            .collect();
+
+        for (idx, tick_dmg, dmg_type) in ticking {
+            // Update last_tick on the effect.
+            combat.fighters[slot].effects[idx].last_tick = now;
+
+            if tick_dmg <= 0.0 {
+                continue;
+            }
+
+            let hp_before = combat.fighters[slot].health;
+            let max_hp = combat.fighters[slot].max_health;
+            combat.fighters[slot].take_damage(tick_dmg.round().max(0.0) as u32);
+            let hp_after = combat.fighters[slot].health;
+            let pct = if max_hp > 0 { 100.0 * tick_dmg / max_hp as f32 } else { 0.0 };
+            debug!(
+                "combat DoT: slot {slot} {dmg_type:?} tick {tick_dmg:.2} ({pct:.2}% maxHP) | HP {hp_before}→{hp_after}"
+            );
+
+            // Emit ReceiveDamage (DamageSource::StatusEffect) to both players.
+            let (defender_stats, attacker_stats) = {
+                let d = &combat.fighters[slot];
+                let a = combat.fighters.get(opp_slot).map(|f| f.packed_stats()).unwrap_or(0);
+                (d.packed_stats(), a)
+            };
+            let defender_obj = combat.fighters[slot].net_object_id;
+            let frame = messages::receive_damage(
+                defender_obj,
+                super::state::NetObjectType::Avatar as u8,
+                defender_stats,
+                attacker_stats,
+                DS::StatusEffect,
+                super::damage::flags::SHOW_DAMAGE, // no HAS_ATTACKER for DoT
+                tick_dmg,
+                0,
+                ActiveSide::None,
+                super::state::DamageType::None,
+                &[(dmg_type, tick_dmg)],
+            );
+            for dest in 0..combat.fighters.len() {
+                out.push((dest, frame.clone()));
+            }
+
+            if combat.fighters[slot].is_dead() {
+                // DoT killed the defender — score the round for the opponent.
+                out.extend(on_round_ending_death(combat, opp_slot));
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Apply a Ward cast to `caster_slot`: push a Ward negation pool + optional armor
+/// bonus onto the fighter and emit op51 `ChangeCombatStatusEffect` (Ward=15) to
+/// both players. The pool drains on incoming elemental hits (existing
+/// `apply_negation_pools` infrastructure); when fully drained, op66 DamageNegated
+/// is emitted by the normal `emit_damage` path. [arena-status-resistance-spec §4.2]
+fn apply_ward(combat: &mut MatchCombat, caster_slot: usize, now: Instant) -> Vec<(usize, Vec<u8>)> {
+    use super::state::{DamageNegationSource, NegationPool, StatusEffectType};
+    let mut out = Vec::new();
+    if caster_slot >= combat.fighters.len() {
+        return out;
+    }
+    let f = &mut combat.fighters[caster_slot];
+    let ward_expires = now + Duration::from_secs_f32(WARD_DURATION_SECS);
+    // Add the negation pool.
+    f.negation_pools.push(NegationPool {
+        source: DamageNegationSource::Ward,
+        remaining: WARD_HEALTH_POOL,
+        expires_at: ward_expires,
+        restoration_factor: 0.0, // Ward: pure negation, no heal-back
+    });
+    // Add transient flat physical armor (subtracted from incoming physical as a
+    // transient resistance on the caster — `DamageType::Health` is NOT physical;
+    // Slashing/Cleaving/Bashing are. We model ward armor as flat resist on physical
+    // types using the transient_resistances mechanism).
+    use super::state::DamageType;
+    for ty in [DamageType::Slashing, DamageType::Cleaving, DamageType::Bashing] {
+        f.transient_resistances.push((ty, WARD_ARMOR_FLAT, ward_expires));
+    }
+    let target_obj = f.net_object_id;
+    info!("combat: slot {caster_slot} WARD applied (pool {WARD_HEALTH_POOL}, armor {WARD_ARMOR_FLAT}, duration {WARD_DURATION_SECS}s)");
+    // op51 apply Ward=15, duration=0 (pool-managed, not time-managed per captures).
+    let frame = messages::change_combat_status_effect(target_obj, true, StatusEffectType::Ward, 0.0, 0);
+    for slot in 0..combat.fighters.len() {
+        out.push((slot, frame.clone()));
+    }
+    out
+}
+
+/// Apply Resist-Elements to `caster_slot`: push four transient elemental resistances
+/// (Fire/Frost/Shock/Poison) with 11.5s duration and emit four op51
+/// `ChangeCombatStatusEffect` events (FireResistance=60 … PoisonResistance=63).
+/// The flat subtraction is applied AFTER block by `total_resistance_against` in the
+/// damage pipeline. [docs/arena-combat-fidelity-iteration.md §Mechanic-3]
+fn apply_resist_elements(combat: &mut MatchCombat, caster_slot: usize, now: Instant) -> Vec<(usize, Vec<u8>)> {
+    use super::state::{DamageType, StatusEffectType};
+    let mut out = Vec::new();
+    if caster_slot >= combat.fighters.len() {
+        return out;
+    }
+    let expires = now + Duration::from_secs_f32(RESIST_ELEMENTS_DURATION_SECS);
+    let target_obj = combat.fighters[caster_slot].net_object_id;
+    let resist_pairs = [
+        (DamageType::Fire, StatusEffectType::FireResistance),
+        (DamageType::Frost, StatusEffectType::FrostResistance),
+        (DamageType::Shock, StatusEffectType::ShockResistance),
+        (DamageType::Poison, StatusEffectType::PoisonResistance),
+    ];
+    for (dmg_ty, effect_ty) in resist_pairs {
+        combat.fighters[caster_slot]
+            .transient_resistances
+            .push((dmg_ty, RESIST_ELEMENTS_FLAT_AMOUNT, expires));
+        let frame = messages::change_combat_status_effect(
+            target_obj,
+            true,
+            effect_ty,
+            RESIST_ELEMENTS_DURATION_SECS,
+            0,
+        );
+        for slot in 0..combat.fighters.len() {
+            out.push((slot, frame.clone()));
+        }
+    }
+    info!(
+        "combat: slot {caster_slot} RESIST ELEMENTS applied (flat {RESIST_ELEMENTS_FLAT_AMOUNT}/elem, {RESIST_ELEMENTS_DURATION_SECS}s)"
+    );
+    out
 }
 
 /// `winner` defeated its opponent (the killing blow just landed). Score the round
@@ -557,6 +790,16 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
         f.reconcile_block(now);
     }
     let mut out = Vec::new();
+
+    // DoT ticks — one tick per second per active condition instance, independent of
+    // whether a bot or player is the source. Runs BEFORE bot swings so a DoT killing
+    // blow is processed before the bot's turn. [§Mechanic-2]
+    out.extend(apply_dot_ticks(combat, now));
+    if matches!(combat.phase, FlowState::RoundEnd | FlowState::NextState) {
+        // A DoT killing blow just ended the round — no bot swings this tick.
+        return out;
+    }
+
     let bot_slots: Vec<usize> = (combat.expected_peers..combat.fighters.len()).collect();
     for bot in bot_slots {
         if combat.fighters[bot].is_dead() {

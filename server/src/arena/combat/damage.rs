@@ -22,7 +22,9 @@
 //! once those are wired from the imported character (until then, loadout defaults
 //! drive the formula and the structure/relationships below are what's verified).
 
-use super::state::{ActiveSide, DamageSource, DamageType, Fighter, Loadout};
+use std::time::Instant;
+
+use super::state::{ActiveSide, BlockPhase, DamageSource, DamageType, Fighter, Loadout};
 use super::tables;
 
 /// A resolved hit: the per-type components (incl. stat drains) + the
@@ -139,20 +141,17 @@ pub const PHYSICAL_BLOCK_MULTIPLIER: f32 = 1.6;
 pub const ELEMENTAL_BLOCK_MULTIPLIER: f32 = 1.23;
 
 /// The corrected, per-CATEGORY block outcome (`docs/arena-combat-reproduction-spec.md`
-/// §4.4 — the AUTHORITATIVE per-hit ground truth, which **supersedes** the
-/// ÷1.6/÷1.23-for-optimal model in `arena-status-resistance-spec.md` §3 and
-/// `blades-combat-formulae.md` §3):
+/// §4.4 — the AUTHORITATIVE per-hit ground truth):
 ///
-///   - a CONNECTED **optimal** block (correct side, in the window) **negates physical
-///     (×0.0)** but only **halves elemental (×0.5)** — phys≈0 / elem×0.5, capture-pinned
-///     on s506 (seq 323: Slashing 113.82 → 0.77 ≈ 0, Poison 137.32 → 68.65 = ÷2.0);
-///   - a **late / wrong-side** block is a *partial* reduction: physical ÷1.6,
-///     elemental ÷1.23 (the dump's real `PvpDefaultSettings` constants — but the LATE
-///     tier, not optimal).
+///   - a CONNECTED **optimal** block: physical NEGATED (×0.0), elemental HALVED (×0.5).
+///   - a **late** block (held > `BLOCK_OPTIMAL_TIME` 2.0s, OR re-raised inside the
+///     `OPTIMAL_BLOCK_RECOVERY_TIME` 0.8s window): physical ÷1.6, elemental ÷1.23.
 ///
-/// `wasOptimalBlocking` is a defender-STATE bit (the server decides absorption from its
-/// own side/timing, then sets the flag) — it is set here only when we applied the
-/// *optimal* reduction. A non-blocking target ⇒ no reduction (factor 1.0, no flag).
+/// Side-matching: OPTIMAL requires the defending side == the attacking `active_side`.
+/// A wrong-side guard while in the optimal phase is still LATE.
+///
+/// `wasOptimalBlocking` is a defender-STATE bit set here only when we applied the
+/// *optimal* reduction.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct BlockOutcome {
     flag: u8,
@@ -177,7 +176,7 @@ impl BlockOutcome {
                 1.0
             }
         } else {
-            // Late / wrong-side: the dump's partial divisors.
+            // Late: the dump's partial divisors (phys ÷1.6, elem ÷1.23).
             if is_physical(ty) {
                 1.0 / PHYSICAL_BLOCK_MULTIPLIER
             } else if is_elemental(ty) {
@@ -189,15 +188,25 @@ impl BlockOutcome {
     }
 }
 
-/// Resolve the block outcome for a hit on `target` swung on `active_side`. Optimal =
-/// the defender is guarding the MATCHING side within the block window; otherwise the
-/// guard is up but off-angle (late). See [`BlockOutcome`] for the corrected factors.
-fn block_outcome(target: &Fighter, active_side: ActiveSide) -> BlockOutcome {
+/// Resolve the block outcome for a hit on `target` swung on `active_side`, using
+/// the OPTIMAL→LATE timeout derived from `target.block_phase(now)`.
+///
+/// OPTIMAL requires BOTH: (1) the defender is in the `Optimal` phase (guard raised
+/// < 2.0s ago AND outside the 0.8s recovery window); AND (2) the defending side
+/// matches the attacking side. Wrong-side in the Optimal phase is still LATE (the
+/// guard is up but mis-oriented). A guard in the LATE phase is LATE regardless of
+/// side. [PvpDefaultSettings dump.cs 427014-427020; s506 calibration §4.4]
+fn block_outcome(target: &Fighter, active_side: ActiveSide, now: Instant) -> BlockOutcome {
     use super::state::ActorStateType;
     if target.actor_state != ActorStateType::Blocking || active_side == ActiveSide::None {
         return BlockOutcome { flag: 0, optimal: false, blocking: false };
     }
-    let optimal = target.blocking_side == active_side;
+    let phase = match target.block_phase(now) {
+        Some(p) => p,
+        None => return BlockOutcome { flag: 0, optimal: false, blocking: false },
+    };
+    let side_matches = target.blocking_side == active_side;
+    let optimal = matches!(phase, BlockPhase::Optimal) && side_matches;
     BlockOutcome {
         flag: if optimal { flags::WAS_OPTIMAL_BLOCKING } else { flags::WAS_LATE_BLOCKING },
         optimal,
@@ -211,7 +220,8 @@ pub trait DamageModel {
     /// Resolve a weapon swing from `attacker` against `target`, at the attacker's
     /// current `combo_count` (the chain depth driving the combo ramp — see
     /// [`swing_multiplier`]). `swing_factor` is the per-swing charge multiplier
-    /// (1.0 = a normal commit).
+    /// (1.0 = a normal commit). `now` is used for OPTIMAL/LATE block phase + transient
+    /// Resist-Elements resistance lookup.
     fn resolve_attack(
         &self,
         attacker: &Loadout,
@@ -220,10 +230,11 @@ pub trait DamageModel {
         active_side: ActiveSide,
         swing_factor: f32,
         combo_count: u32,
+        now: Instant,
     ) -> ResolvedDamage;
 
     /// Resolve an ability/spell cast → Spell-source damage on `target`.
-    fn resolve_ability(&self, ability_level: u8, target: &Fighter, active_side: ActiveSide) -> ResolvedDamage;
+    fn resolve_ability(&self, ability_level: u8, target: &Fighter, active_side: ActiveSide, now: Instant) -> ResolvedDamage;
 }
 
 /// The RE-derived model (formula structure above). Number-exact once the weapon
@@ -275,54 +286,58 @@ impl DamageModel for RetailDamageModel {
         active_side: ActiveSide,
         swing_factor: f32,
         combo_count: u32,
+        now: Instant,
     ) -> ResolvedDamage {
         let mut components =
             Self::swing_components(attacker, target, active_side, swing_factor, combo_count);
-        finish_resolved(attacker, target, source, active_side, &mut components)
+        finish_resolved(attacker, target, source, active_side, &mut components, now)
     }
 
-    fn resolve_ability(&self, ability_level: u8, target: &Fighter, active_side: ActiveSide) -> ResolvedDamage {
+    fn resolve_ability(&self, ability_level: u8, target: &Fighter, active_side: ActiveSide, now: Instant) -> ResolvedDamage {
         // Representative spell: a Fire component scaled by ability level. The SHAPE
         // (Spell source, a single elemental component) matches the captured fire
         // spells; the exact per-ability magnitude needs ability game-data.
         let base = tables::spell_base_for_rank(ability_level);
         let mut components = vec![(DamageType::Fire, base)];
         // A bare attacker loadout (no enchant-piercing) for the spell mitigation path.
-        finish_resolved(&Loadout::default(), target, DamageSource::Spell, active_side, &mut components)
+        finish_resolved(&Loadout::default(), target, DamageSource::Spell, active_side, &mut components, now)
     }
 }
 
 /// Apply the post-roll mitigation pipeline to raw `components` and assemble the
 /// [`ResolvedDamage`] (`docs/arena-status-resistance-spec.md` §1, mitigation order):
-///   block (per-category, §3) → resistance (flat per-type, §2) → negation pools (§4)
-///   → Σ health = total.
-/// Sets the block flag, `most_resisted`, the `negated`/`heal` outputs, and the
-/// per-type components the client renders. The 25%-of-maxHP one-shot clamp is GONE for
-/// arena (`docs/arena-combat-reproduction-spec.md` §4.5) — deep-combo hits are *earned*.
+///   block (per-category, OPTIMAL/LATE, §3) → resistance (flat per-type incl. transient
+///   Resist-Elements, §2) → negation pools (§4) → Σ health = total.
+/// `now` is used for the OPTIMAL→LATE block phase lookup and the transient resistance
+/// expiry check. The 25%-of-maxHP one-shot clamp is GONE for arena (§4.5).
 fn finish_resolved(
     attacker: &Loadout,
     target: &Fighter,
     source: DamageSource,
     active_side: ActiveSide,
     components: &mut Vec<(DamageType, f32)>,
+    now: Instant,
 ) -> ResolvedDamage {
     let mut hit_flags = flags::SHOW_DAMAGE | flags::HAS_ATTACKER;
 
-    // 1) BLOCK — per-category (physical vs elemental differ; see `block_outcome`).
-    let block = block_outcome(target, active_side);
+    // 1) BLOCK — OPTIMAL (phys×0, elem×0.5) or LATE (phys÷1.6, elem÷1.23), determined
+    //    by how long the guard has been held (`block_phase`) and whether the defending
+    //    side matches the attacking side. [PvpDefaultSettings dump.cs 427014-427020]
+    let block = block_outcome(target, active_side, now);
     hit_flags |= block.flag;
     for (ty, v) in components.iter_mut() {
         *v *= block.factor_for(*ty);
     }
 
     // 2) RESISTANCE — flat per-type subtraction (elemental scaled by the attacker's
-    //    Elemental-Resistance-Piercing), summed from the defender's resist sources.
-    //    Track the most-resisted ELEMENT (largest resisted fraction ≥ a small floor).
+    //    Elemental-Resistance-Piercing). Includes TRANSIENT Resist-Elements resistances
+    //    (11.5s duration, four elements simultaneously, applied AFTER block). Track
+    //    the most-resisted ELEMENT (largest resisted fraction ≥ a small floor).
     let mut most_resisted = DamageType::None;
     let mut most_resisted_frac = MOST_RESISTED_FLOOR;
     for (ty, v) in components.iter_mut() {
         let before = *v;
-        let resisted = target.resistance_against(*ty, attacker.elem_resist_piercing);
+        let resisted = target.total_resistance_against(*ty, attacker.elem_resist_piercing, now);
         if resisted > 0.0 && before > 0.0 {
             *v = (before - resisted).max(0.0);
             if is_elemental(*ty) {
@@ -421,9 +436,10 @@ mod tests {
             rd.components.iter().filter(|(t, _)| *t == DamageType::Poison).map(|(_, v)| *v).sum()
         };
 
-        let c0 = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0);
-        let c1 = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Left, 1.0, 1);
-        let c4 = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 4);
+        let now = Instant::now();
+        let c0 = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let c1 = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Left, 1.0, 1, now);
+        let c4 = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 4, now);
 
         // Physical reproduces the s506 anchors: combo-0 Right ≈ 113.8, +1 chained ≈ 165.
         assert!((slash(&c0) - 113.82).abs() < 0.5, "combo-0 Slashing ≈ 113.8, got {}", slash(&c0));
@@ -442,7 +458,8 @@ mod tests {
     #[test]
     fn enchant_base_is_poison_calibrated_with_excluded_drain() {
         let m = RetailDamageModel;
-        let rd = m.resolve_attack(&poison_dagger(), &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0);
+        let now = Instant::now();
+        let rd = m.resolve_attack(&poison_dagger(), &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
         let poison: f32 = rd.components.iter().filter(|(t, _)| *t == DamageType::Poison).map(|(_, v)| *v).sum();
         let magicka: f32 = rd.components.iter().filter(|(t, _)| *t == DamageType::Magicka).map(|(_, v)| *v).sum();
         // Fresh (no conditioning) → amp ×1.0 → base ≈ 137.3, NOT the old 300.
@@ -462,16 +479,20 @@ mod tests {
     fn optimal_block_negates_physical_halves_elemental() {
         let m = RetailDamageModel;
         let lo = poison_dagger();
+        let now = Instant::now();
         // Baseline (no block).
-        let open = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0);
+        let open = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
         let open_slash: f32 = open.components.iter().filter(|(t, _)| *t == DamageType::Slashing).map(|(_, v)| *v).sum();
         let open_poison: f32 = open.components.iter().filter(|(t, _)| *t == DamageType::Poison).map(|(_, v)| *v).sum();
 
-        // OPTIMAL: target guards the SAME side (Right).
+        // OPTIMAL: target guards the SAME side (Right), raised just now (within 2s window,
+        // no recovery cooldown in effect).
         let mut tgt = target();
         tgt.actor_state = ActorStateType::Blocking;
         tgt.blocking_side = ActiveSide::Right;
-        let opt = m.resolve_attack(&lo, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0);
+        tgt.block_raised_at = Some(now); // freshly raised → OPTIMAL phase
+        tgt.blocking_until = Some(now + Duration::from_secs(2));
+        let opt = m.resolve_attack(&lo, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
         let opt_slash: f32 = opt.components.iter().filter(|(t, _)| *t == DamageType::Slashing).map(|(_, v)| *v).sum();
         let opt_poison: f32 = opt.components.iter().filter(|(t, _)| *t == DamageType::Poison).map(|(_, v)| *v).sum();
         assert!(opt.flags & flags::WAS_OPTIMAL_BLOCKING != 0, "optimal flag set");
@@ -482,7 +503,9 @@ mod tests {
         let mut late_t = target();
         late_t.actor_state = ActorStateType::Blocking;
         late_t.blocking_side = ActiveSide::Left;
-        let late = m.resolve_attack(&lo, &late_t, DamageSource::Attack, ActiveSide::Right, 1.0, 0);
+        late_t.block_raised_at = Some(now);
+        late_t.blocking_until = Some(now + Duration::from_secs(2));
+        let late = m.resolve_attack(&lo, &late_t, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
         let late_slash: f32 = late.components.iter().filter(|(t, _)| *t == DamageType::Slashing).map(|(_, v)| *v).sum();
         let late_poison: f32 = late.components.iter().filter(|(t, _)| *t == DamageType::Poison).map(|(_, v)| *v).sum();
         assert!(late.flags & flags::WAS_LATE_BLOCKING != 0, "late flag set");
@@ -498,7 +521,8 @@ mod tests {
         let m = RetailDamageModel;
         let lo = poison_dagger();
         let tgt = target(); // ×3 ≈ 3170 HP; 25% ≈ 792
-        let rd = m.resolve_attack(&lo, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 4);
+        let now = Instant::now();
+        let rd = m.resolve_attack(&lo, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 4, now);
         // combo-4 Slashing ≈ 469 + Poison ≈ 137 = ~606. The total = Σ health components
         // EXACTLY (no clamp scaling), and it is NOT capped at the old 25% (≈792) ceiling
         // by a clamp — prove the clamp is gone by checking the total == raw Σ.
@@ -515,7 +539,7 @@ mod tests {
             enchants: vec![(DamageType::Poison, 10), (DamageType::Fire, 10)],
             ..Default::default()
         };
-        let big = m.resolve_attack(&lethal, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 4);
+        let big = m.resolve_attack(&lethal, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 4, now);
         let cap_25 = 0.25 * tgt.max_health as f32;
         assert!(big.total > cap_25, "a deep-combo big hit is NO LONGER clamped to 25% of max HP");
     }
@@ -529,7 +553,8 @@ mod tests {
         let attacker = poison_dagger(); // no piercing
         let mut tgt = target();
         tgt.loadout.resistances = vec![(DamageType::Poison, 40.0)];
-        let rd = m.resolve_attack(&attacker, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0);
+        let now = Instant::now();
+        let rd = m.resolve_attack(&attacker, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
         let poison: f32 = rd.components.iter().filter(|(t, _)| *t == DamageType::Poison).map(|(_, v)| *v).sum();
         // 137.3 − 40 = 97.3.
         assert!((poison - 97.3).abs() < 1.0, "poison reduced by the flat 40 resist, got {poison}");
@@ -538,7 +563,7 @@ mod tests {
         // With attacker Elemental-Resistance-Piercing 0.5, only half the resist applies.
         let mut piercer = poison_dagger();
         piercer.elem_resist_piercing = 0.5;
-        let rd2 = m.resolve_attack(&piercer, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0);
+        let rd2 = m.resolve_attack(&piercer, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
         let poison2: f32 = rd2.components.iter().filter(|(t, _)| *t == DamageType::Poison).map(|(_, v)| *v).sum();
         assert!((poison2 - (137.3 - 20.0)).abs() < 1.0, "piercing halves the effective resist (−20), got {poison2}");
     }
@@ -568,11 +593,88 @@ mod tests {
 
     #[test]
     fn ability_deals_spell_damage_scaling_with_level() {
+        let now = Instant::now();
         let m = RetailDamageModel;
-        let l1 = m.resolve_ability(1, &target(), ActiveSide::Middle);
-        let l3 = m.resolve_ability(3, &target(), ActiveSide::Middle);
+        let l1 = m.resolve_ability(1, &target(), ActiveSide::Middle, now);
+        let l3 = m.resolve_ability(3, &target(), ActiveSide::Middle, now);
         assert_eq!(l1.source, DamageSource::Spell);
         assert!(l1.components.iter().any(|(t, _)| *t == DamageType::Fire));
         assert!(l3.total > l1.total, "higher ability level → more damage");
+    }
+
+    // -----------------------------------------------------------------------
+    // Mechanic 1: LATE block produces phys×0.625, elem×0.813 [§Mechanic-1]
+    // -----------------------------------------------------------------------
+
+    /// LATE block (guard held > 2.0s) reduces physical by ÷1.6 (×0.625) and elemental
+    /// by ÷1.23 (×0.813), distinct from OPTIMAL (phys×0, elem×0.5). [§4.4 / dump.cs 427019]
+    #[test]
+    fn late_block_applies_correct_divisors_phys_625x_elem_813x() {
+        use crate::arena::combat::state::BlockPhase;
+        let m = RetailDamageModel;
+        let lo = poison_dagger();
+        let now = Instant::now();
+
+        // No-block baseline.
+        let open = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let open_slash: f32 = open.components.iter().filter(|(t, _)| *t == DamageType::Slashing).map(|(_, v)| *v).sum();
+        let open_poison: f32 = open.components.iter().filter(|(t, _)| *t == DamageType::Poison).map(|(_, v)| *v).sum();
+
+        // LATE block: guard held 2.1s (> BLOCK_OPTIMAL_TIME 2.0s), same side as the attack.
+        let mut late_t = target();
+        let raised = now - std::time::Duration::from_millis(2100);
+        late_t.actor_state = ActorStateType::Blocking;
+        late_t.blocking_side = ActiveSide::Right;
+        late_t.block_raised_at = Some(raised); // held 2.1s → LATE
+        late_t.blocking_until = Some(now + std::time::Duration::from_secs(2));
+        // Verify the phase is indeed LATE.
+        assert_eq!(late_t.block_phase(now), Some(BlockPhase::Late), "guard held 2.1s → LATE phase");
+
+        let late = m.resolve_attack(&lo, &late_t, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let late_slash: f32 = late.components.iter().filter(|(t, _)| *t == DamageType::Slashing).map(|(_, v)| *v).sum();
+        let late_poison: f32 = late.components.iter().filter(|(t, _)| *t == DamageType::Poison).map(|(_, v)| *v).sum();
+
+        assert!(late.flags & flags::WAS_LATE_BLOCKING != 0, "LATE block flag set");
+        assert!((late_slash - open_slash / PHYSICAL_BLOCK_MULTIPLIER).abs() < 1e-2,
+            "LATE phys = open÷1.6 (×0.625): expected {:.2}, got {:.2}",
+            open_slash / PHYSICAL_BLOCK_MULTIPLIER, late_slash);
+        assert!((late_poison - open_poison / ELEMENTAL_BLOCK_MULTIPLIER).abs() < 1e-2,
+            "LATE elem = open÷1.23 (×0.813): expected {:.2}, got {:.2}",
+            open_poison / ELEMENTAL_BLOCK_MULTIPLIER, late_poison);
+    }
+
+    // -----------------------------------------------------------------------
+    // Mechanic 4: Ward negation pool drains and then normal damage resumes [§Mechanic-4]
+    // -----------------------------------------------------------------------
+
+    /// A Ward negation pool drains against incoming damage; once exhausted normal HP
+    /// damage resumes (pool.remaining → 0). The pool source is DamageNegationSource::Ward.
+    #[test]
+    fn ward_pool_drains_then_full_damage_passes_through() {
+        let now = Instant::now();
+        let mut tgt = target();
+        // A small Ward pool (100 HP-equivalent) — smaller than a typical hit (251 total).
+        tgt.negation_pools.push(NegationPool {
+            source: DamageNegationSource::Ward,
+            remaining: 100.0,
+            expires_at: now + Duration::from_secs(60),
+            restoration_factor: 0.0, // Ward: pure negation, no heal-back
+        });
+
+        // First hit: 100 exactly — pool drains to 0, whole hit negated.
+        let mut c1 = vec![(DamageType::Slashing, 60.0), (DamageType::Poison, 40.0)];
+        let res1 = tgt.apply_negation_pools(&mut c1);
+        assert!(res1.negated, "pool fully absorbed the hit (negated)");
+        assert_eq!(res1.heal, 0.0, "Ward: no heal-back");
+        let health1: f32 = c1.iter().filter(|(t, _)| is_health_type(*t)).map(|(_, v)| *v).sum();
+        assert_eq!(health1, 0.0, "all health components zeroed by pool");
+        assert!(tgt.negation_pools.is_empty(), "pool drained → removed from list");
+
+        // Second hit (pool gone): full damage passes through unchanged.
+        let mut c2 = vec![(DamageType::Slashing, 113.82), (DamageType::Poison, 137.32)];
+        let res2 = tgt.apply_negation_pools(&mut c2);
+        assert!(!res2.negated, "no pool → not negated");
+        let slashing2: f32 = c2.iter().filter(|(t, _)| *t == DamageType::Slashing).map(|(_, v)| *v).sum();
+        assert!((slashing2 - 113.82).abs() < 1e-3, "full damage passes through after pool drains");
     }
 }
