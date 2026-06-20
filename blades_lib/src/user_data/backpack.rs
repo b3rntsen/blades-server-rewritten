@@ -355,3 +355,19 @@ pub struct InventoryChangeTracker {
     pub modified_backpack: BackpackChangeTracker,
     pub modified_treasury: TreasuryChangeTracker,
 }
+
+#[cfg(test)]
+mod wire_camelcase_tests {
+    use super::*;
+    #[test]
+    fn inventory_diff_is_camelcase() {
+        let mut bp = BackpackUpdate::default();
+        bp.removed_items.insert(uuid::Uuid::nil());
+        let j = serde_json::to_string(&bp).unwrap();
+        assert!(j.contains("removedItems"), "BackpackUpdate not camelCase: {j}");
+        assert!(!j.contains("removed_items"), "BackpackUpdate still snake: {j}");
+        let lo = LoadoutUpdate::default();
+        let lj = serde_json::to_string(&lo).unwrap();
+        assert!(lj.contains("equippedItems") && lj.contains("unequippedItemSlots"), "LoadoutUpdate not camelCase: {lj}");
+    }
+}
