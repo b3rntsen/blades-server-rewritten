@@ -1,0 +1,1077 @@
+{
+  "byShop": {
+    "255ba804-dbfe-4a2f-9eed-32adc2ed9de7": "ba55cc62-a232-4ba7-baa1-237acdbb9ed9",
+    "31f64199-0e20-42d6-8c37-7cbba2f3518f": "db68b372-246d-47e4-b9dd-3199d2ca7be5",
+    "520ee4b2-a570-4337-9d5f-1bae93aaabd6": "db68b372-246d-47e4-b9dd-3199d2ca7be5",
+    "561e3e1f-d941-40e2-899d-d11f125cd9ef": "6392702d-47d3-4717-92c1-d193604ac998",
+    "5e5f32d0-8f64-42a0-8947-23171c5af0b4": "6392702d-47d3-4717-92c1-d193604ac998",
+    "5e8ac649-62ba-426f-9799-93b9d3ba8c2d": "71bdad1d-cf24-43b1-9fc9-e8b4ffd350f7",
+    "66e820c6-0d72-4ad7-99ba-0603ae345798": "6392702d-47d3-4717-92c1-d193604ac998",
+    "6b2ae3eb-94bb-4048-8774-c1d59cf37ec2": "ba55cc62-a232-4ba7-baa1-237acdbb9ed9",
+    "6d832def-b915-4a46-b525-8a7a68289926": "c584e8e6-6698-4814-a700-495e8bd0ef1d",
+    "77728936-c384-419c-825f-175214e278c3": "6392702d-47d3-4717-92c1-d193604ac998",
+    "8e30a650-c2a8-42e0-a175-5edd2d27ae10": "c584e8e6-6698-4814-a700-495e8bd0ef1d",
+    "bd57088c-3b63-42eb-b15f-bd3a2b6cb3e0": "ba55cc62-a232-4ba7-baa1-237acdbb9ed9",
+    "c10d3c81-4de0-4b33-b2e9-05026845570f": "57eeb277-7d37-432e-b99b-f78184af7b9d",
+    "ccd60b95-c3fc-4fd5-b08b-28c8a30d8ce9": "db68b372-246d-47e4-b9dd-3199d2ca7be5",
+    "d1f4b1da-c46a-4946-b6a5-5fcf00770fc4": "ba55cc62-a232-4ba7-baa1-237acdbb9ed9",
+    "dd011061-3c6a-4fd4-82ed-e78ab2f6a979": "c584e8e6-6698-4814-a700-495e8bd0ef1d",
+    "edb07824-cabe-4637-ada5-a32e2ada3113": "6392702d-47d3-4717-92c1-d193604ac998",
+    "f7dc114d-eb17-4ae9-b7f2-9095a7095359": "ba55cc62-a232-4ba7-baa1-237acdbb9ed9"
+  },
+  "byTemplate": {
+    "06845382-98a4-4d38-bf88-25259a3ad1ec": {
+      "bundles": [
+        {
+          "id": "a52da45d-5a6b-439c-92a6-7bc04048058f",
+          "quantity": 8
+        },
+        {
+          "id": "14052e18-2a06-4f5a-8fd7-bdd1a6946052",
+          "quantity": 2
+        },
+        {
+          "id": "6040d60e-b507-4067-bdfc-6c4fd69677bf",
+          "quantity": 4
+        },
+        {
+          "id": "343dee43-56d5-49a7-99b7-08f0ed0f32f7",
+          "quantity": 10
+        },
+        {
+          "id": "3059daf9-5d16-445d-8024-405dd988c433",
+          "quantity": 13
+        },
+        {
+          "id": "ef26cbc3-a8df-47c4-a594-29ef458e077b",
+          "quantity": 8
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 7558,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "1f46ed69-74ac-431d-85d1-75b467cb1a15": {
+      "bundles": [
+        {
+          "id": "ee486683-c721-4bd6-8619-78cc00e34acc",
+          "quantity": 1
+        },
+        {
+          "id": "c60c71e7-8bc3-4495-95c8-fbaee3c6860e",
+          "quantity": 1
+        },
+        {
+          "id": "6352e99e-27a5-4b45-86ca-8af17357584d",
+          "quantity": 2
+        },
+        {
+          "id": "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
+          "quantity": 12
+        },
+        {
+          "id": "f6b6cb92-9d0b-481a-85ed-e2af0c1bb306",
+          "quantity": 3
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 13896,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "21867080-14d7-4b28-abd0-746b88d9c401": {
+      "bundles": [
+        {
+          "id": "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
+          "quantity": 20
+        },
+        {
+          "id": "a52da45d-5a6b-439c-92a6-7bc04048058f",
+          "quantity": 30
+        },
+        {
+          "id": "c60c71e7-8bc3-4495-95c8-fbaee3c6860e",
+          "quantity": 1
+        },
+        {
+          "id": "a4195313-4055-443e-9223-0cc10975500a",
+          "quantity": 18
+        },
+        {
+          "id": "f6b6cb92-9d0b-481a-85ed-e2af0c1bb306",
+          "quantity": 3
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 21254,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "2e857ad8-9b7f-494f-94f8-c4617faca5d4": {
+      "bundles": [
+        {
+          "id": "3059daf9-5d16-445d-8024-405dd988c433",
+          "quantity": 5
+        },
+        {
+          "id": "035ff947-d142-4a47-940a-213a15682593",
+          "quantity": 11
+        },
+        {
+          "id": "1ffd8efc-3c31-4550-8093-0a04f19f1a14",
+          "quantity": 3
+        },
+        {
+          "id": "a4195313-4055-443e-9223-0cc10975500a",
+          "quantity": 2
+        },
+        {
+          "id": "7156bf44-a6e4-4651-b90e-7734a59dfd76",
+          "quantity": 13
+        },
+        {
+          "id": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
+          "quantity": 2
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 2945,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "2efd189e-8a3e-4ba1-9310-0ca063bd4b16": {
+      "bundles": [
+        {
+          "id": "74a7c3fb-6524-46a9-ab9a-50b4977e630e",
+          "quantity": 8
+        },
+        {
+          "id": "035ff947-d142-4a47-940a-213a15682593",
+          "quantity": 18
+        },
+        {
+          "id": "343dee43-56d5-49a7-99b7-08f0ed0f32f7",
+          "quantity": 12
+        },
+        {
+          "id": "41f02b12-4539-42b5-b660-84aab0e9fd01",
+          "quantity": 3
+        },
+        {
+          "id": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
+          "quantity": 3
+        },
+        {
+          "id": "c6b1c416-9634-4e06-8f06-92a385d6bca9",
+          "quantity": 4
+        },
+        {
+          "id": "3059daf9-5d16-445d-8024-405dd988c433",
+          "quantity": 17
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 11080,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "3182aed5-5f32-46f7-b544-1493416aeb2e": {
+      "bundles": [
+        {
+          "id": "2bd6b2a1-d82c-424b-a4b6-32d1d7f7f612",
+          "quantity": 1
+        },
+        {
+          "id": "9074c3bb-1539-42f0-86dc-64c81177ab85",
+          "quantity": 1
+        },
+        {
+          "id": "d1ead58e-eab1-40b9-a4d8-95718566ba4a",
+          "quantity": 6
+        },
+        {
+          "id": "3cd0b563-71ec-4d55-80b5-4b57861947cc",
+          "quantity": 2
+        },
+        {
+          "id": "c5aa2496-ca55-4aa1-9b1c-b621a6b62de3",
+          "quantity": 1
+        },
+        {
+          "id": "41fabcb0-a5fb-4d23-a4c6-d359dff6eca2",
+          "quantity": 7
+        },
+        {
+          "id": "67c26b59-6447-4d2f-9c9b-06296fb2c6de",
+          "quantity": 1
+        },
+        {
+          "id": "3bc67f54-89ce-4061-979f-a004a89225a1",
+          "quantity": 1
+        },
+        {
+          "id": "975ad618-7194-4171-b95a-39c198e901b0",
+          "quantity": 1
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 15759,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "528d52b5-2692-4117-bfba-c6a89702aeeb": {
+      "bundles": [
+        {
+          "id": "337a0bbc-2408-49a9-9dca-598863bdd210",
+          "quantity": 3
+        },
+        {
+          "id": "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
+          "quantity": 6
+        },
+        {
+          "id": "a62855ec-f7ec-48bb-953d-6cd8ecb681dc",
+          "quantity": 1
+        },
+        {
+          "id": "e3c631c8-801a-427a-8007-fc6fb1ad5183",
+          "quantity": 1
+        },
+        {
+          "id": "8c2ff41b-b24f-4dca-9e4c-ac134f8d1701",
+          "quantity": 1
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 4688,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "572484f0-c3db-4c4a-af9a-85269246141f": {
+      "bundles": [
+        {
+          "id": "c330a88f-cb2a-4ac9-8964-dcdffcc4dff6",
+          "quantity": 2
+        },
+        {
+          "id": "ce2ed41b-9192-4a91-ba93-243e650a143b",
+          "quantity": 12
+        },
+        {
+          "id": "7156bf44-a6e4-4651-b90e-7734a59dfd76",
+          "quantity": 9
+        },
+        {
+          "id": "035ff947-d142-4a47-940a-213a15682593",
+          "quantity": 6
+        },
+        {
+          "id": "a52da45d-5a6b-439c-92a6-7bc04048058f",
+          "quantity": 5
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 1833,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "57eeb277-7d37-432e-b99b-f78184af7b9d": {
+      "bundles": [
+        {
+          "id": "7f8e899a-ede9-405e-977b-eb8cb5e9ff37",
+          "quantity": 7
+        },
+        {
+          "id": "7334deaf-b2fc-435d-84f7-aa192349f877",
+          "quantity": 3
+        },
+        {
+          "id": "9feb325d-5786-4d8b-bf89-5f5c6de9223c",
+          "quantity": 1
+        },
+        {
+          "id": "641ada7e-10fb-4ff7-8900-597c7b6b4023",
+          "quantity": 1
+        },
+        {
+          "id": "3275a818-93d1-41f7-9801-01017788f615",
+          "quantity": 1
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 1174,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "6392702d-47d3-4717-92c1-d193604ac998": {
+      "bundles": [
+        {
+          "id": "75e74693-d221-47eb-92e4-e8ac7079084c",
+          "quantity": 1
+        },
+        {
+          "id": "c6b1c416-9634-4e06-8f06-92a385d6bca9",
+          "quantity": 18
+        },
+        {
+          "id": "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
+          "quantity": 18
+        },
+        {
+          "id": "76889fa6-4f69-4425-be4a-81ff991903aa",
+          "quantity": 18
+        },
+        {
+          "id": "01ada486-b642-43b2-8776-e444dbe9343e",
+          "quantity": 1
+        },
+        {
+          "id": "a4195313-4055-443e-9223-0cc10975500a",
+          "quantity": 20
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 27656,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "6cda3555-6466-4b76-a3ba-d72ffd2bb2f5": {
+      "bundles": [
+        {
+          "id": "bc606a47-861d-48da-b12b-cf1b544c937b",
+          "quantity": 8
+        },
+        {
+          "id": "7f8e899a-ede9-405e-977b-eb8cb5e9ff37",
+          "quantity": 8
+        },
+        {
+          "id": "fe566ad8-6369-4a97-abf8-69948f36226c",
+          "quantity": 1
+        },
+        {
+          "id": "6f525c3e-a024-4779-bf24-ab9c2d862cc0",
+          "quantity": 1
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 545,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "71bdad1d-cf24-43b1-9fc9-e8b4ffd350f7": {
+      "bundles": [
+        {
+          "id": "50c1e12e-bca3-4f81-a7f1-6cc779397d5c",
+          "quantity": 12
+        },
+        {
+          "id": "8fb3b92d-4070-4ad5-b07a-d73ebd401873",
+          "quantity": 1
+        },
+        {
+          "id": "198d21d6-805b-4d41-a5f4-2a7bff03aff7",
+          "quantity": 1
+        },
+        {
+          "id": "6b0df8db-ecf4-4f57-86bb-fa853502a604",
+          "quantity": 1
+        },
+        {
+          "id": "a5321a6a-89e8-44af-8472-8db5c4111314",
+          "quantity": 1
+        },
+        {
+          "id": "3bc67f54-89ce-4061-979f-a004a89225a1",
+          "quantity": 5
+        },
+        {
+          "id": "dafac41a-221b-4250-8366-fa66e4f86a21",
+          "quantity": 1
+        },
+        {
+          "id": "3cd0b563-71ec-4d55-80b5-4b57861947cc",
+          "quantity": 5
+        },
+        {
+          "id": "d1ead58e-eab1-40b9-a4d8-95718566ba4a",
+          "quantity": 9
+        },
+        {
+          "id": "4eb63f66-d7f6-4083-b8c0-bc369f241fa5",
+          "quantity": 1
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 18543,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "726fee55-bc6d-447f-b9ce-52e6b83c6e00": {
+      "bundles": [
+        {
+          "id": "7bfd1e3b-97b8-4617-8e46-597c58943cc2",
+          "quantity": 6
+        },
+        {
+          "id": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+          "quantity": 21
+        },
+        {
+          "id": "16b94858-6a39-4b53-b360-b944514407a8",
+          "quantity": 25
+        },
+        {
+          "id": "f30a903c-0887-4605-910f-fe5ce1b454c3",
+          "quantity": 1
+        },
+        {
+          "id": "30e7f3ff-9b8e-4dba-a2a5-3d2ac4e29caa",
+          "quantity": 5
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 6703,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "7d37c5ca-b23b-46f5-ab38-7ada8d214dbd": {
+      "bundles": [
+        {
+          "id": "035ff947-d142-4a47-940a-213a15682593",
+          "quantity": 12
+        },
+        {
+          "id": "27bff5fd-4eb9-4a77-9997-59aced4e0116",
+          "quantity": 2
+        },
+        {
+          "id": "343dee43-56d5-49a7-99b7-08f0ed0f32f7",
+          "quantity": 6
+        },
+        {
+          "id": "084d83f3-9ab3-4b31-8700-9ca0acadc22f",
+          "quantity": 3
+        },
+        {
+          "id": "7156bf44-a6e4-4651-b90e-7734a59dfd76",
+          "quantity": 16
+        },
+        {
+          "id": "3059daf9-5d16-445d-8024-405dd988c433",
+          "quantity": 9
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 5208,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "86f8cc4a-0789-4f9e-84e7-e68138e49ad3": {
+      "bundles": [
+        {
+          "id": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+          "quantity": 16
+        },
+        {
+          "id": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+          "quantity": 4
+        },
+        {
+          "id": "eaa68229-3264-4a1f-b18a-74832fc172d6",
+          "quantity": 8
+        },
+        {
+          "id": "7bfd1e3b-97b8-4617-8e46-597c58943cc2",
+          "quantity": 5
+        },
+        {
+          "id": "fa3f5d6f-8982-4193-b968-3fed2b18e147",
+          "quantity": 1
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 4438,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "8d03ef4f-80ff-4f3d-aefa-e10a262eca42": {
+      "bundles": [
+        {
+          "id": "0e27aaa2-4285-49af-8419-492e70713665",
+          "quantity": 1
+        },
+        {
+          "id": "a62855ec-f7ec-48bb-953d-6cd8ecb681dc",
+          "quantity": 1
+        },
+        {
+          "id": "76889fa6-4f69-4425-be4a-81ff991903aa",
+          "quantity": 5
+        },
+        {
+          "id": "0a06d78a-68a2-4b0d-9530-4c708cf8e0e2",
+          "quantity": 3
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 2964,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "96539ca0-f639-42b2-aa26-3bd98bfb98ab": {
+      "bundles": [
+        {
+          "id": "81be0d03-38dc-4398-ba1a-77a906ba2432",
+          "quantity": 1
+        },
+        {
+          "id": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+          "quantity": 51
+        },
+        {
+          "id": "d62bedb3-2797-4129-910c-778833b0df26",
+          "quantity": 6
+        },
+        {
+          "id": "16b94858-6a39-4b53-b360-b944514407a8",
+          "quantity": 52
+        },
+        {
+          "id": "c3380941-d2e6-4031-a2a5-ce4aa06e28a7",
+          "quantity": 1
+        },
+        {
+          "id": "911b5429-ecb7-4a6a-a02e-511860a153ea",
+          "quantity": 13
+        },
+        {
+          "id": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+          "quantity": 7
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 21057,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "96be3d96-f932-466a-97d5-49a88140fe56": {
+      "bundles": [
+        {
+          "id": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+          "quantity": 8
+        },
+        {
+          "id": "911b5429-ecb7-4a6a-a02e-511860a153ea",
+          "quantity": 8
+        },
+        {
+          "id": "eaa68229-3264-4a1f-b18a-74832fc172d6",
+          "quantity": 7
+        },
+        {
+          "id": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+          "quantity": 38
+        },
+        {
+          "id": "30e7f3ff-9b8e-4dba-a2a5-3d2ac4e29caa",
+          "quantity": 8
+        },
+        {
+          "id": "16b94858-6a39-4b53-b360-b944514407a8",
+          "quantity": 32
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 11686,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "9fd01835-2ca5-4864-9d3d-7928f9097cff": {
+      "bundles": [
+        {
+          "id": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+          "quantity": 93
+        },
+        {
+          "id": "d62bedb3-2797-4129-910c-778833b0df26",
+          "quantity": 9
+        },
+        {
+          "id": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+          "quantity": 9
+        },
+        {
+          "id": "7bfd1e3b-97b8-4617-8e46-597c58943cc2",
+          "quantity": 13
+        },
+        {
+          "id": "c2a95ba6-2c97-473a-b013-9f79c3b7ea17",
+          "quantity": 16
+        },
+        {
+          "id": "911b5429-ecb7-4a6a-a02e-511860a153ea",
+          "quantity": 9
+        },
+        {
+          "id": "81be0d03-38dc-4398-ba1a-77a906ba2432",
+          "quantity": 1
+        },
+        {
+          "id": "bbe35800-9ae8-4ddc-aa8a-8333b41c51c4",
+          "quantity": 3
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 27923,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "b7679dd3-3a7b-4ee8-a54d-9dc773759ec9": {
+      "bundles": [
+        {
+          "id": "ef26cbc3-a8df-47c4-a594-29ef458e077b",
+          "quantity": 12
+        },
+        {
+          "id": "7cc1bb62-d65d-4145-b5b6-b9711c79f1ad",
+          "quantity": 3
+        },
+        {
+          "id": "bef00b7f-72e8-4070-b68c-6dc234776976",
+          "quantity": 10
+        },
+        {
+          "id": "db17e05a-baeb-4d44-95cb-562969e860b5",
+          "quantity": 4
+        },
+        {
+          "id": "343dee43-56d5-49a7-99b7-08f0ed0f32f7",
+          "quantity": 17
+        },
+        {
+          "id": "a52da45d-5a6b-439c-92a6-7bc04048058f",
+          "quantity": 5
+        },
+        {
+          "id": "4ca0bd50-6ce6-46fc-ac5a-f7330ad9a44f",
+          "quantity": 6
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 13916,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "b77374eb-1a75-4070-9475-0c39e2b8fe1f": {
+      "bundles": [
+        {
+          "id": "fa5ac64d-b3ec-4956-910b-fb821e14eb37",
+          "quantity": 1
+        },
+        {
+          "id": "c511ee9f-0525-48d6-a650-8fc364144c32",
+          "quantity": 2
+        },
+        {
+          "id": "a4195313-4055-443e-9223-0cc10975500a",
+          "quantity": 9
+        },
+        {
+          "id": "c6b1c416-9634-4e06-8f06-92a385d6bca9",
+          "quantity": 10
+        },
+        {
+          "id": "3cb7b827-75f6-48f1-ae6b-47743e128e58",
+          "quantity": 1
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 10326,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "b8e4de27-e9f6-44bf-84ad-b24672bbf513": {
+      "bundles": [
+        {
+          "id": "fe82c152-6fd7-443d-bc7a-d2996ec54eb8",
+          "quantity": 2
+        },
+        {
+          "id": "3059daf9-5d16-445d-8024-405dd988c433",
+          "quantity": 20
+        },
+        {
+          "id": "343dee43-56d5-49a7-99b7-08f0ed0f32f7",
+          "quantity": 18
+        },
+        {
+          "id": "a52da45d-5a6b-439c-92a6-7bc04048058f",
+          "quantity": 9
+        },
+        {
+          "id": "4ca0bd50-6ce6-46fc-ac5a-f7330ad9a44f",
+          "quantity": 9
+        },
+        {
+          "id": "bef00b7f-72e8-4070-b68c-6dc234776976",
+          "quantity": 11
+        },
+        {
+          "id": "ec0c90cf-7af6-407a-889a-65c03bc317a1",
+          "quantity": 2
+        },
+        {
+          "id": "74a7c3fb-6524-46a9-ab9a-50b4977e630e",
+          "quantity": 5
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 19309,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "ba55cc62-a232-4ba7-baa1-237acdbb9ed9": {
+      "bundles": [
+        {
+          "id": "72cee2cf-e03a-4537-8f24-fce5d70fda5c",
+          "quantity": 1
+        },
+        {
+          "id": "4e7865fe-b1b9-45f3-af6d-ea5f4cb9cade",
+          "quantity": 1
+        },
+        {
+          "id": "7bae9c4d-5925-4804-96e1-8080038c99cd",
+          "quantity": 1
+        },
+        {
+          "id": "68d9254d-fe6d-4514-9c35-358b45c00814",
+          "quantity": 1
+        },
+        {
+          "id": "41fabcb0-a5fb-4d23-a4c6-d359dff6eca2",
+          "quantity": 12
+        },
+        {
+          "id": "6a17458d-6ce2-4216-913f-8cbf1cfe466c",
+          "quantity": 1
+        },
+        {
+          "id": "8fb3b92d-4070-4ad5-b07a-d73ebd401873",
+          "quantity": 3
+        },
+        {
+          "id": "60f7dfac-f1d9-43e5-ad9c-6cd5ba2ab233",
+          "quantity": 7
+        },
+        {
+          "id": "077f93f0-c24c-4a0c-a954-b9c2f6a1d979",
+          "quantity": 1
+        },
+        {
+          "id": "d1ead58e-eab1-40b9-a4d8-95718566ba4a",
+          "quantity": 8
+        },
+        {
+          "id": "51d46dfe-4316-4fe7-8415-eb8714de23fb",
+          "quantity": 1
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 26880,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "c584e8e6-6698-4814-a700-495e8bd0ef1d": {
+      "bundles": [
+        {
+          "id": "16b94858-6a39-4b53-b360-b944514407a8",
+          "quantity": 185
+        },
+        {
+          "id": "d62bedb3-2797-4129-910c-778833b0df26",
+          "quantity": 10
+        },
+        {
+          "id": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+          "quantity": 187
+        },
+        {
+          "id": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+          "quantity": 25
+        },
+        {
+          "id": "eaa68229-3264-4a1f-b18a-74832fc172d6",
+          "quantity": 18
+        },
+        {
+          "id": "fa3f5d6f-8982-4193-b968-3fed2b18e147",
+          "quantity": 4
+        },
+        {
+          "id": "0f840160-10fd-439f-b831-e96633c32eef",
+          "quantity": 2
+        },
+        {
+          "id": "f30a903c-0887-4605-910f-fe5ce1b454c3",
+          "quantity": 2
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 35885,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "db68b372-246d-47e4-b9dd-3199d2ca7be5": {
+      "bundles": [
+        {
+          "id": "ec0c90cf-7af6-407a-889a-65c03bc317a1",
+          "quantity": 4
+        },
+        {
+          "id": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
+          "quantity": 8
+        },
+        {
+          "id": "3059daf9-5d16-445d-8024-405dd988c433",
+          "quantity": 21
+        },
+        {
+          "id": "3bc241b5-6c5e-4d65-88ac-ee79fdcb1a1a",
+          "quantity": 5
+        },
+        {
+          "id": "4ca0bd50-6ce6-46fc-ac5a-f7330ad9a44f",
+          "quantity": 14
+        },
+        {
+          "id": "c7ca5ee2-2e59-45b3-b512-82915b3e7ff3",
+          "quantity": 3
+        },
+        {
+          "id": "8b10a4c8-730c-4f75-be14-cf95509f1b47",
+          "quantity": 3
+        },
+        {
+          "id": "bef00b7f-72e8-4070-b68c-6dc234776976",
+          "quantity": 12
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 26951,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "e2f3206b-ae97-4e78-b738-1e4da1f96da1": {
+      "bundles": [
+        {
+          "id": "16b94858-6a39-4b53-b360-b944514407a8",
+          "quantity": 27
+        },
+        {
+          "id": "eaa68229-3264-4a1f-b18a-74832fc172d6",
+          "quantity": 6
+        },
+        {
+          "id": "30e7f3ff-9b8e-4dba-a2a5-3d2ac4e29caa",
+          "quantity": 5
+        },
+        {
+          "id": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+          "quantity": 28
+        },
+        {
+          "id": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+          "quantity": 7
+        },
+        {
+          "id": "7df7c157-3fdf-4193-8308-9246a6cf6bc0",
+          "quantity": 1
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 8143,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "e4b84020-f892-45d4-8c51-1a32dafb6e85": {
+      "bundles": [
+        {
+          "id": "337a0bbc-2408-49a9-9dca-598863bdd210",
+          "quantity": 2
+        },
+        {
+          "id": "e3c631c8-801a-427a-8007-fc6fb1ad5183",
+          "quantity": 1
+        },
+        {
+          "id": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
+          "quantity": 8
+        },
+        {
+          "id": "a4195313-4055-443e-9223-0cc10975500a",
+          "quantity": 8
+        },
+        {
+          "id": "74a7c3fb-6524-46a9-ab9a-50b4977e630e",
+          "quantity": 9
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 6911,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "e54ee929-0da4-49f3-b198-91177fd682b5": {
+      "bundles": [
+        {
+          "id": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+          "quantity": 40
+        },
+        {
+          "id": "d62bedb3-2797-4129-910c-778833b0df26",
+          "quantity": 7
+        },
+        {
+          "id": "16b94858-6a39-4b53-b360-b944514407a8",
+          "quantity": 47
+        },
+        {
+          "id": "c2a95ba6-2c97-473a-b013-9f79c3b7ea17",
+          "quantity": 12
+        },
+        {
+          "id": "eaa68229-3264-4a1f-b18a-74832fc172d6",
+          "quantity": 10
+        },
+        {
+          "id": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+          "quantity": 15
+        },
+        {
+          "id": "7bfd1e3b-97b8-4617-8e46-597c58943cc2",
+          "quantity": 7
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 17366,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "ec7b3a8e-ef07-4e7c-a17f-1686f7f4eb2d": {
+      "bundles": [
+        {
+          "id": "ecdbf98b-2ec8-4030-8f13-625756d363c7",
+          "quantity": 2
+        },
+        {
+          "id": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
+          "quantity": 15
+        },
+        {
+          "id": "a52da45d-5a6b-439c-92a6-7bc04048058f",
+          "quantity": 24
+        },
+        {
+          "id": "74a7c3fb-6524-46a9-ab9a-50b4977e630e",
+          "quantity": 15
+        },
+        {
+          "id": "75e74693-d221-47eb-92e4-e8ac7079084c",
+          "quantity": 1
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 19529,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    },
+    "f5bd89ad-20ab-4ad6-b36f-2f35ab18657d": {
+      "bundles": [
+        {
+          "id": "c330a88f-cb2a-4ac9-8964-dcdffcc4dff6",
+          "quantity": 2
+        },
+        {
+          "id": "ce2ed41b-9192-4a91-ba93-243e650a143b",
+          "quantity": 5
+        },
+        {
+          "id": "d571b1ae-e0d1-423b-a50d-caca21ff78c0",
+          "quantity": 2
+        },
+        {
+          "id": "c6b1c416-9634-4e06-8f06-92a385d6bca9",
+          "quantity": 1
+        }
+      ],
+      "wallet": [
+        {
+          "balance": 658,
+          "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+        }
+      ]
+    }
+  },
+  "default": "6cda3555-6466-4b76-a3ba-d72ffd2bb2f5"
+}

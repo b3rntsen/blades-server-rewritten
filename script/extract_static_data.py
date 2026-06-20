@@ -193,6 +193,81 @@ def extract_salvage_recipes(con):
     return seen
 
 
+def extract_shops(con):
+    """Town vendor catalogs. The client renders bundles from its own asset data, so the
+    server just serves the bundle-id list + window per shop. Catalogs are keyed by the
+    shop TEMPLATE (6 types — smith/general/etc.); `byShop` routes a captured shopId to
+    its template, a representative catalog (most bundles seen) is kept per template, and
+    `default` is the most common template (fallback for an unseen shopId)."""
+    import collections
+
+    by_shop = {}
+    best = {}  # templateId -> (nbundles, {bundles, wallet})
+    tmpl_count = collections.Counter()
+    q = (
+        "SELECT response_body FROM api_captures WHERE method='POST' "
+        "AND url LIKE '%/shops/%' AND url GLOB '*/shops/????????-????-????-????-????????????' "
+        "AND url NOT LIKE '%/social/%' AND response_status=200"
+    )
+    for (rb,) in con.execute(q):
+        try:
+            d = json.loads(astext(rb))
+        except Exception:
+            continue
+        shop = d.get("shop") or {}
+        cat = d.get("catalog") or {}
+        sid, tid = shop.get("id"), cat.get("templateId")
+        bundles = cat.get("bundles") or []
+        if not (sid and tid):
+            continue
+        by_shop[sid] = tid
+        tmpl_count[tid] += 1
+        if tid not in best or len(bundles) > best[tid][0]:
+            best[tid] = (len(bundles), {"bundles": bundles, "wallet": cat.get("wallet", [])})
+    by_template = {tid: v[1] for tid, v in best.items()}
+    default = tmpl_count.most_common(1)[0][0] if tmpl_count else None
+    return {"byShop": by_shop, "byTemplate": by_template, "default": default}
+
+
+def extract_shop_bundles(con):
+    """bundleId -> {currencyId, price-per-unit, grant}, from single-bundle buy captures.
+    revenue = price paid; the granted item is the inventory backpack delta."""
+    bundles = {}
+    q = (
+        "SELECT request_body, response_body FROM api_captures "
+        "WHERE url LIKE '%/characters/%/shops/%/purchase' AND url NOT LIKE '%/social/%' "
+        "AND response_status=200"
+    )
+    for rb, sb in con.execute(q):
+        try:
+            req = json.loads(astext(rb))
+            res = json.loads(astext(sb))
+        except Exception:
+            continue
+        reqb = req.get("bundles") or []
+        if len(reqb) != 1:
+            continue
+        bid = reqb[0].get("id")
+        qty = reqb[0].get("quantity") or 1
+        if not bid or bid in bundles:
+            continue
+        rev = res.get("shop", {}).get("revenue") or []
+        inv = res.get("inventory", {}).get("backpack", {})
+        stacks = inv.get("stackableItems") or []
+        items = inv.get("items") or []
+        grant = {}
+        if stacks:
+            grant = {"stackableItems": {stacks[0]["itemTemplateId"]: 1}}
+        elif items:
+            grant = {"items": [items[0]]}
+        bundles[bid] = {
+            "currencyId": (rev[0].get("currencyId") if rev else None),
+            "price": max(1, (rev[0].get("balance", 0) if rev else 0) // max(1, qty)),
+            "grant": grant,
+        }
+    return bundles
+
+
 EXTRACTORS = {
     "gifts.json": extract_gifts,
     "announcements.json": extract_announcements,
@@ -204,6 +279,8 @@ EXTRACTORS = {
     "chest_loots.json": extract_chest_loots,
     "game_events.json": extract_game_events,
     "salvage_recipes.json": extract_salvage_recipes,
+    "shops.json": extract_shops,
+    "shop_bundles.json": extract_shop_bundles,
 }
 
 

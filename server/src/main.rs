@@ -49,6 +49,7 @@ mod quest;
 mod repair;
 mod salvage;
 pub mod schema;
+mod shop;
 mod session;
 mod static_loader;
 mod status;
@@ -292,6 +293,11 @@ async fn main() -> Result<()> {
                     .service(craft::get_crafts)
                     .service(repair::repair_items)
                     .service(salvage::salvage_items)
+                    // Vendor shops: specific verbs before the bare `/shops/{id}` open.
+                    .service(shop::buy_from_shop)
+                    .service(shop::sell_to_shop)
+                    .service(shop::refresh_loot)
+                    .service(shop::open_shop)
                     .service(challenge::get_challenges)
                     .service(challenge::update_challenge)
                     .service(challenge::complete_challenge)

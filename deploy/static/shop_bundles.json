@@ -1,0 +1,47 @@
+{
+  "76889fa6-4f69-4425-be4a-81ff991903aa": {
+    "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+    "grant": {
+      "stackableItems": {
+        "10c54e43-a2a1-4833-9491-4c19149f43b5": 1
+      }
+    },
+    "price": 750
+  },
+  "a4195313-4055-443e-9223-0cc10975500a": {
+    "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+    "grant": {
+      "stackableItems": {
+        "9687d83c-aa7b-4cf3-a69f-0bba8204fa61": 1
+      }
+    },
+    "price": 925
+  },
+  "bc606a47-861d-48da-b12b-cf1b544c937b": {
+    "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+    "grant": {
+      "stackableItems": {
+        "55e82826-2d68-469c-8870-753665ca62cd": 1
+      }
+    },
+    "price": 90
+  },
+  "c6b1c416-9634-4e06-8f06-92a385d6bca9": {
+    "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+    "grant": {
+      "stackableItems": {
+        "8b7d0044-3a38-4ee0-af45-d2892b0f508d": 1
+      }
+    },
+    "price": 500
+  },
+  "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc": {
+    "currencyId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+    "grant": {
+      "stackableItems": {
+        "05b4dd6b-796f-4088-a772-0e33ea3db976": 1
+      }
+    },
+    "price": 250
+  }
+}

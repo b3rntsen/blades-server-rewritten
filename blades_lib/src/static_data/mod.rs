@@ -54,6 +54,71 @@ pub struct Announcement {
     pub asset_url: String,
 }
 
+/// One catalog bundle reference (`{id, quantity}`). The client renders the bundle's
+/// item + price from its own asset data; the server only lists which are in stock.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShopBundleRef {
+    pub id: Uuid,
+    pub quantity: u64,
+}
+
+/// A shop's wallet line (its gold, e.g. for buybacks).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShopWalletEntry {
+    pub currency_id: Uuid,
+    pub balance: i64,
+}
+
+/// A representative catalog for a shop template (bundle list + the shop's wallet).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShopCatalogTemplate {
+    #[serde(default)]
+    pub bundles: Vec<ShopBundleRef>,
+    #[serde(default)]
+    pub wallet: Vec<ShopWalletEntry>,
+}
+
+/// Town vendor shop catalogs (capture-derived). `by_shop` routes a captured shopId to
+/// its template; `by_template` holds a representative catalog per shop type; `default`
+/// is the fallback template for an unseen shopId (so a shop is never empty/timing-out).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShopData {
+    #[serde(default)]
+    pub by_shop: HashMap<Uuid, Uuid>,
+    #[serde(default)]
+    pub by_template: HashMap<Uuid, ShopCatalogTemplate>,
+    #[serde(default)]
+    pub default: Option<Uuid>,
+}
+
+impl ShopData {
+    /// The catalog template for a shop: its captured mapping, else the default.
+    pub fn catalog_for(&self, shop_id: &Uuid) -> Option<&ShopCatalogTemplate> {
+        let tid = self.by_shop.get(shop_id).or(self.default.as_ref())?;
+        self.by_template.get(tid)
+    }
+
+    pub fn template_for(&self, shop_id: &Uuid) -> Option<Uuid> {
+        self.by_shop.get(shop_id).copied().or(self.default)
+    }
+}
+
+/// What buying one unit of a shop bundle costs + grants (capture-derived).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShopBundle {
+    #[serde(default)]
+    pub currency_id: Option<Uuid>,
+    #[serde(default)]
+    pub price: u64,
+    #[serde(default)]
+    pub grant: RewardGrant,
+}
+
 /// All capture-derived static definitions, loaded once at startup. Fields are added
 /// per feature; each is independently optional (a missing/!invalid data file leaves
 /// its field empty rather than failing startup).
@@ -88,4 +153,8 @@ pub struct StaticData {
     /// Representative salvage yield per `recipeId` (`recipeId` -> {material -> count}),
     /// since the real yield is randomised.
     pub salvage_recipes: HashMap<Uuid, HashMap<Uuid, u64>>,
+    /// Town vendor shop catalogs (open-shop), routed by shopId/template.
+    pub shop_data: ShopData,
+    /// What each shop bundle costs + grants when bought (`bundleId` -> price/grant).
+    pub shop_bundles: HashMap<Uuid, ShopBundle>,
 }
