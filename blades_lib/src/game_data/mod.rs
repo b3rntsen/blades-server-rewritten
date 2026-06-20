@@ -91,3 +91,19 @@ pub struct GameData {
     pub quests: HashMap<Uuid, GameDataQuest>,
     pub dungeons: HashMap<Uuid, GameDataDungeon>,
 }
+
+#[cfg(test)]
+mod parsed_json_load_test {
+    use super::*;
+    #[test]
+    fn committed_parsed_json_deserializes() {
+        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+        let s = std::fs::read_to_string(p).expect("read parsed.json");
+        let gd: GameData = serde_json::from_str(&s).expect("parse parsed.json into GameData");
+        assert!(gd.quests.len() > 100, "quests: {}", gd.quests.len());
+        assert!(gd.dungeons.len() > 100, "dungeons: {}", gd.dungeons.len());
+        assert!(gd.items_template.len() > 100, "items: {}", gd.items_template.len());
+        eprintln!("GameData loaded: {} items, {} interactables, {} quests, {} dungeons",
+            gd.items_template.len(), gd.interactables.len(), gd.quests.len(), gd.dungeons.len());
+    }
+}
