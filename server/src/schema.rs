@@ -69,6 +69,22 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    guild_exchanges (id) {
+        id -> Text,
+        guild_id -> Text,
+        requester_user_id -> Uuid,
+        requester_character_id -> Uuid,
+        item_template_id -> Uuid,
+        requested_amount -> Int8,
+        max_donation_amount -> Int8,
+        donations -> Jsonb,
+        donation_sum -> Int8,
+        creation_time -> Int8,
+        redeemed -> Bool,
+    }
+}
+
 diesel::joinable!(characters -> users (user_id));
 diesel::joinable!(quests -> characters (character_id));
 
@@ -79,4 +95,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     guilds,
     guild_members,
     guild_messages,
+    guild_exchanges,
 );

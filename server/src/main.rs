@@ -323,8 +323,10 @@ async fn main() -> Result<()> {
                     .service(daily_reward::get_daily_reward)
                     .service(daily_reward::collect_daily_reward)
                     .service(chests::collect_chest)
-                    // Guild: literal paths (current/search/leaderboard/…) MUST precede
-                    // the generic `/guilds/{guild_id}` so they aren't captured by it.
+                    // Guild: literal paths (current/search/leaderboard/exchanges/…)
+                    // MUST precede the generic `/guilds/{guild_id}` so they aren't
+                    // captured by it. Exchange sub-paths (donate/redeem) must come
+                    // before the bare `exchanges` POST.
                     .service(guild::get_current_guild)
                     .service(guild::search_guilds)
                     .service(guild::guild_leaderboard)
@@ -332,6 +334,10 @@ async fn main() -> Result<()> {
                     .service(guild::post_message)
                     .service(guild::leave_guild)
                     .service(guild::kick_member)
+                    .service(guild::list_exchanges)
+                    .service(guild::donate_exchange)
+                    .service(guild::redeem_exchange)
+                    .service(guild::create_exchange)
                     .service(guild::create_guild)
                     .service(guild::join_guild)
                     .service(guild::get_guild)
