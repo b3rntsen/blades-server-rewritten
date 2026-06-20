@@ -479,6 +479,11 @@ pub struct Fighter {
     pub last_block_dropped_at: Option<Instant>,
     /// Time of this fighter's last landed swing (combat throttle / swing cadence).
     pub last_swing: Option<Instant>,
+    /// Server-side timestamp when this fighter last pressed the attack button (op46
+    /// `_held=1`). Used with the release timestamp (op46 `_held=0`) to compute the
+    /// server-measured hold duration for the held-charge crit gate (bug 4).
+    /// `None` ⇒ no press in progress (e.g. bot swings, or between attacks).
+    pub charge_press_at: Option<Instant>,
     /// **Combo state** (`docs/arena-combat-reproduction-spec.md` §4.2). The number of
     /// uninterrupted, **alternating-side** swings chained so far — drives the combo
     /// ramp (`damage::combo_factor`: ×1.0 → ×1.45 → … → ~×4.12 for a Light weapon).
@@ -573,6 +578,7 @@ impl Fighter {
             block_raised_at: None,
             last_block_dropped_at: None,
             last_swing: None,
+            charge_press_at: None,
             combo_count: 0,
             last_combo_side: ActiveSide::None,
             damage_history: HashMap::new(),
@@ -936,6 +942,7 @@ impl MatchCombat {
             f.block_raised_at = None;
             f.last_block_dropped_at = None;
             f.last_swing = None;
+            f.charge_press_at = None;
             f.reset_combo();
             f.damage_history.clear(); // ClearDamageHistory on round reset (§5.5)
             f.negation_pools.clear();

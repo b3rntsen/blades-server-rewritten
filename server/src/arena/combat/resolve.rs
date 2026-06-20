@@ -34,9 +34,39 @@ use super::tables;
 
 /// Carrier MessageType (`user_data[1]`) of the combat-input family — `0x36` (54).
 const CARRIER_USERMESSAGE: u8 = 0x36;
+/// Carrier for `PlayerCombatInputActivate` (op46) — `0x2e` (46). Op46 uses its own
+/// carrier byte (`GameMessageId` value), NOT the generic `0x36` UserMessage carrier.
+const CARRIER_OP46: u8 = 0x2e;
 
 /// Minimum spacing between landed swings per attacker (stand-in for swipe-commit).
 const SWING_COOLDOWN: Duration = Duration::from_millis(400);
+
+/// Held-charge crit swing multiplier for a **Light** weapon (dagger) — `×1.325`.
+/// From `docs/arena-combat-actions.md` / `tables::Weight::Light.crit_combo().0`.
+/// Applied when the server-measured attack hold ≥ `CRITICAL_HOLD_SECS`.
+const CRIT_FACTOR_LIGHT: f32 = 1.325;
+
+/// Held-charge crit swing multiplier for a **Heavy** weapon — `×1.987`.
+/// From `docs/arena-combat-actions.md` / `tables::Weight::Heavy.crit_combo().0`.
+const CRIT_FACTOR_HEAVY: f32 = 1.987;
+
+/// Held-charge crit swing multiplier for a **Versatile** weapon — `×1.625`.
+/// From `tables::Weight::Versatile.crit_combo().0`.
+const CRIT_FACTOR_VERSATILE: f32 = 1.625;
+
+/// Server-measured hold duration threshold for a FULL charge (Critical state).
+///
+/// **APPROXIMATE — VIDEO-CALIBRATED** (≈1.2 s): from s293 video ground-truth
+/// (`/tmp/arena-video-groundtruth.md` §3) the charge circle fills in ~1–1.5 s
+/// (e.g. t=46→47 partial→full, t=54→55 partial→full). The exact game-data value
+/// is `WeaponTemplate.MinDamageTime` (the CDN-hosted `PlayerCombatAbilitySettings`
+/// ScriptableObjects, not yet captured). Refine when CDN WeaponTemplate data is
+/// available; the threshold is also the `AttackChargeState.PreCritical → Critical`
+/// state transition in `dump.cs TypeDefIndex 13116`.
+///
+/// **CALIBRATION FLAG** — set this const once `MinDamageTime`/`MaxDamageTime` are
+/// captured from the CDN WeaponTemplate assets.
+const CRITICAL_HOLD_SECS: f32 = 1.2;
 
 /// Fallback ability cooldown for abilities without authoritative game-data.
 const ABILITY_COOLDOWN: Duration = Duration::from_millis(3000);
@@ -84,6 +114,61 @@ fn ability_cooldown(ability_uuid: &str) -> Duration {
 /// block window since the on/off flag isn't byte-pinned from a two-sided capture.
 const BLOCK_WINDOW: Duration = Duration::from_secs(2);
 
+/// True iff `user_data` is a `PlayerCombatInputActivate` (op46) frame.
+/// These have carrier `0x2e` (46) — NOT the generic `0x36` UserMessage carrier.
+fn is_op46(user_data: &[u8]) -> bool {
+    user_data.get(1) == Some(&CARRIER_OP46)
+}
+
+/// Parse the `_held` flag (bit0 of `b[9]`, the float's MSB) from an op46 body.
+///
+/// Op46 wire layout (per `arena-charge-decode.md` §2):
+/// ```text
+/// user_data[0]   = C2S marker (0x84)
+/// user_data[1]   = 0x2e (carrier = GameMessageId 46)
+/// user_data[2:6] = netObjectId u32 LE
+/// user_data[6]   = _isWithinBlockZone byte (not decoded here)
+/// user_data[7]   = 0xcc structural separator
+/// user_data[8:12]= _held(bit0 of [11]) + _clientChargeTime f32 LE (remaining 31 bits)
+/// ```
+/// Returns `Some(true)` on button-DOWN (attack press), `Some(false)` on button-UP
+/// (attack release/commit), `None` when the frame is too short or not op46.
+fn parse_op46_held(user_data: &[u8]) -> Option<bool> {
+    if !is_op46(user_data) {
+        return None;
+    }
+    // Need at least 12 bytes: marker(1) + carrier(1) + netObjId(4) + blockZone(1) +
+    // separator(1) + chargeTime+held(4) = 12.
+    if user_data.len() < 12 {
+        return None;
+    }
+    // b[9] in the decode-doc's 0-indexed body is user_data[11] (marker+carrier = 2-byte prefix).
+    // bit0 of the MSB of the f32 LE [user_data[8:12]] = bit0 of user_data[11].
+    let held_bit = user_data[11] & 0x01;
+    Some(held_bit == 1)
+}
+
+/// Determine the swing crit factor for a fighter based on how long they held the
+/// attack button (server-measured). Returns the charge multiplier:
+///   - `CRIT_FACTOR_*` when `hold_secs >= CRITICAL_HOLD_SECS` (full charge / Critical
+///     or PostCriticalDecay state — the server-side equivalent of op45 reporting ≥3).
+///   - `1.0` for a partial hold (uncharged swing, no crit).
+///
+/// Light/Heavy/Versatile multipliers come from `tables::Weight::crit_combo().0`.
+fn charge_crit_factor(fighter: &super::state::Fighter, hold_secs: f32) -> f32 {
+    if hold_secs < CRITICAL_HOLD_SECS {
+        return 1.0;
+    }
+    // Full charge: pick multiplier by weapon class.
+    match fighter.loadout.weapon.weight {
+        Some(tables::Weight::Light) => CRIT_FACTOR_LIGHT,
+        Some(tables::Weight::Heavy) => CRIT_FACTOR_HEAVY,
+        Some(tables::Weight::Versatile) => CRIT_FACTOR_VERSATILE,
+        // Default to Light if weight not set (the calibration target's class).
+        None => CRIT_FACTOR_LIGHT,
+    }
+}
+
 /// Resolve one inbound, decrypted c2s combat input from `sender`.
 pub fn on_c2s_input(
     combat: &mut MatchCombat,
@@ -98,6 +183,80 @@ pub fn on_c2s_input(
     if !matches!(combat.phase, FlowState::StateTimeout) {
         return Vec::new();
     }
+    // Op46 `PlayerCombatInputActivate` uses carrier `0x2e` (its own GameMessageId byte),
+    // NOT the generic `0x36` UserMessage carrier. Handle it FIRST so the 0x36 gate
+    // below doesn't drop it.
+    //
+    // The op46 frame signals a HOLD (button-DOWN, `_held=1`) or a COMMIT (button-UP,
+    // `_held=0`). On DOWN we record the server timestamp; on UP we compute the
+    // server-measured hold duration and apply the held-charge crit multiplier (bug 4):
+    //   - hold ≥ CRITICAL_HOLD_SECS → full charge → swing_factor = CRIT_FACTOR_* by weapon class
+    //   - hold < CRITICAL_HOLD_SECS → partial / uncharged → swing_factor = 1.0
+    //
+    // [arena-charge-decode.md §2-§5; decode-proven: _held bit0 of user_data[11]]
+    if is_op46(user_data) {
+        if !matches!(combat.phase, FlowState::StateTimeout) {
+            return Vec::new();
+        }
+        if sender >= combat.fighters.len() {
+            return Vec::new();
+        }
+        match parse_op46_held(user_data) {
+            Some(true) => {
+                // Button-DOWN: record the press timestamp for hold-duration measurement.
+                combat.fighters[sender].charge_press_at = Some(now);
+                debug!("combat: slot {sender} op46 DOWN — charge press recorded at {now:?}");
+                return Vec::new(); // no damage on press
+            }
+            Some(false) => {
+                // Button-UP (commit): compute hold duration, apply crit.
+                let hold_secs = combat.fighters[sender]
+                    .charge_press_at
+                    .map(|t| now.duration_since(t).as_secs_f32())
+                    .unwrap_or(0.0);
+                // Reset press timestamp — this charge is consumed.
+                combat.fighters[sender].charge_press_at = None;
+                let swing_factor = charge_crit_factor(&combat.fighters[sender], hold_secs);
+                let is_crit = swing_factor > 1.0;
+                if is_crit {
+                    info!(
+                        "combat: slot {sender} op46 UP — hold {hold_secs:.3}s ≥ {CRITICAL_HOLD_SECS}s threshold \
+                         → CRIT ×{swing_factor:.3} (weapon {:?})",
+                        combat.fighters[sender].loadout.weapon.weight,
+                    );
+                } else {
+                    debug!(
+                        "combat: slot {sender} op46 UP — hold {hold_secs:.3}s < {CRITICAL_HOLD_SECS}s \
+                         → normal swing ×1.0",
+                    );
+                }
+                // Now run the usual pre-swing checks (paralysis, opponent, cooldown).
+                for f in combat.fighters.iter_mut() {
+                    f.reconcile_block(now);
+                    reconcile_paralysis(f, now);
+                    f.prune_negation_pools(now);
+                }
+                if combat.fighters[sender].is_paralyzed() {
+                    debug!("combat: slot {sender} op46 UP ignored — paralysed");
+                    return Vec::new();
+                }
+                let Some(target_slot) = combat.opponent_of(sender) else {
+                    debug!("combat: slot {sender} op46 UP ignored — solo/bot match");
+                    return Vec::new();
+                };
+                if combat.fighters[target_slot].is_dead() {
+                    return Vec::new();
+                }
+                return resolve_swing(combat, sender, target_slot, swing_factor, now);
+            }
+            None => {
+                // Frame too short or not op46 — ignore.
+                debug!("combat: slot {sender} op46 parse failed (frame too short?)");
+                return Vec::new();
+            }
+        }
+    }
+
     if user_data.get(1) != Some(&CARRIER_USERMESSAGE) {
         return Vec::new();
     }
@@ -169,15 +328,23 @@ pub fn on_c2s_input(
     if let Some(ea) = input::parse_execute_ability(user_data) {
         resolve_ability_cast(combat, sender, target_slot, user_data, &ea, now)
     } else {
-        resolve_swing(combat, sender, target_slot, now)
+        // Carrier-0x36 swing (no `_held` parse — no charge info). Use ×1.0 (no crit).
+        // Full charge crits arrive via op46 (carrier 0x2e, handled above).
+        resolve_swing(combat, sender, target_slot, 1.0, now)
     }
 }
 
 /// A weapon auto-attack (committed swing), throttled per attacker.
+///
+/// `swing_factor` is the held-charge crit multiplier:
+///   - `1.0` for a normal (partial / uncharged) swing via carrier-0x36 or bot swings.
+///   - `CRIT_FACTOR_*` for a full-charge crit dispatched from the op46 (0x2e) path
+///     when the server-measured hold ≥ `CRITICAL_HOLD_SECS` (bug 4 fix).
 fn resolve_swing(
     combat: &mut MatchCombat,
     sender: usize,
     target_slot: usize,
+    swing_factor: f32,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
     if let Some(last) = combat.fighters[sender].last_swing {
@@ -205,7 +372,7 @@ fn resolve_swing(
         &combat.fighters[target_slot],
         DamageSource::Attack,
         next_side,
-        1.0,
+        swing_factor,
         combo_count,
         now,
     );
@@ -1014,7 +1181,8 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
             .map(|t| now.duration_since(t) >= BOT_SWING_COOLDOWN)
             .unwrap_or(true);
         if ready {
-            out.extend(resolve_swing(combat, bot, target, now));
+            // Bots don't charge — always ×1.0 (no held-charge crit for bot swings).
+            out.extend(resolve_swing(combat, bot, target, 1.0, now));
         }
     }
     out
@@ -1236,6 +1404,215 @@ mod tests {
         );
         // The tick may still emit op65 if stamina/magicka changed, but HP must be static.
         let _ = out;
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 4: Held-charge crit (arena-charge-decode.md §5)
+    // -----------------------------------------------------------------------
+
+    /// Build a synthetic op46 (`PlayerCombatInputActivate`, carrier `0x2e`) frame.
+    ///
+    /// Wire layout per `arena-charge-decode.md` §2:
+    /// ```
+    /// [0x84][0x2e] + netObjId(4 bytes LE) + blockZone(1) + separator(0xcc) +
+    /// chargeTimePacked(4 bytes, MSB=b[11])
+    /// ```
+    /// `held=true` → bit0 of b[11] = 1 (button DOWN).
+    /// `held=false` → bit0 of b[11] = 0 (button UP / commit).
+    fn make_op46_frame(net_obj_id: u32, held: bool) -> Vec<u8> {
+        let mut frame = vec![
+            0x84u8, // C2S marker
+            0x2eu8, // carrier = 0x2e (GameMessageId::PlayerCombatInputActivate = 46)
+        ];
+        // netObjectId u32 LE (4 bytes)
+        frame.extend_from_slice(&net_obj_id.to_le_bytes());
+        // _isWithinBlockZone byte + structural separator
+        frame.push(0x00); // blockZone (not decoded, any value)
+        frame.push(0xcc); // separator
+        // _clientChargeTime f32 LE packed with _held in bit0 of MSB (byte [11]).
+        // Use a representative chargeTime of 52.22s (s293 swing1 chargeTime, both directions).
+        // DOWN: raw bytes e1 e2 50 43; UP: e1 e2 50 42 (bit0 of MSB flipped).
+        let (b8, b9, b10, b11): (u8, u8, u8, u8) = if held {
+            (0xe1, 0xe2, 0x50, 0x43) // DOWN: bit0 of MSB = 1
+        } else {
+            (0xe1, 0xe2, 0x50, 0x42) // UP: bit0 of MSB = 0
+        };
+        frame.extend_from_slice(&[b8, b9, b10, b11]);
+        frame
+    }
+
+    /// Op46 DOWN (button press): records `charge_press_at`; emits ZERO damage frames.
+    #[test]
+    fn op46_down_records_press_no_damage() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+
+        let down_frame = make_op46_frame(0x1234_5678, true);
+        let out = on_c2s_input(&mut combat, 0, &down_frame, now);
+
+        assert!(out.is_empty(), "op46 DOWN must not emit damage, got {} frame(s)", out.len());
+        assert!(
+            combat.fighters[0].charge_press_at.is_some(),
+            "op46 DOWN must record charge_press_at"
+        );
+    }
+
+    /// Build a 2-player combat with pure physical weapon (no enchants), allowing exact
+    /// damage-ratio checks without the enchant track's fixed contribution diluting the ratio.
+    fn make_live_combat_no_enchant(now: Instant, weight: super::super::tables::Weight) -> MatchCombat {
+        use super::super::loadout::starter;
+        let mut combat = MatchCombat::new(2, 2, now);
+        for slot in 0..2 {
+            let obj_id = combat.alloc_net_object_id();
+            let mut f = Fighter::new(slot, obj_id, starter(), now);
+            f.loadout.weapon = super::super::state::WeaponProfile {
+                primary_type: Some(DamageType::Slashing),
+                base_by_type: vec![(DamageType::Slashing, 113.82)],
+                weight: Some(weight),
+            };
+            // No enchants → pure physical, ratio of crit:uncharged == swing_factor exactly.
+            f.loadout.enchants = vec![];
+            combat.fighters.push(f);
+        }
+        combat.match_net_object_id = combat.alloc_net_object_id();
+        combat.phase = FlowState::StateTimeout;
+        combat.phase_entered = now;
+        combat
+    }
+
+    /// Op46 UP after a FULL-CHARGE hold (≥ CRITICAL_HOLD_SECS) → crit ×1.325 on a Light weapon.
+    /// Damage must be GREATER than an uncharged swing (×1.0) on the same fighter.
+    /// Ratio must be ≈×1.325 (within 1% — integer rounding tolerance on an exact formula).
+    #[test]
+    fn op46_full_charge_light_weapon_applies_crit_multiplier() {
+        let now = Instant::now();
+        // No-enchant combat so the physical damage ratio is clean (not diluted by fixed enchant).
+        let mut combat = make_live_combat_no_enchant(now, super::super::tables::Weight::Light);
+
+        // Simulate a full-charge hold: press at t=0, release at t = CRITICAL_HOLD_SECS + 0.5s.
+        let press_time = now;
+        combat.fighters[0].charge_press_at = Some(press_time);
+        let release_time = press_time + Duration::from_secs_f32(CRITICAL_HOLD_SECS + 0.5);
+
+        let up_frame = make_op46_frame(0x1234_5678, false);
+        let out = on_c2s_input(&mut combat, 0, &up_frame, release_time);
+
+        // Must emit ReceiveDamage frames (not empty).
+        assert!(!out.is_empty(), "full-charge op46 UP must emit damage frames");
+
+        // charge_press_at must be cleared after the commit.
+        assert!(
+            combat.fighters[0].charge_press_at.is_none(),
+            "charge_press_at must be cleared after op46 UP commit"
+        );
+
+        // Measure the Slashing damage from the ReceiveDamage: compare against an
+        // uncharged swing resolved directly via resolve_swing(×1.0).
+        // The crit (×1.325 Light) must produce strictly MORE damage than ×1.0.
+        let mut uncharged_combat = make_live_combat_no_enchant(now, super::super::tables::Weight::Light);
+        let _uncharged_out = resolve_swing(&mut uncharged_combat, 0, 1, 1.0, now);
+
+        // The charged combat emitted frames → the target (slot 1) received some HP reduction.
+        let crit_hp_after = combat.fighters[1].health;
+        let norm_hp_after = uncharged_combat.fighters[1].health;
+        let crit_dealt = combat.fighters[1].max_health.saturating_sub(crit_hp_after);
+        let norm_dealt = uncharged_combat.fighters[1].max_health.saturating_sub(norm_hp_after);
+
+        assert!(
+            crit_dealt > norm_dealt,
+            "full-charge crit (×{CRIT_FACTOR_LIGHT}) must deal MORE damage than an uncharged swing: \
+             crit dealt {crit_dealt}, uncharged dealt {norm_dealt}"
+        );
+
+        // The ratio must be approximately CRIT_FACTOR_LIGHT (1.325), within 2% (rounding tolerance).
+        // No enchants → ratio is pure physical = swing_factor (1.325 crit / 1.0 normal).
+        let ratio = crit_dealt as f32 / norm_dealt as f32;
+        let _ = out; // suppress unused warning
+        assert!(
+            (ratio - CRIT_FACTOR_LIGHT).abs() < 0.02,
+            "damage ratio must be ≈×{CRIT_FACTOR_LIGHT} (Light crit), got ×{ratio:.4} \
+             (crit={crit_dealt}, normal={norm_dealt})"
+        );
+    }
+
+    /// Op46 UP after a FULL-CHARGE hold with a Heavy weapon → crit ×1.987.
+    #[test]
+    fn op46_full_charge_heavy_weapon_applies_crit_multiplier() {
+        let now = Instant::now();
+        let mut combat = make_live_combat_no_enchant(now, super::super::tables::Weight::Heavy);
+
+        combat.fighters[0].charge_press_at =
+            Some(now - Duration::from_secs_f32(CRITICAL_HOLD_SECS + 0.3));
+
+        let up_frame = make_op46_frame(0x1234_5678, false);
+        let out = on_c2s_input(&mut combat, 0, &up_frame, now);
+
+        assert!(!out.is_empty(), "full-charge Heavy op46 UP must emit damage");
+
+        // Compare against uncharged heavy.
+        let mut uncharged = make_live_combat_no_enchant(now, super::super::tables::Weight::Heavy);
+        let _ = resolve_swing(&mut uncharged, 0, 1, 1.0, now);
+
+        let crit_dealt = combat.fighters[1].max_health.saturating_sub(combat.fighters[1].health);
+        let norm_dealt = uncharged.fighters[1].max_health.saturating_sub(uncharged.fighters[1].health);
+
+        let ratio = crit_dealt as f32 / norm_dealt as f32;
+        assert!(
+            (ratio - CRIT_FACTOR_HEAVY).abs() < 0.02,
+            "Heavy crit ratio must be ≈×{CRIT_FACTOR_HEAVY}, got ×{ratio:.4}"
+        );
+    }
+
+    /// Op46 UP after a SHORT hold (< CRITICAL_HOLD_SECS) → normal swing ×1.0 (no crit).
+    /// Damage must equal an uncharged swing (no crit boost applied).
+    #[test]
+    fn op46_short_hold_partial_charge_no_crit() {
+        let now = Instant::now();
+        // No-enchant so the comparison is exact (no rounding from fixed enchant contribution).
+        let mut combat = make_live_combat_no_enchant(now, super::super::tables::Weight::Light);
+
+        // Press at t=0, release at t = CRITICAL_HOLD_SECS / 2 (definitely partial).
+        let press_time = now;
+        combat.fighters[0].charge_press_at = Some(press_time);
+        let release_time = press_time + Duration::from_secs_f32(CRITICAL_HOLD_SECS / 2.0);
+
+        let up_frame = make_op46_frame(0x1234_5678, false);
+        let _ = on_c2s_input(&mut combat, 0, &up_frame, release_time);
+
+        // Resolve an uncharged swing on a fresh combat at the same `release_time`.
+        let mut uncharged = make_live_combat_no_enchant(now, super::super::tables::Weight::Light);
+        let _ = resolve_swing(&mut uncharged, 0, 1, 1.0, release_time);
+
+        let partial_dealt = combat.fighters[1].max_health.saturating_sub(combat.fighters[1].health);
+        let normal_dealt = uncharged.fighters[1].max_health.saturating_sub(uncharged.fighters[1].health);
+
+        // Partial charge must be equal to uncharged (×1.0, no crit boost).
+        assert_eq!(
+            partial_dealt, normal_dealt,
+            "partial hold (< {CRITICAL_HOLD_SECS}s) must NOT crit: partial dealt {partial_dealt}, \
+             uncharged dealt {normal_dealt}"
+        );
+    }
+
+    /// `parse_op46_held` unit tests — verify the bit extraction from the wire bytes.
+    #[test]
+    fn parse_op46_held_detects_held_flag() {
+        // Exact s293 DOWN frame bytes: e1 e2 50 43 → b[11]=0x43, bit0=1 → DOWN
+        let down = make_op46_frame(0x1FEDC7B1, true);
+        assert_eq!(parse_op46_held(&down), Some(true), "s293-derived DOWN frame: held=1");
+
+        // Exact s293 UP frame bytes: e1 e2 50 42 → b[11]=0x42, bit0=0 → UP
+        let up = make_op46_frame(0x1FEDC7B1, false);
+        assert_eq!(parse_op46_held(&up), Some(false), "s293-derived UP frame: held=0");
+
+        // Non-op46 frame (carrier 0x36) must return None.
+        let non46 = vec![0x84u8, 0x36u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8,
+                         0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8];
+        assert_eq!(parse_op46_held(&non46), None, "non-op46 carrier must return None");
+
+        // Frame too short must return None.
+        let short = vec![0x84u8, 0x2eu8, 0x01u8];
+        assert_eq!(parse_op46_held(&short), None, "too-short op46 frame must return None");
     }
 
     // -----------------------------------------------------------------------
