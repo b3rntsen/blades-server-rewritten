@@ -86,20 +86,34 @@
 //!    op29 PlayerDead  05:07:01           (carrier 0x36, GMID 29, dead obj 124)
 //!    op79 "RoundEnd"  05:07:01
 //! 14 PostRound        05:07:01  (3.0)
-//!    op48 MatchPostRoundInfoMsg 05:07:01 (the RESULT: winner/loser char UUIDs + matchId;
-//!                                         retail sends op48, NEVER op49)
+//!    op48 MatchPostRoundInfoMsg 05:07:01 (the per-ROUND result: winner/loser UUIDs + matchId)
 //!    op79 "StateTimeout" 05:07:04        (a flow heartbeat, +3s)
+//!    op49 MatchEndMatchMsg 05:07:06      ← THE RESULTS/REWARDS message (the victory CARD).
+//!                                         CORRECTION: op49 IS sent at match-end — carrier
+//!                                         0x36, GMID 49 at NetData propId 3, ResultsJSON at
+//!                                         propId 13 (the earlier "retail NEVER sends op49 /
+//!                                         it rides 0xc2/0xc6" was WRONG: 0xc2/0xc6 was a
+//!                                         misread of the ENet fragment-frame header; op49 is
+//!                                         fragmented so it only round-trips after reassembly).
+//!                                         [docs/arena-match-end-spec.md; 6 sessions.]
 //! 17 BackendMatchEnd  05:07:05  (20)     +4s  (Victory(15) is SKIPPED; 17 precedes 16)
-//!    (a big fragmented ResultsJSON rides carriers 0xc2/0xc6 here)
 //! 16 PostMatch        05:07:11  (5.0)    +6s
 //! 19 DisconnectingPlayersAfterMatch 05:07:16 (~0) +5s  ← terminal; client returns to lobby
 //! ```
-//! The engine reproduces the FINAL-round path: `resolve::end_match` emits op29 + op79
-//! RoundEnd + op48 + MatchState→PostRound(14) on the killing blow, then
-//! `MATCH_STATE_MATCHEND_PROGRESSION` walks 17→16→19 and finishes. Covered by
-//! `engine::tests::post_match_state_walk_reaches_terminal_then_finishes` +
-//! `messages::tests::{player_dead,match_post_round_info}_matches_s506`. [decoded from
-//! prod arena_udp_frames s506, 2026-06-19.]
+//! The engine reproduces the FINAL-round path: `resolve::on_round_ending_death` emits op29
+//! + op79 RoundEnd + op48 + MatchState→PostRound(14) on the killing blow, then
+//! `MATCH_STATE_MATCHEND_PROGRESSION` walks 17→16→19 AND emits one **op49** per player
+//! (the victory card) at the matchend_step==0 tick, and finishes. Covered by
+//! `engine::tests::{post_match_state_walk_reaches_terminal_then_finishes,
+//! match_end_emits_op49_per_player_on_final_round}` +
+//! `messages::tests::{player_dead,match_post_round_info,match_end_match}_matches_s506`.
+//! [decoded from prod arena_udp_frames s506, 2026-06-19/06-20.]
+//!
+//! BLOCK MODEL NOTE (the cross-spec correction, `docs/arena-combat-reproduction-spec.md`
+//! §4.4): a connected OPTIMAL block NEGATES physical (×0) but only HALVES elemental
+//! (×0.5) — `wasOptimalBlocking` is a defender-STATE bit, not "hit absorbed". The
+//! ÷1.6/÷1.23 divisors are the LATE/imperfect tier, NOT optimal (the status-resistance
+//! spec's "÷1.6/÷1.23-for-optimal" was a flag-averaging artifact). See `damage::block_outcome`.
 //!
 //! The c2s round-start uploads (op58 clock echo, op55, the op54 PlayerLoadoutReady
 //! loadout, the op54 flow echoes) are embedded below and replayed at their captured

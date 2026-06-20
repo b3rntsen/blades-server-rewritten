@@ -15,7 +15,7 @@
 
 use arena_proto::{GameMessageId, NetDataWriter};
 
-use super::state::{ActiveSide, DamageSource, DamageType, FlowState, MatchState, NetObjectType, NetRole};
+use super::state::{ActiveSide, DamageSource, DamageType, FlowState, MatchState, NetObjectType, NetRole, StatusEffectType};
 
 /// `NetTransportMessage.MAGIC_HEADER` — present on every message, both directions.
 pub const MARKER_S2C: u8 = 0xBE;
@@ -483,6 +483,44 @@ pub fn receive_damage(
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
+/// `ChangeCombatStatusEffect` (51) — a status effect (condition / buff) was applied or
+/// removed on an actor. Carrier `0x36`, GMID at propId 3. Capture-proven layout
+/// (`docs/arena-status-resistance-spec.md` §5.3, 2 337 frames): `{0:Int actorObj ·
+/// 1:Byte 56 Avatar · 2:Byte 1 Authority · 3:Byte 51 · 4:Bool apply/remove · 5:Byte
+/// StatusEffectType · 6:Float duration · 7:Byte sourceDamageType}`. propId7 = the source
+/// `DamageType` (0 for the four elemental conditions; 255/None otherwise).
+pub fn change_combat_status_effect(
+    actor_net_object_id: i32,
+    apply: bool,
+    status: StatusEffectType,
+    duration: f32,
+    source_damage_type: u8,
+) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, actor_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GameMessageId::ChangeCombatStatusEffect as u8)
+        .bool(4, apply)
+        .byte(5, status as u16 as u8)
+        .float(6, duration)
+        .byte(7, source_damage_type);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// `DamageNegated` (66) — a Ward/Absorb/Dodge pool fully ate a hit (no damage payload).
+/// Carrier `0x36`, GMID at propId 3, on the defending Avatar. A bare NetObjectInfo +
+/// GMID signal (the captured op66 carries no further fields — §3.3/§4.5). Emitted
+/// INSTEAD of letting the hit reduce HP when a negation pool consumed the whole hit.
+pub fn damage_negated(defender_net_object_id: i32) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, defender_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GameMessageId::DamageNegated as u8);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
 /// `PlayerDeadStateChange` (29) — the addressed avatar died (the killing blow).
 ///
 /// **Capture-proven layout (s506 #3523661, the final-round death):** op29 rides the
@@ -562,18 +600,133 @@ pub fn match_post_round_info(
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
-/// `MatchEndMatchMsg` (49) — **NOT sent by retail at match-end.** Decoded s506
-/// end-to-end: the match RESULT is delivered via [`match_post_round_info`] (op48) at
-/// PostRound, and a large fragmented `ResultsJSON` rides separate carriers (0xc2/0xc6)
-/// during BackendMatchEnd(17). op49 never appears as a discrete command in any
-/// captured match (s127/167/293/385/486/503/504/506). Retained as a minimal builder
-/// (NetObjectInfo + winner id) only for the `GameMessageId` round-trip / tests — it is
-/// **not** emitted by the engine. [decoded from prod arena_udp_frames s506 2026-06-19.]
-pub fn match_end(winner_net_object_id: i32) -> Vec<u8> {
+/// The arena GOLD (soft) currency UUID — `reward.currencies[<this>]` is the per-match
+/// gold the victory card animates. CONSTANT across all captured sessions (s506/503/504/
+/// 486/167/127). [`docs/arena-match-end-spec.md` §3.1]
+pub const ARENA_GOLD_CURRENCY_UUID: &str = "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2";
+
+/// `MatchEndMatchMsg` (49) — **the match-END message that drives the client's
+/// victory/results CARD.** Carrier `0x36`, GMID at NetData propId 3, on the **Match**
+/// net-object. Header MIRRORS op48 (`match_post_round_info`): the winner/loser char-UUID
+/// quartet + the result_code at p4; op49 ADDS the per-recipient `ResultsJSON` at propId
+/// 13 + the p14/p15/p16 trailer. ENet auto-fragments the ~4 KB body on ch4 (the same
+/// channel as the op54 profile).
+///
+/// **Correction (`docs/arena-match-end-spec.md`):** op49 IS sent at match-end (the old
+/// stub's "NOT sent by retail / rides 0xc2/0xc6" was WRONG — that was a misread of the
+/// ENet fragment-frame header; the real carrier is `0x36` with GMID 49 at propId 3,
+/// capture-proven in 6 sessions by reassembling the fragmented frame). [s506 #3523709]
+///
+/// Layout (byte-exact, s506 #3523709): `{0:Int matchObj · 1:Byte 54 Match · 2:Byte 1
+/// Authority · 3:Byte 49 · 4:Int result_code · 5/7/11:String winner · 6/8/12:String
+/// loser · 9/10:String "" · 13:String ResultsJSON · 14:Bool false · 15:Byte 0 · 16:Int}`.
+#[allow(clippy::too_many_arguments)]
+pub fn match_end_match(
+    match_net_object_id: i32,
+    winner_char_uuid: &str,
+    loser_char_uuid: &str,
+    result_code: i32,
+    results_json: &str,
+) -> Vec<u8> {
     let mut w = NetDataWriter::new();
-    w.net_object_info(winner_net_object_id, NetObjectType::Match as u8, NetRole::Authority as u8)
-        .int(3, winner_net_object_id);
-    frame(GameMessageId::MatchEndMatchMsg as u8, w.finish())
+    w.int(0, match_net_object_id)
+        .byte(1, NetObjectType::Match as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GameMessageId::MatchEndMatchMsg as u8) // 49
+        .int(4, result_code)
+        .string(5, winner_char_uuid)
+        .string(6, loser_char_uuid)
+        .string(7, winner_char_uuid)
+        .string(8, loser_char_uuid)
+        .string(9, "")
+        .string(10, "")
+        .string(11, winner_char_uuid)
+        .string(12, loser_char_uuid)
+        .string(13, results_json)
+        .bool(14, false)
+        .byte(15, 0)
+        .int(16, 0); // s506=757; a small per-match int, not load-bearing — 0 is fine
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// The per-match reward + post-match PvP deltas for ONE recipient (the inputs to
+/// [`results_json`]). The victory card animates `gold` + `character_xp`; the trophy/rank
+/// deltas come from the post-match `pvp_trophies` / `challenge_rank` the client diffs
+/// against its pre-match values. [`docs/arena-match-end-spec.md` §3]
+#[derive(Debug, Clone)]
+pub struct MatchEndReward {
+    /// Gold granted this match (`reward.currencies[ARENA_GOLD_CURRENCY_UUID]`).
+    pub gold: i64,
+    /// XP granted this match (`reward.characterXp`).
+    pub character_xp: i64,
+    /// The recipient's gold WALLET balance AFTER crediting (`wallet[].balance`).
+    pub wallet_gold: i64,
+    /// The recipient's VISIBLE trophy count, post-match (`character.pvpTrophies`).
+    pub pvp_trophies: i64,
+    /// The matchmaking-internal trophies, post-match (`character.matchmakingPvpTrophies`).
+    pub matchmaking_pvp_trophies: i64,
+    /// The recipient's challenge-season rank, post-match (`character.challengeSeason.rank`).
+    pub challenge_rank: i64,
+}
+
+/// Build the op49 `ResultsJSON` (propId 13) — the victory-card payload
+/// (`docs/arena-match-end-spec.md` §3). PER-RECIPIENT: `characterId`,
+/// `reward.{currencies, characterXp}`, the recipient `character` snapshot (with the
+/// post-match `pvpTrophies`/`matchmakingPvpTrophies`/`challengeSeason.rank` overlaid),
+/// `inventory` (the op54 equipped snapshot), and the credited `wallet`.
+///
+/// `character_json` / `equipped_items_json` are the recipient's op54 PROFILE blobs (the
+/// same source the transfer/profile path uses — `loadout.profile_character_json` /
+/// `profile_equipped_json`); empty/unparseable falls back to a minimal `{id,name}`
+/// character so a starter/bot still produces a valid card. `request_index` is the
+/// player's REST request sequence (echo/idempotency; 0 is fine).
+pub fn results_json(
+    recipient_char_uuid: &str,
+    character_json: &str,
+    equipped_items_json: &str,
+    reward: &MatchEndReward,
+    request_index: i64,
+) -> String {
+    use serde_json::{json, Value};
+
+    // Start from the recipient's op54 character record; overlay the post-match PvP
+    // fields the card reads (the rest of the snapshot is preserved verbatim).
+    let mut character: Value = serde_json::from_str(character_json).unwrap_or_else(|_| {
+        json!({ "id": recipient_char_uuid, "name": "" })
+    });
+    if let Some(obj) = character.as_object_mut() {
+        obj.insert("id".into(), json!(recipient_char_uuid));
+        obj.insert("pvpTrophies".into(), json!(reward.pvp_trophies));
+        obj.insert("matchmakingPvpTrophies".into(), json!(reward.matchmaking_pvp_trophies));
+        // challengeSeason.rank — create/overlay just the rank (the card reads it for the
+        // rank delta); preserve any other season fields already present.
+        let mut season = obj.get("challengeSeason").cloned().unwrap_or_else(|| json!({}));
+        if let Some(s) = season.as_object_mut() {
+            s.insert("rank".into(), json!(reward.challenge_rank));
+        } else {
+            season = json!({ "rank": reward.challenge_rank });
+        }
+        obj.insert("challengeSeason".into(), season);
+    }
+
+    // The inventory snapshot (the op54 equipped-items blob the menu re-syncs from).
+    let inventory: Value = serde_json::from_str::<Value>(equipped_items_json)
+        .map(|loadout| json!({ "loadout": loadout }))
+        .unwrap_or_else(|_| json!({}));
+
+    json!({
+        "characterId": recipient_char_uuid,
+        "character": character,
+        "reward": {
+            "currencies": { ARENA_GOLD_CURRENCY_UUID: reward.gold },
+            "characterXp": reward.character_xp,
+        },
+        "rewardNewLevelArena": {},
+        "currentRequestIndex": request_index,
+        "inventory": inventory,
+        "wallet": [ { "currencyId": ARENA_GOLD_CURRENCY_UUID, "balance": reward.wallet_gold } ],
+    })
+    .to_string()
 }
 
 /// `PlayerEmoteStateChange` (73) — the s2c relay of a client's `PlayEmote` (72).
@@ -1247,5 +1400,111 @@ mod tests {
         assert_eq!(echo[13], 38, "gameMessageId → PerformExecuteAbility (sep+5)");
         assert_eq!(&echo[16..], b"7fc15804-1637-40a9-8dcc-3ea1eb0f778d", "UUID preserved");
         assert_eq!(echo.len(), req.len());
+    }
+
+    /// op49 `MatchEndMatchMsg` header byte-shape vs s506 #3523709 (`docs/arena-match-end-spec.md`
+    /// §2): carrier 0x36 on the Match obj, GMID 49 at propId 3, the winner/loser UUID
+    /// quartet (p5/p7/p11 winner, p6/p8/p12 loser), result_code at p4, the ResultsJSON at
+    /// p13, and the p14/p15/p16 trailer. The JSON body itself is per-recipient (not
+    /// asserted byte-for-byte). This is the op49-IS-SENT correction (the stub was wrong).
+    #[test]
+    fn match_end_match_matches_s506() {
+        let winner = "1131a037-716c-49cc-b165-32d8ddc14f49";
+        let loser = "38c987fd-c42b-4ea6-b869-c8d4c03055f9";
+        let rj = r#"{"characterId":"38c987fd-c42b-4ea6-b869-c8d4c03055f9","reward":{"currencies":{"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":4047},"characterXp":280}}"#;
+        let got = match_end_match(123, winner, loser, 3, rj);
+
+        assert_eq!(&got[0..2], &[0xBE, 0x36], "carrier 0x36 (NOT 0xc2/0xc6 — that was a fragment-header misread)");
+        let nd = arena_proto::parse_netdata(&got[2..]);
+        assert_eq!(nd.int(0), Some(123), "p0 Match obj id");
+        assert_eq!(nd.int(1), Some(54), "p1 Match");
+        assert_eq!(nd.int(2), Some(1), "p2 Authority");
+        assert_eq!(nd.int(3), Some(49), "p3 MatchEndMatchMsg gmid (op49 IS sent)");
+        assert_eq!(nd.int(4), Some(3), "p4 result code = 3");
+        for p in [5, 7, 11] {
+            assert_eq!(nd.string(p), Some(winner), "p{p} = winner char UUID");
+        }
+        for p in [6, 8, 12] {
+            assert_eq!(nd.string(p), Some(loser), "p{p} = loser char UUID");
+        }
+        assert_eq!(nd.string(9), Some(""), "p9 empty");
+        assert_eq!(nd.string(10), Some(""), "p10 empty");
+        assert_eq!(nd.string(13), Some(rj), "p13 = the ResultsJSON");
+        assert_eq!(nd.props.get(&14), Some(&arena_proto::NetDataValue::Bool(false)), "p14 false");
+        assert_eq!(nd.int(15), Some(0), "p15 Byte 0");
+        assert_eq!(nd.int(16), Some(0), "p16 Int (s506=757; 0 is fine — not load-bearing)");
+
+        // It routes on ENet ch4 (the big fragmented channel) like the op54 profile.
+        assert_eq!(retail_channel(&got), 4, "op49 → ch4 (fragmented, like op54)");
+    }
+
+    /// The op49 `ResultsJSON` (propId 13) carries the victory-card fields the client
+    /// reads (`docs/arena-match-end-spec.md` §3): `characterId`, the gold currency reward
+    /// + characterXp, the credited wallet, and the post-match
+    /// pvpTrophies/matchmakingPvpTrophies/challengeSeason.rank overlaid on the char.
+    #[test]
+    fn results_json_has_card_fields() {
+        let reward = MatchEndReward {
+            gold: 4047,
+            character_xp: 280,
+            wallet_gold: 65_039_050,
+            pvp_trophies: 755,
+            matchmaking_pvp_trophies: 817,
+            challenge_rank: 1,
+        };
+        let char_json = r#"{"id":"old","name":"Flappety","level":86,"experience":291458}"#;
+        let equipped = r#"{"equippedItems":{}}"#;
+        let out = results_json("38c987fd-c42b-4ea6-b869-c8d4c03055f9", char_json, equipped, &reward, 789104);
+        let v: serde_json::Value = serde_json::from_str(&out).expect("ResultsJSON must parse");
+
+        assert_eq!(v["characterId"], "38c987fd-c42b-4ea6-b869-c8d4c03055f9");
+        // reward.currencies[<gold uuid>] == gold; reward.characterXp == xp.
+        assert_eq!(v["reward"]["currencies"][ARENA_GOLD_CURRENCY_UUID], 4047);
+        assert_eq!(v["reward"]["characterXp"], 280);
+        // wallet credited with the gold currency.
+        assert_eq!(v["wallet"][0]["currencyId"], ARENA_GOLD_CURRENCY_UUID);
+        assert_eq!(v["wallet"][0]["balance"], 65_039_050i64);
+        // character snapshot: id replaced + post-match PvP fields overlaid; name preserved.
+        assert_eq!(v["character"]["id"], "38c987fd-c42b-4ea6-b869-c8d4c03055f9");
+        assert_eq!(v["character"]["name"], "Flappety");
+        assert_eq!(v["character"]["pvpTrophies"], 755);
+        assert_eq!(v["character"]["matchmakingPvpTrophies"], 817);
+        assert_eq!(v["character"]["challengeSeason"]["rank"], 1);
+        // rewardNewLevelArena empty (no promotion); currentRequestIndex echoed.
+        assert_eq!(v["rewardNewLevelArena"], serde_json::json!({}));
+        assert_eq!(v["currentRequestIndex"], 789104);
+    }
+
+    /// op51 `ChangeCombatStatusEffect` byte shape (`docs/arena-status-resistance-spec.md`
+    /// §5.3): carrier 0x36 on the Avatar, GMID 51, apply bool, status byte, duration,
+    /// source-damage byte. A Poisoned(4.89s) apply with source 0 (an elemental condition).
+    #[test]
+    fn change_combat_status_effect_shape() {
+        let got = change_combat_status_effect(125, true, StatusEffectType::Poisoned, 4.89, 0);
+        assert_eq!(&got[0..2], &[0xBE, 0x36], "carrier 0x36");
+        let nd = arena_proto::parse_netdata(&got[2..]);
+        assert_eq!(nd.int(0), Some(125), "p0 actor obj");
+        assert_eq!(nd.int(1), Some(56), "p1 Avatar");
+        assert_eq!(nd.int(2), Some(1), "p2 Authority");
+        assert_eq!(nd.int(3), Some(51), "p3 ChangeCombatStatusEffect gmid");
+        assert_eq!(nd.props.get(&4), Some(&arena_proto::NetDataValue::Bool(true)), "p4 apply=true");
+        assert_eq!(nd.int(5), Some(7), "p5 StatusEffectType Poisoned(7)");
+        assert_eq!(nd.int(7), Some(0), "p7 sourceDamageType 0 (elemental condition)");
+
+        // A Paralyzed(3.1s) apply rides the same shape (status byte 9).
+        let par = change_combat_status_effect(125, true, StatusEffectType::Paralyzed, 3.1, 0);
+        assert_eq!(arena_proto::parse_netdata(&par[2..]).int(5), Some(9), "Paralyzed = StatusEffectType 9");
+    }
+
+    /// op66 `DamageNegated` is a bare NetObjectInfo + GMID signal (no damage payload) on
+    /// the defending Avatar — the Ward/Absorb full-negation path (§4.5). Routes on ch0.
+    #[test]
+    fn damage_negated_shape() {
+        let got = damage_negated(125);
+        assert_eq!(&got[0..2], &[0xBE, 0x36], "carrier 0x36");
+        let nd = arena_proto::parse_netdata(&got[2..]);
+        assert_eq!(nd.int(0), Some(125), "p0 defender obj");
+        assert_eq!(nd.int(1), Some(56), "p1 Avatar");
+        assert_eq!(nd.int(3), Some(66), "p3 DamageNegated gmid");
     }
 }

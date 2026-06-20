@@ -138,6 +138,21 @@ const MATCH_STATE_MATCHEND_PROGRESSION: &[(MatchState, Duration, f32)] = &[
     (MatchState::DisconnectingPlayersAfterMatch, Duration::from_secs(5), 0.0),
 ];
 
+/// op49 ResultsJSON reward magnitudes — simple win/loss deltas
+/// (`docs/arena-match-end-spec.md` §5 step 2: "the magnitude doesn't gate the screen";
+/// retail's exact per-match formula isn't in the captures). The card animates these; the
+/// trophy values are post-match snapshots the client diffs vs its pre-match totals.
+/// **Flagged as placeholder magnitudes** (calibrate against a winning capture if exact
+/// deltas are ever needed — the op49 SHAPE is what matters).
+const MATCH_END_WIN_GOLD: i64 = 4047; // s506-era order of magnitude
+const MATCH_END_LOSS_GOLD: i64 = 302; // s127/s167 loss value
+const MATCH_END_WIN_XP: i64 = 280;
+const MATCH_END_LOSS_XP: i64 = 16;
+const MATCH_END_WIN_TROPHIES: i64 = 30; // a representative trophy gain on a win
+const MATCH_END_LOSS_TROPHIES: i64 = 0;
+/// The op49/op48 result_code (s506 = 3; near-constant, ≈ maxRounds/result enum).
+const MATCH_END_RESULT_CODE: i32 = 3;
+
 /// The retail BETWEEN-ROUNDS `MatchState` walk — the path from a NON-final round end
 /// back into the next live round (best-of-3). Same `(state, hold_before, timeout)`
 /// shape as the round-0 / match-end tables. `PostRound`(14) is emitted by `resolve`
@@ -591,6 +606,13 @@ impl MatchInstance {
                         // first terminal step).
                         if self.combat.matchend_step == 0 {
                             self.broadcast_flow(&mut out, FlowState::StateTimeout);
+                            // …then the per-recipient op49 MatchEndMatchMsg (the victory
+                            // CARD): one PER PLAYER, right after the heartbeat, as
+                            // BackendMatchEnd is about to be emitted — matching s506's
+                            // op49 at 05:07:06 (just after the 05:07:04 StateTimeout). The
+                            // `matchend_step == 0` guard sends it exactly ONCE, only on the
+                            // FINAL round (this branch runs only when the match was won).
+                            self.broadcast_match_end_results(&mut out);
                         }
                         info!(
                             "combat FSM: post-match MatchState → {:?}({}) [matchend step {}/{}]",
@@ -823,6 +845,66 @@ impl MatchInstance {
                     &self.combat.game_session_id,
                 ),
             ));
+        }
+    }
+
+    /// Broadcast the per-recipient op49 `MatchEndMatchMsg` (the victory/results CARD) —
+    /// ONE PER PLAYER at match-end (`docs/arena-match-end-spec.md` §5 step 3). Each
+    /// player gets their OWN ResultsJSON (their character snapshot + reward + wallet);
+    /// the winner/loser identity for the card comes from the op49 HEADER (p5/p6), not the
+    /// JSON. The reward magnitudes use simple win/loss deltas — retail's exact formula
+    /// isn't in the captures, and the magnitude doesn't gate the card (§5 step 2). ENet
+    /// auto-fragments the ~4 KB frame on ch4. Sent exactly once (the `matchend_step == 0`
+    /// guard at the call site), only on the FINAL round.
+    fn broadcast_match_end_results(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        let (winner_uuid, loser_uuid) = self.combat.winner_loser_uuids();
+        for slot in 0..self.combat.fighters.len() {
+            let f = &self.combat.fighters[slot];
+            let is_winner = self.combat.winner == Some(slot);
+            // Simple, faithful-enough per-match deltas (win > loss); the card animates
+            // these but doesn't depend on the exact values. Trophy/rank are post-match
+            // snapshots the client diffs against its pre-match values.
+            let reward = if is_winner {
+                messages::MatchEndReward {
+                    gold: MATCH_END_WIN_GOLD,
+                    character_xp: MATCH_END_WIN_XP,
+                    wallet_gold: MATCH_END_WIN_GOLD,
+                    pvp_trophies: MATCH_END_WIN_TROPHIES,
+                    matchmaking_pvp_trophies: MATCH_END_WIN_TROPHIES,
+                    challenge_rank: 1,
+                }
+            } else {
+                messages::MatchEndReward {
+                    gold: MATCH_END_LOSS_GOLD,
+                    character_xp: MATCH_END_LOSS_XP,
+                    wallet_gold: MATCH_END_LOSS_GOLD,
+                    pvp_trophies: MATCH_END_LOSS_TROPHIES,
+                    matchmaking_pvp_trophies: MATCH_END_LOSS_TROPHIES,
+                    challenge_rank: 1,
+                }
+            };
+            let rj = messages::results_json(
+                &f.loadout.character_uuid,
+                &f.loadout.profile_character_json,
+                &f.loadout.profile_equipped_json,
+                &reward,
+                0,
+            );
+            let frame = messages::match_end_match(
+                self.combat.match_net_object_id,
+                &winner_uuid,
+                &loser_uuid,
+                MATCH_END_RESULT_CODE,
+                &rj,
+            );
+            info!(
+                "combat: op49 MatchEndMatchMsg → slot {slot} ({}), ResultsJSON {} B (gold {}, xp {})",
+                if is_winner { "winner" } else { "loser" },
+                rj.len(),
+                reward.gold,
+                reward.character_xp,
+            );
+            out.push((slot, frame));
         }
     }
 
@@ -1360,13 +1442,13 @@ mod tests {
                 "real GameMessageId 50 at propId 3"
             );
         }
-        // B's RAW HP dropped by the model swing. Starter = L30 Heavy weapon (Glass
-        // base 120 + Remarkable +9 = 129) × Heavy crit 1.987 = 256.3 Slashing, + Shock
-        // enchant (tier 2 → 60 × 1.987 = 119.2); RAW health total 375.5. The
-        // anti-one-shot clamp (`MAX_HIT_FRACTION_OF_MAX_HP` = 0.25 of the 1470 ×3-arena
-        // pool = 367.5) caps it → 368 (the equal Magicka drain is excluded). HP is raw
-        // (×3 arena pool); wire is a fraction. A starter round is exactly 4 hits.
-        assert_eq!(m.fighter_max_health(1) - m.fighter_health(1), 368, "B raw HP −368 (clamped to 25% of max)");
+        // B's RAW HP dropped by the model swing. Starter = L30 **Light** weapon (the new
+        // default, not Heavy): base = (heavy_base(7)=120 + QUALITY_BONUS[3]=9) × 0.60 =
+        // 77.4 Slashing at combo-0 (the FIRST swing is Right, ×1.0). + a Shock enchant
+        // (tier 2 → 13.73×2 = 27.46, amp ×1.0). Health total = 77.4 + 27.46 ≈ 104.86 →
+        // round 105 (the equal Magicka drain is excluded). NO 25% clamp anymore (§4.5):
+        // the hit is the honest model value. HP is raw (×3 arena pool); wire is a fraction.
+        assert_eq!(m.fighter_max_health(1) - m.fighter_health(1), 105, "B raw HP −105 (combo-0 Light swing, un-clamped)");
         if let Some(arena_proto::NetDataValue::ULong(v)) =
             arena_proto::parse_netdata(&out[0].1[2..]).props.get(&4)
         {
@@ -1584,6 +1666,138 @@ mod tests {
         assert_eq!(m.match_state_for_test(), MatchState::DisconnectingPlayersAfterMatch);
     }
 
+    /// MATCH-END op49 (the victory CARD, `docs/arena-match-end-spec.md`): on the FINAL
+    /// round-ending death, the FSM emits ONE op49 `MatchEndMatchMsg` PER PLAYER (right
+    /// after the post-PostRound StateTimeout heartbeat), each carrying a ResultsJSON with
+    /// `reward.currencies` + `reward.characterXp`, addressed to that player's slot. NOT
+    /// emitted on an intermediate (looping) round.
+    #[test]
+    fn match_end_emits_op49_per_player_on_final_round() {
+        let now = Instant::now();
+        // Two named fighters (distinct UUIDs) so the op49 header carries real winner/loser.
+        let mk = |name: &str, uuid: &str| {
+            let mut l = crate::arena::combat::loadout::starter();
+            l.display_name = name.into();
+            l.character_uuid = uuid.into();
+            l.profile_character_json = format!(r#"{{"id":"{uuid}","name":"{name}","level":86}}"#);
+            l.profile_equipped_json = r#"{"equippedItems":{}}"#.into();
+            l
+        };
+        let mut m = MatchInstance::new(
+            2,
+            2,
+            vec![
+                mk("Flappety", "38c987fd-c42b-4ea6-b869-c8d4c03055f9"),
+                mk("Blank", "1131a037-716c-49cc-b165-32d8ddc14f49"),
+            ],
+            now,
+        );
+        let live = drive_to_live(&mut m, 2, now);
+
+        let is_op49 = |b: &[u8]| {
+            b.len() > 3 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(49)
+        };
+
+        // Round 1 death LOOPS (best-of-3) — NO op49 on an intermediate round.
+        let (d1, t1) = swing_until_death(&mut m, 0, live);
+        assert!(!d1.iter().any(|(_, b)| is_op49(b)), "no op49 on the looping round-1 death");
+        assert_eq!(m.phase(), FlowState::NextState);
+        let (_s1, live2) = drive_interround_to_live(&mut m, t1);
+
+        // Round 2 death → 2-0 → the MATCH ends. Tick the terminal walk; the op49 burst
+        // rides the matchend_step==0 tick (with the StateTimeout heartbeat).
+        let (_d2, t) = swing_until_death(&mut m, 0, live2);
+        assert_eq!(m.combat.rounds_won, [2, 0], "slot 0 won the match 2-0");
+        assert_eq!(m.phase(), FlowState::RoundEnd);
+
+        let mut op49s: Vec<(usize, Vec<u8>)> = Vec::new();
+        let step = Duration::from_millis(250);
+        for i in 1..=80u32 {
+            let out = m.on_tick(2, t + step * i);
+            for (slot, b) in out {
+                if is_op49(&b) {
+                    op49s.push((slot, b));
+                }
+            }
+            if m.phase() == FlowState::Finished {
+                break;
+            }
+        }
+        // Exactly ONE op49 per player (2), one to each slot.
+        assert_eq!(op49s.len(), 2, "one op49 MatchEndMatchMsg per player at match-end");
+        let slots: std::collections::BTreeSet<usize> = op49s.iter().map(|(s, _)| *s).collect();
+        assert_eq!(slots.into_iter().collect::<Vec<_>>(), vec![0, 1], "one op49 to each slot");
+
+        // Each op49 header has the right winner/loser, and its ResultsJSON parses with
+        // the reward fields the card animates.
+        for (_, b) in &op49s {
+            let nd = arena_proto::parse_netdata(&b[2..]);
+            assert_eq!(nd.int(3), Some(49), "GMID 49");
+            assert_eq!(nd.string(5), Some("38c987fd-c42b-4ea6-b869-c8d4c03055f9"), "winner = slot 0 (Flappety)");
+            assert_eq!(nd.string(6), Some("1131a037-716c-49cc-b165-32d8ddc14f49"), "loser = slot 1 (Blank)");
+            let rj = nd.string(13).expect("ResultsJSON at propId 13");
+            let v: serde_json::Value = serde_json::from_str(rj).expect("ResultsJSON parses");
+            assert!(v["reward"]["currencies"].is_object(), "ResultsJSON has reward.currencies");
+            assert!(v["reward"]["characterXp"].is_number(), "ResultsJSON has reward.characterXp");
+        }
+    }
+
+    /// PARALYSE (§5.4): a poison-heavy attacker accumulates poison on the target's
+    /// sliding window; once it crosses the absolute paralyse threshold the target enters
+    /// the `Paralyzed` actor-state (op51 status 9 emitted) and its combat inputs LOCK.
+    #[test]
+    fn poison_accumulation_paralyses_and_locks_inputs() {
+        use crate::arena::combat::state::{ActorStateType, DamageType, WeaponProfile};
+        use crate::arena::combat::tables::Weight;
+        let now = Instant::now();
+        // A heavy-poison dagger so a few swings cross the paralyse threshold.
+        let poison = {
+            let mut l = crate::arena::combat::loadout::starter();
+            l.weapon = WeaponProfile {
+                primary_type: Some(DamageType::Slashing),
+                base_by_type: vec![(DamageType::Slashing, 60.0)],
+                weight: Some(Weight::Light),
+            };
+            l.enchants = vec![(DamageType::Poison, 10)]; // ~137/swing, amplifying with stacks
+            l
+        };
+        let mut m = MatchInstance::new(2, 2, vec![poison, crate::arena::combat::loadout::starter()], now);
+        let live = drive_to_live(&mut m, 2, now);
+
+        // Slot 0 (poison) swings slot 1 repeatedly. Within the 5 s window the poison
+        // accumulates and eventually paralyses slot 1 (op51 status 9 to both players).
+        let is_op51_paralyze = |b: &[u8]| {
+            b.len() > 5
+                && b[1] == 0x36
+                && arena_proto::parse_netdata(&b[2..]).int(3) == Some(51)
+                && arena_proto::parse_netdata(&b[2..]).int(5) == Some(9)
+        };
+        let mut saw_paralyze = false;
+        let mut t = live;
+        for _ in 0..12 {
+            t += Duration::from_millis(500); // > SWING_COOLDOWN, < the 5 s window
+            let out = m.on_c2s(0, &[0x84, 0x36], t);
+            if out.iter().any(|(_, b)| is_op51_paralyze(b)) {
+                saw_paralyze = true;
+                break;
+            }
+            if m.combat.fighters[1].is_dead() {
+                break;
+            }
+        }
+        assert!(saw_paralyze, "poison accumulation must land Paralyzed (op51 status 9) within the window");
+        assert_eq!(
+            m.combat.fighters[1].actor_state,
+            ActorStateType::Paralyzed,
+            "the target is in the Paralyzed actor-state"
+        );
+        // A paralysed fighter's combat inputs are LOCKED (no damage dealt back).
+        let attacker_full = m.fighter_health(0);
+        let out = m.on_c2s(1, &[0x84, 0x36], t + Duration::from_millis(600));
+        assert!(out.is_empty(), "a paralysed fighter's swing is dropped (inputs locked)");
+        assert_eq!(m.fighter_health(0), attacker_full, "paralysed target dealt no damage");
+    }
+
     #[test]
     fn ability_cast_deals_spell_damage() {
         let (mut m, t0) = live_inst(2); // → live round
@@ -1608,25 +1822,35 @@ mod tests {
         assert!(m.on_c2s(0, &req, t0).is_empty(), "ability on cooldown");
     }
 
-    /// BLOCK as a c2s input (the resolve.rs TODO, now wired): a
-    /// `PlayerBlockingStateChange` (41) raises the sender's guard; a subsequent swing
-    /// against the blocker is reduced/negated per the side. An OPTIMAL block (guard on
-    /// the same side the attacker swings — Middle) fully negates; the block produces no
-    /// damage and no s2c itself. Attack still resolves against an un-guarded target.
+    /// BLOCK as a c2s input, with the CORRECTED asymmetric model (§4.4): a
+    /// `PlayerBlockingStateChange` (41) raises the sender's guard; a subsequent swing on
+    /// the SAME side is an OPTIMAL block that NEGATES physical (×0) but only HALVES
+    /// elemental (×0.5) — so a poison/shock weapon still lands its halved elemental.
+    /// (The attacker's first auto-swing is Right, so B must guard Right for optimal.)
     #[test]
     fn block_input_reduces_incoming_damage() {
         let (mut m, t0) = live_inst(2);
         let full = m.fighter_health(1);
 
-        // Build B's (slot 1) PlayerBlockingStateChange (41), Middle guard. NetData
-        // {0:player obj · 1:55 Player · 2:role · 3:41 · 4:1 (Middle side)}.
+        // The starter weapon's per-swing physical vs elemental split (Light, combo-0):
+        // Slashing = weapon_base_for_level(30, Light) ≈ 77.4; Shock = 13.73×2 = 27.46.
+        // An UN-guarded reference hit (fresh match) → total ≈ 105.
+        let (mut m_open, t_open) = live_inst(2);
+        let open_before = m_open.fighter_health(1);
+        m_open.on_c2s(0, &[0x84, 0x36], t_open);
+        let open_dealt = open_before - m_open.fighter_health(1);
+        assert!(open_dealt >= 100, "un-guarded reference hit is the full ~105, got {open_dealt}");
+
+        // Build B's (slot 1) PlayerBlockingStateChange (41), guarding RIGHT (the side the
+        // attacker's first auto-swing uses). NetData {0:player obj · 1:55 · 2:role · 3:41
+        // · 4:3 (ActiveSide::Right)}.
         let mut block = {
             let mut w = arena_proto::NetDataWriter::new();
             w.int(0, m.combat.fighters[1].player_net_object_id)
                 .byte(1, 55)
                 .byte(2, 3)
                 .byte(3, 41) // PlayerBlockingStateChange
-                .byte(4, 1); // ActiveSide::Middle
+                .byte(4, 3); // ActiveSide::Right
             messages::frame_for_test(w.finish())
         };
         block[0] = 0x84; // c2s marker
@@ -1636,18 +1860,25 @@ mod tests {
         assert!(out.is_empty(), "a block input produces no s2c and no damage");
         assert_eq!(m.fighter_health(1), full, "the block itself deals no damage");
 
-        // A (slot 0) swings Middle into B's Middle guard → OPTIMAL block fully negates.
-        // (resolve_swing defaults to a Middle swing; B guards Middle → optimal.)
+        // A (slot 0) swings Right into B's Right guard → OPTIMAL block: physical NEGATED,
+        // elemental HALVED. So B takes only the halved Shock (~14), NOT 0 and NOT the full 105.
         let dmg = m.on_c2s(0, &[0x84, 0x36], t0 + Duration::from_millis(600));
         assert!(!dmg.is_empty(), "the swing still resolves (ReceiveDamage emitted)");
-        assert_eq!(m.fighter_health(1), full, "optimal block (same side) fully negates the hit");
+        let opt_dealt = full - m.fighter_health(1);
+        assert!(opt_dealt > 0, "optimal block still lets the HALVED elemental through (not ×0 overall)");
+        assert!(
+            opt_dealt < open_dealt / 2,
+            "optimal block negates physical: {opt_dealt} << the open hit {open_dealt} (only ~halved Shock lands)"
+        );
+        // ~halved Shock ≈ 14 (27.46 × 0.5 = 13.73 → 14 after rounding).
+        assert!((opt_dealt as i32 - 14).abs() <= 1, "only the halved elemental (~14) lands, got {opt_dealt}");
         // The ReceiveDamage carries the WasOptimalBlocking flag (propId 7 bit3).
         let rd = dmg.iter().find(|(_, b)| b[1] == 0x36
             && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50)).expect("ReceiveDamage");
         let flags = arena_proto::parse_netdata(&rd.1[2..]).int(7).unwrap_or(0);
         assert!(flags & 0b1000 != 0, "WasOptimalBlocking flag set on a same-side block");
 
-        // Sanity: an UN-guarded target still takes full (clamped) damage — a fresh match.
+        // Sanity: an UN-guarded target still takes full damage — a fresh match.
         let (mut m2, t2) = live_inst(2);
         let before = m2.fighter_health(1);
         m2.on_c2s(0, &[0x84, 0x36], t2);
