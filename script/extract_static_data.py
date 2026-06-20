@@ -229,6 +229,60 @@ def extract_shops(con):
     return {"byShop": by_shop, "byTemplate": by_template, "default": default}
 
 
+def extract_recipes(con):
+    """recipeId -> {craftingTypeId, results, durationMs} from POST /crafts captures.
+
+    `results` is the verbatim `craft.results` object (either `{"items":[...]}` or
+    `{"stackableItems":{...}}`). `durationMs` is derived from the capture's wall-clock
+    timestamp vs `completedAt`; falls back to 0 when not derivable.
+    """
+    import datetime
+
+    seen = {}
+    q = (
+        "SELECT timestamp, request_body, response_body FROM api_captures "
+        "WHERE url LIKE '%/crafts' AND method='POST' AND response_status=200"
+    )
+    for ts_raw, rb, sb in con.execute(q):
+        try:
+            req = json.loads(astext(rb))
+            res = json.loads(astext(sb))
+        except Exception:
+            continue
+        rid = req.get("recipeId")
+        craft = res.get("craft") or {}
+        ctid = craft.get("craftingTypeId")
+        results = craft.get("results")
+        completed_at = craft.get("completedAt")  # unix ms
+        if not (rid and ctid and results is not None):
+            continue
+        if rid in seen:
+            continue
+
+        # Derive durationMs from capture wall-clock vs completedAt.
+        duration_ms = 0
+        if completed_at and ts_raw:
+            try:
+                # ts_raw is an ISO-8601 datetime string.
+                ts_str = str(ts_raw).replace(" ", "T")
+                if "+" in ts_str:
+                    ts_str = ts_str.split("+")[0]
+                elif ts_str.endswith("Z"):
+                    ts_str = ts_str[:-1]
+                ts_dt = datetime.datetime.fromisoformat(ts_str)
+                capture_ms = int(ts_dt.timestamp() * 1000)
+                duration_ms = max(0, completed_at - capture_ms)
+            except Exception:
+                duration_ms = 0
+
+        seen[rid] = {
+            "craftingTypeId": ctid,
+            "results": results,
+            "durationMs": duration_ms,
+        }
+    return seen
+
+
 def extract_shop_bundles(con):
     """bundleId -> {currencyId, price-per-unit, grant}, from single-bundle buy captures.
     revenue = price paid; the granted item is the inventory backpack delta."""
@@ -281,6 +335,7 @@ EXTRACTORS = {
     "salvage_recipes.json": extract_salvage_recipes,
     "shops.json": extract_shops,
     "shop_bundles.json": extract_shop_bundles,
+    "recipes.json": extract_recipes,
 }
 
 

@@ -11,10 +11,26 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::features::challenges::ChallengeState;
 use crate::features::daily_reward::DailyRewardState;
+
+/// An in-progress craft job, persisted in `server_state.craft_jobs`. Created by
+/// `POST /crafts`, consumed (and results granted) by `POST /crafts/{id}/finish`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CraftJob {
+    pub id: Uuid,
+    pub recipe_id: Uuid,
+    pub building_id: Uuid,
+    pub crafting_type_id: Uuid,
+    /// Unix milliseconds when the job completes (now + durationMs at creation time).
+    pub completed_at_ms: i64,
+    /// Verbatim `results` from the recipe (items or stackableItems) — re-expanded on finish.
+    pub results: Value,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -28,4 +44,9 @@ pub struct ServerState {
     pub challenges: ChallengeState,
     /// Last 24h period the daily login reward was collected.
     pub daily_reward: DailyRewardState,
+    /// Active craft jobs (smithy/alchemy). Created by `POST /crafts`, finished by
+    /// `POST /crafts/{id}/finish`. `#[serde(default)]` ensures old rows without this
+    /// field deserialize cleanly as an empty list.
+    #[serde(default)]
+    pub craft_jobs: Vec<CraftJob>,
 }
