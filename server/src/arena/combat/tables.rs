@@ -34,6 +34,38 @@ impl Weight {
             Weight::Heavy => (1.987, 1.186),
         }
     }
+
+    /// Per-step combo multiplier (the factor each *chained alternating* side-swing
+    /// COMPOUNDS by) and the combo ceiling, for [`combo_factor`].
+    ///
+    /// **Light is capture-calibrated to s506** (`docs/arena-combat-reproduction-spec.md`
+    /// §4.2): the recorded Dragonbone-dagger combo ramped Slashing ×1.00 → ×1.45 →
+    /// (deep) ×2.65 → ×4.12 against a combo-0 base of 113.82. `1.45^count` reproduces
+    /// that within the spec's stated charge/swingFactor variation (1.45^{0,1,2,3,4} =
+    /// {1.00, 1.45, 2.10, 3.05, 4.42}); capped at **4.12** (the recorded ceiling). The
+    /// first step 1.45 is the EMPIRICAL value (the table `combo` factor 1.540 is the
+    /// nominal one — the spec notes "×1.45 ≈ the Light combo factor 1.540").
+    ///
+    /// **Versatile / Heavy steps + caps are GUESSES** (those weights aren't in the
+    /// recorded match): step = the weight's nominal `combo` factor, cap = step^4. A
+    /// Heavy weapon combos slowly (1.186/step) and leans on charged `Middle` crits
+    /// instead — flagged for calibration when a heavy-weapon match is captured.
+    pub fn combo_step_cap(self) -> (f32, f32) {
+        match self {
+            Weight::Light => (1.45, 4.12),                 // capture-calibrated (s506)
+            Weight::Versatile => (1.250, 1.250_f32.powi(4)), // GUESS (no capture)
+            Weight::Heavy => (1.186, 1.186_f32.powi(4)),     // GUESS (no capture)
+        }
+    }
+}
+
+/// The combo multiplier for a normal swing at chain depth `count` (0 = the fresh,
+/// post-reset swing). Compounds `combo_step_cap().0` per chained alternating swing,
+/// capped at `combo_step_cap().1`. `combo_factor(_, 0) == 1.0` for every weight
+/// (a fresh swing is the un-combo'd base). [`docs/arena-combat-reproduction-spec.md` §4.2]
+pub fn combo_factor(weight: Weight, count: u32) -> f32 {
+    let (step, cap) = weight.combo_step_cap();
+    (step.powi(count as i32)).min(cap)
 }
 
 /// 11 quality tiers (base→Mythical): additive bonus on top of the material base.
@@ -108,5 +140,21 @@ mod tests {
         assert_eq!(smithy_level_for_char_level(1), 2); // Steel
         assert_eq!(smithy_level_for_char_level(30), 7); // Glass
         assert_eq!(smithy_level_for_char_level(86), 10); // Dragonbone
+    }
+
+    /// The Light combo ramp reproduces the s506 anchors (combo 0→1.00, 1→1.45,
+    /// deep→~2.65/4.12) and is capped at 4.12 — `docs/arena-combat-reproduction-spec.md` §4.2.
+    #[test]
+    fn light_combo_ramp_matches_s506() {
+        assert_eq!(combo_factor(Weight::Light, 0), 1.0, "fresh swing = un-combo'd base");
+        assert!((combo_factor(Weight::Light, 1) - 1.45).abs() < 1e-3, "first chained step ≈1.45 (165.1/113.8)");
+        // Deep combos land in the recorded 2.65 / 4.12 band (count 2→2.10, 3→3.05, 4→cap 4.12).
+        assert!(combo_factor(Weight::Light, 3) > 2.65, "deep combo exceeds the ×2.65 recorded mid-step");
+        assert_eq!(combo_factor(Weight::Light, 4), 4.12, "combo is capped at the recorded ×4.12 ceiling");
+        assert_eq!(combo_factor(Weight::Light, 9), 4.12, "and stays capped past the ceiling");
+        // Monotonic non-decreasing ramp.
+        for c in 0..6 {
+            assert!(combo_factor(Weight::Light, c + 1) >= combo_factor(Weight::Light, c));
+        }
     }
 }

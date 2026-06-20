@@ -5,12 +5,22 @@
 //! a **`RequestExecuteAbility`** (spell/ability cast, on cooldown). Both resolve via
 //! the RE-derived [`RetailDamageModel`] from the attacker's loadout → `ReceiveDamage`
 //! to both players (+ a `PerformExecuteAbility` echo for casts); a fighter reaching
-//! 0 HP ends the match (`PlayerDeadStateChange` + `MatchEndMatchMsg`).
+//! 0 HP ends the match (`PlayerDeadStateChange` + the op48/op49 result burst).
 //!
-//! Still to wire (model + builders are ready): decoding the real swipe-input
-//! geometry (`activeSide`/`swingFactor` — defaults to a Middle swing for now), the
-//! `PlayerChannelingStateChange` (53) cast animation (positional framing is
-//! build-specific), block as a c2s *input*, and status-effect/DoT ticks.
+//! Combat fidelity now wired (`docs/arena-{combat-reproduction,status-resistance}-spec.md`):
+//! a per-fighter **COMBO ramp** (auto-swings alternate Left/Right → `combo_factor`), the
+//! corrected **asymmetric block** (optimal: phys ×0 / elem ×0.5; late: ÷1.6 / ÷1.23),
+//! **resistance** (flat per-type, elem-piercing) + `most_resisted`, **negation pools**
+//! (Ward/Absorb → op66 `DamageNegated` + Absorb heal), and **status conditioning** (a
+//! sliding `damage_history` window → op51 `ChangeCombatStatusEffect`, incl. poison→
+//! `Paralyzed` with the victim's inputs locked).
+//!
+//! Still to wire: decoding the real swipe-input `activeSide`/`swingFactor` from the c2s
+//! body (auto-swings ALTERNATE Left/Right as a faithful stand-in); the
+//! `PlayerChannelingStateChange` (53) cast animation; per-element DoT TICK damage (the
+//! conditioning land + threshold is wired; the periodic StatusEffect-source ReceiveDamage
+//! tick is the remaining piece); and routing real ability UUIDs to Ward/Absorb/Paralyze
+//! casts (the casts push pools / run the threshold; the per-ability recognition is TODO).
 
 use std::time::{Duration, Instant};
 
@@ -54,9 +64,11 @@ pub fn on_c2s_input(
         return Vec::new();
     }
     // Reconcile any lapsed block windows first (so a stale guard never keeps reducing
-    // damage), using `now`. Cheap; both fighters.
+    // damage), expire lapsed paralysis / negation pools, using `now`. Cheap; both fighters.
     for f in combat.fighters.iter_mut() {
         f.reconcile_block(now);
+        reconcile_paralysis(f, now);
+        f.prune_negation_pools(now);
     }
     // op41 PlayerBlockingStateChange (c2s) — the client raised/refreshed its guard.
     // Apply a BLOCK state on the sender: incoming hits within the block window are
@@ -101,6 +113,13 @@ pub fn on_c2s_input(
         debug!("combat: slot {sender} input ignored — target slot {target_slot} already dead");
         return Vec::new();
     }
+    // A PARALYZED sender can't act — its inputs are locked for the paralyse duration
+    // (`ActorParalyzedState`, §5.4). Handshake/block frames were already handled above;
+    // this drops only the combat swing/ability of a paralysed attacker.
+    if combat.fighters[sender].is_paralyzed() {
+        debug!("combat: slot {sender} input ignored — paralysed (inputs locked)");
+        return Vec::new();
+    }
 
     // A RequestExecuteAbility (spell/ability) vs a weapon swing.
     if let Some(ea) = input::parse_execute_ability(user_data) {
@@ -125,17 +144,32 @@ fn resolve_swing(
     }
     combat.fighters[sender].last_swing = Some(now);
 
-    // (Next refinement: decode the real swipe-input activeSide/swingFactor; default
-    // to a committed Middle swing.)
+    // Swipe-input geometry: the raw c2s swipe body doesn't carry a decodable activeSide
+    // here, so a normal auto-attack ALTERNATES Left/Right (a dagger combos via chained
+    // alternating side-swings, §4.2) — this drives the combo ramp. The first swing of a
+    // chain is Right (the s506 combo-0 reference). `register_combo_swing` increments the
+    // chain on an alternating side and returns the depth for `combo_factor`.
+    let next_side = match combat.fighters[sender].last_combo_side {
+        ActiveSide::Right => ActiveSide::Left,
+        _ => ActiveSide::Right, // None / Left / Middle → start (or restart) on Right
+    };
+    let combo_count = combat.fighters[sender].register_combo_swing(next_side);
+
     let attacker_loadout = combat.fighters[sender].loadout.clone();
     let resolved = RetailDamageModel.resolve_attack(
         &attacker_loadout,
         &combat.fighters[target_slot],
         DamageSource::Attack,
-        ActiveSide::Middle,
+        next_side,
         1.0,
+        combo_count,
     );
-    emit_damage(combat, sender, target_slot, &resolved)
+    // A connected OPTIMAL block on the target RESETS the attacker's combo (§4.2: a block
+    // breaks the chain — the next swing starts fresh at ×1.0).
+    if resolved.flags & super::damage::flags::WAS_OPTIMAL_BLOCKING != 0 {
+        combat.fighters[sender].reset_combo();
+    }
+    emit_damage(combat, sender, target_slot, &resolved, now)
 }
 
 /// A spell/ability cast: cooldown-gated, echoes `PerformExecuteAbility`, applies
@@ -176,28 +210,61 @@ fn resolve_ability_cast(
         .unwrap_or(1);
     debug!("combat: slot {sender} casts ability {} (level {level}) → slot {target_slot}", ea.ability_uuid);
     let resolved = RetailDamageModel.resolve_ability(level, &combat.fighters[target_slot], ActiveSide::Middle);
-    out.extend(emit_damage(combat, sender, target_slot, &resolved));
+    out.extend(emit_damage(combat, sender, target_slot, &resolved, now));
     out
 }
 
-/// Apply a resolved hit: decrement the target, build the `ReceiveDamage` for both
-/// players, and end the match if the target died.
+/// Apply a resolved hit: drain negation, decrement the target (unless wholly negated),
+/// record elemental conditioning + land status effects, build the `ReceiveDamage` (or
+/// `DamageNegated`) for both players, and end the match if the target died.
 fn emit_damage(
     combat: &mut MatchCombat,
     attacker_slot: usize,
     target_slot: usize,
     resolved: &ResolvedDamage,
+    now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
     let mut out = Vec::new();
+
+    // Finish the mitigation pipeline: drain the DEFENDER's negation pools (Ward/Absorb/
+    // Dodge) against this hit's components (mutates the pool, so it runs HERE, not in the
+    // read-only damage model). Work on a local copy of the components so the wire frame
+    // reflects the post-negation per-type damage. [status-resistance-spec §4]
+    let mut components = resolved.components.clone();
+    let neg = combat.fighters[target_slot].apply_negation_pools(&mut components);
+    let total: f32 = components
+        .iter()
+        .filter(|(t, _)| super::damage::is_health_type(*t))
+        .map(|(_, v)| *v)
+        .sum();
+
+    // Whole hit eaten by a Ward/Absorb pool → emit DamageNegated(66), apply the Absorb
+    // heal-back, and DO NOT reduce HP (the hit dealt 0). [status-resistance-spec §4]
+    if neg.negated {
+        let defender_obj = combat.fighters[target_slot].net_object_id;
+        if neg.heal > 0.0 {
+            let f = &mut combat.fighters[target_slot];
+            f.health = (f.health + neg.heal.round() as u32).min(f.max_health);
+        }
+        info!(
+            "combat damage: slot {attacker_slot} → slot {target_slot} | source {:?} side {:?} | \
+             NEGATED by a pool (heal +{:.0}) → op66 DamageNegated, no HP loss",
+            resolved.source, resolved.active_side, neg.heal,
+        );
+        let frame = messages::damage_negated(defender_obj);
+        out.push((target_slot, frame.clone()));
+        out.push((attacker_slot, frame));
+        return out;
+    }
+
     let hp_before = combat.fighters[target_slot].health;
     let max_hp = combat.fighters[target_slot].max_health;
-    combat.fighters[target_slot].take_damage(resolved.total.round().max(0.0) as u32);
+    combat.fighters[target_slot].take_damage(total.round().max(0.0) as u32);
     let hp_after = combat.fighters[target_slot].health;
-    // Log the per-hit-damage-vs-maxHP ratio (the anti-one-shot calibration knob): a
-    // basic swing should take a CHUNK (≤25% by the clamp), never one-shot. info-level
-    // so the ghost-verify on the box shows the before→after HP without RUST_LOG=debug.
-    let pct = if max_hp > 0 { 100.0 * resolved.total / max_hp as f32 } else { 0.0 };
-    let total = resolved.total;
+    // Per-hit damage-vs-maxHP ratio (info-level so the ghost-verify on the box shows the
+    // before→after HP without RUST_LOG=debug). NOTE: the 25% one-shot clamp is GONE for
+    // arena — deep-combo hits are *earned* and can legitimately be large (§4.5).
+    let pct = if max_hp > 0 { 100.0 * total / max_hp as f32 } else { 0.0 };
     let dealt = hp_before.saturating_sub(hp_after);
     info!(
         "combat damage: slot {attacker_slot} → slot {target_slot} | source {:?} side {:?} | total {total:.1} = {pct:.1}% of {max_hp} maxHP | HP {hp_before} → {hp_after} (−{dealt})",
@@ -215,20 +282,134 @@ fn emit_damage(
             attacker.packed_stats(),
             resolved.source,
             resolved.flags,
-            resolved.total,
+            total,
             0,
             resolved.active_side,
             resolved.most_resisted,
-            &resolved.components,
+            &components,
         )
     };
     out.push((target_slot, msg.clone()));
     out.push((attacker_slot, msg));
 
+    // Elemental conditioning + status land (after the hit resolved): record each
+    // POST-NEGATION elemental component into the target's sliding window and check
+    // thresholds → op51 ChangeCombatStatusEffect (a condition DoT lands) — including the
+    // Paralyze poison→paralyse layering. [status-resistance-spec §5]
+    out.extend(apply_status_conditioning(combat, target_slot, &components, now));
+
     if combat.fighters[target_slot].is_dead() {
         out.extend(on_round_ending_death(combat, attacker_slot));
     }
     out
+}
+
+/// `BURNING/FROZEN/ENERVATED/POISONED` DoT durations once they land (s506 op51: 5 s for
+/// the elemental four; 4.89 s for the Paralyze-spell poison). [§5.3]
+const CONDITION_DURATION_SECS: f32 = 5.0;
+/// `Paralyzed` status duration = `ParalyzeAbility._duration` (s506 op51 = 3.1 s). [§5.4]
+const PARALYZE_DURATION_SECS: f32 = 3.1;
+
+/// Record this hit's elemental components into the target's sliding `damage_history`
+/// window, then run `CheckStatusEffectApplication` per element (§5.2): when accumulated
+/// [element] damage crosses the condition threshold, the condition LANDS → emit op51
+/// (apply, the source DamageType, the DoT duration). For POISON, a further crossing of
+/// the absolute `_damageToCauseParalyze` (gated by `can_be_paralyzed` + the defender's
+/// poison resist / Fortify-Poisoned / Ward) lands `Paralyzed` and locks the victim's
+/// inputs for the duration. Idempotent within a window (won't re-apply an active
+/// condition each tick). [status-resistance-spec §5.5]
+fn apply_status_conditioning(
+    combat: &mut MatchCombat,
+    target_slot: usize,
+    components: &[(super::state::DamageType, f32)],
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    use super::damage::is_elemental;
+    use super::state::{condition_for_element, ActorStateType, DamageType, StatusEffectType, PARALYZE_POISON_THRESHOLD_FRACTION};
+
+    let mut out = Vec::new();
+    let target_obj = combat.fighters[target_slot].net_object_id;
+    let max_hp = combat.fighters[target_slot].max_health;
+
+    // Collect this hit's elemental components (post-mitigation) before borrowing mut.
+    let elementals: Vec<(DamageType, f32)> = components
+        .iter()
+        .filter(|(t, v)| is_elemental(*t) && *v > 0.0)
+        .map(|(t, v)| (*t, *v))
+        .collect();
+    if elementals.is_empty() {
+        return out;
+    }
+
+    for (ty, amount) in &elementals {
+        combat.fighters[target_slot].record_element_damage(*ty, *amount, now);
+        let Some(condition) = condition_for_element(*ty) else { continue };
+        let recent = combat.fighters[target_slot].recent_element_damage(*ty);
+        let threshold = combat.fighters[target_slot].condition_threshold(condition);
+        if recent >= threshold {
+            // The elemental condition lands. Emit op51 apply to both players (the
+            // source DamageType = 0 for the elemental four). Idempotent: skip if this
+            // condition is already active on the target.
+            let already = combat.fighters[target_slot]
+                .effects
+                .iter()
+                .any(|e| e.effect == condition && now < e.expires_at);
+            if !already {
+                combat.fighters[target_slot].effects.push(super::state::ActiveEffect {
+                    effect: condition,
+                    damage_type: *ty,
+                    value: 0.0, // DoT tick magnitude (wired with the on-tick DoT later)
+                    expires_at: now + Duration::from_secs_f32(CONDITION_DURATION_SECS),
+                    last_tick: now,
+                });
+                let frame = messages::change_combat_status_effect(
+                    target_obj, true, condition, CONDITION_DURATION_SECS, 0,
+                );
+                debug!("combat: slot {target_slot} CONDITION {condition:?} landed ({recent:.0} ≥ {threshold:.0} window poison/elem)");
+                for slot in 0..combat.fighters.len() {
+                    out.push((slot, frame.clone()));
+                }
+            }
+
+            // PARALYSE (poison only): the absolute poison threshold layered on top —
+            // gated by can_be_paralyzed (player) + the defender's poison resist /
+            // Fortify-Poisoned / Ward (all already folded into `recent` via mitigation
+            // + into `threshold` via Fortify; Ward eats poison so it never accumulates).
+            if *ty == DamageType::Poison && combat.fighters[target_slot].can_be_paralyzed {
+                let paralyze_threshold = PARALYZE_POISON_THRESHOLD_FRACTION * max_hp as f32;
+                let not_already_paralyzed =
+                    combat.fighters[target_slot].actor_state != ActorStateType::Paralyzed;
+                if recent >= paralyze_threshold && not_already_paralyzed {
+                    let f = &mut combat.fighters[target_slot];
+                    f.actor_state = ActorStateType::Paralyzed; // locks inputs (is_paralyzed)
+                    f.state_entered = now;
+                    f.blocking_until = None; // paralysed → guard drops
+                    let frame = messages::change_combat_status_effect(
+                        target_obj, true, StatusEffectType::Paralyzed, PARALYZE_DURATION_SECS, 0,
+                    );
+                    info!("combat: slot {target_slot} PARALYZED (poison {recent:.0} ≥ {paralyze_threshold:.0}) for {PARALYZE_DURATION_SECS}s");
+                    for slot in 0..combat.fighters.len() {
+                        out.push((slot, frame.clone()));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Clear a lapsed `Paralyzed` actor-state back to Idle once the paralyse duration
+/// (`PARALYZE_DURATION_SECS`) has elapsed since it was applied (`state_entered`) — so a
+/// paralysed fighter regains its inputs. (The client also times the status out via the
+/// op51 duration; the un-paralyse op51 *remove* is a cosmetic nicety not emitted here —
+/// the apply carried the duration.) No-op for a non-paralysed fighter.
+fn reconcile_paralysis(f: &mut super::state::Fighter, now: Instant) {
+    use super::state::ActorStateType;
+    if f.actor_state == ActorStateType::Paralyzed
+        && now.duration_since(f.state_entered) >= Duration::from_secs_f32(PARALYZE_DURATION_SECS)
+    {
+        f.actor_state = ActorStateType::Idle;
+    }
 }
 
 /// `winner` defeated its opponent (the killing blow just landed). Score the round

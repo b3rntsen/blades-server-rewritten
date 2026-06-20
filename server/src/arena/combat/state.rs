@@ -94,7 +94,7 @@ pub enum DamageSource {
 }
 
 /// `DamageType` — per-component damage type. `ReceiveDamage` damageByType[].type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum DamageType {
     None = 0,
@@ -124,23 +124,74 @@ pub enum ActorStateType {
     Channeling = 4,
     Staggered = 5,
     Dialogue = 8,
+    /// `ActorParalyzedState` — the paralysed actor state. **StateId 13**
+    /// (`dump.cs` 340018/340188; `arena-status-resistance-spec.md` §5.4). The victim's
+    /// inputs are blocked for the `Paralyzed` status duration (3.1 s). Was previously a
+    /// placeholder; fixed to the dump's real StateId.
+    Paralyzed = 13,
     PlayerAutoAttack = 19,
     Emote = 28,
     // … (Recovery / FollowThrough / Charging / Draining / Maneuver discriminants
     //    TBD from dump.cs when those state-change messages are built).
 }
 
-/// `StatusEffectType` — combat status effects (`ChangeCombatStatusEffect`).
-/// Partially mapped; the full enum is large.
+/// `StatusEffectType` — combat status effects (`ChangeCombatStatusEffect`, op51 propId5).
+/// Capture-decoded counts/durations in `arena-status-resistance-spec.md` §5.3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum StatusEffectType {
     None = 0,
     Blocking = 1,
+    Staggered = 3,
+    /// Fire conditioning DoT (5 s window). [§5.3]
     Burning = 4,
+    /// Frost conditioning DoT (5 s). [§5.3]
+    Frozen = 5,
+    /// Shock conditioning DoT ("Enervated"/Drained, 5 s). [§5.3]
+    Enervated = 6,
+    /// Poison conditioning DoT (2.52 / 4.89 / 5 s; 4.89 s = the Paralyze-spell poison). [§5.3]
     Poisoned = 7,
+    /// `Paralyzed` — the un-breakable paralyse state (3.1 s = `ParalyzeAbility._duration`). [§5.4]
+    Paralyzed = 9,
+    StaggeredWeakness = 10,
+    Dodging = 12,
+    /// Ward negation buff (elemental-negation pool + armor). [§4.2]
+    Ward = 15,
+    /// Absorb negation buff (damage→heal pool). [§4.1]
+    Absorb = 17,
     BlockStaminaRegen = 51,
+    /// Resist-Elements 4-tuple (FireResistance 60 … PoisonResistance 63, 11.5 s). [§4.3]
+    FireResistance = 60,
+    FrostResistance = 61,
+    ShockResistance = 62,
+    PoisonResistance = 63,
     // …
+}
+
+/// The status condition an elemental [`DamageType`] accumulates toward (the
+/// conditioning rule, §5). `Fire→Burning`, `Frost→Frozen`, `Shock→Enervated`,
+/// `Poison→Poisoned`; non-elemental types have no condition.
+pub fn condition_for_element(t: DamageType) -> Option<StatusEffectType> {
+    Some(match t {
+        DamageType::Fire => StatusEffectType::Burning,
+        DamageType::Frost => StatusEffectType::Frozen,
+        DamageType::Shock => StatusEffectType::Enervated,
+        DamageType::Poison => StatusEffectType::Poisoned,
+        _ => return None,
+    })
+}
+
+/// `DamageNegationSource` (dump.cs 546390) — which pool ate a hit. Drives op66
+/// `DamageNegated`. [`arena-status-resistance-spec.md` §4.5]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum DamageNegationSource {
+    None = 0,
+    Dodge = 1,
+    Absorb = 2,
+    Ward = 3,
+    Breath = 4,
+    Immunity = 5,
 }
 
 /// The match flow-control state — driven server-side, echoed by the client, sent
@@ -270,6 +321,13 @@ pub struct WeaponProfile {
     pub primary_type: Option<DamageType>,
     /// Base damage per type before swing/ability/enchant factors.
     pub base_by_type: Vec<(DamageType, f32)>,
+    /// Weapon weight class — drives the combo/crit ramp (`damage::combo_factor`):
+    /// a **Light** weapon (dagger) combos fast on chained alternating side-swings; a
+    /// **Heavy** weapon leans on charged `Middle` crits. Recovered for the recorded
+    /// match (s506) as **Light** (Dragonbone Dagger); `None` ⇒ the model's default
+    /// (Light — the calibration target's class) until per-weapon item game-data is
+    /// wired. See `loadout::from_character` (the fork lacks an item→weight table).
+    pub weight: Option<crate::arena::combat::tables::Weight>,
 }
 
 /// A fighter's combat-relevant equipment, derived from the imported character.
@@ -291,6 +349,22 @@ pub struct Loadout {
     /// from the stored character by the matchmaker; empty for the starter loadout.
     pub profile_equipped_json: String,
     pub profile_character_json: String,
+
+    // --- Defensive / offensive enchant-derived fields (status-resistance-spec §2.5) ---
+    /// Summed FLAT resistance per `DamageType` (armor "Resist X" enchants + perks).
+    /// Applied as `afterResist = max(0, afterBlock − resist(t)·(1−elemPierce) + weakness)`.
+    pub resistances: Vec<(DamageType, f32)>,
+    /// Summed flat weakness per type (a flat damage INCREASE). Usually empty in PvP.
+    pub weaknesses: Vec<(DamageType, f32)>,
+    /// Attacker-side **Elemental Resistance Piercing** (fraction 0..1): the defender's
+    /// elemental resistance is scaled by `(1 − elem_resist_piercing)` before applying.
+    pub elem_resist_piercing: f32,
+    /// Per-condition threshold BUMP (fraction): "Fortify Poisoned/Burning/Frozen/
+    /// Enervated" raise that condition's land threshold by this fraction of max HP.
+    pub status_resist: Vec<(StatusEffectType, f32)>,
+    /// "Shorten/Extend Elemental Statuses" → multiply status `_duration` by this (1.0 =
+    /// none). Parsed but not yet applied to DoT timers (informational).
+    pub status_dur_mult: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -350,7 +424,63 @@ pub struct Fighter {
     pub blocking_until: Option<Instant>,
     /// Time of this fighter's last landed swing (combat throttle / swing cadence).
     pub last_swing: Option<Instant>,
+    /// **Combo state** (`docs/arena-combat-reproduction-spec.md` §4.2). The number of
+    /// uninterrupted, **alternating-side** swings chained so far — drives the combo
+    /// ramp (`damage::combo_factor`: ×1.0 → ×1.45 → … → ~×4.12 for a Light weapon).
+    /// Incremented on a normal Left/Right swing that alternates vs `last_combo_side`
+    /// within the combo window; RESET to 0 on a non-alternating/late swing, an optimal
+    /// block, a `Middle` maneuver, and at round start. Mirrors the client's
+    /// `AttackerStateData._comboCount`/`IncrementCombo`/`ResetCombo` (dump.cs).
+    pub combo_count: u32,
+    /// The `ActiveSide` of this fighter's last combo-counting swing (Left/Right), so
+    /// the next swing can tell an *alternating* chain (combo++) from a repeat (reset).
+    /// `None` at round start / after a reset.
+    pub last_combo_side: ActiveSide,
+
+    // --- Conditioning / status-effect machinery (status-resistance-spec §5) ---
+    /// Sliding per-element damage window: `DamageType → [(amount, recorded_at)]`. Each
+    /// inbound elemental component (post-block/resist/negate) is pushed here; entries
+    /// age out after [`DAMAGE_HISTORY_WINDOW`]. A condition LANDS when the live sum for
+    /// an element crosses its threshold (`CheckStatusEffectApplication`). Cleared on
+    /// round reset (`ClearDamageHistory`).
+    pub damage_history: HashMap<DamageType, Vec<(f32, Instant)>>,
+    /// Whether this fighter CAN be paralysed (`Actor.CanBeParalyzed`). True for players;
+    /// most bosses set `_innateImmunityParalyze`. [§5.4]
+    pub can_be_paralyzed: bool,
+    /// Active negation pools (Ward/Absorb/Dodge), drained per hit before damage lands.
+    pub negation_pools: Vec<NegationPool>,
 }
+
+/// A damage-negation pool (Ward/Absorb/Dodge) on a fighter — a quantity of
+/// HP-equivalent that eats incoming damage until depleted or expired.
+/// [`arena-status-resistance-spec.md` §4]
+#[derive(Debug, Clone)]
+pub struct NegationPool {
+    pub source: DamageNegationSource,
+    /// Remaining HP-equivalent the pool can still negate.
+    pub remaining: f32,
+    pub expires_at: Instant,
+    /// Absorb heals the caster by `negated × restoration_factor` (≈1.0 = "100% heal");
+    /// 0 for Ward/Dodge (pure negation, no heal-back). [§4.1]
+    pub restoration_factor: f32,
+}
+
+/// The sliding damage-history window length (`ElementalStatusEffectData._duration` ≈ 5 s
+/// — the conditioning window). [`arena-status-resistance-spec.md` §5.1]
+pub const DAMAGE_HISTORY_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// `_healthPercentToCauseStatus` — fraction of MAX HP of accumulated [element] damage
+/// (in the window) that LANDS the elemental condition. ≈0.25 for the elemental four
+/// (`<game-data>`; representative). Arena triples max HP, so ~3× raw damage is needed.
+/// [`arena-status-resistance-spec.md` §5.2 — calibration knob]
+pub const HEALTH_PERCENT_TO_CAUSE_STATUS: f32 = 0.25;
+
+/// `_damageToCauseParalyze` — the ABSOLUTE accumulated-poison threshold (in the window)
+/// that lands `Paralyzed` (layered ON TOP of the Poisoned threshold). `<game-data>`:
+/// set as a fraction of max HP so ~2-3 Paralyze casts land it (calibrated to the s506
+/// cadence: a Paralyze-spell poison hit ≈137 + amp, ~0.45× max HP lands paralyse after
+/// the poison condition). [§5.4 — calibration GUESS]
+pub const PARALYZE_POISON_THRESHOLD_FRACTION: f32 = 0.45;
 
 impl Fighter {
     pub fn new(slot: usize, net_object_id: i32, loadout: Loadout, now: Instant) -> Self {
@@ -380,7 +510,40 @@ impl Fighter {
             blocking_side: ActiveSide::None,
             blocking_until: None,
             last_swing: None,
+            combo_count: 0,
+            last_combo_side: ActiveSide::None,
+            damage_history: HashMap::new(),
+            can_be_paralyzed: true, // players can be paralysed (vs boss innate immunity)
+            negation_pools: Vec::new(),
         }
+    }
+
+    /// Reset the combo chain (`combo_count` → 0, `last_combo_side` → None) — on an
+    /// optimal block, a `Middle` maneuver, a non-alternating/late swing, or round
+    /// start. Mirrors the client's `AttackerStateData.ResetCombo`.
+    pub fn reset_combo(&mut self) {
+        self.combo_count = 0;
+        self.last_combo_side = ActiveSide::None;
+    }
+
+    /// Register a landed normal Left/Right swing and return the resulting combo count
+    /// (post-increment). An *alternating* side vs `last_combo_side` continues the chain
+    /// (`combo_count += 1`); a repeat side (or a None side) RESETS it to 0. `Middle`
+    /// (maneuver) and blocks do not call this — they `reset_combo`. Mirrors
+    /// `AttackerStateData.IncrementCombo`.
+    pub fn register_combo_swing(&mut self, side: ActiveSide) -> u32 {
+        let alternates = matches!(
+            (self.last_combo_side, side),
+            (ActiveSide::Left, ActiveSide::Right) | (ActiveSide::Right, ActiveSide::Left)
+        );
+        if alternates {
+            self.combo_count = self.combo_count.saturating_add(1);
+        } else {
+            // First swing of a chain, or a repeated side → start a fresh chain at 0.
+            self.combo_count = 0;
+        }
+        self.last_combo_side = side;
+        self.combo_count
     }
 
     /// True iff this fighter's guard is up at `now` (a `PlayerBlockingStateChange`
@@ -417,6 +580,136 @@ impl Fighter {
             self.stats_seq,
         )
     }
+
+    // ----- Conditioning / resistance / negation (status-resistance-spec §2/§4/§5) -----
+
+    /// The flat resistance this fighter applies against an incoming `ty` component:
+    /// summed `resistances` of that type, with ELEMENTAL resistance scaled by the
+    /// attacker's `(1 − elem_resist_piercing)`, MINUS any matching `weaknesses` (a
+    /// weakness reduces the effective resistance, i.e. lets more through). Returns a
+    /// non-negative flat amount to subtract from the post-block component. [§2.1/§2.3]
+    pub fn resistance_against(&self, ty: DamageType, attacker_elem_pierce: f32) -> f32 {
+        let mut resist: f32 = self
+            .loadout
+            .resistances
+            .iter()
+            .filter(|(t, _)| *t == ty)
+            .map(|(_, v)| *v)
+            .sum();
+        if super::damage::is_elemental(ty) {
+            resist *= (1.0 - attacker_elem_pierce).clamp(0.0, 1.0);
+        }
+        let weakness: f32 = self
+            .loadout
+            .weaknesses
+            .iter()
+            .filter(|(t, _)| *t == ty)
+            .map(|(_, v)| *v)
+            .sum();
+        (resist - weakness).max(0.0)
+    }
+
+    /// The per-condition land threshold (absolute HP) for `condition`: the base
+    /// `HEALTH_PERCENT_TO_CAUSE_STATUS × max_health`, RAISED by any matching
+    /// `status_resist` ("Fortify Poisoned/…") bump. [§5.2 + §5.5]
+    pub fn condition_threshold(&self, condition: StatusEffectType) -> f32 {
+        let base = HEALTH_PERCENT_TO_CAUSE_STATUS * self.max_health as f32;
+        let bump: f32 = self
+            .loadout
+            .status_resist
+            .iter()
+            .filter(|(c, _)| *c == condition)
+            .map(|(_, frac)| *frac * self.max_health as f32)
+            .sum();
+        base + bump
+    }
+
+    /// The elemental amplification factor for an attacker's `ty` enchant track against
+    /// THIS defender — driven by the matching element's accumulated conditioning in the
+    /// window (`damage::element_amp`). Non-elemental types never amplify. [§4.3]
+    pub fn element_amp_for(&self, ty: DamageType) -> f32 {
+        let Some(condition) = condition_for_element(ty) else {
+            return 1.0;
+        };
+        super::damage::element_amp(self.recent_element_damage(ty), self.condition_threshold(condition))
+    }
+
+    /// Sum of the (non-expired) accumulated damage of `ty` in the sliding window.
+    pub fn recent_element_damage(&self, ty: DamageType) -> f32 {
+        self.damage_history.get(&ty).map(|v| v.iter().map(|(a, _)| *a).sum()).unwrap_or(0.0)
+    }
+
+    /// Push a landed elemental component into the window + prune lapsed entries. Called
+    /// for each elemental component AFTER block/resist/negate. [§5.5]
+    pub fn record_element_damage(&mut self, ty: DamageType, amount: f32, now: Instant) {
+        if amount <= 0.0 || !super::damage::is_elemental(ty) {
+            return;
+        }
+        let entries = self.damage_history.entry(ty).or_default();
+        entries.push((amount, now));
+        entries.retain(|(_, t)| now.duration_since(*t) < DAMAGE_HISTORY_WINDOW);
+    }
+
+    /// Drain the active negation pools (Ward/Absorb/Dodge, in source order) against the
+    /// per-type `components` IN PLACE; expired pools are dropped first. Returns
+    /// `(negated, heal)`: `negated` = the WHOLE hit's health damage was eaten (→ emit
+    /// op66, skip HP), `heal` = Absorb's restoration of what it negated. [§4.5/§4.6]
+    ///
+    /// NOTE: takes `now` via the pools' `expires_at` (the caller prunes by passing the
+    /// current instant through [`Self::prune_negation_pools`] first).
+    pub fn apply_negation_pools(&mut self, components: &mut [(DamageType, f32)]) -> NegationResult {
+        if self.negation_pools.is_empty() {
+            return NegationResult { negated: false, heal: 0.0 };
+        }
+        let health_before: f32 = components
+            .iter()
+            .filter(|(t, _)| super::damage::is_health_type(*t))
+            .map(|(_, v)| *v)
+            .sum();
+        if health_before <= 0.0 {
+            return NegationResult { negated: false, heal: 0.0 };
+        }
+        let mut heal = 0.0;
+        for pool in self.negation_pools.iter_mut() {
+            if pool.remaining <= 0.0 {
+                continue;
+            }
+            // Drain this pool across the remaining health components (in order).
+            for (ty, v) in components.iter_mut() {
+                if !super::damage::is_health_type(*ty) || *v <= 0.0 || pool.remaining <= 0.0 {
+                    continue;
+                }
+                let eaten = v.min(pool.remaining);
+                *v -= eaten;
+                pool.remaining -= eaten;
+                heal += eaten * pool.restoration_factor;
+            }
+        }
+        self.negation_pools.retain(|p| p.remaining > 0.0);
+        let health_after: f32 = components
+            .iter()
+            .filter(|(t, _)| super::damage::is_health_type(*t))
+            .map(|(_, v)| *v)
+            .sum();
+        NegationResult { negated: health_after <= 0.0, heal }
+    }
+
+    /// Drop negation pools whose duration has lapsed (call on tick / before a hit).
+    pub fn prune_negation_pools(&mut self, now: Instant) {
+        self.negation_pools.retain(|p| now < p.expires_at);
+    }
+
+    /// True iff this fighter is currently paralysed (its inputs are blocked).
+    pub fn is_paralyzed(&self) -> bool {
+        self.actor_state == ActorStateType::Paralyzed
+    }
+}
+
+/// Result of draining the negation pools against a hit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NegationResult {
+    pub negated: bool,
+    pub heal: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -523,6 +816,9 @@ impl MatchCombat {
             f.blocking_side = ActiveSide::None;
             f.blocking_until = None;
             f.last_swing = None;
+            f.reset_combo();
+            f.damage_history.clear(); // ClearDamageHistory on round reset (§5.5)
+            f.negation_pools.clear();
         }
     }
 
@@ -560,6 +856,20 @@ impl MatchCombat {
             return None;
         }
         Some(1 - slot.min(1))
+    }
+
+    /// `(winner_char_uuid, loser_char_uuid)` for the match-end op48/op49 header, from the
+    /// `winner` slot set at the match-ending death. Falls back to empty strings if the
+    /// winner isn't set or a fighter is missing. The loser is the winner's opponent.
+    pub fn winner_loser_uuids(&self) -> (String, String) {
+        let Some(winner) = self.winner else {
+            return (String::new(), String::new());
+        };
+        let loser = self.opponent_of(winner).unwrap_or(winner);
+        let uuid = |slot: usize| {
+            self.fighters.get(slot).map(|f| f.loadout.character_uuid.clone()).unwrap_or_default()
+        };
+        (uuid(winner), uuid(loser))
     }
 }
 
@@ -620,5 +930,66 @@ mod tests {
         assert_eq!(FlowState::BackendMatchCreated.wire_name(), Some("BackendMatchCreated"));
         assert_eq!(FlowState::StateTimeout.wire_name(), Some("StateTimeout"));
         assert_eq!(FlowState::Connecting.wire_name(), None);
+    }
+
+    /// COMBO state (§4.2): alternating Left/Right swings ramp `combo_count`; a repeat
+    /// side or a `reset_combo` (block / round / maneuver) restarts the chain at 0.
+    #[test]
+    fn combo_counter_ramps_on_alternating_resets_on_repeat() {
+        let now = Instant::now();
+        let mut f = Fighter::new(0, 564, Loadout::default(), now);
+        assert_eq!(f.register_combo_swing(ActiveSide::Right), 0, "first swing = combo 0");
+        assert_eq!(f.register_combo_swing(ActiveSide::Left), 1, "alternating → combo 1");
+        assert_eq!(f.register_combo_swing(ActiveSide::Right), 2, "alternating → combo 2");
+        // A repeated side restarts the chain.
+        assert_eq!(f.register_combo_swing(ActiveSide::Right), 0, "repeat side → chain restarts at 0");
+        // An explicit reset (optimal block / round) zeroes it.
+        f.register_combo_swing(ActiveSide::Left);
+        f.reset_combo();
+        assert_eq!(f.combo_count, 0);
+        assert_eq!(f.last_combo_side, ActiveSide::None);
+    }
+
+    /// CONDITIONING window (§5): elemental damage accumulates in the sliding window and
+    /// drives the condition threshold; Fortify-<Condition> raises the threshold.
+    #[test]
+    fn conditioning_window_accumulates_and_threshold_scales() {
+        let now = Instant::now();
+        let mut f = Fighter::new(1, 565, Loadout { level: 100, ..Default::default() }, now);
+        let max = f.max_health as f32;
+        assert_eq!(f.recent_element_damage(DamageType::Poison), 0.0, "empty window");
+        f.record_element_damage(DamageType::Poison, 100.0, now);
+        f.record_element_damage(DamageType::Poison, 50.0, now);
+        assert_eq!(f.recent_element_damage(DamageType::Poison), 150.0, "window sums recent poison");
+        // Non-elemental + zero are ignored.
+        f.record_element_damage(DamageType::Slashing, 999.0, now);
+        f.record_element_damage(DamageType::Poison, 0.0, now);
+        assert_eq!(f.recent_element_damage(DamageType::Slashing), 0.0, "physical is not conditioned");
+
+        // Base Poisoned threshold = 25% of max HP; Fortify-Poisoned raises it.
+        let base = f.condition_threshold(StatusEffectType::Poisoned);
+        assert!((base - HEALTH_PERCENT_TO_CAUSE_STATUS * max).abs() < 1e-2, "base threshold = 25% max HP");
+        f.loadout.status_resist = vec![(StatusEffectType::Poisoned, 0.10)];
+        let bumped = f.condition_threshold(StatusEffectType::Poisoned);
+        assert!(bumped > base, "Fortify Poisoned raises the threshold");
+        assert!((bumped - (HEALTH_PERCENT_TO_CAUSE_STATUS + 0.10) * max).abs() < 1e-2, "+10% of max HP bump");
+    }
+
+    /// RESISTANCE (§2): flat per-type subtraction, with elemental resist scaled by the
+    /// attacker's Elemental-Resistance-Piercing; weakness reduces effective resist.
+    #[test]
+    fn resistance_against_flat_with_piercing() {
+        let now = Instant::now();
+        let mut f = Fighter::new(1, 565, Loadout { level: 100, ..Default::default() }, now);
+        f.loadout.resistances = vec![(DamageType::Poison, 40.0), (DamageType::Slashing, 20.0)];
+        // No piercing: full flat resist.
+        assert_eq!(f.resistance_against(DamageType::Poison, 0.0), 40.0);
+        assert_eq!(f.resistance_against(DamageType::Slashing, 0.0), 20.0, "piercing doesn't touch physical");
+        // 50% elem piercing halves the ELEMENTAL resist only.
+        assert_eq!(f.resistance_against(DamageType::Poison, 0.5), 20.0);
+        assert_eq!(f.resistance_against(DamageType::Slashing, 0.5), 20.0, "physical resist unaffected by elem piercing");
+        // A weakness reduces effective resist (floored at 0).
+        f.loadout.weaknesses = vec![(DamageType::Poison, 50.0)];
+        assert_eq!(f.resistance_against(DamageType::Poison, 0.0), 0.0, "weakness > resist → 0 (more gets through)");
     }
 }
