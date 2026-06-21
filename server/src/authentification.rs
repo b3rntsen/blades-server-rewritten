@@ -96,22 +96,34 @@ async fn anon_log_in(
     // (X-Newblades-Device-Ip). Each newblades WG peer has a unique, stable IP, so
     // it serves as a per-device identity for the claim link. (A client with
     // neither still falls through to the dev-login / create path below.)
-    let effective_device_id: Option<String> = info.0.device_id.clone().or_else(|| {
-        req.headers()
-            .get("x-newblades-device-ip")
-            .and_then(|v| v.to_str().ok())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-    });
+    //
+    // The source WG peer IP is always extracted (when present) so it can be
+    // cross-linked with stable-hash bindings via the `source_wg_ip` column — see
+    // Fix 1 / migration 2026-06-21-000000-0000_device_bindings_wg_ip. This
+    // bridges the gap when a device was bound under its stable deviceId hash but
+    // later connects with deviceId: null (e.g. after reinstalling the rigged APK).
+    let source_wg_ip: Option<String> = req
+        .headers()
+        .get("x-newblades-device-ip")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let effective_device_id: Option<String> = info.0.device_id.clone().or_else(|| source_wg_ip.clone());
     if let Some(device_id_val) = effective_device_id {
         let mut conn = app_state.db_pool.get().await.unwrap();
+        // Upsert the device_bindings row. Also write `source_wg_ip` when the
+        // header is present — this lets stable-hash-keyed bindings be found via
+        // the secondary WG-IP lookup below (Fix 1 systemic binding fix).
         let _ = diesel::sql_query(
-            "INSERT INTO device_bindings (device_id, platform, last_seen) VALUES ($1, $2, now()) \
+            "INSERT INTO device_bindings (device_id, platform, last_seen, source_wg_ip) \
+             VALUES ($1, $2, now(), $3) \
              ON CONFLICT (device_id) DO UPDATE SET last_seen = now(), \
-             platform = COALESCE(EXCLUDED.platform, device_bindings.platform)",
+             platform = COALESCE(EXCLUDED.platform, device_bindings.platform), \
+             source_wg_ip = COALESCE(EXCLUDED.source_wg_ip, device_bindings.source_wg_ip)",
         )
         .bind::<diesel::sql_types::Text, _>(device_id_val.clone())
         .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some(info.0.platform.clone()))
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(source_wg_ip.clone())
         .execute(&mut conn)
         .await;
 
@@ -120,14 +132,48 @@ async fn anon_log_in(
             #[diesel(sql_type = diesel::sql_types::Uuid)]
             user_id: Uuid,
         }
+        // Primary lookup: by the effective device key (stable hash or WG IP).
         let bound: Option<BoundUser> = diesel::sql_query(
             "SELECT user_id FROM device_bindings WHERE device_id = $1 AND user_id IS NOT NULL",
         )
-        .bind::<diesel::sql_types::Text, _>(device_id_val)
+        .bind::<diesel::sql_types::Text, _>(device_id_val.clone())
         .get_result(&mut conn)
         .await
         .optional()
         .unwrap_or(None);
+        // Secondary lookup (Fix 1): when the effective key is a WG IP and the
+        // primary lookup found nothing, try to find a stable-hash binding whose
+        // `source_wg_ip` matches this IP. This fires when a device was bound
+        // under its real deviceId hash but now reconnects with deviceId: null
+        // (rigged APK reinstall, server restart, etc.).  Take the most recently
+        // active binding so a re-claim moves the binding correctly.
+        let bound: Option<BoundUser> = if bound.is_none() {
+            if let Some(ref wg_ip) = source_wg_ip {
+                let secondary = diesel::sql_query(
+                    "SELECT user_id FROM device_bindings \
+                     WHERE source_wg_ip = $1 AND user_id IS NOT NULL \
+                     ORDER BY last_seen DESC LIMIT 1",
+                )
+                .bind::<diesel::sql_types::Text, _>(wg_ip.clone())
+                .get_result::<BoundUser>(&mut conn)
+                .await
+                .optional()
+                .unwrap_or(None);
+                if secondary.is_some() {
+                    log::info!(
+                        "device_bindings: WG-IP fallback resolved {} via source_wg_ip {} \
+                         (primary key miss — device reconnected with null deviceId after \
+                         being bound under a stable hash; Fix 1 systemic binding fix)",
+                        device_id_val, wg_ip
+                    );
+                }
+                secondary
+            } else {
+                None
+            }
+        } else {
+            bound
+        };
         if let Some(b) = bound {
             let result = users
                 .select(UserDBEntry::as_select())

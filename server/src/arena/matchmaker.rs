@@ -632,20 +632,34 @@ async fn resolve(
     // match rather than ship the swap (the two devices can't be visually distinguished).
     // Bots are excluded (`bots == 0` on the paired path; the solo-vs-bot collapse is
     // the ARENA_DEBUG_GHOST guard's concern). [Fix 1 + Fix 2 of the spec.]
+    //
+    // FIX 2 — UN-STICK on same-char rejection: previously the two tickets were left
+    // silently unresolved, so each client hung at "determining server" until the 600s
+    // solo-fallback timer fired (the `waiting` slot is empty after pairing, so neither
+    // ticket stays in the actor — they just vanish). Now we send `MatchmakingFailed`
+    // (ticketStatus "MatchmakingFailed", il2cpp-confirmed dump.cs 484188) to each
+    // client immediately. The client's `RmsMatchmakingEvent.HasFailed()` / the
+    // `PvpClientStatsCollector.MatchmakingFailed()` path surfaces this as an error
+    // on the matchmaking screen, so the player sees a clear failure rather than an
+    // infinite wait. Root cause of the same-char collapse is Fix 1 (device→char
+    // binding instability); Fix 2 is the safety net when Fix 1's binding is still
+    // incomplete (e.g. the prod DB hasn't been migrated yet or a device has never
+    // been bound).
     if paired && bots == 0 {
         if let Err(reason) = check_paired_uuids_distinct(&loadouts) {
             warn!(
                 "matchmaker: PAIRED-MATCH APPEARANCE COLLAPSE rejected (gsid {game_session_id}) — {reason} \
-                 Refusing to allocate: the client would render both fighters with one appearance \
-                 (the avatar→PvpPlayer UUID binding collapses). Tickets left unresolved; re-check \
-                 that the two peers resolve to DIFFERENT characters rows (and that load_loadout did \
-                 not time out → empty-UUID starter)."
+                 Sending MatchmakingFailed to both clients (Fix 2 un-stick). Root cause: two peers \
+                 resolved to the SAME characters row — re-link each device to its own character via \
+                 /arena (or wait for the source_wg_ip Fix 1 migration to restore lost bindings)."
             );
             for t in tickets {
                 warn!(
-                    "matchmaker: ticket {} unresolved (paired-match appearance guard)",
+                    "matchmaker: ticket {} → MatchmakingFailed (paired-match appearance guard, same char UUID)",
                     t.ticket_id
                 );
+                // Best-effort: if the client's RMS feed is already closed this is a no-op.
+                let _ = t.rms.send(MatchmakingMessage::Failed { ticket_id: t.ticket_id });
             }
             return;
         }
@@ -808,10 +822,9 @@ mod tests {
     /// (both `load_loadout`s fall back to the empty-UUID `starter()`) is now REFUSED by
     /// the paired-match appearance guard (`docs/arena-appearance-bug-spec.md`): two
     /// empty `character_uuid`s would collapse both avatars onto the local PvpPlayer
-    /// (the appearance-swap bug). So no `Succeeded` is sent and the capacity permit is
-    /// returned. (In production each real user resolves to a DISTINCT characters row →
-    /// distinct non-empty UUIDs → the pair is allocated; the gsid/psess shape itself is
-    /// covered by `psess_derived_from_gsid`.)
+    /// (the appearance-swap bug). No `Succeeded` is sent; capacity is returned. The
+    /// un-stick test below (`same_char_pair_gets_failed_not_hung`) covers Fix 2 (the
+    /// `Failed` message sent on the rejection path).
     #[tokio::test]
     async fn pairs_two_tickets_refused_when_uuids_collapse() {
         let registry = MatchRegistry::new(4);
@@ -842,15 +855,92 @@ mod tests {
         .unwrap();
 
         // No `Succeeded` arrives on either channel (the empty-UUID pair is refused).
-        let got_a = tokio::time::timeout(Duration::from_millis(500), recv_a.recv()).await;
-        let got_b = tokio::time::timeout(Duration::from_millis(500), recv_b.recv()).await;
+        // (The `Failed` frames arrive before this timeout — see `same_char_pair_gets_failed_not_hung`.)
         let no_succeeded = |r: &Result<Option<MatchmakingMessage>, _>| {
             !matches!(r, Ok(Some(MatchmakingMessage::Succeeded { .. })))
         };
-        assert!(no_succeeded(&got_a), "no Succeeded for an empty-UUID paired match (appearance guard)");
-        assert!(no_succeeded(&got_b), "no Succeeded for an empty-UUID paired match (appearance guard)");
+        // Drain up to 3 messages per side (Searching + PotentialMatch + Failed) and
+        // confirm no Succeeded sneaks through.
+        for _ in 0..3 {
+            let got_a = tokio::time::timeout(Duration::from_millis(200), recv_a.recv()).await;
+            assert!(no_succeeded(&got_a), "no Succeeded for an empty-UUID paired match (appearance guard)");
+            if matches!(got_a, Err(_)) { break; } // timeout = no more messages
+        }
+        for _ in 0..3 {
+            let got_b = tokio::time::timeout(Duration::from_millis(200), recv_b.recv()).await;
+            assert!(no_succeeded(&got_b), "no Succeeded for an empty-UUID paired match (appearance guard)");
+            if matches!(got_b, Err(_)) { break; }
+        }
         // The capacity permit was returned (no match allocated), so all 4 are free.
         assert_eq!(registry.available_permits(), 4, "the refused pair holds no capacity permit");
+    }
+
+    /// Fix 2 — un-stick on same-char rejection: when the appearance guard rejects
+    /// a same-character pair (both tickets resolve to the same empty-UUID starter
+    /// loadout, as in the no-DB unit environment), each client must receive a
+    /// `MatchmakingFailed` frame (ticketStatus "MatchmakingFailed",
+    /// il2cpp-confirmed dump.cs 484188) rather than being left silently unresolved
+    /// and hanging at "determining server" until the 600s solo-fallback timer.
+    #[tokio::test]
+    async fn same_char_pair_gets_failed_not_hung() {
+        let registry = MatchRegistry::new(4);
+        let config = ArenaConfig {
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 4,
+            max_queued_players: 64,
+            solo_fallback_secs: 600, // long fallback — the Failed must arrive BEFORE it
+            debug_ghost_user_id: None,
+        };
+        let (tx, rx) = unbounded_channel::<TicketRequest>();
+        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+
+        let tid_a = Uuid::new_v4();
+        let tid_b = Uuid::new_v4();
+        let (rms_a, mut recv_a) = unbounded_channel();
+        let (rms_b, mut recv_b) = unbounded_channel();
+        tx.send(TicketRequest { ticket_id: tid_a, user_id: Uuid::new_v4(), rms: rms_a }).unwrap();
+        tx.send(TicketRequest { ticket_id: tid_b, user_id: Uuid::new_v4(), rms: rms_b }).unwrap();
+
+        // Drain until Failed arrives or 1 s elapses (Searching + PotentialMatch come first).
+        let failed_a = {
+            let mut found: Option<MatchmakingMessage> = None;
+            loop {
+                match tokio::time::timeout(Duration::from_millis(1000), recv_a.recv()).await {
+                    Ok(Some(msg)) if matches!(msg, MatchmakingMessage::Failed { .. }) => {
+                        found = Some(msg);
+                        break;
+                    }
+                    Ok(Some(_)) => {} // Searching / PotentialMatch — keep draining
+                    _ => break,       // timeout or channel closed
+                }
+            }
+            found
+        };
+        let failed_b = {
+            let mut found: Option<MatchmakingMessage> = None;
+            loop {
+                match tokio::time::timeout(Duration::from_millis(1000), recv_b.recv()).await {
+                    Ok(Some(msg)) if matches!(msg, MatchmakingMessage::Failed { .. }) => {
+                        found = Some(msg);
+                        break;
+                    }
+                    Ok(Some(_)) => {}
+                    _ => break,
+                }
+            }
+            found
+        };
+        assert!(
+            matches!(failed_a, Some(MatchmakingMessage::Failed { ticket_id }) if ticket_id == tid_a),
+            "client A must receive Failed (appearance guard un-stick, Fix 2); got {failed_a:?}"
+        );
+        assert!(
+            matches!(failed_b, Some(MatchmakingMessage::Failed { ticket_id }) if ticket_id == tid_b),
+            "client B must receive Failed (appearance guard un-stick, Fix 2); got {failed_b:?}"
+        );
+        // No match was allocated.
+        assert_eq!(registry.available_permits(), 4, "same-char rejection must not consume a capacity permit");
     }
 
     /// A waiting ticket whose client has gone (its RMS feed closed — cancelled, timed

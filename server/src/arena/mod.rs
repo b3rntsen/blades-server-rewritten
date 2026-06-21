@@ -19,6 +19,14 @@ use uuid::Uuid;
 /// maps to one **binary** frame carrying the JSON envelope
 /// `{"messageType":"matchmaking","payload":{...}}`. Shapes confirmed against
 /// captured prod frames (all payload keys present; null until resolved).
+///
+/// `Failed` is the il2cpp-confirmed status for `"MatchmakingFailed"` — the
+/// client's `RmsMatchmakingEvent.HasFailed()` checks for this string and the
+/// `PvpMatchmakingMenu` / `PvpClientStatsCollector.MatchmakingFailed()` surface
+/// it to the player as an error (dump.cs lines 484187-484192, 585675). Sending
+/// it un-sticks the client immediately rather than leaving it hanging at
+/// "determining server" until the 600s solo-fallback timer fires (Fix 2,
+/// appearance-guard same-char rejection).
 #[derive(Debug, Clone)]
 pub enum MatchmakingMessage {
     Searching {
@@ -33,6 +41,12 @@ pub enum MatchmakingMessage {
         game_session_id: Uuid,
         address: String, // arena UDP host the client dials
         port: u16,
+    },
+    /// Tells the client that matchmaking failed and it should surface an error.
+    /// ticketStatus = "MatchmakingFailed" (il2cpp-confirmed, dump.cs 484188).
+    /// Resolution keys are all null (same layout as Searching/PotentialMatch).
+    Failed {
+        ticket_id: Uuid,
     },
 }
 
@@ -61,7 +75,8 @@ impl MatchmakingMessage {
         match self {
             MatchmakingMessage::Searching { ticket_id }
             | MatchmakingMessage::PotentialMatch { ticket_id }
-            | MatchmakingMessage::Succeeded { ticket_id, .. } => *ticket_id,
+            | MatchmakingMessage::Succeeded { ticket_id, .. }
+            | MatchmakingMessage::Failed { ticket_id } => *ticket_id,
         }
     }
 
@@ -97,6 +112,18 @@ impl MatchmakingMessage {
                 game_session_id: Some(*game_session_id),
                 address: Some(address.as_str()),
                 port: Some(*port),
+            },
+            // "MatchmakingFailed" — il2cpp-confirmed (dump.cs 484188,
+            // RmsMatchmakingEvent.MATCH_STATUS_FAILED). The client's HasFailed()
+            // checks this string; resolution keys are null (same layout as
+            // Searching/PotentialMatch — the client tolerates null here).
+            MatchmakingMessage::Failed { ticket_id } => RmsPayload {
+                ticket_id: *ticket_id,
+                player_session_id: None,
+                ticket_status: "MatchmakingFailed",
+                game_session_id: None,
+                address: None,
+                port: None,
             },
         };
         serde_json::to_vec(&RmsEnvelope {
@@ -165,5 +192,28 @@ mod tests {
             MatchmakingMessage::Searching { ticket_id: tid }.ticket_id(),
             tid
         );
+        // Failed also exposes ticket_id correctly.
+        assert_eq!(
+            MatchmakingMessage::Failed { ticket_id: tid }.ticket_id(),
+            tid
+        );
+    }
+
+    /// `MatchmakingFailed` (Fix 2 un-stick): serializes to ticketStatus
+    /// "MatchmakingFailed" (il2cpp-confirmed dump.cs 484188), with all resolution
+    /// keys present as null — matching the Searching/PotentialMatch layout that the
+    /// client already tolerates.
+    #[test]
+    fn failed_serializes_correctly() {
+        let tid = Uuid::parse_str("12345678-0000-0000-0000-000000000000").unwrap();
+        let v = parsed(&MatchmakingMessage::Failed { ticket_id: tid });
+        assert_eq!(v["messageType"], json!("matchmaking"));
+        let p = &v["payload"];
+        assert_eq!(p["ticketStatus"], json!("MatchmakingFailed"));
+        assert_eq!(p["ticketId"], json!("12345678-0000-0000-0000-000000000000"));
+        for k in ["playerSessionId", "gameSessionId", "address", "port"] {
+            assert!(p.get(k).is_some(), "key {k} must be present in Failed frame");
+            assert!(p[k].is_null(), "key {k} must be null in Failed frame");
+        }
     }
 }
