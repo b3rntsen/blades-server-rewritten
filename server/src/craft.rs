@@ -217,7 +217,11 @@ pub async fn create_craft(
                 //    job (never 404 — a 404 here crashed the client mid-craft) ──
                 match &plain_recipe {
                     Some(recipe) => {
-                        let results = apply_tempering_to_results(&recipe.results, tempering_level);
+                        // Mint fresh, unique item ids now (the recipe's are shared
+                        // placeholders); finish preserves whatever id is stored.
+                        let results = remint_result_item_ids(
+                            apply_tempering_to_results(&recipe.results, tempering_level),
+                        );
                         (results, recipe.crafting_type_id, recipe.duration_ms)
                     }
                     None => (serde_json::json!({}), recipe_id, 0),
@@ -356,6 +360,22 @@ fn apply_tempering_to_results(results: &Value, tempering_level: u64) -> Value {
     out
 }
 
+/// Give each instanced item in a `{"items":[...]}` results object a fresh unique `id`.
+/// Plain-craft recipe ids are shared placeholders (from `recipes.json`), so two crafts
+/// of the same recipe would collide once `finish` preserves the stored id — minting
+/// here keeps them unique. Temper/enchant do NOT go through this (they intentionally
+/// keep the original backpack item id).
+fn remint_result_item_ids(mut results: Value) -> Value {
+    if let Some(items) = results.get_mut("items").and_then(|v| v.as_array_mut()) {
+        for item in items.iter_mut() {
+            if let Some(obj) = item.as_object_mut() {
+                obj.insert("id".to_string(), Value::from(Uuid::new_v4().to_string()));
+            }
+        }
+    }
+    results
+}
+
 /// Apply a temper or enchant to an existing item, returning the mutated copy.
 ///
 /// - `tempering_level > 0` → **temper**: set `temperingLevel`, keeping everything else
@@ -385,8 +405,12 @@ fn apply_item_mod(
 }
 
 /// Build a `RewardGrant` from a craft job's stored `results` value. Instanced items
-/// get fresh `Uuid::new_v4()` ids so they never collide with the placeholder ids
-/// stored in the recipe. Stackable items are carried over verbatim.
+/// keep the `id` stored in the job — for temper/enchant that is the ORIGINAL backpack
+/// item id (retail preserves it through the craft, and the client tracks the item in
+/// the smithy by that id; re-minting it here desynced the client → the temper "hung"
+/// after the gem speed-up). Plain-craft ids are made unique at create time (see
+/// `remint_result_item_ids`), so preserving them here never collides. Stackable items
+/// are carried over verbatim.
 fn reward_from_results(results: &Value) -> RewardGrant {
     let mut reward = RewardGrant::default();
 
@@ -411,8 +435,13 @@ fn reward_from_results(results: &Value) -> RewardGrant {
                 .get("properties")
                 .and_then(|p| serde_json::from_value(p.clone()).ok())
                 .unwrap_or_default();
+            let id = item_val
+                .get("id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<Uuid>().ok())
+                .unwrap_or_else(Uuid::new_v4);
             reward.items.push(RewardItem {
-                id: Uuid::new_v4(), // re-mint so ids never collide
+                id, // preserve the stored id (temper/enchant keep the item's own id)
                 item: Item { item_template_id: template_id, tempering_level, durability, properties },
             });
         }
@@ -536,5 +565,35 @@ mod tests {
         let out = apply_item_mod(&existing, 0, None, Uuid::from_u128(0x5));
         assert_eq!(out.tempering_level, 3);
         assert_eq!(out.properties.enchanting.len(), 1, "unchanged when no recipe");
+    }
+
+    #[test]
+    fn finish_preserves_stored_item_id() {
+        // temper/enchant store the ORIGINAL backpack item id in results; finish must
+        // return it unchanged (re-minting it desynced the client → temper hang).
+        let item_id = "fad31819-b941-4446-a229-e22b3647b142";
+        let results = serde_json::json!({"items":[{
+            "id": item_id, "itemTemplateId": "616b64ef-4184-4efb-af55-1a3f122431dc",
+            "temperingLevel": 10, "durability": 675.0
+        }]});
+        let r = reward_from_results(&results);
+        assert_eq!(r.items.len(), 1);
+        assert_eq!(r.items[0].id.to_string(), item_id, "finish must preserve the item id");
+        assert_eq!(r.items[0].item.tempering_level, 10);
+    }
+
+    #[test]
+    fn plain_craft_remint_makes_ids_unique() {
+        // plain-craft recipe ids are shared placeholders → must be unique per craft.
+        let results = serde_json::json!({"items":[{
+            "id": "00000000-0000-0000-0000-000000000001",
+            "itemTemplateId": "616b64ef-4184-4efb-af55-1a3f122431dc"
+        }]});
+        let a = remint_result_item_ids(results.clone());
+        let b = remint_result_item_ids(results);
+        let ida = a["items"][0]["id"].as_str().unwrap();
+        let idb = b["items"][0]["id"].as_str().unwrap();
+        assert_ne!(ida, idb, "each craft gets a unique id");
+        assert_ne!(ida, "00000000-0000-0000-0000-000000000001", "placeholder replaced");
     }
 }
