@@ -207,11 +207,22 @@ pub async fn create_craft(
                 entry.inventory.0.backpack_version += 1;
                 let reward_item = RewardItem { id: item_id, item: mutated };
                 let results = serde_json::json!({ "items": [reward_item] });
-                let (ctid, dur) = mod_recipe
-                    .as_ref()
-                    .map(|m| (m.crafting_type_id, m.duration_ms))
-                    .unwrap_or((recipe_id, 0));
-                (results, ctid, dur)
+                // crafting_type_id MUST be the universal temper/enchant CraftingType, never the
+                // recipe id. item_mod_recipes.json is a tiny subset of the real recipes (retail
+                // has one recipe per item per level); for an unknown recipe we previously fell
+                // back to recipe_id, which the client cannot map to a CraftingStation → the temper
+                // UI spun forever. EVERY real on-device temper recipe is outside our captured 23
+                // (verified against the arena-mitm transcript). Derive the type from
+                // temperingLevel (temper = 06c8087b, enchant = aaef180b — both observed as the
+                // ONLY two craftingTypeIds across item_mod_recipes.json); keep the captured
+                // duration when the recipe is known, else 0 (instantly collectable).
+                let crafting_type_id = if tempering_level > 0 {
+                    Uuid::parse_str("06c8087b-ede4-4ce7-8103-6c2067d18498").unwrap()
+                } else {
+                    Uuid::parse_str("aaef180b-8ee7-474a-a7eb-0156aa5529ba").unwrap()
+                };
+                let duration_ms = mod_recipe.as_ref().map(|m| m.duration_ms).unwrap_or(0);
+                (results, crafting_type_id, duration_ms)
             } else {
                 // ── plain craft: mint from the recipe; unknown recipe → lenient empty
                 //    job (never 404 — a 404 here crashed the client mid-craft) ──
