@@ -1,0 +1,1705 @@
+{
+  "_meta": {
+    "description": "Daily-rotation model for the story/side/event QUESTS (the /quests board's dungeon quests, distinct from town JOBS which live in job_pools.json). Authoritative quest bodies = deploy/static/parsed.json `quests` (171 quests, objectives + dungeon_uuid) resolved through blades_lib generate_quest_data; names = scripts/quest_names.json; rewards = quest_rewards.json; recurring 'Sigil'/event quests = game_events.json served by /gameevents. This file adds (a) a curated daily-ROTATION pool and (b) a deterministic date-keyed selection + level-scaling model for a back-office editor. See the accompanying spec for how quest.rs should consume it.",
+    "authoritative": [
+      "dailyQuestPool[].questId / dungeonId / objectiveCount — from parsed.json (only quests whose dungeon_uuid EXISTS, i.e. completable end-to-end).",
+      "eventQuestLinks — from game_events.json (already live via /gameevents).",
+      "nonDungeonQuests — the 6 nil-dungeon quests that MUST be excluded from any dungeon rotation (they crash generate_quest_data)."
+    ],
+    "guessed": [
+      "The choice of WHICH categories rotate daily (side/bounty/sigil-event) and the per-day counts in `selection` are a faithful design guess — retail rotated jobs (in job_pools.json), not these story quests, on a daily board. Treat this file as the emulator's 'daily featured quest' offering, editable in back-office.",
+      "levelScaling multipliers are guesses aligned to the job difficulty curve; tune per playtest."
+    ],
+    "consumedBy": "server/src/quest.rs (NOT YET WIRED — see spec). Suggested: a quests_daily::select(date, playerLevel) that mirrors jobs_gen: deterministic pick keyed by the UTC day index, level-scaled difficulty, quest bodies via generate_quest_data. The /quests handler already returns game_event_quests arrays as empty TODO; a daily-quest board can populate a parallel array or reuse the jobs pipeline."
+  },
+  "selection": {
+    "_meta": "Deterministic daily selection: dayIndex = floor((now_utc - 0) / 86400) shifted to the 05:00 reset boundary. pick N quests = stable hash(dayIndex, poolCategory, slot) % pool.len, de-duplicated. Every player sees the SAME daily featured set (unlike jobs, which are per-character); it changes at the 05:00 UTC day boundary.",
+    "resetHourUtc": 5,
+    "resetMinuteUtc": 0,
+    "perDay": [
+      {
+        "category": "side",
+        "count": 2
+      },
+      {
+        "category": "bounty",
+        "count": 1
+      },
+      {
+        "category": "sigil-event",
+        "count": 2
+      }
+    ],
+    "dedupeAcrossDays": 1,
+    "_note": "count values GUESSED. dedupeAcrossDays=1 means avoid repeating yesterday's picks where the pool is large enough."
+  },
+  "levelScaling": {
+    "_meta": "generate_quest_data currently hardcodes difficulty_level=1, enemy_level=1, given_xp=1000 (see blades_lib/src/util/quest.rs) — every dungeon quest spawns level-1 enemies regardless of player level. This block is the SCALING TABLE a fixed generator should read. GUESSED, aligned to the job difficulty curve.",
+    "enemyLevelFromPlayerLevel": {
+      "formula": "enemyLevel = clamp(playerLevel + offset, 1, 100)",
+      "offsetBySkull": {
+        "0": -6,
+        "1": -3,
+        "2": 0,
+        "3": 3,
+        "4": 6
+      },
+      "defaultSkull": 2
+    },
+    "enemyCountByPlayerLevel": [
+      {
+        "level": 1,
+        "primaryMin": 2,
+        "primaryMax": 4
+      },
+      {
+        "level": 20,
+        "primaryMin": 3,
+        "primaryMax": 5
+      },
+      {
+        "level": 40,
+        "primaryMin": 4,
+        "primaryMax": 6
+      },
+      {
+        "level": 60,
+        "primaryMin": 4,
+        "primaryMax": 7
+      },
+      {
+        "level": 100,
+        "primaryMin": 5,
+        "primaryMax": 8
+      }
+    ],
+    "givenXpFormula": "given_xp = round(base(=100) * enemyLevel * 1.0)  (base 100/level is a guess; retail scales XP with enemy level)",
+    "rewardScaling": "Quest completion reward comes from quest_rewards.json keyed by questId/gldQuestId (fixed, capture-derived); NOT level-scaled in retail for story quests. Leave as-is."
+  },
+  "dailyQuestPool": [
+    {
+      "questId": "f69774f4-94b0-49c4-aa9b-8881e687c582",
+      "name": "The Cave of Thieves",
+      "category": "bounty",
+      "dungeonId": "d4764ff8-b8fa-462c-ac85-22bc7f25f8bd",
+      "objectiveCount": 4,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "260f2cdf-adea-4ad1-b221-8c4cb8abaefe",
+      "name": "Frigid Corruption",
+      "category": "sigil-event",
+      "dungeonId": "3c4b62a0-f3e3-4154-91a6-54eeb90bb4a4",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "2d1200ee-ecb8-4ea6-9892-54d1f538d83d",
+      "name": "The Web Mother's Trap",
+      "category": "sigil-event",
+      "dungeonId": "401ffa22-79ba-4c1c-aaa2-d67730d76aad",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "2290ab73-8f56-4dba-a4f0-7a23270eb93c",
+      "name": "The Biting Blade",
+      "category": "sigil-event",
+      "dungeonId": "1b09f826-f866-42d3-a113-a8a46e18ddaf",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "9eaef27f-e119-4ae4-9248-314c7a50babc",
+      "name": "Hangman's Wood",
+      "category": "side",
+      "dungeonId": "88824f01-27cb-46bf-96a3-e2327ae69c63",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "90f184df-71e7-43a3-abf8-09a639fa2431",
+      "name": "The Pit of Pestilence",
+      "category": "sigil-event",
+      "dungeonId": "76812dd4-3e89-483d-890b-251566efc1f9",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "777d1990-6ca8-4514-8a9c-8aeb669c6187",
+      "name": "Like Father, Like Son",
+      "category": "side",
+      "dungeonId": "e5430cf8-420b-4a4f-8e19-c7049a279052",
+      "objectiveCount": 4,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "f4023a38-195a-4977-bfbc-f443a257566f",
+      "name": "Fortress of the Savage Throne",
+      "category": "sigil-event",
+      "dungeonId": "0f3e5919-2799-4caf-8dbd-2233e28bfcd0",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "cd66c93c-5086-4311-b0f6-e90af54099b2",
+      "name": "A Darker Dungeon",
+      "category": "sigil-event",
+      "dungeonId": "68a653b9-6cc8-4d50-89b3-fe42e917fc5d",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "7a01320e-cdd4-4fa5-84bf-c14be0f65ef1",
+      "name": "The Ruins of Niryastare",
+      "category": "side",
+      "dungeonId": "1be8e0b3-a7a3-4ec6-ad16-4a7353374899",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "32d147d3-5037-4dc6-9b59-a281c7c0dd25",
+      "name": "The Heretic",
+      "category": "side",
+      "dungeonId": "acdcb96a-ad5d-4ce1-acd6-7cb76788a3d1",
+      "objectiveCount": 4,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "c0075b14-9ef7-46f9-be96-e77013a7d0cd",
+      "name": "The Dark Hold",
+      "category": "sigil-event",
+      "dungeonId": "69137ee3-95e3-4b3a-a9fa-8db5a4159c18",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "909431a2-177c-4719-8326-7523fdf104e2",
+      "name": "A Treacherous Quarry",
+      "category": "bounty",
+      "dungeonId": "d32ac1ca-68c1-4d9a-83ab-2fee9834299d",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "41aef1a7-bbf7-4f32-9eb5-9cf6fe5332a0",
+      "name": "Feats of Strength",
+      "category": "sigil-event",
+      "dungeonId": "c2460d9f-3228-42af-a389-ff1cca47b0c3",
+      "objectiveCount": 3,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "0f17d97c-1b04-408f-a569-374d43bb4f9b",
+      "name": "Into the Fire",
+      "category": "side",
+      "dungeonId": "172c856c-bde1-4261-91db-e1101964029f",
+      "objectiveCount": 2,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "b34a3b9c-6aea-458f-b4b3-c8951d506546",
+      "name": "The Hunt, part 1",
+      "category": "side",
+      "dungeonId": "2316c2df-7ffe-4e28-a6ff-22f7e677bbd0",
+      "objectiveCount": 2,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "109cc6ea-0b1b-4d69-9056-d4fbf4e8e0c4",
+      "name": "The Big Hit",
+      "category": "bounty",
+      "dungeonId": "fe3a3300-0258-4ec8-8612-3cacaade264a",
+      "objectiveCount": 6,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "beb2284b-9525-4bfa-83bd-5ed6e089c97c",
+      "name": "A Blizzard of Blades",
+      "category": "sigil-event",
+      "dungeonId": "d428357b-a918-4772-9299-4c9a6c4a1877",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "57daa8ca-4a0a-4b5d-a9b1-47b5a1689306",
+      "name": "Shadow of Doubt",
+      "category": "side",
+      "dungeonId": "78d07925-f846-4f59-9b2a-abd3f538cbfd",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "a008cbbc-a164-4183-8b69-470ac8cd5707",
+      "name": "Fire and Ice",
+      "category": "sigil-event",
+      "dungeonId": "0ea438d5-3238-44d7-b642-22c7f81fbc3f",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "9181f784-9eb8-4872-953d-30ba8b6bc9d1",
+      "name": "Gauntlet of the Impenitent",
+      "category": "sigil-event",
+      "dungeonId": "5abada25-c56f-46af-b786-db2e4f56ecdf",
+      "objectiveCount": 6,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "9ae181d9-b5ef-4abd-80f0-e3593ae2e309",
+      "name": "Gabrielle's Apprentice",
+      "category": "bounty",
+      "dungeonId": "fbfbead7-dc1f-4a96-ae3b-5b96df1f08d7",
+      "objectiveCount": 2,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "67c59fb2-7195-4bbb-a935-ef7beceecad3",
+      "name": "The Scorched Earth",
+      "category": "side",
+      "dungeonId": "ccdae458-83a9-4dcf-8a3c-5112f2ffa81b",
+      "objectiveCount": 6,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "f115ef09-3567-42e2-9e20-1eb933eb0286",
+      "name": "Picking up the Pieces",
+      "category": "bounty",
+      "dungeonId": "d0f1748f-c4d2-4e45-a0a9-60ba07d9566b",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "7a860695-6b01-4ac9-b75e-be217d6af418",
+      "name": "Silk Farm Hunt",
+      "category": "side",
+      "dungeonId": "841e5d45-bd16-43f5-a56f-6c9b3edcdfd4",
+      "objectiveCount": 5,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "816ff4c8-b56f-4645-bd2a-29bc7c1baf96",
+      "name": "Death's Shadow",
+      "category": "sigil-event",
+      "dungeonId": "88d3d9f4-fb63-4d2a-af60-66ef1ba74736",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "30a53534-e8d2-43ef-82f7-d706b6ef8a97",
+      "name": "Trophy Hunting",
+      "category": "side",
+      "dungeonId": "52cd2782-0cd8-4acb-895a-b970678c5440",
+      "objectiveCount": 4,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "c2c3c16d-695d-4e69-b609-40e8ec800b83",
+      "name": "Vilified",
+      "category": "side",
+      "dungeonId": "0c3abea4-e31a-48a3-8533-925a26f8711d",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "a846b491-b439-447d-a8a1-9c2611522610",
+      "name": "The Eldritch Grotto",
+      "category": "sigil-event",
+      "dungeonId": "8e65eda5-53bc-4a6b-8732-0eca70d3da2e",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "a85408a6-7107-433d-b616-50105080574e",
+      "name": "Servants of the Blue God",
+      "category": "sigil-event",
+      "dungeonId": "8e2db517-ac60-4db8-b3cd-aefaed596ea5",
+      "objectiveCount": 2,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "26eb6ab5-2d8c-4993-820e-ada79f6f00a8",
+      "name": "Wrath of the Undying",
+      "category": "sigil-event",
+      "dungeonId": "04382566-ff56-4802-9ec9-07d6364011d0",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "4f562a99-d298-486c-b3f5-1e3188e85db2",
+      "name": "Crypt of Flames",
+      "category": "sigil-event",
+      "dungeonId": "ba4676f4-fd96-43e6-b805-30f77c94666e",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "54061e01-30dd-4e2d-bdaf-6a2fbbb8b496",
+      "name": "The Howling Caves",
+      "category": "side",
+      "dungeonId": "301cd6b2-ddcd-4299-a33b-911803873ed8",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "bd05e8f6-439a-4c77-919e-edf33595c044",
+      "name": "Rage of the Ayleids",
+      "category": "sigil-event",
+      "dungeonId": "2f6352c7-349d-4540-96df-2879ca01a8e5",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "7486296a-335a-4b46-aee1-5102090ce34f",
+      "name": "Saints' Revenge",
+      "category": "sigil-event",
+      "dungeonId": "9e9384cc-2662-4cd1-bf9d-022b2ac56b6b",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "e5b3c53d-a3af-409e-9f50-2c0a65227e25",
+      "name": "Oblivion's Call",
+      "category": "sigil-event",
+      "dungeonId": "ec56ce56-69fb-4488-a216-ca695be86233",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "6d1102ac-3aff-4dc1-bb0d-5301a003a4e7",
+      "name": "Gabrielle's Hunt",
+      "category": "bounty",
+      "dungeonId": "9018580c-4c3e-4170-8a93-9e4153aa24f6",
+      "objectiveCount": 1,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "be7732ad-2ff0-4fb4-8684-e2f6d089965e",
+      "name": "The Green and the Black",
+      "category": "sigil-event",
+      "dungeonId": "0394881e-faf3-4396-8092-4b691d88f130",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "1f26d523-f182-436a-9f50-f99fffd51b66",
+      "name": "The Impenetrable Grove",
+      "category": "sigil-event",
+      "dungeonId": "bc75e301-e128-4025-b339-fbb9ab99b8ec",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "11ffa10c-f587-432b-8901-fde27f37f65a",
+      "name": "Spirit of the Hunt",
+      "category": "sigil-event",
+      "dungeonId": "7e840c88-2952-48e4-8a6c-496a86612482",
+      "objectiveCount": 5,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "c08cf606-e3e8-42ed-adc3-f5d5af7e2490",
+      "name": "Attack of the Spell Casters",
+      "category": "sigil-event",
+      "dungeonId": "2f491b05-cea8-4ab5-855a-3adc7d4252a8",
+      "objectiveCount": 5,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "19e25e7a-b6c0-4660-8f04-a2e51094c330",
+      "name": "The Greencaps' Trail",
+      "category": "bounty",
+      "dungeonId": "af8891db-5276-4926-b95d-6b419870a416",
+      "objectiveCount": 4,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "b2f3ffa8-8d5f-41d5-9b3e-ae97f3f519a1",
+      "name": "The Farmer's Plea",
+      "category": "bounty",
+      "dungeonId": "0ed1c86f-8306-464e-bbe1-7644b98bb29c",
+      "objectiveCount": 8,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "5675e806-8842-4791-870f-d8558ba035ec",
+      "name": "The Sundered Caves",
+      "category": "sigil-event",
+      "dungeonId": "56189000-7bde-486e-9ae5-278248e936d1",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "838e49aa-6139-4938-84d3-e09e1da80ae8",
+      "name": "Vault of Lightning",
+      "category": "sigil-event",
+      "dungeonId": "05abade5-671d-446f-a40f-f5f7b32e31a4",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "8599746a-f4c0-4024-830b-6337fc87c65b",
+      "name": "Cutting Off the Snake's Head",
+      "category": "bounty",
+      "dungeonId": "55411362-7c35-41ab-a84d-ff96e820e417",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "e2bda86c-0f80-43e4-9394-cdbff00a34c1",
+      "name": "Return to the Wizard's Tower",
+      "category": "sigil-event",
+      "dungeonId": "c3c2a155-437a-4926-943d-ae40cc86dd09",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "cbc5a18d-42ae-4c3f-a48d-7d7a6da9c42c",
+      "name": "Kill It With Fire",
+      "category": "sigil-event",
+      "dungeonId": "db8045e6-54e5-4286-9948-1608e0d1d915",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "9cbb61e3-a1f1-4897-aa6f-c05f4d1194f4",
+      "name": "Mining Misfortune",
+      "category": "side",
+      "dungeonId": "5dd4777b-b958-4846-a28f-19a87968eeef",
+      "objectiveCount": 6,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "79cef1e4-0aa3-4c3e-bfba-385f0bf62405",
+      "name": "Trapped!",
+      "category": "sigil-event",
+      "dungeonId": "89e83241-b4ce-4bae-b36e-85079a93d91d",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "1a38ac88-2b00-47a4-a626-cb2e8af2ab1f",
+      "name": "EQ18_Quest",
+      "category": "sigil-event",
+      "dungeonId": "57da57d2-4ca4-43a1-ac87-26801fe602d0",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "0dd37f6b-28ad-4cb7-8e12-2ebbf43fb366",
+      "name": "Sticks and Stones",
+      "category": "sigil-event",
+      "dungeonId": "0caed672-80d9-4d8e-a284-d8d8add37464",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "7f0d1508-312b-4036-970f-ff5f4c342526",
+      "name": "The Spectral Forest",
+      "category": "sigil-event",
+      "dungeonId": "97a2b3ee-a066-4307-9f18-f38063be7670",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "8acc8345-4111-4eaf-876c-23570fe1a40f",
+      "name": "The Dragon Slayer",
+      "category": "side",
+      "dungeonId": "6063aa6f-551d-4110-9bcb-f6a016b5a938",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "cf4c4255-b5f9-49da-a61c-2396c1b0aed0",
+      "name": "Resolution",
+      "category": "side",
+      "dungeonId": "bba7eb2b-24e8-4d72-a122-50f1c4c1c148",
+      "objectiveCount": 4,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "270b4efd-50dd-44a3-8cb9-9feb16129395",
+      "name": "The Wizard's Tower",
+      "category": "side",
+      "dungeonId": "cedc90ca-a661-4827-a51f-760437e7c0d5",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "62e9a71c-fc4e-4246-8179-2a4b7005539f",
+      "name": "Journey to Fort Cassynder",
+      "category": "side",
+      "dungeonId": "18b2c1c0-9583-4494-b303-fe07708a1153",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "ed1414eb-e94f-4d02-90e7-041ecc2b73d3",
+      "name": "Children of Muluk",
+      "category": "sigil-event",
+      "dungeonId": "1cdf3bf9-c69b-42e9-a59d-20dd76201737",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "e8f3614c-8672-4f77-9dad-4b400676f4b6",
+      "name": "A Battle Unceasing",
+      "category": "sigil-event",
+      "dungeonId": "924f1147-fd7f-4736-9e2d-f33fa942dbdd",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "bd14583c-4061-4157-996c-3335c33f0c62",
+      "name": "Villains",
+      "category": "side",
+      "dungeonId": "7f3ca11c-bfc7-40ec-bf72-7fb5c45ddbd0",
+      "objectiveCount": 2,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "7f07d85f-f4ed-4762-b670-79e36b224902",
+      "name": "Curse of the Ayleids",
+      "category": "sigil-event",
+      "dungeonId": "d8eb7ad7-8623-4642-9bc1-fc11d4a86ad0",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "61f7a386-dd0c-4119-acf6-7f41a9c5b62b",
+      "name": "Golden Madness",
+      "category": "sigil-event",
+      "dungeonId": "f7b87dad-8a62-4228-ab3b-2debd8680cf6",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "31baf922-2b1a-4605-ae52-4946e26994c6",
+      "name": "The Thunder and the Fury",
+      "category": "sigil-event",
+      "dungeonId": "413d5dfb-13b6-4a7c-84b1-81e008648f19",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "c23cd046-a7f1-431b-9c14-5b023d6a104b",
+      "name": "The Trap",
+      "category": "sigil-event",
+      "dungeonId": "966b188b-d509-41f5-ad0a-e5936420427e",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "6fe1271e-66eb-4f71-aa23-4576710e071f",
+      "name": "The Ancient One",
+      "category": "sigil-event",
+      "dungeonId": "5e84fe00-b6d3-4fcb-a574-211f227c092f",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "6249e106-70f7-4395-8a19-3211a312bb0e",
+      "name": "The Purifying Flames",
+      "category": "sigil-event",
+      "dungeonId": "5efccb08-26d5-4313-9c17-12e97f59a602",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "1c76244d-b85d-4d3e-8d7c-fd60023a175e",
+      "name": "A Cry for Help",
+      "category": "side",
+      "dungeonId": "868b6c7c-e3c5-4a20-bac7-d967e198b75f",
+      "objectiveCount": 4,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "8057a28b-92c2-4a84-97d6-2d991d6fe84f",
+      "name": "Gabrielle's Treasure",
+      "category": "bounty",
+      "dungeonId": "0ae78fe0-51d9-42f4-ad8c-6c8b38676260",
+      "objectiveCount": 5,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "fbeeaa85-13ae-479a-a751-5625688d682d",
+      "name": "Unholy Quickenings",
+      "category": "sigil-event",
+      "dungeonId": "109a8dea-90c0-45a0-bb51-f44b30a2afea",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "01121c2f-6806-4b8c-998e-adc5d0e21db7",
+      "name": "The Beast in the Shadows",
+      "category": "sigil-event",
+      "dungeonId": "eb9320fd-88ab-4efa-ab13-465654e97375",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "a1aafdc9-a35c-45c9-89f6-27f7d3a628e6",
+      "name": "Prisoner of the Golden Keep",
+      "category": "sigil-event",
+      "dungeonId": "8ac511d7-2c40-497c-8216-36e1f1739f48",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "7e17f90d-157f-453f-97a8-882fb08e66d3",
+      "name": "The Hunt, part 2",
+      "category": "side",
+      "dungeonId": "c311386c-6e3b-4332-b663-528c672f2fa0",
+      "objectiveCount": 2,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "334e582f-95ba-4263-b381-ac6d91eabe92",
+      "name": "The Wizard's Challenge",
+      "category": "side",
+      "dungeonId": "108a7290-cea1-4af2-b58d-9c592af7d9d8",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "bdb31f0a-686d-4d63-a6ec-be3472255406",
+      "name": "Raid on the Bandits' Base",
+      "category": "bounty",
+      "dungeonId": "bc928826-67c4-4cca-b7ea-9799383ff790",
+      "objectiveCount": 2,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "c178813f-ea7c-4732-aba0-a5c8d8767ec9",
+      "name": "Pool of Despair",
+      "category": "side",
+      "dungeonId": "da0a20c9-bbca-46bf-8f14-fead50f50675",
+      "objectiveCount": 4,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "b82b5384-5d68-4703-9450-1815f6d7d28b",
+      "name": "The Long Night",
+      "category": "sigil-event",
+      "dungeonId": "b75cfbce-dfc6-436c-b315-20619d04e86a",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "361d145c-2247-4a97-8718-48bda0c93a17",
+      "name": "Deadly Neighbor",
+      "category": "side",
+      "dungeonId": "ff23b3b9-1eaf-4553-864a-176207fe1cba",
+      "objectiveCount": 3,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "8ef9fad8-e7f6-4f7e-90e3-b0d2daf782bd",
+      "name": "The Blade's Edge",
+      "category": "sigil-event",
+      "dungeonId": "ac9d21d8-19e9-48c5-acef-e583de16ae95",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "f116b952-9932-4b1a-b20d-246ca2945bb4",
+      "name": "Season of the Witch",
+      "category": "sigil-event",
+      "dungeonId": "1806964b-c886-4e69-a494-c7d512698e95",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "9c9cf9d4-c8f1-4ae8-9868-0ce695e9509b",
+      "name": "The Noxious Menagerie",
+      "category": "sigil-event",
+      "dungeonId": "fdf961e8-0857-48e4-909e-51e47d558c7e",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "f9c2a9a1-51a8-4628-81e3-9ca2c3f1c3d9",
+      "name": "In the Queen's Service",
+      "category": "bounty",
+      "dungeonId": "57401b33-65be-4c23-9263-102225eb7c23",
+      "objectiveCount": 4,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "3405ea07-6655-49c0-b149-b0e19f9f1c85",
+      "name": "The Trickster",
+      "category": "sigil-event",
+      "dungeonId": "fe8f12a4-c88f-48f1-b752-d662a7158590",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "ff662bf7-a7fa-4ba7-9107-a8556db391e1",
+      "name": "The Lich's Tower",
+      "category": "sigil-event",
+      "dungeonId": "9bc6b965-3644-4020-9b75-2a7eb6a434dd",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    }
+  ],
+  "otherPlayableQuests": [
+    {
+      "questId": "173fee56-ecc1-4dd3-92cd-3659e213b7f0",
+      "name": "Exhibition Fight: Enchanted Statues",
+      "category": "arena",
+      "dungeonId": "451d607e-2c36-4a43-ac5f-d33fdf303f8c",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "bfe86826-751f-4c59-9b13-d6568ce01bca",
+      "name": "BreakableTest_Forest",
+      "category": "test",
+      "dungeonId": "3892567e-84f2-4e57-ae92-af34cf9c8cbf",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "725f538f-5044-4b27-a6a9-56e000469f9f",
+      "name": "A Fragile Alliance",
+      "category": "guild-story",
+      "dungeonId": "2f443276-4f5c-4603-b24a-4a21d9f0f25b",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "749423bb-d06c-4e77-939b-c44287d63f2f",
+      "name": "Tournament: Molriel",
+      "category": "arena",
+      "dungeonId": "c8197b0e-0c7e-445a-985c-105d22485969",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "7e715e53-e9f6-45d9-80c1-1fae66f7f46f",
+      "name": "Tournament Trials: Rakhad",
+      "category": "arena",
+      "dungeonId": "d5f8480c-6b97-47f8-98cc-96094d7b41d8",
+      "objectiveCount": 1,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "73ab7435-021e-451a-9944-29e32e72382c",
+      "name": "Coming Home",
+      "category": "main",
+      "dungeonId": "b08cc930-2030-41ec-92e8-044e0bad9aa8",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "9d03a3dc-8cfa-4928-bbb7-2a30a079d0a5",
+      "name": "Tournament: Aragoth",
+      "category": "arena",
+      "dungeonId": "a908c151-ac50-4aab-8116-f55b86987282",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "3900e50d-ccae-467d-bfaf-419623cc2dc3",
+      "name": "Tournament: Angarion the Bold",
+      "category": "arena",
+      "dungeonId": "fb5148a2-38f7-40f4-b96e-dedab0daef65",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "4f552ec2-83d7-4b13-b290-c78ef6816939",
+      "name": "Wrath of the Sorcerer-King",
+      "category": "main",
+      "dungeonId": "d26b2da3-bb71-4fe1-a3ae-a7f9bb675a93",
+      "objectiveCount": 1,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "e7a4ca56-9479-4976-8136-9160ce3c7a2c",
+      "name": "Tournament: Garen Bethalas",
+      "category": "arena",
+      "dungeonId": "fbcee1ba-d5a9-4f9c-949a-1f2b7b2fd43c",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "5ee732fa-b576-49cf-b95d-c211a92525a3",
+      "name": "Tournament: Garzul gro-Durgoth",
+      "category": "arena",
+      "dungeonId": "03655596-a5bf-43c6-8d0a-295f28cd2d40",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "416b8186-13d3-4429-a95c-defc8e2d4a6f",
+      "name": "The Messenger",
+      "category": "guild-hall",
+      "dungeonId": "2ccbdecc-66dd-40ef-bdb4-bc953b34fbb5",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "cea05249-d3b6-4ded-baef-9732398ca504",
+      "name": "BreakableTest_Ayleid",
+      "category": "test",
+      "dungeonId": "9b7cefcf-498b-4a15-9518-d74ea16674dc",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "c5647999-be55-4030-8ebf-84110419b478",
+      "name": "Tournament Trials: Connelain of the Reach",
+      "category": "arena",
+      "dungeonId": "ecd943fc-d85a-4611-9591-34b96d28ba36",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "b2c782d5-5def-4176-8053-7c940082f2a8",
+      "name": "Practice with Henrik Seven-Swords",
+      "category": "training",
+      "dungeonId": "d58d802b-4839-46a6-b8e2-007955690e33",
+      "objectiveCount": 1,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "ef5342bf-b94c-4c56-b1c2-30ba0a55c609",
+      "name": "The Treasure Hunter",
+      "category": "main",
+      "dungeonId": "b8af428d-a9b6-4731-a6e8-c313880be513",
+      "objectiveCount": 3,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "fd8e2764-6f60-4530-833e-2419f0e32408",
+      "name": "The Five Stones",
+      "category": "main",
+      "dungeonId": "50f0e783-32a4-4487-a61a-bc2d4e890b87",
+      "objectiveCount": 5,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "3001c464-54f2-46a5-9ae9-f49db761078f",
+      "name": "Exhibition Fight: Atronachs",
+      "category": "arena",
+      "dungeonId": "d156df62-21ec-4ec9-834b-b085858d4024",
+      "objectiveCount": 1,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "d5cec77b-9174-488b-8ec7-27f6324f582b",
+      "name": "Tournament: Brynhildur War-Wind",
+      "category": "arena",
+      "dungeonId": "48e2ec94-fe49-4630-b1a1-368fc63ceeb4",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "65f509ec-87fa-4fd4-9a5a-6511b4c0a69f",
+      "name": "Arena_05_Test",
+      "category": "arena",
+      "dungeonId": "d98d5e5a-1e9a-4697-8619-141257dae379",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "d4a88399-0518-4b72-872c-de8cbb191dae",
+      "name": "The Greencap Bandits",
+      "category": "main",
+      "dungeonId": "2e4cf902-64e5-4e1e-8771-ee26f40e256b",
+      "objectiveCount": 2,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "0e51b9b4-6d21-4612-a6d7-e2395d96e73b",
+      "name": "The Freedom to Believe",
+      "category": "guild-hall",
+      "dungeonId": "91890529-00c0-437a-9b36-1dffb7505561",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "c8cfc740-927c-45f3-8cc3-d00fc8cbfe9f",
+      "name": "Draugluin's Tomb",
+      "category": "guild-hall",
+      "dungeonId": "515081f7-d740-4154-948d-1ddeb7fa9dab",
+      "objectiveCount": 3,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "09fd53ff-1be5-4691-86e7-6582d0d25569",
+      "name": "Prisoner of the Thalmor",
+      "category": "guild-hall",
+      "dungeonId": "b6a8cfff-b27d-47fc-b4ed-542707aabb54",
+      "objectiveCount": 3,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "eda206ed-1783-46a5-bb21-1f1528e87ffe",
+      "name": "Meet the Old Blademaster",
+      "category": "training",
+      "dungeonId": "b2c36573-6c6e-4943-8a74-da72bf0d3a81",
+      "objectiveCount": 2,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "39c8bf84-8c6b-4332-b010-32a82d2aebc4",
+      "name": "A Friend in Need",
+      "category": "guild-hall",
+      "dungeonId": "e16b8648-d0c1-48be-b194-7e229f58bde0",
+      "objectiveCount": 2,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "7fd324c5-cfcf-42df-8db7-07651a9a8ac2",
+      "name": "MultiKitTest",
+      "category": "test",
+      "dungeonId": "baedecb6-1c1c-4b41-ac50-787c10a9af47",
+      "objectiveCount": 0,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "159bc1e7-454c-4e2a-90cf-e200c74b961a",
+      "name": "Goblins United",
+      "category": "guild-story",
+      "dungeonId": "b751c0b0-fd59-4a59-8ee0-e3604545ee4b",
+      "objectiveCount": 4,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "207f53b3-d892-4445-b09a-33df63a4379a",
+      "name": "The Old Enchanter",
+      "category": "main",
+      "dungeonId": "9f7f0c2d-ebc2-494c-be2d-3fc9dc5c19fb",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "97550887-5a92-47f5-9770-f3c0de2e94f4",
+      "name": "Arena_06_Test",
+      "category": "arena",
+      "dungeonId": "8a1f168f-effb-4b72-b1b6-f7875aa90387",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "3c5ada24-8706-4e65-af90-675a00756c29",
+      "name": "The Haunted Grove",
+      "category": "guild-hall",
+      "dungeonId": "14beb38d-cfb1-4132-8249-b822f2afdbf5",
+      "objectiveCount": 6,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "9a63309e-ad49-469f-acb3-07816c606b0e",
+      "name": "A Visit to Blackridge",
+      "category": "arena",
+      "dungeonId": "046cf0c1-b598-4c1d-8656-1379cf490e29",
+      "objectiveCount": 3,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "a4517822-e972-444d-ac70-ee2258451f0b",
+      "name": "BreakableTest_Stone",
+      "category": "test",
+      "dungeonId": "45bcab70-1240-4fe0-8fda-42eed0b91346",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "b3ed646e-2966-41ab-9105-49c242b7f114",
+      "name": "Exhibition Fight: Wolves",
+      "category": "arena",
+      "dungeonId": "b547d7a8-40de-4e02-bd68-aae8e0417e78",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "5f8714ab-155f-423d-8c92-2cbfbe70717e",
+      "name": "Tournament - Round 1 Finals",
+      "category": "arena",
+      "dungeonId": "7eac2944-8c57-4742-94ca-200975c5771b",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "7f1fcbbc-ef2c-4883-831e-1319521b0ab0",
+      "name": "Exhibition Fight: Bears",
+      "category": "arena",
+      "dungeonId": "7fd49bd0-451e-40ef-ba68-2c7c42c9dc7b",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "37967571-fdc0-4de3-9f15-f969dc7b71d5",
+      "name": "Tournament - Championship Fight",
+      "category": "arena",
+      "dungeonId": "f0131574-f931-4376-9d7c-78904af13ab0",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "585137fa-5a78-48a7-99f7-f744a5f6cfdc",
+      "name": "The Ghost's Tale",
+      "category": "main",
+      "dungeonId": "4cf75840-2dab-47d9-84c6-b922d959d548",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "4439f370-5da7-4154-92fc-44ce2a4fe2b4",
+      "name": "Mercenaries on the Run",
+      "category": "main",
+      "dungeonId": "30d69ad7-a456-4611-8086-ec0e17772c9c",
+      "objectiveCount": 2,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "e0212e3f-5f6a-458c-8544-78d3532b2cb9",
+      "name": "The Troll Hunter",
+      "category": "other",
+      "dungeonId": "df69e4fe-cfaa-4e90-b3ef-50143665f182",
+      "objectiveCount": 1,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "ab53fc6d-e49f-47d6-a52f-46e6838301d6",
+      "name": "No Honor Among Thieves",
+      "category": "guild-story",
+      "dungeonId": "de5a22cf-05ba-4242-97f4-800e81ef86e0",
+      "objectiveCount": 2,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "1dace385-6423-474a-be20-9408a9c93f37",
+      "name": "The Blue God",
+      "category": "guild-story",
+      "dungeonId": "c0cdd2e6-2a78-4add-b0bb-f6edd8c5e021",
+      "objectiveCount": 2,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "898d2182-da65-4003-90c0-b986c5ad52a8",
+      "name": "Tournament - Round 4 Finals",
+      "category": "arena",
+      "dungeonId": "bab29aab-7fb7-4f09-bfe6-5369306fabc8",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "2c3567f5-9ce7-4b41-9a96-6c9235499ffc",
+      "name": "Arena_03_Test",
+      "category": "arena",
+      "dungeonId": "4b4a4abd-7754-4de0-808f-059cc3720542",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "3266dae7-9899-4996-b615-697e05b4061e",
+      "name": "A Tale of Two Brothers",
+      "category": "main",
+      "dungeonId": "b44375cd-484c-4d33-b7da-b90cb3fd1eda",
+      "objectiveCount": 4,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "45c042e1-538b-4079-8b92-06f1d7677b6f",
+      "name": "The Troll Trap",
+      "category": "guild-hall",
+      "dungeonId": "4216705a-c11d-4a6c-ba68-7b4c94adf1ff",
+      "objectiveCount": 4,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "ed722b9f-4859-4940-8495-d0c599f1d087",
+      "name": "Practice with Henrik Seven-Swords III",
+      "category": "training",
+      "dungeonId": "619486ff-ce6a-4d82-9b86-9c747377402a",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "28c5f8fa-68a1-4ee6-b2bb-bdbcbcc84fa2",
+      "name": "The Name of Evil",
+      "category": "main",
+      "dungeonId": "ac9c7dfa-365b-4919-95e0-6d7f5d7211b9",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "9e52b8f2-7e66-4b4a-8a42-21b54a615939",
+      "name": "Facing the Dragon",
+      "category": "main",
+      "dungeonId": "5a1ffc5e-db3e-4166-9846-d10b1826020c",
+      "objectiveCount": 3,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "5ad30483-8994-484e-b6dc-a5e9014cc4d5",
+      "name": "Rescuing the Townsfolk",
+      "category": "main",
+      "dungeonId": "51470ac0-46eb-4790-8de1-d51d7c36908c",
+      "objectiveCount": 3,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "b6b39407-56dc-4950-8b56-6436601a3d86",
+      "name": "The Red and the White",
+      "category": "guild-story",
+      "dungeonId": "512af25e-c1d4-4e7e-9c30-89cb1574e3c6",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "71187e01-77f0-4980-9f15-610f727cd48c",
+      "name": "A Few More Questions",
+      "category": "arena",
+      "dungeonId": "089479e7-3fec-4728-85c7-383908896eba",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "1c369004-be30-40b2-ad7b-4102e6b224f0",
+      "name": "Tournament - Round 3 Finals",
+      "category": "arena",
+      "dungeonId": "06920d8f-32c3-4014-ab82-3660df8496cf",
+      "objectiveCount": 1,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "4a246d55-d582-4222-aa3d-b6ce09816854",
+      "name": "The Bloodfall Queen",
+      "category": "main",
+      "dungeonId": "f481f6e9-5225-4e48-90ca-6828ec4df4ef",
+      "objectiveCount": 1,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "788d7731-3860-4052-af2b-3b36a2e1f1fb",
+      "name": "The Goblin Scourge",
+      "category": "other",
+      "dungeonId": "1f0c93b0-703c-4f92-97c2-d86256374b31",
+      "objectiveCount": 1,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "29048d0e-e1a9-4bb0-95e5-3fac3d785734",
+      "name": "Practice with Henrik Seven-Swords II",
+      "category": "training",
+      "dungeonId": "a22ac0b2-250f-4eb6-baca-5e3eb724cf4f",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "4fdd7a79-8d5b-4751-a87d-d913d5f62d1f",
+      "name": "Hidden Mysteries",
+      "category": "main",
+      "dungeonId": "02f534e1-9df0-445c-a101-291bab3e006f",
+      "objectiveCount": 2,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "e53a430b-35f4-4848-8b4e-c1f0089e098a",
+      "name": "Lumber Run",
+      "category": "main",
+      "dungeonId": "32b5e43c-9a08-473d-af5c-05f7584865c5",
+      "objectiveCount": 2,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "025e53b6-8cf3-443b-b573-2143ade0f57a",
+      "name": "Arena_01_Test",
+      "category": "arena",
+      "dungeonId": "842c4bd4-e2ab-4215-b361-d104c5db4576",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "bd82425a-dfa4-47b2-a091-b4dea4c2ce15",
+      "name": "The Missing Scroll",
+      "category": "main",
+      "dungeonId": "3ef2b1f9-9dc9-44ba-b18b-93dac3f2f3d3",
+      "objectiveCount": 3,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "ad64867c-2146-4468-a128-aac881150dab",
+      "name": "Tournament: Thorbjold",
+      "category": "arena",
+      "dungeonId": "3635d747-98ff-44e1-b64a-19f458006661",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "549c061d-de9f-4b21-8164-9a64a38ea0d4",
+      "name": "Tournament: Arielle Themond",
+      "category": "arena",
+      "dungeonId": "93de6fa5-361f-4ab9-ade9-c227b11120c6",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "8959ab54-f507-406c-b08f-c0f9487473e0",
+      "name": "High Treason",
+      "category": "main",
+      "dungeonId": "6f6a60b6-436d-4c6a-abc2-10b0d7595731",
+      "objectiveCount": 5,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "411ef91c-8e20-4f4d-8655-0a6a1a3c1a62",
+      "name": "BreakableTest_Cave",
+      "category": "test",
+      "dungeonId": "db191909-8fa7-4c0c-b58e-51c0fd535736",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "0dc4f277-abe1-4d7d-8ac2-b470214285cb",
+      "name": "A Friend in Need",
+      "category": "guild-hall",
+      "dungeonId": "b2b6824b-936a-422c-b543-ecbf07e8336c",
+      "objectiveCount": 3,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "b62d49de-8b53-46a0-b5bd-25c064cae2ec",
+      "name": "The Long Shadow of the Past",
+      "category": "arena",
+      "dungeonId": "bfa91d78-6e48-49e8-aa0d-da1f021d2daa",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "a1e242b7-eec4-40d6-b097-56a388a0439d",
+      "name": "A Question of Murder",
+      "category": "arena",
+      "dungeonId": "08a3f410-4b47-4ffa-ad5e-22811da9dc4f",
+      "objectiveCount": 1,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "73420485-569d-41f9-8356-38dc5e4f37fc",
+      "name": "Practice with Henrik Seven-Swords IV",
+      "category": "training",
+      "dungeonId": "e2f5a307-05be-46f9-96cb-f09b26ba6a78",
+      "objectiveCount": 1,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "6ac4400c-a741-4e50-a43a-22287f34c119",
+      "name": "Tournament Trials: Najeepa Swims-in-Blood",
+      "category": "arena",
+      "dungeonId": "cd3aa001-8fe0-4f30-b038-719a854cd2a1",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "961c556f-0332-4d49-be7b-8f41f351e7f2",
+      "name": "Tournament: Dalsa Veleth",
+      "category": "arena",
+      "dungeonId": "0b656aa3-dc94-470b-8f9a-f1d9ea266454",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "71c602c1-301b-4228-9777-45442a41fe4a",
+      "name": "Tournament: Dinahan-Al-Rihad",
+      "category": "arena",
+      "dungeonId": "fa30e013-0b8f-44c8-b195-3f29fe6273ae",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "f4a9bc81-e652-45d0-ab1c-dc184c06ecd6",
+      "name": "Secrets of the Ayleids",
+      "category": "main",
+      "dungeonId": "af788264-5d28-4682-b35c-1386880cd6a3",
+      "objectiveCount": 1,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "84b3343b-c973-40d2-97fd-377aa49bf880",
+      "name": "Tournament Trials: Tasha",
+      "category": "arena",
+      "dungeonId": "75a70bb8-16f8-4e51-a51c-4a6bc29e1e9a",
+      "objectiveCount": 1,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "46bc0bca-071b-44cd-ba0d-4ead69eea433",
+      "name": "The Goblin Messiah",
+      "category": "guild-story",
+      "dungeonId": "4bc514a2-fe7b-4d3a-b3a7-410fc0a3c7da",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "6be8f9fd-1550-4410-8196-5f41801f09bb",
+      "name": "Arena_04_Test",
+      "category": "arena",
+      "dungeonId": "18579f63-01a7-42cf-ac4b-ef4b3ff3bbb5",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "378307c6-0a23-41f8-b721-5282fa0a8a2b",
+      "name": "The Haunted Forest",
+      "category": "main",
+      "dungeonId": "7e8d7a85-791e-4d4e-bbc5-f92d467b0a8e",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "559b9345-27ae-4ccf-8482-5905b266bb7f",
+      "name": "Tournament - Round 2 Finals",
+      "category": "arena",
+      "dungeonId": "f2c009e9-bb75-4d1a-bbf3-abcf68867224",
+      "objectiveCount": 1,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "dc6f2e5b-fa0d-4566-aafa-7c74742a0432",
+      "name": "Arena_02_Test",
+      "category": "arena",
+      "dungeonId": "4e4eea5e-a426-4818-b9d8-61f2e3e521a7",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "2d83cb96-ef3b-40b4-95c5-cee8b25e87cb",
+      "name": "Tournament: Severa Calvina",
+      "category": "arena",
+      "dungeonId": "cbdb01fa-a428-40b2-b9a3-1358036769aa",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "ca50d7a1-877f-4f3a-bc75-c9a423c0ae47",
+      "name": "Tournament: Dalan Silver-Skin",
+      "category": "arena",
+      "dungeonId": "0ee54cb0-baaf-4635-864d-608650abe3c0",
+      "objectiveCount": 1,
+      "hasCapturedReward": true
+    },
+    {
+      "questId": "b4d3bf8d-3ac9-450c-bf46-9d1591d0d855",
+      "name": "The Ayleid Crown",
+      "category": "main",
+      "dungeonId": "44677030-64e0-47ff-9857-080115abd00f",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    },
+    {
+      "questId": "0c9fc46d-9cb3-41b9-9e73-70c331533131",
+      "name": "Tournament: Practice with Noura",
+      "category": "arena",
+      "dungeonId": "a95c0b14-5ac0-42a6-a1a1-02e28cba86fd",
+      "objectiveCount": 1,
+      "hasCapturedReward": false
+    }
+  ],
+  "eventQuestLinks": [
+    {
+      "eventId": "b483c668-5ff6-4aa2-b731-33c522d04001",
+      "questId": "7f0d1508-312b-4036-970f-ff5f4c342526",
+      "questName": "The Spectral Forest",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1663214400,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "ffcbe281-e953-49c9-b048-69780616c034",
+      "questId": "7f07d85f-f4ed-4762-b670-79e36b224902",
+      "questName": "Curse of the Ayleids",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1666497600,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "2cc8f717-7e08-4dcc-9cb3-f992a343ccab",
+      "questId": "9c9cf9d4-c8f1-4ae8-9868-0ce695e9509b",
+      "questName": "The Noxious Menagerie",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1666411200,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "3b4864b8-69d2-46b3-b129-1a15f3b324d7",
+      "questId": "1f26d523-f182-436a-9f50-f99fffd51b66",
+      "questName": "The Impenetrable Grove",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1663387200,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "30b20b6f-9ae4-477a-9b10-0264969bd966",
+      "questId": "260f2cdf-adea-4ad1-b221-8c4cb8abaefe",
+      "questName": "Frigid Corruption",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1663300800,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "3df60c54-ed45-4085-b472-4b5d0a489705",
+      "questId": "90f184df-71e7-43a3-abf8-09a639fa2431",
+      "questName": "The Pit of Pestilence",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1663473600,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "00414d25-fda9-4bf8-8ec1-76e62d01d16e",
+      "questId": "a846b491-b439-447d-a8a1-9c2611522610",
+      "questName": "The Eldritch Grotto",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1663560000,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "5a1916f9-15a4-4741-8b8f-55197ff10c31",
+      "questId": "5675e806-8842-4791-870f-d8558ba035ec",
+      "questName": "The Sundered Caves",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1663646400,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "b654d3d1-0fd3-4025-8003-69b9ee08f6ea",
+      "questId": "6249e106-70f7-4395-8a19-3211a312bb0e",
+      "questName": "The Purifying Flames",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1663732800,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "688972ba-77c0-445b-9fad-ea6134e4b0dc",
+      "questId": "beb2284b-9525-4bfa-83bd-5ed6e089c97c",
+      "questName": "A Blizzard of Blades",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1663819200,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "3c6f4f2e-318e-4f8d-9f99-3f75120c5f5f",
+      "questId": "838e49aa-6139-4938-84d3-e09e1da80ae8",
+      "questName": "Vault of Lightning",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1663905600,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "aa13aa4c-5d6a-4a85-a74e-4120774278bd",
+      "questId": "4f562a99-d298-486c-b3f5-1e3188e85db2",
+      "questName": "Crypt of Flames",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1664078400,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "511b53a8-67e9-43d0-bba6-d1d718a731b2",
+      "questId": "0dd37f6b-28ad-4cb7-8e12-2ebbf43fb366",
+      "questName": "Sticks and Stones",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1663992000,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "818b20fa-fffd-4dcc-9bf7-d5eff1dd214e",
+      "questId": "8ef9fad8-e7f6-4f7e-90e3-b0d2daf782bd",
+      "questName": "The Blade's Edge",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1664164800,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "b253d721-e0fa-4d57-8586-8d4bd86598fe",
+      "questId": "31baf922-2b1a-4605-ae52-4946e26994c6",
+      "questName": "The Thunder and the Fury",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1664251200,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "df4c0cf5-68bd-4c41-bae2-6e3e728720d2",
+      "questId": "61f7a386-dd0c-4119-acf6-7f41a9c5b62b",
+      "questName": "Golden Madness",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1664337600,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "2ba72412-3a6c-4708-b49f-b15c8c7f8907",
+      "questId": "e8f3614c-8672-4f77-9dad-4b400676f4b6",
+      "questName": "A Battle Unceasing",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1664424000,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "5ea03a01-4be2-432d-98b9-28db9bdbb7f8",
+      "questId": "26eb6ab5-2d8c-4993-820e-ada79f6f00a8",
+      "questName": "Wrath of the Undying",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1664510400,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "b09f45e0-8606-4f6c-8c46-60e48789502a",
+      "questId": "7486296a-335a-4b46-aee1-5102090ce34f",
+      "questName": "Saints' Revenge",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1664596800,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "decd5521-cc3f-44b9-87bd-3d909af06971",
+      "questId": "e5b3c53d-a3af-409e-9f50-2c0a65227e25",
+      "questName": "Oblivion's Call",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1664683200,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "15ac04e8-97d2-4bb3-9070-33e1016054bf",
+      "questId": "ff662bf7-a7fa-4ba7-9107-a8556db391e1",
+      "questName": "The Lich's Tower",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1664769600,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "bf6a0ec0-24fe-4627-b085-9720025d2cfe",
+      "questId": "bd05e8f6-439a-4c77-919e-edf33595c044",
+      "questName": "Rage of the Ayleids",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1664856000,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "4334e445-7cb9-45bf-943e-8a7fc55b3042",
+      "questId": "2d1200ee-ecb8-4ea6-9892-54d1f538d83d",
+      "questName": "The Web Mother's Trap",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1664942400,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "e61fd3d6-47a4-418c-ba45-113422b2dec2",
+      "questId": "816ff4c8-b56f-4645-bd2a-29bc7c1baf96",
+      "questName": "Death's Shadow",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1665028800,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "fe7776f8-6167-4f4c-8584-f63322cc8ca2",
+      "questId": "a85408a6-7107-433d-b616-50105080574e",
+      "questName": "Servants of the Blue God",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1665115200,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "11233dc0-f6e3-472d-bf33-3014e5572337",
+      "questId": "f4023a38-195a-4977-bfbc-f443a257566f",
+      "questName": "Fortress of the Savage Throne",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1665201600,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "a11a03ee-5198-4267-95b5-0a3d918f9b06",
+      "questId": "a008cbbc-a164-4183-8b69-470ac8cd5707",
+      "questName": "Fire and Ice",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1665288000,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "1d7ac820-b32c-41df-afcb-98d4b91ebc0c",
+      "questId": "fbeeaa85-13ae-479a-a751-5625688d682d",
+      "questName": "Unholy Quickenings",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1665374400,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "e7b2c8ad-f05f-43b1-a355-80fad2031abd",
+      "questId": "79cef1e4-0aa3-4c3e-bfba-385f0bf62405",
+      "questName": "Trapped!",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1665460800,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "50ea3b8a-f000-434a-98cd-a7c06f3fe19f",
+      "questId": "2290ab73-8f56-4dba-a4f0-7a23270eb93c",
+      "questName": "The Biting Blade",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1665547200,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "9576a10f-52ea-4919-b126-d6a6feb01b88",
+      "questId": "9181f784-9eb8-4872-953d-30ba8b6bc9d1",
+      "questName": "Gauntlet of the Impenitent",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1665633600,
+      "durationSecs": 172800
+    },
+    {
+      "eventId": "c6d32752-b6fc-436e-a7db-3c5d87c2f1e1",
+      "questId": "a1aafdc9-a35c-45c9-89f6-27f7d3a628e6",
+      "questName": "Prisoner of the Golden Keep",
+      "recurrenceIntervalDays": 39,
+      "startTimeSecs": 1665720000,
+      "durationSecs": 172800
+    }
+  ],
+  "nonDungeonQuests": [
+    {
+      "questId": "81ac5a8e-c60e-4ede-9417-fb209d28e47b",
+      "name": "Gather {0} {1} times in {2}.",
+      "category": "daily-job",
+      "dungeonUuid": "00000000-0000-0000-0000-000000000000",
+      "objectiveCount": 2
+    },
+    {
+      "questId": "3fde291d-9ea8-48f0-b1fa-128ce3ce4c9d",
+      "name": "Defeat the challenger in an Arena fight.",
+      "category": "daily-job",
+      "dungeonUuid": "00000000-0000-0000-0000-000000000000",
+      "objectiveCount": 1
+    },
+    {
+      "questId": "c430453c-d9c8-423a-a098-ae67d224fafa",
+      "name": "Defeat {0} {1}",
+      "category": "daily-job",
+      "dungeonUuid": "00000000-0000-0000-0000-000000000000",
+      "objectiveCount": 2
+    },
+    {
+      "questId": "fc50f807-7225-4664-aa70-b326c31f04a1",
+      "name": "Rescue {0} Townsfolk",
+      "category": "daily-job",
+      "dungeonUuid": "00000000-0000-0000-0000-000000000000",
+      "objectiveCount": 2
+    },
+    {
+      "questId": "3001a1ff-c2af-4e32-a31d-b5b5f9bd1fe3",
+      "name": "Explore the {0}",
+      "category": "daily-job",
+      "dungeonUuid": "00000000-0000-0000-0000-000000000000",
+      "objectiveCount": 2
+    },
+    {
+      "questId": "4e480992-40a4-4238-9504-12e67f7d0f62",
+      "name": "Find the {0}",
+      "category": "daily-job",
+      "dungeonUuid": "00000000-0000-0000-0000-000000000000",
+      "objectiveCount": 1
+    }
+  ]
+}

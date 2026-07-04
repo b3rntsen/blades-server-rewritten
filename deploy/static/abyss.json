@@ -1,29 +1,134 @@
 {
+  "_meta": {
+    "_description": "Back-office-editable Abyss (endless descending dungeon) config: difficulty curve + depth-weighted monster spawn table. Consumed by server/src/abyss.rs build_slices_from. Extra keys are ignored by the current Rust AbyssStaticData deserializer (all fields #[serde(default)], no deny_unknown_fields) so this file is safe to extend before the server wiring lands.",
+    "_sources": {
+      "AUTHORITATIVE": [
+        "fixedSlices + randomPool + futureRewards + algorithmVersion + totalPregenFloors: captured from prod /abysses responses (unchanged).",
+        "difficultyCurve floors 1-24: the captured fixedSlices difficultyLevel ladder (1,2,3,4,5,6,7,8,9,10,12,14,16,20,24,28,34,42,50,60,70,82,94,100).",
+        "dungeonPool: every *AbyssDungeonSetting from the APK Unity bundles (deploy/static/parsed.json 'dungeons'); handle/environment/monsters/enemyCount are read directly from DungeonSettingsScriptableObject.",
+        "monsterTiers authoritativeFloor: the floor each family first appears on the captured fixed ladder.",
+        "scaling model FIELD NAMES: read from il2cpp dump.cs AbyssScaling / AbyssScaling_Backend / AbyssSlice / AbyssScaling.PerFloorData / AbyssScaling.AbyssScalingCurveEntry ScriptableObjects."
+      ],
+      "GUESSED": [
+        "difficultyCurve floors 25-150: smooth continuation (+6/floor from 100, cap 400). Prod only pinned difficulty 100 for the random pool.",
+        "depthBands boundaries + tierWeights: a smooth shallow->deep shift (weak tiers early, tough tiers deep). Band SHAPE is designed; the tier->floor anchors are authoritative.",
+        "monsterTiers.tier for families NOT on the captured ladder (skeletons, wight, warlord, liches, lichesoutcastnether, dragon*): placed by lore/power tier (tierGuessed:true).",
+        "scalingBackend + scalingCurve + perFloorRewards VALUES: the ScriptableObject float values were not extracted (TypeTree tool install was declined); values are plausible from captured rewards (~195 gold / 64 XP per floor). Field names/meaning are authoritative."
+      ]
+    },
+    "_fields": {
+      "fixedSlices": "AUTHORITATIVE. [{dungeonSettingsId, difficultyLevel}] served verbatim for floors 1..len (indices 0-based). Each dungeonSettingsId keys into dungeonPool for its monster/environment.",
+      "randomPool": "AUTHORITATIVE. Dungeon-settings UUIDs cycled for floors beyond fixedSlices. Currently all high-tier (Atronach/Dremora). Key into dungeonPool.",
+      "futureRewards": "AUTHORITATIVE. [{score, stackableItems:{uuid:qty}}] in-run reward thresholds by score.",
+      "algorithmVersion": "AUTHORITATIVE. Baked into every generated run (client expects it echoed).",
+      "totalPregenFloors": "AUTHORITATIVE. Floors pre-generated per run (150).",
+      "difficultyCurve": "[{floor(1-based), difficultyLevel, guessed}]. Per-floor difficultyLevel assigned to each slice. Floors 1-24 authoritative; 25+ guessed ramp. Back-office: edit difficultyLevel to reshape the curve; add rows to extend past 150.",
+      "monsterTiers": "{familyKey: {tier(1..9), authoritativeFloor|null, tierGuessed}}. Groups every monster family to a power tier. Higher tier = tougher/deeper. familyKey is the lowercased monster token from the dungeon handle (e.g. 'goblin','dremora','dragon').",
+      "depthBands": "[{floorMin, floorMax, tierWeights:{tier:weight}}]. For a given floor, the eligible monster TIERS and their relative spawn weight. Deeper bands weight higher tiers. Back-office: adjust weights to bias which monsters appear at depth; add/split bands freely.",
+      "dungeonPool": "{dungeonSettingsId: {handle, environment(Stone|Cave|Ayleid|Forest), monsters:[family...], isBoss, enemyCount(1-4)}}. AUTHORITATIVE index of every abyss dungeon-setting the client can render. The server picks a dungeon for a floor by (a) its difficulty band, (b) the depthBands tierWeights over each dungeon's monster tier, weighted-random by seed. isBoss dungeons are candidates for milestone floors.",
+      "scalingBackend": "Mirrors AbyssScaling_Backend: slicesCount(150, authoritative), maxDifficulty, slicesCountAbovePlayerLevel (how far above the player's level enemies scale), hardcoreSliceDifficultyOffset, minimumSuccessRating. See _guessed/_authoritative sub-lists.",
+      "scalingCurve": "Mirrors AbyssScaling._abyssScalingCurve: difficultyOffset (floorDifficulty - initialPlayerLevel) -> gold/xp bonus multipliers (fight harder-than-your-level enemies -> more reward). Values guessed.",
+      "perFloorRewards": "Mirrors AbyssScaling._perFloorData: baseGoldReward/baseXPReward granted per floor cleared (before scalingCurve multiplier). Values guessed."
+    },
+    "_wiring": "server/src/abyss.rs build_slices_from currently: floors < fixedSlices.len() use fixedSlices verbatim; floors beyond use randomPool cycled by (seed+floor) and HARD-CODE difficultyLevel=100. To honor this file: (1) set each slice's difficultyLevel from difficultyCurve[floor]; (2) for floors past the fixed ladder, pick the dungeonSettingsId by seeded weighted-random over dungeonPool filtered/weighted by depthBands.tierWeights (map each dungeon's monster family -> monsterTiers.tier -> band weight); (3) build_generated_data can size spawn groups from the chosen dungeon's enemyCount and scale per-enemy gold/xp by perFloorRewards * scalingCurve[floorDifficulty-initialPlayerLevel]."
+  },
   "fixedSlices": [
-    {"dungeonSettingsId": "663053f0-3a46-4012-b004-6cb2e907f33c", "difficultyLevel": 1},
-    {"dungeonSettingsId": "4de80b69-fe4e-4ed5-a556-71e5b7c82ed0", "difficultyLevel": 2},
-    {"dungeonSettingsId": "1396d90c-c38e-47c6-a9da-6e98c49788e5", "difficultyLevel": 3},
-    {"dungeonSettingsId": "fe22c3c8-e4c9-491c-bd85-7c0ba9dc6b31", "difficultyLevel": 4},
-    {"dungeonSettingsId": "44e0d7cd-26a1-4183-996b-056a484a5e2e", "difficultyLevel": 5},
-    {"dungeonSettingsId": "5cc26070-12ac-4adc-b55d-da6fed6934ee", "difficultyLevel": 6},
-    {"dungeonSettingsId": "cc9c27fd-1917-4b0a-a62e-87cfb07e7c6d", "difficultyLevel": 7},
-    {"dungeonSettingsId": "d30de853-68ca-4360-b060-81aaf182d940", "difficultyLevel": 8},
-    {"dungeonSettingsId": "84e70169-4e8c-4820-936d-18976b871c8d", "difficultyLevel": 9},
-    {"dungeonSettingsId": "7924c82d-f6b3-4eb6-9edb-9b1349a1da84", "difficultyLevel": 10},
-    {"dungeonSettingsId": "ad7a91a8-c47e-47ab-b78f-f7559123a879", "difficultyLevel": 12},
-    {"dungeonSettingsId": "73aa75cb-1109-4e96-b7a2-73e55aaa99a2", "difficultyLevel": 14},
-    {"dungeonSettingsId": "0ec5e913-6074-4490-abaa-f1802827b007", "difficultyLevel": 16},
-    {"dungeonSettingsId": "2c0e2b66-2642-409c-a7c9-2184c6c51c6c", "difficultyLevel": 20},
-    {"dungeonSettingsId": "28ffdb77-161e-49a4-897e-7a8f679264d6", "difficultyLevel": 24},
-    {"dungeonSettingsId": "4c793f15-aa4b-406f-be88-9689085fdc05", "difficultyLevel": 28},
-    {"dungeonSettingsId": "0b82053f-958e-42e9-b1b7-9232b25a81ef", "difficultyLevel": 34},
-    {"dungeonSettingsId": "028dcf09-7006-499f-8cc7-09bb20a7adea", "difficultyLevel": 42},
-    {"dungeonSettingsId": "4aee4783-c32c-4dd2-8fa9-2cec42ca32e4", "difficultyLevel": 50},
-    {"dungeonSettingsId": "ceaa6f04-eee8-4167-a617-d35810f3b2b1", "difficultyLevel": 60},
-    {"dungeonSettingsId": "c211c8e2-fef1-45ae-95ea-9b7295271a17", "difficultyLevel": 70},
-    {"dungeonSettingsId": "4a31b6b7-3c62-4f7d-bd80-5d77f0a5065d", "difficultyLevel": 82},
-    {"dungeonSettingsId": "717d4768-decf-4b5c-abd4-6679c9e120e3", "difficultyLevel": 94},
-    {"dungeonSettingsId": "34655edb-5b0e-483e-aaf6-f3186d99ed10", "difficultyLevel": 100}
+    {
+      "dungeonSettingsId": "663053f0-3a46-4012-b004-6cb2e907f33c",
+      "difficultyLevel": 1
+    },
+    {
+      "dungeonSettingsId": "4de80b69-fe4e-4ed5-a556-71e5b7c82ed0",
+      "difficultyLevel": 2
+    },
+    {
+      "dungeonSettingsId": "1396d90c-c38e-47c6-a9da-6e98c49788e5",
+      "difficultyLevel": 3
+    },
+    {
+      "dungeonSettingsId": "fe22c3c8-e4c9-491c-bd85-7c0ba9dc6b31",
+      "difficultyLevel": 4
+    },
+    {
+      "dungeonSettingsId": "44e0d7cd-26a1-4183-996b-056a484a5e2e",
+      "difficultyLevel": 5
+    },
+    {
+      "dungeonSettingsId": "5cc26070-12ac-4adc-b55d-da6fed6934ee",
+      "difficultyLevel": 6
+    },
+    {
+      "dungeonSettingsId": "cc9c27fd-1917-4b0a-a62e-87cfb07e7c6d",
+      "difficultyLevel": 7
+    },
+    {
+      "dungeonSettingsId": "d30de853-68ca-4360-b060-81aaf182d940",
+      "difficultyLevel": 8
+    },
+    {
+      "dungeonSettingsId": "84e70169-4e8c-4820-936d-18976b871c8d",
+      "difficultyLevel": 9
+    },
+    {
+      "dungeonSettingsId": "7924c82d-f6b3-4eb6-9edb-9b1349a1da84",
+      "difficultyLevel": 10
+    },
+    {
+      "dungeonSettingsId": "ad7a91a8-c47e-47ab-b78f-f7559123a879",
+      "difficultyLevel": 12
+    },
+    {
+      "dungeonSettingsId": "73aa75cb-1109-4e96-b7a2-73e55aaa99a2",
+      "difficultyLevel": 14
+    },
+    {
+      "dungeonSettingsId": "0ec5e913-6074-4490-abaa-f1802827b007",
+      "difficultyLevel": 16
+    },
+    {
+      "dungeonSettingsId": "2c0e2b66-2642-409c-a7c9-2184c6c51c6c",
+      "difficultyLevel": 20
+    },
+    {
+      "dungeonSettingsId": "28ffdb77-161e-49a4-897e-7a8f679264d6",
+      "difficultyLevel": 24
+    },
+    {
+      "dungeonSettingsId": "4c793f15-aa4b-406f-be88-9689085fdc05",
+      "difficultyLevel": 28
+    },
+    {
+      "dungeonSettingsId": "0b82053f-958e-42e9-b1b7-9232b25a81ef",
+      "difficultyLevel": 34
+    },
+    {
+      "dungeonSettingsId": "028dcf09-7006-499f-8cc7-09bb20a7adea",
+      "difficultyLevel": 42
+    },
+    {
+      "dungeonSettingsId": "4aee4783-c32c-4dd2-8fa9-2cec42ca32e4",
+      "difficultyLevel": 50
+    },
+    {
+      "dungeonSettingsId": "ceaa6f04-eee8-4167-a617-d35810f3b2b1",
+      "difficultyLevel": 60
+    },
+    {
+      "dungeonSettingsId": "c211c8e2-fef1-45ae-95ea-9b7295271a17",
+      "difficultyLevel": 70
+    },
+    {
+      "dungeonSettingsId": "4a31b6b7-3c62-4f7d-bd80-5d77f0a5065d",
+      "difficultyLevel": 82
+    },
+    {
+      "dungeonSettingsId": "717d4768-decf-4b5c-abd4-6679c9e120e3",
+      "difficultyLevel": 94
+    },
+    {
+      "dungeonSettingsId": "34655edb-5b0e-483e-aaf6-f3186d99ed10",
+      "difficultyLevel": 100
+    }
   ],
   "randomPool": [
     "d06c756d-aeb6-4184-99e8-546f27670c6d",
@@ -43,8 +148,2549 @@
     "eeca6c54-42a1-4fba-bf1d-9ecfbd243f59"
   ],
   "futureRewards": [
-    {"score": 35, "stackableItems": {"f1c5c03c-5297-48fb-a9d2-5f32bffb467c": 1}}
+    {
+      "score": 35,
+      "stackableItems": {
+        "f1c5c03c-5297-48fb-a9d2-5f32bffb467c": 1
+      }
+    }
   ],
   "algorithmVersion": 1,
-  "totalPregenFloors": 150
+  "totalPregenFloors": 150,
+  "difficultyCurve": [
+    {
+      "floor": 1,
+      "difficultyLevel": 1,
+      "guessed": false
+    },
+    {
+      "floor": 2,
+      "difficultyLevel": 2,
+      "guessed": false
+    },
+    {
+      "floor": 3,
+      "difficultyLevel": 3,
+      "guessed": false
+    },
+    {
+      "floor": 4,
+      "difficultyLevel": 4,
+      "guessed": false
+    },
+    {
+      "floor": 5,
+      "difficultyLevel": 5,
+      "guessed": false
+    },
+    {
+      "floor": 6,
+      "difficultyLevel": 6,
+      "guessed": false
+    },
+    {
+      "floor": 7,
+      "difficultyLevel": 7,
+      "guessed": false
+    },
+    {
+      "floor": 8,
+      "difficultyLevel": 8,
+      "guessed": false
+    },
+    {
+      "floor": 9,
+      "difficultyLevel": 9,
+      "guessed": false
+    },
+    {
+      "floor": 10,
+      "difficultyLevel": 10,
+      "guessed": false
+    },
+    {
+      "floor": 11,
+      "difficultyLevel": 12,
+      "guessed": false
+    },
+    {
+      "floor": 12,
+      "difficultyLevel": 14,
+      "guessed": false
+    },
+    {
+      "floor": 13,
+      "difficultyLevel": 16,
+      "guessed": false
+    },
+    {
+      "floor": 14,
+      "difficultyLevel": 20,
+      "guessed": false
+    },
+    {
+      "floor": 15,
+      "difficultyLevel": 24,
+      "guessed": false
+    },
+    {
+      "floor": 16,
+      "difficultyLevel": 28,
+      "guessed": false
+    },
+    {
+      "floor": 17,
+      "difficultyLevel": 34,
+      "guessed": false
+    },
+    {
+      "floor": 18,
+      "difficultyLevel": 42,
+      "guessed": false
+    },
+    {
+      "floor": 19,
+      "difficultyLevel": 50,
+      "guessed": false
+    },
+    {
+      "floor": 20,
+      "difficultyLevel": 60,
+      "guessed": false
+    },
+    {
+      "floor": 21,
+      "difficultyLevel": 70,
+      "guessed": false
+    },
+    {
+      "floor": 22,
+      "difficultyLevel": 82,
+      "guessed": false
+    },
+    {
+      "floor": 23,
+      "difficultyLevel": 94,
+      "guessed": false
+    },
+    {
+      "floor": 24,
+      "difficultyLevel": 100,
+      "guessed": false
+    },
+    {
+      "floor": 25,
+      "difficultyLevel": 106,
+      "guessed": true
+    },
+    {
+      "floor": 26,
+      "difficultyLevel": 112,
+      "guessed": true
+    },
+    {
+      "floor": 27,
+      "difficultyLevel": 118,
+      "guessed": true
+    },
+    {
+      "floor": 28,
+      "difficultyLevel": 124,
+      "guessed": true
+    },
+    {
+      "floor": 29,
+      "difficultyLevel": 130,
+      "guessed": true
+    },
+    {
+      "floor": 30,
+      "difficultyLevel": 136,
+      "guessed": true
+    },
+    {
+      "floor": 31,
+      "difficultyLevel": 142,
+      "guessed": true
+    },
+    {
+      "floor": 32,
+      "difficultyLevel": 148,
+      "guessed": true
+    },
+    {
+      "floor": 33,
+      "difficultyLevel": 154,
+      "guessed": true
+    },
+    {
+      "floor": 34,
+      "difficultyLevel": 160,
+      "guessed": true
+    },
+    {
+      "floor": 35,
+      "difficultyLevel": 166,
+      "guessed": true
+    },
+    {
+      "floor": 36,
+      "difficultyLevel": 172,
+      "guessed": true
+    },
+    {
+      "floor": 37,
+      "difficultyLevel": 178,
+      "guessed": true
+    },
+    {
+      "floor": 38,
+      "difficultyLevel": 184,
+      "guessed": true
+    },
+    {
+      "floor": 39,
+      "difficultyLevel": 190,
+      "guessed": true
+    },
+    {
+      "floor": 40,
+      "difficultyLevel": 196,
+      "guessed": true
+    },
+    {
+      "floor": 41,
+      "difficultyLevel": 202,
+      "guessed": true
+    },
+    {
+      "floor": 42,
+      "difficultyLevel": 208,
+      "guessed": true
+    },
+    {
+      "floor": 43,
+      "difficultyLevel": 214,
+      "guessed": true
+    },
+    {
+      "floor": 44,
+      "difficultyLevel": 220,
+      "guessed": true
+    },
+    {
+      "floor": 45,
+      "difficultyLevel": 226,
+      "guessed": true
+    },
+    {
+      "floor": 46,
+      "difficultyLevel": 232,
+      "guessed": true
+    },
+    {
+      "floor": 47,
+      "difficultyLevel": 238,
+      "guessed": true
+    },
+    {
+      "floor": 48,
+      "difficultyLevel": 244,
+      "guessed": true
+    },
+    {
+      "floor": 49,
+      "difficultyLevel": 250,
+      "guessed": true
+    },
+    {
+      "floor": 50,
+      "difficultyLevel": 256,
+      "guessed": true
+    },
+    {
+      "floor": 51,
+      "difficultyLevel": 262,
+      "guessed": true
+    },
+    {
+      "floor": 52,
+      "difficultyLevel": 268,
+      "guessed": true
+    },
+    {
+      "floor": 53,
+      "difficultyLevel": 274,
+      "guessed": true
+    },
+    {
+      "floor": 54,
+      "difficultyLevel": 280,
+      "guessed": true
+    },
+    {
+      "floor": 55,
+      "difficultyLevel": 286,
+      "guessed": true
+    },
+    {
+      "floor": 56,
+      "difficultyLevel": 292,
+      "guessed": true
+    },
+    {
+      "floor": 57,
+      "difficultyLevel": 298,
+      "guessed": true
+    },
+    {
+      "floor": 58,
+      "difficultyLevel": 304,
+      "guessed": true
+    },
+    {
+      "floor": 59,
+      "difficultyLevel": 310,
+      "guessed": true
+    },
+    {
+      "floor": 60,
+      "difficultyLevel": 316,
+      "guessed": true
+    },
+    {
+      "floor": 61,
+      "difficultyLevel": 322,
+      "guessed": true
+    },
+    {
+      "floor": 62,
+      "difficultyLevel": 328,
+      "guessed": true
+    },
+    {
+      "floor": 63,
+      "difficultyLevel": 334,
+      "guessed": true
+    },
+    {
+      "floor": 64,
+      "difficultyLevel": 340,
+      "guessed": true
+    },
+    {
+      "floor": 65,
+      "difficultyLevel": 346,
+      "guessed": true
+    },
+    {
+      "floor": 66,
+      "difficultyLevel": 352,
+      "guessed": true
+    },
+    {
+      "floor": 67,
+      "difficultyLevel": 358,
+      "guessed": true
+    },
+    {
+      "floor": 68,
+      "difficultyLevel": 364,
+      "guessed": true
+    },
+    {
+      "floor": 69,
+      "difficultyLevel": 370,
+      "guessed": true
+    },
+    {
+      "floor": 70,
+      "difficultyLevel": 376,
+      "guessed": true
+    },
+    {
+      "floor": 71,
+      "difficultyLevel": 382,
+      "guessed": true
+    },
+    {
+      "floor": 72,
+      "difficultyLevel": 388,
+      "guessed": true
+    },
+    {
+      "floor": 73,
+      "difficultyLevel": 394,
+      "guessed": true
+    },
+    {
+      "floor": 74,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 75,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 76,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 77,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 78,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 79,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 80,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 81,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 82,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 83,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 84,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 85,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 86,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 87,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 88,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 89,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 90,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 91,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 92,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 93,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 94,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 95,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 96,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 97,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 98,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 99,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 100,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 101,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 102,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 103,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 104,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 105,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 106,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 107,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 108,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 109,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 110,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 111,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 112,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 113,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 114,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 115,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 116,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 117,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 118,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 119,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 120,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 121,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 122,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 123,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 124,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 125,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 126,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 127,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 128,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 129,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 130,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 131,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 132,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 133,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 134,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 135,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 136,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 137,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 138,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 139,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 140,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 141,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 142,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 143,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 144,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 145,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 146,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 147,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 148,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 149,
+      "difficultyLevel": 400,
+      "guessed": true
+    },
+    {
+      "floor": 150,
+      "difficultyLevel": 400,
+      "guessed": true
+    }
+  ],
+  "monsterTiers": {
+    "goblin": {
+      "tier": 1,
+      "authoritativeFloor": 1,
+      "tierGuessed": false
+    },
+    "bandit": {
+      "tier": 1,
+      "authoritativeFloor": 3,
+      "tierGuessed": false
+    },
+    "skeevers": {
+      "tier": 1,
+      "authoritativeFloor": 4,
+      "tierGuessed": false
+    },
+    "mercenary": {
+      "tier": 2,
+      "authoritativeFloor": 5,
+      "tierGuessed": false
+    },
+    "troll": {
+      "tier": 2,
+      "authoritativeFloor": 7,
+      "tierGuessed": false
+    },
+    "spidergoblin": {
+      "tier": 2,
+      "authoritativeFloor": 9,
+      "tierGuessed": false
+    },
+    "spriggan": {
+      "tier": 3,
+      "authoritativeFloor": 10,
+      "tierGuessed": false
+    },
+    "wolves": {
+      "tier": 3,
+      "authoritativeFloor": 11,
+      "tierGuessed": false
+    },
+    "forestspiders": {
+      "tier": 3,
+      "authoritativeFloor": 13,
+      "tierGuessed": false
+    },
+    "bears": {
+      "tier": 3,
+      "authoritativeFloor": 14,
+      "tierGuessed": false
+    },
+    "bearswolf": {
+      "tier": 3,
+      "authoritativeFloor": 14,
+      "tierGuessed": false
+    },
+    "cavespiders": {
+      "tier": 4,
+      "authoritativeFloor": 15,
+      "tierGuessed": false
+    },
+    "trollspider": {
+      "tier": 4,
+      "authoritativeFloor": null,
+      "tierGuessed": true
+    },
+    "necromancer": {
+      "tier": 5,
+      "authoritativeFloor": 17,
+      "tierGuessed": false
+    },
+    "atronachnecromancer": {
+      "tier": 5,
+      "authoritativeFloor": 17,
+      "tierGuessed": false
+    },
+    "sprigganwisp": {
+      "tier": 5,
+      "authoritativeFloor": 19,
+      "tierGuessed": false
+    },
+    "wisp": {
+      "tier": 5,
+      "authoritativeFloor": 19,
+      "tierGuessed": false
+    },
+    "dremora": {
+      "tier": 6,
+      "authoritativeFloor": 18,
+      "tierGuessed": false
+    },
+    "atronach": {
+      "tier": 7,
+      "authoritativeFloor": 24,
+      "tierGuessed": false
+    },
+    "atronachdremora": {
+      "tier": 7,
+      "authoritativeFloor": 25,
+      "tierGuessed": false
+    },
+    "skeletons": {
+      "tier": 5,
+      "authoritativeFloor": null,
+      "tierGuessed": true
+    },
+    "wight": {
+      "tier": 6,
+      "authoritativeFloor": null,
+      "tierGuessed": true
+    },
+    "warlord": {
+      "tier": 7,
+      "authoritativeFloor": null,
+      "tierGuessed": true
+    },
+    "liches": {
+      "tier": 8,
+      "authoritativeFloor": null,
+      "tierGuessed": true
+    },
+    "lichesoutcastnether": {
+      "tier": 8,
+      "authoritativeFloor": null,
+      "tierGuessed": true
+    },
+    "dragon": {
+      "tier": 9,
+      "authoritativeFloor": null,
+      "tierGuessed": true
+    },
+    "dragonancientfire": {
+      "tier": 9,
+      "authoritativeFloor": null,
+      "tierGuessed": true
+    },
+    "dragonancientfrost": {
+      "tier": 9,
+      "authoritativeFloor": null,
+      "tierGuessed": true
+    },
+    "dragonundead": {
+      "tier": 9,
+      "authoritativeFloor": null,
+      "tierGuessed": true
+    }
+  },
+  "depthBands": [
+    {
+      "floorMin": 1,
+      "floorMax": 5,
+      "tierWeights": {
+        "1": 70,
+        "2": 25,
+        "3": 5
+      }
+    },
+    {
+      "floorMin": 6,
+      "floorMax": 10,
+      "tierWeights": {
+        "1": 30,
+        "2": 45,
+        "3": 20,
+        "4": 5
+      }
+    },
+    {
+      "floorMin": 11,
+      "floorMax": 16,
+      "tierWeights": {
+        "2": 25,
+        "3": 45,
+        "4": 25,
+        "5": 5
+      }
+    },
+    {
+      "floorMin": 17,
+      "floorMax": 24,
+      "tierWeights": {
+        "3": 15,
+        "4": 25,
+        "5": 30,
+        "6": 25,
+        "7": 5
+      }
+    },
+    {
+      "floorMin": 25,
+      "floorMax": 40,
+      "tierWeights": {
+        "5": 15,
+        "6": 35,
+        "7": 40,
+        "8": 10
+      }
+    },
+    {
+      "floorMin": 41,
+      "floorMax": 70,
+      "tierWeights": {
+        "6": 20,
+        "7": 35,
+        "8": 30,
+        "9": 15
+      }
+    },
+    {
+      "floorMin": 71,
+      "floorMax": 150,
+      "tierWeights": {
+        "7": 20,
+        "8": 40,
+        "9": 40
+      }
+    }
+  ],
+  "dungeonPool": {
+    "ceaa6f04-eee8-4167-a617-d35810f3b2b1": {
+      "handle": "Cave_Spriggan_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Spriggan"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "7638c25a-d230-4935-b969-d84604d86b59": {
+      "handle": "Ayleid_DragonAncientFire_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "DragonAncientFire"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "45afa850-3fd9-4dcf-933d-cb52f76499d6": {
+      "handle": "Ayleid_Dragon_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Dragon"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "1396d90c-c38e-47c6-a9da-6e98c49788e5": {
+      "handle": "Test_Stone_Bandit_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Bandit"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "65375990-e5b3-41cf-b5d3-cbe2c740cb1d": {
+      "handle": "Ayleid_LichesOutcastNetherWight_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "LichesOutcastNetherWight"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "76645b54-bbb9-4b59-b86b-8ce063d0d5cb": {
+      "handle": "Ayleid_GoblinTroll_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "GoblinTroll"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "f85ce072-5597-48bc-bdd6-3371e05b1258": {
+      "handle": "Cave_Atronach_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Atronach"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "f00dea4c-025d-4233-a503-8ab28ef53c80": {
+      "handle": "Stone_AtronachDremora_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "AtronachDremora"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "e81e1397-4d1d-4e43-8eff-baf826679d11": {
+      "handle": "Forest_Dremora_2Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Dremora"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "663053f0-3a46-4012-b004-6cb2e907f33c": {
+      "handle": "Stone_Goblin_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Goblin"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "cbf673a4-994b-4895-9d0e-bf98e5b600ae": {
+      "handle": "Forest_Bears_2Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Bears"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "ce6bc7f1-e643-4a85-8d7c-fa101829ba38": {
+      "handle": "Stone_AtronachGoblinWizard_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "AtronachGoblinWizard"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "b8547119-7a93-448d-bdd2-e6d550aba93a": {
+      "handle": "Ayleid_WispTroll_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "WispTroll"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "04fed881-1f7b-42e9-bae7-4977a8cd02cc": {
+      "handle": "Cave_Atronach_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Atronach"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "5c5013bc-2037-4d36-96cb-55ae8b5d43cb": {
+      "handle": "Forest_Necromancer_2Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Necromancer"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "1a2e2665-190b-4618-ae3e-51e43b1f16d4": {
+      "handle": "Cave_Warlord_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Warlord"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "6009357f-ef56-4d8b-b1ba-47676ad4f1ef": {
+      "handle": "Forest_SprigganWisp_3Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "SprigganWisp"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "ef9bcf3f-5b89-47e5-bbd5-d971c0ba6a3c": {
+      "handle": "Cave_Skeevers_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Skeevers"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "957d069b-e203-4172-9186-9df207a33ca2": {
+      "handle": "Cave_AtronachUndead_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "AtronachUndead"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "ebacf26a-d35f-4454-a511-3e74360a3856": {
+      "handle": "Cave_Wisp_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Wisp"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "ddd00c28-a1d5-4a62-9dfc-7faaa61315b4": {
+      "handle": "Ayleid_NecromancerSkeleton_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "NecromancerSkeleton"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "cc9c27fd-1917-4b0a-a62e-87cfb07e7c6d": {
+      "handle": "Cave_Troll_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Troll"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "a981d71c-d23c-4496-9070-82ce91622e72": {
+      "handle": "Ayleid_Necromancer_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Necromancer"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "98e55718-9fd3-4d7e-b89b-0c6ab314ab25": {
+      "handle": "Stone_DragonAncientFire_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "DragonAncientFire"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "5f32924f-de10-4c2d-bcd7-8db4a0fdf168": {
+      "handle": "Cave_Necromancer_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Necromancer"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "d06c756d-aeb6-4184-99e8-546f27670c6d": {
+      "handle": "Cave_Dremora_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Dremora"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "55c7237b-00df-4b89-9a68-ab6b13ca51e8": {
+      "handle": "Stone_Troll_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Troll"
+      ],
+      "isBoss": false,
+      "enemyCount": 1
+    },
+    "a072a0da-a4b2-4a5d-85f8-750c9292268a": {
+      "handle": "Ayleid_Wisp_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Wisp"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "39563e49-03d0-4abe-b461-8fda6fa96965": {
+      "handle": "Ayleid_Skeletons_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Skeletons"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "4aee4783-c32c-4dd2-8fa9-2cec42ca32e4": {
+      "handle": "Cave_SprigganWisp_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "SprigganWisp"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "2e7a1550-6843-48b1-809f-a65f0da0669f": {
+      "handle": "Stone_Warlord_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Warlord"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "73aa75cb-1109-4e96-b7a2-73e55aaa99a2": {
+      "handle": "Stone_Bandit_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Bandit"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "6a922e58-0ae0-44d0-bf06-3306efa9dfcd": {
+      "handle": "Ayleid_Goblin_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Goblin"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "717d4768-decf-4b5c-abd4-6679c9e120e3": {
+      "handle": "Stone_Dremora_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Dremora"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "951be4f9-9d03-4408-9639-50cabc2f0825": {
+      "handle": "Cave_Wight_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Wight"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "fc48e5d1-3723-4c5f-9a30-50683679cd9e": {
+      "handle": "Cave_DragonUndead_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "DragonUndead"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "2f0b9551-9c2e-4513-a60b-af7bc39ae60e": {
+      "handle": "Cave_Necromancer_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Necromancer"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "5e57a12f-1dcb-42c7-84f2-b41fd900883d": {
+      "handle": "Test_Forest_Skeletons_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Skeletons"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "6d1ede39-1ddd-4e1b-a1de-b31bca66d882": {
+      "handle": "Forest_Spriggan_2Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Spriggan"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "7234cbba-986e-450f-b605-c876a8658013": {
+      "handle": "Ayleid_AtronachDremora_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "AtronachDremora"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "58b2b19b-8825-460f-b301-9c8a49a6cf25": {
+      "handle": "Stone_LichesOutcastNether_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "LichesOutcastNether"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "04ae4dcd-3693-4e07-962f-1da3d5c3c85e": {
+      "handle": "Cave_SpiderGoblin_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "SpiderGoblin"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "9daf2260-6dca-4fc5-851e-11f344e09e3c": {
+      "handle": "Cave_Mercenary_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Mercenary"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "65656b1d-713c-40b8-b240-a96270517d8d": {
+      "handle": "Stone_Dragon_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Dragon"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "e0af1fc3-1eff-4212-9139-8803b1d23ffa": {
+      "handle": "Forest_NecromancerSkeleton_3Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "NecromancerSkeleton"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "ec2a8b28-16ad-407f-a0fe-c3c86b9f8801": {
+      "handle": "Cave_AbyssEntrance",
+      "environment": "Cave",
+      "monsters": [
+        "AbyssEntrance"
+      ],
+      "isBoss": false,
+      "enemyCount": 0
+    },
+    "8130438a-214c-4824-94fd-872e355efef8": {
+      "handle": "Stone_DragonUndead_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "DragonUndead"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "6a9e4c4a-6d9a-43f4-a396-e47725626268": {
+      "handle": "Ayleid_TrollSpider_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "TrollSpider"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "cf409329-d93c-413c-9012-24c03a6c4d49": {
+      "handle": "Forest_Bandit_2Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Bandit"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "c211c8e2-fef1-45ae-95ea-9b7295271a17": {
+      "handle": "Cave_Troll_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Troll"
+      ],
+      "isBoss": false,
+      "enemyCount": 1
+    },
+    "d92e3196-8c47-4b15-becb-6bd459dc15c5": {
+      "handle": "Forest_Warlord_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Warlord"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "fcff221d-ffed-4151-9cf9-9f5de0d03be2": {
+      "handle": "Test_Forest_Dremora_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Dremora"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "04d73a53-582b-4a70-bbc4-f02a3d74ef51": {
+      "handle": "Forest_ForestSpiders_2Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "ForestSpiders"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "2bc5a9b9-2194-4790-a42a-b728b81b421f": {
+      "handle": "Ayleid_DragonUndead_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "DragonUndead"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "c75ebc53-fcc2-4caf-9dcb-d182f4ba8c4a": {
+      "handle": "Ayleid_Wisp_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Wisp"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "257ccfb6-f8c3-40a1-85e0-67fc7e2d9985": {
+      "handle": "Ayleid_Goblin_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Goblin"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "ba1c8452-bdcb-4e66-88d1-f26661c43848": {
+      "handle": "Stone_TrollSpider_3Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "TrollSpider"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "fac0a497-8577-44b2-9ef4-f36829c73f44": {
+      "handle": "Forest_TrollSpider_3Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "TrollSpider"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "ce0358f8-2459-4d19-9972-cd5d529a1766": {
+      "handle": "Cave_Wight_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Wight"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "b5bb6441-2a8d-4982-95bb-879cc4f607c9": {
+      "handle": "Cave_Dragon_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Dragon"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "7aa6221d-66fa-4290-a7ca-c86a851e135b": {
+      "handle": "Test_Stone_CaveSpiders_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "CaveSpiders"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "8c8c57c9-eefb-4d07-a9fc-218ebb7957a7": {
+      "handle": "Ayleid_Liches_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Liches"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "437223c0-8cdf-4f94-bf97-a6ace3473154": {
+      "handle": "Test_Forest_ForestSpiders_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "ForestSpiders"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "b98b7781-21e0-415a-a527-98325f64e82b": {
+      "handle": "Stone_Wisp_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Wisp"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "1543e5f2-0c48-4908-8ca9-02c7dd82bbc3": {
+      "handle": "Cave_Wisp_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Wisp"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "30b3ee25-c985-49fd-93f3-995ecf666a9c": {
+      "handle": "Ayleid_Skeletons_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Skeletons"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "2a372944-6fe2-422a-8577-19c2a980dcf4": {
+      "handle": "Ayleid_DragonAncientFrost_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "DragonAncientFrost"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "6ae20bd9-594d-48fc-b9f6-691428c44406": {
+      "handle": "Stone_Spriggan_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Spriggan"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "06b1dd29-679b-4478-80de-12208fe450ac": {
+      "handle": "Stone_Necromancer_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Necromancer"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "ef24eeb3-8181-48e2-ae3d-320bd6f5992c": {
+      "handle": "Stone_Liches_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Liches"
+      ],
+      "isBoss": false,
+      "enemyCount": 1
+    },
+    "1e21ec74-c386-4ad7-8fcf-694ba7dc6017": {
+      "handle": "Test_Forest_Wisp_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Wisp"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "85bf1a3a-0006-4abf-993c-f483ec7db298": {
+      "handle": "Ayleid_WightSkeleton_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "WightSkeleton"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "84e70169-4e8c-4820-936d-18976b871c8d": {
+      "handle": "Ayleid_SpiderGoblin_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "SpiderGoblin"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "17a30718-3986-459f-913c-460c822de0c1": {
+      "handle": "Stone_Skeevers_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Skeevers"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "0ec5e913-6074-4490-abaa-f1802827b007": {
+      "handle": "Ayleid_ForestSpiders_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "ForestSpiders"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "dd6a03e7-5754-4d89-ac50-6b7bc0663d80": {
+      "handle": "Ayleid_GoblinSkeleton_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "GoblinSkeleton"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "2c0e2b66-2642-409c-a7c9-2184c6c51c6c": {
+      "handle": "Ayleid_BearsWolf_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "BearsWolf"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "947ea5a9-56b7-49d2-97ce-05e87ee7aec3": {
+      "handle": "Forest_AbyssEntrance",
+      "environment": "Forest",
+      "monsters": [
+        "AbyssEntrance"
+      ],
+      "isBoss": false,
+      "enemyCount": 0
+    },
+    "d6ea4e26-4ab5-4773-83fb-b53d4fb91e26": {
+      "handle": "Ayleid_AbyssEntrance",
+      "environment": "Ayleid",
+      "monsters": [
+        "AbyssEntrance"
+      ],
+      "isBoss": false,
+      "enemyCount": 0
+    },
+    "e4590fe9-29d8-4333-ab78-47eaf4147eb8": {
+      "handle": "Ayleid_Wight_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Wight"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "836df66a-0aaa-49a3-96d4-b587d185ea99": {
+      "handle": "Ayleid_AtronachUndead_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "AtronachUndead"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "977d272d-8bd8-4f22-b13b-e1dc5aa88a56": {
+      "handle": "Ayleid_LichesOutcastNether_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "LichesOutcastNether"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "34655edb-5b0e-483e-aaf6-f3186d99ed10": {
+      "handle": "Stone_Atronach_3Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Atronach"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "310ae4a6-fb24-4c1f-8319-29e4a65c9f47": {
+      "handle": "Cave_Bears_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Bears"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "028dcf09-7006-499f-8cc7-09bb20a7adea": {
+      "handle": "Ayleid_Dremora_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Dremora"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "b9a5a72b-05c0-494e-ba1c-967728a55b6c": {
+      "handle": "Cave_Liches_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Liches"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "d7cd7d5c-80e5-4400-af10-8d9ebc3e96bb": {
+      "handle": "Stone_AbyssEntrance",
+      "environment": "Stone",
+      "monsters": [
+        "AbyssEntrance"
+      ],
+      "isBoss": false,
+      "enemyCount": 0
+    },
+    "f9c1faec-79b2-49e5-a5b3-57bb5ce6a717": {
+      "handle": "Test_Forest_Goblin_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Goblin"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "a8625417-72b3-4c96-bfa4-53b66d7d1776": {
+      "handle": "Test_Stone_LichesOutcastNether_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "LichesOutcastNether"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "0ae7451b-76db-47a8-a345-919f07a47a01": {
+      "handle": "Test_Stone_Mercenary_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Mercenary"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "fcfd25b6-dff0-481d-9c84-34cf6945f00d": {
+      "handle": "Forest_SpiderGoblin_3Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "SpiderGoblin"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "d3816ae3-1072-409c-a015-d1155a993119": {
+      "handle": "Cave_Skeletons_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Skeletons"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "7b416d0a-2657-4e30-b87e-f41cccad07ac": {
+      "handle": "Cave_LichesOutcastNether_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "LichesOutcastNether"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "4a31b6b7-3c62-4f7d-bd80-5d77f0a5065d": {
+      "handle": "Test_Stone_Dremora_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Dremora"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "eeca6c54-42a1-4fba-bf1d-9ecfbd243f59": {
+      "handle": "Cave_Dremora_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Dremora"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "5cafa1e5-6ce5-4896-a6f0-762d606d7041": {
+      "handle": "Forest_BearsWolf_3Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "BearsWolf"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "fe22c3c8-e4c9-491c-bd85-7c0ba9dc6b31": {
+      "handle": "Test_Stone_Skeevers_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Skeevers"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "4e570093-8e51-4752-9e91-3577f0996afe": {
+      "handle": "Ayleid_Troll_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Troll"
+      ],
+      "isBoss": false,
+      "enemyCount": 1
+    },
+    "9ff89d72-b1dd-461e-b786-bf6ad0576e3b": {
+      "handle": "Forest_Wolves_2Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Wolves"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "3010dcc3-ab87-4153-b3b5-f54f5d3cb574": {
+      "handle": "Forest_Mercenary_2Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Mercenary"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "daefd6cf-da7e-4701-9bb3-bb5d43db0332": {
+      "handle": "Stone_AtronachNecromancer_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "AtronachNecromancer"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "5f4eb184-5aa9-42fc-b538-664d118ea870": {
+      "handle": "Test_Stone_Skeletons_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Skeletons"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "d9db794b-848a-449e-abe9-df3a2dda8825": {
+      "handle": "Stone_DragonAncientFrost_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "DragonAncientFrost"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "eb89870c-a6cf-4c1e-9e17-15347d61213a": {
+      "handle": "Test_Forest_Bears_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Bears"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "5cc26070-12ac-4adc-b55d-da6fed6934ee": {
+      "handle": "Cave_Skeevers_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Skeevers"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "79f1868c-c62e-466b-9849-c86b5f65238e": {
+      "handle": "Test_Forest_Bandit_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Bandit"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "0ef19a96-1051-4b9f-8a4c-5ea3f2396638": {
+      "handle": "Test_Stone_Troll_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Troll"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "9e2a015f-94ca-4837-9ae2-84c996c49bf4": {
+      "handle": "Ayleid_LichesOutcastNether_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "LichesOutcastNether"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "f87c2e82-1d6a-4b70-ab4b-1792b6822728": {
+      "handle": "Ayleid_Necromancer_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Necromancer"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "76a249f4-2c7a-4b07-8573-8147c38fd00b": {
+      "handle": "Test_Stone_Wisp_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Wisp"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "abb4d904-ff35-4b1f-93c5-f1c6a7686357": {
+      "handle": "Cave_CaveSpiders_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "CaveSpiders"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "28ffdb77-161e-49a4-897e-7a8f679264d6": {
+      "handle": "Cave_CaveSpiders_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "CaveSpiders"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "fc75de59-8eec-4b95-8c8a-e9f81d88507a": {
+      "handle": "Cave_DragonAncientFire_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "DragonAncientFire"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "fb964813-5b11-4159-8986-6a3a9dab5ee3": {
+      "handle": "Ayleid_LichesOutcastNetherSkeleton_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "LichesOutcastNetherSkeleton"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "1e6dcd50-7309-4ee2-8314-e3605079a37c": {
+      "handle": "Stone_Mercenary_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Mercenary"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "0d6066ba-454e-481a-aa54-bbab22f64e22": {
+      "handle": "Cave_AtronachNecromancer_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "AtronachNecromancer"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "2424d0d3-ca76-49dd-aab0-15f6c6245efc": {
+      "handle": "Ayleid_Mercenary_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Mercenary"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "219788af-f3a1-4e48-9f6b-67152a79dec1": {
+      "handle": "Test_Stone_Wight_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Wight"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "0e5671ac-c415-4c6e-affc-44fdca610f1e": {
+      "handle": "Ayleid_Dremora_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Dremora"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "10cd3637-f935-4f2a-9fd8-465eaabcd33d": {
+      "handle": "Cave_Bears_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Bears"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "bcf94a62-c394-4526-9878-c8bb1312e979": {
+      "handle": "Ayleid_Mercenary_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Mercenary"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "3b5df42b-aaf1-4fa5-8e22-0bd6e64a6960": {
+      "handle": "Cave_Skeletons_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Skeletons"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "b86d3d8e-4287-440c-8095-a28913533d14": {
+      "handle": "Cave_Goblin_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Goblin"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "073dcdc8-10c8-4470-8d9f-2edad5570e74": {
+      "handle": "Forest_Wisp_2Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Wisp"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "99129b95-27bd-4d70-b32d-54ce9ff8e67c": {
+      "handle": "Ayleid_SprigganWisp_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "SprigganWisp"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "ec7f53fa-6fae-45e4-ba77-901f4bc1da2d": {
+      "handle": "Cave_AtronachGoblinWizard_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "AtronachGoblinWizard"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "c00b2520-18be-48bc-a208-d97361675fc9": {
+      "handle": "Forest_Troll_2Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Troll"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "4de80b69-fe4e-4ed5-a556-71e5b7c82ed0": {
+      "handle": "Test_Stone_Goblin_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Goblin"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "28bbb173-e6bd-495e-b3c9-7aee71755bc3": {
+      "handle": "Stone_NecromancerSkeleton_3Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "NecromancerSkeleton"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "0b82053f-958e-42e9-b1b7-9232b25a81ef": {
+      "handle": "Ayleid_AtronachNecromancer_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "AtronachNecromancer"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "22c87784-7e9c-4c91-85a5-d8fc2a312705": {
+      "handle": "Stone_CaveSpiders_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "CaveSpiders"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "cae943b8-f051-4dfc-a9c3-353b46d2ddfd": {
+      "handle": "Ayleid_LichesSkeleton_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "LichesSkeleton"
+      ],
+      "isBoss": true,
+      "enemyCount": 3
+    },
+    "48c042a4-e993-446b-9c70-ee68eba53fdf": {
+      "handle": "Ayleid_AtronachGoblinWizard_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "AtronachGoblinWizard"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "6e4476c9-d2d7-45db-a253-dfb47567efff": {
+      "handle": "Cave_Wolves_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Wolves"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "0f120f01-1387-4061-ad54-7c3094390707": {
+      "handle": "Cave_DragonAncientFrost_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "DragonAncientFrost"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "b1ea02bb-fc98-4209-9f00-8cd828945cdb": {
+      "handle": "Ayleid_Atronach_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Atronach"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "23d31b6e-4aea-4a7c-a913-f3ce5e7608f7": {
+      "handle": "Ayleid_Warlord_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Warlord"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "83a0ce31-26be-46e8-ab37-df42a8b191f9": {
+      "handle": "Test_Stone_Liches_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Liches"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "e92332f5-d18d-4f7d-9dc1-90fe4c24dde8": {
+      "handle": "Ayleid_Wolves_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Wolves"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "d30de853-68ca-4360-b060-81aaf182d940": {
+      "handle": "Ayleid_Bandit_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Bandit"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "2975861f-2a74-4f88-8fd7-f1c6a5e85529": {
+      "handle": "Test_Forest_Spriggan_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Spriggan"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "4e682650-cddc-4326-bf45-3ecefc09bf0e": {
+      "handle": "Stone_Atronach_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Atronach"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "8d6ce8f8-4264-40c3-a0fa-3b7681057a6f": {
+      "handle": "Forest_Skeletons_2Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Skeletons"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "e666f78a-2bb2-49ac-8ad7-8a507087f322": {
+      "handle": "Cave_Bandit_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Bandit"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "f2dd8509-74a0-4600-a72c-c543fb7aebf1": {
+      "handle": "Stone_DragonUndead_Boss_2Rooms_AbyssDungeonSetting_1",
+      "environment": "Stone",
+      "monsters": [
+        "DragonUndead"
+      ],
+      "isBoss": true,
+      "enemyCount": 1
+    },
+    "248d0981-6891-4ed8-b220-139486c63569": {
+      "handle": "Cave_Bandit_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Bandit"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "19c21a26-f324-4506-ae5c-6b9d5ad618ab": {
+      "handle": "Ayleid_Wight_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Wight"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "4c972b57-91c1-44d4-9292-a5fa87957426": {
+      "handle": "Stone_AtronachUndead_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "AtronachUndead"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "ba3a3dd6-0a38-49c5-8bce-60f83bf11b07": {
+      "handle": "Test_Forest_Mercenary_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Mercenary"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "4c793f15-aa4b-406f-be88-9689085fdc05": {
+      "handle": "Ayleid_Spriggan_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Spriggan"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "3b41a23d-7b3c-45b0-bed4-743373d6a630": {
+      "handle": "Cave_AtronachDremora_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "AtronachDremora"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "7f963227-b598-4c8b-88ce-01a3209e0e87": {
+      "handle": "Ayleid_Bears_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Bears"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "bb218c80-03f6-4227-882f-8b44bfd9f154": {
+      "handle": "Test_Forest_Wolves_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Wolves"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "f2c3ade3-73db-4a60-b47f-b20252292e6f": {
+      "handle": "Test_Stone_Necromancer_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Necromancer"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "d9601fad-0aff-4f1f-9bfa-50399ec3059b": {
+      "handle": "Cave_LichesOutcastNether_2Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "LichesOutcastNether"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "4f3d44cf-2cf1-4f8e-8f82-a1c075615654": {
+      "handle": "Cave_BearsWolf_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "BearsWolf"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "9caf32a0-7e63-445a-8cc9-9aea10bc7c16": {
+      "handle": "Ayleid_Troll_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Troll"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "7924c82d-f6b3-4eb6-9edb-9b1349a1da84": {
+      "handle": "Stone_Spriggan_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Spriggan"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "b31ce7dd-714e-47d3-9d90-24cf9bace655": {
+      "handle": "Stone_Skeletons_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Skeletons"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "54e3b968-eeac-4506-b697-51d03ba4bdd8": {
+      "handle": "Test_Forest_Necromancer_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Necromancer"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "8e92c452-8905-4686-9ae0-dc11788ff6b9": {
+      "handle": "Forest_Goblin_2Rooms_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Goblin"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "42a854a1-eb07-4f3f-bfb0-c03a7d391077": {
+      "handle": "Ayleid_WarlordMercenary_Boss_2Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "WarlordMercenary"
+      ],
+      "isBoss": true,
+      "enemyCount": 3
+    },
+    "44e0d7cd-26a1-4183-996b-056a484a5e2e": {
+      "handle": "Cave_Mercenary_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Mercenary"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "ad7a91a8-c47e-47ab-b78f-f7559123a879": {
+      "handle": "Stone_Wolves_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Wolves"
+      ],
+      "isBoss": false,
+      "enemyCount": 2
+    },
+    "f01a78e9-6299-47f7-a14a-68db66c9eb9d": {
+      "handle": "Stone_Wight_2Rooms_AbyssDungeonSetting",
+      "environment": "Stone",
+      "monsters": [
+        "Wight"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    },
+    "a1db3158-30ea-449a-98e1-ea91830f9a08": {
+      "handle": "Ayleid_Atronach_3Rooms_AbyssDungeonSetting",
+      "environment": "Ayleid",
+      "monsters": [
+        "Atronach"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "a883d41b-4334-4622-b6cc-2f6a31d26d6a": {
+      "handle": "Cave_Goblin_3Rooms_AbyssDungeonSetting",
+      "environment": "Cave",
+      "monsters": [
+        "Goblin"
+      ],
+      "isBoss": false,
+      "enemyCount": 4
+    },
+    "c34b918e-16bd-4272-9fd5-808b46232978": {
+      "handle": "Test_Forest_Troll_AbyssDungeonSetting",
+      "environment": "Forest",
+      "monsters": [
+        "Troll"
+      ],
+      "isBoss": false,
+      "enemyCount": 3
+    }
+  },
+  "scalingBackend": {
+    "slicesCount": 150,
+    "maxDifficulty": 400,
+    "slicesCountAbovePlayerLevel": 2,
+    "hardcoreSliceDifficultyOffset": 10,
+    "minimumSuccessRating": 0.0,
+    "_guessed": [
+      "maxDifficulty",
+      "slicesCountAbovePlayerLevel",
+      "hardcoreSliceDifficultyOffset",
+      "minimumSuccessRating"
+    ],
+    "_authoritative": [
+      "slicesCount"
+    ]
+  },
+  "scalingCurve": {
+    "_note": "AbyssScaling._abyssScalingCurve: difficultyOffset (floor - initialPlayerLevel) -> gold/xp bonus multipliers. Values GUESSED.",
+    "entries": [
+      {
+        "difficultyOffset": -5,
+        "goldBonusMultiplier": 0.5,
+        "xpBonusMultiplier": 0.5
+      },
+      {
+        "difficultyOffset": 0,
+        "goldBonusMultiplier": 1.0,
+        "xpBonusMultiplier": 1.0
+      },
+      {
+        "difficultyOffset": 3,
+        "goldBonusMultiplier": 1.5,
+        "xpBonusMultiplier": 1.5
+      },
+      {
+        "difficultyOffset": 6,
+        "goldBonusMultiplier": 2.0,
+        "xpBonusMultiplier": 2.0
+      },
+      {
+        "difficultyOffset": 10,
+        "goldBonusMultiplier": 3.0,
+        "xpBonusMultiplier": 3.0
+      }
+    ]
+  },
+  "perFloorRewards": {
+    "_note": "AbyssScaling._perFloorData: baseGold/baseXP per floor (before scalingCurve multiplier). Values GUESSED from the captured ~2923 gold / 958 XP over ~15 floors (=~195 gold / 64 XP per floor average).",
+    "baseGoldReward": 195,
+    "baseXPReward": 64,
+    "_guessed": true
+  }
 }

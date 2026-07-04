@@ -1,28 +1,137 @@
 {
   "_meta": {
-    "description": "Town job-pool definitions + rotation recurrence. APK bundle gameplaymetadata -> JobData / JobDuelBossList (authoritative).",
+    "description": "Town job-board definitions + daily/weekly rotation. Authoritative source = APK il2cpp `JobData` / `JobPool` / `JobDuelBossList` (ScriptableObject, `BGS.Game.Quests`), cross-checked against prod /quests captures and UESP Blades:Jobs. Consumed by server/src/quest.rs `jobs_gen`, which loads this whole file as a raw serde_json::Value (unknown keys are ignored, so it is safe to add documentation/back-office blocks).",
+    "authoritative": "jobPools[], globals (JobData scalars), perTypeDifficulty (JobData.PerTypeData.JobDifficultyDistributionWithLevel), perTypeAndSourceData (boss loot tables), jobDuelBossList, spawn-group IDs. All read directly from the compiled client.",
+    "guessed": "The `jobTypes` catalog labels/objective-count hints and the level>=60 difficulty extrapolation rows are annotated `_guessed:true` where present. `dailyRotation` documents behaviour already implemented in quest.rs; the numbers there (slot counts) are authoritative from JobData, the seeding scheme is our deterministic impl choice.",
     "enums": {
+      "jobType": {
+        "_source": "il2cpp Job.JobType (TypeDefIndex 11096) — CORRECTED: type 2 is Fetch, NOT 'Clear'.",
+        "0": "Defeat  — defeat enemies + collect reward",
+        "1": "Explore — defeat the boss and find the exit",
+        "2": "Fetch   — fetch objective items (rare in captures)",
+        "3": "Rescue  — rescue townsfolk and defeat the boss",
+        "4": "Gather  — gather items and defeat the boss",
+        "5": "Duel    — win against a gladiator (duel boss)",
+        "6": "COUNT (sentinel)",
+        "100": "None (sentinel)"
+      },
       "jobSource": {
-        "1": "daily",
-        "2": "weekly",
-        "3": "special"
+        "_source": "il2cpp JobSource (TypeDefIndex 11901) — CORRECTED from prior draft labels.",
+        "0": "None",
+        "1": "Regular (the four rolling Normal-job slots)",
+        "2": "Daily (one Daily job, refreshes at the daily reset)",
+        "3": "Weekly (one Weekly job, refreshes Monday)"
+      },
+      "presentation": {
+        "_source": "il2cpp Job.JobPresentation (TypeDefIndex 11097) — CORRECTED from prior draft labels.",
+        "0": "Standard (the Regular/Normal rolling slots)",
+        "1": "Daily (the featured Daily job)",
+        "2": "Weekly (the featured Weekly boss job)",
+        "3": "Special",
+        "100": "None"
       },
       "recurrenceType": {
+        "_source": "il2cpp Recurrence.RecurrenceType.",
         "1": "daily",
         "2": "weekly"
       },
-      "presentation": {
-        "0": "standard",
-        "1": "featured",
-        "2": "boss"
+      "jobDifficulty": {
+        "_source": "il2cpp JobDifficulty enum (TypeDefIndex 11120) — the 0..4 'skull' rating the UI shows.",
+        "0": "VeryEasy",
+        "1": "Easy",
+        "2": "Normal",
+        "3": "Hard",
+        "4": "VeryHard"
       },
-      "dayOfWeek": "0=Sunday .. 6=Saturday"
+      "dayOfWeek": "0=Sunday .. 6=Saturday (matches quest.rs weekday_sun0; il2cpp uses Recurrence.JavaDayOfWeek)"
     },
     "notes": [
-      "jobPoolId values match the fork quest.rs job_pools stub ids.",
-      "endTime/nextStartTime are DERIVED at runtime from recurrence; this file gives the cadence.",
-      "The per-instance jobSetup runtime shape is GENERATED from these definitions (enemy spawn groups, boss loot per type/source, difficulty, gem-skip) \u2014 it is not a static table."
+      "jobPoolId values are the real APK Uids (JobPool._uid). The presentation field on each pool selects the board slot: presentation 0 = the four rolling Normal slots (maxActive 4); presentation 2 = the weekly Duel boss; presentation 1 = per-weekday featured Daily pools.",
+      "endTime/nextStartTime are DERIVED at runtime from recurrence by quest.rs jobs_gen::pool_timers; this file gives only the cadence (durationSecs/resetHour/resetMinute/type/dayOfWeek).",
+      "The per-instance jobSetup runtime shape (enemy spawn groups, counts, boss loot per type/source, difficulty level, gem-skip, duel boss) is GENERATED per character+day by jobs_gen::roll_job from these definitions plus the harvested constant pools baked into quest.rs (dungeon templates, enemy families, duel bosses, gather items). It is not a static table.",
+      "DIFFICULTY SCALING: quest.rs jobs_gen::roll_difficulty reads perTypeDifficulty[jobType].difficultyByLevel, picks the highest row whose level <= player level, and rolls difficultyLevel = playerLevel + rand(veryEasyMin .. veryHardMax) clamped to >=1. The client then maps difficultyLevel-vs-playerLevel into the 0..4 skull rating via the veryEasyMin/easyMin/normalMin/hardMin/veryHardMin thresholds (il2cpp QuestDifficultyCalculator.GetRelativeDifficulty). So raising these offsets makes a level band harder.",
+      "AUTO-EASING: UESP notes that after repeated failed jobs the game lowers difficulty. That live-adjust is character state (not in this file); a faithful server can decrement a per-character difficulty bias — see dailyRotation.autoEasing below (currently GUESSED, not yet implemented in quest.rs)."
     ]
+  },
+  "jobTypes": [
+    {
+      "jobType": 0,
+      "name": "Defeat",
+      "presentationLabel": "defeat enemies and collect reward",
+      "objectivePairCaptured": true,
+      "usesBoss": false
+    },
+    {
+      "jobType": 1,
+      "name": "Explore",
+      "presentationLabel": "defeat the boss and find the exit",
+      "objectivePairCaptured": true,
+      "usesBoss": true
+    },
+    {
+      "jobType": 2,
+      "name": "Fetch",
+      "presentationLabel": "fetch objective items",
+      "objectivePairCaptured": false,
+      "usesBoss": false,
+      "_guessed": true,
+      "_note": "Type 2 (Fetch) never seen in captures; jobs_gen currently falls back to the Defeat objective pair for it and does not roll it into Standard pools."
+    },
+    {
+      "jobType": 3,
+      "name": "Rescue",
+      "presentationLabel": "rescue townsfolk and defeat the boss",
+      "objectivePairCaptured": true,
+      "usesBoss": true
+    },
+    {
+      "jobType": 4,
+      "name": "Gather",
+      "presentationLabel": "gather items and defeat the boss",
+      "objectivePairCaptured": true,
+      "usesBoss": true
+    },
+    {
+      "jobType": 5,
+      "name": "Duel",
+      "presentationLabel": "win against a gladiator",
+      "objectivePairCaptured": true,
+      "usesBoss": true,
+      "_note": "Weekly boss pool (presentation 2) always rolls Duel; duel boss drawn from jobDuelBossList."
+    }
+  ],
+  "dailyRotation": {
+    "_meta": "Documents the deterministic daily/weekly rotation quest.rs already implements, so a back-office editor can reason about it. Model = every player sees the SAME cadence, but each player's rolled jobs are seeded by (characterId, resetBoundary, poolId, slot) so boards differ per player yet are stable within a reset window and reproducible on re-fetch. Change the cadence by editing jobPools[].recurrence + globals; change difficulty by editing perTypeDifficulty.",
+    "resetModel": {
+      "dailyResetHourUtc": 5,
+      "dailyResetMinuteUtc": 0,
+      "weeklyResetDayOfWeek": 1,
+      "_note": "UESP + JobData: Normal + Daily jobs refresh every 24h at 05:00 UTC; the Weekly job refreshes Monday 05:00 UTC. quest.rs derives the reset boundary from globals.dailyJobsRefreshTimeHour/Minute (05:00) and rolls the weekly pool on its recurrence.dayOfWeek."
+    },
+    "boardComposition": {
+      "regularSlots": 4,
+      "dailyFeatured": 1,
+      "weeklyBoss": 1,
+      "_note": "Authoritative: globals.maxActiveJobs = 4 Standard slots. quest.rs adds 1 weekly Duel boss always, plus the per-weekday featured Daily pool that is active on its window (one job). Typical board = 4 + 1 boss + (0..1 featured) = 5-6 jobs."
+    },
+    "seeding": {
+      "scheme": "deterministic",
+      "seedInputs": [
+        "characterId",
+        "resetBoundary(epochSecs)",
+        "jobPoolId",
+        "slotIndex"
+      ],
+      "prng": "splitmix64 (self-contained in quest.rs jobs_gen)",
+      "_note": "IMPLEMENTATION CHOICE (not from the client): guarantees same board within a reset window, different board per character, reproducible on every /quests fetch without persisting job bodies."
+    },
+    "autoEasing": {
+      "_guessed": true,
+      "enabled": false,
+      "failuresBeforeEase": 3,
+      "difficultyStepDown": 1,
+      "_note": "UESP: after several unfinishable jobs the game eases difficulty. NOT yet implemented in quest.rs. A faithful impl would track a per-character difficultyBias (persisted on the character), subtract it in roll_difficulty, and increment it on repeated abandon/fail. Wire this before relying on it."
+    }
   },
   "globals": {
     "maxActiveJobs": 4,
@@ -487,6 +596,26 @@
           "hardMin": -3,
           "veryHardMin": -1,
           "veryHardMax": 2
+        },
+        {
+          "level": 80,
+          "veryEasyMin": -11,
+          "easyMin": -9,
+          "normalMin": -7,
+          "hardMin": -5,
+          "veryHardMin": -3,
+          "veryHardMax": 0,
+          "_guessed": true
+        },
+        {
+          "level": 100,
+          "veryEasyMin": -13,
+          "easyMin": -11,
+          "normalMin": -9,
+          "hardMin": -7,
+          "veryHardMin": -5,
+          "veryHardMax": -2,
+          "_guessed": true
         }
       ]
     },
@@ -546,6 +675,26 @@
           "hardMin": -3,
           "veryHardMin": -1,
           "veryHardMax": 2
+        },
+        {
+          "level": 80,
+          "veryEasyMin": -11,
+          "easyMin": -9,
+          "normalMin": -7,
+          "hardMin": -5,
+          "veryHardMin": -3,
+          "veryHardMax": 0,
+          "_guessed": true
+        },
+        {
+          "level": 100,
+          "veryEasyMin": -13,
+          "easyMin": -11,
+          "normalMin": -9,
+          "hardMin": -7,
+          "veryHardMin": -5,
+          "veryHardMax": -2,
+          "_guessed": true
         }
       ]
     },
@@ -605,6 +754,26 @@
           "hardMin": -3,
           "veryHardMin": -1,
           "veryHardMax": 2
+        },
+        {
+          "level": 80,
+          "veryEasyMin": -11,
+          "easyMin": -9,
+          "normalMin": -7,
+          "hardMin": -5,
+          "veryHardMin": -3,
+          "veryHardMax": 0,
+          "_guessed": true
+        },
+        {
+          "level": 100,
+          "veryEasyMin": -13,
+          "easyMin": -11,
+          "normalMin": -9,
+          "hardMin": -7,
+          "veryHardMin": -5,
+          "veryHardMax": -2,
+          "_guessed": true
         }
       ]
     },
@@ -664,6 +833,26 @@
           "hardMin": -3,
           "veryHardMin": -1,
           "veryHardMax": 2
+        },
+        {
+          "level": 80,
+          "veryEasyMin": -11,
+          "easyMin": -9,
+          "normalMin": -7,
+          "hardMin": -5,
+          "veryHardMin": -3,
+          "veryHardMax": 0,
+          "_guessed": true
+        },
+        {
+          "level": 100,
+          "veryEasyMin": -13,
+          "easyMin": -11,
+          "normalMin": -9,
+          "hardMin": -7,
+          "veryHardMin": -5,
+          "veryHardMax": -2,
+          "_guessed": true
         }
       ]
     },
@@ -723,6 +912,26 @@
           "hardMin": -3,
           "veryHardMin": -1,
           "veryHardMax": 2
+        },
+        {
+          "level": 80,
+          "veryEasyMin": -11,
+          "easyMin": -9,
+          "normalMin": -7,
+          "hardMin": -5,
+          "veryHardMin": -3,
+          "veryHardMax": 0,
+          "_guessed": true
+        },
+        {
+          "level": 100,
+          "veryEasyMin": -13,
+          "easyMin": -11,
+          "normalMin": -9,
+          "hardMin": -7,
+          "veryHardMin": -5,
+          "veryHardMax": -2,
+          "_guessed": true
         }
       ]
     },
@@ -782,6 +991,26 @@
           "hardMin": -3,
           "veryHardMin": -1,
           "veryHardMax": 2
+        },
+        {
+          "level": 80,
+          "veryEasyMin": -11,
+          "easyMin": -9,
+          "normalMin": -7,
+          "hardMin": -5,
+          "veryHardMin": -3,
+          "veryHardMax": 0,
+          "_guessed": true
+        },
+        {
+          "level": 100,
+          "veryEasyMin": -13,
+          "easyMin": -11,
+          "normalMin": -9,
+          "hardMin": -7,
+          "veryHardMin": -5,
+          "veryHardMax": -2,
+          "_guessed": true
         }
       ]
     }
