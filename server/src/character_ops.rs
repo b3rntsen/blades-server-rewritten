@@ -319,6 +319,14 @@ struct LoadoutCurrentRequest {
     equipment_updates: HashMap<Uuid, Option<Uuid>>,
     #[serde(default)]
     ability_updates: Value,
+    /// Equipped consumables (potions), by stackable TEMPLATE id — the client's separate
+    /// `equippedConsumables` field on this endpoint (il2cpp `PARAMETER_EQUIPPED_CONSUMABLES`).
+    /// Absent for a gear/ability-only update; when present it is the FULL equipped-
+    /// consumable list. Consumables are stackable (not instanced gear), so equipping a
+    /// potion arrives here — the old handler ignored the field and the equip silently
+    /// vanished, which the client surfaced as "Unable to connect".
+    #[serde(default)]
+    equipped_consumables: Option<Vec<Uuid>>,
 }
 
 /// `POST /loadouts/current` — equip/unequip gear and/or set equipped-ability slots.
@@ -339,12 +347,28 @@ pub async fn update_loadout(
         async move {
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
             let mut tracker = InventoryChangeTracker::default();
+            let mut inventory_changed = false;
             if !body.equipment_updates.is_empty() {
                 character_ops::apply_equipment_updates(
                     &mut entry.inventory.0,
                     &body.equipment_updates,
                     &mut tracker,
                 );
+                inventory_changed = true;
+            }
+            // A potion equip arrives as the separate `equippedConsumables` list (a full
+            // replacement). Apply it faithfully so the equipped consumable lands + is
+            // echoed in the loadout diff — the old handler ignored this, so the equip
+            // never took and the client showed "Unable to connect".
+            if let Some(consumables) = &body.equipped_consumables {
+                let changed = character_ops::set_equipped_consumables(
+                    &mut entry.inventory.0,
+                    consumables,
+                    &mut tracker,
+                );
+                inventory_changed |= changed;
+            }
+            if inventory_changed {
                 entry.inventory.0.backpack_version += 1;
             }
             if body.ability_updates.is_object() {

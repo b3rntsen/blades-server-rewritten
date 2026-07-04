@@ -36,16 +36,78 @@ use crate::{
     },
     models::CharacterDbEntryCharacterWalletInventory,
     schema::characters,
-    session::SessionLookedUpMaybe,
+    session::{Session, SessionLookedUpMaybe},
 };
 
-/// A queued matchmaking ticket handed to the matchmaker actor. Carries a clone
-/// of the requesting session's RMS sender so the matchmaker can push frames
-/// back to exactly that client.
+/// How the matchmaker reaches a ticket's client over its RMS WebSocket.
+///
+/// The RMS sender is NOT captured once at enqueue time. The client reconnects its
+/// rms WS repeatedly (each reconnect overwrites `Session.matchmaking_ws`), so a sender
+/// cloned at `create_match` time can be a STALE channel the client no longer reads —
+/// `Succeeded` sent into it silently vanishes and the client hangs at "determining
+/// server" forever (the 2026-07 stale-sender race). Instead we hold the `Arc<Session>`
+/// and re-fetch the CURRENT live sender at every send, so a client that reconnected
+/// still receives the address.
+///
+/// `Direct` is the unit-test variant: an `UnboundedSender` with no backing session
+/// (the matchmaker tests have no `SessionStore`), behaving as before.
+pub enum RmsHandle {
+    /// Production: re-fetch `session.matchmaking_ws` live on each access.
+    Session(Arc<Session>),
+    /// Tests: a fixed sender (no session store to re-fetch from).
+    Direct(UnboundedSender<MatchmakingMessage>),
+}
+
+impl RmsHandle {
+    /// Snapshot the CURRENT live sender (None if the client has no rms WS open right
+    /// now). For `Session` this reads `matchmaking_ws` under its async lock, so a
+    /// reconnect since enqueue is picked up.
+    async fn current(&self) -> Option<UnboundedSender<MatchmakingMessage>> {
+        match self {
+            RmsHandle::Session(s) => s.matchmaking_ws.lock().await.clone(),
+            RmsHandle::Direct(tx) => Some(tx.clone()),
+        }
+    }
+
+    /// True iff the client currently has NO live rms sender (never connected, or the
+    /// sender is closed because its WS reader task exited). Used to skip resolving a
+    /// ticket whose client is gone.
+    async fn is_gone(&self) -> bool {
+        match self.current().await {
+            Some(tx) => tx.is_closed(),
+            None => true,
+        }
+    }
+
+    /// Send `msg` to the client's CURRENT live sender. `Ok(())` on success; `Err(())`
+    /// when there is no live sender or the send failed (logged by the caller).
+    async fn send(&self, msg: MatchmakingMessage) -> Result<(), ()> {
+        match self.current().await {
+            Some(tx) => tx.send(msg).map_err(|_| ()),
+            None => Err(()),
+        }
+    }
+}
+
+/// A command handed to the matchmaker actor over its single channel. Cancellation is
+/// routed through the SAME channel as enqueue so the actor (the sole owner of the
+/// `waiting` slot) can actually DEQUEUE a cancelled ticket — a `cancel` handler can't
+/// touch `waiting` directly (no shared lock), which is why the old cancel was a no-op
+/// and a cancelled ticket still zombie-resolved on the fallback timer.
+pub enum MatchmakerCommand {
+    /// Enqueue a new ticket.
+    Enqueue(TicketRequest),
+    /// Remove a ticket from the queue (client cancelled) — never zombie-resolves.
+    Cancel { ticket_id: Uuid, user_id: Uuid },
+}
+
+/// A queued matchmaking ticket handed to the matchmaker actor. Carries an [`RmsHandle`]
+/// so the matchmaker re-fetches the requesting client's CURRENT rms sender at send time
+/// (surviving rms-WS reconnects), rather than a stale sender captured at enqueue.
 pub struct TicketRequest {
     pub ticket_id: Uuid,
     pub user_id: Uuid,
-    pub rms: UnboundedSender<MatchmakingMessage>,
+    pub rms: RmsHandle,
 }
 
 /// Status of a recorded matchmaking ticket, for the web /arena activity feed.
@@ -518,7 +580,7 @@ pub async fn query_recent_matches(
 /// single-owner matchmaker task.
 pub struct ArenaGlobal {
     pub config: ArenaConfig,
-    pub matchmaker_tx: UnboundedSender<TicketRequest>,
+    pub matchmaker_tx: UnboundedSender<MatchmakerCommand>,
     pub registry: Arc<MatchRegistry>,
 }
 
@@ -532,7 +594,7 @@ impl ArenaGlobal {
         let key_submitter = KeySubmitter::from_config(KeySubmitConfig::from_env()).map(Arc::new);
         let registry = MatchRegistry::new_with_submitter(config.max_concurrent_matches, key_submitter);
 
-        let (tx, rx) = unbounded_channel::<TicketRequest>();
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         let mm_cfg = config.clone();
         let mm_reg = registry.clone();
         actix_web::rt::spawn(async move {
@@ -555,7 +617,7 @@ impl ArenaGlobal {
 /// arrives it falls back to a solo match against a server-driven bot, so a single
 /// tester always gets a fight instead of being stuck "Searching".
 async fn matchmaker_loop(
-    mut rx: UnboundedReceiver<TicketRequest>,
+    mut rx: UnboundedReceiver<MatchmakerCommand>,
     config: ArenaConfig,
     registry: Arc<MatchRegistry>,
     db: Option<DbPool>,
@@ -568,16 +630,16 @@ async fn matchmaker_loop(
     // A single ticket held while it waits for an opponent to pair with.
     let mut waiting: Option<TicketRequest> = None;
     loop {
-        // If a ticket is already waiting, race the next ticket against a fallback
-        // timer; otherwise just block for the next ticket.
+        // If a ticket is already waiting, race the next command against a fallback
+        // timer; otherwise just block for the next command.
         let next = if waiting.is_some() {
             tokio::select! {
                 r = rx.recv() => r,
                 _ = tokio::time::sleep(Duration::from_secs(config.solo_fallback_secs)) => {
                     let lone = waiting.take().expect("waiting is some");
                     // Don't spin up a bot match for a client that's already gone.
-                    if lone.rms.is_closed() {
-                        info!("matchmaker: waiting ticket {} abandoned (RMS closed) — dropped, no fallback", lone.ticket_id);
+                    if lone.rms.is_gone().await {
+                        info!("matchmaker: waiting ticket {} abandoned (RMS gone) — dropped, no fallback", lone.ticket_id);
                         continue;
                     }
                     info!("matchmaker: no opponent for ticket {} — solo fallback (vs bot)", lone.ticket_id);
@@ -588,23 +650,47 @@ async fn matchmaker_loop(
         } else {
             rx.recv().await
         };
-        let Some(req) = next else { break };
+        let Some(cmd) = next else { break };
+
+        let req = match cmd {
+            MatchmakerCommand::Enqueue(req) => req,
+            // Cancellation is routed through the actor so the ONLY owner of `waiting`
+            // can dequeue the cancelled ticket. Before this, cancel was a no-op and a
+            // cancelled ticket still zombie-resolved into a bot match on the fallback
+            // timer — the client saw a `Succeeded` for a match it had abandoned. Match
+            // on both ticket_id AND user_id so a cancel can only drop THAT user's ticket.
+            MatchmakerCommand::Cancel { ticket_id, user_id } => {
+                match &waiting {
+                    Some(w) if w.ticket_id == ticket_id && w.user_id == user_id => {
+                        info!("matchmaker: cancelled waiting ticket {ticket_id} (user {user_id}) — dequeued");
+                        waiting = None;
+                    }
+                    _ => {
+                        info!("matchmaker: cancel for ticket {ticket_id} — not the waiting ticket (already resolved/gone)");
+                    }
+                }
+                continue;
+            }
+        };
 
         info!("matchmaker: ticket {} (user {})", req.ticket_id, req.user_id);
         record_match_queued(&db, req.ticket_id, req.user_id).await;
         // Push the captured 3-frame progression's first two frames now; the
-        // `Succeeded` frame follows once the match resolves (pair or fallback).
+        // `Succeeded` frame follows once the match resolves (pair or fallback). Sent to
+        // the client's CURRENT live rms sender (re-fetched by `RmsHandle::send`).
         let _ = req
             .rms
-            .send(MatchmakingMessage::Searching { ticket_id: req.ticket_id });
+            .send(MatchmakingMessage::Searching { ticket_id: req.ticket_id })
+            .await;
         let _ = req
             .rms
-            .send(MatchmakingMessage::PotentialMatch { ticket_id: req.ticket_id });
+            .send(MatchmakingMessage::PotentialMatch { ticket_id: req.ticket_id })
+            .await;
 
         match waiting.take() {
             // A LIVE second player is already waiting → pair the two into ONE shared
             // match (no bot).
-            Some(first) if !first.rms.is_closed() => {
+            Some(first) if !first.rms.is_gone().await => {
                 resolve(&registry, &config, &db, &[first, req], 0).await
             }
             // The waiting ticket's client is gone — its RMS feed closed (it cancelled,
@@ -615,7 +701,7 @@ async fn matchmaker_loop(
             // ticket wait for a live opponent instead.
             Some(stale) => {
                 info!(
-                    "matchmaker: discarded stale waiting ticket {} (RMS closed); {} now waiting",
+                    "matchmaker: discarded stale waiting ticket {} (RMS gone); {} now waiting",
                     stale.ticket_id, req.ticket_id
                 );
                 waiting = Some(req);
@@ -844,7 +930,10 @@ async fn resolve(
                     t.ticket_id
                 );
                 // Best-effort: if the client's RMS feed is already closed this is a no-op.
-                let _ = t.rms.send(MatchmakingMessage::Failed { ticket_id: t.ticket_id });
+                let _ = t
+                    .rms
+                    .send(MatchmakingMessage::Failed { ticket_id: t.ticket_id })
+                    .await;
             }
             return;
         }
@@ -875,11 +964,16 @@ async fn resolve(
             address: config.advertise_host.clone(),
             port: config.udp_port,
         };
-        if t.rms.send(succeeded).is_err() {
+        // Send to the client's CURRENT live rms sender (re-fetched here, not the sender
+        // captured at enqueue): the client reconnects its rms WS repeatedly, so a
+        // captured sender would be a stale channel it no longer reads → the ONLY frame
+        // carrying the arena address vanishes → permanent "determining server". If the
+        // live sender is closed/absent, log it (the client is genuinely gone).
+        if t.rms.send(succeeded).await.is_err() {
             // The match's capacity permit is held until both players connect; an
             // abandoned ticket leaks one slot until expiry (TODO: deadline sweep).
             warn!(
-                "matchmaker: ticket {} — client RMS gone before Succeeded",
+                "matchmaker: ticket {} — no live client RMS sender for Succeeded (client gone or reconnecting)",
                 t.ticket_id
             );
         }
@@ -923,22 +1017,27 @@ pub async fn create_match(
     let session = session.get_session_or_error()?;
     let ticket_id = Uuid::new_v4();
 
-    // The RMS WebSocket must already be open — the client holds it from login.
-    // Clone the sender out under a brief lock, then drop the guard.
-    let rms = {
+    // The RMS WebSocket must already be open — the client holds it from login. We
+    // require it open at enqueue (so a client without a feed can't queue), but we hand
+    // the matchmaker the `Arc<Session>` (not a cloned sender): the client reconnects
+    // its rms WS repeatedly, so the matchmaker must re-fetch the CURRENT live sender at
+    // resolve time (`RmsHandle::Session`) or `Succeeded` lands in a stale channel and
+    // the client hangs at "determining server" (the stale-sender race).
+    {
         let guard = session.session.matchmaking_ws.lock().await;
-        guard.clone()
+        if guard.is_none() {
+            return Err(BladeApiError::new(StatusCode::CONFLICT, 4, 1));
+        }
     }
-    .ok_or_else(|| BladeApiError::new(StatusCode::CONFLICT, 4, 1))?;
 
     app_state
         .arena
         .matchmaker_tx
-        .send(TicketRequest {
+        .send(MatchmakerCommand::Enqueue(TicketRequest {
             ticket_id,
             user_id: session.session.user_id,
-            rms,
-        })
+            rms: RmsHandle::Session(session.session.clone()),
+        }))
         .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, 4, 2))?;
 
     Ok(Json(CreateMatchResponse {
@@ -954,11 +1053,22 @@ pub async fn create_match(
 pub async fn cancel_match(
     path: web::Path<Uuid>,
     session: SessionLookedUpMaybe,
+    app_state: web::Data<Arc<ServerGlobal>>,
 ) -> Result<HttpResponse, BladeApiError> {
-    let _session = session.get_session_or_error()?;
-    info!("matchmaker: cancel ticket {}", path.into_inner());
-    // Captured behavior: 200 with a literal `null` body. v1 resolves tickets
-    // immediately, so cancellation is an acknowledged no-op.
+    let session = session.get_session_or_error()?;
+    let ticket_id = path.into_inner();
+    info!("matchmaker: cancel ticket {ticket_id}");
+    // Route the cancel INTO the matchmaker actor so it actually DEQUEUES the ticket
+    // from `waiting`. This was previously an acknowledged no-op, so a cancelled ticket
+    // still zombie-resolved into a bot match on the solo-fallback timer (the client got
+    // a `Succeeded`/"determining server" for a match it had abandoned). Scoped to this
+    // user's id so a cancel can only drop that user's own waiting ticket. Best-effort:
+    // if the actor's channel is gone the ticket can't be in-queue anyway.
+    let _ = app_state.arena.matchmaker_tx.send(MatchmakerCommand::Cancel {
+        ticket_id,
+        user_id: session.session.user_id,
+    });
+    // Captured behavior: 200 with a literal `null` body.
     Ok(HttpResponse::Ok()
         .content_type("application/json")
         .body("null"))
@@ -1022,22 +1132,22 @@ mod tests {
             debug_ghost_user_id: None,
             bot_user_ids: Vec::new(),
         };
-        let (tx, rx) = unbounded_channel::<TicketRequest>();
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
 
         let (rms_a, mut recv_a) = unbounded_channel();
         let (rms_b, mut recv_b) = unbounded_channel();
-        tx.send(TicketRequest {
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
-            rms: rms_a,
-        })
+            rms: RmsHandle::Direct(rms_a),
+        }))
         .unwrap();
-        tx.send(TicketRequest {
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
-            rms: rms_b,
-        })
+            rms: RmsHandle::Direct(rms_b),
+        }))
         .unwrap();
 
         // No `Succeeded` arrives on either channel (the empty-UUID pair is refused).
@@ -1079,15 +1189,25 @@ mod tests {
             debug_ghost_user_id: None,
             bot_user_ids: Vec::new(),
         };
-        let (tx, rx) = unbounded_channel::<TicketRequest>();
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
 
         let tid_a = Uuid::new_v4();
         let tid_b = Uuid::new_v4();
         let (rms_a, mut recv_a) = unbounded_channel();
         let (rms_b, mut recv_b) = unbounded_channel();
-        tx.send(TicketRequest { ticket_id: tid_a, user_id: Uuid::new_v4(), rms: rms_a }).unwrap();
-        tx.send(TicketRequest { ticket_id: tid_b, user_id: Uuid::new_v4(), rms: rms_b }).unwrap();
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            ticket_id: tid_a,
+            user_id: Uuid::new_v4(),
+            rms: RmsHandle::Direct(rms_a),
+        }))
+        .unwrap();
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            ticket_id: tid_b,
+            user_id: Uuid::new_v4(),
+            rms: RmsHandle::Direct(rms_b),
+        }))
+        .unwrap();
 
         // Drain until Failed arrives or 1 s elapses (Searching + PotentialMatch come first).
         let failed_a = {
@@ -1147,17 +1267,17 @@ mod tests {
             debug_ghost_user_id: None,
             bot_user_ids: Vec::new(),
         };
-        let (tx, rx) = unbounded_channel::<TicketRequest>();
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
 
         // The client goes away immediately: drop the RMS receiver so is_closed() == true.
         let (rms_a, recv_a) = unbounded_channel();
         drop(recv_a);
-        tx.send(TicketRequest {
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
-            rms: rms_a,
-        })
+            rms: RmsHandle::Direct(rms_a),
+        }))
         .unwrap();
 
         // Past the solo-fallback timer: the dead ticket is dropped, not bot-matched, so
@@ -1167,6 +1287,101 @@ mod tests {
             registry.available_permits(),
             4,
             "a dead waiting ticket must not consume a match permit (dropped, not bot-matched)"
+        );
+    }
+
+    /// A CANCEL routed into the actor must DEQUEUE the waiting ticket so it never
+    /// zombie-resolves on the solo-fallback timer. Before the fix, cancel was a no-op:
+    /// the cancelled ticket stayed in `waiting` and still bot-matched after the timer,
+    /// pushing a `Succeeded` for a match the client had abandoned. Here the waiting
+    /// ticket is cancelled BEFORE the (short) fallback fires; past the timer no match
+    /// was allocated (no permit consumed) and no `Succeeded` was sent.
+    #[tokio::test]
+    async fn cancel_dequeues_waiting_ticket() {
+        let registry = MatchRegistry::new(4);
+        let config = ArenaConfig {
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 4,
+            max_queued_players: 64,
+            solo_fallback_secs: 1,
+            debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
+        };
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
+        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+
+        let tid = Uuid::new_v4();
+        let uid = Uuid::new_v4();
+        let (rms, mut recv) = unbounded_channel();
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            ticket_id: tid,
+            user_id: uid,
+            rms: RmsHandle::Direct(rms),
+        }))
+        .unwrap();
+
+        // Let Searching/PotentialMatch enqueue, then cancel BEFORE the 1s fallback.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        tx.send(MatchmakerCommand::Cancel { ticket_id: tid, user_id: uid }).unwrap();
+
+        // Past the fallback timer: the cancelled ticket must NOT have bot-matched.
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert_eq!(
+            registry.available_permits(),
+            4,
+            "a cancelled ticket must not consume a match permit (dequeued, not zombie-resolved)"
+        );
+        // Drain the channel: only Searching + PotentialMatch, never a Succeeded.
+        while let Ok(Some(msg)) = tokio::time::timeout(Duration::from_millis(50), recv.recv()).await {
+            assert!(
+                !matches!(msg, MatchmakingMessage::Succeeded { .. }),
+                "a cancelled ticket must never receive a Succeeded frame; got {msg:?}"
+            );
+        }
+    }
+
+    /// A cancel that does NOT match the waiting ticket's (ticket_id, user_id) must
+    /// leave the waiting ticket in place — a cancel can only drop its OWN ticket. Here
+    /// user A queues, a spurious cancel for a different ticket/user arrives, and A still
+    /// bot-matches on the fallback timer (permit consumed).
+    #[tokio::test]
+    async fn cancel_does_not_drop_a_different_users_ticket() {
+        let registry = MatchRegistry::new(4);
+        let config = ArenaConfig {
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 4,
+            max_queued_players: 64,
+            solo_fallback_secs: 1,
+            debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
+        };
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
+        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+
+        let tid = Uuid::new_v4();
+        let uid = Uuid::new_v4();
+        let (rms, _recv) = unbounded_channel();
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            ticket_id: tid,
+            user_id: uid,
+            rms: RmsHandle::Direct(rms),
+        }))
+        .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // A cancel for someone else's ticket must not touch A's waiting ticket.
+        tx.send(MatchmakerCommand::Cancel { ticket_id: Uuid::new_v4(), user_id: Uuid::new_v4() })
+            .unwrap();
+
+        // Past the fallback timer: A still bot-matched (a solo bot needs no DB — the
+        // starter bot fill allocates a permit), so one permit is consumed.
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert_eq!(
+            registry.available_permits(),
+            3,
+            "a spurious cancel must not dequeue another user's ticket — A still bot-matches"
         );
     }
 

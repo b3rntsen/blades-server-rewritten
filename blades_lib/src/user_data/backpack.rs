@@ -179,6 +179,17 @@ pub struct EquippedItems(
 #[serde(rename_all = "camelCase")]
 pub struct Loadout {
     pub equipped_items: EquippedItems,
+    /// Equipped consumables (potions), by their stackable TEMPLATE id. Consumables are
+    /// stackable — they live in `backpack.stackableItems` (template id + count), not in
+    /// the instanced `backpack.items`, so an equipped consumable is a template id, not
+    /// an instanced `SingleEquippedItem`. The client's REST loadout carries these in a
+    /// separate `equippedConsumables` list (il2cpp `PlayerLoadoutPreset`
+    /// DATA_MEMBER_EQUIPPED_CONSUMABLES / `ItemLoadoutUpdateRequest`+consumables), so we
+    /// model them as their own list rather than shoehorning them into `equippedItems`.
+    /// `skip_serializing_if` empty keeps the wire byte-identical for characters with no
+    /// equipped consumable (the common case, and every pre-existing stored character).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub equipped_consumables: Vec<Uuid>,
 }
 
 #[derive(Serialize, Debug, Clone, Default)]
@@ -186,6 +197,11 @@ pub struct Loadout {
 pub struct LoadoutUpdate {
     pub equipped_items: EquippedItems,
     pub unequipped_item_slots: HashSet<Uuid>,
+    /// The full equipped-consumable list AFTER this update (echoed only when it changed
+    /// this request), so the client's loadout diff sees the potion equip land. Omitted
+    /// when unchanged to keep the diff minimal / wire-identical to the gear-only path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub equipped_consumables: Option<Vec<Uuid>>,
 }
 
 impl Loadout {
@@ -201,6 +217,12 @@ impl Loadout {
             } else {
                 update.unequipped_item_slots.insert(*updated_loadout);
             }
+        }
+        // Echo the current equipped-consumable list only when it changed this request
+        // (the tracker flag) — so a potion equip/unequip is reflected in the diff and
+        // the client stops surfacing "Unable to connect".
+        if tracker.consumables_changed {
+            update.equipped_consumables = Some(self.equipped_consumables.clone());
         }
         update
     }
@@ -347,6 +369,9 @@ pub struct BackpackChangeTracker {
 #[derive(Default, Debug, Clone)]
 pub struct LoadoutChangeTracker {
     pub modified_equipped_items: HashSet<Uuid>,
+    /// Set when the equipped-consumable list changed this request, so the loadout diff
+    /// echoes `equippedConsumables`.
+    pub consumables_changed: bool,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -369,5 +394,47 @@ mod wire_camelcase_tests {
         let lo = LoadoutUpdate::default();
         let lj = serde_json::to_string(&lo).unwrap();
         assert!(lj.contains("equippedItems") && lj.contains("unequippedItemSlots"), "LoadoutUpdate not camelCase: {lj}");
+    }
+
+    /// A `Loadout` with NO equipped consumables must serialize WITHOUT the
+    /// `equippedConsumables` key — wire-identical to every pre-existing stored
+    /// character (and the arena op54 profile's `equippedItems` serialization), so the
+    /// new field can't break stored data or the client's deserializer. When present,
+    /// the key is camelCase.
+    #[test]
+    fn loadout_omits_empty_equipped_consumables() {
+        let empty = Loadout::default();
+        let j = serde_json::to_string(&empty).unwrap();
+        assert!(!j.contains("equippedConsumables"), "empty consumables must be omitted: {j}");
+
+        let mut with = Loadout::default();
+        with.equipped_consumables.push(uuid::Uuid::nil());
+        let jw = serde_json::to_string(&with).unwrap();
+        assert!(jw.contains("equippedConsumables"), "non-empty consumables serialized: {jw}");
+        assert!(!jw.contains("equipped_consumables"), "must be camelCase: {jw}");
+
+        // Round-trips: a stored character JSON WITHOUT the field still deserializes
+        // (the `#[serde(default)]`), so no migration is needed for existing rows.
+        let legacy: Loadout = serde_json::from_str(r#"{"equippedItems":{}}"#).unwrap();
+        assert!(legacy.equipped_consumables.is_empty());
+    }
+
+    /// The loadout DIFF echoes `equippedConsumables` only when it changed this request
+    /// (so a gear-only equip's diff stays wire-identical to before), and drops it when
+    /// unchanged.
+    #[test]
+    fn loadout_update_echoes_consumables_only_when_changed() {
+        let mut lo = Loadout::default();
+        lo.equipped_consumables.push(uuid::Uuid::nil());
+
+        // Unchanged consumables → diff omits the key.
+        let unchanged = lo.generate_client_update(&LoadoutChangeTracker::default());
+        let j = serde_json::to_string(&unchanged).unwrap();
+        assert!(!j.contains("equippedConsumables"), "unchanged diff omits consumables: {j}");
+
+        // Changed → diff carries the full current list.
+        let tracker = LoadoutChangeTracker { consumables_changed: true, ..Default::default() };
+        let changed = lo.generate_client_update(&tracker);
+        assert_eq!(changed.equipped_consumables, Some(vec![uuid::Uuid::nil()]));
     }
 }

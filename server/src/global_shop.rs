@@ -181,6 +181,22 @@ pub async fn purchase_global_shop(
             if !reward.stackable_items.is_empty() || !reward.items.is_empty() {
                 entry.inventory.0.backpack_version += 1;
             }
+            // Chest products (e.g. the `1275d959…` chest bucket) grant a treasury chest;
+            // `apply_reward` doesn't handle chests (they land in the treasury, not the
+            // backpack), so grant each one here — mirrors quest.rs / daily_reward.rs. A
+            // chest product with NO grants entry 404'd → the client prompted to reconnect
+            // to Bethesda; a chest reward that never lands would be a silent no-op.
+            if !reward.chests.is_empty() {
+                for chest in &reward.chests {
+                    blades_lib::economy::grant_chest(
+                        &mut entry.inventory.0,
+                        chest.tier,
+                        chest.level,
+                        &mut tracker,
+                    );
+                }
+                entry.inventory.0.treasury_version += 1;
+            }
             *entry
                 .server_state
                 .0

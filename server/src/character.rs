@@ -190,6 +190,7 @@ async fn create_characters(
         backpack: Backpack::default(),
         loadout: Loadout {
             equipped_items: EquippedItems(equipped_items),
+            equipped_consumables: Vec::new(),
         },
         treasury: Treasury::default(),
         overflow_treasury: Treasury::default(),
