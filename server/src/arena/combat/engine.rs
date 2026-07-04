@@ -343,25 +343,29 @@ impl MatchInstance {
             return out;
         }
 
-        // op72 PlayEmote (c2s) — the client played an emote. RELAY it to the opponent as
-        // op73 PlayerEmoteStateChange so the emote displays on the other player's screen
-        // (server-authoritative; a client can't fabricate an opponent's emote). Echoed
-        // for the EMOTING actor's Avatar net-object, addressed to the opponent only
-        // (the emoter already sees its own). Intercepted HERE (not in `resolve`) because
-        // op72/73 are classified non-combat — `resolve` would drop them. No damage, no
-        // phase change. Works in any live-ish phase; gated to a real 2-player match.
+        // op72 PlayEmote (c2s) — the client played an emote. The server is AUTHORITATIVE
+        // over actor state, so it broadcasts op73 PlayerEmoteStateChange on the emoting
+        // actor's Avatar net-object to BOTH players: the OPPONENT (so it displays on the
+        // other screen — a client can't fabricate an opponent's emote) AND the EMOTER
+        // itself (the emoter's Emote actor-state is applied only when the server echoes
+        // it, exactly like `PerformExecuteAbility` is echoed to the caster — without the
+        // echo the emoter presses the wheel and NOTHING happens: bug 2). Intercepted HERE
+        // (not in `resolve`) because op72/73 are classified non-combat — `resolve` would
+        // drop them. No damage, no phase change. Works in any live-ish phase.
         if messages::is_play_emote(user_data) {
             let emote_id = messages::play_emote_id(user_data).unwrap_or_default();
-            if let Some(opp) = self.combat.opponent_of(sender) {
-                if let Some(emoter) = self.combat.fighters.get(sender) {
-                    let relay = messages::player_emote_state_change(emoter.net_object_id, &emote_id);
+            if let Some(emoter) = self.combat.fighters.get(sender) {
+                let relay = messages::player_emote_state_change(emoter.net_object_id, &emote_id);
+                // Echo to the emoter first (its own animation), then relay to the opponent.
+                out.push((sender, relay.clone()));
+                if let Some(opp) = self.combat.opponent_of(sender) {
                     info!(
-                        "combat c2s: slot {sender} op72 PlayEmote (\"{emote_id}\") → relaying op73 PlayerEmoteStateChange to opponent slot {opp}"
+                        "combat c2s: slot {sender} op72 PlayEmote (\"{emote_id}\") → op73 PlayerEmoteStateChange to emoter + opponent slot {opp}"
                     );
                     out.push((opp, relay));
+                } else {
+                    debug!("combat c2s: slot {sender} op72 PlayEmote (\"{emote_id}\") → echoed to emoter (no opponent — solo/bot)");
                 }
-            } else {
-                debug!("combat c2s: slot {sender} op72 PlayEmote ignored — no opponent (solo/bot)");
             }
             return out;
         }
@@ -1575,6 +1579,73 @@ mod tests {
         assert!(!m.is_finished(), "peers NOT disconnected — the match continues");
     }
 
+    /// BUG-1 (round scoring): the op48 `MatchPostRoundInfoMsg` the CLIENT receives must
+    /// carry the ACTUAL round number and `IsMatchEnded`=false on an intermediate round
+    /// (so the client scores 1-0 after round 1, not "2-0"), and only `IsMatchEnded`=true
+    /// on the match-ending round. Previously every round sent a fixed RoundNumber=3 +
+    /// IsMatchEnded=true frame → the client double-counted and only ended after 3 rounds.
+    #[test]
+    fn op48_round_number_and_match_ended_track_the_real_round() {
+        // Parse the op48 (carrier 0x36, gmid 48) out of a death-burst: RoundNumber(p4),
+        // IsMatchEnded(p15), MatchWinnerPlayerId(p16).
+        let parse_op48 = |out: &[(usize, Vec<u8>)]| -> Option<(i64, bool, String)> {
+            out.iter().find_map(|(_, b)| {
+                if b.len() > 3 && b[1] == 0x36 {
+                    let nd = arena_proto::parse_netdata(&b[2..]);
+                    if nd.int(3) == Some(48) {
+                        let round = nd.int(4)?;
+                        let ended = matches!(nd.props.get(&15), Some(NetDataValue::Bool(true)));
+                        let mwid = nd.string(16).unwrap_or("").to_string();
+                        return Some((round, ended, mwid));
+                    }
+                }
+                None
+            })
+        };
+
+        // Named fighters (distinct UUIDs) so the match-ending op48 carries a real
+        // MatchWinnerPlayerId (the starter loadout has an empty character_uuid).
+        let now = Instant::now();
+        let mk = |name: &str, uuid: &str| {
+            let mut l = crate::arena::combat::loadout::starter();
+            l.display_name = name.into();
+            l.character_uuid = uuid.into();
+            l
+        };
+        let mut m = MatchInstance::new(
+            2,
+            2,
+            vec![
+                mk("Flappety", "38c987fd-c42b-4ea6-b869-c8d4c03055f9"),
+                mk("Blank", "1131a037-716c-49cc-b165-32d8ddc14f49"),
+            ],
+            now,
+        );
+        let t0 = drive_to_live(&mut m, 2, now);
+
+        // Round 1: slot 0 wins → op48 must say RoundNumber=1, IsMatchEnded=false,
+        // MatchWinnerPlayerId empty (the match is NOT over — best-of-3, score 1-0).
+        let (d1, t1) = swing_until_death(&mut m, 0, t0);
+        let (r1, ended1, mw1) = parse_op48(&d1).expect("op48 emitted on the round-1 death");
+        assert_eq!(r1, 1, "op48 RoundNumber = 1 for round 1 (not a fixed 3)");
+        assert!(!ended1, "round 1 is NOT the match end → IsMatchEnded=false (client scores 1-0, not 2-0)");
+        assert_eq!(mw1, "", "no overall MatchWinnerPlayerId on an intermediate round");
+        assert_eq!(m.combat.rounds_won, [1, 0], "server score 1-0 after round 1");
+        let (_s1, live2) = drive_interround_to_live(&mut m, t1);
+
+        // Round 2: slot 0 wins again → 2-0 → the MATCH ends. op48 RoundNumber=2,
+        // IsMatchEnded=true, MatchWinnerPlayerId = the winner.
+        let (d2, _t2) = swing_until_death(&mut m, 0, live2);
+        let (r2, ended2, mw2) = parse_op48(&d2).expect("op48 emitted on the round-2 death");
+        assert_eq!(r2, 2, "op48 RoundNumber = 2 for round 2");
+        assert!(ended2, "2-0 ends the match → IsMatchEnded=true");
+        assert_eq!(
+            mw2, "38c987fd-c42b-4ea6-b869-c8d4c03055f9",
+            "the match-ending op48 names the overall winner (slot 0) as MatchWinnerPlayerId"
+        );
+        assert_eq!(m.combat.rounds_won, [2, 0], "server score 2-0 → match won");
+    }
+
     /// BEST-OF-3 end: when a fighter reaches 2 round-wins, the NEXT round-ending death
     /// ENDS the match (terminal walk → Finished), instead of looping. Drive to a 1-1
     /// score, then a third death must take the winner to 2 and end the match.
@@ -1904,13 +1975,15 @@ mod tests {
         assert!(m.fighter_health(1) < full, "after the block window expires, the hit lands");
     }
 
-    /// EMOTE relay: a `PlayEmote` (72) from one player is relayed to the OPPONENT as a
-    /// `PlayerEmoteStateChange` (73) carrying the emote id, so it displays on the other
-    /// screen. No damage; the emoter is not echoed its own emote.
+    /// BUG-2 (emotes): a `PlayEmote` (72) is broadcast as `PlayerEmoteStateChange` (73)
+    /// to BOTH the emoter (server-authoritative echo → the emoter's own animation plays)
+    /// and the opponent (so it displays on the other screen). Both frames carry the
+    /// EMOTER's avatar obj + the emote id. No damage; no phase change.
     #[test]
-    fn emote_relays_to_opponent() {
+    fn emote_broadcasts_to_both_players() {
         let (mut m, t0) = live_inst(2);
         let full = m.fighter_health(1);
+        let emoter_avatar = m.combat.fighters[0].net_object_id as i64;
 
         // Build A's (slot 0) PlayEmote (72): {0:obj · 1:55 · 2:role · 3:72 · 4:String id}.
         let mut emote = {
@@ -1925,15 +1998,19 @@ mod tests {
         emote[0] = 0x84; // c2s marker
 
         let out = m.on_c2s(0, &emote, t0);
-        // Exactly one s2c, to the OPPONENT (slot 1), an op73 PlayerEmoteStateChange.
-        assert_eq!(out.len(), 1, "emote relays exactly once, to the opponent only");
-        let (viewer, body) = &out[0];
-        assert_eq!(*viewer, 1, "relayed to the opponent (slot 1), not echoed to the emoter");
-        assert_eq!(body[1], 0x36, "carrier 0x36");
-        let nd = arena_proto::parse_netdata(&body[2..]);
-        assert_eq!(nd.int(3), Some(73), "GMID 73 PlayerEmoteStateChange");
-        assert_eq!(nd.int(0), Some(m.combat.fighters[0].net_object_id as i64), "carries the EMOTER's avatar obj");
-        assert_eq!(nd.string(5), Some("emote_wave"), "the emote id is relayed");
+        // Broadcast to BOTH: the emoter (slot 0, the echo — bug-2 fix) AND the opponent (slot 1).
+        assert_eq!(out.len(), 2, "emote is broadcast to both players (emoter echo + opponent relay)");
+        let viewers: Vec<usize> = out.iter().map(|(v, _)| *v).collect();
+        assert!(viewers.contains(&0), "the EMOTER (slot 0) is echoed its own emote — without this the emote does nothing");
+        assert!(viewers.contains(&1), "the opponent (slot 1) sees the emote");
+        // Every relayed frame is a well-formed op73 carrying the emoter's avatar + id.
+        for (_, body) in &out {
+            assert_eq!(body[1], 0x36, "carrier 0x36");
+            let nd = arena_proto::parse_netdata(&body[2..]);
+            assert_eq!(nd.int(3), Some(73), "GMID 73 PlayerEmoteStateChange");
+            assert_eq!(nd.int(0), Some(emoter_avatar), "carries the EMOTER's avatar obj");
+            assert_eq!(nd.string(5), Some("emote_wave"), "the emote id is relayed");
+        }
         // No damage from an emote.
         assert_eq!(m.fighter_health(1), full, "an emote deals no damage");
         assert_eq!(m.phase(), FlowState::StateTimeout, "emote doesn't change the match phase");

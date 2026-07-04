@@ -579,33 +579,53 @@ pub fn player_dead(
 /// `MatchPostRoundInfoMsg` (48) — the round/match RESULT, sent at the PostRound
 /// transition on the **Match** net-object. **This is the real retail "who won"
 /// message** (s506 sends op48, never op49): the client reads it to show the
-/// result/victory screen.
+/// per-round result and to TALLY the running score.
 ///
-/// **Capture-proven layout (s506 #3523671, the final round of a best-of-3):** carrier
-/// `0x36`, on Match obj 123 (type 54, Authority). NetData
-/// `{0:Int matchObj · 1:Byte 54 · 2:Byte 1 · 3:Byte 48 · 4:Int 3 · 5:String winnerCharUUID
-/// · 6:String loserCharUUID · 7:String winnerCharUUID · 8:String loserCharUUID ·
-/// 9:String "" · 10:String "" · 11:Byte 1 · 12:String winnerCharUUID · 13:String
-/// loserCharUUID · 14:Bool false · 15:Bool true · 16:String winnerCharUUID · 17:Bool
-/// false · 18:String matchId}`. The winner UUID repeats at p5/p7/p12/p16 and the loser
-/// at p6/p8/p13 (the client cross-checks them); p4 = a small Int (s506 = 3, the match's
-/// maxRounds / a result code — near-constant), p18 = the matchId. Byte-for-byte vs s506
-/// #3523671 (winner 1131a037…, loser 38c987fd…). [decoded from prod arena_udp_frames
-/// s506 2026-06-19.]
+/// **Field semantics (dump.cs `MatchPostRoundInfoMessage : MatchInfoMessage`, 589846):**
+/// beyond the NetObjectInfo header + gmid, the message carries `RoundNumber` (which
+/// round this result is for), `WinnerPlayerId`/`LoserPlayerId` (this round's result),
+/// `MatchConceded`/`OpponentDisconnected`/`IsMatchEnded` bools, `MatchWinnerPlayerId`
+/// (the OVERALL match winner — only meaningful once `IsMatchEnded`), and a trailing
+/// telemetry id. **The client accumulates the score from the per-round Winner/Loser it
+/// sees each round, and only closes the match when `IsMatchEnded` is true.**
+///
+/// **Bug-1 fix (round-scoring):** the previous builder hardcoded `RoundNumber`≡3 and
+/// `IsMatchEnded`≡true on EVERY round, so the client saw an identical "match-ended,
+/// round 3" frame after round 1 → it double-counted the win (displayed "2-0" after one
+/// round) and only stopped after three rounds had elapsed. Now `round_number` and
+/// `is_match_ended` are per-round parameters, and `MatchWinnerPlayerId` is empty until
+/// the match actually ends. NetData:
+/// `{0:Int matchObj · 1:Byte 54 · 2:Byte 1 · 3:Byte 48 · 4:Int RoundNumber ·
+/// 5:String winnerCharUUID · 6:String loserCharUUID · 7:String winnerCharUUID ·
+/// 8:String loserCharUUID · 9:String "" · 10:String "" · 11:Byte 1 · 12:String
+/// winnerCharUUID · 13:String loserCharUUID · 14:Bool MatchConceded(false) · 15:Bool
+/// IsMatchEnded · 16:String MatchWinnerPlayerId · 17:Bool OpponentDisconnected(false) ·
+/// 18:String matchId}`.
+///
+/// **NOTE (fidelity):** op48 was **never captured** (0 rows in all prod sessions per
+/// `docs/archive/arena-combat-reference.md`), so this layout is dump.cs-derived, not
+/// byte-pinned. The `RoundInfo[]` array the base class serializes is not representable
+/// in the flat NetData codec and is not emitted; the per-round Winner/Loser + RoundNumber
+/// + IsMatchEnded carry enough for the client's score tally in a best-of-3.
 #[allow(clippy::too_many_arguments)]
 pub fn match_post_round_info(
     match_net_object_id: i32,
     winner_char_uuid: &str,
     loser_char_uuid: &str,
     match_id: &str,
-    result_code: i32,
+    round_number: i32,
+    is_match_ended: bool,
 ) -> Vec<u8> {
+    // MatchWinnerPlayerId is only meaningful once the match has ended (it names the
+    // OVERALL winner); an intermediate round leaves it empty so the client doesn't
+    // prematurely close the match / mis-tally.
+    let match_winner = if is_match_ended { winner_char_uuid } else { "" };
     let mut w = NetDataWriter::new();
     w.int(0, match_net_object_id)
         .byte(1, NetObjectType::Match as u8)
         .byte(2, NetRole::Authority as u8)
         .byte(3, GameMessageId::MatchPostRoundInfoMsg as u8)
-        .int(4, result_code)
+        .int(4, round_number)
         .string(5, winner_char_uuid)
         .string(6, loser_char_uuid)
         .string(7, winner_char_uuid)
@@ -615,10 +635,10 @@ pub fn match_post_round_info(
         .byte(11, 1)
         .string(12, winner_char_uuid)
         .string(13, loser_char_uuid)
-        .bool(14, false)
-        .bool(15, true)
-        .string(16, winner_char_uuid)
-        .bool(17, false)
+        .bool(14, false) // MatchConceded
+        .bool(15, is_match_ended) // IsMatchEnded — true ONLY on the match-ending round
+        .string(16, match_winner) // MatchWinnerPlayerId — empty until the match ends
+        .bool(17, false) // OpponentDisconnected
         .string(18, match_id);
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
@@ -1267,45 +1287,50 @@ mod tests {
         assert_eq!(got, want, "op29 props 0-6 must byte-match s506 #3523661");
     }
 
-    /// Byte-for-byte vs s506 #3523671 — op48 `MatchPostRoundInfoMsg`, the real retail
-    /// match-RESULT message (carrier 0x36 on the Match obj 123). winner=Blank
-    /// (1131a037…), loser=Flappety (38c987fd…), matchId 88e9347a…, result code 3.
-    /// This frame self-validates (ENet dataLength 339 == BE36+consumed 337).
+    /// op48 `MatchPostRoundInfoMsg` — the retail match-RESULT message (carrier 0x36 on
+    /// the Match obj 123). dump.cs-derived layout (op48 was never captured — 0 rows in
+    /// all prod sessions). Bug-1 fix: `RoundNumber` (p4) and `IsMatchEnded` (p15) vary
+    /// per round; `MatchWinnerPlayerId` (p16) is empty until the match ends.
     #[test]
-    fn match_post_round_info_matches_s506() {
-        let got = match_post_round_info(
-            123,
-            "1131a037-716c-49cc-b165-32d8ddc14f49", // winner
-            "38c987fd-c42b-4ea6-b869-c8d4c03055f9", // loser
-            "88e9347a-f060-40d6-b796-a61b8c4d233e", // matchId
-            3,
-        );
-        // Carrier + structural framing, then every field decoded (the captured frame
-        // self-validates: ENet dataLength 339 == BE 36 + the 337-byte NetData).
-        assert_eq!(&got[0..2], &[0xBE, 0x36], "marker + UserMessage carrier");
-        assert_eq!(got.len(), 339, "op48 frame is 339 bytes (BE 36 + 337-byte NetData)");
-        let nd = arena_proto::parse_netdata(&got[2..]);
+    fn match_post_round_info_field_layout() {
+        let w = "1131a037-716c-49cc-b165-32d8ddc14f49";
+        let l = "38c987fd-c42b-4ea6-b869-c8d4c03055f9";
+        let mid = "88e9347a-f060-40d6-b796-a61b8c4d233e";
+
+        // INTERMEDIATE round (round 1, match NOT ended): the client must see
+        // RoundNumber=1, IsMatchEnded=false, and an EMPTY MatchWinnerPlayerId so it
+        // doesn't prematurely close the match or double-count the win.
+        let round1 = match_post_round_info(123, w, l, mid, 1, false);
+        assert_eq!(&round1[0..2], &[0xBE, 0x36], "marker + UserMessage carrier");
+        let nd = arena_proto::parse_netdata(&round1[2..]);
         assert_eq!(nd.int(0), Some(123), "p0 Match obj id");
         assert_eq!(nd.int(1), Some(54), "p1 Match");
         assert_eq!(nd.int(2), Some(1), "p2 Authority");
         assert_eq!(nd.int(3), Some(48), "p3 MatchPostRoundInfoMsg gmid");
-        assert_eq!(nd.int(4), Some(3), "p4 result code = 3");
-        let w = "1131a037-716c-49cc-b165-32d8ddc14f49";
-        let l = "38c987fd-c42b-4ea6-b869-c8d4c03055f9";
-        // Winner repeats at p5/p7/p12/p16, loser at p6/p8/p13 (s506 cross-check).
-        for p in [5, 7, 12, 16] {
-            assert_eq!(nd.string(p), Some(w), "p{p} = winner char UUID");
+        assert_eq!(nd.int(4), Some(1), "p4 RoundNumber = 1 (this round, not a fixed 3)");
+        // This round's winner/loser (client tallies the score from these per round).
+        for p in [5, 7, 12] {
+            assert_eq!(nd.string(p), Some(w), "p{p} = round winner char UUID");
         }
         for p in [6, 8, 13] {
-            assert_eq!(nd.string(p), Some(l), "p{p} = loser char UUID");
+            assert_eq!(nd.string(p), Some(l), "p{p} = round loser char UUID");
         }
         assert_eq!(nd.string(9), Some(""), "p9 empty");
         assert_eq!(nd.string(10), Some(""), "p10 empty");
         assert_eq!(nd.int(11), Some(1), "p11 Byte 1");
-        assert_eq!(nd.props.get(&14), Some(&arena_proto::NetDataValue::Bool(false)), "p14 false");
-        assert_eq!(nd.props.get(&15), Some(&arena_proto::NetDataValue::Bool(true)), "p15 true");
-        assert_eq!(nd.props.get(&17), Some(&arena_proto::NetDataValue::Bool(false)), "p17 false");
-        assert_eq!(nd.string(18), Some("88e9347a-f060-40d6-b796-a61b8c4d233e"), "p18 matchId");
+        assert_eq!(nd.props.get(&14), Some(&arena_proto::NetDataValue::Bool(false)), "p14 MatchConceded false");
+        assert_eq!(nd.props.get(&15), Some(&arena_proto::NetDataValue::Bool(false)), "p15 IsMatchEnded=false on an intermediate round");
+        assert_eq!(nd.string(16), Some(""), "p16 MatchWinnerPlayerId EMPTY until the match ends");
+        assert_eq!(nd.props.get(&17), Some(&arena_proto::NetDataValue::Bool(false)), "p17 OpponentDisconnected false");
+        assert_eq!(nd.string(18), Some(mid), "p18 matchId");
+
+        // FINAL round (round 2, match ENDED): IsMatchEnded=true and MatchWinnerPlayerId
+        // names the overall winner.
+        let final_round = match_post_round_info(123, w, l, mid, 2, true);
+        let ndf = arena_proto::parse_netdata(&final_round[2..]);
+        assert_eq!(ndf.int(4), Some(2), "p4 RoundNumber = 2");
+        assert_eq!(ndf.props.get(&15), Some(&arena_proto::NetDataValue::Bool(true)), "p15 IsMatchEnded=true on the match-ending round");
+        assert_eq!(ndf.string(16), Some(w), "p16 MatchWinnerPlayerId = overall winner when the match ends");
     }
 
     /// The carrier-`0x36` GameMessageId reader + the combat/non-combat split that

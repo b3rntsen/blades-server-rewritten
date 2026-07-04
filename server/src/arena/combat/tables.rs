@@ -35,6 +35,31 @@ impl Weight {
         }
     }
 
+    /// Minimum spacing between committed auto-attack swings for this weapon class —
+    /// the real-game swing cadence (a dagger swings noticeably faster than a
+    /// greatsword). An attack input arriving before this interval has elapsed since the
+    /// attacker's last landed swing is rejected (see `resolve::resolve_swing`), so
+    /// swings resolve at the weapon's cadence instead of instantly / spammed.
+    ///
+    /// **GUESSED / calibration knob.** The exact per-class cadence is CDN game-data
+    /// (`WeaponClass`-keyed `[ExcelVariable]` attack rates — `QuestUIParameters.
+    /// SimulationAttackRates.ComboAttackRate` / the weapon template's attack-animation
+    /// length; both are `[ExcelVariable]`/ScriptableObject values, NOT literal in
+    /// `dump.cs`, and op-level swing timing was never captured). The RELATIVE ordering
+    /// IS authoritative — `WeaponClass` (dump.cs 560111) is `Light(1) < Balanced(2) <
+    /// Heavy(3)`, and heavier = slower swing. Values below preserve that ordering and
+    /// are set near the old flat 400 ms floor for Light so existing behaviour only
+    /// TIGHTENS for heavier weapons (never loosens): Light 0.40 s (~2.5/s), Versatile
+    /// 0.65 s (~1.5/s), Heavy 0.90 s (~1.1/s). Re-pin once CDN WeaponTemplate attack
+    /// rates are captured. [docs/arena-cooldowns-authoritative.md is spell-only.]
+    pub fn swing_interval(self) -> std::time::Duration {
+        std::time::Duration::from_millis(match self {
+            Weight::Light => 400,
+            Weight::Versatile => 650,
+            Weight::Heavy => 900,
+        })
+    }
+
     /// Per-step combo multiplier (the factor each *chained alternating* side-swing
     /// COMPOUNDS by) and the combo ceiling, for the GEOMETRIC fallback in
     /// [`combo_factor`] (used for weights WITHOUT a capture-pinned per-depth table).
@@ -217,6 +242,20 @@ mod tests {
         assert!(s3 > 150 && s3 < 240, "R3 Quick Strikes stam cost must be between R1 and R6");
         // Unknown UUID: zero cost (no gate, no deduction).
         assert_eq!(ability_cost("unknown-uuid", 1), (0, 0));
+    }
+
+    /// Per-weapon-class swing cadence (bug 3): heavier weapons swing slower — the
+    /// authoritative RELATIVE ordering (WeaponClass Light<Balanced<Heavy, dump.cs
+    /// 560111). Magnitudes are calibration guesses; the ordering is the invariant.
+    #[test]
+    fn swing_interval_orders_by_weight_class() {
+        let light = Weight::Light.swing_interval();
+        let versatile = Weight::Versatile.swing_interval();
+        let heavy = Weight::Heavy.swing_interval();
+        assert!(light < versatile, "Light swings faster than Versatile/Balanced");
+        assert!(versatile < heavy, "Versatile swings faster than Heavy");
+        // Light stays at the historical 400ms floor (behaviour only tightens for heavier).
+        assert_eq!(light, std::time::Duration::from_millis(400));
     }
 
     #[test]

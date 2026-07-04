@@ -38,8 +38,26 @@ const CARRIER_USERMESSAGE: u8 = 0x36;
 /// carrier byte (`GameMessageId` value), NOT the generic `0x36` UserMessage carrier.
 const CARRIER_OP46: u8 = 0x2e;
 
-/// Minimum spacing between landed swings per attacker (stand-in for swipe-commit).
+/// Fallback minimum spacing between landed swings when the attacker's weapon WEIGHT
+/// class is unknown (no per-class `tables::Weight::swing_interval`). The real cadence is
+/// per-weapon-class (dagger swings faster than a greatsword) — see
+/// [`swing_cooldown_for`]. This flat value is the Light-class default (the calibration
+/// target's class).
 const SWING_COOLDOWN: Duration = Duration::from_millis(400);
+
+/// The minimum spacing between committed swings for `fighter`, keyed to the equipped
+/// weapon's WEIGHT class (`tables::Weight::swing_interval`) — so a Heavy weapon can't be
+/// swung at a dagger's cadence. Falls back to [`SWING_COOLDOWN`] (the Light default) when
+/// the loadout has no weapon weight (starter/bot/un-imported). [bug-3 fix: per-class
+/// swing cadence]
+fn swing_cooldown_for(fighter: &super::state::Fighter) -> Duration {
+    fighter
+        .loadout
+        .weapon
+        .weight
+        .map(|w| w.swing_interval())
+        .unwrap_or(SWING_COOLDOWN)
+}
 
 /// Held-charge crit swing multiplier for a **Light** weapon (dagger) — `×1.325`.
 /// From `docs/arena-combat-actions.md` / `tables::Weight::Light.crit_combo().0`.
@@ -347,9 +365,10 @@ fn resolve_swing(
     swing_factor: f32,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
+    let cooldown = swing_cooldown_for(&combat.fighters[sender]);
     if let Some(last) = combat.fighters[sender].last_swing {
-        if now.duration_since(last) < SWING_COOLDOWN {
-            debug!("combat: slot {sender} swing throttled (< {SWING_COOLDOWN:?} since last)");
+        if now.duration_since(last) < cooldown {
+            debug!("combat: slot {sender} swing throttled (< {cooldown:?} since last, weapon cadence)");
             return Vec::new();
         }
     }
@@ -974,13 +993,16 @@ fn on_round_ending_death(combat: &mut MatchCombat, winner: usize) -> Vec<(usize,
     //    final-blow value. [capture-proven layout — supersedes the old bare guess.]
     let dead_frame = messages::player_dead(loser_obj, loser_stats, winner_stats, DamageSource::WeaponManeuver as u8);
     // 3) op48 MatchPostRoundInfoMsg — the result (winner/loser char UUIDs + match id).
-    //    matchId = the gameSessionId (the Match net-object's propId9). result_code 3 (s506).
+    //    matchId = the gameSessionId (the Match net-object's propId9). Carries the ACTUAL
+    //    round number (so the client scores THIS round, not a fixed round-3 frame) and
+    //    `is_match_ended` = whether this death won the match (best-of-3). [bug-1 fix]
     let result_frame = messages::match_post_round_info(
         combat.match_net_object_id,
         &winner_uuid,
         &loser_uuid,
         &combat.game_session_id,
-        3,
+        combat.round as i32,
+        match_won,
     );
     // 4) Match net-object → PostRound(14), timeout 3.0 (s506 obj 123 round end).
     let post_round_update = messages::update_match(
@@ -1663,6 +1685,109 @@ mod tests {
         ]);
         frame.extend_from_slice(uuid.as_bytes());
         frame
+    }
+
+    // -----------------------------------------------------------------------
+    // BUG 3: per-weapon-class swing cadence (no more swing-spam)
+    // -----------------------------------------------------------------------
+
+    /// A second swing that arrives BEFORE the weapon's swing interval has elapsed is
+    /// REJECTED (no damage), and one that arrives AFTER lands. Proves attacks resolve at
+    /// the weapon cadence, not instantly.
+    #[test]
+    fn second_swing_before_cooldown_is_rejected() {
+        use super::super::tables::Weight;
+        let now = Instant::now();
+        let mut combat = make_live_combat_no_enchant(now, Weight::Light);
+        let interval = Weight::Light.swing_interval(); // 400 ms
+
+        // First swing lands.
+        let out1 = resolve_swing(&mut combat, 0, 1, 1.0, now);
+        assert!(!out1.is_empty(), "first swing lands (emits ReceiveDamage)");
+        let hp_after_first = combat.fighters[1].health;
+
+        // Second swing HALF an interval later → rejected, no additional damage.
+        let too_soon = now + interval / 2;
+        let out2 = resolve_swing(&mut combat, 0, 1, 1.0, too_soon);
+        assert!(out2.is_empty(), "a swing before the weapon cadence elapses is rejected");
+        assert_eq!(combat.fighters[1].health, hp_after_first, "rejected swing deals no damage");
+
+        // A swing just past the interval lands again.
+        let ok_time = now + interval + Duration::from_millis(1);
+        let out3 = resolve_swing(&mut combat, 0, 1, 1.0, ok_time);
+        assert!(!out3.is_empty(), "a swing after the cadence elapses lands");
+        assert!(combat.fighters[1].health < hp_after_first, "the cadence-legal swing deals damage");
+    }
+
+    /// Spamming N swing inputs in a short window resolves only the cadence-allowed
+    /// number. Fire 20 swings across 1 second on a Light weapon (400 ms interval) → at
+    /// most 3 land (t=0, ~0.4s, ~0.8s), not 20.
+    #[test]
+    fn spamming_swings_resolves_only_cadence_allowed_count() {
+        use super::super::tables::Weight;
+        let now = Instant::now();
+        let mut combat = make_live_combat_no_enchant(now, Weight::Light);
+
+        let window = Duration::from_secs(1);
+        let n = 20u32;
+        let mut landed = 0u32;
+        for i in 0..n {
+            // 20 evenly-spaced inputs across the 1s window (~50 ms apart — spam).
+            let t = now + window * i / n;
+            if !resolve_swing(&mut combat, 0, 1, 1.0, t).is_empty() {
+                landed += 1;
+            }
+        }
+        // 400 ms cadence over 1s → t=0, 0.4, 0.8 = 3 landed swings. Certainly not 20.
+        assert_eq!(landed, 3, "only cadence-allowed swings land (400 ms over 1 s = 3), not the {n} spammed");
+    }
+
+    /// A Heavy weapon swings SLOWER than a Light one: at a time inside the Light cadence
+    /// but before the Heavy cadence, a Light fighter's second swing lands while a Heavy
+    /// fighter's is still rejected.
+    #[test]
+    fn heavy_weapon_swings_slower_than_light() {
+        use super::super::tables::Weight;
+        let now = Instant::now();
+        assert!(
+            Weight::Heavy.swing_interval() > Weight::Light.swing_interval(),
+            "Heavy cadence must be slower than Light"
+        );
+
+        let mut light = make_live_combat_no_enchant(now, Weight::Light);
+        let mut heavy = make_live_combat_no_enchant(now, Weight::Heavy);
+        // First swing for both.
+        assert!(!resolve_swing(&mut light, 0, 1, 1.0, now).is_empty());
+        assert!(!resolve_swing(&mut heavy, 0, 1, 1.0, now).is_empty());
+
+        // A time past the Light interval but before the Heavy interval.
+        let t = now + Weight::Light.swing_interval() + Duration::from_millis(1);
+        assert!(t < now + Weight::Heavy.swing_interval(), "test time is inside the Heavy cadence");
+        assert!(!resolve_swing(&mut light, 0, 1, 1.0, t).is_empty(), "Light can swing again");
+        assert!(resolve_swing(&mut heavy, 0, 1, 1.0, t).is_empty(), "Heavy is still on cadence — rejected");
+    }
+
+    /// The spell/ability cooldown gate: a second cast of the SAME ability before its
+    /// authoritative cooldown elapses is rejected (no `PerformExecuteAbility` echo);
+    /// after the cooldown it fires again. (Fireball = 3540 ms.)
+    #[test]
+    fn ability_cast_is_cooldown_gated() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let fireball = "d07a8d30-9a1c-49b0-866d-97a8aa1534cf";
+        let cd = ability_cooldown(fireball); // 3540 ms
+        let frame = make_ability_frame(combat.fighters[0].net_object_id, fireball);
+
+        let out1 = on_c2s_input(&mut combat, 0, &frame, now);
+        assert!(!out1.is_empty(), "first cast fires (PerformExecuteAbility + damage)");
+
+        let too_soon = now + cd / 2;
+        let out2 = on_c2s_input(&mut combat, 0, &frame, too_soon);
+        assert!(out2.is_empty(), "a re-cast before the ability cooldown elapses is rejected");
+
+        let after = now + cd + Duration::from_millis(1);
+        let out3 = on_c2s_input(&mut combat, 0, &frame, after);
+        assert!(!out3.is_empty(), "the ability fires again once its cooldown elapses");
     }
 }
 
