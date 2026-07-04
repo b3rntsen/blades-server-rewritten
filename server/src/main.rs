@@ -50,6 +50,7 @@ mod repair;
 mod salvage;
 pub mod schema;
 mod shop;
+mod shop_gen;
 mod session;
 mod static_loader;
 mod status;
@@ -111,6 +112,12 @@ pub struct ServerGlobal {
     pub building_upgrades: serde_json::Value,
     pub job_pools: serde_json::Value,
     pub appearance_change_cost: serde_json::Value,
+    /// Authored, admin-editable per-level town-shop STOCK generation config
+    /// (`shop_stock.json`). Drives [`shop_gen::generate_catalog`] so a vendor
+    /// stocks level-appropriate items. A missing/invalid file loads as an empty
+    /// config; the shop endpoint then falls back to the capture-derived templates
+    /// (never empty). Pure data — a future admin route can hot-reload it.
+    pub shop_stock: shop_gen::ShopStockConfig,
     pub arena: Arc<arena::matchmaker::ArenaGlobal>,
     /// Static dev token for the `/api/dev/v1/import-character` endpoint, read
     /// from `ARENA_IMPORT_TOKEN` at startup. `None` (unset) disables the
@@ -202,6 +209,27 @@ async fn main() -> Result<()> {
             let job_pools = load_static_json("job_pools.json");
             let appearance_change_cost = load_static_json("appearance_change_cost.json");
 
+            // Authored per-level shop-stock generation config. Parsed straight into
+            // the typed `ShopStockConfig` (only the `generation` block is read);
+            // missing/invalid → empty config and the shop endpoint falls back to the
+            // capture-derived templates rather than panicking at startup.
+            let shop_stock: shop_gen::ShopStockConfig = {
+                let p = static_data.join("shop_stock.json");
+                match File::open(&p) {
+                    Ok(f) => serde_json::from_reader(std::io::BufReader::new(f))
+                        .unwrap_or_else(|e| {
+                            log::warn!(
+                                "[shop] invalid {p:?}: {e}; shop stock falls back to templates"
+                            );
+                            Default::default()
+                        }),
+                    Err(_) => {
+                        log::warn!("[shop] no {p:?}; shop stock falls back to templates");
+                        Default::default()
+                    }
+                }
+            };
+
             // Capture-derived static definitions (gifts, announcements, …). Missing
             // files degrade gracefully (empty → endpoint returns an empty list).
             let static_data_defs = static_loader::load(&static_data);
@@ -230,6 +258,7 @@ async fn main() -> Result<()> {
                 building_upgrades,
                 job_pools,
                 appearance_change_cost,
+                shop_stock,
                 arena,
                 arena_import_token,
                 arena_debug_token,
