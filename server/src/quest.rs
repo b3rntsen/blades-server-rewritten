@@ -26,7 +26,7 @@ use crate::{
         CharacterDbEntryCharacterAlone, CharacterDbEntryEconomy, QuestDbEntry, QuestDbEntryInfo,
     },
     session::SessionLookedUpMaybe,
-    util::{self, check_permission_for_character_and_get_it},
+    util,
 };
 
 #[derive(Serialize)]
@@ -43,9 +43,11 @@ pub struct GetQuestsResponse {
     /// Per-pool rotation timers (`[{id, endTime, nextStartTime}]`, epoch seconds)
     /// computed relative to *now* by [`jobs_gen`] — no longer frozen constants.
     job_pools: Value,
-    game_event_quests: Vec<()>,            //TODO:
-    game_event_quests_in_warning: Vec<()>, //TODO,
-    game_event_quests_finished: Vec<()>,   //TODO
+    /// The featured DAILY quests (`quests_daily::select`) — a global, day-rotating set of
+    /// story/side/event quests, level-scaled to the player. Previously an empty TODO.
+    game_event_quests: Vec<QuestWithId>,
+    game_event_quests_in_warning: Vec<QuestWithId>, //TODO: warning-window variants unmodelled
+    game_event_quests_finished: Vec<QuestWithId>,   //TODO: finished-history unmodelled
 }
 
 #[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/quests")]
@@ -63,6 +65,10 @@ pub async fn get_quests(
     // and the daily reset. Tests exercise the pure generator with an injected `now`.
     let now = jobs_gen::now_epoch_secs();
     let job_pools_def = app_state.job_pools.clone();
+    // Shared globals for use inside the transaction closure (the daily-quest select reads
+    // static_data + game_data). Cloning the Arc avoids borrowing `app_state` across the
+    // `conn` borrow (which the closure would otherwise move — E0505).
+    let globals = app_state.get_ref().clone();
     let mut conn = app_state.db_pool.get().await.unwrap();
     conn.transaction(|mut conn| {
         async move {
@@ -191,6 +197,16 @@ pub async fn get_quests(
                 };
             }
 
+            // Featured daily quests: a global, deterministic day-rotating set (SAME for
+            // every player), level-scaled to this character. Uses the same `now` as the
+            // job rotation so both refresh at the 05:00 boundary together.
+            let game_event_quests = quests_daily::select(
+                &globals.static_data.quests_daily,
+                &globals.game_data,
+                now,
+                character.character.0.level as i64,
+            );
+
             Ok(Json(GetQuestsResponse {
                 quests: result_quests,
                 dungeon_generated_data_list: result_generated_data,
@@ -199,7 +215,7 @@ pub async fn get_quests(
                     character: character.character.0,
                 },
                 jobs,
-                game_event_quests: Vec::new(),
+                game_event_quests,
                 game_event_quests_finished: Vec::new(),
                 game_event_quests_in_warning: Vec::new(),
                 job_pools,
@@ -281,13 +297,27 @@ async fn accept_quest(
         // Not a job we know about and not a real quest → let the normal path 404.
     }
 
-    // check permission (normal-quest path)
-    let _ = check_permission_for_character_and_get_it(&mut conn, &session.session, character_id)
-        .await?;
+    // check permission (normal-quest path) + read the character level so the quest's
+    // enemies scale to the player (fix: generate_quest_data no longer hard-codes level 1).
+    let character = {
+        use crate::schema::characters::dsl::*;
+        let rows = characters
+            .filter(id.eq(&character_id))
+            .select(CharacterDbEntryCharacterAlone::as_select())
+            .load(&mut conn)
+            .await?;
+        util::get_only_single_character_and_check_permission(rows, &session.session)?
+    };
+    let player_level = character.character.0.level as i64;
 
-    // actually add quest
-
-    let (quest, dungeon_generated_data) = generate_quest_data(&app_state.game_data, quest_id)?;
+    // actually add quest (level-scaled; a nil-dungeon dialogue quest generates no
+    // dungeon data instead of erroring).
+    let (quest, dungeon_generated_data) = generate_quest_data(
+        &app_state.game_data,
+        quest_id,
+        player_level,
+        &app_state.static_data.quests_daily.level_scaling,
+    )?;
     //TODO: specifically handle the case the quest already exist (primary key is character id + quest id)
 
     let to_insert = QuestDbEntry {
@@ -1230,6 +1260,108 @@ mod jobs_gen {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Daily featured quests (`quests_daily`)
+// ---------------------------------------------------------------------------
+//
+// The `/quests` response's `game_event_quests*` arrays were empty TODOs. This module
+// mirrors `jobs_gen`'s deterministic selection, but for the story/side/event QUEST board
+// (distinct from town JOBS): a set of "featured" daily quests, the SAME for every player,
+// rotating at the 05:00-UTC day boundary. Bodies come from `generate_quest_data` (so they
+// are level-scaled + accept-able), and the nil-dungeon quests are excluded.
+mod quests_daily {
+    use super::*;
+    use blades_lib::static_data::QuestsDailyData;
+    use blades_lib::user_data::QuestWithId;
+    use blades_lib::util::quest::generate_quest_data;
+
+    const SECS_PER_DAY: u64 = 86_400;
+
+    /// The UTC day index for `now`, shifted to the config's reset boundary (default
+    /// 05:00). All players share this index, so the featured set is global + stable
+    /// within a day and changes at the reset. Deterministic — tests inject `now`.
+    pub fn day_index(daily: &QuestsDailyData, now: u64) -> u64 {
+        let hour = daily.selection.reset_hour_utc; // 0 when unset → midnight boundary
+        let minute = daily.selection.reset_minute_utc;
+        let shift = hour * 3600 + minute * 60;
+        now.saturating_sub(shift) / SECS_PER_DAY
+    }
+
+    /// A deterministic FNV-1a hash of `(day_index, category, slot)` → a pool index seed.
+    /// Same day → same picks; changes at the day boundary. No per-character input (the
+    /// featured set is global).
+    fn slot_hash(day: u64, category: &str, slot: u32) -> u64 {
+        let mut h: u64 = 0xCBF2_9CE4_8422_2325;
+        let mut mix = |bytes: &[u8]| {
+            for b in bytes {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x0000_0100_0000_01B3);
+            }
+        };
+        mix(&day.to_le_bytes());
+        mix(category.as_bytes());
+        mix(&slot.to_le_bytes());
+        h
+    }
+
+    /// Select the featured daily quest IDS for `now`'s day: per the `selection.perDay`
+    /// rules, `count` distinct quests per category, de-duplicated, drawn from
+    /// `dailyQuestPool` and EXCLUDING the nil-dungeon quests. Pure + deterministic — the
+    /// server generates the bodies (see [`select`]).
+    pub fn select_ids(daily: &QuestsDailyData, now: u64) -> Vec<Uuid> {
+        let day = day_index(daily, now);
+        let excluded = daily.non_dungeon_ids();
+        let mut chosen: Vec<Uuid> = Vec::new();
+
+        for rule in &daily.selection.per_day {
+            // Candidate pool for this category, excluding nil-dungeon + already-chosen.
+            let pool: Vec<Uuid> = daily
+                .daily_quest_pool
+                .iter()
+                .filter(|q| q.category == rule.category)
+                .map(|q| q.quest_id)
+                .filter(|id| !excluded.contains(id))
+                .collect();
+            if pool.is_empty() {
+                continue;
+            }
+            for slot in 0..rule.count {
+                // Probe forward from the hashed start index for the first not-yet-chosen
+                // quest (dedup within the day); bounded by the pool length.
+                let start = (slot_hash(day, &rule.category, slot) % pool.len() as u64) as usize;
+                for probe in 0..pool.len() {
+                    let id = pool[(start + probe) % pool.len()];
+                    if !chosen.contains(&id) {
+                        chosen.push(id);
+                        break;
+                    }
+                }
+            }
+        }
+        chosen
+    }
+
+    /// Build the featured daily quests for `now`'s day as wire `QuestWithId` entries,
+    /// level-scaled to `player_level`. A quest whose body can't be generated (unknown id
+    /// in a partial parsed.json) is skipped — never fails the whole board.
+    pub fn select(
+        daily: &QuestsDailyData,
+        game_data: &blades_lib::game_data::GameData,
+        now: u64,
+        player_level: i64,
+    ) -> Vec<QuestWithId> {
+        select_ids(daily, now)
+            .into_iter()
+            .filter_map(|quest_id| {
+                let (quest, _dungeon) =
+                    generate_quest_data(game_data, quest_id, player_level, &daily.level_scaling)
+                        .ok()?;
+                Some(QuestWithId { quest_id, quest })
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod jobs_tests {
     use super::jobs_gen;
@@ -1444,6 +1576,101 @@ mod jobs_tests {
                 "job must build a persistable quest row"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod quests_daily_tests {
+    use super::quests_daily;
+    use blades_lib::static_data::{
+        DailyQuestDef, DailySelection, DailySelectionRule, QuestsDailyData,
+    };
+    use uuid::Uuid;
+
+    const DAY_SECS: u64 = 86_400;
+    // 2026-05-13 06:00 UTC — after the 05:00 reset.
+    const NOW: u64 = 1_778_648_400 + 3600;
+
+    fn q(cat: &str, n: u128) -> DailyQuestDef {
+        DailyQuestDef {
+            quest_id: Uuid::from_u128(n),
+            name: format!("{cat} {n}"),
+            category: cat.into(),
+            dungeon_id: Some(Uuid::from_u128(0xD000 + n)),
+            objective_count: 1,
+        }
+    }
+
+    fn fixture() -> QuestsDailyData {
+        let nil = Uuid::from_u128(0);
+        QuestsDailyData {
+            daily_quest_pool: vec![
+                q("side", 1), q("side", 2), q("side", 3), q("side", 4),
+                q("bounty", 10), q("bounty", 11),
+                // A pool member that is ALSO a nil-dungeon quest → must be excluded.
+                DailyQuestDef { quest_id: nil, category: "side".into(), ..Default::default() },
+            ],
+            selection: DailySelection {
+                reset_hour_utc: 5,
+                reset_minute_utc: 0,
+                per_day: vec![
+                    DailySelectionRule { category: "side".into(), count: 2 },
+                    DailySelectionRule { category: "bounty".into(), count: 1 },
+                ],
+            },
+            non_dungeon_quests: vec![DailyQuestDef { quest_id: nil, ..Default::default() }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn select_ids_is_deterministic_per_day_and_rotates() {
+        let d = fixture();
+        let today = quests_daily::select_ids(&d, NOW);
+        // Same day → identical picks.
+        assert_eq!(today, quests_daily::select_ids(&d, NOW + 3600), "stable within the day");
+        // 2 side + 1 bounty = 3 picks, all distinct.
+        assert_eq!(today.len(), 3, "perDay counts honored");
+        let mut uniq = today.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(uniq.len(), 3, "picks are de-duplicated");
+        // The nil-dungeon quest is never selected.
+        assert!(!today.contains(&Uuid::from_u128(0)), "nil-dungeon quest excluded");
+        // A different day generally rotates the set (not asserting inequality of a
+        // specific slot, just that the day index advances the hash input).
+        let next = quests_daily::select_ids(&d, NOW + DAY_SECS);
+        assert_eq!(next.len(), 3);
+    }
+
+    #[test]
+    fn day_index_advances_at_reset_boundary() {
+        let d = fixture();
+        // Just before 05:00 UTC and just after belong to different day indices.
+        let midnight = (NOW / DAY_SECS) * DAY_SECS; // 00:00 UTC of NOW's day
+        let just_before_reset = midnight + 5 * 3600 - 1;
+        let just_after_reset = midnight + 5 * 3600 + 1;
+        assert_ne!(
+            quests_daily::day_index(&d, just_before_reset),
+            quests_daily::day_index(&d, just_after_reset),
+            "the day rolls over at the 05:00 reset"
+        );
+    }
+
+    /// The real committed `quests_daily.json` selects a stable, non-empty, nil-free set.
+    #[test]
+    fn real_quests_daily_file_selects_nonempty_nil_free() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/quests_daily.json");
+        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        let daily: QuestsDailyData = serde_json::from_str(&raw).expect("valid quests_daily.json");
+
+        let ids = quests_daily::select_ids(&daily, NOW);
+        assert!(!ids.is_empty(), "real file yields a featured set");
+        let excluded = daily.non_dungeon_ids();
+        assert!(ids.iter().all(|id| !excluded.contains(id)), "no nil-dungeon quest featured");
+        // Deterministic against the real file too.
+        assert_eq!(ids, quests_daily::select_ids(&daily, NOW + 100), "stable within the day");
     }
 }
 

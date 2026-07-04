@@ -237,24 +237,40 @@ pub async fn create_craft(
                         (results, recipe.crafting_type_id, recipe.duration_ms)
                     }
                     None => {
-                        // recipes.json is a PARTIAL capture (retail has far more alchemy
-                        // recipes than we captured). For an unknown recipe we previously
-                        // echoed crafting_type_id = recipe_id — exactly the temper-hang
-                        // class of bug (fix e5659c9): the client can't map that id to a
-                        // CraftingStation, so the Alchemist screen freezes and the app
-                        // restarts. Derive a VALID crafting_type_id from context instead,
-                        // and return a well-formed (non-empty) result so the craft-
-                        // completion flow can finish.
-                        let crafting_type_id =
-                            derive_plain_craft_type(building_id, &globals.static_data);
-                        // Approximate the brew's output as one stackable of the recipe's
-                        // own id (the true potion template for an un-captured recipe is
-                        // unknown; granting a single stackable is well-formed and lets the
-                        // completion flow finish — flagged as an approximation).
-                        let results = serde_json::json!({
-                            "stackableItems": { recipe_id.to_string(): 1 }
-                        });
-                        (results, crafting_type_id, 0)
+                        // A smith (Forge) craft resolves to a REAL craftable: the client's
+                        // RecipeManager gates the list by forge level and sends its own
+                        // recipeId; recipes.json captured only ~4 smithing recipes, so most
+                        // forge crafts land here. Mint the REAL item at its gradeIndex (a
+                        // proper instanced backpack item, like a known recipe) and ALWAYS
+                        // report the Smithing craftingTypeId — never the recipe id (echoing
+                        // recipe_id hangs the client, fix e5659c9).
+                        if let Some(craftable) =
+                            globals.static_data.smith_craftables.resolve(&recipe_id)
+                        {
+                            let crafting_type_id = smithing_crafting_type(&globals.static_data);
+                            let results = mint_smith_craftable(craftable, tempering_level);
+                            (results, crafting_type_id, craftable.duration_ms)
+                        } else {
+                            // Not a smith craftable → the alchemy/other plain-craft path.
+                            // recipes.json is a PARTIAL capture (retail has far more alchemy
+                            // recipes than we captured). For an unknown recipe we previously
+                            // echoed crafting_type_id = recipe_id — exactly the temper-hang
+                            // class of bug (fix e5659c9): the client can't map that id to a
+                            // CraftingStation, so the Alchemist screen freezes and the app
+                            // restarts. Derive a VALID crafting_type_id from context instead,
+                            // and return a well-formed (non-empty) result so the craft-
+                            // completion flow can finish.
+                            let crafting_type_id =
+                                derive_plain_craft_type(building_id, &globals.static_data);
+                            // Approximate the brew's output as one stackable of the recipe's
+                            // own id (the true potion template for an un-captured recipe is
+                            // unknown; granting a single stackable is well-formed and lets the
+                            // completion flow finish — flagged as an approximation).
+                            let results = serde_json::json!({
+                                "stackableItems": { recipe_id.to_string(): 1 }
+                            });
+                            (results, crafting_type_id, 0)
+                        }
                     }
                 }
             };
@@ -408,6 +424,46 @@ fn derive_plain_craft_type(
         .map(|r| r.crafting_type_id)
         .next()
         .unwrap_or(alchemy)
+}
+
+/// The Smithing station's `craftingTypeId`, ALWAYS echoed for a forge craft (never the
+/// recipe id — echoing recipe_id hangs the client, fix e5659c9). Prefer the value loaded
+/// from `smith_craftables.json`; fall back to the known Smithing station UUID so the
+/// client can still map the CraftingStation if the file is missing.
+const SMITHING_CRAFTING_TYPE_ID: &str = "a47707e6-59e9-43b0-a29f-6d703acd8171";
+
+fn smithing_crafting_type(static_data: &blades_lib::static_data::StaticData) -> Uuid {
+    static_data
+        .smith_craftables
+        .smithing_crafting_type_id
+        .unwrap_or_else(|| {
+            Uuid::parse_str(SMITHING_CRAFTING_TYPE_ID).expect("valid smithing craft type uuid")
+        })
+}
+
+/// Full durability stamped on a freshly-forged item. The captured smithing recipe result
+/// carried a per-tier durability that `smith_craftables.json` does not model per item;
+/// 150.0 matches the captured Fine-tier smithing result and is a sane full-durability
+/// value (the repair endpoint restores from `item_durability.json` at use time anyway).
+const SMITH_MINT_DURABILITY: f64 = 150.0;
+
+/// Mint a smith craftable into a well-formed `{"items":[...]}` results object: a fresh
+/// instanced item at the craftable's `itemTemplateId`, with the requested `temperingLevel`
+/// and full durability — mirroring how a known smithing recipe's result is shaped
+/// (`{id, itemTemplateId, temperingLevel, durability}`). The `gradeIndex` is intrinsic to
+/// the chosen `itemTemplateId` (each material+grade is a distinct client template), so it
+/// is not a separate wire field; grade-specific `GRADING` affix property UUIDs are not in
+/// this config, so no (malformed) synthetic grading is attached. A unique id is minted now
+/// so repeated crafts of the same template never collide when `finish` preserves the id.
+fn mint_smith_craftable(craftable: &blades_lib::static_data::SmithCraftable, tempering_level: u64) -> Value {
+    serde_json::json!({
+        "items": [{
+            "id": Uuid::new_v4().to_string(),
+            "itemTemplateId": craftable.item_template_id.to_string(),
+            "temperingLevel": tempering_level,
+            "durability": SMITH_MINT_DURABILITY,
+        }]
+    })
 }
 
 /// The universal temper / enchant `craftingTypeId`s — the ONLY two that appear across
@@ -734,6 +790,78 @@ mod tests {
             Recipe { crafting_type_id: Uuid::from_u128(0xF0), results: serde_json::json!({}), duration_ms: 0 },
         );
         assert_eq!(derive_plain_craft_type(Uuid::from_u128(9), &sd), alchemy);
+    }
+
+    /// A smith craftable mints the REAL itemTemplateId at its grade (a proper instanced
+    /// backpack item, `finish`-able) and reports the Smithing craftingTypeId — never the
+    /// recipe id (echoing recipe_id hangs the client, fix e5659c9).
+    #[test]
+    fn smith_craftable_mints_real_item_and_smithing_type_not_recipe_id() {
+        use blades_lib::static_data::{SmithCraftable, SmithCraftables, StaticData};
+
+        let template = Uuid::from_u128(0x5A17_C0DE);
+        let request_recipe_id = template; // client sends its own (== template) id
+        let craftable = SmithCraftable {
+            item_template_id: template,
+            grade_index: 3,
+            recipe_id: None,
+            duration_ms: 12_345,
+            name: Some("Ebony Longsword".into()),
+        };
+        let mut sd = StaticData::default();
+        let smithing_type = Uuid::parse_str(SMITHING_CRAFTING_TYPE_ID).unwrap();
+        sd.smith_craftables = SmithCraftables {
+            smithing_crafting_type_id: Some(smithing_type),
+            forge_building_type_id: Some(Uuid::from_u128(0xF0_47E)),
+            by_recipe: Default::default(),
+            by_template: {
+                let mut m = std::collections::HashMap::new();
+                m.insert(template, craftable.clone());
+                m
+            },
+        };
+
+        // The unknown-recipe smith path resolves + mints.
+        let resolved = sd.smith_craftables.resolve(&request_recipe_id).expect("resolves by template");
+        let results = mint_smith_craftable(resolved, 10);
+        let ctid = smithing_crafting_type(&sd);
+
+        // Crafting type is Smithing, NOT the recipe id.
+        assert_eq!(ctid, smithing_type, "reports the Smithing crafting type");
+        assert_ne!(ctid, request_recipe_id, "must never echo the recipe id");
+
+        // The minted item is the real template, is finish-able, and carries the tempering.
+        let reward = reward_from_results(&results);
+        assert_eq!(reward.items.len(), 1, "one instanced item minted");
+        assert_eq!(reward.items[0].item.item_template_id, template, "real itemTemplateId");
+        assert_eq!(reward.items[0].item.tempering_level, 10, "requested tempering applied");
+        assert!(reward.items[0].item.durability > 0.0, "minted with durability");
+    }
+
+    /// Resolution prefers the captured recipe id over the template id, and the two smith
+    /// crafting-type consts agree (loaded value used when present, hardcoded fallback else).
+    #[test]
+    fn smith_resolve_by_recipe_id_and_type_fallback() {
+        use blades_lib::static_data::{SmithCraftable, SmithCraftables, StaticData};
+        let template = Uuid::from_u128(0xAA);
+        let recipe = Uuid::from_u128(0xBB);
+        let craftable = SmithCraftable {
+            item_template_id: template,
+            grade_index: 0,
+            recipe_id: Some(recipe),
+            duration_ms: 5,
+            name: None,
+        };
+        let mut sd = StaticData::default();
+        sd.smith_craftables = SmithCraftables {
+            smithing_crafting_type_id: None, // force fallback
+            forge_building_type_id: None,
+            by_recipe: { let mut m = std::collections::HashMap::new(); m.insert(recipe, craftable.clone()); m },
+            by_template: { let mut m = std::collections::HashMap::new(); m.insert(template, craftable.clone()); m },
+        };
+        assert!(sd.smith_craftables.resolve(&recipe).is_some(), "resolves by captured recipe id");
+        // No loaded type → the known Smithing station UUID fallback (a real CraftingStation).
+        assert_eq!(smithing_crafting_type(&sd).to_string(), SMITHING_CRAFTING_TYPE_ID);
     }
 
     /// The unknown-recipe result object is well-formed and NON-empty (a single stackable),
