@@ -5,6 +5,7 @@ use crate::{
     models::{CharacterDbEntryCharacterWalletInventory, QuestDbEntryDungeonStateAndGeneratedData},
 };
 use actix_web::{
+    http::StatusCode,
     post,
     web::{self, Json},
 };
@@ -31,10 +32,31 @@ struct EnemyKilledUpdate {
     pub time: u64,
 }
 
+/// A `combat_completed` action — the client posts it (alongside `enemy_killed`
+/// actions) when a combat encounter/room resolves. The per-enemy XP + kills arrive as
+/// the `EnemyKilled` actions in the SAME batch, so this is a state-only marker here
+/// (the dungeon's `current_state` blob is persisted regardless). Fields vary by client
+/// version; serde ignores any we don't name, so an evolving payload never 400s.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct CombatCompletedUpdate {
+    #[serde(default)]
+    #[allow(dead_code)]
+    time: Option<u64>,
+}
+
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum DungeonUpdateAction {
     EnemyKilled(EnemyKilledUpdate),
+    /// Accepted so a mixed `enemy_killed` + `combat_completed` batch deserializes —
+    /// previously an unknown variant made serde reject the whole POST (→400), which is
+    /// PaganBlueNose's "network error … with a quest".
+    CombatCompleted(CombatCompletedUpdate),
+    /// Forward-compat: any OTHER action type the client emits is accepted and ignored
+    /// rather than 400-ing the whole batch.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Deserialize, Debug)]
@@ -85,16 +107,20 @@ pub async fn dungeon_update(
                     .await?
                     .into_iter()
                     .next()
-                    .expect("TODO: proper error handling")
+                    // No matching quest/character for this user → 404 instead of a panic
+                    // (dropped connection = the client's "network error").
+                    .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
             };
 
+            // The dungeon must have been entered/generated first. A missing
+            // generated_data / dungeon_state is a client/state error → 400, not a panic.
             let generated_data = quest_data
                 .generated_data
                 .0
-                .expect("TODO: proper error handling");
+                .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2))?;
             let mut dungeon_state = quest_data
                 .dungeon_state
-                .expect("TODO: proper error handling")
+                .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2))?
                 .0;
 
             let inventory_modification_tracker = InventoryChangeTracker::default();
@@ -109,18 +135,25 @@ pub async fn dungeon_update(
                             enemy_killed.spawner_index,
                             enemy_killed.enemy_index,
                         );
-                        let enemy_generated_data = generated_data
-                            .get_enemy(&enemy_index)
-                            .expect("TODO: error handling");
+                        // A stale/unknown enemy index → skip THAT action, don't kill the
+                        // whole dungeon update (was a panic).
+                        let Some(enemy_generated_data) = generated_data.get_enemy(&enemy_index)
+                        else {
+                            log::warn!(
+                                "dungeon_update: enemy {:?} not in generated data (stale) — skipping",
+                                enemy_index
+                            );
+                            continue;
+                        };
                         if let Some(current_enemy_data) = dungeon_state
                             .dungeon_status
                             .enemy_status
                             .get_mut(&enemy_index)
                         {
+                            // Re-reporting an already-killed enemy (client retry/dup) is a
+                            // no-op, not a panic — and must not double-count XP.
                             if current_enemy_data.killed {
-                                panic!(
-                                    "TODO: properly handle killing already killed enemy (or just early continue?)"
-                                );
+                                continue;
                             }
                             current_enemy_data.killed = true;
                         } else {
@@ -137,6 +170,16 @@ pub async fn dungeon_update(
                         }
 
                         character_data.character.0.experience += enemy_generated_data.given_xp;
+                    }
+                    // Room/combat finished — the kills (XP) arrived as EnemyKilled actions
+                    // in this batch and the dungeon current_state blob is persisted below;
+                    // no extra reward to apply here.
+                    DungeonUpdateAction::CombatCompleted(_) => {}
+                    DungeonUpdateAction::Unknown => {
+                        log::warn!(
+                            "dungeon_update: ignoring unknown action type in quest {}",
+                            quest_id
+                        );
                     }
                 }
             }
@@ -180,4 +223,32 @@ pub async fn dungeon_update(
             Ok::<_, BladeApiError>(Json(result))
         }
     }.scope_boxed()).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mixed_batch_with_combat_completed_deserializes() {
+        // The real client posts a MIXED actions array (enemy_killed + combat_completed).
+        // With the old single-variant enum, serde rejected `combat_completed` and the
+        // WHOLE POST 400'd (PaganBlueNose's quest "network error"). It must now parse,
+        // and an unknown future action type must be tolerated too.
+        let raw = r#"{
+            "currentState": {"b64": "AAAA"},
+            "actions": [
+                {"type":"enemy_killed","spawnGroupId":"11111111-0000-0000-0000-000000000001","spawnerIndex":0,"enemyIndex":0,"xpReward":11.0,"time":1234},
+                {"type":"combat_completed","time":1300,"someFutureField":42},
+                {"type":"room_cleared","whatever":true}
+            ]
+        }"#;
+        let req: DungeonUpdateRequest =
+            serde_json::from_str(raw).expect("mixed dungeon-update batch must deserialize");
+        assert_eq!(req.actions.len(), 3);
+        assert!(matches!(req.actions[0], DungeonUpdateAction::EnemyKilled(_)));
+        assert!(matches!(req.actions[1], DungeonUpdateAction::CombatCompleted(_)));
+        // Unknown action type tolerated (not a 400).
+        assert!(matches!(req.actions[2], DungeonUpdateAction::Unknown));
+    }
 }
