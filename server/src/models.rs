@@ -67,6 +67,31 @@ pub struct CharacterDbEntryCharacterWalletInventory {
     pub inventory: JsonDbWrapper<CompleteInventory>,
 }
 
+/// Town-lifecycle handlers (build / upgrade / complete / destroy): the `town`
+/// JSONB column plus the wallet + backpack that a build cost debits, and the
+/// character (its `town` xp/level is the gate for `requireTownLevel`). `AsChangeset`
+/// so a handler loads it `for_no_key_update`, mutates the JSONB in place, and writes
+/// it all back in one row update (mirrors [`CharacterDbEntryCharacterWalletInventory`],
+/// with the `town` column added). `town` is `Option` — a character with no captured
+/// town can't have its buildings mutated (the handler 404s rather than fabricate one).
+#[derive(Queryable, Selectable, AsChangeset)]
+#[diesel(table_name = crate::schema::characters)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct CharacterDbEntryTownEconomy {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub character: JsonDbWrapper<CompleteCharacter>,
+    pub wallet: JsonDbWrapper<CompleteWallet>,
+    pub inventory: JsonDbWrapper<CompleteInventory>,
+    pub town: Option<JsonDbWrapper<Value>>,
+}
+
+impl CharacterHolder for CharacterDbEntryTownEconomy {
+    fn get_user_id(&self) -> &Uuid {
+        &self.user_id
+    }
+}
+
 /// Workhorse for the town/RPG economy handlers (shops, crafts, chests, gifts, the
 /// global store, challenges, …): the character + wallet + inventory plus the
 /// server-managed `server_state`. `AsChangeset` so a handler loads it

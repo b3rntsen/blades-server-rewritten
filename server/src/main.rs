@@ -326,6 +326,13 @@ async fn main() -> Result<()> {
                     .service(abyss::end_abyss)
                     .service(abyss::get_abyss)
                     .service(town::get_town)
+                    // Town building lifecycle. Register the deeper `/buildings/{id}/…`
+                    // paths BEFORE the bare `/buildings` collection POST so the latter
+                    // (place) doesn't shadow the per-building actions.
+                    .service(town::upgrade_building)
+                    .service(town::complete_building)
+                    .service(town::destroy_building)
+                    .service(town::place_building)
                     // Crafting: finish (specific path) BEFORE create (bare /crafts).
                     .service(craft::finish_craft)
                     .service(craft::create_craft)
