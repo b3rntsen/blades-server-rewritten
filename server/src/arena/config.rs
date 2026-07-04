@@ -36,6 +36,14 @@ pub struct ArenaConfig {
     /// `None` when unset / unparseable → unchanged (today's empty-starter bot). Does
     /// NOT affect a real PvP pair (both players upload their own profiles).
     pub debug_ghost_user_id: Option<Uuid>,
+    /// Roster of arena `characters.user_id` UUIDs to use as solo-match BOT opponents
+    /// (env `ARENA_BOT_USER_IDS`, comma-separated). When set, a solo-fallback bot loads
+    /// one of these (COMPLETE + distinct from the human, rotated by gsid). When EMPTY,
+    /// the bot is instead any random COMPLETE character in the DB. Either way the bot
+    /// gets a non-empty op54 PROFILE → the opponent is visible/bindable, killable, and
+    /// the match-end card resolves (the 2026-07-03 invisible-bot / post-match-hang fix).
+    /// Unlike `debug_ghost_user_id` this is the PRODUCTION bot path (not a debug crutch).
+    pub bot_user_ids: Vec<Uuid>,
 }
 
 impl ArenaConfig {
@@ -54,6 +62,16 @@ impl ArenaConfig {
             debug_ghost_user_id: env::var("ARENA_DEBUG_GHOST")
                 .ok()
                 .and_then(|s| Uuid::parse_str(s.trim()).ok()),
+            // Production solo-bot roster (comma-separated user_id UUIDs). Empty → any
+            // random COMPLETE character in the DB is used as the bot.
+            bot_user_ids: env::var("ARENA_BOT_USER_IDS")
+                .ok()
+                .map(|s| {
+                    s.split(',')
+                        .filter_map(|p| Uuid::parse_str(p.trim()).ok())
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 }

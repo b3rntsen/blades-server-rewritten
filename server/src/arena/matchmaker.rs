@@ -157,30 +157,34 @@ async fn load_loadout(db: &Option<DbPool>, user_id: Uuid) -> crate::arena::comba
         .ok()
         .and_then(|rows| rows.into_iter().next());
     match row {
-        Some(r) => {
-            let mut lo = loadout::from_character(&r.character.0, &r.inventory.0);
-            lo.character_uuid = r.id.to_string(); // the character UUID for the op50 spawn
-            // op54 round-start PROFILE JSON, serialized faithfully from the stored
-            // character (the structs ARE the game wire format — camelCase + verbatim
-            // Value sub-objects): p4 = {"equippedItems":{…}}, p5 = data + id + character.
-            // MUST include `data` (customization) — retail's profile carries it
-            // (data.customization.CharacterUID = the avatar visual); without it the
-            // opponent has no appearance and the client's resource-load hangs at
-            // "connecting" (the 2026-06-17 gate, found via the on-device matchstate probe).
-            // TODO(arena-profile): `equippedItems` shape still diverges from retail
-            // (missing per-item `grade` / `arcaneTier`). Fixing it needs data-model
-            // changes (those fields aren't stored on the item), so it's a separate
-            // follow-up — left as-is for now. The op54 hang is driven by the CHARACTER
-            // JSON schema (below), which this fix makes retail-identical.
-            lo.profile_equipped_json =
-                serde_json::json!({ "equippedItems": &r.inventory.0.loadout.equipped_items }).to_string();
-            // op54 round-start PROFILE character JSON, trimmed to retail's schema.
-            lo.profile_character_json =
-                build_profile_character_json(&r.data.0, r.id, &r.character.0);
-            lo
-        }
+        Some(r) => loadout_from_row(&r),
         None => loadout::starter(),
     }
+}
+
+/// Build a full combat [`Loadout`] from a loaded `characters` row: the parsed combat
+/// stats PLUS the identity the round-start emit needs — `character_uuid` (op50 spawn
+/// `p4` / avatar propId4) and the op54 PROFILE JSON. Shared by [`load_loadout`] (the
+/// human) and [`load_bot_loadout`] (the solo bot), so a bot gets the SAME non-empty
+/// profile a human does — the op54 PROFILE (GameMessageId 35) is the frame that makes
+/// the opponent VISIBLE and bindable. An empty starter profile → invisible/unkillable
+/// bot + a match-end hang (the 2026-07-03 solo-bot bug).
+///
+/// The profile MUST include `data.customization` (the opponent's avatar visual) or the
+/// client's resource-load hangs at "Connecting"; `build_profile_character_json` also
+/// trims it to retail's exact schema (dropping keys retail never sends, which the
+/// client's deserializer would reject). `equippedItems` shape still diverges slightly
+/// from retail (missing per-item `grade`/`arcaneTier`) — a separate data-model follow-up.
+fn loadout_from_row(
+    r: &CharacterDbEntryCharacterWalletInventory,
+) -> crate::arena::combat::Loadout {
+    use crate::arena::combat::loadout;
+    let mut lo = loadout::from_character(&r.character.0, &r.inventory.0);
+    lo.character_uuid = r.id.to_string();
+    lo.profile_equipped_json =
+        serde_json::json!({ "equippedItems": &r.inventory.0.loadout.equipped_items }).to_string();
+    lo.profile_character_json = build_profile_character_json(&r.data.0, r.id, &r.character.0);
+    lo
 }
 
 /// Build the op54 round-start PROFILE character JSON, **trimmed to retail's
@@ -258,6 +262,145 @@ fn build_profile_character_json(
 /// (Empty UUIDs — a starter loadout — never count as a self-match.)
 fn is_self_match(human_char_uuid: &str, ghost_char_uuid: &str) -> bool {
     !ghost_char_uuid.is_empty() && ghost_char_uuid == human_char_uuid
+}
+
+/// True iff a loaded `characters` row has a non-empty `data.customization` — the
+/// opponent avatar's appearance. A bot WITHOUT it renders nothing and the client's
+/// resource-load hangs at "Connecting", so solo-bot selection filters on this.
+fn row_has_customization(r: &CharacterDbEntryCharacterWalletInventory) -> bool {
+    serde_json::to_value(&r.data.0)
+        .ok()
+        .and_then(|v| v.get("customization").cloned())
+        .and_then(|c| c.as_object().map(|o| !o.is_empty()))
+        .unwrap_or(false)
+}
+
+/// Pure selection: from `(character_uuid, is_complete)` candidates, choose a bot that is
+/// COMPLETE (renders) AND distinct from the human (not a self-match), rotated by the
+/// match's `gsid` for variety. Returns the chosen index, or `None` if none qualifies.
+fn pick_bot_index(
+    candidates: &[(String, bool)],
+    human_char_uuid: &str,
+    gsid: Uuid,
+) -> Option<usize> {
+    let eligible: Vec<usize> = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, (uuid, complete))| *complete && !is_self_match(human_char_uuid, uuid))
+        .map(|(i, _)| i)
+        .collect();
+    if eligible.is_empty() {
+        return None;
+    }
+    // Rotate by the (random) gsid's first byte → variety across matches, deterministic
+    // for a given match. No RNG (Date/rand are unavailable/undesired in this actor).
+    let seed = gsid.as_bytes()[0] as usize;
+    Some(eligible[seed % eligible.len()])
+}
+
+/// Load a SOLO-match bot opponent: a real, COMPLETE, distinct character so the bot has a
+/// non-empty op54 PROFILE (a visible/bindable/killable opponent + a resolvable match-end
+/// card — the 2026-07-03 solo-bot fix). Pool = the configured `ARENA_BOT_USER_IDS`
+/// roster if set, else any OTHER character in the DB. Filters to complete + non-self,
+/// rotates by gsid. Falls back to the empty `starter()` (logged) only if NOTHING
+/// qualifies (e.g. no other complete character exists yet).
+async fn load_bot_loadout(
+    db: &Option<DbPool>,
+    human_char_uuid: &str,
+    config: &ArenaConfig,
+    gsid: Uuid,
+) -> crate::arena::combat::Loadout {
+    use crate::arena::combat::loadout;
+    let Some(db) = db else {
+        return loadout::starter();
+    };
+    let Ok(mut conn) = db.get().await else {
+        return loadout::starter();
+    };
+
+    let rows: Vec<CharacterDbEntryCharacterWalletInventory> = if !config.bot_user_ids.is_empty() {
+        characters::table
+            .filter(characters::user_id.eq_any(config.bot_user_ids.clone()))
+            .select(CharacterDbEntryCharacterWalletInventory::as_select())
+            .load(&mut conn)
+            .await
+            .unwrap_or_default()
+    } else {
+        // No roster → any OTHER character (cap the scan; the pool is small today — this
+        // self-heals as more players transfer characters with appearance).
+        let mut q = characters::table
+            .select(CharacterDbEntryCharacterWalletInventory::as_select())
+            .limit(200)
+            .into_boxed();
+        if let Ok(h) = Uuid::parse_str(human_char_uuid) {
+            q = q.filter(characters::id.ne(h));
+        }
+        q.load(&mut conn).await.unwrap_or_default()
+    };
+
+    let candidates: Vec<(String, bool)> = rows
+        .iter()
+        .map(|r| (r.id.to_string(), row_has_customization(r)))
+        .collect();
+    match pick_bot_index(&candidates, human_char_uuid, gsid) {
+        Some(i) => loadout_from_row(&rows[i]),
+        None => {
+            warn!(
+                "matchmaker: no COMPLETE distinct bot character available (pool {}) — bot falls \
+                 back to the empty starter (INVISIBLE opponent). Seed ARENA_BOT_USER_IDS or \
+                 transfer more characters with appearance.",
+                candidates.len()
+            );
+            loadout::starter()
+        }
+    }
+}
+
+#[cfg(test)]
+mod bot_pick_tests {
+    use super::*;
+
+    fn gsid_with_first_byte(b: u8) -> Uuid {
+        let mut bytes = [0u8; 16];
+        bytes[0] = b;
+        Uuid::from_bytes(bytes)
+    }
+
+    #[test]
+    fn pick_bot_index_prefers_complete_and_distinct() {
+        let human = "aaaaaaaa-0000-0000-0000-000000000001";
+        let cands = vec![
+            (human.to_string(), true),                              // self-match → excluded
+            ("bbbbbbbb-0000-0000-0000-000000000002".into(), false), // incomplete → excluded
+            ("cccccccc-0000-0000-0000-000000000003".into(), true),  // the only eligible
+        ];
+        assert_eq!(pick_bot_index(&cands, human, gsid_with_first_byte(0)), Some(2));
+        assert_eq!(pick_bot_index(&cands, human, gsid_with_first_byte(123)), Some(2));
+    }
+
+    #[test]
+    fn pick_bot_index_none_when_no_complete_distinct() {
+        let human = "aaaaaaaa-0000-0000-0000-000000000001";
+        let cands = vec![
+            (human.to_string(), true),                              // self
+            ("dddddddd-0000-0000-0000-000000000004".into(), false), // incomplete
+        ];
+        assert_eq!(pick_bot_index(&cands, human, gsid_with_first_byte(0)), None);
+    }
+
+    #[test]
+    fn pick_bot_index_rotates_across_matches() {
+        let human = "zzzzzzzz-0000-0000-0000-000000000009";
+        let cands = vec![
+            ("11111111-0000-0000-0000-000000000001".into(), true),
+            ("22222222-0000-0000-0000-000000000002".into(), true),
+            ("33333333-0000-0000-0000-000000000003".into(), true),
+        ];
+        // Three eligible → gsid first-byte selects eligible[b % 3]; distinct seeds differ.
+        assert_eq!(pick_bot_index(&cands, human, gsid_with_first_byte(0)), Some(0));
+        assert_eq!(pick_bot_index(&cands, human, gsid_with_first_byte(1)), Some(1));
+        assert_eq!(pick_bot_index(&cands, human, gsid_with_first_byte(2)), Some(2));
+    }
 }
 
 /// Derive one `playerSessionId` per player for a match, sharing the `gameSessionId`.
@@ -610,6 +753,48 @@ async fn resolve(
         }
     }
 
+    // PRODUCTION BOT FILL (2026-07-03 solo-bot fix). Any bot slot NOT filled by a
+    // configured debug ghost gets a REAL, COMPLETE, DISTINCT opponent character. A real
+    // character has a non-empty op54 PROFILE, so the engine's broadcast emits the
+    // opponent → the client RENDERS + BINDS the NPC (visible), dispatches the player's
+    // attacks against it (killable), and the match-end result card carries a resolvable
+    // winner (no post-match "stuck on loading" hang). Without this the bot slot falls to
+    // loadout::starter() (empty profile) → the invisible/unkillable-bot bug. Bounded by
+    // the same 1.5s timeout so a slow query never hangs the single matchmaker actor.
+    if bots > 0 && loadouts.len() < tickets.len() + bots {
+        let human_char_uuid = loadouts
+            .get(0)
+            .map(|l| l.character_uuid.clone())
+            .unwrap_or_default();
+        while loadouts.len() < tickets.len() + bots {
+            let bot = match tokio::time::timeout(
+                std::time::Duration::from_millis(1500),
+                load_bot_loadout(db, &human_char_uuid, config, game_session_id),
+            )
+            .await
+            {
+                Ok(b) => b,
+                Err(_) => {
+                    warn!("matchmaker: bot loadout load timed out — empty starter bot");
+                    crate::arena::combat::loadout::starter()
+                }
+            };
+            info!(
+                "matchmaker: solo bot slot {} → \"{}\" (char {}, profile {} B → {})",
+                loadouts.len(),
+                bot.display_name,
+                bot.character_uuid,
+                bot.profile_character_json.len(),
+                if bot.profile_character_json.is_empty() {
+                    "INVISIBLE (no complete bot available)"
+                } else {
+                    "opponent op54 PROFILE will broadcast"
+                },
+            );
+            loadouts.push(bot);
+        }
+    }
+
     // APPEARANCE GUARD (docs/arena-appearance-bug-spec.md). Log each fighter's
     // binding UUID at allocation — the client binds opponent appearance by the
     // avatar's propId4 = this `character_uuid`, so distinctness here is what keeps the
@@ -835,6 +1020,7 @@ mod tests {
             max_queued_players: 64,
             solo_fallback_secs: 15,
             debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
         };
         let (tx, rx) = unbounded_channel::<TicketRequest>();
         tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
@@ -891,6 +1077,7 @@ mod tests {
             max_queued_players: 64,
             solo_fallback_secs: 600, // long fallback — the Failed must arrive BEFORE it
             debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
         };
         let (tx, rx) = unbounded_channel::<TicketRequest>();
         tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
@@ -958,6 +1145,7 @@ mod tests {
             max_queued_players: 64,
             solo_fallback_secs: 1,
             debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
         };
         let (tx, rx) = unbounded_channel::<TicketRequest>();
         tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
