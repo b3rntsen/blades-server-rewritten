@@ -208,19 +208,19 @@ pub async fn create_craft(
                 let reward_item = RewardItem { id: item_id, item: mutated };
                 let results = serde_json::json!({ "items": [reward_item] });
                 // crafting_type_id MUST be the universal temper/enchant CraftingType, never the
-                // recipe id. item_mod_recipes.json is a tiny subset of the real recipes (retail
-                // has one recipe per item per level); for an unknown recipe we previously fell
-                // back to recipe_id, which the client cannot map to a CraftingStation → the temper
-                // UI spun forever. EVERY real on-device temper recipe is outside our captured 23
-                // (verified against the arena-mitm transcript). Derive the type from
-                // temperingLevel (temper = 06c8087b, enchant = aaef180b — both observed as the
-                // ONLY two craftingTypeIds across item_mod_recipes.json); keep the captured
-                // duration when the recipe is known, else 0 (instantly collectable).
-                let crafting_type_id = if tempering_level > 0 {
-                    Uuid::parse_str("06c8087b-ede4-4ce7-8103-6c2067d18498").unwrap()
-                } else {
-                    Uuid::parse_str("aaef180b-8ee7-474a-a7eb-0156aa5529ba").unwrap()
-                };
+                // recipe id. item_mod_recipes.json is a tiny subset of the real recipes
+                // (retail has one recipe per item per level); for an unknown recipe we
+                // previously fell back to recipe_id, which the client cannot map to a
+                // CraftingStation → the temper UI spun forever. EVERY real on-device
+                // temper recipe is outside our captured 23 (verified against the
+                // arena-mitm transcript). Derive the type from temperingLevel; keep the
+                // captured duration when the recipe is known, else 0.
+                //
+                // Both branches fixed this independently and identically (e5659c9 on
+                // main, f73f425 here) — same two UUIDs, same rule. Keeping this side
+                // because the logic lives in a named helper with its own test rather
+                // than inline, so there is one place for it to be wrong.
+                let crafting_type_id = item_mod_crafting_type(tempering_level);
                 let duration_ms = mod_recipe.as_ref().map(|m| m.duration_ms).unwrap_or(0);
                 (results, crafting_type_id, duration_ms)
             } else {
@@ -408,6 +408,22 @@ fn derive_plain_craft_type(
         .map(|r| r.crafting_type_id)
         .next()
         .unwrap_or(alchemy)
+}
+
+/// The universal temper / enchant `craftingTypeId`s — the ONLY two that appear across
+/// `item_mod_recipes.json`. A mod-craft (`itemId` present) MUST report one of these, never
+/// the recipe id: `item_mod_recipes.json` is a tiny captured subset (retail has one recipe
+/// per item per level), so an unknown recipe reporting `recipe_id` leaves the client unable
+/// to map the `CraftingStation` → the temper UI spins forever (fix e5659c9). Every real
+/// on-device temper recipe is outside our captured 23, so this path is the common one.
+fn item_mod_crafting_type(tempering_level: u64) -> Uuid {
+    if tempering_level > 0 {
+        // temper
+        Uuid::parse_str("06c8087b-ede4-4ce7-8103-6c2067d18498").expect("valid temper craft type")
+    } else {
+        // enchant
+        Uuid::parse_str("aaef180b-8ee7-474a-a7eb-0156aa5529ba").expect("valid enchant craft type")
+    }
 }
 
 /// Apply the requested `tempering_level` to every item in an `{"items":[...]}` results
@@ -681,6 +697,23 @@ mod tests {
             ctid.to_string(),
             ALCHEMY_CRAFTING_TYPE_ID,
             "empty recipe set → alchemy fallback"
+        );
+    }
+
+    /// Temper/enchant (itemId present) reports the universal craftingTypeId, NEVER the recipe
+    /// id — an unknown mod-recipe (all real on-device tempers are outside our captured 23) must
+    /// still map to a CraftingStation or the temper UI spins forever (fix e5659c9).
+    #[test]
+    fn item_mod_crafting_type_is_universal_never_recipe_id() {
+        assert_eq!(
+            item_mod_crafting_type(3).to_string(),
+            "06c8087b-ede4-4ce7-8103-6c2067d18498",
+            "temper (level>0) → universal temper type"
+        );
+        assert_eq!(
+            item_mod_crafting_type(0).to_string(),
+            "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+            "enchant (level==0) → universal enchant type"
         );
     }
 
