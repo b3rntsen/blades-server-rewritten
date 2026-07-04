@@ -103,6 +103,14 @@ pub struct ServerGlobal {
     /// Keyed by lowercase UUID string -> tempering-level string -> max durability.
     /// Empty if the file is missing/invalid (repair then leaves durability as-is).
     pub item_max_durability: std::collections::HashMap<String, std::collections::HashMap<String, f64>>,
+    /// Faithful town game-data extracted from the APK bundles (server/data/static/):
+    /// building upgrade cost/time/material tables, town job-pool definitions, and the
+    /// appearance-change currency cost. Raw JSON parsed by the town/quest/character
+    /// handlers; a missing/invalid file loads as `Null` and that feature degrades
+    /// gracefully (no panic at startup).
+    pub building_upgrades: serde_json::Value,
+    pub job_pools: serde_json::Value,
+    pub appearance_change_cost: serde_json::Value,
     pub arena: Arc<arena::matchmaker::ArenaGlobal>,
     /// Static dev token for the `/api/dev/v1/import-character` endpoint, read
     /// from `ARENA_IMPORT_TOKEN` at startup. `None` (unset) disables the
@@ -173,6 +181,27 @@ async fn main() -> Result<()> {
                 }
             };
 
+            // Faithful town game-data extracted from the APK (building upgrade costs,
+            // job pools, appearance-change cost). Missing/invalid → Null; the consuming
+            // handler degrades gracefully rather than panicking at startup.
+            let load_static_json = |name: &str| -> serde_json::Value {
+                let p = static_data.join(name);
+                match File::open(&p) {
+                    Ok(f) => serde_json::from_reader(std::io::BufReader::new(f))
+                        .unwrap_or_else(|e| {
+                            log::warn!("[static] invalid {p:?}: {e}; feature degraded to Null");
+                            serde_json::Value::Null
+                        }),
+                    Err(_) => {
+                        log::warn!("[static] no {p:?}; feature degraded to Null");
+                        serde_json::Value::Null
+                    }
+                }
+            };
+            let building_upgrades = load_static_json("building_upgrades.json");
+            let job_pools = load_static_json("job_pools.json");
+            let appearance_change_cost = load_static_json("appearance_change_cost.json");
+
             // Capture-derived static definitions (gifts, announcements, …). Missing
             // files degrade gracefully (empty → endpoint returns an empty list).
             let static_data_defs = static_loader::load(&static_data);
@@ -198,6 +227,9 @@ async fn main() -> Result<()> {
                 game_data,
                 static_data: static_data_defs,
                 item_max_durability,
+                building_upgrades,
+                job_pools,
+                appearance_change_cost,
                 arena,
                 arena_import_token,
                 arena_debug_token,
