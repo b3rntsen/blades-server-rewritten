@@ -29,7 +29,7 @@ pub use enet::{
 };
 pub use netdata::{
     parse_netdata, NetDataOverflow, NetDataParse, NetDataType, NetDataValue, NetDataWriter,
-    NETDATA_MAX_VALUE_LEN,
+    NETDATA_MAX_BYTEARRAY_LEN, NETDATA_MAX_STRING_LEN,
 };
 pub use opcodes::{is_game_message_id, GameMessageId, GAME_MESSAGE_IDS};
 pub use reassembly::{

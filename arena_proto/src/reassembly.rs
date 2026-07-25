@@ -24,18 +24,26 @@
 //! endpoint-scoped, UUID-confirmed selector ported here as
 //! [`select_endpoint_key`]:
 //!
-//!   1. Bucket every *complete* group by its GameLift endpoint.
+//!   1. Bucket every *complete* group by its **connection** (GameLift endpoint
+//!      + client peer).
 //!   2. Try the **cross product** of the candidate keys × the candidate nonces
 //!      (the Frida gadget mis-pairs key↔nonce, so the right pair can be
 //!      `key[i]` with `nonce[j]`).
 //!   3. Score each pair by the number of 36-char UUID *strings* it decodes
-//!      across all of that endpoint's assembled buffers — a real arena message
+//!      across all of that connection's assembled buffers — a real arena message
 //!      is name+UUID state and yields dozens-to-hundreds; a wrong key yields 0.
-//!   4. Require [`REASSEMBLY_UUID_CONFIRM_MIN`]; below that the endpoint's key
+//!   4. Require [`REASSEMBLY_UUID_CONFIRM_MIN`]; below that the connection's key
 //!      was simply never captured (honest no-key, leave the frames undecrypted).
 //!   5. Accept a group's decode under the confirmed pair only if
-//!      [`group_decode_is_real`] holds — the same endpoint can carry a group
-//!      encrypted under a *different*, uncaptured key.
+//!      [`group_decode_is_real`] holds — the same connection can carry a group
+//!      encrypted under a *different*, uncaptured key (or a re-key mid-flow).
+//!
+//! Why per *connection* and not per endpoint: one ENet connection is encrypted
+//! under exactly one ChaCha20 `(key, nonce)` — that is the unit the Frida hook
+//! captures — while one GameLift server carries many concurrent connections,
+//! each with its own key. Measured on the 6-session replay fixture by the Python
+//! reference, endpoint scoping resolved 154 fragment frames out of the WRONG
+//! connection's message and left 353 resolvable frames unresolved.
 
 use std::collections::{HashMap, HashSet};
 
@@ -82,20 +90,45 @@ impl Frame {
             )
         }
     }
+
+    /// The CLIENT side of the flow — the mirror of [`Frame::gamelift`]: source
+    /// for c2s, destination for s2c. Port of `_peer_for` in
+    /// `scripts/arena-decrypt.py`. Part of the reassembly group identity; see
+    /// [`GroupKey`].
+    pub fn peer(&self) -> (String, i64) {
+        if self.direction == "c2s" {
+            (
+                self.src_ip.clone().unwrap_or_default(),
+                self.src_port.unwrap_or(0),
+            )
+        } else {
+            (
+                self.dst_ip.clone().unwrap_or_default(),
+                self.dst_port.unwrap_or(0),
+            )
+        }
+    }
 }
 
-/// Reassembly group identity: `(gl_ip, gl_port, direction, channel, start_seq)`.
+/// Reassembly group identity:
+/// `(gl_ip, gl_port, peer_ip, peer_port, direction, channel, start_seq)`.
 ///
-/// **Known reference limitation (kept for byte parity).** This key does NOT
-/// include the *client* side of the flow. Two concurrent connections from
-/// different client ports to the same GameLift endpoint can therefore collide
-/// on `(channel, startSeq)`; the second message's fragments are dropped by the
-/// `total_length` guard in [`reassemble_session`], and its frames then resolve
-/// against the *first* message's plaintext. `scripts/arena-decrypt.py` has the
-/// same behaviour and its stored plaintext already carries the contamination —
-/// see the module-level note in the parity report. Changing the key here would
-/// break byte parity with the captured corpus, so it is deliberately unchanged.
-pub type GroupKey = (String, i64, String, u8, u16);
+/// The client peer is load-bearing, not decoration. ENet's `(channel, startSeq)`
+/// is only unique **within one ENet connection**; a single GameLift server serves
+/// many concurrent clients and each connection numbers its own sequences from
+/// scratch. Keying on the GameLift endpoint alone (the pre-2026-07-25 bug, fixed
+/// in `scripts/arena-decrypt.py` by commit `fc1ed49` and mirrored here) let two
+/// concurrent flows to the same server collide on `(channel, startSeq)`: the
+/// first `totalLength` seen owned the group, the other flow's fragments were
+/// dropped by the `total_length` guard in [`reassemble_session`], and its frames
+/// then resolved slices out of the WRONG message's plaintext — stored
+/// `decrypt_status='ok'` carrying another connection's bytes.
+///
+/// Measured on the 6-session replay fixture: 13 of 130 fragment groups took
+/// fragments from more than one client peer, and in all 13 the peers declared
+/// *different* `totalLength`s — every one a real collision. One group
+/// (s293 `3.78.254.65:5075` ch4/ss1) had five competing peers.
+pub type GroupKey = (String, i64, String, i64, String, u8, u16);
 
 /// Largest buffer we'll allocate for a single reassembly group. Real arena
 /// messages top out around 40 KiB; this guards against a corrupt `totalLength`
@@ -294,7 +327,7 @@ fn score_pair(pair: &Pair, buffers: &[&[u8]], ks: &mut Vec<u8>, scratch: &mut Ve
     total
 }
 
-/// Resolve every complete group at ONE GameLift endpoint.
+/// Resolve every complete group on ONE connection (GameLift endpoint + peer).
 ///
 /// Walks the `key × nonce` cross product in reference order and, for each
 /// group, accepts the **first** pair whose decode satisfies
@@ -470,20 +503,26 @@ pub fn reassemble_session(frames: &[Frame], keys: &[KeyCandidate]) -> HashMap<Gr
 
     for f in frames {
         let (gl_ip, gl_port) = f.gamelift();
+        let (peer_ip, peer_port) = f.peer();
         for frag in walk_fragments(&f.ciphertext) {
             let total = frag.total_length as usize;
             let gkey: GroupKey = (
                 gl_ip.clone(),
                 gl_port,
+                peer_ip.clone(),
+                peer_port,
                 f.direction.clone(),
                 frag.channel,
                 frag.start_seq,
             );
             let grp = groups.entry(gkey).or_insert_with(|| Group::new(total));
             if grp.total_length != total {
-                // Inconsistent group (startSeq collision between two concurrent
-                // client flows / wrap / corruption) — drop this fragment. The
-                // FIRST totalLength seen owns the group, exactly as in Python.
+                // Inconsistent group — a different totalLength for the same
+                // (peer, channel, startSeq) means startSeq wrapped within this
+                // one connection, or the data is corrupt. Drop this fragment.
+                // (Before the peer went into the key this also fired for two
+                // CONCURRENT client flows, silently discarding the second
+                // message — the bug this key fixes.)
                 continue;
             }
             let end = frag.ud_start + frag.data_length;
@@ -495,9 +534,16 @@ pub fn reassemble_session(frames: &[Frame], keys: &[KeyCandidate]) -> HashMap<Gr
         }
     }
 
-    // Bucket the COMPLETE groups by GameLift endpoint: the key is confirmed
-    // per endpoint (over all of its groups at once), not per group.
-    let mut by_gl: HashMap<(String, i64), Vec<(GroupKey, &[u8])>> = HashMap::new();
+    // Bucket the COMPLETE groups by CONNECTION (GameLift endpoint + client
+    // peer), not endpoint-wide: one ENet connection is encrypted under exactly
+    // one (key, nonce) — the unit the Frida hook captures — while one GameLift
+    // server carries many concurrent connections, each with its own key. An
+    // endpoint-wide bucket mixes buffers from unrelated connections, which the
+    // Python reference's argmax vote then resolves in favour of whichever
+    // connection has the most UUIDs, writing every other one off as "no key".
+    // Splitting the buffer set can only LOWER a pair's score, never raise it,
+    // so this cannot loosen the acceptance gate.
+    let mut by_conn: HashMap<(String, i64, String, i64), Vec<(GroupKey, &[u8])>> = HashMap::new();
     for (gkey, grp) in &groups {
         if !grp.is_complete() {
             continue;
@@ -505,14 +551,14 @@ pub fn reassemble_session(frames: &[Frame], keys: &[KeyCandidate]) -> HashMap<Gr
         let Some(buf) = grp.buffer.as_deref() else {
             continue;
         };
-        by_gl
-            .entry((gkey.0.clone(), gkey.1))
+        by_conn
+            .entry((gkey.0.clone(), gkey.1, gkey.2.clone(), gkey.3))
             .or_default()
             .push((gkey.clone(), buf));
     }
 
     let mut results: HashMap<GroupKey, Vec<u8>> = HashMap::new();
-    for (_gl, mut grouplist) in by_gl {
+    for (_conn, mut grouplist) in by_conn {
         // Deterministic scoring order (HashMap iteration is not stable). The
         // score is a plain sum so order cannot change the winner, but a stable
         // order keeps the harness reproducible run-to-run.
@@ -527,11 +573,18 @@ pub fn reassemble_session(frames: &[Frame], keys: &[KeyCandidate]) -> HashMap<Gr
 
 /// Look up a fragment's plaintext slice from a reassembly map (the resolver
 /// body). Port of the closure built by `_build_resolver`.
+///
+/// `peer_ip`/`peer_port` are the CLIENT side of the frame's flow
+/// ([`Frame::peer`]). Binding them is what stops a frame from resolving out of a
+/// *concurrent* connection's message — see [`GroupKey`].
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_fragment(
     reassembly: &HashMap<GroupKey, Vec<u8>>,
     direction: &str,
     gl_ip: &str,
     gl_port: i64,
+    peer_ip: &str,
+    peer_port: i64,
     channel: u8,
     start_seq: u16,
     frag_offset: u32,
@@ -540,6 +593,8 @@ pub fn resolve_fragment(
     let key: GroupKey = (
         gl_ip.to_string(),
         gl_port,
+        peer_ip.to_string(),
+        peer_port,
         direction.to_string(),
         channel,
         start_seq,
@@ -609,6 +664,12 @@ mod tests {
         f
     }
 
+    /// The client port every synthetic frame uses unless a test deliberately
+    /// makes it a SECOND, concurrent flow. It must be constant across a flow's
+    /// frames: for s2c the destination port is the client peer, and the peer is
+    /// part of the reassembly [`GroupKey`].
+    const CLIENT_PORT: i64 = 46382;
+
     fn s2c_frame(id: i64, port: i64, ciphertext: Vec<u8>) -> Frame {
         Frame {
             id,
@@ -616,7 +677,7 @@ mod tests {
             src_ip: Some("3.78.254.65".into()),
             src_port: Some(port),
             dst_ip: Some("10.99.0.10".into()),
-            dst_port: Some(40000 + id),
+            dst_port: Some(CLIENT_PORT),
             ciphertext,
             plaintext: None,
             decrypt_status: "pending".into(),
@@ -707,8 +768,11 @@ mod tests {
         // Reconstructing frame 0 via the resolver yields its plaintext slice
         // spliced into the ENet wrapper.
         let (gl_ip, gl_port) = frames[0].gamelift();
+        let (peer_ip, peer_port) = frames[0].peer();
         let resolver = |ch: u8, ss: u16, fo: u32, dl: usize| {
-            resolve_fragment(&reassembly, "s2c", &gl_ip, gl_port, ch, ss, fo, dl)
+            resolve_fragment(
+                &reassembly, "s2c", &gl_ip, gl_port, &peer_ip, peer_port, ch, ss, fo, dl,
+            )
         };
         let out = reconstruct_plaintext(&frames[0].ciphertext, &KEY, &NONCE, Some(&resolver), false)
             .expect("decode frag0");
@@ -777,14 +841,23 @@ mod tests {
         assert!(reassemble_session(&frames, &keys()).is_empty());
     }
 
-    /// Two concurrent client flows to the same GameLift endpoint can collide on
-    /// `(channel, startSeq)`. The FIRST `totalLength` seen owns the group and
-    /// the other flow's fragments are dropped — this is the Python reference's
-    /// behaviour and the captured corpus depends on it byte-for-byte.
+    /// **The fix this module was corrected for (2026-07-25).** Two concurrent
+    /// client flows to the same GameLift endpoint routinely reuse the same
+    /// `(channel, startSeq)` — ENet numbers sequences per CONNECTION. With the
+    /// client peer in the [`GroupKey`] the two flows are independent groups and
+    /// both messages come out whole.
+    ///
+    /// Before the fix this asserted the *bug*: one group, the first
+    /// `totalLength` seen won the slot, flow B's fragments were dropped and its
+    /// frames resolved slices of flow A's plaintext while being stored
+    /// `decrypt_status='ok'`. Mirrors `scripts/arena-decrypt.py` `fc1ed49`.
     #[test]
-    fn colliding_start_seq_first_total_length_wins() {
+    fn colliding_start_seq_resolves_both_flows_independently() {
         let msg_a = uuid_message(10);
-        let msg_b = uuid_message(4); // different length ⇒ different totalLength
+        let mut msg_b = uuid_message(4); // different length ⇒ different totalLength
+        // `uuid_message(4)` is a literal PREFIX of `uuid_message(10)`, which would
+        // hide a cross-flow resolve. Make flow B's payload textually distinct.
+        msg_b[2..8].copy_from_slice(b"Foeman");
         assert_ne!(msg_a.len(), msg_b.len());
         let ct_a = chacha20_legacy(&msg_a, &KEY, &NONCE);
         let ct_b = chacha20_legacy(&msg_b, &KEY, &NONCE);
@@ -792,20 +865,47 @@ mod tests {
         let mut frames = fragment_frames(&ct_a, 10, 64, &[0, 1, 2, 3, 4, 5, 6]);
         let n_a = frames.len();
         // Same start_seq 10, same endpoint, different client port + totalLength.
+        const PEER_B: i64 = 47209;
         for (i, f) in fragment_frames(&ct_b, 10, 64, &[0, 1, 2]).into_iter().enumerate() {
             let mut f = f;
             f.id = (n_a + i) as i64 + 100;
-            f.dst_port = Some(47209); // a DIFFERENT client flow
+            f.dst_port = Some(PEER_B); // a DIFFERENT client flow
             frames.push(f);
         }
 
         let reassembly = reassemble_session(&frames, &keys());
-        assert_eq!(reassembly.len(), 1, "collided flows share one group slot");
         assert_eq!(
-            reassembly.values().next().unwrap(),
-            &msg_a,
-            "the first totalLength seen owns the group"
+            reassembly.len(),
+            2,
+            "each connection owns its own (channel, startSeq) slot"
         );
+
+        // Each flow's group must carry ITS OWN message — not a slice of the other's.
+        let (gl_ip, gl_port) = frames[0].gamelift();
+        let by_peer = |peer_port: i64| -> Option<&Vec<u8>> {
+            reassembly.get(&(
+                gl_ip.clone(),
+                gl_port,
+                "10.99.0.10".to_string(),
+                peer_port,
+                "s2c".to_string(),
+                0u8,
+                10u16,
+            ))
+        };
+        assert_eq!(by_peer(CLIENT_PORT), Some(&msg_a), "flow A keeps its message");
+        assert_eq!(by_peer(PEER_B), Some(&msg_b), "flow B is no longer contaminated");
+
+        // And the resolver hands each flow's frames the right bytes: flow B's
+        // fragment 0 must be a prefix of msg_b, which under the old key resolved
+        // out of msg_a.
+        let resolver_b = |ch: u8, ss: u16, fo: u32, dl: usize| {
+            resolve_fragment(
+                &reassembly, "s2c", &gl_ip, gl_port, "10.99.0.10", PEER_B, ch, ss, fo, dl,
+            )
+        };
+        assert_eq!(resolver_b(0, 10, 0, 64).unwrap(), msg_b[..64].to_vec());
+        assert_ne!(msg_a[..64], msg_b[..64], "test bug: the two prefixes must differ");
     }
 
     /// No candidate key decodes the endpoint ⇒ honest no-key, nothing emitted.

@@ -148,9 +148,12 @@ fn main() -> ExitCode {
         ok_total += 1;
 
         let (gl_ip, gl_port) = f.gamelift();
+        let (peer_ip, peer_port) = f.peer();
         let dir = f.direction.clone();
         let resolver = |ch: u8, ss: u16, fo: u32, dl: usize| {
-            resolve_fragment(&reassembly, &dir, &gl_ip, gl_port, ch, ss, fo, dl)
+            resolve_fragment(
+                &reassembly, &dir, &gl_ip, gl_port, &peer_ip, peer_port, ch, ss, fo, dl,
+            )
         };
 
         // Find the key candidate that reproduces the stored plaintext exactly.
