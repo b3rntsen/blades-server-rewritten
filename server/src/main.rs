@@ -239,6 +239,13 @@ async fn main() -> Result<()> {
                 db_pool.clone(),
             );
 
+            // Phase 5.4 — start the match-end economy writer. The combat engine is
+            // synchronous and cannot touch the async pool from inside the ENet tick,
+            // so it pushes finished matches onto a queue that this task drains.
+            // Without it the victory card's gold / XP / trophies are wire-only and
+            // vanish the moment the client re-syncs from REST.
+            arena::arena_economy::install(db_pool.clone());
+
             let arena_import_token = std::env::var("ARENA_IMPORT_TOKEN").ok();
             // DEBUG: dedicated token for the arena packet-injection routes;
             // falls back to ARENA_IMPORT_TOKEN in the handler when unset.

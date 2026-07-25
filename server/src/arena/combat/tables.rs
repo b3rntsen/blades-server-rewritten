@@ -1,15 +1,37 @@
-//! UESP-derived combat constants (Blades level-50-cap era; see
-//! `docs/blades-combat-formulae.md`). The weapon-damage surface is **additive**
-//! (verified exact across all 110 material×quality cells); spell magnitudes are
-//! per-rank. Used by `loadout`/`damage` to produce level-appropriate numbers until
-//! real equipped-item game-data is wired.
+//! Derived combat surfaces that sit *between* the shipped game data
+//! ([`super::gamedata`]) and the damage model.
 //!
-//! ⚠️ These are L50-era reference magnitudes; our build is L100. Treat the
-//! *formulae/ratios* as solid and the *absolute magnitudes* as calibrated against
-//! captured s293 damage (the level→quality/weight choices below are the tunable
-//! calibration knobs).
+//! # What lives here now (Phase 3)
+//!
+//! Everything numeric that the shipped assets define directly was moved OUT of
+//! this file and is read from [`super::gamedata`]:
+//!
+//! | was | now |
+//! |---|---|
+//! | `ability_cost()` hand-transcribed UUID table | [`ability_cost`] → `gamedata::ability_rank_clamped().stamina_cost/magicka_cost` |
+//! | `SPELL_BASE_BY_RANK` / `spell_base_for_rank` | `gamedata::AbilityRank::damage()` |
+//! | `Weight::swing_interval()` (guessed per-class) | [`swing_interval`] from the item's `attack_delay + recovery_time` |
+//! | `weapon_base_for_level` as the *primary* base | `gamedata::weapon().base_damage` (+ [`tempering_bonus`]) |
+//!
+//! What remains is genuinely *derived*:
+//!
+//! * the **capture-pinned combo ramp** ([`LIGHT_COMBO_RAMP`]) — a wire
+//!   measurement, not an asset value;
+//! * the **rating→reduction** helpers ([`armor_reduction`],
+//!   [`resistance_reduction`], [`block_reduction`], [`weakness_increase`]),
+//!   which apply the shipped `CombatParameters` factors;
+//! * the **tempering axis** ([`QUALITY_BONUS`] / [`tempering_bonus`]) — the
+//!   shipped `WeaponTemplateList` carries only the *quality-0* cell (verified:
+//!   Dragonbone Dagger `base_damage` 99.0 == `heavy_base(10) * Light 0.60`), so
+//!   the per-tempering-level bonus still comes from the UESP surface;
+//! * the **UESP fallback surface** ([`fallback`]) for bots / starter loadouts
+//!   whose items do not resolve to a real template.
 
-/// Weapon weight class.
+use super::gamedata::{self, combat_params};
+
+/// Weapon weight class. Mirrors [`gamedata::WeaponClass`] (`Light 1 / Balanced 2 /
+/// Heavy 3`); kept as a separate type because the damage model's combo/crit
+/// surfaces are capture-derived rather than shipped data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Weight {
     Light,
@@ -18,7 +40,18 @@ pub enum Weight {
 }
 
 impl Weight {
-    /// Damage factor relative to Heavy (Versatile = 2H grip 0.92).
+    /// Map the shipped `WeaponClass` enum onto the model's weight class.
+    pub fn from_class(c: gamedata::WeaponClass) -> Self {
+        match c {
+            gamedata::WeaponClass::Light => Weight::Light,
+            gamedata::WeaponClass::Versatile => Weight::Versatile,
+            gamedata::WeaponClass::Heavy => Weight::Heavy,
+        }
+    }
+
+    /// Damage factor relative to Heavy (Versatile = 2H grip 0.92). **Only used by
+    /// [`fallback`]** — a real item's `base_damage` already has this baked in
+    /// (Dragonbone Dagger 99.0 = Dragonbone heavy base 165 × 0.60).
     pub fn damage_factor(self) -> f32 {
         match self {
             Weight::Light => 0.60,
@@ -26,7 +59,7 @@ impl Weight {
             Weight::Heavy => 1.00,
         }
     }
-    /// `(crit, combo)` swing multipliers for this weight.
+    /// `(crit, combo)` swing multipliers for this weight. [uesp]
     pub fn crit_combo(self) -> (f32, f32) {
         match self {
             Weight::Light => (1.325, 1.540),
@@ -35,74 +68,68 @@ impl Weight {
         }
     }
 
-    /// Minimum spacing between committed auto-attack swings for this weapon class —
-    /// the real-game swing cadence (a dagger swings noticeably faster than a
-    /// greatsword). An attack input arriving before this interval has elapsed since the
-    /// attacker's last landed swing is rejected (see `resolve::resolve_swing`), so
-    /// swings resolve at the weapon's cadence instead of instantly / spammed.
-    ///
-    /// **GUESSED / calibration knob.** The exact per-class cadence is CDN game-data
-    /// (`WeaponClass`-keyed `[ExcelVariable]` attack rates — `QuestUIParameters.
-    /// SimulationAttackRates.ComboAttackRate` / the weapon template's attack-animation
-    /// length; both are `[ExcelVariable]`/ScriptableObject values, NOT literal in
-    /// `dump.cs`, and op-level swing timing was never captured). The RELATIVE ordering
-    /// IS authoritative — `WeaponClass` (dump.cs 560111) is `Light(1) < Balanced(2) <
-    /// Heavy(3)`, and heavier = slower swing. Values below preserve that ordering and
-    /// are set near the old flat 400 ms floor for Light so existing behaviour only
-    /// TIGHTENS for heavier weapons (never loosens): Light 0.40 s (~2.5/s), Versatile
-    /// 0.65 s (~1.5/s), Heavy 0.90 s (~1.1/s). Re-pin once CDN WeaponTemplate attack
-    /// rates are captured. [docs/arena-cooldowns-authoritative.md is spell-only.]
-    pub fn swing_interval(self) -> std::time::Duration {
-        std::time::Duration::from_millis(match self {
-            Weight::Light => 400,
-            Weight::Versatile => 650,
-            Weight::Heavy => 900,
-        })
-    }
-
-    /// Per-step combo multiplier (the factor each *chained alternating* side-swing
-    /// COMPOUNDS by) and the combo ceiling, for the GEOMETRIC fallback in
-    /// [`combo_factor`] (used for weights WITHOUT a capture-pinned per-depth table).
+    /// Per-step combo multiplier and ceiling for the GEOMETRIC fallback in
+    /// [`combo_factor`] (weights WITHOUT a capture-pinned per-depth table).
     ///
     /// **Versatile / Heavy steps + caps are GUESSES** (those weights aren't in the
-    /// recorded match): step = the weight's nominal `combo` factor, cap = step^4. A
-    /// Heavy weapon combos slowly (1.186/step) and leans on charged `Middle` crits
-    /// instead — flagged for calibration when a heavy-weapon match is captured.
-    /// **Light** does NOT use this geometric model — it uses the capture-pinned
-    /// per-depth anchor table [`LIGHT_COMBO_RAMP`] (the recorded ramp is irregular, not
-    /// geometric — see [`combo_factor`]).
+    /// recorded match). **Light** does NOT use this — it uses [`LIGHT_COMBO_RAMP`].
     pub fn combo_step_cap(self) -> (f32, f32) {
         match self {
-            // Light's geometric params are kept only as the >ceiling fallback; the
-            // measured ramp is the explicit LIGHT_COMBO_RAMP table.
-            Weight::Light => (1.45, 4.12),                 // capture-calibrated (s506); table-driven
+            Weight::Light => (1.45, 4.12), // capture-calibrated (s506); table-driven
             Weight::Versatile => (1.250, 1.250_f32.powi(4)), // GUESS (no capture)
             Weight::Heavy => (1.186, 1.186_f32.powi(4)),     // GUESS (no capture)
         }
     }
 }
 
+// ---------------------------------------------------------------------------
+// Swing cadence — per ITEM, from the shipped weapon template (Phase 3.12)
+// ---------------------------------------------------------------------------
+
+/// Commit-to-commit swing interval for a weapon: `attackDelay + recoveryTime`,
+/// floored at `PlayerCombatParameters.globalMinimumAttackDelay` (0.1 s).
+///
+/// This **replaces** the old guessed `Weight::swing_interval()` (a flat
+/// 400/650/900 ms per weight class). The Dragonbone Dagger's shipped numbers
+/// (0.2333 + 0.55 = 0.7833 s) are now used verbatim, and every one of the 370
+/// templates carries its own pair.
+pub fn swing_interval(attack_delay: f32, recovery_time: f32) -> std::time::Duration {
+    let secs = (attack_delay + recovery_time).max(combat_params::GLOBAL_MINIMUM_ATTACK_DELAY);
+    std::time::Duration::from_secs_f32(secs)
+}
+
+/// The cadence for a resolved weapon template.
+pub fn swing_interval_for_weapon(w: &gamedata::WeaponStats) -> std::time::Duration {
+    swing_interval(w.attack_delay, w.recovery_time)
+}
+
+/// The cadence used when a fighter's weapon does not resolve to a real template
+/// (bot / starter). The global floor times the weight's relative speed
+/// [uesp Speed column: Light 2.07, Versatile 1.33, Heavy 1.00] normalised so
+/// Heavy keeps the historical ~0.9 s and Light stays fast.
+pub fn fallback_swing_interval(weight: Weight) -> std::time::Duration {
+    let secs: f32 = match weight {
+        Weight::Light => 0.40,
+        Weight::Versatile => 0.65,
+        Weight::Heavy => 0.90,
+    };
+    std::time::Duration::from_secs_f32(secs.max(combat_params::GLOBAL_MINIMUM_ATTACK_DELAY))
+}
+
+// ---------------------------------------------------------------------------
+// Combo ramp (capture-pinned — NOT shipped data)
+// ---------------------------------------------------------------------------
+
 /// The **capture-pinned** Light-weapon combo ramp, indexed by chain depth (0 = the
-/// fresh post-reset swing). These are the s506 recorded per-depth Slashing factors
-/// against the combo-0 base of 113.82 (`docs/arena-combat-reproduction-spec.md` §2a/§4.2):
-/// the recorded chain ramped ×1.00 → ×1.45 → ~×1.50 → ×2.65 → ×4.12 (seq 277/287 →
-/// 375/420 → 436 → 452). The ramp is **irregular** (NOT a clean `1.45^n`: the
-/// step-to-step ratios are 1.45 / 1.03 / 1.77 / 1.55), so it is reproduced as an
-/// explicit table rather than a geometric series — `1.45^3 = 3.05` overshot the
-/// recorded ×2.65 deep step by ~15%. Depths past the table HOLD at the ×4.12 ceiling
-/// (`LIGHT_COMBO_CAP`). [calibration: the four magnitudes are capture-pinned to s506.]
+/// fresh post-reset swing): the s506 recorded per-depth Slashing factors against the
+/// combo-0 base (`docs/arena-combat-reproduction-spec.md` §2a/§4.2). The ramp is
+/// **irregular** (step ratios 1.45 / 1.03 / 1.77 / 1.55), so it is an explicit table
+/// rather than a geometric series.
 pub const LIGHT_COMBO_RAMP: [f32; 5] = [1.00, 1.45, 1.50, 2.65, 4.12];
-/// The recorded Light combo ceiling (×4.12, seq 452) — depths beyond [`LIGHT_COMBO_RAMP`]
-/// stay capped here (a runaway chain can't exceed the recorded maximum).
+/// The recorded Light combo ceiling (×4.12, seq 452).
 pub const LIGHT_COMBO_CAP: f32 = 4.12;
 
-/// The combo multiplier for a normal swing at chain depth `count` (0 = the fresh,
-/// post-reset swing). `combo_factor(_, 0) == 1.0` for every weight (a fresh swing is
-/// the un-combo'd base). For **Light** (the only capture-calibrated weight) this reads
-/// the explicit s506 [`LIGHT_COMBO_RAMP`] anchor table (holding at [`LIGHT_COMBO_CAP`]
-/// beyond it) — the recorded ramp is irregular, not geometric. Other weights compound
-/// `combo_step_cap().0` per chained swing, capped at `combo_step_cap().1` (uncaptured
-/// GUESS). [`docs/arena-combat-reproduction-spec.md` §4.2]
+/// The combo multiplier for a normal swing at chain depth `count` (0 = fresh).
 pub fn combo_factor(weight: Weight, count: u32) -> f32 {
     if weight == Weight::Light {
         return LIGHT_COMBO_RAMP
@@ -114,189 +141,356 @@ pub fn combo_factor(weight: Weight, count: u32) -> f32 {
     (step.powi(count as i32)).min(cap)
 }
 
-/// 11 quality tiers (base→Mythical): additive bonus on top of the material base.
+// ---------------------------------------------------------------------------
+// Tempering (the axis the shipped WeaponTemplateList does NOT carry)
+// ---------------------------------------------------------------------------
+
+/// 11 quality/tempering tiers (base→Mythical): additive bonus on top of the
+/// material's **heavy** base, before the weight factor. [uesp — verified exact
+/// across all 110 material×quality cells]
+///
+/// **Why this survives Phase 3.** `gamedata::WEAPONS[].base_damage` is the
+/// *quality-0* cell only (Dragonbone Dagger 99.0 == `heavy_base(10) 165 × Light
+/// 0.60` — an exact cross-validation of the UESP surface against the shipped
+/// asset). A character's `Item.tempering_level` is the orthogonal axis and the
+/// shipped `WeaponTemplateList` has no per-temper table, so the bonus still comes
+/// from UESP. [Class 2: real mechanism, UESP magnitudes]
 pub const QUALITY_BONUS: [f32; 11] =
     [0.0, 1.5, 4.5, 9.0, 15.0, 22.5, 30.0, 37.5, 45.0, 60.0, 75.0];
 
-/// Heavy (1.0×) base damage for a smithy level (1 = Iron … 10 = Dragonbone):
-/// `15 × (smithy_level + 1)`.
-pub fn heavy_base(smithy_level: u8) -> f32 {
-    15.0 * (smithy_level as f32 + 1.0)
+/// The damage a `tempering_level` adds to a weapon of this `weight`:
+/// `QUALITY_BONUS[level] × weight.damage_factor()`. Levels past the table clamp.
+pub fn tempering_bonus(weight: Weight, tempering_level: u64) -> f32 {
+    let idx = (tempering_level as usize).min(QUALITY_BONUS.len() - 1);
+    QUALITY_BONUS[idx] * weight.damage_factor()
 }
 
-/// Highest usable material's smithy level at a character level (the req-level
-/// table: Iron/Steel L1 → Dragonbone L45).
-pub fn smithy_level_for_char_level(level: u16) -> u8 {
-    match level {
-        0..=7 => 2,    // Steel (best base usable at L1)
-        8..=12 => 3,   // Silver
-        13..=17 => 4,  // Orcish
-        18..=22 => 5,  // Dwarven
-        23..=27 => 6,  // Elven
-        28..=32 => 7,  // Glass
-        33..=38 => 8,  // Ebony
-        39..=44 => 9,  // Daedric
-        _ => 10,       // Dragonbone (L45+)
+// ---------------------------------------------------------------------------
+// Rating → reduction (Phase 3.3 / 3.4 / 3.5) — shipped CombatParameters
+// ---------------------------------------------------------------------------
+
+/// Scale that turns a shipped **rating** into the units
+/// `reductionPer*Rating` multiplies.
+///
+/// Armor / Resistance ratings are *damage points*: `reductionPerArmorRating 0.1`
+/// means "0.1 damage removed per point of Armor Rating" — i.e. UESP's
+/// `reduction = armorRating / 10` and bladesarena's "10 % of AR is deducted per
+/// hit (AR 1000 → −100/hit)", two independent sources agreeing with the shipped
+/// constant. `reductionPerResistanceRating 1.0` then makes a Resistance Rating a
+/// literal flat damage subtraction, which is exactly how the enemy assets read
+/// (`Nascent Flame Atronach` `resistances.Fire = 65.28`).
+///
+/// Block is different: `maximumBlockReduction`/`minimumBlockReduction` bound a
+/// **fraction**, so a Block Rating is scaled into 0..1. `BLOCK_RATING_SCALE`
+/// is the percentage-point divisor that puts real shield ratings (150–330) in a
+/// sane band instead of saturating instantly. [Class 3: bridge constant]
+pub const BLOCK_RATING_SCALE: f32 = 100.0;
+
+/// A connected **optimal** block reads the rating at double weight.
+/// [uesp: "blockRating/10 (low block) / blockRating/5 (high block — 2×)"]
+pub const OPTIMAL_BLOCK_RATING_MULTIPLIER: f32 = 2.0;
+
+/// Physical damage removed by an Armor Rating: a FLAT
+/// `rating × reductionPerArmorRating`, capped so armor can never remove more than
+/// `maximumArmorReduction` (95 %) of the incoming amount. [Phase 3.3]
+pub fn armor_reduction(incoming: f32, armor_rating: f32) -> f32 {
+    if incoming <= 0.0 || armor_rating <= 0.0 {
+        return 0.0;
+    }
+    (armor_rating * combat_params::REDUCTION_PER_ARMOR_RATING)
+        .min(incoming * combat_params::MAXIMUM_ARMOR_REDUCTION)
+}
+
+/// Damage removed by a Resistance Rating: a FLAT
+/// `rating × reductionPerResistanceRating`, capped at `maximumResistanceReduction`
+/// (95 %) of the incoming amount. `continuous` applies
+/// `continuousDamageResistanceEffectiveness` (0.75) for DoT ticks. [Phase 3.4]
+pub fn resistance_reduction(incoming: f32, resistance_rating: f32, continuous: bool) -> f32 {
+    if incoming <= 0.0 || resistance_rating <= 0.0 {
+        return 0.0;
+    }
+    let eff = if continuous {
+        combat_params::CONTINUOUS_DAMAGE_RESISTANCE_EFFECTIVENESS
+    } else {
+        1.0
+    };
+    (resistance_rating * combat_params::REDUCTION_PER_RESISTANCE_RATING * eff)
+        .min(incoming * combat_params::MAXIMUM_RESISTANCE_REDUCTION)
+}
+
+/// Extra damage added by a Weakness Rating: FLAT
+/// `rating × increasePerWeaknessRating`, capped at `maximumWeaknessEffect` (×1.0,
+/// i.e. at most doubling). `continuous` applies
+/// `continuousDamageWeaknessEffectiveness` (0.75).
+pub fn weakness_increase(incoming: f32, weakness_rating: f32, continuous: bool) -> f32 {
+    if incoming <= 0.0 || weakness_rating <= 0.0 {
+        return 0.0;
+    }
+    let eff = if continuous {
+        combat_params::CONTINUOUS_DAMAGE_WEAKNESS_EFFECTIVENESS
+    } else {
+        1.0
+    };
+    (weakness_rating * combat_params::INCREASE_PER_WEAKNESS_RATING * eff)
+        .min(incoming * combat_params::MAXIMUM_WEAKNESS_EFFECT)
+}
+
+/// The FRACTION of a hit a Block Rating removes.
+///
+/// `clamp(rating / BLOCK_RATING_SCALE × reductionPerBlockRating × categoryFactor,
+/// minimumBlockReduction, maximumBlockReduction)` with `categoryFactor` =
+/// `physicalBlockRatingFactor` (1.0) or `elementalBlockRatingFactor` (0.6666667).
+///
+/// **Blocking is NOT de-rated against continuous damage** —
+/// `continuousDamageBlockingEffectiveness == 1`, unlike absorb / fortify /
+/// resistance / revenge / weakness which are all 0.75. [Phase 3.5, correction 1]
+pub fn block_reduction(block_rating: f32, physical: bool) -> f32 {
+    if block_rating <= 0.0 {
+        return combat_params::MINIMUM_BLOCK_REDUCTION;
+    }
+    let factor = if physical {
+        combat_params::PHYSICAL_BLOCK_RATING_FACTOR
+    } else {
+        combat_params::ELEMENTAL_BLOCK_RATING_FACTOR
+    };
+    let raw = block_rating / BLOCK_RATING_SCALE * combat_params::REDUCTION_PER_BLOCK_RATING * factor;
+    raw.clamp(
+        combat_params::MINIMUM_BLOCK_REDUCTION,
+        combat_params::MAXIMUM_BLOCK_REDUCTION,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Enchantment magnitude (Phase 3.6/3.7)
+// ---------------------------------------------------------------------------
+
+/// Converts an [`gamedata::EnchantTier::value`] into damage points.
+///
+/// The shipped `_value` is a **shared power curve** (`268 / 736 / 1318 / 1941 /
+/// 2566 / 3209 / 4008 / 4961 / 6137 / 7591` — 32 of the 116 families use exactly
+/// this one), i.e. a raw magnitude in the logic class's own units, not damage.
+/// The scale that maps it onto wire damage is pinned by capture:
+///
+/// * s506 `Weapon Poison Damage` **tier 10** (`value 7591`) landed **137.32**
+///   → `137.32 / 7591 = 0.018090`;
+/// * s293 `Weapon Shock Damage` **tier 7** (`value 4008`) landed **72.0**
+///   → `72.0 / 4008 = 0.017964`.
+///
+/// Two different families, two different sessions, agreeing to **0.7 %**. This
+/// replaces the old `13.73 × tier` guess, which was only right at tier 10 and
+/// linear where the real curve is convex (`268 → 7591` is ×28 over 10 tiers, not
+/// ×10). [Class 2: real curve, capture-pinned scale]
+pub const ENCHANT_DAMAGE_PER_VALUE: f32 = 0.018090;
+
+/// Damage contributed by one enchantment family at `tier`, or `None` when the
+/// family/tier is not in the shipped data.
+pub fn enchant_damage(family_uuid: &str, tier: u8) -> Option<f32> {
+    gamedata::enchant_value(family_uuid, tier).map(|v| v * ENCHANT_DAMAGE_PER_VALUE)
+}
+
+// ---------------------------------------------------------------------------
+// Ability costs / cooldowns — straight from the shipped ranks
+// ---------------------------------------------------------------------------
+
+/// `(stamina_cost, magicka_cost)` for an ability at `rank`, from the shipped
+/// `<Name>Rank<N>` asset. Unknown ability or perk rank → `(0, 0)`.
+///
+/// **Replaces** the hand-transcribed table that used to live here — 11 of whose
+/// 33 UUIDs were fabricated tails (e.g. Thunderstorm was
+/// `2ab06506-c9e5-4d12-…`, the real id is `2ab06506-2114-4738-…`), so those
+/// abilities silently cost nothing.
+pub fn ability_cost(ability_uuid: &str, rank: u8) -> (u32, u32) {
+    match gamedata::ability_rank_clamped(ability_uuid, rank.max(1) as u16) {
+        Some(r) => (
+            r.stamina_cost.unwrap_or(0.0).round().max(0.0) as u32,
+            r.magicka_cost.unwrap_or(0.0).round().max(0.0) as u32,
+        ),
+        None => (0, 0),
     }
 }
 
-/// A representative quality tier (0-10) for a character level — gear quality trends
-/// up with level. Tunable calibration knob.
-pub fn quality_tier_for_level(level: u16) -> usize {
-    ((level as usize) / 9).min(QUALITY_BONUS.len() - 1)
+/// The shipped cooldown (seconds) for an ability at `rank`, if any.
+pub fn ability_cooldown_secs(ability_uuid: &str, rank: u8) -> Option<f32> {
+    gamedata::ability_rank_clamped(ability_uuid, rank.max(1) as u16)?.cooldown
 }
 
-/// Level-appropriate weapon base damage for a weight class (additive surface +
-/// representative material/quality for the level).
-pub fn weapon_base_for_level(level: u16, weight: Weight) -> f32 {
-    let heavy = heavy_base(smithy_level_for_char_level(level)) + QUALITY_BONUS[quality_tier_for_level(level)];
-    heavy * weight.damage_factor()
+/// Direct-hit damage for an ability rank, from the shipped `_damage`.
+/// `None` when the rank defines no `_damage` (buffs, wards, perks).
+pub fn ability_damage(ability_uuid: &str, rank: u8) -> Option<f32> {
+    gamedata::ability_rank_clamped(ability_uuid, rank.max(1) as u16)?.damage()
 }
 
-/// Authoritative Stamina/Magicka cost per ability, keyed by the ability *definition*
-/// UUID and the ability RANK (1-based).  Values are `_staminaCost` / `_magickaCost`
-/// from the APK's `ActiveAbility` ScriptableObjects (extracted via UnityPy; see
-/// docs/arena-combat-fixes-spec.md §1).
-///
-/// Returns `(stamina_cost, magicka_cost)` for the given UUID and rank.  Both are 0
-/// for purely passive / unrecognised abilities; maneuvers have stamina cost only,
-/// spells have magicka cost only.  Costs scale LINEARLY across ranks; rank is
-/// clamped to [1, max_rank] at the call site.  Unknown UUIDs return `(0, 0)` —
-/// the cooldown gate remains but no resource is deducted.
-///
-/// Per-rank formula: `cost(rank) = r1_cost + (r6_cost - r1_cost) / 5 * (rank - 1)`
-/// (linear between R1 and R6 anchors; integer rounds to nearest).
-pub fn ability_cost(ability_uuid: &str, rank: u8) -> (u32, u32) {
-    // (r1_stamina, r6_stamina, r1_magicka, r6_magicka)
-    let (r1s, r6s, r1m, r6m): (u32, u32, u32, u32) = match ability_uuid {
-        // --- Spells (magicka cost, staminaCost=0) ---
-        "4e760726-b012-4b25-bc92-0cd6312d6601" => (0, 0, 185, 355), // Absorb
-        "c4b48518-e847-4f3d-81a2-2856bdb4ed98" => (0, 0, 290, 420), // Blizzard Armor
-        "85596d85-93d9-4c74-a3db-5e5e11cde30e" => (0, 0, 140, 215), // Blind
-        "e07f9b1a-64db-44ef-ba25-0e4378789ddc" => (0, 0, 160, 255), // Consuming Inferno
-        "dfb8d247-1333-42eb-9730-a1c16d10584f" => (0, 0, 145, 220), // Delayed Lightning Bolt
-        "f60f69d4-7b5c-4c1d-b0e4-99df3d49e52c" => (0, 0, 425, 570), // Echo Weapon
-        "d07a8d30-9a1c-49b0-866d-97a8aa1534cf" => (0, 0, 90, 150),  // Fireball
-        "4be1d681-c35d-4540-b255-c2910ac80664" => (0, 0, 170, 280), // Frostbite
-        "cfee0b02-6d91-4d34-869c-a7e54329060d" => (0, 0, 130, 190), // Ice Spike
-        "7fc15804-1637-40a9-8dcc-3ea1eb0f778d" => (0, 0, 80, 125),  // Lightning Bolt
-        "1c836287-3df5-4b54-b05a-2e0a43cece5a" => (0, 0, 425, 570), // Magicka Surge
-        "9fdc4d52-ce90-44f8-9b5d-21f31e27dbda" => (0, 0, 185, 265), // Paralyze
-        "66bdc017-30c5-4b5e-9753-215c45056f6a" => (0, 0, 110, 175), // Poison Cloud
-        "91078132-ef5c-492a-97f2-ac69be5140a8" => (0, 0, 200, 335), // Resist Elements
-        "2ab06506-c9e5-4d12-8d5b-1d6a3b3e7e9c" => (0, 0, 190, 270), // Thunderstorm
-        "65ede044-d68a-4b2b-8f0c-02075ad133cc" => (0, 0, 205, 305), // Ward
-        // --- Maneuvers (stamina cost, magickaCost=0) ---
-        "be56c560-a4ba-47ad-8513-f24c342ca594" => (180, 280, 0, 0), // Adrenaline Dodge
-        "1e7f0dd6-6015-4f65-b811-3246e407e330" => (145, 265, 0, 0), // Dodging Strike
-        "e685e88f-4e3f-4b9c-8f1a-2c3d5e6f7a8b" => (195, 275, 0, 0), // Focusing Dodge
-        "cc768bae-a063-4885-8207-f39c6542fb36" => (215, 320, 0, 0), // Guardbreaker
-        "69ffa3fd-deb7-4824-bab6-ac6450f19676" => (190, 300, 0, 0), // Harrying Bash
-        "66610227-d1e2-4f3a-b4c5-6d7e8f9a0b1c" => (265, 380, 0, 0), // Indomitable Smash
-        "cdab44fb-6ff6-4701-a4ec-d19cce79e49f" => (180, 265, 0, 0), // Piercing Strikes
-        "ce6b63e9-9f18-49c4-aee0-51f7985f9892" => (145, 230, 0, 0), // Power Attack
-        "eb0cb7e6-47cf-48e7-8cc9-dbf80fc77f13" => (150, 240, 0, 0), // Quick Strikes
-        "0cfe29cd-5e6f-4a7b-8c9d-0e1f2a3b4c5d" => (425, 570, 0, 0), // Reckless Fury
-        "e08f95de-85bb-4829-ba7e-cf45bc6fb422" => (250, 345, 0, 0), // Recovery Strikes
-        "ba61ce46-163f-4a61-8ede-f5b7ae365e40" => (290, 425, 0, 0), // Reflecting Bash
-        "7f78d342-9a0b-4c1d-8e2f-3a4b5c6d7e8f" => (205, 265, 0, 0), // Renewing Dodge
-        "f9a2373b-a84f-4716-90ce-165baa2dd6ed" => (155, 260, 0, 0), // Shield Bash
-        "c112c956-7d8e-4f0a-b1c2-3d4e5f6a7b8c" => (175, 275, 0, 0), // Skullcrusher
-        "9b915ec3-c63b-4b62-b417-4c5436d45fc1" => (235, 360, 0, 0), // Staggering Bash
-        "e14eedd5-2f3a-4b5c-9d0e-1f2a3b4c5d6e" => (210, 305, 0, 0), // Venom Strikes
-        _ => return (0, 0), // unknown ability: no cost (cooldown gate still fires)
-    };
-    // Linear interpolation between R1 and R6 anchors (cost ∝ rank − 1).
-    // rank is 1-based; clamp to avoid underflow.
-    let r = rank.max(1) as u32;
-    let stam = r1s + (r6s.saturating_sub(r1s)) * r.saturating_sub(1) / 5;
-    let mag  = r1m + (r6m.saturating_sub(r1m)) * r.saturating_sub(1) / 5;
-    (stam, mag)
-}
+// ---------------------------------------------------------------------------
+// UESP fallback surface — bots / starter only
+// ---------------------------------------------------------------------------
 
-/// Representative spell base magnitude by rank (Fireball-class direct damage, UESP
-/// R1..R6). Used as a grounded stand-in when an ability's exact spell is unknown
-/// (we lack ability definitions). Index by rank (1-based; clamped).
-pub const SPELL_BASE_BY_RANK: [f32; 7] = [73.89, 73.89, 108.42, 150.24, 182.81, 213.75, 245.53];
+/// The level→material→damage surface, kept **only** for fighters whose equipped
+/// weapon does not resolve to a real `gamedata::WEAPONS` template (bots, the
+/// starter loadout, characters imported without inventory).
+pub mod fallback {
+    use super::{Weight, QUALITY_BONUS};
 
-pub fn spell_base_for_rank(rank: u8) -> f32 {
-    SPELL_BASE_BY_RANK[(rank as usize).clamp(1, SPELL_BASE_BY_RANK.len() - 1)]
+    /// Heavy (1.0×) base damage for a smithy level (1 = Iron … 10 = Dragonbone):
+    /// `15 × (smithy_level + 1)`. Cross-validated against the shipped assets:
+    /// `heavy_base(10) × Light 0.60 == Dragonbone Dagger base_damage 99.0`.
+    pub fn heavy_base(smithy_level: u8) -> f32 {
+        15.0 * (smithy_level as f32 + 1.0)
+    }
+
+    /// Highest usable material's smithy level at a character level.
+    pub fn smithy_level_for_char_level(level: u16) -> u8 {
+        match level {
+            0..=7 => 2,   // Steel
+            8..=12 => 3,  // Silver
+            13..=17 => 4, // Orcish
+            18..=22 => 5, // Dwarven
+            23..=27 => 6, // Elven
+            28..=32 => 7, // Glass
+            33..=38 => 8, // Ebony
+            39..=44 => 9, // Daedric
+            _ => 10,      // Dragonbone (L45+)
+        }
+    }
+
+    /// A representative tempering tier (0-10) for a character level.
+    pub fn quality_tier_for_level(level: u16) -> usize {
+        ((level as usize) / 9).min(QUALITY_BONUS.len() - 1)
+    }
+
+    /// Level-appropriate weapon base damage for a weight class.
+    pub fn weapon_base_for_level(level: u16, weight: Weight) -> f32 {
+        let heavy =
+            heavy_base(smithy_level_for_char_level(level)) + QUALITY_BONUS[quality_tier_for_level(level)];
+        heavy * weight.damage_factor()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// APK-authoritative costs (spec §1): spot-check R1 and R6 anchors for a spell
-    /// (Fireball, magicka) and a maneuver (Quick Strikes, stamina); unknown UUID → (0,0).
+    /// The shipped weapon template's `base_damage` IS the UESP quality-0 cell —
+    /// which is why [`QUALITY_BONUS`] survives as the tempering axis rather than
+    /// being deleted.
     #[test]
-    fn ability_cost_r1_r6_and_linear_ramp() {
-        // Fireball (spell): R1=90 mag, R6=150 mag, stam=0.
-        assert_eq!(ability_cost("d07a8d30-9a1c-49b0-866d-97a8aa1534cf", 1), (0, 90));
-        assert_eq!(ability_cost("d07a8d30-9a1c-49b0-866d-97a8aa1534cf", 6), (0, 150));
-        // Quick Strikes (maneuver): R1=150 stam, R6=240 stam, mag=0.
-        assert_eq!(ability_cost("eb0cb7e6-47cf-48e7-8cc9-dbf80fc77f13", 1), (150, 0));
-        assert_eq!(ability_cost("eb0cb7e6-47cf-48e7-8cc9-dbf80fc77f13", 6), (240, 0));
-        // Linear ramp: R3 is between R1 and R6.
-        let (s3, _) = ability_cost("eb0cb7e6-47cf-48e7-8cc9-dbf80fc77f13", 3);
-        assert!(s3 > 150 && s3 < 240, "R3 Quick Strikes stam cost must be between R1 and R6");
-        // Unknown UUID: zero cost (no gate, no deduction).
+    fn shipped_base_damage_equals_uesp_quality_zero_cell() {
+        let w = gamedata::weapon(gamedata::ids::DRAGONBONE_DAGGER).expect("dagger");
+        let uesp_q0 = fallback::heavy_base(10) * Weight::Light.damage_factor();
+        assert!(
+            (w.base_damage - uesp_q0).abs() < 1e-3,
+            "shipped {} vs UESP quality-0 {}",
+            w.base_damage,
+            uesp_q0
+        );
+        // Mythical (tempering 10) adds 75 at heavy scale → 45 at Light scale.
+        assert!((tempering_bonus(Weight::Light, 10) - 45.0).abs() < 1e-3);
+        assert!((w.base_damage + tempering_bonus(Weight::Light, 10) - 144.0).abs() < 1e-3);
+    }
+
+    /// Ability costs now come from the shipped ranks — including the abilities the
+    /// old hand-written table had wrong UUIDs for.
+    #[test]
+    fn ability_costs_come_from_shipped_ranks() {
+        // Fireball R1/R2 magicka = 90 / 105 (the old table's "R6 = 150" was a
+        // linear extrapolation; the real ramp is per-rank).
+        assert_eq!(ability_cost(gamedata::ids::FIREBALL, 1), (0, 90));
+        assert_eq!(ability_cost(gamedata::ids::FIREBALL, 2), (0, 105));
+        // Ward R1 magicka 205.
+        assert_eq!(ability_cost(gamedata::ids::WARD, 1), (0, 205));
+        // Thunderstorm's REAL uuid resolves (the old table's did not).
+        assert_ne!(ability_cost("2ab06506-2114-4738-bd87-f6f402d3ce2e", 1), (0, 0));
+        // Unknown uuid → no cost.
         assert_eq!(ability_cost("unknown-uuid", 1), (0, 0));
+        // Cooldowns are per-ability, from the asset.
+        assert!((ability_cooldown_secs(gamedata::ids::FIREBALL, 1).unwrap() - 3.54).abs() < 1e-3);
+        assert!((ability_cooldown_secs(gamedata::ids::WARD, 1).unwrap() - 7.5).abs() < 1e-3);
     }
 
-    /// Per-weapon-class swing cadence (bug 3): heavier weapons swing slower — the
-    /// authoritative RELATIVE ordering (WeaponClass Light<Balanced<Heavy, dump.cs
-    /// 560111). Magnitudes are calibration guesses; the ordering is the invariant.
+    /// Per-ITEM swing cadence replaces the guessed per-weight-class constants.
     #[test]
-    fn swing_interval_orders_by_weight_class() {
-        let light = Weight::Light.swing_interval();
-        let versatile = Weight::Versatile.swing_interval();
-        let heavy = Weight::Heavy.swing_interval();
-        assert!(light < versatile, "Light swings faster than Versatile/Balanced");
-        assert!(versatile < heavy, "Versatile swings faster than Heavy");
-        // Light stays at the historical 400ms floor (behaviour only tightens for heavier).
-        assert_eq!(light, std::time::Duration::from_millis(400));
+    fn swing_cadence_is_per_item() {
+        let dagger = gamedata::weapon(gamedata::ids::DRAGONBONE_DAGGER).unwrap();
+        let got = swing_interval_for_weapon(dagger);
+        // 0.233333 + 0.55 = 0.783333 s.
+        assert!((got.as_secs_f32() - 0.783333).abs() < 1e-4, "got {got:?}");
+        // The global floor is respected for a pathologically fast template.
+        assert_eq!(
+            swing_interval(0.0, 0.0),
+            std::time::Duration::from_secs_f32(combat_params::GLOBAL_MINIMUM_ATTACK_DELAY)
+        );
     }
 
+    /// Armor is a FLAT subtraction (`rating × 0.1`), capped at 95 % of the hit.
     #[test]
-    fn additive_weapon_surface_matches_uesp() {
-        // Dragonbone (smithy 10) base = 165; Mythical (+75) = 240 (UESP anchor).
-        assert_eq!(heavy_base(10), 165.0);
-        assert_eq!(heavy_base(10) + QUALITY_BONUS[10], 240.0);
-        // Iron (smithy 1) base = 30; Mythical = 105.
-        assert_eq!(heavy_base(1), 30.0);
-        assert_eq!(heavy_base(1) + QUALITY_BONUS[10], 105.0);
-        // Versatile 2H = 0.92× heavy.
-        assert!((weapon_base_for_level(45, Weight::Versatile)
-            - (heavy_base(10) + QUALITY_BONUS[quality_tier_for_level(45)]) * 0.92)
-            .abs()
-            < 1e-3);
+    fn armor_is_flat_capped_at_95_percent() {
+        assert!((armor_reduction(144.0, 301.8) - 30.18).abs() < 1e-3);
+        // A huge rating cannot remove more than 95 % of the hit.
+        assert!((armor_reduction(100.0, 100_000.0) - 95.0).abs() < 1e-3);
+        assert_eq!(armor_reduction(0.0, 500.0), 0.0);
     }
 
+    /// Resistance is a FLAT subtraction at `reductionPerResistanceRating = 1.0`,
+    /// de-rated to 0.75 for continuous (DoT) damage.
     #[test]
-    fn level_picks_material_tier() {
-        assert_eq!(smithy_level_for_char_level(1), 2); // Steel
-        assert_eq!(smithy_level_for_char_level(30), 7); // Glass
-        assert_eq!(smithy_level_for_char_level(86), 10); // Dragonbone
+    fn resistance_is_flat_and_derated_for_dot() {
+        assert!((resistance_reduction(200.0, 65.28, false) - 65.28).abs() < 1e-3);
+        assert!((resistance_reduction(200.0, 65.28, true) - 65.28 * 0.75).abs() < 1e-3);
+        assert!((resistance_reduction(10.0, 1000.0, false) - 9.5).abs() < 1e-3);
     }
 
-    /// The Light combo ramp reproduces the s506 recorded per-depth anchors EXACTLY
-    /// (combo 0→1.00, 1→1.45, 2→1.50, 3→2.65, 4→4.12) and holds at the ×4.12 ceiling
-    /// beyond — `docs/arena-combat-reproduction-spec.md` §2a/§4.2. (The earlier
-    /// geometric `1.45^n` overshot the recorded ×2.65 deep step; the ramp is irregular.)
+    /// Block is a FRACTION, and it is **not** de-rated against continuous damage
+    /// (`continuousDamageBlockingEffectiveness == 1`).
+    #[test]
+    fn block_is_a_fraction_with_elemental_two_thirds_of_physical() {
+        let rating = 750.0;
+        let phys = block_reduction(rating, true);
+        let elem = block_reduction(rating, false);
+        assert!((phys - 0.75).abs() < 1e-4, "phys {phys}");
+        assert!((elem - 0.5).abs() < 1e-4, "elem {elem}");
+        assert!((elem / phys - combat_params::ELEMENTAL_BLOCK_RATING_FACTOR).abs() < 1e-4);
+        // Caps.
+        assert!((block_reduction(100_000.0, true) - combat_params::MAXIMUM_BLOCK_REDUCTION).abs() < 1e-6);
+        assert_eq!(block_reduction(0.0, true), combat_params::MINIMUM_BLOCK_REDUCTION);
+        assert_eq!(
+            combat_params::CONTINUOUS_DAMAGE_BLOCKING_EFFECTIVENESS,
+            1.0,
+            "blocking is FULL effectiveness vs DoT — the 0.75 figure is absorb/fortify/resist/revenge/weakness"
+        );
+    }
+
+    /// Enchant magnitude follows the shipped per-family curve, not `13.73 × tier`.
+    #[test]
+    fn enchant_damage_follows_the_shipped_curve() {
+        const POISON: &str = "08ea75d0-5cf1-44a9-9816-d3c6740c4191";
+        let t10 = enchant_damage(POISON, 10).expect("poison tier 10");
+        assert!((t10 - 137.32).abs() < 0.5, "s506 poison base {t10} != 137.32");
+        // The curve is convex: tier 2 is ~1/10 of tier 10, not 1/5 as a linear
+        // `13.73 × tier` model would say.
+        let t2 = enchant_damage(POISON, 2).expect("poison tier 2");
+        assert!((t2 - 736.0 * ENCHANT_DAMAGE_PER_VALUE).abs() < 1e-3);
+        assert!(t2 < t10 / 5.0, "convex curve: t2 {t2} << t10/5 {}", t10 / 5.0);
+        // Odd tiers do not exist for this family.
+        assert_eq!(enchant_damage(POISON, 3), None);
+    }
+
+    /// The Light combo ramp reproduces the s506 recorded per-depth anchors.
     #[test]
     fn light_combo_ramp_matches_s506() {
-        assert_eq!(combo_factor(Weight::Light, 0), 1.0, "fresh swing = un-combo'd base");
-        assert!((combo_factor(Weight::Light, 1) - 1.45).abs() < 1e-3, "first chained step 1.45 (165.1/113.8)");
-        assert!((combo_factor(Weight::Light, 2) - 1.50).abs() < 1e-3, "second step ~1.50 (171.8/113.8)");
-        // The recorded deep steps are EXACT now (table-driven, not geometric).
-        assert!((combo_factor(Weight::Light, 3) - 2.65).abs() < 1e-3, "deep combo = recorded ×2.65 (301.8/113.8)");
-        assert!((combo_factor(Weight::Light, 4) - 4.12).abs() < 1e-3, "deeper combo = recorded ×4.12 (469.3/113.8)");
-        assert_eq!(combo_factor(Weight::Light, 4), 4.12, "combo is capped at the recorded ×4.12 ceiling");
-        assert_eq!(combo_factor(Weight::Light, 9), 4.12, "and stays capped past the ceiling");
-        // Monotonic non-decreasing ramp.
+        assert_eq!(combo_factor(Weight::Light, 0), 1.0);
+        assert!((combo_factor(Weight::Light, 1) - 1.45).abs() < 1e-3);
+        assert!((combo_factor(Weight::Light, 2) - 1.50).abs() < 1e-3);
+        assert!((combo_factor(Weight::Light, 3) - 2.65).abs() < 1e-3);
+        assert!((combo_factor(Weight::Light, 4) - 4.12).abs() < 1e-3);
+        assert_eq!(combo_factor(Weight::Light, 9), 4.12);
         for c in 0..8 {
             assert!(combo_factor(Weight::Light, c + 1) >= combo_factor(Weight::Light, c));
         }
+    }
+
+    #[test]
+    fn fallback_surface_still_available_for_bots() {
+        assert_eq!(fallback::heavy_base(10), 165.0);
+        assert_eq!(fallback::smithy_level_for_char_level(86), 10);
+        assert!(fallback::weapon_base_for_level(30, Weight::Light) > 0.0);
     }
 }

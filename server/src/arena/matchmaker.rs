@@ -537,6 +537,50 @@ fn check_paired_uuids_distinct(loadouts: &[crate::arena::combat::Loadout]) -> Re
     Ok(())
 }
 
+/// The symmetric half of [`check_paired_uuids_distinct`], for the op54 PROFILE.
+///
+/// `character_uuid` is the KEY the client binds appearance by; `profile_character_json`
+/// is the VALUE it dresses the avatar from. A distinct key with a missing or shared
+/// value collapses identity just as thoroughly, and it fails in a way that is easy to
+/// ship by accident, because [`loadout::starter`] — the fallback whenever a character
+/// load is slow, errors, or the row is missing — has an EMPTY profile:
+///   - **empty** → `broadcast_profiles` skips that fighter, so the opponent never gets
+///     an op54 profile at all and the client leaves the opponent body wearing whatever
+///     it already has (the local character's customization);
+///   - **identical** → both clients dress both avatars from the same blob.
+///
+/// `Ok(())` when every fighter has a non-empty, distinct `profile_character_json`.
+/// Kept separate from the UUID guard so each failure names its own cause (and so the
+/// UUID guard's own unit test can keep using bare `starter()` loadouts).
+fn check_paired_profiles_present_and_distinct(
+    loadouts: &[crate::arena::combat::Loadout],
+) -> Result<(), String> {
+    for (i, lo) in loadouts.iter().enumerate() {
+        if lo.profile_character_json.is_empty() {
+            return Err(format!(
+                "fighter {i} (\"{}\", char {}) has an EMPTY profile_character_json — a degraded \
+                 loadout::starter() fallback. broadcast_profiles skips empty profiles, so the \
+                 opponent never receives this fighter's op54 PROFILE and renders its body with \
+                 the LOCAL character's appearance.",
+                lo.display_name, lo.character_uuid,
+            ));
+        }
+        for (j, other) in loadouts.iter().enumerate().skip(i + 1) {
+            if lo.profile_character_json == other.profile_character_json {
+                return Err(format!(
+                    "fighters {i} (\"{}\") and {j} (\"{}\") share an IDENTICAL \
+                     profile_character_json ({} B) — both clients would dress both avatars from \
+                     the same customization blob.",
+                    lo.display_name,
+                    other.display_name,
+                    lo.profile_character_json.len(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Newest-first view of `arena_matches`, capped at `limit`, marking `mine`
 /// against `filter`. Backs the dev `recent-matches` endpoint; durable across
 /// restarts (#NB-3). Returns empty on a DB error (the endpoint stays up).
@@ -917,7 +961,13 @@ async fn resolve(
     // incomplete (e.g. the prod DB hasn't been migrated yet or a device has never
     // been bound).
     if paired && bots == 0 {
-        if let Err(reason) = check_paired_uuids_distinct(&loadouts) {
+        // Both halves of the identity are checked: the binding KEY (character_uuid,
+        // what the client's GetPvpPlayer looks the avatar up by) and the VALUE it
+        // dresses that avatar from (profile_character_json). Either one collapsing is
+        // the same visible bug, so both are hard failures.
+        let identity_check = check_paired_uuids_distinct(&loadouts)
+            .and_then(|()| check_paired_profiles_present_and_distinct(&loadouts));
+        if let Err(reason) = identity_check {
             warn!(
                 "matchmaker: PAIRED-MATCH APPEARANCE COLLAPSE rejected (gsid {game_session_id}) — {reason} \
                  Sending MatchmakingFailed to both clients (Fix 2 un-stick). Root cause: two peers \
@@ -1444,6 +1494,61 @@ mod tests {
         ];
         let err = check_paired_uuids_distinct(&empty).expect_err("empty UUID must be rejected");
         assert!(err.contains("EMPTY character_uuid"), "rejection names the empty-UUID collapse: {err}");
+    }
+
+    /// The symmetric half of the guard: distinct `character_uuid`s are necessary but
+    /// NOT sufficient. The op54 PROFILE is the blob the client dresses the avatar
+    /// from, and a bare `loadout::starter()` fallback carries an EMPTY one — which
+    /// `broadcast_profiles` skips, so the opponent's body keeps the local character's
+    /// appearance even though every UUID was distinct.
+    #[test]
+    fn paired_profile_presence_guard() {
+        use crate::arena::combat::loadout::starter;
+        let fighter = |uuid: &str, name: &str, profile: &str| {
+            let mut l = starter();
+            l.character_uuid = uuid.to_string();
+            l.display_name = name.to_string();
+            l.profile_character_json = profile.to_string();
+            l
+        };
+        const U1: &str = "38c987fd-c42b-4ea6-b869-c8d4c03055f9";
+        const U2: &str = "1131a037-716c-49cc-b165-32d8ddc14f49";
+
+        // Distinct UUIDs AND distinct non-empty profiles → OK.
+        let ok = vec![
+            fighter(U1, "Flappety", r#"{"id":"38c987fd","name":"Flappety"}"#),
+            fighter(U2, "Blank", r#"{"id":"1131a037","name":"Blank"}"#),
+        ];
+        assert!(check_paired_profiles_present_and_distinct(&ok).is_ok());
+
+        // Distinct UUIDs but one profile EMPTY (a degraded starter() fallback) →
+        // rejected: this passes the UUID guard yet still collapses appearance.
+        let degraded = vec![
+            fighter(U1, "Flappety", r#"{"id":"38c987fd","name":"Flappety"}"#),
+            fighter(U2, "DegradedToStarter", ""),
+        ];
+        assert!(
+            check_paired_uuids_distinct(&degraded).is_ok(),
+            "the UUID guard alone does NOT catch this — that is the point of the second guard"
+        );
+        let err = check_paired_profiles_present_and_distinct(&degraded)
+            .expect_err("an empty profile must be rejected");
+        assert!(
+            err.contains("EMPTY profile_character_json"),
+            "rejection names the empty-profile collapse: {err}"
+        );
+
+        // Two identical profiles → both clients dress both avatars from one blob.
+        let shared = vec![
+            fighter(U1, "Flappety", r#"{"id":"38c987fd","name":"Flappety"}"#),
+            fighter(U2, "WolfWalker", r#"{"id":"38c987fd","name":"Flappety"}"#),
+        ];
+        let err = check_paired_profiles_present_and_distinct(&shared)
+            .expect_err("an identical profile must be rejected");
+        assert!(
+            err.contains("IDENTICAL profile_character_json"),
+            "rejection names the shared-profile collapse: {err}"
+        );
     }
 
     /// The op54 round-start PROFILE character JSON must be schema-identical to

@@ -27,6 +27,12 @@ pub use enet::{
     first_marker_in_plaintext, first_opcode_in_plaintext, reconstruct_plaintext, walk_fragments,
     STREAM_PLAINTEXT_LEADS,
 };
-pub use netdata::{parse_netdata, NetDataParse, NetDataType, NetDataValue, NetDataWriter};
+pub use netdata::{
+    parse_netdata, NetDataOverflow, NetDataParse, NetDataType, NetDataValue, NetDataWriter,
+    NETDATA_MAX_VALUE_LEN,
+};
 pub use opcodes::{is_game_message_id, GameMessageId, GAME_MESSAGE_IDS};
-pub use reassembly::{reassemble_session, resolve_fragment, try_assembled, Frame, KeyCandidate};
+pub use reassembly::{
+    group_decode_is_real, reassemble_session, resolve_fragment, select_endpoint_key, try_assembled,
+    uuid_string_count, Frame, KeyCandidate, REASSEMBLY_UUID_CONFIRM_MIN,
+};

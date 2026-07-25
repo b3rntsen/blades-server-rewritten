@@ -707,9 +707,53 @@ pub struct MatchEndReward {
     /// The recipient's VISIBLE trophy count, post-match (`character.pvpTrophies`).
     pub pvp_trophies: i64,
     /// The matchmaking-internal trophies, post-match (`character.matchmakingPvpTrophies`).
+    ///
+    /// The 108 reassembled retail cards show this is the season **high-water mark**
+    /// (monotone non-decreasing, `= max(pvpTrophies)`), and that it — not the live
+    /// `pvpTrophies` — is what the arena ladder promotes on.
     pub matchmaking_pvp_trophies: i64,
     /// The recipient's challenge-season rank, post-match (`character.challengeSeason.rank`).
     pub challenge_rank: i64,
+    /// `character.pvpChestMeter`, post-match. Counts **rounds won** (not matches)
+    /// and wraps at `pvp_match_rewards.chest_meter_capacity` = 8. Capture-proven by
+    /// diffing consecutive cards against `numberPvpMatchPlayed`.
+    pub pvp_chest_meter: i64,
+    /// `character.pvpWinningStreak`, post-match. Positive counts consecutive wins,
+    /// negative consecutive losses; the sign is the card's own win/loss marker.
+    pub pvp_winning_streak: i64,
+    /// `character.numberPvpMatchPlayed`, post-match (pre-match + 1).
+    pub number_pvp_match_played: i64,
+    /// `character.highestArenaReached` — the ladder arena for the post-match
+    /// high-water mark.
+    pub highest_arena_reached: u64,
+    /// `character.highestLevelArenaReached` — the ladder level within that arena.
+    pub highest_level_arena_reached: u64,
+    /// The `rewardNewLevelArena` block. `{}` on every ordinary match; populated
+    /// only when this match crossed one or more ladder `required_trophy_count`
+    /// thresholds. See `arena_ladder::PromotionRewards` for the three retail
+    /// examples the shape is taken from.
+    pub reward_new_level_arena: serde_json::Value,
+}
+
+impl Default for MatchEndReward {
+    fn default() -> Self {
+        MatchEndReward {
+            gold: 0,
+            character_xp: 0,
+            wallet_gold: 0,
+            pvp_trophies: 0,
+            matchmaking_pvp_trophies: 0,
+            challenge_rank: 1,
+            pvp_chest_meter: 0,
+            pvp_winning_streak: 0,
+            number_pvp_match_played: 0,
+            highest_arena_reached: 1,
+            highest_level_arena_reached: 1,
+            // NOT `Value::Null` — the card's field is an empty OBJECT when there
+            // was no promotion, which is what every non-promotion retail card has.
+            reward_new_level_arena: serde_json::json!({}),
+        }
+    }
 }
 
 /// Build the op49 `ResultsJSON` (propId 13) — the victory-card payload
@@ -741,6 +785,18 @@ pub fn results_json(
         obj.insert("id".into(), json!(recipient_char_uuid));
         obj.insert("pvpTrophies".into(), json!(reward.pvp_trophies));
         obj.insert("matchmakingPvpTrophies".into(), json!(reward.matchmaking_pvp_trophies));
+        // The rest of the post-match PvP block. Retail's card carries all of these
+        // and the arena menu reads them straight back out of the snapshot, so
+        // leaving them at their stale pre-match values made the chest meter and the
+        // ladder position visibly rewind the moment the card appeared.
+        obj.insert("pvpChestMeter".into(), json!(reward.pvp_chest_meter));
+        obj.insert("pvpWinningStreak".into(), json!(reward.pvp_winning_streak));
+        obj.insert("numberPvpMatchPlayed".into(), json!(reward.number_pvp_match_played));
+        obj.insert("highestArenaReached".into(), json!(reward.highest_arena_reached));
+        obj.insert(
+            "highestLevelArenaReached".into(),
+            json!(reward.highest_level_arena_reached),
+        );
         // challengeSeason.rank — create/overlay just the rank (the card reads it for the
         // rank delta); preserve any other season fields already present.
         let mut season = obj.get("challengeSeason").cloned().unwrap_or_else(|| json!({}));
@@ -764,7 +820,7 @@ pub fn results_json(
             "currencies": { ARENA_GOLD_CURRENCY_UUID: reward.gold },
             "characterXp": reward.character_xp,
         },
-        "rewardNewLevelArena": {},
+        "rewardNewLevelArena": reward.reward_new_level_arena,
         "currentRequestIndex": request_index,
         "inventory": inventory,
         "wallet": [ { "currencyId": ARENA_GOLD_CURRENCY_UUID, "balance": reward.wallet_gold } ],
@@ -1499,6 +1555,7 @@ mod tests {
             pvp_trophies: 755,
             matchmaking_pvp_trophies: 817,
             challenge_rank: 1,
+            ..Default::default()
         };
         let char_json = r#"{"id":"old","name":"Flappety","level":86,"experience":291458}"#;
         let equipped = r#"{"equippedItems":{}}"#;
@@ -1521,6 +1578,82 @@ mod tests {
         // rewardNewLevelArena empty (no promotion); currentRequestIndex echoed.
         assert_eq!(v["rewardNewLevelArena"], serde_json::json!({}));
         assert_eq!(v["currentRequestIndex"], 789104);
+    }
+
+    /// The rest of the post-match PvP block (Phase 5.2). Retail's cards carry
+    /// `pvpChestMeter` / `pvpWinningStreak` / `numberPvpMatchPlayed` /
+    /// `highestArenaReached` / `highestLevelArenaReached`, and the arena menu reads
+    /// them back out of this snapshot.
+    ///
+    /// The values below are Flappety's real card from prod session **s615 at
+    /// 2026-06-27 21:18:21** — the winner half of the two-sided s615/s616 pair.
+    #[test]
+    fn results_json_carries_the_full_post_match_pvp_block() {
+        let reward = MatchEndReward {
+            gold: 14961,
+            character_xp: 691,
+            wallet_gold: 65_808_256,
+            pvp_trophies: 773,
+            matchmaking_pvp_trophies: 847,
+            challenge_rank: 1,
+            pvp_chest_meter: 7,
+            pvp_winning_streak: 1,
+            number_pvp_match_played: 138,
+            highest_arena_reached: 2,
+            highest_level_arena_reached: 7,
+            reward_new_level_arena: serde_json::json!({}),
+        };
+        let char_json = r#"{"id":"old","name":"Flappety","level":86,"pvpChestMeter":5}"#;
+        let out = results_json(
+            "38c987fd-c42b-4ea6-b869-c8d4c03055f9",
+            char_json,
+            "{}",
+            &reward,
+            789416,
+        );
+        let v: serde_json::Value = serde_json::from_str(&out).expect("ResultsJSON must parse");
+
+        assert_eq!(v["reward"]["currencies"][ARENA_GOLD_CURRENCY_UUID], 14961);
+        assert_eq!(v["reward"]["characterXp"], 691);
+        assert_eq!(v["wallet"][0]["balance"], 65_808_256i64);
+        assert_eq!(v["character"]["pvpTrophies"], 773);
+        assert_eq!(v["character"]["matchmakingPvpTrophies"], 847);
+        // The stale pre-match meter (5) must be overwritten by the post-match 7.
+        assert_eq!(v["character"]["pvpChestMeter"], 7);
+        assert_eq!(v["character"]["pvpWinningStreak"], 1);
+        assert_eq!(v["character"]["numberPvpMatchPlayed"], 138);
+        assert_eq!(v["character"]["highestArenaReached"], 2);
+        assert_eq!(v["character"]["highestLevelArenaReached"], 7);
+        assert_eq!(v["currentRequestIndex"], 789416);
+    }
+
+    /// A promotion card. The shape is capture-derived, not authored: prod s168
+    /// (flapdroid L5 crossing 50 trophies into arena 1 level 2, `chest_rarity` 3)
+    /// carried exactly `{"chests":[{"id":"1","tier":3,"level":5}],"characterXp":0}`.
+    #[test]
+    fn results_json_carries_a_populated_reward_new_level_arena_on_promotion() {
+        let reward = MatchEndReward {
+            gold: 1170,
+            character_xp: 42,
+            pvp_trophies: 51,
+            matchmaking_pvp_trophies: 51,
+            pvp_chest_meter: 2,
+            pvp_winning_streak: 1,
+            number_pvp_match_played: 3,
+            highest_arena_reached: 1,
+            highest_level_arena_reached: 2,
+            reward_new_level_arena: serde_json::json!({
+                "chests": [ { "id": "1", "tier": 3, "level": 5 } ],
+                "characterXp": 0,
+            }),
+            ..Default::default()
+        };
+        let out = results_json("aaaaaaaa-0000-0000-0000-000000000000", "{}", "{}", &reward, 1);
+        let v: serde_json::Value = serde_json::from_str(&out).expect("ResultsJSON must parse");
+        assert_eq!(v["rewardNewLevelArena"]["chests"][0]["tier"], 3);
+        assert_eq!(v["rewardNewLevelArena"]["chests"][0]["level"], 5);
+        assert_eq!(v["rewardNewLevelArena"]["characterXp"], 0);
+        assert_eq!(v["character"]["highestLevelArenaReached"], 2);
     }
 
     /// op51 `ChangeCombatStatusEffect` byte shape (`docs/arena-status-resistance-spec.md`

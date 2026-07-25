@@ -176,10 +176,15 @@ pub enum StatusEffectType {
 /// at OPTIMAL efficiency before degrading to LATE.
 pub const BLOCK_OPTIMAL_TIME_SECS: f32 = 2.0;
 
-/// `OPTIMAL_BLOCK_RECOVERY_TIME` (dump.cs 427015): cooldown (seconds) after dropping
-/// the block before a new OPTIMAL window can begin. Re-raising within this window
-/// starts as LATE, not OPTIMAL.
-pub const OPTIMAL_BLOCK_RECOVERY_SECS: f32 = 0.8;
+/// Cooldown (seconds) after dropping the block before a new OPTIMAL window can
+/// begin. Re-raising within this window starts as LATE, not OPTIMAL.
+///
+/// **Phase 3.5:** this is `PlayerCombatParameters.postOptimalBlockResetTime`
+/// (**1.4 s**), replacing the dump's `OPTIMAL_BLOCK_RECOVERY_TIME = 0.8 s`. The
+/// shipped player-combat asset is the authority for a *player* re-raising a guard;
+/// `PvpDefaultSettings` 0.8 was a server-cheat default.
+pub const OPTIMAL_BLOCK_RECOVERY_SECS: f32 =
+    super::gamedata::combat_params::POST_OPTIMAL_BLOCK_RESET_TIME;
 
 /// The block phase for a defending fighter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -334,15 +339,28 @@ impl PackedStats {
 /// when the imported character's ability template UUID matches a known class
 /// (`ward_ability_uuids`, `resist_elements_ability_uuids` in loadout.rs). Keeps the
 /// generic damage path working without game-data for unrecognized abilities.
+/// **Phase 3.11:** derived from the full 63-ability shipped table
+/// (`loadout::ability_tag_for_template`), not a single hardcoded UUID prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AbilityTag {
     #[default]
-    /// Generic damage spell — handled by the default `resolve_ability` path.
+    /// Unrecognised / passive — handled by the default `resolve_ability` path.
     Generic,
-    /// `WardAbility` subclass: apply Ward negation pool + armor. [§Mechanic-4]
+    /// `WardAbility` (Ward / Spellbreaker): apply a Ward negation pool + armor.
     Ward,
-    /// `ResistElementsAbility`: apply 4-tuple elemental resistance. [§Mechanic-3]
+    /// `AbsorbAbility`: a negation pool that HEALS back what it eats
+    /// (`_maximumAmountAbsorbed` + `_restorationFactor`).
+    Absorb,
+    /// `ResistElementsAbility`: apply the 4-tuple elemental resistance.
     ResistElements,
+    /// `ParalyzeAbility`: direct damage + the paralyse threshold/duration.
+    Paralyze,
+    /// A direct-damage spell with a shipped `_damage` and `damage_type`.
+    Damage,
+    /// A stamina-cost maneuver (`_parameters.one_handed_multiplier` scales the swing).
+    Maneuver,
+    /// A passive perk — never activates.
+    Perk,
 }
 
 /// One equipped ability: its instance UUID (as referenced by
@@ -354,20 +372,30 @@ pub struct EquippedAbility {
     pub tag: AbilityTag,
 }
 
-/// The weapon's base damage profile (per-type), filled from game data / RE.
+/// The weapon's base damage profile (per-type) + its shipped cadence/block stats.
+///
+/// **Phase 3.1/3.2/3.12:** every field below is now resolved from the equipped
+/// item's template via `gamedata::weapon(...)`; only fighters whose item does not
+/// resolve (bots / starter) fall back to the UESP surface.
 #[derive(Debug, Clone, Default)]
 pub struct WeaponProfile {
     pub primary_type: Option<DamageType>,
-    /// Base damage per type before swing/ability/enchant factors.
+    /// Base damage per type before swing/ability/enchant factors, already including
+    /// the item's `tempering_level` bonus (`tables::tempering_bonus`).
     pub base_by_type: Vec<(DamageType, f32)>,
-    /// Weapon weight class — drives the combo/crit ramp (`damage::combo_factor`):
-    /// a **Light** weapon (dagger) combos fast on chained alternating side-swings; a
-    /// **Heavy** weapon leans on charged `Middle` crits. Recovered for the recorded
-    /// match (s506) as **Light** (Dragonbone Dagger); `None` ⇒ the model's default
-    /// (Light — the calibration target's class) until per-weapon item game-data is
-    /// wired. See `loadout::from_character` (the fork lacks an item→weight table).
+    /// Weapon weight class — drives the combo/crit ramp (`damage::combo_factor`).
+    /// Resolved from the template's `weapon_class`; `None` ⇒ the model default (Light).
     pub weight: Option<crate::arena::combat::tables::Weight>,
 }
+
+/// The shipped `WeaponTemplateList` row backing a fighter's weapon, when the equipped
+/// item resolved (Phase 3.1/3.12).
+///
+/// **Why this hangs off [`Loadout`] and not [`WeaponProfile`]:** `WeaponProfile` is
+/// constructed as a struct literal in `engine.rs` (a file this change does not own),
+/// so widening it would break that call site. The three-field profile stays
+/// source-compatible and the item stats live one level up.
+pub type WeaponTemplate = &'static crate::arena::combat::gamedata::WeaponStats;
 
 /// A fighter's combat-relevant equipment, derived from the imported character.
 #[derive(Debug, Clone, Default)]
@@ -376,9 +404,21 @@ pub struct Loadout {
     pub level: u16,
     pub abilities: Vec<EquippedAbility>,
     pub weapon: WeaponProfile,
+    /// The shipped weapon template the equipped item resolved to (Phase 3.1). `None`
+    /// ⇒ this loadout used the UESP fallback surface (bot / no inventory).
+    pub weapon_template: Option<WeaponTemplate>,
     pub has_shield: bool,
-    /// Enchant `(damage_type, tier)` contributions, applied in the damage model.
+    /// Enchant `(damage_type, tier)` contributions, kept for provenance/logging.
+    /// The MAGNITUDE now lives in [`Self::enchant_damage`] — the shipped `_value`
+    /// curve is per-family and convex, so `tier` alone cannot produce it.
     pub enchants: Vec<(DamageType, u8)>,
+    /// Attacker-side **Armor Piercing Rating**
+    /// (`ArmorPiercingPhysicalPropertyLogic`) — subtracted from the defender's
+    /// Armor Rating before the physical reduction. [Phase 3.3]
+    pub armor_piercing_rating: f32,
+    /// Attacker-side `Fortify <Element> Damage` — a 0..1 fraction per element that
+    /// raises that element track's amplification ceiling. [Phase 3.6]
+    pub element_fortify: Vec<(DamageType, f32)>,
     /// Display name + character UUID for the round-start op50 spawn. Empty for the
     /// starter loadout (no character row); set by `loadout::from_character` + the
     /// matchmaker's character load.
@@ -389,9 +429,32 @@ pub struct Loadout {
     pub profile_equipped_json: String,
     pub profile_character_json: String,
 
+    // --- Rating-derived defence (Phase 3.3/3.4/3.5) ---
+    /// Summed **Armor Rating** of every equipped armor piece
+    /// (`gamedata::armor_rating`). Reduces PHYSICAL damage only, via
+    /// `tables::armor_reduction` (`rating × reductionPerArmorRating`, capped at
+    /// `maximumArmorReduction`). 0.0 for a fighter with no resolvable armor.
+    pub armor_rating: f32,
+    /// Summed **Block Rating** contributed by the equipped weapon + shield
+    /// (`blockBase`). Feeds `tables::block_reduction`.
+    pub block_rating: f32,
+    /// The shield's `optimalBlockBoost` (1.0 when no shield / unresolved).
+    pub shield_optimal_block_boost: f32,
+    /// **Elemental Resistance Piercing RATING** (not a fraction) contributed by the
+    /// attacker's enchants — subtracted from the defender's resistance rating before
+    /// the reduction is computed. [Phase 3.4]
+    pub elem_resist_piercing_rating: f32,
+    /// The caster's Paralyze ability rank (0 = not equipped) — selects the shipped
+    /// `_damageToCauseParalyze` / `_duration` row. [Phase 3.9]
+    pub paralyze_rank: u8,
+    /// The equipped WEAPON's `optimalBlockBoost` (1.0 when unresolved).
+    pub weapon_optimal_block_boost: f32,
+
     // --- Defensive / offensive enchant-derived fields (status-resistance-spec §2.5) ---
-    /// Summed FLAT resistance per `DamageType` (armor "Resist X" enchants + perks).
-    /// Applied as `afterResist = max(0, afterBlock − resist(t)·(1−elemPierce) + weakness)`.
+    /// Summed **Resistance Rating** per `DamageType` (armor "Resist X" enchants +
+    /// perks). With `reductionPerResistanceRating = 1.0` a rating point is a flat
+    /// damage point, which is exactly how the shipped enemy assets read it
+    /// (`Nascent Flame Atronach resistances.Fire = 65.28`). [Phase 3.4]
     pub resistances: Vec<(DamageType, f32)>,
     /// Summed flat weakness per type (a flat damage INCREASE). Usually empty in PvP.
     pub weaknesses: Vec<(DamageType, f32)>,
@@ -404,6 +467,19 @@ pub struct Loadout {
     /// "Shorten/Extend Elemental Statuses" → multiply status `_duration` by this (1.0 =
     /// none). Parsed but not yet applied to DoT timers (informational).
     pub status_dur_mult: f32,
+}
+
+impl Loadout {
+    /// Commit-to-commit swing cadence (Phase 3.12): the equipped template's own
+    /// `attackDelay + recoveryTime`, floored at `globalMinimumAttackDelay`; the
+    /// weight-class fallback when no template resolved.
+    pub fn swing_interval(&self) -> std::time::Duration {
+        use crate::arena::combat::tables;
+        match self.weapon_template {
+            Some(w) => tables::swing_interval_for_weapon(w),
+            None => tables::fallback_swing_interval(self.weapon.weight.unwrap_or(tables::Weight::Light)),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -497,6 +573,35 @@ pub struct Fighter {
     /// `None` at round start / after a reset.
     pub last_combo_side: ActiveSide,
 
+    // --- Phase 4.1: client pointer geometry (`PlayerCombatInputPosition`, gmid 47) ---
+    /// Most recent **normalised screen X** the client reported (gmid 47 propId 4,
+    /// range ~0.03–1.0). This is the field the swing-side classifier reads: prod
+    /// ground truth separates Left (median x 0.213) from Right (median x 0.800)
+    /// cleanly on this axis. `None` until the client sends its first pointer sample
+    /// (bots, and clients that stream nothing, stay `None` forever — the classifier
+    /// then falls back to the synthetic alternation).
+    pub last_input_x: Option<f32>,
+    /// Most recent normalised screen Y (gmid 47 propId 5). Recorded for completeness
+    /// / future vertical gestures; it carries **no side signal** (prod medians 0.529
+    /// Left vs 0.497 Right — indistinguishable).
+    pub last_input_y: Option<f32>,
+    /// When [`Self::last_input_x`] was recorded. A sample older than
+    /// `SIDE_CLASSIFY_SAMPLE_TTL` is treated as stale and ignored.
+    pub last_input_at: Option<Instant>,
+    /// The **client-reported** charge/hold duration in seconds (gmid 46 propId 5, and
+    /// the same value latched into gmid 47 propId 7).
+    ///
+    /// **TELEMETRY ONLY — never authoritative.** This is client-authored and therefore
+    /// trivially spoofable (a modified client could report a full 1.2 s charge on every
+    /// tap and crit every swing). The crit gate uses the *server*-measured hold
+    /// (`charge_press_at` → release). This field exists so the two can be compared and
+    /// a divergence logged.
+    pub last_client_charge: Option<f32>,
+    /// The client's `_isWithinBlockZone` flag from the last `PlayerCombatInputActivate`
+    /// (gmid 46 propId 6). Recorded for telemetry; it does **not** gate swings — see
+    /// the note in `resolve::on_c2s_input`.
+    pub last_input_block_zone: Option<bool>,
+
     // --- Conditioning / status-effect machinery (status-resistance-spec §5) ---
     /// Sliding per-element damage window: `DamageType → [(amount, recorded_at)]`. Each
     /// inbound elemental component (post-block/resist/negate) is pushed here; entries
@@ -515,6 +620,17 @@ pub struct Fighter {
     /// pipeline AFTER block (same insertion point as loadout resistances). Duration = 11.5s
     /// (`ResistElementsAbility._resistanceDuration` from multi-session op51 analysis).
     pub transient_resistances: Vec<(DamageType, f32, Instant)>, // (type, flat_amount, expires_at)
+    /// While set and in the future this fighter is STAGGERED
+    /// (`CombatParameters.baseStaggerDuration` 1.5 s): inputs are dropped, exactly
+    /// like `Paralyzed`, and the actor-state is `Staggered`. [Phase 3.13]
+    pub staggered_until: Option<Instant>,
+    /// Consumables used in the CURRENT round — gated by
+    /// [`CONSUMABLES_PER_ROUND`] (1). Reset by `reset_fighters_for_next_round`.
+    /// [Phase 4.3]
+    pub consumables_used: u32,
+    /// How long the CURRENT paralysis lasts (the casting rank's shipped `_duration`);
+    /// read by `resolve::reconcile_paralysis`. [Phase 3.9]
+    pub paralyze_secs: f32,
 }
 
 /// A damage-negation pool (Ward/Absorb/Dodge) on a fighter — a quantity of
@@ -536,17 +652,50 @@ pub struct NegationPool {
 pub const DAMAGE_HISTORY_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// `_healthPercentToCauseStatus` — fraction of MAX HP of accumulated [element] damage
-/// (in the window) that LANDS the elemental condition. ≈0.25 for the elemental four
-/// (`<game-data>`; representative). Arena triples max HP, so ~3× raw damage is needed.
-/// [`arena-status-resistance-spec.md` §5.2 — calibration knob]
-pub const HEALTH_PERCENT_TO_CAUSE_STATUS: f32 = 0.25;
+/// (in the window) that LANDS the elemental condition. **Now read from the shipped
+/// `CombatParameters.elemental_status_data`** (0.25, identical for all four elements).
+/// Arena triples max HP, so ~3× raw damage is needed. [Phase 3.8]
+pub const HEALTH_PERCENT_TO_CAUSE_STATUS: f32 =
+    super::gamedata::combat_params::HEALTH_PERCENT_TO_CAUSE_STATUS;
 
-/// `_damageToCauseParalyze` — the ABSOLUTE accumulated-poison threshold (in the window)
-/// that lands `Paralyzed` (layered ON TOP of the Poisoned threshold). `<game-data>`:
-/// set as a fraction of max HP so ~2-3 Paralyze casts land it (calibrated to the s506
-/// cadence: a Paralyze-spell poison hit ≈137 + amp, ~0.45× max HP lands paralyse after
-/// the poison condition). [§5.4 — calibration GUESS]
-pub const PARALYZE_POISON_THRESHOLD_FRACTION: f32 = 0.45;
+/// `CombatParameters.baseStaggerDuration` — how long a staggered actor is locked out.
+/// [Phase 3.13]
+pub const BASE_STAGGER_DURATION_SECS: f32 = super::gamedata::combat_params::BASE_STAGGER_DURATION;
+
+/// `CombatParameters.criticalHealthThreshold` — health **percentage** (0..100) below
+/// which a fighter is "critical" (drives the potion prompt + `Fortify Health
+/// Regeneration At Critical Health`). [Phase 3.13]
+pub const CRITICAL_HEALTH_THRESHOLD_PCT: f32 =
+    super::gamedata::combat_params::CRITICAL_HEALTH_THRESHOLD;
+
+/// `PvpParameters.consumablesPerRound` — consumables a fighter may use per round.
+/// [Phase 4.3]
+pub const CONSUMABLES_PER_ROUND: u32 = super::gamedata::combat_params::CONSUMABLES_PER_ROUND;
+
+/// The **absolute** accumulated-poison damage (inside the sliding window) that lands
+/// `Paralyzed`, from `ParalyzeAbility`'s per-rank `_damageToCauseParalyze`
+/// (**32.7 @ R1**, 37.63 @ R2, 43.77 @ R3 …).
+///
+/// **Phase 3.9 correction:** this replaces `PARALYZE_POISON_THRESHOLD_FRACTION = 0.45`
+/// (a fraction of max HP → 1417 damage at L86 arena HP, ~43× the shipped value). The
+/// shipped number is an absolute damage figure, so paralyse lands off a single strong
+/// poison hit — which is what a Paralyze spell is supposed to do.
+///
+/// `rank` is the caster's Paralyze rank; when the attacker has no Paralyze ability the
+/// R1 value is used as the generic poison→paralyse threshold.
+pub fn paralyze_damage_threshold(rank: u8) -> f32 {
+    super::gamedata::ability_rank_clamped(super::gamedata::ids::PARALYZE, rank.max(1) as u16)
+        .and_then(|r| r.damage_to_cause_paralyze())
+        .unwrap_or(32.7)
+}
+
+/// The shipped `Paralyze` per-rank `_duration` (**2.0 s @ R1**, 2.1 @ R2, 2.2 @ R3 …).
+/// Replaces the invented `PARALYZE_DURATION_SECS = 3.1`. [Phase 3.9]
+pub fn paralyze_duration_secs(rank: u8) -> f32 {
+    super::gamedata::ability_rank_clamped(super::gamedata::ids::PARALYZE, rank.max(1) as u16)
+        .and_then(|r| r.duration())
+        .unwrap_or(2.0)
+}
 
 impl Fighter {
     pub fn new(slot: usize, net_object_id: i32, loadout: Loadout, now: Instant) -> Self {
@@ -581,11 +730,85 @@ impl Fighter {
             charge_press_at: None,
             combo_count: 0,
             last_combo_side: ActiveSide::None,
+            last_input_x: None,
+            last_input_y: None,
+            last_input_at: None,
+            last_client_charge: None,
+            last_input_block_zone: None,
             damage_history: HashMap::new(),
             can_be_paralyzed: true, // players can be paralysed (vs boss innate immunity)
             negation_pools: Vec::new(),
             transient_resistances: Vec::new(),
+            staggered_until: None,
+            consumables_used: 0,
+            paralyze_secs: paralyze_duration_secs(1),
         }
+    }
+
+    /// This fighter's live **Block Rating** while guarding (Phase 3.5): the summed
+    /// weapon + shield `blockBase`, multiplied by `optimalBlockBoost` and the UESP
+    /// high-block ×2 when the guard is in its OPTIMAL phase.
+    pub fn block_rating(&self, optimal: bool) -> f32 {
+        use super::tables;
+        let base = self.loadout.block_rating;
+        if !optimal {
+            return base;
+        }
+        let boost = self
+            .loadout
+            .shield_optimal_block_boost
+            .max(self.loadout.weapon_optimal_block_boost)
+            .max(1.0);
+        base * boost * tables::OPTIMAL_BLOCK_RATING_MULTIPLIER
+    }
+
+    /// True iff this fighter is currently staggered. [Phase 3.13]
+    pub fn is_staggered(&self, now: Instant) -> bool {
+        matches!(self.staggered_until, Some(t) if now < t)
+    }
+
+    /// Enter the staggered state for `CombatParameters.baseStaggerDuration`.
+    pub fn apply_stagger(&mut self, now: Instant) {
+        self.staggered_until =
+            Some(now + std::time::Duration::from_secs_f32(BASE_STAGGER_DURATION_SECS));
+        self.actor_state = ActorStateType::Staggered;
+        self.state_entered = now;
+        // A staggered fighter's guard drops and its combo chain breaks.
+        self.blocking_until = None;
+        self.block_raised_at = None;
+        self.reset_combo();
+    }
+
+    /// Clear an expired stagger, returning true when the fighter just recovered.
+    pub fn reconcile_stagger(&mut self, now: Instant) -> bool {
+        if let Some(t) = self.staggered_until {
+            if now >= t {
+                self.staggered_until = None;
+                if self.actor_state == ActorStateType::Staggered {
+                    self.actor_state = ActorStateType::Idle;
+                    self.state_entered = now;
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// True when health is below `CombatParameters.criticalHealthThreshold` (35 %).
+    /// [Phase 3.13]
+    pub fn is_critical_health(&self) -> bool {
+        self.max_health > 0
+            && (self.health as f32 / self.max_health as f32) * 100.0 < CRITICAL_HEALTH_THRESHOLD_PCT
+    }
+
+    /// Consume one of this round's consumable charges, or `false` when the
+    /// `consumablesPerRound` budget is spent. [Phase 4.3]
+    pub fn try_use_consumable(&mut self) -> bool {
+        if self.consumables_used >= CONSUMABLES_PER_ROUND {
+            return false;
+        }
+        self.consumables_used += 1;
+        true
     }
 
     /// Reset the combo chain (`combo_count` → 0, `last_combo_side` → None) — on an
@@ -700,7 +923,22 @@ impl Fighter {
     /// resistance scaled by the attacker's `(1 − elem_resist_piercing)`, MINUS any
     /// matching `weaknesses`. Returns a non-negative flat amount. [§2.1/§2.3]
     pub fn resistance_against(&self, ty: DamageType, attacker_elem_pierce: f32) -> f32 {
-        let mut resist: f32 = self
+        self.resistance_rating_against(ty, attacker_elem_pierce, 0.0)
+    }
+
+    /// The **Resistance Rating** this fighter applies against an incoming `ty`
+    /// component (Phase 3.4). Elemental resistance is first reduced by the attacker's
+    /// Elemental-Resistance-Piercing — as a **rating subtraction**
+    /// (`pierce_rating`, the shipped `ResistancePiercingElementalPropertyLogic` value)
+    /// and then by the legacy fractional `pierce_frac` (the ability-side
+    /// `_elementalResistancePiercing`, which is a percentage). Never negative.
+    pub fn resistance_rating_against(
+        &self,
+        ty: DamageType,
+        pierce_frac: f32,
+        pierce_rating: f32,
+    ) -> f32 {
+        let mut rating: f32 = self
             .loadout
             .resistances
             .iter()
@@ -708,16 +946,23 @@ impl Fighter {
             .map(|(_, v)| *v)
             .sum();
         if super::damage::is_elemental(ty) {
-            resist *= (1.0 - attacker_elem_pierce).clamp(0.0, 1.0);
+            rating = (rating - pierce_rating).max(0.0);
+            rating *= (1.0 - pierce_frac).clamp(0.0, 1.0);
         }
-        let weakness: f32 = self
-            .loadout
+        rating.max(0.0)
+    }
+
+    /// The **Weakness Rating** this fighter suffers for an incoming `ty` component —
+    /// a flat damage INCREASE (`increasePerWeaknessRating`), capped at
+    /// `maximumWeaknessEffect`. Kept separate from resistance: netting the two (as the
+    /// old model did) hid the cap and made a weakness silently cancel a resist.
+    pub fn weakness_rating_against(&self, ty: DamageType) -> f32 {
+        self.loadout
             .weaknesses
             .iter()
             .filter(|(t, _)| *t == ty)
             .map(|(_, v)| *v)
-            .sum();
-        (resist - weakness).max(0.0)
+            .sum()
     }
 
     /// Combined flat resistance including transient Resist-Elements buffs (timed via
@@ -825,6 +1070,18 @@ impl Fighter {
     }
 }
 
+/// How a round ended. [Phase 3.14]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoundOutcome {
+    /// Both fighters still alive.
+    Ongoing,
+    /// Exactly one fighter died — `winner` scores the round.
+    Win { winner: usize },
+    /// **Both** fighters hit 0 HP in the same resolution step: no score, the round
+    /// is replayed. [Phase 3.14 — AUTHORED, no capture evidence]
+    DoubleKo,
+}
+
 /// Result of draining the negation pools against a hit.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NegationResult {
@@ -922,6 +1179,55 @@ impl MatchCombat {
         self.rounds_won.iter().any(|&w| w >= ROUND_WINS_TO_WIN_MATCH)
     }
 
+    /// How a round ended. [Phase 3.14]
+    pub fn round_outcome(&self) -> RoundOutcome {
+        let dead: Vec<usize> = self
+            .fighters
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.is_dead())
+            .map(|(i, _)| i)
+            .collect();
+        match dead.len() {
+            0 => RoundOutcome::Ongoing,
+            1 => RoundOutcome::Win {
+                winner: self.opponent_of(dead[0]).unwrap_or(dead[0]),
+            },
+            // Simultaneous 0 HP: nobody scores, the round is replayed.
+            _ => RoundOutcome::DoubleKo,
+        }
+    }
+
+    /// The match winner when the final round ends 1-1 (no fighter reached 2 wins) —
+    /// **Phase 3.14, AUTHORED, not capture-derived.** No recorded match ended in a
+    /// draw, so the tiebreak below is a designed rule, not a reproduction:
+    ///
+    /// 1. higher remaining HP **fraction** wins;
+    /// 2. if the fractions tie, the LOWER `pvpTrophies` wins (the underdog);
+    /// 3. if those tie too, slot 0.
+    ///
+    /// `trophies` is `(slot0, slot1)` from the players' `pvpTrophies`.
+    pub fn draw_tiebreak_winner(&self, trophies: (i64, i64)) -> usize {
+        if self.fighters.len() < 2 {
+            return 0;
+        }
+        let frac = |f: &Fighter| {
+            if f.max_health == 0 {
+                0.0
+            } else {
+                f.health as f32 / f.max_health as f32
+            }
+        };
+        let (a, b) = (frac(&self.fighters[0]), frac(&self.fighters[1]));
+        if (a - b).abs() > 1e-4 {
+            return if a > b { 0 } else { 1 };
+        }
+        if trophies.0 != trophies.1 {
+            return if trophies.0 < trophies.1 { 0 } else { 1 };
+        }
+        0
+    }
+
     /// Reset both fighters to full pools for the next round (best-of-3 loop): HP/
     /// Stamina/Magicka back to max, clear cooldowns / status effects / block /
     /// swing-throttle, actor back to Idle. The stats sequence id keeps rising
@@ -944,9 +1250,18 @@ impl MatchCombat {
             f.last_swing = None;
             f.charge_press_at = None;
             f.reset_combo();
+            // Phase 4.1: drop last round's pointer geometry so the first swing of the
+            // new round can never be classified from a stale pre-reset sample.
+            f.last_input_x = None;
+            f.last_input_y = None;
+            f.last_input_at = None;
+            f.last_client_charge = None;
+            f.last_input_block_zone = None;
             f.damage_history.clear(); // ClearDamageHistory on round reset (§5.5)
             f.negation_pools.clear();
             f.transient_resistances.clear();
+            f.staggered_until = None;
+            f.consumables_used = 0; // consumablesPerRound is PER ROUND [Phase 4.3]
         }
         // Anchor the regen timer to now so the next round's first tick fires 1s in.
         self.last_regen_tick = now;
@@ -1118,9 +1433,16 @@ mod tests {
         // 50% elem piercing halves the ELEMENTAL resist only.
         assert_eq!(f.resistance_against(DamageType::Poison, 0.5), 20.0);
         assert_eq!(f.resistance_against(DamageType::Slashing, 0.5), 20.0, "physical resist unaffected by elem piercing");
-        // A weakness reduces effective resist (floored at 0).
+        // Phase 3.4: WEAKNESS is now a SEPARATE flat increase (`increasePerWeaknessRating`,
+        // capped by `maximumWeaknessEffect`) rather than being netted off the resistance —
+        // netting them hid the cap and let a weakness silently cancel a resist.
         f.loadout.weaknesses = vec![(DamageType::Poison, 50.0)];
-        assert_eq!(f.resistance_against(DamageType::Poison, 0.0), 0.0, "weakness > resist → 0 (more gets through)");
+        assert_eq!(f.resistance_against(DamageType::Poison, 0.0), 40.0, "resistance is untouched by weakness");
+        assert_eq!(f.weakness_rating_against(DamageType::Poison), 50.0);
+        assert_eq!(f.weakness_rating_against(DamageType::Slashing), 0.0);
+        // Elemental-Resistance-PIERCING can also be a RATING subtraction (Phase 3.4).
+        assert_eq!(f.resistance_rating_against(DamageType::Poison, 0.0, 15.0), 25.0);
+        assert_eq!(f.resistance_rating_against(DamageType::Poison, 0.0, 999.0), 0.0, "never negative");
     }
 
     // -----------------------------------------------------------------------
@@ -1175,7 +1497,7 @@ mod tests {
         // Drop the block (record last_block_dropped_at = now).
         f.last_block_dropped_at = Some(now);
 
-        // Re-raise immediately (0.3s after drop — inside the 0.8s recovery window).
+        // Re-raise inside the `postOptimalBlockResetTime` (1.4 s) recovery window.
         let reraise = now + std::time::Duration::from_millis(300);
         f.actor_state = ActorStateType::Blocking;
         f.blocking_side = ActiveSide::Right;
@@ -1185,17 +1507,28 @@ mod tests {
         assert_eq!(
             f.block_phase(reraise),
             Some(BlockPhase::Late),
-            "re-raised within 0.8s recovery → starts as LATE, not OPTIMAL"
+            "re-raised within postOptimalBlockResetTime (1.4 s) → starts as LATE, not OPTIMAL"
         );
 
-        // After the recovery cooldown passes (>0.8s), a fresh raise is OPTIMAL again.
-        let after_recovery = now + std::time::Duration::from_millis(900);
+        // Phase 3.5: the recovery window is `postOptimalBlockResetTime` = 1.4 s
+        // (PlayerCombatParameters), NOT the dump's 0.8 s server-cheat default — so a
+        // raise at 0.9 s is still LATE and only a raise past 1.4 s is OPTIMAL again.
+        assert!(
+            (OPTIMAL_BLOCK_RECOVERY_SECS - 1.4).abs() < 1e-6,
+            "postOptimalBlockResetTime is 1.4 s, got {OPTIMAL_BLOCK_RECOVERY_SECS}"
+        );
+        let still_late = now + std::time::Duration::from_millis(900);
+        f.block_raised_at = Some(still_late);
+        f.blocking_until = Some(still_late + block_window);
+        assert_eq!(f.block_phase(still_late), Some(BlockPhase::Late), "0.9 s < 1.4 s → still LATE");
+
+        let after_recovery = now + std::time::Duration::from_millis(1500);
         f.block_raised_at = Some(after_recovery);
         f.blocking_until = Some(after_recovery + block_window);
         assert_eq!(
             f.block_phase(after_recovery),
             Some(BlockPhase::Optimal),
-            "re-raised after 0.8s recovery → OPTIMAL"
+            "re-raised after the 1.4 s reset → OPTIMAL"
         );
     }
 

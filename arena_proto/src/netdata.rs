@@ -306,6 +306,39 @@ pub fn parse_netdata(body: &[u8]) -> NetDataParse {
     NetDataParse { props, consumed: i, ok: true }
 }
 
+/// The largest byte length a NetData `String` / `ByteArray` value can carry: the
+/// wire length prefix is a **u16** (`[len: u16-LE][bytes]`), so 65 535 bytes is the
+/// hard ceiling. Anything longer cannot be represented — writing `len as u16`
+/// silently WRAPS, which desynchronises the whole property stream for the reader
+/// (every subsequent propId is decoded from the middle of the oversize payload).
+/// [`NetDataWriter::finish`] therefore truncates deliberately and logs; use
+/// [`NetDataWriter::finish_checked`] to get an explicit error instead.
+///
+/// Latent today: the largest real payload is the op54 PROFILE character JSON
+/// (~20 KB in retail s506), well under the ceiling. It becomes reachable the
+/// moment a character JSON grows past 64 KB.
+pub const NETDATA_MAX_VALUE_LEN: usize = u16::MAX as usize;
+
+/// A `String`/`ByteArray` property too long for the u16 wire length prefix.
+/// Returned by [`NetDataWriter::finish_checked`] / [`NetDataWriter::overflows`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetDataOverflow {
+    /// The propId whose value is oversize.
+    pub prop_id: u8,
+    /// The value's true byte length (> [`NETDATA_MAX_VALUE_LEN`]).
+    pub len: usize,
+}
+
+impl std::fmt::Display for NetDataOverflow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "NetData propId {} value is {} B, over the u16 length-prefix ceiling of {} B",
+            self.prop_id, self.len, NETDATA_MAX_VALUE_LEN
+        )
+    }
+}
+
 /// Builder for a NetData property stream. Accumulate `(propId, value)` pairs in
 /// any order, then [`finish`](Self::finish) emits the canonical bytes (maxPropId
 /// + presence bitmap + type nibbles + ascending values) — the exact inverse of
@@ -365,7 +398,38 @@ impl NetDataWriter {
             .byte(2, net_role)
     }
 
+    /// Every `String`/`ByteArray` property whose value exceeds the u16 wire
+    /// length prefix ([`NETDATA_MAX_VALUE_LEN`]). Empty for every normal payload.
+    pub fn overflows(&self) -> Vec<NetDataOverflow> {
+        self.props
+            .iter()
+            .filter_map(|(&prop_id, v)| {
+                let len = match v {
+                    NetDataValue::String(s) => s.len(),
+                    NetDataValue::ByteArray(b) => b.len(),
+                    _ => return None,
+                };
+                (len > NETDATA_MAX_VALUE_LEN).then_some(NetDataOverflow { prop_id, len })
+            })
+            .collect()
+    }
+
+    /// Like [`finish`](Self::finish), but returns an explicit **error** instead of
+    /// truncating when a `String`/`ByteArray` value can't fit the u16 length
+    /// prefix. Callers that must not ship a lossy frame should use this.
+    pub fn finish_checked(&self) -> Result<Vec<u8>, Vec<NetDataOverflow>> {
+        let over = self.overflows();
+        if over.is_empty() { Ok(self.finish()) } else { Err(over) }
+    }
+
     /// Serialize to the canonical NetData byte layout.
+    ///
+    /// A `String`/`ByteArray` longer than [`NETDATA_MAX_VALUE_LEN`] is **truncated
+    /// deliberately** (to the last whole UTF-8 code point for a `String`) and logged
+    /// at `error!` — never silently wrapped, which would corrupt every property
+    /// after it. [`finish_checked`](Self::finish_checked) surfaces the same
+    /// condition as an error. Byte-identical to the old behaviour for every value
+    /// at or under the ceiling.
     pub fn finish(&self) -> Vec<u8> {
         let mut out = Vec::new();
         let max_prop_id = self.props.keys().copied().max().unwrap_or(0);
@@ -394,14 +458,45 @@ impl NetDataWriter {
         out.extend_from_slice(&type_bytes);
 
         // Values, ascending propId.
-        for (_pid, v) in &self.props {
-            encode_value(&mut out, v);
+        for (&pid, v) in &self.props {
+            encode_value(&mut out, pid, v);
         }
         out
     }
 }
 
-fn encode_value(out: &mut Vec<u8>, v: &NetDataValue) {
+/// Write a `[len: u16-LE][bytes]` length-prefixed value, **checked**. Over the
+/// u16 ceiling we log loudly and truncate deliberately (at a UTF-8 code-point
+/// boundary when `is_utf8`) rather than let `len as u16` wrap — a wrapped prefix
+/// makes the reader resume parsing inside the payload and mis-decode every
+/// following property.
+fn write_len_prefixed(out: &mut Vec<u8>, prop_id: u8, bytes: &[u8], is_utf8: bool) {
+    let keep = match u16::try_from(bytes.len()) {
+        Ok(len) => len as usize,
+        Err(_) => {
+            let mut keep = NETDATA_MAX_VALUE_LEN;
+            if is_utf8 {
+                // Back off to the last whole code point so the truncated value is
+                // still valid UTF-8 (`str::floor_char_boundary` is unstable).
+                while keep > 0 && (bytes[keep] & 0xC0) == 0x80 {
+                    keep -= 1;
+                }
+            }
+            log::error!(
+                "arena_proto::netdata: propId {prop_id} value is {} B — over the u16 \
+                 length-prefix ceiling of {NETDATA_MAX_VALUE_LEN} B. TRUNCATING to {keep} B \
+                 (the frame is lossy but still parseable). Use NetDataWriter::finish_checked \
+                 to reject instead.",
+                bytes.len(),
+            );
+            keep
+        }
+    };
+    out.extend_from_slice(&(keep as u16).to_le_bytes());
+    out.extend_from_slice(&bytes[..keep]);
+}
+
+fn encode_value(out: &mut Vec<u8>, prop_id: u8, v: &NetDataValue) {
     use NetDataValue as V;
     match v {
         V::Int(x) => out.extend_from_slice(&x.to_le_bytes()),
@@ -414,15 +509,8 @@ fn encode_value(out: &mut Vec<u8>, v: &NetDataValue) {
         V::Byte(x) => out.push(*x),
         V::Int16(x) => out.extend_from_slice(&x.to_le_bytes()),
         V::UInt16(x) => out.extend_from_slice(&x.to_le_bytes()),
-        V::String(s) => {
-            let bytes = s.as_bytes();
-            out.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
-            out.extend_from_slice(bytes);
-        }
-        V::ByteArray(b) => {
-            out.extend_from_slice(&(b.len() as u16).to_le_bytes());
-            out.extend_from_slice(b);
-        }
+        V::String(s) => write_len_prefixed(out, prop_id, s.as_bytes(), true),
+        V::ByteArray(b) => write_len_prefixed(out, prop_id, b, false),
         V::Vector2(b) => out.extend_from_slice(b),
         V::Vector3(b) => out.extend_from_slice(b),
     }
@@ -538,6 +626,110 @@ mod tests {
             assert_eq!((v >> 10) & 0x3ff, stamina);
             assert_eq!((v >> 20) & 0x3ff, magicka);
             assert_eq!(v >> 32, seq);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // >64 KB length-prefix guard (Phase 0.5).
+    //
+    // The wire length prefix for String/ByteArray is a u16. Writing
+    // `bytes.len() as u16` SILENTLY WRAPS above 65 535 — e.g. a 70 000 B string
+    // writes prefix 4 464, so the reader resumes parsing 65 536 bytes early,
+    // *inside* the payload, and mis-decodes every property that follows. These
+    // tests pin the deliberate behaviour: truncate + log (finish) or an explicit
+    // error (finish_checked), never a wrap.
+    // -----------------------------------------------------------------------
+
+    /// A 70 KB String must NOT wrap the u16 prefix: the stream stays parseable and
+    /// every property AFTER the oversize one still decodes to its true value.
+    #[test]
+    fn oversize_string_truncates_deliberately_instead_of_wrapping() {
+        const OVERSIZE: usize = 70_000;
+        let big = "A".repeat(OVERSIZE);
+        let mut w = NetDataWriter::new();
+        w.int(0, 4242).string(1, big).byte(2, 7).int(3, -99);
+
+        // The explicit-error API names the offending property.
+        assert_eq!(
+            w.finish_checked().unwrap_err(),
+            vec![NetDataOverflow { prop_id: 1, len: OVERSIZE }],
+            "finish_checked must reject the oversize propId, not silently emit it",
+        );
+
+        let bytes = w.finish();
+        let p = parse_netdata(&bytes);
+        assert!(
+            p.ok,
+            "the truncated stream must still parse cleanly (a wrapped u16 prefix leaves \
+             ~65 KB of payload bytes to be misread as properties)",
+        );
+        assert_eq!(
+            p.string(1).map(str::len),
+            Some(NETDATA_MAX_VALUE_LEN),
+            "the oversize value is clamped to the u16 ceiling, not wrapped to {} B",
+            OVERSIZE as u16,
+        );
+        // The load-bearing assertions: the properties AFTER the oversize one are
+        // intact. With `len as u16` these decode from inside the payload ('A' = 65).
+        assert_eq!(p.int(0), Some(4242), "propId 0 (before the oversize value)");
+        assert_eq!(p.int(2), Some(7), "propId 2 AFTER the oversize value must survive");
+        assert_eq!(p.int(3), Some(-99), "propId 3 AFTER the oversize value must survive");
+    }
+
+    /// Same guard for `ByteArray`, and the truncation is byte-exact (a prefix of
+    /// the original), so the reader gets a valid — if lossy — value.
+    #[test]
+    fn oversize_bytearray_truncates_deliberately_instead_of_wrapping() {
+        let big: Vec<u8> = (0..80_000u32).map(|i| (i % 251) as u8).collect();
+        let mut w = NetDataWriter::new();
+        w.put(1, NetDataValue::ByteArray(big.clone())).byte(2, 0xAB);
+
+        assert_eq!(
+            w.finish_checked().unwrap_err(),
+            vec![NetDataOverflow { prop_id: 1, len: 80_000 }],
+        );
+        let p = parse_netdata(&w.finish());
+        assert!(p.ok);
+        match p.get(1) {
+            Some(NetDataValue::ByteArray(b)) => {
+                assert_eq!(b.len(), NETDATA_MAX_VALUE_LEN);
+                assert_eq!(b[..], big[..NETDATA_MAX_VALUE_LEN], "a true prefix of the input");
+            }
+            other => panic!("expected a ByteArray at propId 1, got {other:?}"),
+        }
+        assert_eq!(p.int(2), Some(0xAB), "the property after the oversize one survives");
+    }
+
+    /// Truncation of a `String` never splits a UTF-8 code point — the decoded
+    /// value is still valid UTF-8 (no replacement chars from a half character).
+    #[test]
+    fn oversize_string_truncates_on_a_utf8_boundary() {
+        // 3-byte code points: 65535 is NOT a multiple of 3, so a naive cut at the
+        // ceiling would land mid-character.
+        let big = "→".repeat(30_000); // 90 000 B
+        let mut w = NetDataWriter::new();
+        w.string(1, big);
+        let p = parse_netdata(&w.finish());
+        assert!(p.ok);
+        let s = p.string(1).expect("string at propId 1");
+        assert_eq!(s.len() % 3, 0, "cut on a code-point boundary (65535 % 3 == 0 is false)");
+        assert!(s.len() <= NETDATA_MAX_VALUE_LEN && s.len() > NETDATA_MAX_VALUE_LEN - 3);
+        assert!(s.chars().all(|c| c == '→'), "no partial code point / replacement char");
+    }
+
+    /// Non-breaking: values AT the ceiling and just under it encode exactly as
+    /// before (no truncation, no error) — normal-size payloads are untouched.
+    #[test]
+    fn at_and_under_the_ceiling_is_unchanged() {
+        for len in [0usize, 1, 4096, NETDATA_MAX_VALUE_LEN - 1, NETDATA_MAX_VALUE_LEN] {
+            let s = "x".repeat(len);
+            let mut w = NetDataWriter::new();
+            w.string(1, s.clone()).byte(2, 9);
+            assert!(w.finish_checked().is_ok(), "len {len} must not be flagged");
+            let p = parse_netdata(&w.finish());
+            assert!(p.ok, "len {len} must parse");
+            assert_eq!(p.string(1), Some(s.as_str()), "len {len} round-trips exactly");
+            assert_eq!(p.int(2), Some(9), "len {len}: following property intact");
         }
     }
 }

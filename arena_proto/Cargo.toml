@@ -12,6 +12,10 @@ chacha20 = "0.9"
 # X25519 ECDH; the shared secret IS the 32-byte ChaCha20 key (no KDF).
 # `static_secrets` is non-default in 2.x and gates StaticSecret.
 x25519-dalek = { version = "2", features = ["static_secrets"] }
+# Loud diagnostics for un-encodable NetData values (a >64 KB String/ByteArray
+# cannot fit the u16 wire length prefix — see `netdata::NETDATA_MAX_VALUE_LEN`).
+# Same version the `server` crate already uses; no new crate enters the lockfile.
+log = "0.4.29"
 
 [dev-dependencies]
 hex = "0.4"

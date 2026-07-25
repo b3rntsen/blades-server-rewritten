@@ -45,6 +45,7 @@
 
 pub mod damage;
 pub mod engine;
+pub mod gamedata;
 pub mod input;
 pub mod loadout;
 pub mod messages;

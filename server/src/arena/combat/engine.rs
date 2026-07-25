@@ -138,20 +138,55 @@ const MATCH_STATE_MATCHEND_PROGRESSION: &[(MatchState, Duration, f32)] = &[
     (MatchState::DisconnectingPlayersAfterMatch, Duration::from_secs(5), 0.0),
 ];
 
-/// op49 ResultsJSON reward magnitudes — simple win/loss deltas
-/// (`docs/arena-match-end-spec.md` §5 step 2: "the magnitude doesn't gate the screen";
-/// retail's exact per-match formula isn't in the captures). The card animates these; the
-/// trophy values are post-match snapshots the client diffs vs its pre-match totals.
-/// **Flagged as placeholder magnitudes** (calibrate against a winning capture if exact
-/// deltas are ever needed — the op49 SHAPE is what matters).
-const MATCH_END_WIN_GOLD: i64 = 4047; // s506-era order of magnitude
-const MATCH_END_LOSS_GOLD: i64 = 302; // s127/s167 loss value
-const MATCH_END_WIN_XP: i64 = 280;
-const MATCH_END_LOSS_XP: i64 = 16;
-const MATCH_END_WIN_TROPHIES: i64 = 30; // a representative trophy gain on a win
-const MATCH_END_LOSS_TROPHIES: i64 = 0;
 /// The op49/op48 result_code (s506 = 3; near-constant, ≈ maxRounds/result enum).
 const MATCH_END_RESULT_CODE: i32 = 3;
+
+/// The pre-match PvP counters a recipient's op49 card has to advance, read off the
+/// character snapshot the matchmaker loaded (`Loadout::profile_character_json`).
+///
+/// Phase 5 replaced the old hard-coded placeholder magnitudes with a real economy:
+/// the card now reports the character's ACTUAL post-match trophies, streak, chest
+/// meter, match count and ladder rung, and `arena_economy` persists exactly the
+/// same numbers. Everything defaults to zero for a bot / starter loadout that has
+/// no character row behind it.
+#[derive(Debug, Clone, Copy, Default)]
+struct PrePvpState {
+    trophies: i64,
+    high_water: i64,
+    chest_meter: i64,
+    winning_streak: i64,
+    matches_played: i64,
+    challenge_rank: i64,
+    level: u16,
+}
+
+impl PrePvpState {
+    /// Parse the PvP block out of a character profile blob. An empty/unparseable
+    /// blob (bot, starter loadout) yields all-zero, which the reward path handles.
+    fn from_profile(character_json: &str, fallback_level: u16) -> Self {
+        let v: serde_json::Value = serde_json::from_str(character_json).unwrap_or(serde_json::Value::Null);
+        let i = |k: &str| v.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
+        PrePvpState {
+            trophies: i("pvpTrophies"),
+            // `matchmakingPvpTrophies` is the season high-water mark; never let it
+            // start below the live count or the ladder would demote on load.
+            high_water: i("matchmakingPvpTrophies").max(i("pvpTrophies")),
+            chest_meter: i("pvpChestMeter"),
+            winning_streak: i("pvpWinningStreak"),
+            matches_played: i("numberPvpMatchPlayed"),
+            challenge_rank: v
+                .get("challengeSeason")
+                .and_then(|s| s.get("rank"))
+                .and_then(|r| r.as_i64())
+                .unwrap_or(1),
+            level: v
+                .get("level")
+                .and_then(|x| x.as_u64())
+                .map(|l| l as u16)
+                .unwrap_or(fallback_level),
+        }
+    }
+}
 
 /// The retail BETWEEN-ROUNDS `MatchState` walk — the path from a NON-final round end
 /// back into the next live round (best-of-3). Same `(state, hold_before, timeout)`
@@ -273,6 +308,20 @@ impl MatchInstance {
     /// returns to the arena lobby instead of holding the connection open.
     pub fn is_finished(&self) -> bool {
         matches!(self.combat.phase, FlowState::Finished)
+    }
+
+    /// True while the FSM is still waiting for its peers (`Connecting`) — i.e. the
+    /// round-start identity burst has NOT been emitted yet.
+    ///
+    /// The registry uses this to hold the burst back until every peer's fighter slot
+    /// is *authoritatively* known. The burst is per-viewer by construction
+    /// (`broadcast_spawns` / `broadcast_avatars` / `broadcast_profiles` all branch on
+    /// `actor.slot == viewer`), so its content is only ever as correct as the
+    /// slot→peer addressing applied one layer up; emitting it while a peer is still
+    /// bound by FIFO admission order is what swaps the two players' identities.
+    /// See `MatchRegistry::tick_matches`.
+    pub fn is_connecting(&self) -> bool {
+        matches!(self.combat.phase, FlowState::Connecting)
     }
 
     /// The character display name of the fighter in `slot`, if any (empty for a
@@ -856,37 +905,117 @@ impl MatchInstance {
     /// ONE PER PLAYER at match-end (`docs/arena-match-end-spec.md` §5 step 3). Each
     /// player gets their OWN ResultsJSON (their character snapshot + reward + wallet);
     /// the winner/loser identity for the card comes from the op49 HEADER (p5/p6), not the
-    /// JSON. The reward magnitudes use simple win/loss deltas — retail's exact formula
-    /// isn't in the captures, and the magnitude doesn't gate the card (§5 step 2). ENet
-    /// auto-fragments the ~4 KB frame on ch4. Sent exactly once (the `matchend_step == 0`
-    /// guard at the call site), only on the FINAL round.
+    /// JSON. ENet auto-fragments the ~4 KB frame on ch4. Sent exactly once (the
+    /// `matchend_step == 0` guard at the call site), only on the FINAL round.
+    ///
+    /// **Phase 5 — the economy is real now.** The magnitudes used to be hard-coded
+    /// placeholders (`4047` gold win / `302` loss, a flat `30` trophies) and, worse,
+    /// nothing was ever written down: the card animated numbers that evaporated on the
+    /// next REST sync. Now gold and XP come from
+    /// [`arena_ladder::match_reward`](crate::arena::arena_ladder::match_reward) —
+    /// calibrated against 108 retail op49 cards, including the two-sided s615/s616 pair
+    /// that finally pinned the WINNER side — trophies move by an Elo swing, the chest
+    /// meter advances by rounds won, the ladder rung is recomputed from the trophy
+    /// high-water mark, and crossing a rung pays out its `rewards_once_reached` chests.
+    /// Every one of those numbers is queued to
+    /// [`arena_economy`](crate::arena::arena_economy) so it survives the walk back to
+    /// the menu.
     fn broadcast_match_end_results(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        use crate::arena::arena_economy::{self, MatchEconomyOutcome};
+        use crate::arena::arena_ladder::{self, MatchOutcome};
+
         let (winner_uuid, loser_uuid) = self.combat.winner_loser_uuids();
-        for slot in 0..self.combat.fighters.len() {
+        let game_session_id = uuid::Uuid::parse_str(&self.combat.game_session_id).ok();
+        let n = self.combat.fighters.len();
+
+        // Pre-match PvP state per slot, read off the loaded character profiles. The
+        // opponent's trophies feed the Elo swing, so both sides are resolved up front.
+        let pre: Vec<PrePvpState> = (0..n)
+            .map(|s| {
+                let f = &self.combat.fighters[s];
+                PrePvpState::from_profile(&f.loadout.profile_character_json, f.loadout.level)
+            })
+            .collect();
+
+        for slot in 0..n {
             let f = &self.combat.fighters[slot];
             let is_winner = self.combat.winner == Some(slot);
-            // Simple, faithful-enough per-match deltas (win > loss); the card animates
-            // these but doesn't depend on the exact values. Trophy/rank are post-match
-            // snapshots the client diffs against its pre-match values.
-            let reward = if is_winner {
-                messages::MatchEndReward {
-                    gold: MATCH_END_WIN_GOLD,
-                    character_xp: MATCH_END_WIN_XP,
-                    wallet_gold: MATCH_END_WIN_GOLD,
-                    pvp_trophies: MATCH_END_WIN_TROPHIES,
-                    matchmaking_pvp_trophies: MATCH_END_WIN_TROPHIES,
-                    challenge_rank: 1,
-                }
+            let p = pre[slot];
+            let opponent = (0..n).find(|&o| o != slot);
+            let opponent_trophies = opponent.map(|o| pre[o].trophies).unwrap_or(p.trophies);
+
+            // Round score from the authoritative match state (best-of-3). It is the
+            // sole driver of the reward multiplier, and that is capture-proven: the
+            // retail loss payout is byte-identical across dozens of matches for the
+            // same character EXCEPT when a round was won, and the chest-meter delta
+            // (which counts rounds won) corroborates every case.
+            let rounds_won = self.combat.rounds_won.get(slot).copied().unwrap_or(0);
+            let rounds_lost = opponent
+                .and_then(|o| self.combat.rounds_won.get(o).copied())
+                .unwrap_or(0);
+            let outcome = MatchOutcome { rounds_won, rounds_lost, win: is_winner };
+
+            let level = if p.level > 0 { p.level } else { f.loadout.level };
+            let payout = arena_ladder::match_reward(level, outcome);
+            let trophy_delta = arena_ladder::trophy_delta(is_winner, p.trophies, opponent_trophies);
+
+            // Post-match counters, computed once so the card and the durable write are
+            // literally the same numbers.
+            let post_trophies = (p.trophies + trophy_delta).max(0);
+            let post_high_water = p.high_water.max(post_trophies);
+            let (post_meter, _filled) = arena_ladder::advance_chest_meter(p.chest_meter, rounds_won);
+            let post_streak = if is_winner {
+                if p.winning_streak > 0 { p.winning_streak + 1 } else { 1 }
+            } else if p.winning_streak < 0 {
+                p.winning_streak - 1
             } else {
-                messages::MatchEndReward {
-                    gold: MATCH_END_LOSS_GOLD,
-                    character_xp: MATCH_END_LOSS_XP,
-                    wallet_gold: MATCH_END_LOSS_GOLD,
-                    pvp_trophies: MATCH_END_LOSS_TROPHIES,
-                    matchmaking_pvp_trophies: MATCH_END_LOSS_TROPHIES,
-                    challenge_rank: 1,
-                }
+                -1
             };
+            let tier = arena_ladder::tier_for_trophies(post_high_water);
+            let promo = arena_ladder::promotion_rewards(p.high_water, post_high_water, level);
+
+            // `rewardNewLevelArena` stays `{}` unless a ladder rung was crossed. The
+            // populated shape is capture-derived (prod s168 / s460 / s607), not
+            // authored: each chest carries the rung's `chest_rarity` as `tier` and the
+            // CHARACTER level as `level`, and `characterXp` is always 0 there (the
+            // match XP rides the separate `reward` block).
+            let reward_new_level_arena = if promo.chests.is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::json!({
+                    "chests": promo
+                        .chests
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (rarity, lvl))| serde_json::json!({
+                            "id": (i + 1).to_string(),
+                            "tier": rarity,
+                            "level": lvl,
+                        }))
+                        .collect::<Vec<_>>(),
+                    "characterXp": 0,
+                })
+            };
+
+            let reward = messages::MatchEndReward {
+                gold: payout.gold,
+                character_xp: payout.character_xp,
+                // The true post-credit balance lives in `characters.wallet`, which the
+                // engine has no handle on (Loadout carries no wallet — see the Phase-5
+                // handoff note). The client re-reads `/wallets/current` on returning to
+                // the menu, by which time `arena_economy` has credited it.
+                wallet_gold: payout.gold,
+                pvp_trophies: post_trophies,
+                matchmaking_pvp_trophies: post_high_water,
+                challenge_rank: p.challenge_rank.max(1),
+                pvp_chest_meter: post_meter,
+                pvp_winning_streak: post_streak,
+                number_pvp_match_played: p.matches_played + 1,
+                highest_arena_reached: tier.arena as u64,
+                highest_level_arena_reached: tier.level as u64,
+                reward_new_level_arena,
+            };
+
             let rj = messages::results_json(
                 &f.loadout.character_uuid,
                 &f.loadout.profile_character_json,
@@ -902,13 +1031,45 @@ impl MatchInstance {
                 &rj,
             );
             info!(
-                "combat: op49 MatchEndMatchMsg → slot {slot} ({}), ResultsJSON {} B (gold {}, xp {})",
+                "combat: op49 MatchEndMatchMsg → slot {slot} ({}, L{level} {rounds_won}-{rounds_lost}), \
+                 ResultsJSON {} B (gold {}, xp {}, trophies {} → {} [{:+}], meter {}, arena {}/{}{})",
                 if is_winner { "winner" } else { "loser" },
                 rj.len(),
                 reward.gold,
                 reward.character_xp,
+                p.trophies,
+                post_trophies,
+                trophy_delta,
+                post_meter,
+                tier.arena,
+                tier.level,
+                if promo.chests.is_empty() {
+                    String::new()
+                } else {
+                    format!(", PROMOTED +{} chest(s)", promo.chests.len())
+                },
             );
             out.push((slot, frame));
+
+            // Persist. A bot / starter loadout has no character uuid to write to, and
+            // the queue is a no-op when the server runs without a database (unit tests,
+            // the offline round-trip harness).
+            if let Ok(character_id) = uuid::Uuid::parse_str(&f.loadout.character_uuid) {
+                arena_economy::record(MatchEconomyOutcome {
+                    character_id,
+                    game_session_id,
+                    level,
+                    gold: payout.gold,
+                    character_xp: payout.character_xp,
+                    trophy_delta,
+                    rounds_won,
+                    rounds_lost,
+                    win: is_winner,
+                    opponent_character_id: opponent.and_then(|o| {
+                        uuid::Uuid::parse_str(&self.combat.fighters[o].loadout.character_uuid).ok()
+                    }),
+                });
+            }
         }
     }
 

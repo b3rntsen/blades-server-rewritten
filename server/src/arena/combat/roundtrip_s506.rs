@@ -321,22 +321,61 @@ struct Emitted {
     kind: Kind,
 }
 
-/// Two fighters that each carry a (non-empty) profile, so `broadcast_profiles`
-/// emits the op54 PROFILE — required to reproduce s506's t+2 opponent profile.
-/// The gear JSON is a stub: we assert the profile is PRESENT and opponent-only,
-/// never its bytes.
-fn profiled(name: &str) -> Loadout {
+// --- Two DISTINCT fighter identities (Phase 0.2) ---------------------------
+//
+// The fixture used to hand BOTH fighters the same `character_uuid` and a
+// customization-less `{"name":"X"}` profile, which made the whole file blind to
+// identity mix-ups: the avatar propId4 the client binds appearance off (and the
+// profile it renders the opponent from) were indistinguishable between slots.
+// Slot 0 and slot 1 now carry different UUIDs AND different customization, so a
+// swapped identity is observable. (Shapes follow the real data: propId4 is a
+// 36-char hyphenated UUID; the profile carries `customization.CharacterUID` =
+// the `Visual_Player_{Gender}{Race}Visual` label the client resolves for looks.)
+
+/// Slot 0's character UUID (`propId4` on its op50 Player/Avatar spawns).
+const UUID_SLOT0: &str = "11111111-1111-4111-8111-111111111111";
+/// Slot 1's character UUID — deliberately DIFFERENT from [`UUID_SLOT0`].
+const UUID_SLOT1: &str = "22222222-2222-4222-8222-222222222222";
+/// Slot 0's appearance block (the bit that visibly differs on screen).
+const CUSTOMIZATION_SLOT0: &str =
+    r#"{"CharacterUID":"Visual_Player_MaleNordVisual","hairIndex":3,"skinIndex":1}"#;
+/// Slot 1's appearance block — deliberately DIFFERENT from [`CUSTOMIZATION_SLOT0`].
+const CUSTOMIZATION_SLOT1: &str =
+    r#"{"CharacterUID":"Visual_Player_FemaleRedguardVisual","hairIndex":7,"skinIndex":5}"#;
+
+/// A fighter that carries a (non-empty) profile, so `broadcast_profiles` emits the
+/// op54 PROFILE — required to reproduce s506's t+2 opponent profile.
+///
+/// `character_uuid` is what the op50 Player/Avatar spawns put at NetData propId4
+/// (the client's `GetPvpPlayer` lookup key → appearance binding), and
+/// `customization` is embedded in `profile_character_json` so the two fighters'
+/// profiles are byte-distinct. Callers MUST pass distinct values per slot — the
+/// s506 differential only checks protocol shape, but
+/// `identity_burst_is_per_viewer_and_distinct` checks WHICH identity each viewer
+/// receives, and that needs the two fighters to be tellable apart.
+fn profiled(name: &str, character_uuid: &str, customization: &str) -> Loadout {
     let mut l = super::loadout::starter();
     l.display_name = name.to_string();
-    l.character_uuid = "00000000-0000-0000-0000-000000000001".to_string();
+    l.character_uuid = character_uuid.to_string();
     l.abilities.push(super::state::EquippedAbility {
         instance_uuid: "5b764e61-8851-4703-8fea-3d8e589ed24f".to_string(),
         level: 1,
         tag: super::state::AbilityTag::Generic,
     });
     l.profile_equipped_json = r#"{"equippedItems":{}}"#.to_string();
-    l.profile_character_json = format!(r#"{{"name":"{name}"}}"#);
+    l.profile_character_json = format!(
+        r#"{{"id":"{character_uuid}","name":"{name}","customization":{customization}}}"#
+    );
     l
+}
+
+/// The two fixture fighters, slot 0 then slot 1 — distinct UUIDs, distinct names,
+/// distinct customization.
+fn s506_fighters() -> Vec<Loadout> {
+    vec![
+        profiled("Flappety", UUID_SLOT0, CUSTOMIZATION_SLOT0),
+        profiled("Opponent", UUID_SLOT1, CUSTOMIZATION_SLOT1),
+    ]
 }
 
 /// Drive a 2-fighter PvP match over s506's relative timing, replaying s506's c2s
@@ -346,7 +385,7 @@ fn profiled(name: &str) -> Loadout {
 fn drive_s506() -> (MatchInstance, Vec<Emitted>) {
     let t0 = Instant::now();
     // PvP: 2 fighters, both real peers; both carry a profile (opponent-only relay).
-    let mut m = MatchInstance::new(2, 2, vec![profiled("Flappety"), profiled("Opponent")], t0);
+    let mut m = MatchInstance::new(2, 2, s506_fighters(), t0);
 
     let c2s = s506_c2s();
     let mut log = Vec::new();
@@ -598,6 +637,185 @@ fn round_start_reproduces_s506_sequence_and_stagger() {
 fn is_subsequence(needle: &[Kind], hay: &[Kind]) -> bool {
     let mut it = hay.iter();
     needle.iter().all(|n| it.any(|h| h == n))
+}
+
+// ---------------------------------------------------------------------------
+// Phase 0.3 — per-viewer IDENTITY of the round-start burst.
+//
+// The s506 differential above only checks protocol SHAPE (which kinds, in which
+// order, with what stagger). It is structurally blind to *whose* identity each
+// frame carries — which is exactly the failure seen in the wild: both clients
+// rendered the opponent with their OWN character's appearance while the NAMES
+// (bound off a different path) looked right.
+//
+// Retail ground truth (s506, per viewer):
+//   · self Player   (type 55, NetRole 3 Autonomous)   propId4 = self UUID
+//   · opponent Player (type 55, NetRole 2 Simulated)  propId4 = opponent UUID
+//   · self Avatar   (type 56, NetRole 3 Autonomous)   propId4 = self UUID
+//   · opponent Avatar (type 56, NetRole 2 Simulated)  propId4 = opponent UUID
+//     ← the Simulated Avatar's propId4 is the char-UUID the client looks up in
+//       `_pvpPlayers` (`GetPvpPlayer`) to bind the OPPONENT's appearance.
+//   · exactly ONE op54 PROFILE per viewer = the OPPONENT's (never the viewer's own).
+// ---------------------------------------------------------------------------
+
+/// One decoded op50 Avatar spawn: `(NetRole, character UUID at propId4)`.
+fn avatar_spawns_for(burst: &[(usize, Vec<u8>)], viewer: usize) -> Vec<(i64, String)> {
+    burst
+        .iter()
+        .filter(|(v, _)| *v == viewer)
+        .filter_map(|(_, b)| {
+            if b.len() < 3 || b[0] != 0xBE || b[1] != 0x32 {
+                return None; // not an op50 spawn
+            }
+            let nd = parse_netdata(&b[2..]);
+            if nd.int(1) != Some(56) {
+                return None; // not an Avatar (55 = Player, 54 = Match)
+            }
+            Some((nd.int(2)?, nd.string(4)?.to_string()))
+        })
+        .collect()
+}
+
+/// The op54 PROFILE character-JSON blobs (propId5) delivered to `viewer`.
+fn profiles_for(burst: &[(usize, Vec<u8>)], viewer: usize) -> Vec<String> {
+    burst
+        .iter()
+        .filter(|(v, _)| *v == viewer)
+        .filter_map(|(_, b)| {
+            if b.len() < 3 || b[0] != 0xBE || b[1] != 0x36 {
+                return None;
+            }
+            let nd = parse_netdata(&b[2..]);
+            if nd.int(3) != Some(35) {
+                return None; // op54 carrier is shared: 35 == the PROFILE GameMessageId
+            }
+            Some(nd.string(5)?.to_string())
+        })
+        .collect()
+}
+
+/// Every s2c frame of the round-start identity burst (spawns → avatars → profiles
+/// → BackendMatchCreated), tagged with the viewer slot the engine addressed it to.
+/// Ticks 100 ms over 0…6 s, which covers the whole burst (`MATCH_SETUP_STAGGER` 1 s
+/// for the avatars+profiles, `SPAWN_HANDSHAKE_HOLD` 4 s for BackendMatchCreated).
+fn drive_identity_burst() -> Vec<(usize, Vec<u8>)> {
+    let t0 = Instant::now();
+    let mut m = MatchInstance::new(2, 2, s506_fighters(), t0);
+    let step = Duration::from_millis(100);
+    let mut burst = Vec::new();
+    for i in 0..=60u32 {
+        burst.extend(m.on_tick(2, t0 + step * i));
+    }
+    burst
+}
+
+/// **Phase 0.3.** Each viewer's round-start identity burst must describe the RIGHT
+/// two characters: its own as Autonomous(3), the OTHER one as Simulated(2), and the
+/// single op54 profile it receives must be the opponent's. A viewer that is handed
+/// its own UUID on the Simulated avatar renders the opponent wearing its own
+/// character's appearance — the observed live bug.
+///
+/// **Status at `af2602d`: PASSES.** The engine's per-viewer construction is
+/// correct in isolation — `broadcast_spawns` / `broadcast_avatars` /
+/// `broadcast_profiles` all key off `actor.slot == viewer`. The live identity
+/// inversion is therefore NOT in the burst's construction but in the fighter-slot
+/// → peer resolution one layer up (`MatchRegistry::{tick_matches,
+/// handle_live_user_data}` fall back to the FIFO `m.players[target]`), which
+/// `match_registry::tests::admission_order_reversed_still_binds_correctly` pins.
+/// Keep this test: it is what stops a Phase-2 routing fix from being "corrected"
+/// by breaking the engine side instead.
+#[test]
+fn identity_burst_is_per_viewer_and_distinct() {
+    let fighters = s506_fighters();
+    let uuid: [String; 2] = [fighters[0].character_uuid.clone(), fighters[1].character_uuid.clone()];
+    let name: [String; 2] = [fighters[0].display_name.clone(), fighters[1].display_name.clone()];
+    assert_ne!(uuid[0], uuid[1], "fixture precondition: the two fighters must be tellable apart");
+
+    let burst = drive_identity_burst();
+    assert!(!burst.is_empty(), "the round-start burst emitted nothing at all");
+
+    let mut delivered_profiles: Vec<String> = Vec::new();
+
+    for viewer in 0..2usize {
+        let opp = 1 - viewer;
+
+        // ---- (a) op50 Avatar spawns: one Autonomous (self), one Simulated (opp) ----
+        let avatars = avatar_spawns_for(&burst, viewer);
+        assert_eq!(
+            avatars.len(),
+            2,
+            "viewer {viewer}: retail s506 sends TWO Avatar (type 56) spawns per viewer — its own \
+             (obj 124, role 3 Autonomous) and the OPPONENT's (obj 125, role 2 Simulated); the \
+             Simulated one is what flips HasOpponentPlayer. Got: {avatars:?}",
+        );
+
+        let simulated: Vec<&(i64, String)> = avatars.iter().filter(|(r, _)| *r == 2).collect();
+        assert_eq!(
+            simulated.len(),
+            1,
+            "viewer {viewer}: exactly ONE Simulated(2) Avatar (the opponent's body). Got: {avatars:?}",
+        );
+        let sim_uuid = &simulated[0].1;
+        assert_ne!(
+            sim_uuid, &uuid[viewer],
+            "IDENTITY BUG — viewer {viewer}: the Simulated(2) Avatar's propId4 is the viewer's OWN \
+             character UUID ({}). The client binds the opponent's appearance off this UUID \
+             (GetPvpPlayer → SpawnOpponent), so it renders the opponent as a copy of the local \
+             character. It must be the OPPONENT's UUID ({}).",
+            uuid[viewer], uuid[opp],
+        );
+        assert_eq!(
+            sim_uuid, &uuid[opp],
+            "viewer {viewer}: the Simulated(2) Avatar must carry the OPPONENT's (slot {opp}) \
+             character UUID at propId4",
+        );
+
+        let autonomous: Vec<&(i64, String)> = avatars.iter().filter(|(r, _)| *r == 3).collect();
+        assert_eq!(
+            autonomous.len(),
+            1,
+            "viewer {viewer}: exactly ONE Autonomous(3) Avatar (the viewer's own body). Got: {avatars:?}",
+        );
+        assert_eq!(
+            &autonomous[0].1, &uuid[viewer],
+            "IDENTITY BUG — viewer {viewer}: the Autonomous(3) Avatar must carry the VIEWER's own \
+             character UUID (IsLocalPlayer == NetRole::Autonomous)",
+        );
+
+        // ---- (b) exactly ONE op54 PROFILE, and it is the OPPONENT's ----------
+        let profiles = profiles_for(&burst, viewer);
+        assert_eq!(
+            profiles.len(),
+            1,
+            "viewer {viewer}: retail sends EXACTLY ONE op54 profile per match per viewer — the \
+             opponent's. Got {} ({:?}).",
+            profiles.len(),
+            profiles.iter().map(|p| p.len()).collect::<Vec<_>>(),
+        );
+        let profile = &profiles[0];
+        assert!(!profile.is_empty(), "viewer {viewer}: the delivered profile JSON is empty");
+        assert!(
+            profile.contains(uuid[opp].as_str()) && profile.contains(name[opp].as_str()),
+            "IDENTITY BUG — viewer {viewer}: the op54 profile it receives is not the OPPONENT's \
+             (slot {opp}, {} / {}). The client builds the opponent actor — appearance, gear — \
+             straight from this JSON. Got: {profile}",
+            name[opp], uuid[opp],
+        );
+        assert!(
+            !profile.contains(uuid[viewer].as_str()),
+            "IDENTITY BUG — viewer {viewer}: it was handed a profile carrying its OWN character \
+             UUID ({}). Retail never echoes a client its own profile. Got: {profile}",
+            uuid[viewer],
+        );
+        delivered_profiles.push(profile.clone());
+    }
+
+    // ---- (c) the two viewers must not receive the SAME profile ---------------
+    assert_ne!(
+        delivered_profiles[0], delivered_profiles[1],
+        "IDENTITY BUG: both viewers received the identical opponent profile — with a correct \
+         per-viewer burst they are mirror images (viewer 0 gets slot 1's, viewer 1 gets slot 0's).",
+    );
 }
 
 #[test]

@@ -15,8 +15,15 @@
 //! sliding `damage_history` window → op51 `ChangeCombatStatusEffect`, incl. poison→
 //! `Paralyzed` with the victim's inputs locked).
 //!
-//! Still to wire: decoding the real swipe-input `activeSide`/`swingFactor` from the c2s
-//! body (auto-swings ALTERNATE Left/Right as a faithful stand-in); the
+//! **Phase 4.1 (done):** the swing side is now CLASSIFIED FROM REAL CLIENT INPUT.
+//! There is no `activeSide` enum on the c2s wire — the client streams raw pointer
+//! geometry (`PlayerCombatInputPosition`, gmid 47, ~30 Hz) and commits with
+//! `PlayerCombatInputActivate` (gmid 46). The server classifies Left/Right from the
+//! normalised screen X of the freshest pointer sample; see the "swing-side
+//! classification" block below for the prod ground-truth calibration. The synthetic
+//! Left/Right alternation survives only as a fallback for bots / silent clients.
+//!
+//! Still to wire: the `swingFactor` magnitude from the c2s body; the
 //! `PlayerChannelingStateChange` (53) cast animation; per-element DoT TICK damage (the
 //! conditioning land + threshold is wired; the periodic StatusEffect-source ReceiveDamage
 //! tick is the remaining piece); and routing real ability UUIDs to Ward/Absorb/Paralyze
@@ -38,25 +45,15 @@ const CARRIER_USERMESSAGE: u8 = 0x36;
 /// carrier byte (`GameMessageId` value), NOT the generic `0x36` UserMessage carrier.
 const CARRIER_OP46: u8 = 0x2e;
 
-/// Fallback minimum spacing between landed swings when the attacker's weapon WEIGHT
-/// class is unknown (no per-class `tables::Weight::swing_interval`). The real cadence is
-/// per-weapon-class (dagger swings faster than a greatsword) — see
-/// [`swing_cooldown_for`]. This flat value is the Light-class default (the calibration
-/// target's class).
-const SWING_COOLDOWN: Duration = Duration::from_millis(400);
-
-/// The minimum spacing between committed swings for `fighter`, keyed to the equipped
-/// weapon's WEIGHT class (`tables::Weight::swing_interval`) — so a Heavy weapon can't be
-/// swung at a dagger's cadence. Falls back to [`SWING_COOLDOWN`] (the Light default) when
-/// the loadout has no weapon weight (starter/bot/un-imported). [bug-3 fix: per-class
-/// swing cadence]
+/// The minimum spacing between committed swings for `fighter` — **Phase 3.12**: the
+/// equipped weapon's own `attackDelay + recoveryTime`, floored at
+/// `PlayerCombatParameters.globalMinimumAttackDelay` (0.1 s).
+///
+/// This replaces the guessed per-weight-class table (`Weight::swing_interval`, a flat
+/// 400/650/900 ms). A Dragonbone Dagger now swings every 0.783 s, an Iron Warhammer
+/// every 1.35 s — from the shipped `WeaponTemplateList`, per template, not per class.
 fn swing_cooldown_for(fighter: &super::state::Fighter) -> Duration {
-    fighter
-        .loadout
-        .weapon
-        .weight
-        .map(|w| w.swing_interval())
-        .unwrap_or(SWING_COOLDOWN)
+    fighter.loadout.swing_interval()
 }
 
 /// Held-charge crit swing multiplier for a **Light** weapon (dagger) — `×1.325`.
@@ -89,41 +86,17 @@ const CRITICAL_HOLD_SECS: f32 = 1.2;
 /// Fallback ability cooldown for abilities without authoritative game-data.
 const ABILITY_COOLDOWN: Duration = Duration::from_millis(3000);
 
-/// Authoritative per-ability cooldown, keyed by the ability *definition* UUID
-/// carried in the cast. Values are `_cooldown` (seconds → ms) read from the APK's
-/// `ActiveAbility` ScriptableObjects (rank-independent; extracted via UnityPy —
-/// see docs/arena-cooldowns-authoritative.md). Unknown UUIDs fall back to
-/// `ABILITY_COOLDOWN`. NOTE: Lightning Bolt's 0.5s is the channeled re-fire
-/// interval (not a between-cast gate); `_initialCooldown` (round-start delay) and
-/// the 10 never-captured abilities are not yet applied.
-fn ability_cooldown(ability_uuid: &str) -> Duration {
-    let ms: u64 = match ability_uuid {
-        "d07a8d30-9a1c-49b0-866d-97a8aa1534cf" => 3540, // Fireball
-        "7fc15804-1637-40a9-8dcc-3ea1eb0f778d" => 500,  // Lightning Bolt (channeled re-fire)
-        "cfee0b02-6d91-4d34-869c-a7e54329060d" => 5230, // Ice Spike
-        "4be1d681-c35d-4540-b255-c2910ac80664" => 8090, // Frostbite
-        "e07f9b1a-64db-44ef-ba25-0e4378789ddc" => 8090, // Consuming Inferno
-        "dfb8d247-1333-42eb-9730-a1c16d10584f" => 6580, // Delayed Lightning Bolt
-        "66bdc017-30c5-4b5e-9753-215c45056f6a" => 6580, // Poison Cloud
-        "9fdc4d52-ce90-44f8-9b5d-21f31e27dbda" => 8090, // Paralyze
-        "4e760726-b012-4b25-bc92-0cd6312d6601" => 6000, // Absorb
-        "c4b48518-e847-4f3d-81a2-2856bdb4ed98" => 7500, // Blizzard Armor
-        "91078132-ef5c-492a-97f2-ac69be5140a8" => 8000, // Resist Elements
-        "65ede044-d68a-4b2b-8f0c-02075ad133cc" => 7500, // Ward
-        "eb0cb7e6-47cf-48e7-8cc9-dbf80fc77f13" => 5830, // Quick Strikes
-        "cdab44fb-6ff6-4701-a4ec-d19cce79e49f" => 5830, // Piercing Strikes
-        "ce6b63e9-9f18-49c4-aee0-51f7985f9892" => 8090, // Power Attack
-        "69ffa3fd-deb7-4824-bab6-ac6450f19676" => 6700, // Harrying Bash
-        "9b915ec3-c63b-4b62-b417-4c5436d45fc1" => 6700, // Staggering Bash
-        "f9a2373b-a84f-4716-90ce-165baa2dd6ed" => 6700, // Shield Bash
-        "ba61ce46-163f-4a61-8ede-f5b7ae365e40" => 6700, // Reflecting Bash
-        "1e7f0dd6-6015-4f65-b811-3246e407e330" => 8650, // Dodging Strike
-        "be56c560-a4ba-47ad-8513-f24c342ca594" => 8650, // Adrenaline Dodge
-        "e08f95de-85bb-4829-ba7e-cf45bc6fb422" => 8750, // Recovery Strikes
-        "cc768bae-a063-4885-8207-f39c6542fb36" => 8090, // Guardbreaker
-        _ => return ABILITY_COOLDOWN,
-    };
-    Duration::from_millis(ms)
+/// Per-ability, **per-rank** cooldown from the shipped `<Name>Rank<N>` asset
+/// (`_cooldown`). Unknown UUIDs fall back to [`ABILITY_COOLDOWN`].
+///
+/// **Phase 3.11:** replaces the hand-transcribed rank-independent table. Several of
+/// that table's UUIDs never matched a shipped ability (fabricated tails), so those
+/// abilities silently used the 3 s fallback.
+fn ability_cooldown(ability_uuid: &str, rank: u8) -> Duration {
+    match tables::ability_cooldown_secs(ability_uuid, rank) {
+        Some(s) if s > 0.0 => Duration::from_secs_f32(s),
+        _ => ABILITY_COOLDOWN,
+    }
 }
 
 /// How long a `PlayerBlockingStateChange` (41) holds the guard up before it
@@ -137,6 +110,243 @@ const BLOCK_WINDOW: Duration = Duration::from_secs(2);
 fn is_op46(user_data: &[u8]) -> bool {
     user_data.get(1) == Some(&CARRIER_OP46)
 }
+
+/// `GameMessageId` values whose body carries the client's swipe geometry.
+const GMID_PLAYER_COMBAT_INPUT_ACTIVATE: u8 = 46;
+const GMID_PLAYER_COMBAT_INPUT_POSITION: u8 = 47;
+
+// ---------------------------------------------------------------------------
+// Phase 4.1 — swing-side classification from the client's raw input geometry
+// ---------------------------------------------------------------------------
+//
+// ## What the client actually sends (decoded from prod `arena_udp_frames`)
+//
+// There is **no `activeSide` enum on the c2s wire**. `CombatSwipeInfo` (gmid 54)
+// does not exist in the corpus (10 frames total, none of them a swipe input). The
+// client instead streams raw pointer geometry and the server classifies it:
+//
+// * **gmid 47 `PlayerCombatInputPosition`** — a ~30 Hz pointer stream, 68 913 c2s
+//   frames on prod. NetData `{0:Int netObjectId · 1:Byte 56 Avatar · 2:Byte 3
+//   Autonomous · 3:Byte 47 · 4:Float x · 5:Float y · 6:Float frameDelta ·
+//   7:Float chargeSeconds · 8:Int seq}`.
+// * **gmid 46 `PlayerCombatInputActivate`** — the discrete press/release, 17 817
+//   c2s frames. NetData `{… 3:Byte 46 · 4:Bool held · 5:Float chargeSeconds ·
+//   6:Bool isWithinBlockZone}`.
+//
+// **Both ride the generic `0x36` UserMessage carrier**, not their own GameMessageId
+// byte: of 1 500 sampled prod gmid-46 frames, 1 497 are `(marker 0xBE, carrier
+// 0x36)` and only 3 are `(0x84, 0x2e)`; gmid-47 is 1 500/1 500 on `0x36`. The
+// pre-existing `CARRIER_OP46` (`0x2e`) path is therefore near-dead on real traffic
+// and is kept only as a compatibility branch (see [`is_op46`]).
+//
+// ## Which feature classifies the side — measured, not assumed
+//
+// `ReceiveDamage` (gmid 50) propId 10 **is** the retail server's own `ActiveSide`
+// decision (same field this server writes in `messages::receive_damage`), so prod
+// captures provide ground-truth labels. Joining 3 277 attack hits against the c2s
+// pointer stream that preceded them:
+//
+// | feature                              | accuracy @ 0.5 |
+// |--------------------------------------|----------------|
+// | absolute X at release (`p4`, last)   | **93.7 %**     |
+// | absolute X at press (`p4`, first)    | 92.7 %         |
+// | travel delta ΔX across the gesture   | ~chance        |
+//
+// **Absolute position wins; travel-delta carries no signal at all.** Despite the
+// name "swipe", the gesture is a *hold at a point*, not a directional sweep: within
+// a press→release burst X moves by ~0.0005/frame (finger jitter) and the sign split
+// is symmetric for both classes (Left: 686 positive / 421 negative; Right: 828 /
+// 778). Classifying on ΔX would be a coin flip.
+//
+// The two classes are cleanly bimodal on X with a wide empty valley — Left q1/med/q3
+// = 0.160 / 0.213 / 0.232, Right = 0.785 / 0.814 / 0.838, and only 167 of 4 539
+// samples (3.7 %) land anywhere in [0.30, 0.70]. Y (`p5`) is *not* discriminative
+// (Left median 0.529 vs Right 0.497).
+//
+// Two further structural facts from the same ground truth:
+// * `DamageSource::Attack` is the **only** source that ever produces Left/Right, and
+//   it *always* does (2 706 Left / 3 889 Right; never None, never Middle). Every
+//   other source (Spell, WeaponManeuver, StatusEffect, …) is None or Middle.
+// * At high combo the recorded side strictly alternates (combo 9→Left, 10→Right,
+//   11→Left, 12→Right, …), independently confirming that the combo ramp advances
+//   only on alternating sides — which is why a synthetic alternator let every player
+//   max the ramp for free.
+
+/// **[Class 3 calibration]** Normalised-screen-X cut-point separating a Left swing
+/// from a Right swing.
+///
+/// Retail is gone; this cannot be validated against the shipped client's own
+/// constant. It is calibrated from 3 277 prod attack hits labelled by the retail
+/// server's own `ReceiveDamage.activeSide` (see the module note above). A sweep over
+/// candidate thresholds peaks **exactly at 0.50** (93.7 %) on a very flat plateau —
+/// 0.30 → 0.924, 0.45 → 0.932, **0.50 → 0.937**, 0.60 → 0.934, 0.70 → 0.934 — so the
+/// screen midpoint is both the empirical optimum and the obvious design value. The
+/// residual ~6 % is dominated by capture-side pairing slop (dropped 30 Hz samples,
+/// attributing a hit to the wrong burst), not by the feature.
+const SIDE_CLASSIFY_X_MIDPOINT: f32 = 0.5;
+
+/// **[Class 3 calibration]** How long a pointer sample stays usable for classifying
+/// a swing.
+///
+/// The client streams gmid 47 **only while a finger is down** — in prod traces the
+/// stream stops at release and resumes at the next press (gaps of seconds between
+/// gestures). The last sample before a release is typically ~33 ms old (one 30 Hz
+/// frame), so this window only has to survive a short burst of packet loss. 500 ms
+/// ≈ 15 dropped frames, while still being far shorter than the inter-gesture gap, so
+/// a stale position from a *previous* gesture can never be reused.
+const SIDE_CLASSIFY_SAMPLE_TTL: Duration = Duration::from_millis(500);
+
+/// **[Class 3 calibration]** Tolerance for the server-vs-client charge cross-check.
+/// A divergence beyond this is logged (possible cheat / clock skew / packet loss);
+/// it never changes the damage, which always uses the server measurement.
+const CHARGE_CROSS_CHECK_TOLERANCE_SECS: f32 = 0.35;
+
+// NetData propIds — gmid 47 `PlayerCombatInputPosition`.
+const PROP_POS_X: u8 = 4;
+const PROP_POS_Y: u8 = 5;
+const PROP_POS_CHARGE: u8 = 7;
+// NetData propIds — gmid 46 `PlayerCombatInputActivate`.
+const PROP_ACT_HELD: u8 = 4;
+const PROP_ACT_CHARGE: u8 = 5;
+const PROP_ACT_BLOCK_ZONE: u8 = 6;
+
+/// Read a `Float` NetData prop. Deliberately strict: unlike `NetDataParse::int`
+/// (which coerces `Bool` → 0/1 and would happily read a *bool* prop as a number),
+/// this matches the `Float` variant only.
+fn netdata_f32(nd: &arena_proto::NetDataParse, prop: u8) -> Option<f32> {
+    match nd.get(prop) {
+        Some(arena_proto::NetDataValue::Float(v)) => Some(*v),
+        _ => None,
+    }
+}
+
+/// Read a `Bool` NetData prop (strict — see [`netdata_f32`]).
+fn netdata_bool(nd: &arena_proto::NetDataParse, prop: u8) -> Option<bool> {
+    match nd.get(prop) {
+        Some(arena_proto::NetDataValue::Bool(v)) => Some(*v),
+        _ => None,
+    }
+}
+
+/// One decoded `PlayerCombatInputPosition` (gmid 47) pointer sample.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PointerSample {
+    /// Normalised screen X (propId 4).
+    x: f32,
+    /// Normalised screen Y (propId 5).
+    y: f32,
+    /// Client-reported charge seconds latched at propId 7 (telemetry only).
+    client_charge: Option<f32>,
+}
+
+/// One decoded `PlayerCombatInputActivate` (gmid 46) press/release event.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct InputActivate {
+    /// `true` = button DOWN (press), `false` = button UP (release/commit).
+    held: bool,
+    /// Client-reported hold duration in seconds (telemetry only — see
+    /// [`state::Fighter::last_client_charge`]).
+    client_charge: Option<f32>,
+    /// The client's `_isWithinBlockZone` flag.
+    block_zone: Option<bool>,
+}
+
+/// Decode a carrier-`0x36` `PlayerCombatInputPosition` (gmid 47) frame.
+/// Returns `None` for any other frame.
+fn parse_input_position(user_data: &[u8]) -> Option<PointerSample> {
+    if messages::user_message_gmid(user_data)? != GMID_PLAYER_COMBAT_INPUT_POSITION {
+        return None;
+    }
+    let nd = arena_proto::parse_netdata(user_data.get(2..)?);
+    Some(PointerSample {
+        x: netdata_f32(&nd, PROP_POS_X)?,
+        y: netdata_f32(&nd, PROP_POS_Y)?,
+        client_charge: netdata_f32(&nd, PROP_POS_CHARGE),
+    })
+}
+
+/// Decode a carrier-`0x36` `PlayerCombatInputActivate` (gmid 46) frame.
+/// Returns `None` for any other frame.
+fn parse_input_activate(user_data: &[u8]) -> Option<InputActivate> {
+    if messages::user_message_gmid(user_data)? != GMID_PLAYER_COMBAT_INPUT_ACTIVATE {
+        return None;
+    }
+    let nd = arena_proto::parse_netdata(user_data.get(2..)?);
+    Some(InputActivate {
+        held: netdata_bool(&nd, PROP_ACT_HELD)?,
+        client_charge: netdata_f32(&nd, PROP_ACT_CHARGE),
+        block_zone: netdata_bool(&nd, PROP_ACT_BLOCK_ZONE),
+    })
+}
+
+/// Classify a swing side from a normalised-screen-X pointer position.
+///
+/// Left half of the screen → [`ActiveSide::Left`], right half → [`ActiveSide::Right`],
+/// split at [`SIDE_CLASSIFY_X_MIDPOINT`]. Out-of-range values (a malformed or hostile
+/// frame) yield `None` so the caller can fall back rather than trust them.
+///
+/// Never returns `Middle`: prod ground truth shows a weapon `Attack` is *always* Left
+/// or Right (0 of 6 595 recorded attack hits carried Middle or None). `Middle` remains
+/// reachable only through the maneuver/ability lane.
+fn classify_side_from_x(x: f32) -> Option<ActiveSide> {
+    if !x.is_finite() || !(0.0..=1.0).contains(&x) {
+        return None;
+    }
+    Some(if x >= SIDE_CLASSIFY_X_MIDPOINT { ActiveSide::Right } else { ActiveSide::Left })
+}
+
+/// The side to use for `sender`'s next swing, from the freshest pointer sample the
+/// client streamed. `None` when there is no usable sample — the caller then uses the
+/// clearly-marked synthetic fallback in [`resolve_swing_with_side`].
+fn classified_side_for(
+    fighter: &super::state::Fighter,
+    now: Instant,
+) -> Option<ActiveSide> {
+    let at = fighter.last_input_at?;
+    // `Instant` arithmetic: guard against a sample stamped in the future (clock jitter
+    // in tests) by using `checked_duration_since`.
+    let age = now.checked_duration_since(at)?;
+    if age > SIDE_CLASSIFY_SAMPLE_TTL {
+        return None;
+    }
+    classify_side_from_x(fighter.last_input_x?)
+}
+
+/// Compare the server-measured hold against the client-reported one and log a
+/// divergence. **Purely observational** — the returned value is never used for damage.
+///
+/// The client's number is a faithful wall-clock timer (in prod traces gmid 47 propId 7
+/// ramps by exactly 1/30 s per frame and matches the gmid 46 release value to the last
+/// decimal), but it is *client-authored*: trusting it would let a modified client claim
+/// a full charge on every tap and crit for free. So the server keeps its own stopwatch
+/// and only uses the client value to notice when the two disagree.
+fn charge_cross_check(slot: usize, server_secs: f32, client_secs: Option<f32>) {
+    let Some(client) = client_secs else { return };
+    let delta = (server_secs - client).abs();
+    if delta > CHARGE_CROSS_CHECK_TOLERANCE_SECS {
+        info!(
+            "combat: slot {slot} charge cross-check DIVERGED — server {server_secs:.3}s vs \
+             client-reported {client:.3}s (Δ{delta:.3}s > {CHARGE_CROSS_CHECK_TOLERANCE_SECS}s). \
+             Server measurement is authoritative; client value is telemetry only."
+        );
+    } else {
+        debug!(
+            "combat: slot {slot} charge cross-check ok — server {server_secs:.3}s vs client \
+             {client:.3}s (Δ{delta:.3}s)"
+        );
+    }
+}
+
+/// **Superseded — the old `decode_active_side` lived here.**
+///
+/// It scanned NetData props above the header for any value in `0..=3` and read it as
+/// an `ActiveSide`. That was wrong twice over: (a) there is no `activeSide` field on
+/// the c2s wire at all (see the Phase 4.1 module note above), and (b)
+/// `NetDataParse::int` coerces `Bool` → 0/1, so on a real carrier-`0x36` gmid-46
+/// frame it hit propId 4 (`held`, a Bool) first and returned `Middle` for every press
+/// and `None` for every release — `Middle` resets the combo chain. Replaced by
+/// [`classified_side_for`] / [`classify_side_from_x`], which classify from the
+/// pointer geometry the client actually streams.
 
 /// Parse the `_held` flag (bit0 of `b[9]`, the float's MSB) from an op46 body.
 ///
@@ -265,7 +475,19 @@ pub fn on_c2s_input(
                 if combat.fighters[target_slot].is_dead() {
                     return Vec::new();
                 }
-                return resolve_swing(combat, sender, target_slot, swing_factor, now);
+                // Phase 4.1: classify from pointer geometry here too, so the legacy
+                // `0x2e` shape behaves identically to the real `0x36` one. With no
+                // geometry (the usual case on this path) this is `None` and the
+                // synthetic fallback applies.
+                let side = classified_side_for(&combat.fighters[sender], now);
+                return resolve_swing_with_side(
+                    combat,
+                    sender,
+                    target_slot,
+                    swing_factor,
+                    side,
+                    now,
+                );
             }
             None => {
                 // Frame too short or not op46 — ignore.
@@ -323,6 +545,28 @@ pub fn on_c2s_input(
         debug!("combat: slot {sender} carrier-54 handshake/flow frame (not a swing) — ignored");
         return Vec::new();
     }
+
+    // ---- Phase 4.1: the REAL combat-input family, on the generic 0x36 carrier ----
+    //
+    // `PlayerCombatInputPosition` (gmid 47) is a ~30 Hz POINTER STREAM, not an attack.
+    // It must update the sender's geometry and emit nothing. (Before Phase 4.1 these
+    // frames fell through to the swing path, so the server launched a swing on every
+    // pointer sample — rate-limited only by the weapon cadence. Combined with the
+    // synthetic side alternation that meant a player maxed the combo ramp merely by
+    // holding a finger on the screen.)
+    if sender < combat.fighters.len() {
+        if let Some(sample) = parse_input_position(user_data) {
+            let f = &mut combat.fighters[sender];
+            f.last_input_x = Some(sample.x);
+            f.last_input_y = Some(sample.y);
+            f.last_input_at = Some(now);
+            if let Some(cc) = sample.client_charge {
+                f.last_client_charge = Some(cc);
+            }
+            return Vec::new();
+        }
+    }
+
     let Some(target_slot) = combat.opponent_of(sender) else {
         debug!("combat: slot {sender} input ignored — solo/bot match, no opponent");
         return Vec::new();
@@ -341,14 +585,78 @@ pub fn on_c2s_input(
         debug!("combat: slot {sender} input ignored — paralysed (inputs locked)");
         return Vec::new();
     }
+    // A STAGGERED sender can't act either, for `baseStaggerDuration` (1.5 s). [Phase 3.13]
+    if combat.fighters[sender].is_staggered(now) {
+        debug!("combat: slot {sender} input ignored — staggered");
+        return Vec::new();
+    }
+
+    // `PlayerCombatInputActivate` (gmid 46) on the 0x36 carrier — the discrete
+    // press/release. This is how a real client commits a swing (the `0x2e`-carrier
+    // branch near the top of this function is the near-dead legacy shape: 3 of 1 500
+    // sampled prod gmid-46 frames).
+    if let Some(act) = parse_input_activate(user_data) {
+        if sender >= combat.fighters.len() {
+            return Vec::new();
+        }
+        {
+            let f = &mut combat.fighters[sender];
+            f.last_input_block_zone = act.block_zone;
+            if let Some(cc) = act.client_charge {
+                f.last_client_charge = Some(cc);
+            }
+        }
+        if act.held {
+            // Button DOWN — start the server's charge stopwatch. No damage.
+            combat.fighters[sender].charge_press_at = Some(now);
+            debug!(
+                "combat: slot {sender} op46 DOWN (carrier 0x36) — charge press recorded \
+                 (blockZone={:?})",
+                act.block_zone
+            );
+            return Vec::new();
+        }
+        // Button UP — commit the swing.
+        //
+        // NOTE on `_isWithinBlockZone`: prod attack hits occur after both block-zone
+        // and non-block-zone bursts, so this flag is recorded but deliberately does
+        // NOT gate the swing. Gating on it would silently swallow legitimate attacks
+        // if the zone semantics are anything other than assumed.
+        let hold_secs = combat.fighters[sender]
+            .charge_press_at
+            .map(|t| now.saturating_duration_since(t).as_secs_f32())
+            .unwrap_or(0.0);
+        combat.fighters[sender].charge_press_at = None;
+        // Server measurement is authoritative; the client's number is only compared.
+        charge_cross_check(sender, hold_secs, act.client_charge);
+        let swing_factor = charge_crit_factor(&combat.fighters[sender], hold_secs);
+        if combat.fighters[target_slot].is_dead() {
+            return Vec::new();
+        }
+        let side = classified_side_for(&combat.fighters[sender], now);
+        debug!(
+            "combat: slot {sender} op46 UP (carrier 0x36) — hold {hold_secs:.3}s ×{swing_factor:.3}, \
+             side {side:?} from x={:?}",
+            combat.fighters[sender].last_input_x
+        );
+        return resolve_swing_with_side(combat, sender, target_slot, swing_factor, side, now);
+    }
+
 
     // A RequestExecuteAbility (spell/ability) vs a weapon swing.
     if let Some(ea) = input::parse_execute_ability(user_data) {
         resolve_ability_cast(combat, sender, target_slot, user_data, &ea, now)
     } else {
-        // Carrier-0x36 swing (no `_held` parse — no charge info). Use ×1.0 (no crit).
-        // Full charge crits arrive via op46 (carrier 0x2e, handled above).
-        resolve_swing(combat, sender, target_slot, 1.0, now)
+        // An *unstructured* carrier-0x36 body: no GameMessageId, so neither an
+        // ability nor one of the gmid-46/47 input messages handled above. Real
+        // clients commit swings through gmid 46; this branch keeps bots and
+        // minimal/synthetic clients able to attack. No `_held` info ⇒ ×1.0 (no crit).
+        //
+        // Phase 4.1: still prefer the classified side if the sender happens to have
+        // streamed fresh pointer geometry; otherwise `resolve_swing_with_side`
+        // applies the synthetic-alternation fallback.
+        let side = classified_side_for(&combat.fighters[sender], now);
+        resolve_swing_with_side(combat, sender, target_slot, 1.0, side, now)
     }
 }
 
@@ -358,11 +666,12 @@ pub fn on_c2s_input(
 ///   - `1.0` for a normal (partial / uncharged) swing via carrier-0x36 or bot swings.
 ///   - `CRIT_FACTOR_*` for a full-charge crit dispatched from the op46 (0x2e) path
 ///     when the server-measured hold ≥ `CRITICAL_HOLD_SECS` (bug 4 fix).
-fn resolve_swing(
+fn resolve_swing_with_side(
     combat: &mut MatchCombat,
     sender: usize,
     target_slot: usize,
     swing_factor: f32,
+    decoded_side: Option<ActiveSide>,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
     let cooldown = swing_cooldown_for(&combat.fighters[sender]);
@@ -374,16 +683,36 @@ fn resolve_swing(
     }
     combat.fighters[sender].last_swing = Some(now);
 
-    // Swipe-input geometry: the raw c2s swipe body doesn't carry a decodable activeSide
-    // here, so a normal auto-attack ALTERNATES Left/Right (a dagger combos via chained
-    // alternating side-swings, §4.2) — this drives the combo ramp. The first swing of a
-    // chain is Right (the s506 combo-0 reference). `register_combo_swing` increments the
-    // chain on an alternating side and returns the depth for `combo_factor`.
-    let next_side = match combat.fighters[sender].last_combo_side {
-        ActiveSide::Right => ActiveSide::Left,
-        _ => ActiveSide::Right, // None / Left / Middle → start (or restart) on Right
+    // ---- Phase 4.1: swing side ----
+    //
+    // `decoded_side` is the side CLASSIFIED FROM THE CLIENT'S REAL POINTER GEOMETRY
+    // (`classified_side_for` → `classify_side_from_x`). That is the normal path for a
+    // real client and the whole point of Phase 4.1: the combo ramp (×1.00 → ×1.45 →
+    // ×2.65 → ×4.12) only advances on *alternating* sides, so the side has to reflect
+    // what the player actually did.
+    //
+    // ======================= SYNTHETIC FALLBACK (not real input) ==================
+    // When `decoded_side` is `None` there is no usable geometry — a BOT, a client
+    // that streams no `PlayerCombatInputPosition`, a stale (>`SIDE_CLASSIFY_SAMPLE_TTL`)
+    // sample, or an out-of-range coordinate. We then ALTERNATE Left/Right so the
+    // fight still progresses and nothing hangs. This is deliberately generous (it
+    // maxes the combo ramp) but it is unreachable for a real, streaming client, and
+    // the alternative — refusing the swing — would deadlock a bot match.
+    // The first swing of a chain is Right (the s506 combo-0 reference).
+    // ==============================================================================
+    let next_side = decoded_side.filter(|s| *s != ActiveSide::None).unwrap_or_else(|| {
+        match combat.fighters[sender].last_combo_side {
+            ActiveSide::Right => ActiveSide::Left,
+            _ => ActiveSide::Right, // None / Left / Middle → start (or restart) on Right
+        }
+    });
+    // A `Middle` (maneuver/charged) swing is not part of a side chain — it resets it.
+    let combo_count = if next_side == ActiveSide::Middle {
+        combat.fighters[sender].reset_combo();
+        0
+    } else {
+        combat.fighters[sender].register_combo_swing(next_side)
     };
-    let combo_count = combat.fighters[sender].register_combo_swing(next_side);
 
     let attacker_loadout = combat.fighters[sender].loadout.clone();
     let resolved = RetailDamageModel.resolve_attack(
@@ -401,6 +730,17 @@ fn resolve_swing(
         combat.fighters[sender].reset_combo();
     }
     emit_damage(combat, sender, target_slot, &resolved, now)
+}
+
+/// Swing with the server-synthesised side (no decoded client geometry).
+fn resolve_swing(
+    combat: &mut MatchCombat,
+    sender: usize,
+    target_slot: usize,
+    swing_factor: f32,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    resolve_swing_with_side(combat, sender, target_slot, swing_factor, None, now)
 }
 
 /// A spell/ability cast: cooldown-gated, resource-gated (stamina for maneuvers /
@@ -457,7 +797,7 @@ fn resolve_ability_cast(
     combat
         .fighters[sender]
         .cooldowns
-        .insert(ea.ability_uuid.clone(), now + ability_cooldown(&ea.ability_uuid));
+        .insert(ea.ability_uuid.clone(), now + ability_cooldown(&ea.ability_uuid, level));
 
     // Deduct stamina/magicka and emit op65 PlayerStatsUpdate to both players so the
     // HUD bars reflect the new pools immediately.  `stats_seq` is bumped inside
@@ -498,19 +838,88 @@ fn resolve_ability_cast(
 
     debug!("combat: slot {sender} casts ability {} (tag {tag:?}, level {level}) → slot {target_slot}", ea.ability_uuid);
 
-    // Route Ward and ResistElements to their specific handlers (no direct damage).
-    // Generic abilities go through the standard spell-damage path.
+    // Phase 3.11: route on the FULL shipped ability table. Ward/Absorb/ResistElements
+    // are self-buffs (no direct damage); Paralyze/Damage/Maneuver deal the rank's own
+    // `_damage`; Perks never activate.
+    use super::state::AbilityTag;
     match tag {
-        super::state::AbilityTag::Ward => {
-            out.extend(apply_ward(combat, sender, now));
-        }
-        super::state::AbilityTag::ResistElements => {
-            out.extend(apply_resist_elements(combat, sender, now));
-        }
-        super::state::AbilityTag::Generic => {
-            let resolved = RetailDamageModel.resolve_ability(level, &combat.fighters[target_slot], ActiveSide::Middle, now);
+        AbilityTag::Ward => out.extend(apply_ward(combat, sender, level, now)),
+        AbilityTag::Absorb => out.extend(apply_absorb(combat, sender, level, now)),
+        AbilityTag::ResistElements => out.extend(apply_resist_elements(combat, sender, level, now)),
+        AbilityTag::Perk => {}
+        AbilityTag::Paralyze | AbilityTag::Damage | AbilityTag::Maneuver | AbilityTag::Generic => {
+            let resolved = RetailDamageModel.resolve_ability(
+                &ea.ability_uuid,
+                level,
+                &combat.fighters[target_slot],
+                ActiveSide::Middle,
+                now,
+            );
             out.extend(emit_damage(combat, sender, target_slot, &resolved, now));
+            // A landed Paralyze also carries its own paralyse threshold + duration
+            // (`_damageToCauseParalyze` / `_duration`), applied by
+            // `apply_status_conditioning` via the caster's `paralyze_rank`.
+            if tag == AbilityTag::Paralyze {
+                out.extend(try_paralyze(combat, sender, target_slot, level, now));
+            }
+            // A maneuver rank that defines `_damageToCauseStagger` staggers the
+            // target when the hit lands hard enough. [Phase 3.13]
+            if let Some(threshold) = super::gamedata::ability_rank_clamped(&ea.ability_uuid, level as u16)
+                .and_then(|r| r.damage_to_cause_stagger())
+            {
+                if resolved.total >= threshold && !combat.fighters[target_slot].is_dead() {
+                    combat.fighters[target_slot].apply_stagger(now);
+                    let obj = combat.fighters[target_slot].net_object_id;
+                    let frame = messages::change_combat_status_effect(
+                        obj,
+                        true,
+                        super::state::StatusEffectType::Staggered,
+                        super::state::BASE_STAGGER_DURATION_SECS,
+                        0,
+                    );
+                    for slot in 0..combat.fighters.len() {
+                        out.push((slot, frame.clone()));
+                    }
+                }
+            }
         }
+    }
+    out
+}
+
+/// Land `Paralyzed` on `target_slot` when the caster's Paralyze rank says the hit is
+/// strong enough. The threshold is the **absolute** shipped `_damageToCauseParalyze`
+/// (32.7 @ R1) checked against the target's accumulated poison in the sliding window,
+/// and the lock lasts the rank's own `_duration` (2.0 s @ R1). [Phase 3.9]
+fn try_paralyze(
+    combat: &mut MatchCombat,
+    _caster: usize,
+    target_slot: usize,
+    rank: u8,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    use super::state::{ActorStateType, DamageType, StatusEffectType};
+    let mut out = Vec::new();
+    if !combat.fighters[target_slot].can_be_paralyzed
+        || combat.fighters[target_slot].actor_state == ActorStateType::Paralyzed
+    {
+        return out;
+    }
+    let recent = combat.fighters[target_slot].recent_element_damage(DamageType::Poison);
+    let threshold = super::state::paralyze_damage_threshold(rank);
+    if recent < threshold {
+        return out;
+    }
+    let secs = super::state::paralyze_duration_secs(rank);
+    let f = &mut combat.fighters[target_slot];
+    f.actor_state = ActorStateType::Paralyzed;
+    f.state_entered = now;
+    f.blocking_until = None;
+    let obj = f.net_object_id;
+    info!("combat: slot {target_slot} PARALYZED (poison {recent:.1} ≥ {threshold:.1}) for {secs}s");
+    let frame = messages::change_combat_status_effect(obj, true, StatusEffectType::Paralyzed, secs, 0);
+    for slot in 0..combat.fighters.len() {
+        out.push((slot, frame.clone()));
     }
     out
 }
@@ -605,11 +1014,39 @@ fn emit_damage(
     out
 }
 
-/// `BURNING/FROZEN/ENERVATED/POISONED` DoT durations once they land (s506 op51: 5 s for
-/// the elemental four; 4.89 s for the Paralyze-spell poison). [§5.3]
-const CONDITION_DURATION_SECS: f32 = 5.0;
-/// `Paralyzed` status duration = `ParalyzeAbility._duration` (s506 op51 = 3.1 s). [§5.4]
-const PARALYZE_DURATION_SECS: f32 = 3.1;
+/// `BURNING/FROZEN/ENERVATED/POISONED` DoT duration once landed — the shipped
+/// `CombatParameters.elemental_status_data[].duration` (5 s, identical for all four).
+/// [Phase 3.8]
+const CONDITION_DURATION_SECS: f32 = super::gamedata::combat_params::ELEMENTAL_STATUS_DURATION;
+
+/// The **per-element** `_percentHealthDamage` for an elemental status, straight from
+/// `CombatParameters.elemental_status_data`:
+///
+/// | element | percent_health_damage |
+/// |---|---|
+/// | Fire | 0.02 |
+/// | Frost | **0.0** |
+/// | Shock | **0.0** |
+/// | Poison | 0.02 |
+///
+/// **Phase 3.8 correction:** Frost and Shock are *control* statuses — they apply their
+/// mirrored Stamina/Magicka drain, not a damage-over-time. The old flat
+/// `DOT_PERCENT_HEALTH_PER_TICK = 0.003` was 6.7× too small for Fire/Poison **and**
+/// wrongly nonzero for Frost/Shock.
+fn dot_percent_health(ty: super::state::DamageType) -> f32 {
+    use super::gamedata::combat_params as cp;
+    use super::state::DamageType;
+    let status_type = match ty {
+        DamageType::Fire => 4,
+        DamageType::Frost => 5,
+        DamageType::Shock => 6,
+        DamageType::Poison => 7,
+        _ => return 0.0,
+    };
+    cp::elemental_status(status_type)
+        .map(|e| e.percent_health_damage)
+        .unwrap_or(0.0)
+}
 
 /// DoT tick cadence — 1 tick per second (s506 packet timestamps confirm 1s intervals).
 const DOT_TICK_INTERVAL: Duration = Duration::from_secs(1);
@@ -638,41 +1075,56 @@ const MAGICKA_REGEN_RATE_PER_S: f32 = 0.05;
 /// [ground-truth: §1 "Health regen: 0 in-round; full reset between rounds"]
 const HEALTH_REGEN_RATE_PER_S: f32 = 0.0; // NO in-round health regen (video-proven)
 
-/// `_percentHealthDamage` default for elemental DoT effects (game-data-driven; flagged
-/// as a calibration guess). Derived from s506's dominant Poison DoT value of 3.87/tick
-/// at ~L86 arena×3 maxHP ≈ 1290 HP → 3.87/1290 ≈ 0.003. Range observed: 1.25–7.73/tick.
-/// **CALIBRATION FLAG**: the exact per-ability `_percentHealthDamage` requires the game's
-/// Excel data. [docs/arena-combat-fidelity-iteration.md §Mechanic-4]
-const DOT_PERCENT_HEALTH_PER_TICK: f32 = 0.003;
+/// **Phase 3.10 — the invented Ward / Resist-Elements constants are GONE.**
+///
+/// | deleted | was | shipped (R1) | error |
+/// |---|---|---|---|
+/// | `WARD_HEALTH_POOL` | 300.0 | `WardRank1._wardHealth` **120.54** | 2.5× |
+/// | `WARD_ARMOR_FLAT` | 20.0 | `WardRank1._wardArmor` **67.2** | 3.4× (the other way) |
+/// | `WARD_DURATION_SECS` | 60.0 | `WardRank1._wardDuration` **3.0** | 20× |
+/// | `RESIST_ELEMENTS_FLAT_AMOUNT` | 50.0 | `ResistElementsRank1._resistanceAmount` **48.54** | ~3 % |
+/// | `RESIST_ELEMENTS_DURATION_SECS` | 11.5 | `ResistElementsRank1._resistanceDuration` **10.0** | 15 % |
+///
+/// All five are now read per-rank from [`super::gamedata`].
+///
+/// `_wardDuration` (3 s) is a HARD expiry, not the "pool-managed, effectively
+/// unbounded" model the 60 s constant implied — a Ward that is not consumed within
+/// three seconds is simply gone.
+fn ward_params(rank: u8) -> (f32, f32, f32) {
+    match super::gamedata::ability_rank_clamped(super::gamedata::ids::WARD, rank.max(1) as u16) {
+        Some(r) => (
+            r.ward_health().unwrap_or(120.54),
+            r.ward_armor().unwrap_or(67.2),
+            r.ward_duration().unwrap_or(3.0),
+        ),
+        None => (120.54, 67.2, 3.0),
+    }
+}
 
-/// Resist-Elements status duration (11.5s), measured from op51 apply events across
-/// sessions s127, s167, s293, s385 (multi-session analysis). Applies to all four
-/// resistance types simultaneously. [docs/arena-combat-fidelity-iteration.md §Mechanic-3]
-const RESIST_ELEMENTS_DURATION_SECS: f32 = 11.5;
+/// `(resistance_amount, resistance_duration)` for a Resist-Elements rank.
+fn resist_elements_params(rank: u8) -> (f32, f32) {
+    match super::gamedata::ability_rank_clamped(super::gamedata::ids::RESIST_ELEMENTS, rank.max(1) as u16)
+    {
+        Some(r) => (
+            r.resistance_amount().unwrap_or(48.54),
+            r.resistance_duration().unwrap_or(10.0),
+        ),
+        None => (48.54, 10.0),
+    }
+}
 
-/// Flat resistance value per element for Resist-Elements. Game-data-driven
-/// (`ResistElementsAbility._resistanceAmount`). **CALIBRATION FLAG**: no direct
-/// measurement from captures (no Resist-Elements hits in s506). Representative value
-/// chosen so that a typical Poison hit (137 base) is partially reduced without full
-/// negation. Calibrate against a session that has op51 ResistElements + matching
-/// ReceiveDamage hits.
-const RESIST_ELEMENTS_FLAT_AMOUNT: f32 = 50.0;
-
-/// Ward `_wardArmor` default physical reduction (flat armor, subtracted from
-/// incoming physical damage). Game-data from `WardAbility._wardArmor`. **CALIBRATION
-/// FLAG**: the exact value requires game-data extraction. Representative: ~20 flat
-/// physical armor (reduces a 113-base Slashing hit by ~18%).
-const WARD_ARMOR_FLAT: f32 = 20.0;
-
-/// Ward `_wardHealth` default negation pool size (HP-equivalent). Game-data from
-/// `WardAbility._wardHealth`. **CALIBRATION FLAG**. Representative: 300 HP pool
-/// (absorbs ~2 average hits before draining). [arena-status-resistance-spec §4.2]
-const WARD_HEALTH_POOL: f32 = 300.0;
-
-/// Ward duration — pool-managed (not time-managed); op51 events have duration=0 in
-/// captures. We give it a generously long hard cap so the pool can drain naturally
-/// before it expires. Retail: pool hits 0 → DamageNegated emitted and Ward removed.
-const WARD_DURATION_SECS: f32 = 60.0;
+/// `(maximum_amount_absorbed, restoration_factor, duration)` for an Absorb rank.
+fn absorb_params(ability_uuid: &str, rank: u8) -> (f32, f32, f32) {
+    use super::gamedata::AbilityField;
+    match super::gamedata::ability_rank_clamped(ability_uuid, rank.max(1) as u16) {
+        Some(r) => (
+            r.maximum_amount_absorbed().unwrap_or(30.83),
+            r.get(AbilityField::RestorationFactor).unwrap_or(1.0),
+            r.duration().unwrap_or(1.5),
+        ),
+        None => (30.83, 1.0, 1.5),
+    }
+}
 
 /// Record this hit's elemental components into the target's sliding `damage_history`
 /// window, then run `CheckStatusEffectApplication` per element (§5.2): when accumulated
@@ -689,11 +1141,11 @@ fn apply_status_conditioning(
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
     use super::damage::is_elemental;
-    use super::state::{condition_for_element, ActorStateType, DamageType, StatusEffectType, PARALYZE_POISON_THRESHOLD_FRACTION};
+    use super::state::{condition_for_element, ActorStateType, DamageType, StatusEffectType};
 
     let mut out = Vec::new();
     let target_obj = combat.fighters[target_slot].net_object_id;
-    let max_hp = combat.fighters[target_slot].max_health;
+    let _ = combat.fighters[target_slot].max_health;
 
     // Collect this hit's elemental components (post-mitigation) before borrowing mut.
     let elementals: Vec<(DamageType, f32)> = components
@@ -720,7 +1172,9 @@ fn apply_status_conditioning(
                 .any(|e| e.effect == condition && now < e.expires_at);
             if !already {
                 let max_hp = combat.fighters[target_slot].max_health;
-                let per_tick = DOT_PERCENT_HEALTH_PER_TICK * max_hp as f32;
+                // Phase 3.8: the PER-ELEMENT shipped `_percentHealthDamage`
+                // (Fire/Poison 0.02, Frost/Shock 0.0 — they are control statuses).
+                let per_tick = dot_percent_health(*ty) * max_hp as f32;
                 combat.fighters[target_slot].effects.push(super::state::ActiveEffect {
                     effect: condition,
                     damage_type: *ty,
@@ -743,8 +1197,18 @@ fn apply_status_conditioning(
             // gated by can_be_paralyzed (player) + the defender's poison resist /
             // Fortify-Poisoned / Ward (all already folded into `recent` via mitigation
             // + into `threshold` via Fortify; Ward eats poison so it never accumulates).
+            // **Phase 3.9:** the threshold is the shipped, ABSOLUTE
+            // `ParalyzeAbility._damageToCauseParalyze` (32.7 @ R1) — not a fraction of
+            // max HP — and the lock lasts the rank's own `_duration` (2.0 s @ R1).
             if *ty == DamageType::Poison && combat.fighters[target_slot].can_be_paralyzed {
-                let paralyze_threshold = PARALYZE_POISON_THRESHOLD_FRACTION * max_hp as f32;
+                // The ATTACKER's Paralyze rank selects the row (0 → the R1 default).
+                let rank = combat
+                    .opponent_of(target_slot)
+                    .and_then(|s| combat.fighters.get(s))
+                    .map(|f| f.loadout.paralyze_rank)
+                    .unwrap_or(0);
+                let paralyze_threshold = super::state::paralyze_damage_threshold(rank);
+                let secs = super::state::paralyze_duration_secs(rank);
                 let not_already_paralyzed =
                     combat.fighters[target_slot].actor_state != ActorStateType::Paralyzed;
                 if recent >= paralyze_threshold && not_already_paralyzed {
@@ -752,10 +1216,11 @@ fn apply_status_conditioning(
                     f.actor_state = ActorStateType::Paralyzed; // locks inputs (is_paralyzed)
                     f.state_entered = now;
                     f.blocking_until = None; // paralysed → guard drops
+                    f.paralyze_secs = secs;
                     let frame = messages::change_combat_status_effect(
-                        target_obj, true, StatusEffectType::Paralyzed, PARALYZE_DURATION_SECS, 0,
+                        target_obj, true, StatusEffectType::Paralyzed, secs, 0,
                     );
-                    info!("combat: slot {target_slot} PARALYZED (poison {recent:.0} ≥ {paralyze_threshold:.0}) for {PARALYZE_DURATION_SECS}s");
+                    info!("combat: slot {target_slot} PARALYZED (poison {recent:.1} ≥ {paralyze_threshold:.1}) for {secs}s");
                     for slot in 0..combat.fighters.len() {
                         out.push((slot, frame.clone()));
                     }
@@ -774,10 +1239,12 @@ fn apply_status_conditioning(
 fn reconcile_paralysis(f: &mut super::state::Fighter, now: Instant) {
     use super::state::ActorStateType;
     if f.actor_state == ActorStateType::Paralyzed
-        && now.duration_since(f.state_entered) >= Duration::from_secs_f32(PARALYZE_DURATION_SECS)
+        && now.duration_since(f.state_entered) >= Duration::from_secs_f32(f.paralyze_secs.max(0.1))
     {
         f.actor_state = ActorStateType::Idle;
     }
+    // Phase 3.13: a lapsed stagger also returns the actor to Idle.
+    f.reconcile_stagger(now);
 }
 
 /// Drive DoT ticks for all active elemental conditions on all fighters. For each
@@ -877,18 +1344,24 @@ fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
 /// both players. The pool drains on incoming elemental hits (existing
 /// `apply_negation_pools` infrastructure); when fully drained, op66 DamageNegated
 /// is emitted by the normal `emit_damage` path. [arena-status-resistance-spec §4.2]
-fn apply_ward(combat: &mut MatchCombat, caster_slot: usize, now: Instant) -> Vec<(usize, Vec<u8>)> {
+fn apply_ward(
+    combat: &mut MatchCombat,
+    caster_slot: usize,
+    rank: u8,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
     use super::state::{DamageNegationSource, NegationPool, StatusEffectType};
     let mut out = Vec::new();
     if caster_slot >= combat.fighters.len() {
         return out;
     }
+    let (ward_health, ward_armor, ward_duration) = ward_params(rank);
     let f = &mut combat.fighters[caster_slot];
-    let ward_expires = now + Duration::from_secs_f32(WARD_DURATION_SECS);
+    let ward_expires = now + Duration::from_secs_f32(ward_duration);
     // Add the negation pool.
     f.negation_pools.push(NegationPool {
         source: DamageNegationSource::Ward,
-        remaining: WARD_HEALTH_POOL,
+        remaining: ward_health,
         expires_at: ward_expires,
         restoration_factor: 0.0, // Ward: pure negation, no heal-back
     });
@@ -898,12 +1371,55 @@ fn apply_ward(combat: &mut MatchCombat, caster_slot: usize, now: Instant) -> Vec
     // types using the transient_resistances mechanism).
     use super::state::DamageType;
     for ty in [DamageType::Slashing, DamageType::Cleaving, DamageType::Bashing] {
-        f.transient_resistances.push((ty, WARD_ARMOR_FLAT, ward_expires));
+        f.transient_resistances.push((ty, ward_armor, ward_expires));
     }
     let target_obj = f.net_object_id;
-    info!("combat: slot {caster_slot} WARD applied (pool {WARD_HEALTH_POOL}, armor {WARD_ARMOR_FLAT}, duration {WARD_DURATION_SECS}s)");
-    // op51 apply Ward=15, duration=0 (pool-managed, not time-managed per captures).
-    let frame = messages::change_combat_status_effect(target_obj, true, StatusEffectType::Ward, 0.0, 0);
+    info!(
+        "combat: slot {caster_slot} WARD r{rank} applied (pool {ward_health:.2}, armor {ward_armor:.2}, duration {ward_duration}s)"
+    );
+    // op51 apply Ward=15 with the rank's real `_wardDuration` (was 0 = "pool-managed").
+    let frame =
+        messages::change_combat_status_effect(target_obj, true, StatusEffectType::Ward, ward_duration, 0);
+    for slot in 0..combat.fighters.len() {
+        out.push((slot, frame.clone()));
+    }
+    out
+}
+
+/// Apply an **Absorb** cast to `caster_slot` (Phase 3.10/3.11): a negation pool of
+/// `_maximumAmountAbsorbed` that HEALS the caster back by `_restorationFactor` of
+/// whatever it eats, for `_duration` seconds. Emits op51 `Absorb`(17).
+fn apply_absorb(
+    combat: &mut MatchCombat,
+    caster_slot: usize,
+    rank: u8,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    use super::state::{DamageNegationSource, NegationPool, StatusEffectType};
+    let mut out = Vec::new();
+    if caster_slot >= combat.fighters.len() {
+        return out;
+    }
+    // The caster's Absorb ability uuid (Absorb / SiphonLife both map to this tag).
+    let uuid = combat.fighters[caster_slot]
+        .loadout
+        .abilities
+        .iter()
+        .find(|a| a.tag == super::state::AbilityTag::Absorb)
+        .map(|a| a.instance_uuid.clone())
+        .unwrap_or_else(|| "4e760726-b012-4b25-bc92-0cd6312d6601".to_string());
+    let (amount, restoration, duration) = absorb_params(&uuid, rank);
+    let f = &mut combat.fighters[caster_slot];
+    f.negation_pools.push(NegationPool {
+        source: DamageNegationSource::Absorb,
+        remaining: amount,
+        expires_at: now + Duration::from_secs_f32(duration),
+        restoration_factor: restoration,
+    });
+    let obj = f.net_object_id;
+    info!("combat: slot {caster_slot} ABSORB r{rank} applied (pool {amount:.2}, heal ×{restoration}, {duration}s)");
+    let frame =
+        messages::change_combat_status_effect(obj, true, StatusEffectType::Absorb, duration, 0);
     for slot in 0..combat.fighters.len() {
         out.push((slot, frame.clone()));
     }
@@ -915,13 +1431,19 @@ fn apply_ward(combat: &mut MatchCombat, caster_slot: usize, now: Instant) -> Vec
 /// `ChangeCombatStatusEffect` events (FireResistance=60 … PoisonResistance=63).
 /// The flat subtraction is applied AFTER block by `total_resistance_against` in the
 /// damage pipeline. [docs/arena-combat-fidelity-iteration.md §Mechanic-3]
-fn apply_resist_elements(combat: &mut MatchCombat, caster_slot: usize, now: Instant) -> Vec<(usize, Vec<u8>)> {
+fn apply_resist_elements(
+    combat: &mut MatchCombat,
+    caster_slot: usize,
+    rank: u8,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
     use super::state::{DamageType, StatusEffectType};
     let mut out = Vec::new();
     if caster_slot >= combat.fighters.len() {
         return out;
     }
-    let expires = now + Duration::from_secs_f32(RESIST_ELEMENTS_DURATION_SECS);
+    let (resist_amount, resist_duration) = resist_elements_params(rank);
+    let expires = now + Duration::from_secs_f32(resist_duration);
     let target_obj = combat.fighters[caster_slot].net_object_id;
     let resist_pairs = [
         (DamageType::Fire, StatusEffectType::FireResistance),
@@ -932,20 +1454,15 @@ fn apply_resist_elements(combat: &mut MatchCombat, caster_slot: usize, now: Inst
     for (dmg_ty, effect_ty) in resist_pairs {
         combat.fighters[caster_slot]
             .transient_resistances
-            .push((dmg_ty, RESIST_ELEMENTS_FLAT_AMOUNT, expires));
-        let frame = messages::change_combat_status_effect(
-            target_obj,
-            true,
-            effect_ty,
-            RESIST_ELEMENTS_DURATION_SECS,
-            0,
-        );
+            .push((dmg_ty, resist_amount, expires));
+        let frame =
+            messages::change_combat_status_effect(target_obj, true, effect_ty, resist_duration, 0);
         for slot in 0..combat.fighters.len() {
             out.push((slot, frame.clone()));
         }
     }
     info!(
-        "combat: slot {caster_slot} RESIST ELEMENTS applied (flat {RESIST_ELEMENTS_FLAT_AMOUNT}/elem, {RESIST_ELEMENTS_DURATION_SECS}s)"
+        "combat: slot {caster_slot} RESIST ELEMENTS r{rank} applied (rating {resist_amount:.2}/elem, {resist_duration}s)"
     );
     out
 }
@@ -977,7 +1494,13 @@ fn apply_resist_elements(combat: &mut MatchCombat, caster_slot: usize, now: Inst
 fn on_round_ending_death(combat: &mut MatchCombat, winner: usize) -> Vec<(usize, Vec<u8>)> {
     let mut out = Vec::new();
     let loser = combat.opponent_of(winner).unwrap_or(winner);
-    if winner < combat.rounds_won.len() {
+    // **Phase 3.14 — DOUBLE-KO.** Both fighters at 0 HP in the same resolution step:
+    // nobody scores, the round is replayed. AUTHORED, not capture-derived — no
+    // recorded match ends this way, so this is a designed rule.
+    let double_ko = combat.round_outcome() == super::state::RoundOutcome::DoubleKo;
+    if double_ko {
+        info!("combat: DOUBLE-KO — both fighters at 0 HP, round is replayed (no score)");
+    } else if winner < combat.rounds_won.len() {
         combat.rounds_won[winner] += 1;
     }
     let match_won = combat.match_is_won();
@@ -1492,6 +2015,7 @@ mod tests {
                 base_by_type: vec![(DamageType::Slashing, 113.82)],
                 weight: Some(weight),
             };
+            f.loadout.weapon_template = None; // synthetic profile → fallback cadence
             // No enchants → pure physical, ratio of crit:uncharged == swing_factor exactly.
             f.loadout.enchants = vec![];
             combat.fighters.push(f);
@@ -1654,6 +2178,7 @@ mod tests {
                 base_by_type: vec![(DamageType::Slashing, 113.82)],
                 weight: Some(super::super::tables::Weight::Light),
             };
+            f.loadout.weapon_template = None; // synthetic profile → fallback cadence
             combat.fighters.push(f);
         }
         combat.match_net_object_id = combat.alloc_net_object_id();
@@ -1699,7 +2224,7 @@ mod tests {
         use super::super::tables::Weight;
         let now = Instant::now();
         let mut combat = make_live_combat_no_enchant(now, Weight::Light);
-        let interval = Weight::Light.swing_interval(); // 400 ms
+        let interval = tables::fallback_swing_interval(Weight::Light); // 400 ms
 
         // First swing lands.
         let out1 = resolve_swing(&mut combat, 0, 1, 1.0, now);
@@ -1750,7 +2275,7 @@ mod tests {
         use super::super::tables::Weight;
         let now = Instant::now();
         assert!(
-            Weight::Heavy.swing_interval() > Weight::Light.swing_interval(),
+            tables::fallback_swing_interval(Weight::Heavy) > tables::fallback_swing_interval(Weight::Light),
             "Heavy cadence must be slower than Light"
         );
 
@@ -1761,8 +2286,8 @@ mod tests {
         assert!(!resolve_swing(&mut heavy, 0, 1, 1.0, now).is_empty());
 
         // A time past the Light interval but before the Heavy interval.
-        let t = now + Weight::Light.swing_interval() + Duration::from_millis(1);
-        assert!(t < now + Weight::Heavy.swing_interval(), "test time is inside the Heavy cadence");
+        let t = now + tables::fallback_swing_interval(Weight::Light) + Duration::from_millis(1);
+        assert!(t < now + tables::fallback_swing_interval(Weight::Heavy), "test time is inside the Heavy cadence");
         assert!(!resolve_swing(&mut light, 0, 1, 1.0, t).is_empty(), "Light can swing again");
         assert!(resolve_swing(&mut heavy, 0, 1, 1.0, t).is_empty(), "Heavy is still on cadence — rejected");
     }
@@ -1775,7 +2300,7 @@ mod tests {
         let now = Instant::now();
         let mut combat = make_live_combat(now);
         let fireball = "d07a8d30-9a1c-49b0-866d-97a8aa1534cf";
-        let cd = ability_cooldown(fireball); // 3540 ms
+        let cd = ability_cooldown(fireball, 1); // shipped FireballRank1._cooldown = 3.54 s
         let frame = make_ability_frame(combat.fighters[0].net_object_id, fireball);
 
         let out1 = on_c2s_input(&mut combat, 0, &frame, now);
@@ -1795,12 +2320,402 @@ mod tests {
 mod cooldown_data_tests {
     use super::*;
 
+    /// Cooldowns now come from the shipped per-RANK assets (Phase 3.11), so they are
+    /// exact floats rather than the hand-rounded milliseconds of the old table.
     #[test]
     fn authoritative_per_ability_cooldowns() {
-        assert_eq!(ability_cooldown("d07a8d30-9a1c-49b0-866d-97a8aa1534cf"), Duration::from_millis(3540)); // Fireball
-        assert_eq!(ability_cooldown("7fc15804-1637-40a9-8dcc-3ea1eb0f778d"), Duration::from_millis(500)); // Lightning Bolt (channel)
-        assert_eq!(ability_cooldown("ce6b63e9-9f18-49c4-aee0-51f7985f9892"), Duration::from_millis(8090)); // Power Attack
-        assert_eq!(ability_cooldown("65ede044-d68a-4b2b-8f0c-02075ad133cc"), Duration::from_millis(7500)); // Ward
-        assert_eq!(ability_cooldown("not-a-real-uuid"), ABILITY_COOLDOWN); // fallback
+        let ms = |u: &str, r: u8| ability_cooldown(u, r).as_secs_f32();
+        assert!((ms("d07a8d30-9a1c-49b0-866d-97a8aa1534cf", 1) - 3.54).abs() < 1e-3); // Fireball
+        assert!((ms("ce6b63e9-9f18-49c4-aee0-51f7985f9892", 1) - 8.09).abs() < 1e-2); // Power Attack
+        assert!((ms("65ede044-d68a-4b2b-8f0c-02075ad133cc", 1) - 7.5).abs() < 1e-3); // Ward
+        // The old table had Thunderstorm under a fabricated uuid, so it silently fell
+        // back to 3 s; the real id now resolves.
+        assert_ne!(ability_cooldown("2ab06506-2114-4738-bd87-f6f402d3ce2e", 1), ABILITY_COOLDOWN);
+        assert_eq!(ability_cooldown("not-a-real-uuid", 1), ABILITY_COOLDOWN); // fallback
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4.3 — consumables
+// ---------------------------------------------------------------------------
+
+/// Spend one of `slot`'s per-round consumable charges.
+///
+/// `PvpParameters.consumablesPerRound` is **1**, and the budget resets in
+/// `MatchCombat::reset_fighters_for_next_round`. Returns `false` (and does nothing)
+/// once the budget is spent.
+///
+/// **HANDOFF:** the fork decodes no `UseConsumable` GameMessageId — `messages.rs`
+/// only names `EquipAbilitiesAndConsumables`(56), which is the loadout *equip*, not
+/// a use. Wiring the wire-level trigger needs `messages.rs`/`input.rs`, which this
+/// change does not own; this entry point is the server-side half and is ready for it.
+pub fn use_consumable(combat: &mut MatchCombat, slot: usize, _now: Instant) -> bool {
+    match combat.fighters.get_mut(slot) {
+        Some(f) => {
+            let ok = f.try_use_consumable();
+            if !ok {
+                debug!(
+                    "combat: slot {slot} consumable REJECTED — consumablesPerRound ({}) already spent",
+                    super::state::CONSUMABLES_PER_ROUND,
+                );
+            }
+            ok
+        }
+        None => false,
+    }
+}
+
+#[cfg(test)]
+mod phase4_tests {
+    use super::*;
+    use crate::arena::combat::state::Fighter;
+
+    // ---------------------------------------------------------------------
+    // Phase 4.1 — swing-side classification from real client input geometry
+    // ---------------------------------------------------------------------
+    //
+    // (The former `active_side_decodes_only_from_combat_input_frames` test lived
+    // here. It asserted that a 0..=3 NetData prop above the header was an
+    // `ActiveSide`. Prod ground truth disproved that hypothesis outright — there is
+    // no `activeSide` field on the c2s wire — so the test was replaced rather than
+    // relaxed: it was pinning a decode that does not exist.)
+
+    /// A prod-shaped `PlayerCombatInputPosition` (gmid 47) on the generic 0x36
+    /// carrier: `{0:Int obj · 1:Byte 56 · 2:Byte 3 · 3:Byte 47 · 4:Float x ·
+    /// 5:Float y · 6:Float frameDelta · 7:Float charge · 8:Int seq}`.
+    fn make_pos_frame(x: f32, y: f32, charge: f32) -> Vec<u8> {
+        let mut w = arena_proto::NetDataWriter::new();
+        w.int(0, 565)
+            .byte(1, 56)
+            .byte(2, 3)
+            .byte(3, 47)
+            .float(4, x)
+            .float(5, y)
+            .float(6, 0.033_334)
+            .float(7, charge)
+            .int(8, 410);
+        let mut f = messages::frame_for_test(w.finish());
+        f[0] = 0x84; // c2s marker
+        f
+    }
+
+    /// A prod-shaped `PlayerCombatInputActivate` (gmid 46) on the generic 0x36
+    /// carrier: `{… 3:Byte 46 · 4:Bool held · 5:Float charge · 6:Bool blockZone}`.
+    fn make_act_frame(held: bool, charge: f32, block_zone: bool) -> Vec<u8> {
+        let mut w = arena_proto::NetDataWriter::new();
+        w.int(0, 565)
+            .byte(1, 56)
+            .byte(2, 3)
+            .byte(3, 46)
+            .bool(4, held)
+            .float(5, charge)
+            .bool(6, block_zone);
+        let mut f = messages::frame_for_test(w.finish());
+        f[0] = 0x84;
+        f
+    }
+
+    fn live_combat(now: Instant) -> MatchCombat {
+        use super::super::loadout::starter;
+        let mut combat = MatchCombat::new(2, 2, now);
+        for slot in 0..2 {
+            let obj = combat.alloc_net_object_id();
+            let mut f = Fighter::new(slot, obj, starter(), now);
+            f.loadout.weapon = super::super::state::WeaponProfile {
+                primary_type: Some(super::super::state::DamageType::Slashing),
+                base_by_type: vec![(super::super::state::DamageType::Slashing, 113.82)],
+                weight: Some(super::super::tables::Weight::Light),
+            };
+            f.loadout.weapon_template = None;
+            combat.fighters.push(f);
+        }
+        combat.match_net_object_id = combat.alloc_net_object_id();
+        combat.phase = FlowState::StateTimeout;
+        combat.phase_entered = now;
+        combat
+    }
+
+    /// Swing `sender` by press→release at normalised X `x`, `dt` after `t0`.
+    /// Returns the resulting combo count.
+    fn swing_at(combat: &mut MatchCombat, sender: usize, x: f32, t: Instant) -> u32 {
+        on_c2s_input(combat, sender, &make_pos_frame(x, 0.5, 0.0), t);
+        on_c2s_input(combat, sender, &make_act_frame(true, 0.0, false), t);
+        on_c2s_input(combat, sender, &make_act_frame(false, 0.1, false), t);
+        combat.fighters[sender].combo_count
+    }
+
+    /// The decoders read the real prod NetData layout.
+    #[test]
+    fn combat_input_frames_decode_prod_layout() {
+        let pos = parse_input_position(&make_pos_frame(0.7946, 0.4528, 0.4169))
+            .expect("gmid 47 decodes");
+        assert!((pos.x - 0.7946).abs() < 1e-4, "propId 4 is normalised screen X");
+        assert!((pos.y - 0.4528).abs() < 1e-4, "propId 5 is normalised screen Y");
+        assert!((pos.client_charge.unwrap() - 0.4169).abs() < 1e-4, "propId 7 is charge secs");
+
+        let down = parse_input_activate(&make_act_frame(true, 0.0, true)).expect("gmid 46 decodes");
+        assert!(down.held, "propId 4 true = press");
+        assert_eq!(down.block_zone, Some(true), "propId 6 = _isWithinBlockZone");
+        let up = parse_input_activate(&make_act_frame(false, 2.81, false)).expect("gmid 46 decodes");
+        assert!(!up.held, "propId 4 false = release");
+        assert!((up.client_charge.unwrap() - 2.81).abs() < 1e-3);
+
+        // Neither decoder fires on a foreign frame.
+        assert!(parse_input_position(&make_act_frame(true, 0.0, false)).is_none());
+        assert!(parse_input_activate(&make_pos_frame(0.5, 0.5, 0.0)).is_none());
+        assert!(parse_input_position(&[0x84, 0x36]).is_none());
+        assert!(parse_input_activate(&[0x84, 0x36]).is_none());
+    }
+
+    /// The X midpoint splits Left from Right; garbage coordinates classify to nothing
+    /// (so the caller falls back rather than trusting a hostile frame).
+    #[test]
+    fn x_midpoint_classifies_side() {
+        // Prod class medians (n = 3 277 ground-truth attack hits).
+        assert_eq!(classify_side_from_x(0.213), Some(ActiveSide::Left));
+        assert_eq!(classify_side_from_x(0.814), Some(ActiveSide::Right));
+        // Exactly on the cut-point resolves Right (>= is the documented rule).
+        assert_eq!(classify_side_from_x(SIDE_CLASSIFY_X_MIDPOINT), Some(ActiveSide::Right));
+        // Never Middle: a weapon Attack is always Left or Right in the corpus.
+        for x in [0.0, 0.05, 0.49, 0.51, 0.99, 1.0] {
+            let s = classify_side_from_x(x).unwrap();
+            assert!(matches!(s, ActiveSide::Left | ActiveSide::Right), "got {s:?} for x={x}");
+        }
+        // Out of range / non-finite → no classification.
+        assert_eq!(classify_side_from_x(-0.1), None);
+        assert_eq!(classify_side_from_x(1.5), None);
+        assert_eq!(classify_side_from_x(f32::NAN), None);
+    }
+
+    /// A `PlayerCombatInputPosition` is a 30 Hz POINTER STREAM: it records geometry
+    /// and must never itself resolve a swing.
+    #[test]
+    fn pointer_stream_updates_geometry_and_never_swings() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        let before = combat.fighters[1].health;
+        for i in 0..30 {
+            let out = on_c2s_input(
+                &mut combat,
+                0,
+                &make_pos_frame(0.80, 0.45, 0.0),
+                now + Duration::from_millis(i * 33),
+            );
+            assert!(out.is_empty(), "a pointer sample must emit nothing (frame {i})");
+        }
+        assert_eq!(combat.fighters[1].health, before, "no damage from pointer samples alone");
+        assert_eq!(combat.fighters[0].last_swing, None, "no swing was committed");
+        assert!((combat.fighters[0].last_input_x.unwrap() - 0.80).abs() < 1e-4);
+    }
+
+    /// **The Phase 4.1 crux.** The combo ramp must follow what the player actually
+    /// did. Tapping the SAME side over and over never advances the combo; alternating
+    /// does. Under the old synthetic alternator both cases ramped identically.
+    #[test]
+    fn combo_follows_the_players_real_sides() {
+        let now = Instant::now();
+        let step = Duration::from_millis(900); // > weapon cadence
+
+        // (a) Repeating the RIGHT side: combo stays pinned at 0 forever.
+        let mut same = live_combat(now);
+        for i in 1..=5u32 {
+            let combo = swing_at(&mut same, 0, 0.814, now + step * i);
+            assert_eq!(combo, 0, "repeating one side must not build combo (swing {i})");
+            assert_eq!(same.fighters[0].last_combo_side, ActiveSide::Right);
+        }
+
+        // (b) Alternating Right/Left/Right/…: the combo ramps 0,1,2,3,4.
+        let mut alt = live_combat(now);
+        for i in 1..=5u32 {
+            let x = if i % 2 == 1 { 0.814 } else { 0.213 };
+            let combo = swing_at(&mut alt, 0, x, now + step * i);
+            assert_eq!(combo, i - 1, "alternating sides must ramp the combo (swing {i})");
+        }
+
+        // The two must diverge — that is the behavioural fix.
+        assert!(alt.fighters[0].combo_count > same.fighters[0].combo_count);
+    }
+
+    /// A left-half press is a LEFT swing and a right-half press is a RIGHT swing,
+    /// end-to-end through `on_c2s_input`.
+    #[test]
+    fn press_position_drives_the_committed_side() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        swing_at(&mut combat, 0, 0.213, now + Duration::from_millis(900));
+        assert_eq!(combat.fighters[0].last_combo_side, ActiveSide::Left);
+        swing_at(&mut combat, 0, 0.814, now + Duration::from_millis(1800));
+        assert_eq!(combat.fighters[0].last_combo_side, ActiveSide::Right);
+    }
+
+    /// FALLBACK: with no pointer stream at all (a bot, or a client that sends only
+    /// bare carrier-54 bodies) the synthetic alternation still drives the fight, so
+    /// nothing can hang.
+    #[test]
+    fn no_pointer_stream_falls_back_to_alternation() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        assert!(classified_side_for(&combat.fighters[0], now).is_none(), "no sample yet");
+        let step = Duration::from_millis(900);
+        let mut sides = Vec::new();
+        for i in 1..=4u32 {
+            // Bare unstructured carrier-54 swing — no geometry anywhere.
+            let out = on_c2s_input(&mut combat, 0, &[0x84, 0x36], now + step * i);
+            assert!(!out.is_empty(), "the fallback must still land a swing");
+            sides.push(combat.fighters[0].last_combo_side);
+        }
+        assert_eq!(
+            sides,
+            vec![ActiveSide::Right, ActiveSide::Left, ActiveSide::Right, ActiveSide::Left],
+            "fallback alternates so a bot match progresses"
+        );
+    }
+
+    /// A pointer sample older than the TTL is stale and must not classify a swing
+    /// (the client only streams gmid 47 while a finger is down, so a survivor from a
+    /// previous gesture would be misleading).
+    #[test]
+    fn stale_pointer_sample_is_ignored() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        on_c2s_input(&mut combat, 0, &make_pos_frame(0.213, 0.5, 0.0), now);
+        assert_eq!(
+            classified_side_for(&combat.fighters[0], now + SIDE_CLASSIFY_SAMPLE_TTL),
+            Some(ActiveSide::Left),
+            "still fresh at exactly the TTL"
+        );
+        assert_eq!(
+            classified_side_for(
+                &combat.fighters[0],
+                now + SIDE_CLASSIFY_SAMPLE_TTL + Duration::from_millis(1)
+            ),
+            None,
+            "past the TTL the sample is dropped and the fallback takes over"
+        );
+    }
+
+    /// Round reset clears the geometry, so the first swing of a new round can never
+    /// inherit the previous round's pointer position.
+    #[test]
+    fn round_reset_clears_pointer_geometry() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        on_c2s_input(&mut combat, 0, &make_pos_frame(0.9, 0.5, 0.0), now);
+        assert!(combat.fighters[0].last_input_x.is_some());
+        combat.reset_fighters_for_next_round(now);
+        assert_eq!(combat.fighters[0].last_input_x, None);
+        assert_eq!(combat.fighters[0].last_input_at, None);
+        assert_eq!(classified_side_for(&combat.fighters[0], now), None);
+    }
+
+    /// **The charge timer is SERVER-measured, never client-claimed.** A client that
+    /// reports a full 2.8 s charge on an instantaneous tap gets no crit: the damage
+    /// is identical to an honest uncharged swing. The client value is kept only as
+    /// telemetry.
+    #[test]
+    fn client_claimed_charge_cannot_buy_a_crit() {
+        let now = Instant::now();
+        let t = now + Duration::from_millis(900);
+
+        // Honest: press and release in the same instant (0 s hold), no claim.
+        let mut honest = live_combat(now);
+        on_c2s_input(&mut honest, 0, &make_pos_frame(0.814, 0.5, 0.0), t);
+        on_c2s_input(&mut honest, 0, &make_act_frame(true, 0.0, false), t);
+        on_c2s_input(&mut honest, 0, &make_act_frame(false, 0.0, false), t);
+        let honest_dmg = honest.fighters[1].health;
+
+        // Cheating: identical timing, but the client CLAIMS a 2.8 s charge.
+        let mut liar = live_combat(now);
+        on_c2s_input(&mut liar, 0, &make_pos_frame(0.814, 0.5, 0.0), t);
+        on_c2s_input(&mut liar, 0, &make_act_frame(true, 2.817, false), t);
+        on_c2s_input(&mut liar, 0, &make_act_frame(false, 2.817, false), t);
+
+        assert_eq!(
+            liar.fighters[1].health, honest_dmg,
+            "a client-claimed charge must not increase damage"
+        );
+        // …but the claim IS recorded for telemetry.
+        assert!((liar.fighters[0].last_client_charge.unwrap() - 2.817).abs() < 1e-3);
+
+        // And an honest, genuinely-held charge DOES crit (server-measured).
+        let mut real = live_combat(now);
+        on_c2s_input(&mut real, 0, &make_pos_frame(0.814, 0.5, 0.0), t);
+        on_c2s_input(&mut real, 0, &make_act_frame(true, 0.0, false), t);
+        let held_to = t + Duration::from_secs_f32(CRITICAL_HOLD_SECS + 0.1);
+        on_c2s_input(&mut real, 0, &make_act_frame(false, 1.3, false), held_to);
+        assert!(
+            real.fighters[1].health < honest_dmg,
+            "a real server-measured full hold must crit for more than an uncharged swing"
+        );
+    }
+
+    /// Phase 4.3: `consumablesPerRound` is 1 and the budget resets between rounds.
+    #[test]
+    fn consumables_are_gated_per_round() {
+        let now = Instant::now();
+        let mut combat = MatchCombat::new(2, 2, now);
+        for slot in 0..2 {
+            let obj = combat.alloc_net_object_id();
+            combat.fighters.push(Fighter::new(slot, obj, super::super::loadout::starter(), now));
+        }
+        assert_eq!(super::super::state::CONSUMABLES_PER_ROUND, 1);
+        assert!(use_consumable(&mut combat, 0, now), "the first consumable is allowed");
+        assert!(!use_consumable(&mut combat, 0, now), "the second is refused (1 per round)");
+        assert!(use_consumable(&mut combat, 1, now), "the budget is per FIGHTER");
+        combat.reset_fighters_for_next_round(now);
+        assert!(use_consumable(&mut combat, 0, now), "the budget resets between rounds");
+        assert!(!use_consumable(&mut combat, 9, now), "an out-of-range slot is refused");
+    }
+
+    /// Phase 3.13: a staggered fighter's combat inputs are dropped, and the stagger
+    /// lasts `CombatParameters.baseStaggerDuration` (1.5 s).
+    #[test]
+    fn stagger_locks_inputs_for_the_shipped_duration() {
+        use super::super::state::BASE_STAGGER_DURATION_SECS;
+        assert!((BASE_STAGGER_DURATION_SECS - 1.5).abs() < 1e-6);
+        let now = Instant::now();
+        let mut f = Fighter::new(0, 564, super::super::loadout::starter(), now);
+        f.apply_stagger(now);
+        assert!(f.is_staggered(now));
+        assert_eq!(f.actor_state, super::super::state::ActorStateType::Staggered);
+        assert!(f.blocking_until.is_none(), "a stagger drops the guard");
+        // Still locked just before the duration, recovered just after.
+        assert!(f.is_staggered(now + Duration::from_millis(1400)));
+        assert!(!f.is_staggered(now + Duration::from_millis(1600)));
+        assert!(f.reconcile_stagger(now + Duration::from_millis(1600)));
+        assert_eq!(f.actor_state, super::super::state::ActorStateType::Idle);
+    }
+
+    /// Phase 3.14: a simultaneous double-KO scores nothing; a 1-1 draw at the final
+    /// round is broken on remaining HP fraction, then on the lower `pvpTrophies`.
+    #[test]
+    fn double_ko_scores_nothing_and_the_draw_tiebreak_is_ordered() {
+        use super::super::state::RoundOutcome;
+        let now = Instant::now();
+        let mut combat = MatchCombat::new(2, 2, now);
+        for slot in 0..2 {
+            let obj = combat.alloc_net_object_id();
+            combat.fighters.push(Fighter::new(slot, obj, super::super::loadout::starter(), now));
+        }
+        assert_eq!(combat.round_outcome(), RoundOutcome::Ongoing);
+        combat.fighters[1].take_damage(u32::MAX);
+        assert_eq!(combat.round_outcome(), RoundOutcome::Win { winner: 0 });
+        combat.fighters[0].take_damage(u32::MAX);
+        assert_eq!(combat.round_outcome(), RoundOutcome::DoubleKo);
+
+        // Neither side scores on a double-KO.
+        let before = combat.rounds_won;
+        let _ = on_round_ending_death(&mut combat, 0);
+        assert_eq!(combat.rounds_won, before, "a double-KO scores nothing");
+
+        // Tiebreak: higher remaining HP fraction first.
+        combat.reset_fighters_for_next_round(now);
+        combat.fighters[1].take_damage(100);
+        assert_eq!(combat.draw_tiebreak_winner((0, 0)), 0, "more HP left wins");
+        // Equal HP → the LOWER pvpTrophies (the underdog) wins.
+        combat.reset_fighters_for_next_round(now);
+        assert_eq!(combat.draw_tiebreak_winner((900, 100)), 1);
+        assert_eq!(combat.draw_tiebreak_winner((100, 900)), 0);
+        assert_eq!(combat.draw_tiebreak_winner((500, 500)), 0, "fully tied → slot 0");
     }
 }
