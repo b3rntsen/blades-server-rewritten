@@ -537,12 +537,6 @@ pub fn change_combat_status_effect(
 /// state); kept verbatim rather than guessed at.
 const CHANNELING_STATE_ID: u8 = 4;
 
-/// Body offset of `PlayerChannelingStateChange`'s propId-7 length prefix. Fixed by
-/// this message's leading property layout, which is identical in every captured
-/// frame: `1 (maxPropId) + 2 (presence bitmap) + 5 (type nibbles)` header, then the
-/// propId 0..=6 values `4 (Int) + 1 + 1 + 1 (Byte) + 8 + 8 (ULong) + 1 (Byte)` = 24.
-const CHANNELING_PROP7_LEN_OFFSET: usize = 1 + 2 + 5 + 24;
-
 /// op53 `PlayerChannelingStateChange` (carrier `0x36`, GameMessageId at NetData
 /// propId 3) — the caster's spell/ability CAST (channel) state change. This is what
 /// drives the client's cast animation and channelling VFX; with it missing, spells
@@ -568,10 +562,10 @@ const CHANNELING_PROP7_LEN_OFFSET: usize = 1 + 2 + 5 + 24;
 /// * **propId 7** — a variable-length blob (6…23 B, 778 distinct values across 1 182
 ///   frames) whose internal structure did not fall out of the corpus. On the wire it
 ///   is a `ByteArray` with a **u8** length prefix (proven: with u8 all 1 182 frames
-///   parse to exactly their byte length, with u16 none do — note `arena_proto`'s
-///   `NetDataValue::ByteArray` writes a **u16** prefix, so it cannot round-trip a
-///   retail op53; arena_proto is out of scope for this change, hence
-///   [`CHANNELING_PROP7_LEN_OFFSET`]). Production emission passes `state_blob = None`
+///   parse to exactly their byte length, with u16 none do). `arena_proto`'s
+///   `NetDataWriter` now emits that u8 prefix natively — see
+///   [`arena_proto::NetDataType::len_prefix_width`] — so this builder round-trips a
+///   retail op53 with no post-processing. Production emission passes `state_blob = None`
 ///   and simply OMITS the property — NetData is a sparse property bag, so the client
 ///   leaves the field at its default rather than reading a fabricated blob.
 ///   `Some(..)` exists so the byte-differential tests can rebuild a real captured
@@ -605,27 +599,7 @@ pub fn player_channeling_state_change(
         w.put(7, arena_proto::NetDataValue::ByteArray(blob.to_vec()));
     }
     w.float(8, channel_duration_secs).string(9, ability_uuid);
-    let mut body = w.finish();
-    if let Some(blob) = state_blob {
-        narrow_prop7_length(&mut body, blob.len());
-    }
-    frame(MSGTYPE_USERMESSAGE, body)
-}
-
-/// Collapse the propId-7 `ByteArray` length prefix `arena_proto` writes (u16-LE) to
-/// the single byte retail uses, in a `player_channeling_state_change` body. Retail's
-/// op53 `ByteArray` is u8-length-prefixed — see the note on
-/// [`player_channeling_state_change`]. No-op if the body is shorter than expected or
-/// the prefix isn't the u16 we just wrote (defensive: never corrupt a frame).
-fn narrow_prop7_length(body: &mut Vec<u8>, blob_len: usize) {
-    let o = CHANNELING_PROP7_LEN_OFFSET;
-    if blob_len > u8::MAX as usize || body.len() < o + 2 {
-        return;
-    }
-    if u16::from_le_bytes([body[o], body[o + 1]]) != blob_len as u16 {
-        return;
-    }
-    body.remove(o + 1); // drop the high byte of the u16 length
+    frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
 /// op64 `PerformConsumeConsumable` (carrier `0x36`, GameMessageId at NetData propId
