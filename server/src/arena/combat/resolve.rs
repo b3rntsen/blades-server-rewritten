@@ -23,8 +23,8 @@
 //! classification" block below for the prod ground-truth calibration. The synthetic
 //! Left/Right alternation survives only as a fallback for bots / silent clients.
 //!
-//! Still to wire: the `swingFactor` magnitude from the c2s body; the
-//! `PlayerChannelingStateChange` (53) cast animation; per-element DoT TICK damage (the
+//! Still to wire: the `swingFactor` magnitude from the c2s body;
+//! per-element DoT TICK damage (the
 //! conditioning land + threshold is wired; the periodic StatusEffect-source ReceiveDamage
 //! tick is the remaining piece); and routing real ability UUIDs to Ward/Absorb/Paralyze
 //! casts (the casts push pools / run the threshold; the per-ability recognition is TODO).
@@ -404,6 +404,23 @@ pub fn on_c2s_input(
     user_data: &[u8],
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
+    // `EquipAbilitiesAndConsumables` (56) is a LOADOUT DECLARATION, not combat input,
+    // and it is the only frame that names the consumable item the client has equipped.
+    // Latch it in EVERY phase: retail uploads it during round-start setup (before the
+    // live round opens) and re-uploads it after each use with a decremented charge
+    // count. Without this the server cannot answer a later op63 (which carries no item
+    // id). Handled ahead of the live-round gate for exactly that reason; it emits
+    // nothing and touches no combat state. [Phase 4.3 wire trigger]
+    if let Some(eq) = input::parse_equip_consumables(user_data) {
+        if sender < combat.fighters.len() {
+            debug!(
+                "combat: slot {sender} equipped consumable {} ({} charge(s) per the client)",
+                eq.consumable_uuid, eq.charges,
+            );
+            combat.fighters[sender].equipped_consumable = Some(eq.consumable_uuid);
+        }
+        return Vec::new();
+    }
     // Combat resolves ONLY in the live round (StateTimeout). During Connecting /
     // Spawning / BackendMatchCreated the inbound op54s are round-start handshake
     // traffic (the client's PlayerLoadoutReady upload, op55, op58) — resolving them as
@@ -541,6 +558,16 @@ pub fn on_c2s_input(
     // #3523274 op36) — resolving them as a swing injects phantom damage. Only real
     // combat inputs (op37 ability, op46/47 swipe-input) and unstructured swipe bodies
     // fall through to resolution. [docs/arena-journey-log.md §7]
+    // `RequestConsumeConsumable` (63) — the client drank its potion. This is the wire
+    // TRIGGER for the (previously dormant) `use_consumable` budget: spend a charge and
+    // echo `PerformConsumeConsumable` (64) to BOTH players so each renders the drink.
+    // It MUST be handled before the swing fallback below: op63 is not in the
+    // `is_noncombat_user_message` set and carries no gmid-46/47 structure, so it would
+    // otherwise fall through to the "unstructured carrier-0x36 body" branch and be
+    // resolved as a phantom weapon swing.
+    if input::is_request_consume_consumable(user_data) {
+        return on_consume_consumable(combat, sender, now);
+    }
     if messages::is_noncombat_user_message(user_data) {
         debug!("combat: slot {sender} carrier-54 handshake/flow frame (not a swing) — ignored");
         return Vec::new();
@@ -835,6 +862,33 @@ fn resolve_ability_cast(
     // Emit the stat update (after the cast echo so the client sees the visual before
     // the bar drop — matches retail ordering).
     out.extend(stat_frames);
+
+    // op53 `PlayerChannelingStateChange` — the CAST ANIMATION / channelling feedback.
+    // Retail sends it immediately after the op38 echo (s127: c2s op37 #954963 → s2c
+    // op38 #954965 → s2c op53 #954966), to both players, so each sees the caster wind
+    // up. Without it spells fire with no channelling visual — this was the standing
+    // "still to wire" gap in this module.
+    //
+    // The channel time comes from the CASTER'S OWN equipped ability at its own rank
+    // (`ability_rank_clamped(uuid, level)._channelDuration`) — never a hard-coded UUID.
+    // Abilities that ship no `_channelDuration` (e.g. `4be1d681…`) send 0.0. See the
+    // note on `messages::player_channeling_state_change`: the float's exact retail
+    // semantics are NOT pinned by the captures (the captured values are not the shipped
+    // `_channelDuration`), and the unmodelled propId-7 blob is deliberately omitted
+    // rather than fabricated.
+    let channel_secs = super::gamedata::ability_rank_clamped(&ea.ability_uuid, level as u16)
+        .and_then(|r| r.channel_duration())
+        .unwrap_or(0.0);
+    let channeling = messages::player_channeling_state_change(
+        combat.fighters[sender].net_object_id,
+        combat.fighters[sender].packed_stats(),
+        combat.fighters[target_slot].packed_stats(),
+        channel_secs,
+        &ea.ability_uuid,
+        None, // propId 7: unmodelled in the corpus — omitted, never invented
+    );
+    out.push((sender, channeling.clone()));
+    out.push((target_slot, channeling));
 
     debug!("combat: slot {sender} casts ability {} (tag {tag:?}, level {level}) → slot {target_slot}", ea.ability_uuid);
 
@@ -2345,10 +2399,10 @@ mod cooldown_data_tests {
 /// `MatchCombat::reset_fighters_for_next_round`. Returns `false` (and does nothing)
 /// once the budget is spent.
 ///
-/// **HANDOFF:** the fork decodes no `UseConsumable` GameMessageId — `messages.rs`
-/// only names `EquipAbilitiesAndConsumables`(56), which is the loadout *equip*, not
-/// a use. Wiring the wire-level trigger needs `messages.rs`/`input.rs`, which this
-/// change does not own; this entry point is the server-side half and is ready for it.
+/// Driven by [`on_consume_consumable`], the wire trigger. (The earlier note here
+/// claimed no `UseConsumable` GameMessageId exists — that was wrong: retail uses a
+/// REQUEST/PERFORM pair, `RequestConsumeConsumable`(63) c2s → `PerformConsumeConsumable`
+/// (64) s2c, both present in the corpus. See [`on_consume_consumable`].)
 pub fn use_consumable(combat: &mut MatchCombat, slot: usize, _now: Instant) -> bool {
     match combat.fighters.get_mut(slot) {
         Some(f) => {
@@ -2363,6 +2417,51 @@ pub fn use_consumable(combat: &mut MatchCombat, slot: usize, _now: Instant) -> b
         }
         None => false,
     }
+}
+
+/// The WIRE TRIGGER for consumables: handle a client's `RequestConsumeConsumable`
+/// (63) and answer with `PerformConsumeConsumable` (64) to both players.
+///
+/// Capture-established protocol (269 op63 + 554 op64 prod frames; s433 shows the
+/// pairing directly — c2s op63 on avatar 199 is answered by an s2c op64 on avatar
+/// 199 carrying that avatar's declared consumable UUID, every time):
+///   1. c2s op56 `EquipAbilitiesAndConsumables` declares `{consumableUuid, charges}`.
+///   2. c2s op63 `RequestConsumeConsumable` — bare NetObjectInfo + gmid, NO item id.
+///   3. s2c op64 `PerformConsumeConsumable` — the same avatar, plus the UUID from (1).
+///
+/// The server is authoritative on whether the drink happens: the request is refused
+/// (silently, no op64) when the fighter's `consumablesPerRound` budget is already
+/// spent, or when no op56 has named a consumable yet — the UUID is never fabricated.
+///
+/// **Not wired here:** the potion's actual EFFECT. The shipped consumable items are
+/// not in `gamedata.rs` (none of the observed consumable UUIDs appear there), so
+/// there is no authoritative heal/restore magnitude to apply, and guessing one would
+/// desync the HUD from the real game's numbers. The charge accounting and the visual
+/// are faithful; the stat change is a documented gap.
+fn on_consume_consumable(
+    combat: &mut MatchCombat,
+    sender: usize,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    if sender >= combat.fighters.len() {
+        return Vec::new();
+    }
+    // Resolve the item id BEFORE spending the charge, so a request we cannot answer
+    // does not silently burn the round's only consumable.
+    let Some(uuid) = combat.fighters[sender].equipped_consumable.clone() else {
+        debug!(
+            "combat: slot {sender} op63 ignored — no consumable declared yet \
+             (no EquipAbilitiesAndConsumables seen)"
+        );
+        return Vec::new();
+    };
+    if !use_consumable(combat, sender, now) {
+        return Vec::new();
+    }
+    let obj = combat.fighters[sender].net_object_id;
+    info!("combat: slot {sender} consumed {uuid} (op63 → op64)");
+    let frame = messages::perform_consume_consumable(obj, &uuid);
+    (0..combat.fighters.len()).map(|s| (s, frame.clone())).collect()
 }
 
 #[cfg(test)]
@@ -2665,6 +2764,147 @@ mod phase4_tests {
         combat.reset_fighters_for_next_round(now);
         assert!(use_consumable(&mut combat, 0, now), "the budget resets between rounds");
         assert!(!use_consumable(&mut combat, 9, now), "an out-of-range slot is refused");
+    }
+
+    /// Build a c2s `EquipAbilitiesAndConsumables` (56) declaring `uuid` for the avatar
+    /// net object `obj` — the same wire shape as prod s127 #954909.
+    fn make_equip_consumable_frame(obj: i32, uuid: &str, charges: i32) -> Vec<u8> {
+        let mut w = arena_proto::NetDataWriter::new();
+        w.int(0, obj)
+            .byte(1, 56)
+            .byte(2, 3) // Autonomous (c2s)
+            .byte(3, arena_proto::GameMessageId::EquipAbilitiesAndConsumables as u8)
+            .string(4, uuid)
+            .int(5, charges);
+        let mut v = vec![0xBEu8, 0x36];
+        v.extend_from_slice(&w.finish());
+        v
+    }
+
+    /// Build a c2s `RequestConsumeConsumable` (63) for avatar net object `obj` — the
+    /// bare NetObjectInfo + gmid shape of prod s127 #962747.
+    fn make_request_consume_frame(obj: i32) -> Vec<u8> {
+        let mut w = arena_proto::NetDataWriter::new();
+        w.int(0, obj)
+            .byte(1, 56)
+            .byte(2, 3)
+            .byte(3, arena_proto::GameMessageId::RequestConsumeConsumable as u8);
+        let mut v = vec![0xBEu8, 0x36];
+        v.extend_from_slice(&w.finish());
+        v
+    }
+
+    /// The consumable WIRE path end-to-end: op56 declares the item, op63 spends the
+    /// round's single charge and is answered with an op64 to BOTH players carrying that
+    /// item's UUID; a second op63 in the same round is refused; the budget resets next
+    /// round. Also proves op63 is no longer mis-resolved as a weapon swing.
+    #[test]
+    fn consumable_request_is_answered_with_perform_and_gated_per_round() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        let obj = combat.fighters[0].net_object_id;
+        const POTION: &str = "d826ea12-e583-47c1-a50f-4de608281735";
+
+        // With no op56 yet, an op63 is refused — the UUID is never fabricated, and no
+        // charge is burned.
+        assert!(on_c2s_input(&mut combat, 0, &make_request_consume_frame(obj), now).is_empty());
+        assert_eq!(combat.fighters[0].consumables_used, 0);
+
+        // op56 latches the equipped item.
+        assert!(on_c2s_input(&mut combat, 0, &make_equip_consumable_frame(obj, POTION, 6), now)
+            .is_empty());
+        assert_eq!(combat.fighters[0].equipped_consumable.as_deref(), Some(POTION));
+
+        // op63 → op64 to both players.
+        let target_hp_before = combat.fighters[1].health;
+        let out = on_c2s_input(&mut combat, 0, &make_request_consume_frame(obj), now);
+        assert_eq!(out.len(), 2, "op64 goes to both players");
+        let expect = messages::perform_consume_consumable(obj, POTION);
+        assert_eq!(out[0].1, expect, "byte-identical to the op64 builder");
+        assert_eq!(out[1].1, expect);
+        assert_eq!(messages::user_message_gmid(&out[0].1), Some(64));
+        assert_eq!(
+            combat.fighters[1].health, target_hp_before,
+            "an op63 must NOT be resolved as a phantom weapon swing"
+        );
+
+        // consumablesPerRound is 1 → the second request in the same round is refused.
+        assert!(on_c2s_input(&mut combat, 0, &make_request_consume_frame(obj), now).is_empty());
+
+        // …and the budget (plus the latched item) survives into the next round.
+        combat.reset_fighters_for_next_round(now);
+        combat.phase = FlowState::StateTimeout;
+        let out2 = on_c2s_input(&mut combat, 0, &make_request_consume_frame(obj), now);
+        assert_eq!(out2.len(), 2, "the budget resets between rounds");
+    }
+
+    /// op56 is a loadout declaration, so it must latch even OUTSIDE the live round —
+    /// retail uploads it during round-start setup, before `StateTimeout` opens.
+    #[test]
+    fn equipped_consumable_latches_before_the_live_round() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        combat.phase = FlowState::BackendMatchCreated;
+        let obj = combat.fighters[0].net_object_id;
+        const POTION: &str = "819094ad-e749-4c02-9210-38c3bb1ec535";
+        assert!(on_c2s_input(&mut combat, 0, &make_equip_consumable_frame(obj, POTION, 3), now)
+            .is_empty());
+        assert_eq!(combat.fighters[0].equipped_consumable.as_deref(), Some(POTION));
+    }
+
+    /// A cast now emits op53 `PlayerChannelingStateChange` to BOTH players, right after
+    /// the op38 echo — the cast-animation feedback that was previously missing. The
+    /// channel time is the CASTER'S OWN ability's shipped `_channelDuration`, looked up
+    /// per-UUID (never a hard-coded one).
+    #[test]
+    fn ability_cast_emits_channeling_state_change_for_the_casters_own_ability() {
+        const FIREBALL: &str = "d07a8d30-9a1c-49b0-866d-97a8aa1534cf";
+        const LIGHTNING: &str = "7fc15804-1637-40a9-8dcc-3ea1eb0f778d";
+
+        let cast = |uuid: &str| -> Vec<(usize, Vec<u8>)> {
+            let now = Instant::now();
+            let mut combat = live_combat(now);
+            // Give the caster plenty of magicka so the resource gate passes.
+            combat.fighters[0].magicka = combat.fighters[0].max_magicka;
+            let mut frame = vec![
+                0xBE, 0x36, 0x04, 0x1F, 0x70, 0x77, 0x0A, 0x35, 0x02, 0x00, 0x00, 0x38, 0x03,
+                0x25, 0x24, 0x00,
+            ];
+            frame.extend_from_slice(uuid.as_bytes());
+            on_c2s_input(&mut combat, 0, &frame, now)
+        };
+
+        for (uuid, want_secs) in [(FIREBALL, 0.9f32), (LIGHTNING, 0.5f32)] {
+            let out = cast(uuid);
+            let chan: Vec<&(usize, Vec<u8>)> = out
+                .iter()
+                .filter(|(_, f)| messages::user_message_gmid(f) == Some(53))
+                .collect();
+            assert_eq!(chan.len(), 2, "op53 goes to both players ({uuid})");
+            assert_eq!(chan[0].0, 0, "the caster gets one");
+            assert_eq!(chan[1].0, 1, "the opponent gets one");
+            assert_eq!(chan[0].1, chan[1].1, "both receive identical bytes");
+
+            let nd = arena_proto::parse_netdata(&chan[0].1[2..]);
+            assert!(nd.ok);
+            assert_eq!(nd.int(1), Some(56), "on the Avatar net object");
+            assert_eq!(nd.int(2), Some(1), "Authority");
+            assert_eq!(nd.string(9), Some(uuid), "carries the cast ability's own UUID");
+            let secs = match nd.props.get(&8) {
+                Some(arena_proto::NetDataValue::Float(v)) => *v,
+                other => panic!("propId 8 must be a Float, got {other:?}"),
+            };
+            assert!(
+                (secs - want_secs).abs() < 1e-6,
+                "{uuid}: propId 8 must be that ability's shipped _channelDuration \
+                 ({want_secs}), got {secs}"
+            );
+
+            // The op38 cast echo must still precede the op53 (retail ordering).
+            let i38 = out.iter().position(|(_, f)| messages::user_message_gmid(f) == Some(38));
+            let i53 = out.iter().position(|(_, f)| messages::user_message_gmid(f) == Some(53));
+            assert!(i38 < i53, "retail sends op38 before op53");
+        }
     }
 
     /// Phase 3.13: a staggered fighter's combat inputs are dropped, and the stagger

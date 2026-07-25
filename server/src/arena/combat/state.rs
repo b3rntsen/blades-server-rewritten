@@ -628,6 +628,13 @@ pub struct Fighter {
     /// [`CONSUMABLES_PER_ROUND`] (1). Reset by `reset_fighters_for_next_round`.
     /// [Phase 4.3]
     pub consumables_used: u32,
+    /// The consumable item UUID this fighter has equipped, as declared by its own
+    /// `EquipAbilitiesAndConsumables` (56) upload (`{4:String consumableUuid ·
+    /// 5:Int charges}`). It is the ONLY source of the UUID the server must echo in
+    /// `PerformConsumeConsumable` (64) when the client requests a potion — the
+    /// request (63) itself carries no payload. `None` until the client uploads its
+    /// loadout. [Phase 4.3 wire trigger]
+    pub equipped_consumable: Option<String>,
     /// How long the CURRENT paralysis lasts (the casting rank's shipped `_duration`);
     /// read by `resolve::reconcile_paralysis`. [Phase 3.9]
     pub paralyze_secs: f32,
@@ -741,6 +748,7 @@ impl Fighter {
             transient_resistances: Vec::new(),
             staggered_until: None,
             consumables_used: 0,
+            equipped_consumable: None,
             paralyze_secs: paralyze_duration_secs(1),
         }
     }

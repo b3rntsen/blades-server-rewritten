@@ -531,6 +531,124 @@ pub fn change_combat_status_effect(
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
+/// The constant NetData propId 6 of every captured `PlayerChannelingStateChange` —
+/// `4` in **all 1 182** de-duplicated prod op53 frames. Semantics unconfirmed (most
+/// likely the `PlayerStateChange` base's `stateId`, i.e. the "channelling" actor
+/// state); kept verbatim rather than guessed at.
+const CHANNELING_STATE_ID: u8 = 4;
+
+/// Body offset of `PlayerChannelingStateChange`'s propId-7 length prefix. Fixed by
+/// this message's leading property layout, which is identical in every captured
+/// frame: `1 (maxPropId) + 2 (presence bitmap) + 5 (type nibbles)` header, then the
+/// propId 0..=6 values `4 (Int) + 1 + 1 + 1 (Byte) + 8 + 8 (ULong) + 1 (Byte)` = 24.
+const CHANNELING_PROP7_LEN_OFFSET: usize = 1 + 2 + 5 + 24;
+
+/// op53 `PlayerChannelingStateChange` (carrier `0x36`, GameMessageId at NetData
+/// propId 3) — the caster's spell/ability CAST (channel) state change. This is what
+/// drives the client's cast animation and channelling VFX; with it missing, spells
+/// fire with no build-up. Retail sends it immediately after the
+/// `PerformExecuteAbility` (38) echo (s127: c2s op37 #954963 → s2c op38 #954965 →
+/// s2c op53 #954966).
+///
+/// **Capture-derived layout** — 1 182 de-duplicated prod frames (2 450 raw), every
+/// one of them s2c and carrier `0x36` (NOT `0x35`: that carrier is the net-object
+/// property update `MSGTYPE_NETOBJ_UPDATE`, a different family that older notes
+/// conflated with op53). propIds and type nibbles are identical in all 1 182:
+///
+/// `{0:Int avatarObj · 1:Byte 56 Avatar · 2:Byte 1 Authority · 3:Byte 53 ·
+///   4:ULong caster packed stats · 5:ULong opponent packed stats ·
+///   6:Byte 4 · 7:ByteArray <unmodelled> · 8:Float <time, s> · 9:String abilityUuid}`
+///
+/// propId 4/5 carry the same packed-pool word as `ReceiveDamage`/`PlayerStatsUpdate`
+/// (`Health|Stamina<<10|Magicka<<20` in the hi32, seq in the lo32) — decoding them
+/// against the captures tracks the caster's and the opponent's bars draining.
+///
+/// **Two fields could NOT be resolved from the corpus and are therefore not invented:**
+///
+/// * **propId 7** — a variable-length blob (6…23 B, 778 distinct values across 1 182
+///   frames) whose internal structure did not fall out of the corpus. On the wire it
+///   is a `ByteArray` with a **u8** length prefix (proven: with u8 all 1 182 frames
+///   parse to exactly their byte length, with u16 none do — note `arena_proto`'s
+///   `NetDataValue::ByteArray` writes a **u16** prefix, so it cannot round-trip a
+///   retail op53; arena_proto is out of scope for this change, hence
+///   [`CHANNELING_PROP7_LEN_OFFSET`]). Production emission passes `state_blob = None`
+///   and simply OMITS the property — NetData is a sparse property bag, so the client
+///   leaves the field at its default rather than reading a fabricated blob.
+///   `Some(..)` exists so the byte-differential tests can rebuild a real captured
+///   frame exactly.
+/// * **propId 8** — a float, always a multiple of 1/60 s. It is demonstrably **NOT**
+///   the shipped `_channelDuration`: that value is rank-invariant per ability
+///   (Fireball 0.9, Lightning Bolt 0.5, Poison Cloud 1.3, `cfee0b02…` 1.12) whereas
+///   the captured floats spread widely for one ability (Lightning Bolt 0.15…1.27,
+///   Fireball 0.03…1.83), and `4be1d681…` — which defines no `_channelDuration` at
+///   all — still appears with 0.33/0.35/1.63. The deduped histogram peaks at
+///   0.12…0.35 s, which reads like an elapsed/latency offset. We send the caster's
+///   own shipped `_channelDuration` because that is the value with the right
+///   *meaning* for a cast-animation length; the exact retail semantics stay open.
+pub fn player_channeling_state_change(
+    caster_avatar_net_object_id: i32,
+    caster_packed_stats: u64,
+    opponent_packed_stats: u64,
+    channel_duration_secs: f32,
+    ability_uuid: &str,
+    state_blob: Option<&[u8]>,
+) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, caster_avatar_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GameMessageId::PlayerChannelingStateChange as u8)
+        .ulong(4, caster_packed_stats)
+        .ulong(5, opponent_packed_stats)
+        .byte(6, CHANNELING_STATE_ID);
+    if let Some(blob) = state_blob {
+        w.put(7, arena_proto::NetDataValue::ByteArray(blob.to_vec()));
+    }
+    w.float(8, channel_duration_secs).string(9, ability_uuid);
+    let mut body = w.finish();
+    if let Some(blob) = state_blob {
+        narrow_prop7_length(&mut body, blob.len());
+    }
+    frame(MSGTYPE_USERMESSAGE, body)
+}
+
+/// Collapse the propId-7 `ByteArray` length prefix `arena_proto` writes (u16-LE) to
+/// the single byte retail uses, in a `player_channeling_state_change` body. Retail's
+/// op53 `ByteArray` is u8-length-prefixed — see the note on
+/// [`player_channeling_state_change`]. No-op if the body is shorter than expected or
+/// the prefix isn't the u16 we just wrote (defensive: never corrupt a frame).
+fn narrow_prop7_length(body: &mut Vec<u8>, blob_len: usize) {
+    let o = CHANNELING_PROP7_LEN_OFFSET;
+    if blob_len > u8::MAX as usize || body.len() < o + 2 {
+        return;
+    }
+    if u16::from_le_bytes([body[o], body[o + 1]]) != blob_len as u16 {
+        return;
+    }
+    body.remove(o + 1); // drop the high byte of the u16 length
+}
+
+/// op64 `PerformConsumeConsumable` (carrier `0x36`, GameMessageId at NetData propId
+/// 3) — the server's authoritative confirmation that a fighter drank its equipped
+/// consumable. Sent to BOTH players so each renders the drink animation.
+///
+/// Capture-derived layout (554 prod frames, all s2c, all carrier `0x36`, all this
+/// exact shape): `{0:Int avatarObj · 1:Byte 56 Avatar · 2:Byte 1 Authority ·
+/// 3:Byte 64 · 4:String consumableItemUuid}`. The UUIDs resolve against the capture
+/// platform's `uuid_labels` to real items (`d826ea12…` = "Potion of Light Healing",
+/// `819094ad…` = "Potion of Healing"), and match the UUID the same avatar declared
+/// in its `EquipAbilitiesAndConsumables` (56) upload — see
+/// [`super::input::parse_equip_consumables`]. Byte-for-byte vs s127 #962751.
+pub fn perform_consume_consumable(avatar_net_object_id: i32, consumable_uuid: &str) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, avatar_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GameMessageId::PerformConsumeConsumable as u8)
+        .string(4, consumable_uuid);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
 /// `DamageNegated` (66) — a Ward/Absorb/Dodge pool fully ate a hit (no damage payload).
 /// Carrier `0x36`, GMID at propId 3, on the defending Avatar. A bare NetObjectInfo +
 /// GMID signal (the captured op66 carries no further fields — §3.3/§4.5). Emitted
@@ -1675,6 +1793,132 @@ mod tests {
         // A Paralyzed(3.1s) apply rides the same shape (status byte 9).
         let par = change_combat_status_effect(125, true, StatusEffectType::Paralyzed, 3.1, 0);
         assert_eq!(arena_proto::parse_netdata(&par[2..]).int(5), Some(9), "Paralyzed = StatusEffectType 9");
+    }
+
+    /// Three REAL prod `PlayerChannelingStateChange` (53) frames, stored as their exact
+    /// decrypted `user_data` hex. Each is `marker 0xBE ‖ carrier 0x36 ‖ NetData`.
+    ///   * s127 #954966 — Lightning Bolt, propId-7 blob 7 B, propId 8 = 1.35024
+    ///   * s127 #961429 — Fireball, blob 9 B, propId 8 = 1.21714
+    ///   * s168 #1041484 — `cfee0b02…`, blob 7 B, propId 8 = 2.78354
+    const OP53_S127_954966: &str = "be3609ff03707722d7a5350200003801351f000000f4216d251f000000ffffff3f04\
+0704000000\
+1c000483d4ac3f240037666331353830342d313633372d343061392d386463632d336561316562306637373864";
+    const OP53_S127_961429: &str = "be3609ff03707722d7a53b020000380135340000006ffe6f3e34000000ffffff3f04\
+09060000001c0001000439cb9b3f240064303761386433302d396131632d343962302d383636642d393761386161313533346366";
+    const OP53_S168_1041484: &str = "be3609ff03707722d7a5140000003801351400000080feff3f14000000ffffff3f04\
+07040000001c00044b253240240063666565306230322d366439312d346433342d383639632d613765353433323930363064";
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+
+    /// **Byte-differential**: rebuild three real captured op53 frames from their decoded
+    /// field values and assert byte-for-byte equality with the capture. This pins the
+    /// carrier (`0x36`, NOT `0x35`), the propId set, the type nibbles, the ULong
+    /// packed-stat pair, the constant propId 6 = 4, the u8-length `ByteArray` at propId
+    /// 7, the float, and the trailing ability UUID string.
+    #[test]
+    fn player_channeling_state_change_matches_capture() {
+        struct Case {
+            hex: &'static str,
+            obj: i32,
+            caster: u64,
+            opponent: u64,
+            blob: &'static [u8],
+            secs: f32,
+            uuid: &'static str,
+        }
+        let cases = [
+            Case {
+                hex: OP53_S127_954966,
+                obj: 565,
+                caster: 0x256D_21F4_0000_001F,
+                opponent: 0x3FFF_FFFF_0000_001F,
+                blob: &[0x04, 0x00, 0x00, 0x00, 0x1C, 0x00, 0x04],
+                secs: f32::from_bits(0x3FAC_D483),
+                uuid: "7fc15804-1637-40a9-8dcc-3ea1eb0f778d",
+            },
+            Case {
+                hex: OP53_S127_961429,
+                obj: 571,
+                caster: 0x3E6F_FE6F_0000_0034,
+                opponent: 0x3FFF_FFFF_0000_0034,
+                blob: &[0x06, 0x00, 0x00, 0x00, 0x1C, 0x00, 0x01, 0x00, 0x04],
+                secs: f32::from_bits(0x3F9B_CB39),
+                uuid: "d07a8d30-9a1c-49b0-866d-97a8aa1534cf",
+            },
+            Case {
+                hex: OP53_S168_1041484,
+                obj: 20,
+                caster: 0x3FFF_FE80_0000_0014,
+                opponent: 0x3FFF_FFFF_0000_0014,
+                blob: &[0x04, 0x00, 0x00, 0x00, 0x1C, 0x00, 0x04],
+                secs: f32::from_bits(0x4032_254B),
+                uuid: "cfee0b02-6d91-4d34-869c-a7e54329060d",
+            },
+        ];
+        for (i, c) in cases.iter().enumerate() {
+            let want = unhex(c.hex);
+            let got = player_channeling_state_change(
+                c.obj,
+                c.caster,
+                c.opponent,
+                c.secs,
+                c.uuid,
+                Some(c.blob),
+            );
+            assert_eq!(hex_of(&got), hex_of(&want), "op53 case {i} must be byte-identical to the capture");
+            // The retail carrier is the UserMessage one; op53 is NOT a 0x35 net-object update.
+            assert_eq!(got[1], MSGTYPE_USERMESSAGE, "op53 rides carrier 0x36");
+            assert_eq!(user_message_gmid(&got), Some(53), "gmid 53 at propId 3");
+            assert_eq!(retail_channel(&got), 0, "op53 rides ENet channel 0");
+        }
+    }
+
+    /// Production emission omits the unmodelled propId-7 blob. NetData is a sparse
+    /// property bag, so the frame stays well-formed and every other field is unchanged
+    /// from the captured layout — asserted against the same s127 #954966 values.
+    #[test]
+    fn player_channeling_state_change_omits_the_unmodelled_blob() {
+        let sparse = player_channeling_state_change(
+            565,
+            0x256D_21F4_0000_001F,
+            0x3FFF_FFFF_0000_001F,
+            0.9,
+            "d07a8d30-9a1c-49b0-866d-97a8aa1534cf",
+            None,
+        );
+        assert_eq!(&sparse[0..2], &[0xBE, 0x36]);
+        let nd = arena_proto::parse_netdata(&sparse[2..]);
+        assert!(nd.ok, "the sparse form is a well-formed NetData stream");
+        assert_eq!(nd.int(0), Some(565));
+        assert_eq!(nd.int(1), Some(56), "Avatar");
+        assert_eq!(nd.int(2), Some(1), "Authority");
+        assert_eq!(nd.int(3), Some(53));
+        assert_eq!(nd.props.get(&4), Some(&arena_proto::NetDataValue::ULong(0x256D_21F4_0000_001F)));
+        assert_eq!(nd.props.get(&5), Some(&arena_proto::NetDataValue::ULong(0x3FFF_FFFF_0000_001F)));
+        assert_eq!(nd.int(6), Some(CHANNELING_STATE_ID as i64));
+        assert!(!nd.props.contains_key(&7), "the unmodelled blob is omitted, not invented");
+        assert_eq!(nd.props.get(&8), Some(&arena_proto::NetDataValue::Float(0.9)));
+        assert_eq!(nd.string(9), Some("d07a8d30-9a1c-49b0-866d-97a8aa1534cf"));
+    }
+
+    /// **Byte-differential**: op64 `PerformConsumeConsumable` vs the real prod frame
+    /// s127 #962751 (avatar 571 drinking "Potion of Light Healing").
+    #[test]
+    fn perform_consume_consumable_matches_capture() {
+        let want = unhex(
+            "be36041f70770a3b0200003801402400\
+64383236656131322d653538332d343763312d613530662d346465363038323831373335",
+        );
+        let got = perform_consume_consumable(571, "d826ea12-e583-47c1-a50f-4de608281735");
+        assert_eq!(hex_of(&got), hex_of(&want), "op64 must be byte-identical to the capture");
+        assert_eq!(user_message_gmid(&got), Some(64));
+        assert_eq!(retail_channel(&got), 0, "op64 rides ENet channel 0");
+    }
+
+    fn hex_of(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{x:02x}")).collect()
     }
 
     /// op66 `DamageNegated` is a bare NetObjectInfo + GMID signal (no damage payload) on
