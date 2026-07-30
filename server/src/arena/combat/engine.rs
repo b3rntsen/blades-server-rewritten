@@ -1740,16 +1740,22 @@ mod tests {
         assert!(!m.is_finished(), "peers NOT disconnected — the match continues");
     }
 
-    /// BUG-1 (round scoring): the op48 `MatchPostRoundInfoMsg` the CLIENT receives must
-    /// carry the ACTUAL round number and `IsMatchEnded`=false on an intermediate round
-    /// (so the client scores 1-0 after round 1, not "2-0"), and only `IsMatchEnded`=true
-    /// on the match-ending round. Previously every round sent a fixed RoundNumber=3 +
-    /// IsMatchEnded=true frame → the client double-counted and only ended after 3 rounds.
+    /// Round scoring, end to end. The op48 the CLIENT receives must be CUMULATIVE —
+    /// the round-1 result stays in slots (5,6) while round 2 fills (7,8), and propId 11
+    /// counts completed rounds minus one — with propId 4 pinned at the constant 3 that
+    /// all 375 captured frames carry, and IsMatchEnded true only on the closing round.
+    ///
+    /// Regression for the reported "0-0 after round 1, then 3-0, third round labelled
+    /// the 4th": we previously sent the live round number at p4 and a single result
+    /// duplicated into the round-2 slot with p11 hardcoded to 1, so the client could
+    /// not tally.
     #[test]
-    fn op48_round_number_and_match_ended_track_the_real_round() {
+    fn op48_is_cumulative_with_constant_round_number() {
         // Parse the op48 (carrier 0x36, gmid 48) out of a death-burst: RoundNumber(p4),
         // IsMatchEnded(p15), MatchWinnerPlayerId(p16).
-        let parse_op48 = |out: &[(usize, Vec<u8>)]| -> Option<(i64, bool, String)> {
+        // (p4, IsMatchEnded, MatchWinnerPlayerId, [p5..p10 slots], p11)
+        type Op48 = (i64, bool, String, Vec<String>, i64);
+        let parse_op48 = |out: &[(usize, Vec<u8>)]| -> Option<Op48> {
             out.iter().find_map(|(_, b)| {
                 if b.len() > 3 && b[1] == 0x36 {
                     let nd = arena_proto::parse_netdata(&b[2..]);
@@ -1757,7 +1763,11 @@ mod tests {
                         let round = nd.int(4)?;
                         let ended = matches!(nd.props.get(&15), Some(NetDataValue::Bool(true)));
                         let mwid = nd.string(16).unwrap_or("").to_string();
-                        return Some((round, ended, mwid));
+                        let slots: Vec<String> = (5..=10)
+                            .map(|p| nd.string(p).unwrap_or("").to_string())
+                            .collect();
+                        let p11 = nd.int(11)?;
+                        return Some((round, ended, mwid, slots, p11));
                     }
                 }
                 None
@@ -1787,19 +1797,28 @@ mod tests {
         // Round 1: slot 0 wins → op48 must say RoundNumber=1, IsMatchEnded=false,
         // MatchWinnerPlayerId empty (the match is NOT over — best-of-3, score 1-0).
         let (d1, t1) = swing_until_death(&mut m, 0, t0);
-        let (r1, ended1, mw1) = parse_op48(&d1).expect("op48 emitted on the round-1 death");
-        assert_eq!(r1, 1, "op48 RoundNumber = 1 for round 1 (not a fixed 3)");
-        assert!(!ended1, "round 1 is NOT the match end → IsMatchEnded=false (client scores 1-0, not 2-0)");
+        let (r1, ended1, mw1, slots1, p11_1) = parse_op48(&d1).expect("op48 emitted on the round-1 death");
+        assert_eq!(r1, 3, "p4 is the CONSTANT 3 retail always sends, not the live round");
+        assert!(!ended1, "round 1 is NOT the match end → IsMatchEnded=false");
         assert_eq!(mw1, "", "no overall MatchWinnerPlayerId on an intermediate round");
+        assert_eq!(slots1[0], "38c987fd-c42b-4ea6-b869-c8d4c03055f9", "round-1 winner in slot 1");
+        assert_eq!(slots1[1], "1131a037-716c-49cc-b165-32d8ddc14f49", "round-1 loser in slot 1");
+        assert_eq!(slots1[2], "", "round-2 slot must still be EMPTY after round 1");
+        assert_eq!(slots1[3], "", "round-2 slot must still be EMPTY after round 1");
+        assert_eq!(p11_1, 0, "p11 = completedRounds-1 = 0 after round 1");
         assert_eq!(m.combat.rounds_won, [1, 0], "server score 1-0 after round 1");
         let (_s1, live2) = drive_interround_to_live(&mut m, t1);
 
         // Round 2: slot 0 wins again → 2-0 → the MATCH ends. op48 RoundNumber=2,
         // IsMatchEnded=true, MatchWinnerPlayerId = the winner.
         let (d2, _t2) = swing_until_death(&mut m, 0, live2);
-        let (r2, ended2, mw2) = parse_op48(&d2).expect("op48 emitted on the round-2 death");
-        assert_eq!(r2, 2, "op48 RoundNumber = 2 for round 2");
+        let (r2, ended2, mw2, slots2, p11_2) = parse_op48(&d2).expect("op48 emitted on the round-2 death");
+        assert_eq!(r2, 3, "p4 still the constant 3");
         assert!(ended2, "2-0 ends the match → IsMatchEnded=true");
+        assert_eq!(slots2[0], "38c987fd-c42b-4ea6-b869-c8d4c03055f9", "round 1 is PRESERVED (cumulative)");
+        assert_eq!(slots2[2], "38c987fd-c42b-4ea6-b869-c8d4c03055f9", "round 2 winner fills the second slot");
+        assert_eq!(slots2[3], "1131a037-716c-49cc-b165-32d8ddc14f49", "round 2 loser fills the second slot");
+        assert_eq!(p11_2, 1, "p11 = 1 after two rounds");
         assert_eq!(
             mw2, "38c987fd-c42b-4ea6-b869-c8d4c03055f9",
             "the match-ending op48 names the overall winner (slot 0) as MatchWinnerPlayerId"

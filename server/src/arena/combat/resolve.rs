@@ -1562,8 +1562,6 @@ fn on_round_ending_death(combat: &mut MatchCombat, winner: usize) -> Vec<(usize,
     let winner_obj = combat.fighters.get(winner).map(|f| f.net_object_id).unwrap_or(0);
     let loser_stats = combat.fighters.get(loser).map(|f| f.packed_stats()).unwrap_or(0);
     let winner_stats = combat.fighters.get(winner).map(|f| f.packed_stats()).unwrap_or(0);
-    let winner_uuid = combat.fighters.get(winner).map(|f| f.loadout.character_uuid.clone()).unwrap_or_default();
-    let loser_uuid = combat.fighters.get(loser).map(|f| f.loadout.character_uuid.clone()).unwrap_or_default();
 
     // 1) op29 PlayerDead for the loser. Carrier 0x36, props 0-6 (NetObjectInfo + the
     //    two packed-stats ULongs + a cause byte). Cause = WeaponManeuver(3), the s506
@@ -1573,12 +1571,25 @@ fn on_round_ending_death(combat: &mut MatchCombat, winner: usize) -> Vec<(usize,
     //    matchId = the gameSessionId (the Match net-object's propId9). Carries the ACTUAL
     //    round number (so the client scores THIS round, not a fixed round-3 frame) and
     //    `is_match_ended` = whether this death won the match (best-of-3). [bug-1 fix]
+    // Record THIS round's outcome, then send the cumulative array. op48 is
+    // cumulative — the client tallies the score from the whole round-by-round list,
+    // so every completed round must be present in order (capture-pinned, 375 frames).
+    combat.round_winners.push(winner);
+    let round_results: Vec<(String, String)> = combat
+        .round_winners
+        .iter()
+        .map(|&w| {
+            let l = 1 - w;
+            (
+                combat.fighters.get(w).map(|f| f.loadout.character_uuid.clone()).unwrap_or_default(),
+                combat.fighters.get(l).map(|f| f.loadout.character_uuid.clone()).unwrap_or_default(),
+            )
+        })
+        .collect();
     let result_frame = messages::match_post_round_info(
         combat.match_net_object_id,
-        &winner_uuid,
-        &loser_uuid,
+        &round_results,
         &combat.game_session_id,
-        combat.round as i32,
         match_won,
     );
     // 4) Match net-object → PostRound(14), timeout 3.0 (s506 obj 123 round end).

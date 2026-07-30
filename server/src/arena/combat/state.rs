@@ -1132,6 +1132,14 @@ pub struct MatchCombat {
     pub next_net_object_id: i32,
     pub round: u8,
     pub rounds_won: [u8; 2],
+    /// Ordered per-round outcome: the SLOT that won round 1, round 2, … .
+    ///
+    /// `rounds_won` is only a tally, but op48 carries the cumulative round-by-round
+    /// result ARRAY and the client tallies the displayed score from it — so the
+    /// ORDER and the count both go on the wire. Capture-pinned: every one of the 375
+    /// captured op48 frames fills (5,6),(7,8),(9,10) for rounds 1..N and sets
+    /// propId 11 = N-1. See `messages::match_post_round_info`.
+    pub round_winners: Vec<usize>,
     /// When the current flow phase started (drives StateTimeout heartbeat /
     /// round timers from the tick).
     pub phase_entered: Instant,
@@ -1171,6 +1179,7 @@ impl MatchCombat {
             next_net_object_id: 564, // matches captured combat-actor id range
             round: 0,
             rounds_won: [0; 2],
+            round_winners: Vec::new(),
             phase_entered: now,
             winner: None,
             matchend_step: 0,
