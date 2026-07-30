@@ -920,31 +920,41 @@ pub fn results_json(
     .to_string()
 }
 
-/// `PlayerEmoteStateChange` (73) — the s2c relay of a client's `PlayEmote` (72).
-/// `dump.cs:590906` (`PlayerEmoteStateChangeMessage : PlayerStateChangeMessage`,
-/// fields `ActorStateType.StateId stateId` + `string emoteId`). It is one of the
-/// avatar-state-change family on the EMOTING actor's net-object (the same
-/// NetObjectInfo + StateId shape as the other `Player*StateChange`), carrying the
-/// `emoteId` string the client maps to the emote animation. We relay it to the
-/// OPPONENT so the emote displays on the other player's screen.
+/// The s2c relay of a client's `PlayEmote` (72) — sent back as `PlayEmote` (72).
 ///
-/// NetData `{0:Int actorObj · 1:Byte 56 Avatar · 2:Byte 1 Authority · 3:Byte 73
-/// (PlayerEmoteStateChange gmid) · 4:Byte stateId (Emote=28) · 5:String emoteId}`.
-/// The exact wire prop count of the `PlayerStateChange` base (the optional
-/// `_stateHistory`/`_timeInPreviousState`) is build-specific and not pinned from a
-/// two-sided capture; this minimal NetObjectInfo + StateId + emoteId shape is what
-/// the client needs to render the opponent's emote. [structure from dump.cs; the
-/// raw c2s PlayEmote frame is not byte-decodable from the retained ENet-framed
-/// captures — see the resolve.rs note.]
-pub fn player_emote_state_change(emoting_avatar_net_object_id: i32, emote_id: &str) -> Vec<u8> {
-    use super::state::ActorStateType;
+/// CAPTURE-PINNED 2026-07-30, and it corrects what was here before. The server does
+/// NOT answer with `PlayerEmoteStateChange` (73): across 264,302 decoded retail
+/// frames, gmid 73 appears ZERO times, while gmid 72 appears 1,230 times c2s and
+/// 2,014 times s2c over 45 sessions. Retail echoes the SAME message id back, and
+/// the s2c frame is shape-identical to the c2s one — every one of them 62 bytes
+/// with the single prop set {0,1,2,3,4}:
+///
+///   marker 0xBE · carrier 0x36 · {0:Int emoterObj · 1:Byte 56 Avatar
+///                                 · 2:Byte 3 Autonomous · 3:Byte 72 PlayEmote
+///                                 · 4:String emoteId}
+///
+/// `emoteId` is a 36-char UUID (e.g. "a654c0e8-bef2-4d9e-8384-642a68eba019"), not a
+/// symbolic name. There is NO ActorStateType/stateId property, and the string sits
+/// at propId 4 — the previous shape put a stateId at 4 and the string at 5, under a
+/// gmid the client never receives from retail, which is why pressing an emote
+/// animated nothing for either player.
+///
+/// Note prop2 is Autonomous (3), not Authority (1): every captured s2c relay uses 3.
+///
+/// The old comment claimed the raw c2s PlayEmote frame was "not byte-decodable from
+/// the retained ENet-framed captures". It is — the NetData frame begins at offset 10,
+/// after the ENet header; parsing from there decodes cleanly.
+///
+/// Relayed to the emoter (so its own animation plays — the server is authoritative
+/// over actor state) AND to the opponent (so it shows on the other screen).
+/// `dump.cs:588944` (`PlayEmoteMessage`, single `string _emoteId`).
+pub fn play_emote_relay(emoting_avatar_net_object_id: i32, emote_id: &str) -> Vec<u8> {
     let mut w = NetDataWriter::new();
     w.int(0, emoting_avatar_net_object_id)
-        .byte(1, NetObjectType::Avatar as u8)
-        .byte(2, NetRole::Authority as u8)
-        .byte(3, GameMessageId::PlayerEmoteStateChange as u8)
-        .byte(4, ActorStateType::Emote as u8)
-        .string(5, emote_id);
+        .byte(1, NetObjectType::Avatar as u8) // 56
+        .byte(2, NetRole::Autonomous as u8) // 3 — NOT Authority; see below
+        .byte(3, GameMessageId::PlayEmote as u8) // 72 — the SAME id the client sent
+        .string(4, emote_id);
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
@@ -960,7 +970,13 @@ pub fn play_emote_id(user_data: &[u8]) -> Option<String> {
         return None;
     }
     let nd = arena_proto::parse_netdata(user_data.get(2..)?);
-    // The emoteId is a string property; take the first string prop id > 3.
+    // CAPTURE-PINNED: the emoteId is a String at propId 4 (a 36-char UUID). All
+    // 1,230 captured c2s PlayEmote frames carry exactly the prop set {0,1,2,3,4}.
+    if let Some(s) = nd.string(4) {
+        return Some(s.to_string());
+    }
+    // Fall back to the first string above the GameMessageId, then to empty — a
+    // PlayEmote we can't fully decode should still relay rather than vanish.
     let mut keys: Vec<&u8> = nd.props.keys().filter(|k| **k > 3).collect();
     keys.sort();
     for k in keys {
@@ -968,7 +984,7 @@ pub fn play_emote_id(user_data: &[u8]) -> Option<String> {
             return Some(s.to_string());
         }
     }
-    Some(String::new()) // a PlayEmote with no decodable string → empty (still relay)
+    Some(String::new())
 }
 
 /// True iff a carrier-0x36 c2s frame is the client's `PlayEmote` (72).
@@ -1519,19 +1535,54 @@ mod tests {
         assert_eq!(user_message_gmid(&[0x84, 0x3a, 0x00]), None);
     }
 
-    /// op73 PlayerEmoteStateChange (the s2c emote relay) carries the emoting avatar's
-    /// NetObjectInfo, the Emote state-id (28), and the emote id string; readable back
-    /// by the c2s `play_emote_id` decoder shape.
+    /// The s2c emote relay must be byte-shaped like RETAIL's, which echoes gmid 72
+    /// — not gmid 73. Pinned against the capture corpus (2026-07-30): gmid 73 occurs
+    /// 0 times in 264,302 decoded frames; gmid 72 occurs 2,014 times s2c across 45
+    /// sessions, always with the prop set {0,1,2,3,4} and the emoteId String at 4.
+    ///
+    /// This is the regression guard for "pressing an emote animates nothing": the
+    /// previous shape sent gmid 73 with a stateId at 4 and the string at 5, which the
+    /// client never receives from retail and therefore ignored.
     #[test]
-    fn player_emote_state_change_structure() {
-        let got = player_emote_state_change(124, "emote_taunt");
+    fn emote_relay_matches_retail_shape() {
+        let emote_uuid = "a654c0e8-bef2-4d9e-8384-642a68eba019";
+        let got = play_emote_relay(565, emote_uuid);
         assert_eq!(&got[0..2], &[0xBE, 0x36], "marker + UserMessage carrier");
         let nd = arena_proto::parse_netdata(&got[2..]);
-        assert_eq!(nd.int(0), Some(124), "p0 emoting avatar obj");
+        assert_eq!(nd.int(0), Some(565), "p0 emoter obj");
         assert_eq!(nd.int(1), Some(56), "p1 Avatar");
-        assert_eq!(nd.int(3), Some(73), "p3 PlayerEmoteStateChange gmid");
-        assert_eq!(nd.int(4), Some(28), "p4 stateId = Emote(28)");
-        assert_eq!(nd.string(5), Some("emote_taunt"), "p5 emote id");
+        assert_eq!(nd.int(2), Some(3), "p2 Autonomous — retail never uses Authority here");
+        assert_eq!(nd.int(3), Some(72), "p3 must be PlayEmote(72), NOT 73");
+        assert_eq!(nd.string(4), Some(emote_uuid), "p4 emoteId (a UUID)");
+        assert_eq!(nd.int(5), None, "no stateId/extra prop — retail stops at 4");
+
+        // The relay is shape-identical to a client frame, so our own c2s decoder
+        // must read it back. (Retail's s2c frames are byte-identical in structure.)
+        assert!(is_play_emote(&got));
+        assert_eq!(play_emote_id(&got).as_deref(), Some(emote_uuid));
+    }
+
+    /// A real captured c2s PlayEmote decodes to the pinned prop set. Bytes are the
+    /// NetData frame from session 127 (offset 10 onward, past the ENet header).
+    #[test]
+    fn decodes_a_real_captured_play_emote() {
+        let mut f = vec![0xBEu8, 0x36];
+        f.extend_from_slice(&hex_bytes(
+            "041F70770A35020000380348240061363534633065382D626566322D346439652D383338342D363432613638656261303139",
+        ));
+        assert!(is_play_emote(&f), "captured frame must classify as PlayEmote");
+        assert_eq!(
+            play_emote_id(&f).as_deref(),
+            Some("a654c0e8-bef2-4d9e-8384-642a68eba019"),
+            "emoteId is the 36-char UUID at propId 4"
+        );
+    }
+
+    fn hex_bytes(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))
+            .collect()
     }
 
     /// The c2s PlayEmote (72) / PlayerBlockingStateChange (41) classifiers + their

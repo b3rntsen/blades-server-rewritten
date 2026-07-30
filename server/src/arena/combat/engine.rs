@@ -404,7 +404,7 @@ impl MatchInstance {
         if messages::is_play_emote(user_data) {
             let emote_id = messages::play_emote_id(user_data).unwrap_or_default();
             if let Some(emoter) = self.combat.fighters.get(sender) {
-                let relay = messages::player_emote_state_change(emoter.net_object_id, &emote_id);
+                let relay = messages::play_emote_relay(emoter.net_object_id, &emote_id);
                 // Echo to the emoter first (its own animation), then relay to the opponent.
                 out.push((sender, relay.clone()));
                 if let Some(opp) = self.combat.opponent_of(sender) {
@@ -2136,7 +2136,7 @@ mod tests {
         assert!(m.fighter_health(1) < full, "after the block window expires, the hit lands");
     }
 
-    /// BUG-2 (emotes): a `PlayEmote` (72) is broadcast as `PlayerEmoteStateChange` (73)
+    /// BUG-2 (emotes): a `PlayEmote` (72) is echoed back as `PlayEmote` (72) — retail's own shape
     /// to BOTH the emoter (server-authoritative echo → the emoter's own animation plays)
     /// and the opponent (so it displays on the other screen). Both frames carry the
     /// EMOTER's avatar obj + the emote id. No damage; no phase change.
@@ -2164,13 +2164,15 @@ mod tests {
         let viewers: Vec<usize> = out.iter().map(|(v, _)| *v).collect();
         assert!(viewers.contains(&0), "the EMOTER (slot 0) is echoed its own emote — without this the emote does nothing");
         assert!(viewers.contains(&1), "the opponent (slot 1) sees the emote");
-        // Every relayed frame is a well-formed op73 carrying the emoter's avatar + id.
+        // Every relayed frame echoes gmid 72 in retail's shape, carrying the emoter's
+        // avatar + id. Retail never sends 73 (0 of 264,302 captured frames); sending it
+        // was why an emote press animated nothing. See messages::play_emote_relay.
         for (_, body) in &out {
             assert_eq!(body[1], 0x36, "carrier 0x36");
             let nd = arena_proto::parse_netdata(&body[2..]);
-            assert_eq!(nd.int(3), Some(73), "GMID 73 PlayerEmoteStateChange");
+            assert_eq!(nd.int(3), Some(72), "GMID must be PlayEmote(72), not 73");
             assert_eq!(nd.int(0), Some(emoter_avatar), "carries the EMOTER's avatar obj");
-            assert_eq!(nd.string(5), Some("emote_wave"), "the emote id is relayed");
+            assert_eq!(nd.string(4), Some("emote_wave"), "the emote id is relayed at propId 4");
         }
         // No damage from an emote.
         assert_eq!(m.fighter_health(1), full, "an emote deals no damage");
