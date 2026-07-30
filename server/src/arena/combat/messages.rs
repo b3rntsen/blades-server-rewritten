@@ -1054,20 +1054,61 @@ pub fn blocking_active_side(user_data: &[u8]) -> Option<ActiveSide> {
     if user_message_gmid(user_data) != Some(GameMessageId::PlayerBlockingStateChange as u8) {
         return None;
     }
+    active_side_of_state_change(user_data)
+}
+
+/// Read `ActiveSide` from any member of the PlayerStateChange family — propId **9**.
+///
+/// CAPTURE-PINNED 2026-07-30. The family (39, 41, 43, 44, 45, 52) shares one frame:
+///
+/// ```text
+///   {0:Int actorObj · 1:Byte 56 Avatar · 2:Byte 1 Authority · 3:Byte gmid
+///    · 4,5:Long packed stats · 6:Byte ActorStateType · 7:ByteArray stateHistory
+///    · 8:Single timeInState · 9:Byte ActiveSide}   (+ per-message tail at 10)
+/// ```
+///
+/// propId 6 is the STATE ID and is constant per message type — Blocking=1,
+/// Charging=2, Recovery=16, FollowThrough=17, AutoAttack=19 — while gmid 39, the
+/// generic member, varies it (0/5/13/27/28; 13=Paralyzed, 28=Emote). propId 9 is
+/// the side: constant **1 (Middle)** across all 6,643 captured op41 blocks, and
+/// {2,3} = Left/Right across the swing family (43/44/45/52). Only 1/2/3 ever
+/// appear, which is exactly `ActiveSide` minus `None`.
+///
+/// THE BUG THIS REPLACES: the previous reader took "the first int-typed property
+/// above 3", which is **propId 4 — a packed-stats u64**. That never matches 1/2/3,
+/// so it fell through to `ActiveSide::None` for EVERY block ever received. Block
+/// side was therefore never actually decoded.
+/// CAVEAT on direction: the pinned shape above is the SERVER's broadcast — all
+/// 6,643 captured op41 frames are s2c and retail shows **zero** c2s op41 (the
+/// client signals a guard some other way, most likely gmid 46
+/// `PlayerCombatInputActivate`, 17,817 c2s frames). So propId 9 is authoritative
+/// for s2c, and unverified for anything inbound. Hence: prefer propId 9, and for a
+/// frame that lacks it fall back to a scan — but one that SKIPS propIds 4 and 5,
+/// the packed-stat words whose accidental capture was the original bug.
+pub fn active_side_of_state_change(user_data: &[u8]) -> Option<ActiveSide> {
     let nd = arena_proto::parse_netdata(user_data.get(2..)?);
-    let mut keys: Vec<&u8> = nd.props.keys().filter(|k| **k > 3).collect();
-    keys.sort();
-    for k in keys {
-        if let Some(v) = nd.int(*k) {
-            return Some(match v {
-                1 => ActiveSide::Middle,
-                2 => ActiveSide::Left,
-                3 => ActiveSide::Right,
-                _ => ActiveSide::None,
-            });
-        }
+    let to_side = |v: i64| match v {
+        1 => Some(ActiveSide::Middle),
+        2 => Some(ActiveSide::Left),
+        3 => Some(ActiveSide::Right),
+        _ => None,
+    };
+    if let Some(side) = nd.int(9).and_then(to_side) {
+        return Some(side);
     }
-    None
+    // Fallback for un-pinned (inbound / short) shapes: the first property above 3
+    // whose value is actually in range. An ActiveSide is only ever 1..=3, so the
+    // packed-stat u64s at 4/5 are excluded BY VALUE and the scan simply continues.
+    // The original bug was not that it looked at propId 4 — it was that it
+    // *returned* `_ => None` on the first non-matching value instead of skipping it.
+    let mut keys: Vec<u8> = nd.props.keys().copied().filter(|k| *k > 3).collect();
+    keys.sort_unstable();
+    keys.into_iter().find_map(|k| nd.int(k).and_then(to_side))
+}
+
+/// The `ActorStateType` a PlayerStateChange-family frame carries (propId 6).
+pub fn state_change_actor_state(user_data: &[u8]) -> Option<i64> {
+    arena_proto::parse_netdata(user_data.get(2..)?).int(6)
 }
 
 /// `PerformExecuteAbility` (38) — the s2c echo of a `RequestExecuteAbility` (37).
@@ -1646,6 +1687,48 @@ mod tests {
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))
             .collect()
+    }
+
+    /// ActiveSide lives at propId 9, capture-pinned across the whole
+    /// PlayerStateChange family. Regression for a reader that scanned "first int
+    /// prop > 3" and so returned the packed-stats u64 at propId 4 — which matches
+    /// no ActiveSide arm, making EVERY block decode as `None`.
+    #[test]
+    fn active_side_reads_prop9_not_the_packed_stats() {
+        // A realistic op41: propIds 4/5 are huge packed-stat words, 6 is the state
+        // id (Blocking=1), 9 is the side. Values taken from the captured shape.
+        let build = |side: u8| {
+            let mut w = NetDataWriter::new();
+            w.int(0, 312)
+                .byte(1, NetObjectType::Avatar as u8)
+                .byte(2, NetRole::Authority as u8)
+                .byte(3, GameMessageId::PlayerBlockingStateChange as u8)
+                .long(4, 1_078_416_444_930_130_123_i64)
+                .long(5, 4_530_621_220_839_751_883_i64)
+                .byte(6, 1) // ActorStateType Blocking — NOT the side
+                .string(7, "0300001c0001")
+                .float(8, 0.533_377_3)
+                .byte(9, side);
+            let mut f = frame(MSGTYPE_USERMESSAGE, w.finish());
+            f[0] = 0x84;
+            f
+        };
+
+        // The captured constant: every one of the 6,643 op41 frames has side = 1.
+        assert_eq!(blocking_active_side(&build(1)), Some(ActiveSide::Middle));
+        assert_eq!(blocking_active_side(&build(2)), Some(ActiveSide::Left));
+        assert_eq!(blocking_active_side(&build(3)), Some(ActiveSide::Right));
+
+        // The bug: prop 4 is a packed-stats word and must never be read as a side.
+        let nd = arena_proto::parse_netdata(&build(2)[2..]);
+        assert!(
+            nd.int(4).unwrap() > 1_000_000,
+            "prop4 is a packed-stats word — the old reader took THIS as the side"
+        );
+        assert_eq!(nd.int(6), Some(1), "prop6 is the state id, not the side");
+
+        // The state id is exposed separately now.
+        assert_eq!(state_change_actor_state(&build(2)), Some(1));
     }
 
     /// The c2s PlayEmote (72) / PlayerBlockingStateChange (41) classifiers + their
