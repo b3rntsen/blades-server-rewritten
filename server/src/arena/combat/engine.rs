@@ -427,7 +427,45 @@ impl MatchInstance {
         {
             info!("combat: slot {sender} conceded → match Finished");
             self.combat.phase = FlowState::Finished;
+
+            // Emit the op48 result card with MatchConceded=true. Retail does send
+            // op48 on a concession — 4 of the 375 captured frames carry
+            // MatchConceded=true — but we previously sent only the flow-state
+            // change, so a conceded match gave the client NO result at all and the
+            // builder could hardcode the flag to false.
+            //
+            // The concession counts as the final round, won by the opponent. op48 is
+            // cumulative, so it carries every completed round plus this one.
+            let conceder = sender;
+            let winner = self.combat.opponent_of(sender).unwrap_or(1 - sender);
+            self.combat.round_winners.push(winner);
+            let uuid_of = |slot: usize| -> String {
+                self.combat
+                    .fighters
+                    .get(slot)
+                    .map(|f| f.loadout.character_uuid.clone())
+                    .unwrap_or_default()
+            };
+            let round_results: Vec<(String, String)> = self
+                .combat
+                .round_winners
+                .iter()
+                .map(|&w| (uuid_of(w), uuid_of(1 - w)))
+                .collect();
+            let result = messages::match_post_round_info(
+                self.combat.match_net_object_id,
+                &round_results,
+                &self.combat.game_session_id,
+                true, // the concession ends the match
+                true, // MatchConceded
+            );
+            debug!(
+                "combat: concede by slot {conceder} → op48 winner slot {winner}, {} round(s)",
+                round_results.len()
+            );
+
             for slot in 0..self.combat.fighters.len() {
+                out.push((slot, result.clone()));
                 if let Some(m) = messages::flow_state(self.combat.flow_controller_id, FlowState::RoundEnd) {
                     out.push((slot, m));
                 }

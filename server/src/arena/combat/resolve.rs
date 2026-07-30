@@ -1612,6 +1612,7 @@ fn on_round_ending_death(combat: &mut MatchCombat, winner: usize) -> Vec<(usize,
         &round_results,
         &combat.game_session_id,
         match_won,
+        false, // a death, not a concession
     );
     // 4) Match net-object → PostRound(14), timeout 3.0 (s506 obj 123 round end).
     let post_round_update = messages::update_match(

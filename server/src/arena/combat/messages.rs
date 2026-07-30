@@ -723,6 +723,10 @@ pub fn match_post_round_info(
     round_results: &[(String, String)],
     match_id: &str,
     is_match_ended: bool,
+    /* MatchConceded (propId 14). Capture-proven to be genuinely set: 4 of the 375
+       captured op48 frames carry true. It was hardcoded false here, which the
+       corpus disproves. */
+    conceded: bool,
 ) -> Vec<u8> {
     // The client tallies the displayed score from this cumulative array, so every
     // completed round must be present, in order. Slots are (5,6), (7,8), (9,10) —
@@ -769,7 +773,7 @@ pub fn match_post_round_info(
         .byte(11, last_index)
         .string(12, latest_w)
         .string(13, latest_l)
-        .bool(14, false) // MatchConceded
+        .bool(14, conceded) // MatchConceded — see the corpus note above
         .bool(15, is_match_ended) // IsMatchEnded
         .string(16, match_winner) // MatchWinnerPlayerId — empty until the match ends
         .bool(17, false) // OpponentDisconnected
@@ -1604,7 +1608,7 @@ mod tests {
         let pair = |w: &str, l: &str| (w.to_string(), l.to_string());
 
         // ---- after round 1 (A won), match still live ----
-        let r1 = match_post_round_info(123, &[pair(a, b)], mid, false);
+        let r1 = match_post_round_info(123, &[pair(a, b)], mid, false, false);
         assert_eq!(&r1[0..2], &[0xBE, 0x36], "marker + UserMessage carrier");
         let nd = arena_proto::parse_netdata(&r1[2..]);
         assert_eq!(nd.int(0), Some(123), "p0 Match obj id");
@@ -1626,7 +1630,7 @@ mod tests {
         assert_eq!(nd.string(18), Some(mid), "p18 matchId");
 
         // ---- after round 2, B won it: 1-1, match goes to round 3 (captured ×6) ----
-        let r2 = match_post_round_info(123, &[pair(a, b), pair(b, a)], mid, false);
+        let r2 = match_post_round_info(123, &[pair(a, b), pair(b, a)], mid, false, false);
         let nd2 = arena_proto::parse_netdata(&r2[2..]);
         assert_eq!(nd2.int(4), Some(3), "p4 still 3");
         assert_eq!(nd2.string(5), Some(a), "round 1 preserved");
@@ -1637,20 +1641,38 @@ mod tests {
         assert_eq!(nd2.props.get(&15), Some(&arena_proto::NetDataValue::Bool(false)));
 
         // ---- 2-0 sweep: ends at round 2 (the most common captured frame, ×271) ----
-        let sweep = match_post_round_info(123, &[pair(a, b), pair(a, b)], mid, true);
+        let sweep = match_post_round_info(123, &[pair(a, b), pair(a, b)], mid, true, false);
         let nds = arena_proto::parse_netdata(&sweep[2..]);
         assert_eq!(nds.int(11), Some(1), "p11 = 1 for a two-round match");
         assert_eq!(nds.props.get(&15), Some(&arena_proto::NetDataValue::Bool(true)), "p15 ended");
         assert_eq!(nds.string(16), Some(a), "p16 = overall winner once ended");
 
         // ---- went the distance: 3 rounds (captured ×53) ----
-        let full = match_post_round_info(123, &[pair(a, b), pair(b, a), pair(a, b)], mid, true);
+        let full = match_post_round_info(123, &[pair(a, b), pair(b, a), pair(a, b)], mid, true, false);
         let ndl = arena_proto::parse_netdata(&full[2..]);
         assert_eq!(ndl.int(4), Some(3), "p4 constant 3");
         assert_eq!(ndl.string(9), Some(a), "round 3 winner fills the third slot");
         assert_eq!(ndl.string(10), Some(b), "round 3 loser fills the third slot");
         assert_eq!(ndl.int(11), Some(2), "p11 = 2 for a three-round match");
         assert_eq!(ndl.string(16), Some(a), "overall winner");
+
+        // MatchConceded (p14) is a real, capture-proven flag — 4 of the 375 frames
+        // carry true — and was previously hardcoded false.
+        let normal = arena_proto::parse_netdata(&sweep[2..]);
+        assert_eq!(
+            normal.props.get(&14),
+            Some(&arena_proto::NetDataValue::Bool(false)),
+            "a death-ended match is not conceded"
+        );
+        let conceded = match_post_round_info(123, &[pair(a, b)], mid, true, true);
+        let ndc = arena_proto::parse_netdata(&conceded[2..]);
+        assert_eq!(
+            ndc.props.get(&14),
+            Some(&arena_proto::NetDataValue::Bool(true)),
+            "a conceded match must set MatchConceded"
+        );
+        assert_eq!(ndc.int(4), Some(3), "p4 still the constant 3");
+        assert_eq!(ndc.string(16), Some(a), "the non-conceding player is the winner");
     }
 
     /// The carrier-`0x36` GameMessageId reader + the combat/non-combat split that
