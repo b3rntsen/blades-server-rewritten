@@ -31,11 +31,11 @@ async fn matchmaking_ws(
     let (tx, rx) = mpsc::unbounded_channel::<MatchmakingMessage>();
     let mut rx = UnboundedReceiverStream::new(rx);
 
-    {
-        let mut matchmaking_ws = user_session.session.matchmaking_ws.lock().await;
-        *matchmaking_ws = Some(tx);
-    }
+    user_session.session.set_matchmaking_ws(tx.clone()).await;
 
+    // Kept so the teardown below can tell "the slot still holds MY sender" from
+    // "a newer socket has taken over". See the compare-and-clear at the end.
+    let my_tx = tx;
     let user_session_cloned = user_session.session.clone();
     rt::spawn(async move {
         // spawn another thread to catch panic
@@ -88,8 +88,30 @@ async fn matchmaking_ws(
             }
         };
 
-        let mut matchmaking_ws = user_session_cloned.matchmaking_ws.lock().await;
-        *matchmaking_ws = None;
+        // COMPARE-AND-CLEAR, never a blind clear.
+        //
+        // The client reconnects this socket repeatedly (roughly once a minute in
+        // practice, and always after a game restart). A reconnect registers the
+        // NEW sender first, and only then does the OLD socket's loop notice it is
+        // dead and run this teardown. A blind `= None` therefore wiped the sender
+        // belonging to the healthy, live socket.
+        //
+        // The damage was permanent and invisible: `create_match` requires this
+        // slot to be populated and answers 409-4-1 when it is not, so matchmaking
+        // stayed broken for the rest of the session while the WebSocket sat there
+        // exchanging ping/pong perfectly. Observed in production 2026-07-30 —
+        // matches/create succeeded at 11:40:48 right after the first socket
+        // opened, then 409'd at 11:46:54, 11:47:55 and 11:50:18, each time within
+        // a minute of another successful 101 upgrade.
+        //
+        // Only clear the slot if it still holds OUR sender. Tested in
+        // session.rs::matchmaking_slot_tests.
+        if !user_session_cloned
+            .clear_matchmaking_ws_if_owner(&my_tx)
+            .await
+        {
+            log::debug!("rms: socket closed but a newer one owns the slot; leaving it");
+        }
     });
 
     // respond immediately with response connected to WS session

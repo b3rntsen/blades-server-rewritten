@@ -1073,11 +1073,17 @@ pub async fn create_match(
     // its rms WS repeatedly, so the matchmaker must re-fetch the CURRENT live sender at
     // resolve time (`RmsHandle::Session`) or `Succeeded` lands in a stale channel and
     // the client hangs at "determining server" (the stale-sender race).
-    {
-        let guard = session.session.matchmaking_ws.lock().await;
-        if guard.is_none() {
-            return Err(BladeApiError::new(StatusCode::CONFLICT, 4, 1));
-        }
+    // 409-4-1 when there is no feed. NOTE: this being empty is not always the
+    // client's fault — until 2026-07-30 a reconnecting socket's predecessor
+    // blind-cleared the slot on teardown, so a client with a perfectly healthy
+    // WebSocket got 409-4-1 on every match for the rest of its session. See
+    // Session::clear_matchmaking_ws_if_owner.
+    if !session.session.has_matchmaking_ws().await {
+        log::warn!(
+            "matchmaker: refusing ticket for user {} — no rms feed registered",
+            session.session.user_id
+        );
+        return Err(BladeApiError::new(StatusCode::CONFLICT, 4, 1));
     }
 
     app_state
