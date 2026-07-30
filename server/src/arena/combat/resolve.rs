@@ -451,7 +451,28 @@ pub fn on_c2s_input(
                 // Button-DOWN: record the press timestamp for hold-duration measurement.
                 combat.fighters[sender].charge_press_at = Some(now);
                 debug!("combat: slot {sender} op46 DOWN — charge press recorded at {now:?}");
-                return Vec::new(); // no damage on press
+                // Broadcast op45 PlayerChargingStateChange — THE CHARGE/COMBO CIRCLE.
+                // Retail sends this on every charge (13,060 captured frames); we sent
+                // it zero times, so a plain swing showed no circle at all while an
+                // ability incidentally produced one. No damage on press — this is
+                // purely the actor-state broadcast.
+                let side = classified_side_for(&combat.fighters[sender], now)
+                    .unwrap_or(ActiveSide::Right);
+                let own = combat.fighters[sender].packed_stats();
+                let opp = combat
+                    .opponent_of(sender)
+                    .and_then(|o| combat.fighters.get(o))
+                    .map(|f| f.packed_stats())
+                    .unwrap_or(0);
+                let obj = combat.fighters[sender].net_object_id;
+                let charging = messages::player_charging_state_change(obj, own, opp, side);
+                // To BOTH viewers: the charging player needs its own circle, and the
+                // opponent needs to see the wind-up.
+                let mut out = vec![(sender, charging.clone())];
+                if let Some(o) = combat.opponent_of(sender) {
+                    out.push((o, charging));
+                }
+                return out;
             }
             Some(false) => {
                 // Button-UP (commit): compute hold duration, apply crit.
@@ -2051,20 +2072,43 @@ mod tests {
         frame
     }
 
-    /// Op46 DOWN (button press): records `charge_press_at`; emits ZERO damage frames.
+    /// Op46 DOWN (button press): records `charge_press_at`, emits ZERO damage, and
+    /// broadcasts op45 `PlayerChargingStateChange` — the charge/combo circle — to
+    /// BOTH viewers. Retail sends op45 on every charge (13,060 captured frames);
+    /// sending none is why a plain swing showed no circle.
     #[test]
-    fn op46_down_records_press_no_damage() {
+    fn op46_down_broadcasts_charging_state_and_no_damage() {
         let now = Instant::now();
         let mut combat = make_live_combat(now);
 
         let down_frame = make_op46_frame(0x1234_5678, true);
         let out = on_c2s_input(&mut combat, 0, &down_frame, now);
 
-        assert!(out.is_empty(), "op46 DOWN must not emit damage, got {} frame(s)", out.len());
         assert!(
             combat.fighters[0].charge_press_at.is_some(),
             "op46 DOWN must record charge_press_at"
         );
+
+        // Both viewers get it: the charging player (own circle) and the opponent
+        // (sees the wind-up).
+        assert_eq!(out.len(), 2, "op45 must go to both viewers");
+        let viewers: Vec<usize> = out.iter().map(|(v, _)| *v).collect();
+        assert!(viewers.contains(&0), "the charging player gets its own circle");
+        assert!(viewers.contains(&1), "the opponent sees the wind-up");
+
+        for (_, body) in &out {
+            assert_eq!(body[1], 0x36, "carrier 0x36");
+            let nd = arena_proto::parse_netdata(&body[2..]);
+            assert_eq!(nd.int(3), Some(45), "gmid 45 PlayerChargingStateChange");
+            assert_eq!(nd.int(1), Some(56), "Avatar");
+            assert_eq!(nd.int(6), Some(2), "ActorStateType charging = 2 (constant in all captures)");
+            assert!(
+                matches!(nd.int(9), Some(2) | Some(3)),
+                "ActiveSide must be Left(2)/Right(3) — captures never show Middle here"
+            );
+            // Not damage: no ReceiveDamage anywhere in the burst.
+            assert_ne!(nd.int(3), Some(50), "op46 DOWN must not emit damage");
+        }
     }
 
     /// Build a 2-player combat with pure physical weapon (no enchants), allowing exact

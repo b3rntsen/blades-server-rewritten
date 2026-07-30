@@ -965,6 +965,58 @@ pub fn results_json(
     .to_string()
 }
 
+/// `PlayerChargingStateChange` (45) — the s2c "this actor is charging a swing"
+/// broadcast. **This is the charge/combo circle.**
+///
+/// CAPTURE-PINNED 2026-07-30 from 13,060 decoded frames across 46 sessions, one
+/// prop-set, all s2c. We were sending it ZERO times, which is why a plain swing
+/// showed no circle while tapping an ability did (an ability path incidentally put
+/// the client into a charge state).
+///
+/// It is one member of the PlayerStateChange family (39/41/43/44/45/52), which all
+/// share this frame:
+///
+/// ```text
+///   {0:Int actorObj · 1:Byte 56 Avatar · 2:Byte 1 Authority · 3:Byte gmid
+///    · 4,5:Long packed stats · 6:Byte ActorStateType · 7:ByteArray stateHistory
+///    · 8:Single timeInState · 9:Byte ActiveSide}
+/// ```
+///
+/// propId 6 is the state id and is CONSTANT 2 for charging in all 13,060 frames
+/// (cf. Blocking=1, Recovery=16, FollowThrough=17, AutoAttack=19). propId 9 is the
+/// side and only ever holds 2 or 3 — Left/Right — never Middle, which fits: a
+/// charge always has a swipe direction.
+///
+/// NOT pinned per-instance, and deliberately conservative:
+///   * propId 7 `stateHistory` is a ByteArray whose contents vary per frame; we send
+///     it EMPTY. If the client turns out to need real history, that is the next
+///     thing to pin (correlate consecutive frames within one session).
+///   * propId 8 is the time already spent in the state; 0.0 is correct at entry
+///     (0.0 is also the single most common captured value).
+pub fn player_charging_state_change(
+    actor_net_object_id: i32,
+    own_packed_stats: u64,
+    opponent_packed_stats: u64,
+    side: ActiveSide,
+) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, actor_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GameMessageId::PlayerChargingStateChange as u8)
+        .long(4, own_packed_stats as i64)
+        .long(5, opponent_packed_stats as i64)
+        .byte(6, ACTOR_STATE_CHARGING)
+        .string(7, "")
+        .float(8, 0.0)
+        .byte(9, side as u8);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// `ActorStateType` for charging — propId 6 of gmid 45, constant across all 13,060
+/// captured frames.
+pub const ACTOR_STATE_CHARGING: u8 = 2;
+
 /// The s2c relay of a client's `PlayEmote` (72) — sent back as `PlayEmote` (72).
 ///
 /// CAPTURE-PINNED 2026-07-30, and it corrects what was here before. The server does
