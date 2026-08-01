@@ -246,6 +246,32 @@ fn loadout_from_row(
     lo.profile_equipped_json =
         serde_json::json!({ "equippedItems": &r.inventory.0.loadout.equipped_items }).to_string();
     lo.profile_character_json = build_profile_character_json(&r.data.0, r.id, &r.character.0);
+
+    // DIAGNOSTIC for "no ability buttons in a match", reported 2026-08-01 by two
+    // players (Taheen, Swanne) while a third (Flappety) is unaffected.
+    //
+    // Ruled out from the stored data already: all three have 6 equipped abilities
+    // with identical slot-keyed shape, no equipped ability is missing from the
+    // owned map, loadout profiles / inventory / customization are structurally the
+    // same, ability RANKS are not out of range, and every one of the 13 distinct
+    // equipped UUIDs is known to both this server and reference/game-defs.
+    //
+    // So the difference is not the character row. The remaining candidates are all
+    // per-match and need a live match to distinguish: how many abilities survive
+    // into the Loadout, and how big the profile is — retail's op54 profile is
+    // ~17 KB / 16 ENet fragments, and ours was 31 KB / 26 before trimming, so a
+    // player whose profile is unusually large is a real suspect. Log both, per
+    // fighter, so the next match by an affected player produces the evidence
+    // rather than requiring them to be online while someone watches.
+    info!(
+        "arena loadout: char {} \"{}\" — equipped_abilities={} profile_json={}B equipped_json={}B",
+        r.id,
+        lo.display_name,
+        lo.abilities.len(),
+        lo.profile_character_json.len(),
+        lo.profile_equipped_json.len(),
+    );
+
     lo
 }
 
