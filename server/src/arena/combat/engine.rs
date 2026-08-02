@@ -1245,7 +1245,7 @@ impl MatchInstance {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::arena::combat) mod tests {
     use super::*;
 
     fn inst(capacity: usize) -> (MatchInstance, Instant) {
@@ -1296,7 +1296,11 @@ mod tests {
     }
 
     /// Like [`live_inst`] but also returns the instant the round went live.
-    fn live_inst_at(capacity: usize) -> (MatchInstance, Instant, Instant) {
+    /// `pub(in crate::arena::combat)` so the s506 differential harness can drive a LIVE
+    /// round without duplicating the round-start walk.
+    pub(in crate::arena::combat) fn live_inst_at(
+        capacity: usize,
+    ) -> (MatchInstance, Instant, Instant) {
         let now = Instant::now();
         let mut m = MatchInstance::new(capacity, capacity, vec![], now);
         let live = drive_to_live(&mut m, capacity, now);

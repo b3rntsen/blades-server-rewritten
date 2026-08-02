@@ -847,3 +847,182 @@ fn capture_and_emission_classify_identically() {
         Some(Kind::Spawn),
     );
 }
+
+// ---------------------------------------------------------------------------
+// The gmid DISTRIBUTION differential — did we fix the animation class?
+// ---------------------------------------------------------------------------
+
+/// The retail s2c `game_message_id` histogram for a live round, from prod session
+/// **503** (the reference fight). Extracted read-only, session-scoped — never scan
+/// `arena_udp_frames` unscoped, that took the box down for an hour once:
+///
+/// ```sql
+/// SELECT game_message_id, COUNT(*) FROM arena_udp_frames
+///  WHERE session_id=503 AND direction='s2c' AND game_message_id IS NOT NULL
+///  GROUP BY game_message_id ORDER BY 2 DESC;
+/// ```
+///
+/// ```text
+///  50 → 894   51 → 832   45 → 491   39 → 361   75 → 338   52 → 330   43 → 325
+///  44 → 291   38 → 207   65 → 182   41 → 175   79 → 147   53 → 116   42 →  50
+///  58 →  45   72 →  41   59 →  32   35 →  19   64 →  13   29 →  12   48 →  10
+/// ```
+///
+/// The rows this test exists for are the ones we used to send **zero** of. Absolute
+/// counts are not comparable — s503 is a real human fight of a different length — so
+/// the assertion is on the *shape*: the messages retail sent hundreds of, we must send
+/// at least one of, in the right order, to both viewers.
+const S503_ANIMATION_GMIDS: &[(i64, &str, u32)] = &[
+    (52, "PlayerAutoAttackStateChange", 330),
+    (43, "PlayerFollowThroughStateChange", 325),
+    (44, "PlayerRecoveryStateChange", 291),
+    (39, "PlayerStateChange", 361),
+];
+
+/// The `GameMessageId` at propId 3 of a carrier-0x36 frame, or `None`.
+fn gmid_of(frame: &[u8]) -> Option<i64> {
+    let (carrier, body) = user_data(frame)?;
+    if carrier != 0x36 {
+        return None;
+    }
+    parse_netdata(body).int(3)
+}
+
+/// A prod-shaped `PlayerCombatInputActivate` (gmid 46) press or release, as c2s.
+/// Mirrors `resolve::tests::make_act_frame`; kept local because that module is private.
+fn act_frame(held: bool) -> Vec<u8> {
+    let mut w = arena_proto::NetDataWriter::new();
+    w.int(0, 565)
+        .byte(1, 56)
+        .byte(2, 3)
+        .byte(3, 46)
+        .bool(4, held)
+        .float(5, 0.0)
+        .bool(6, false);
+    let mut f = super::messages::frame_for_test(w.finish());
+    f[0] = 0x84; // c2s marker
+    f
+}
+
+/// Drive a live round with real swings and collect every s2c frame emitted, tagged
+/// with the emitting tick so ordering can be checked.
+fn drive_live_fight_gmids() -> Vec<(u64, i64)> {
+    let (mut m, _t0, live) = super::engine::tests::live_inst_at(2);
+    let mut log: Vec<(u64, i64)> = Vec::new();
+    let step = Duration::from_millis(10);
+    // ~3 s of round time: long enough for several swings at the starter weapon's
+    // cadence, and for each swing's scheduled beats to come due on the tick.
+    for i in 0..300u64 {
+        let now = live + step * i as u32;
+        // Slot 0 presses and releases every 400 ms (past the swing cooldown), so the
+        // full AutoAttack → FollowThrough → Recovery → Idle walk runs repeatedly.
+        if i % 40 == 0 {
+            for (_, f) in m.on_c2s(0, &act_frame(true), now) {
+                if let Some(g) = gmid_of(&f) {
+                    log.push((i, g));
+                }
+            }
+        }
+        if i % 40 == 5 {
+            for (_, f) in m.on_c2s(0, &act_frame(false), now) {
+                if let Some(g) = gmid_of(&f) {
+                    log.push((i, g));
+                }
+            }
+        }
+        for (_, f) in m.on_tick(2, now) {
+            if let Some(g) = gmid_of(&f) {
+                log.push((i, g));
+            }
+        }
+    }
+    log
+}
+
+/// **The objective pass/fail for the actor-state fix.** Every gmid retail sent
+/// hundreds of during a fight must stop being zero for us.
+///
+/// This is the test that would have caught the original bug: before the fix our
+/// emitted histogram contained op50 `ReceiveDamage` and essentially nothing else,
+/// which is exactly why damage was right and nothing animated.
+#[test]
+fn live_fight_emits_the_retail_animation_gmids() {
+    let log = drive_live_fight_gmids();
+    assert!(!log.is_empty(), "the harness must emit something");
+    for (gmid, name, retail) in S503_ANIMATION_GMIDS {
+        let n = log.iter().filter(|(_, g)| g == gmid).count();
+        assert!(
+            n > 0,
+            "gmid {gmid} {name}: emitted 0, retail s503 sent {retail}. \
+             This is the animation class regressing — the client is being told the \
+             result of combat and not the actor's state, so nothing animates."
+        );
+    }
+    // op50 must still be there: this fix adds the state stream, it does not replace
+    // the damage stream.
+    assert!(
+        log.iter().any(|(_, g)| *g == 50),
+        "gmid 50 ReceiveDamage must still be emitted"
+    );
+}
+
+/// The three beats of a swing must arrive in retail's order — 52, then 43, then 44 —
+/// and be separated in TIME, not all crammed into one tick. Sending them together
+/// would make the client flash through the animation rather than play it.
+#[test]
+fn swing_beats_are_ordered_and_staggered() {
+    let log = drive_live_fight_gmids();
+    let first = |gmid: i64| log.iter().find(|(_, g)| *g == gmid).map(|(tick, _)| *tick);
+    let auto = first(52).expect("gmid 52 PlayerAutoAttackStateChange");
+    let follow = first(43).expect("gmid 43 PlayerFollowThroughStateChange");
+    let recover = first(44).expect("gmid 44 PlayerRecoveryStateChange");
+    assert!(
+        auto < follow && follow < recover,
+        "retail order is 52 → 43 → 44; got ticks {auto} → {follow} → {recover}"
+    );
+    // 10 ms per tick: the capture-measured gaps are ~50 ms (52→43) and ~17 ms (43→44),
+    // so each beat must land on a strictly later tick than the one before it.
+    assert!(
+        follow - auto >= 4,
+        "52 → 43 must be ~50 ms apart (capture-measured 49-65 ms), got {} ms",
+        (follow - auto) * 10
+    );
+    assert!(
+        recover > follow,
+        "43 → 44 must be on a later tick (capture-measured 16-21 ms)"
+    );
+}
+
+/// Every actor-state frame goes to BOTH viewers. A viewer that only ever hears about
+/// its own state cannot animate its opponent — that is the missing-enemy-swing bug.
+#[test]
+fn animation_frames_reach_both_viewers() {
+    let (mut m, _t0, live) = super::engine::tests::live_inst_at(2);
+    let step = Duration::from_millis(10);
+    let mut per_viewer = [0usize; 2];
+    for i in 0..300u64 {
+        let now = live + step * i as u32;
+        let mut burst = Vec::new();
+        if i % 40 == 0 {
+            burst.extend(m.on_c2s(0, &act_frame(true), now));
+        }
+        if i % 40 == 5 {
+            burst.extend(m.on_c2s(0, &act_frame(false), now));
+        }
+        burst.extend(m.on_tick(2, now));
+        for (viewer, f) in burst {
+            if matches!(gmid_of(&f), Some(52) | Some(43) | Some(44) | Some(39) | Some(41)) {
+                per_viewer[viewer] += 1;
+            }
+        }
+    }
+    assert!(per_viewer[0] > 0, "the acting player must see its own state changes");
+    assert!(
+        per_viewer[1] > 0,
+        "the OPPONENT must see them too — this is the enemy-swing animation"
+    );
+    assert_eq!(
+        per_viewer[0], per_viewer[1],
+        "both viewers get the same stream; got {per_viewer:?}"
+    );
+}

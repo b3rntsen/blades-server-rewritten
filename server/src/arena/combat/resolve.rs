@@ -557,12 +557,24 @@ pub fn on_c2s_input(
     // Bounded by `BLOCK_WINDOW` (the dump's `BLOCK_OPTIMAL_TIME` 2.0s) and auto-expired
     // by `reconcile_block` — a fresh op41 simply refreshes the window. No damage.
     //
-    // DOES emit s2c. This used to say "no s2c (the client animates its own guard)",
-    // which is false: retail sent gmid 41 **6,664 times, all s2c**, and a player
-    // reported that blocking reduced damage exactly as intended while no shield ever
-    // appeared. The client waits to be told. Relayed to BOTH viewers so the opponent
-    // sees the guard go up too. Handled BEFORE the swing fallback so a block frame is
-    // never mis-resolved as an attack.
+    // DOES emit s2c — but no longer from here. ENTERING the `Blocking` actor state is
+    // what raises the shield, and [`drain_state_changes`] turns that transition into
+    // the gmid 41 broadcast for both viewers. That is the point of routing every state
+    // change through one seam: the notification is not this handler's job, so a block
+    // raised by any OTHER path animates too, for free.
+    //
+    // ⚠️ THIS HANDLER IS UNREACHABLE IN PRODUCTION — a separate, still-open bug.
+    // Retail's corpus holds **784 s2c gmid 41 frames and ZERO c2s**, verified across
+    // sessions 503/506/486/615/616; the same holds for the whole family (39/42/43/44/
+    // 52/59/75 — zero c2s, every gmid, every session). The client never sends gmid 41.
+    // So nothing in production ever puts a fighter into `Blocking`, which means the
+    // shield cannot rise AND `damage::block_outcome` never sees a blocking defender.
+    // Finding the real c2s block signal is tracked separately; the leading candidate is
+    // gmid 46 `PlayerCombatInputActivate`'s `_isWithinBlockZone` (17,817 c2s frames),
+    // whose semantics are not yet pinned.
+    //
+    // The handler is kept because it is correct if a client ever does send op41, and it
+    // is what the block tests drive. Do NOT read its existence as "blocking works".
     if messages::is_player_blocking_state_change(user_data) {
         if sender < combat.fighters.len() {
             let side = messages::blocking_active_side(user_data).unwrap_or(ActiveSide::Middle);
@@ -576,13 +588,7 @@ pub fn on_c2s_input(
             f.blocking_side = side;
             f.blocking_until = Some(now + BLOCK_WINDOW);
             f.block_raised_at = Some(now);
-            let avatar_obj = f.net_object_id;
             debug!("combat: slot {sender} raised guard ({side:?}) for {BLOCK_WINDOW:?}");
-            // Tell every client someone is blocking — this is what raises the shield.
-            let relay = messages::player_blocking_state_change(avatar_obj, side, true);
-            return (0..combat.fighters.len())
-                .map(|viewer| (viewer, relay.clone()))
-                .collect();
         }
         return Vec::new();
     }
@@ -2007,11 +2013,18 @@ mod tests {
             f
         };
 
-        let out = on_c2s_input(&mut combat, 0, &block_frame, now);
+        let resolved = on_c2s_input(&mut combat, 0, &block_frame, now);
+        assert!(
+            resolved.is_empty(),
+            "resolution itself emits nothing for a block — no damage, and the gmid-41 \
+             relay is the drain's job"
+        );
 
-        // A block produces NO DAMAGE, but it DOES relay the blocking state — that
-        // relay is what raises the shield on screen. This assertion used to demand
-        // zero frames, which is what kept the shield down (report #5).
+        // The relay comes from the actor-state drain, which the engine runs at the end
+        // of every on_c2s/on_tick. It is what raises the shield on screen; this test
+        // used to assert zero frames anywhere, which is what kept the shield down
+        // (report #5).
+        let out = drain_state_changes(&mut combat, now);
         assert_eq!(
             out.len(),
             combat.fighters.len(),
@@ -2019,10 +2032,13 @@ mod tests {
             out.len()
         );
         for (_, f) in &out {
-            assert!(
-                super::messages::is_player_blocking_state_change(f),
+            let nd = arena_proto::parse_netdata(&f[2..]);
+            assert_eq!(
+                nd.int(3),
+                Some(41),
                 "the only frame a block emits is the gmid-41 relay — never damage"
             );
+            assert_eq!(nd.int(6), Some(1), "prop6 = ActorStateType::Blocking");
         }
         // And the fighter should now be in the Blocking state.
         assert_eq!(
