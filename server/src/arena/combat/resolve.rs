@@ -465,28 +465,21 @@ pub fn on_c2s_input(
                 // Button-DOWN: record the press timestamp for hold-duration measurement.
                 combat.fighters[sender].charge_press_at = Some(now);
                 debug!("combat: slot {sender} op46 DOWN — charge press recorded at {now:?}");
-                // Broadcast op45 PlayerChargingStateChange — THE CHARGE/COMBO CIRCLE.
-                // Retail sends this on every charge (13,060 captured frames); we sent
-                // it zero times, so a plain swing showed no circle at all while an
-                // ability incidentally produced one. No damage on press — this is
-                // purely the actor-state broadcast.
+                // Enter the wind-up. The gmid 45 broadcast to BOTH viewers comes from
+                // the actor-state drain, exactly as it does on the live 0x36 path —
+                // one code path for the charge, so the two carriers cannot drift.
+                //
+                // NOTE ON THIS WHOLE BRANCH: carrier 0x2e appears **zero** times in
+                // prod sessions 503/615/616. Real clients send op46 as a 0x36
+                // UserMessage with propId 3 = 46 (579 of them in s503 alone), which is
+                // the `parse_input_activate` path below. This branch is kept because it
+                // is cheap and harmless, not because anything reaches it — do not read
+                // its existence as evidence that it runs.
                 let side = classified_side_for(&combat.fighters[sender], now)
                     .unwrap_or(ActiveSide::Right);
-                let own = combat.fighters[sender].packed_stats();
-                let opp = combat
-                    .opponent_of(sender)
-                    .and_then(|o| combat.fighters.get(o))
-                    .map(|f| f.packed_stats())
-                    .unwrap_or(0);
-                let obj = combat.fighters[sender].net_object_id;
-                let charging = messages::player_charging_state_change(obj, own, opp, side);
-                // To BOTH viewers: the charging player needs its own circle, and the
-                // opponent needs to see the wind-up.
-                let mut out = vec![(sender, charging.clone())];
-                if let Some(o) = combat.opponent_of(sender) {
-                    out.push((o, charging));
-                }
-                return out;
+                combat.fighters[sender].charge_side = Some(side);
+                combat.fighters[sender].set_actor_state(ActorStateType::Charging, now);
+                return Vec::new();
             }
             Some(false) => {
                 // Button-UP (commit): compute hold duration, apply crit.
@@ -738,13 +731,23 @@ pub fn on_c2s_input(
                 f.reconcile_block(now);
                 debug!("combat: slot {sender} attack press cancels the guard");
             }
-            // Button DOWN — start the server's charge stopwatch. No damage.
+            // Button DOWN — start the server's charge stopwatch AND enter the wind-up.
             f.charge_press_at = Some(now);
+            f.bot_swing_at = None;
             debug!(
                 "combat: slot {sender} op46 DOWN (carrier 0x36) — charge press recorded \
                  (blockZone={:?})",
                 act.block_zone
             );
+            // THE WIND-UP. Retail begins every swing with gmid 45 `Charging` 300-400 ms
+            // before the 52 — 593 of 593 decoded swings, both avatars, no exceptions —
+            // and it is the long, visible part: the 52 → 43 → 44 tail runs in 66 ms.
+            // We were sending none of it, which is why the shield animated and the
+            // swing did not.
+            let side = classified_side_for(&combat.fighters[sender], now);
+            combat.fighters[sender].charge_side = side;
+            combat.fighters[sender]
+                .set_actor_state(ActorStateType::Charging, now);
             return Vec::new();
         }
         // Button UP — commit the swing.
@@ -759,7 +762,11 @@ pub fn on_c2s_input(
         if combat.fighters[target_slot].is_dead() {
             return Vec::new();
         }
-        let side = classified_side_for(&combat.fighters[sender], now);
+        // Prefer the side classified from live geometry (what the damage model is
+        // calibrated on); fall back to the side the wind-up was announced with, so the
+        // 45 and the 52 carry the same ActiveSide as they do in every captured pair.
+        let side = classified_side_for(&combat.fighters[sender], now)
+            .or(combat.fighters[sender].charge_side);
         debug!(
             "combat: slot {sender} op46 UP (carrier 0x36) — hold {hold_secs:.3}s ×{swing_factor:.3}, \
              side {side:?} from x={:?}",
@@ -1840,6 +1847,16 @@ fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u
 // Actor-state broadcast — the animation stream
 // ---------------------------------------------------------------------------
 
+/// How long a BOT winds up before its swing lands — the `Charging` → `PlayerAutoAttack`
+/// gap. Capture-measured on the opponent's avatar: median 383 ms (the capturing
+/// player's own median is 318 ms, and the minimum anywhere in the corpus is 215 ms).
+///
+/// A human's wind-up is however long they hold the button; only a bot needs a
+/// synthetic one. Without it the bot's charge and swing drain in the same tick and the
+/// client has nothing to animate — which is exactly what "I still don't see the
+/// opponent's swing" looked like.
+const BOT_CHARGE_WINDUP: Duration = Duration::from_millis(350);
+
 /// Delay from `PlayerAutoAttackStateChange` (52) to `PlayerFollowThroughStateChange`
 /// (43). **Capture-pinned**: the measured 52→43 gaps in retail are 49, 49, 49, 53 and
 /// 65 ms, and the 43 frame's own `_timeInPreviousState` is 0.050 — the message states
@@ -1871,8 +1888,9 @@ const RECOVERY_DELAY: Duration = Duration::from_millis(17);
 ///   block **ends**: there is no shield-down variant of 41 (all 248 decoded 41 frames
 ///   carry prop6 = Blocking), so the guard comes down with a 39 carrying stateId 0.
 ///
-/// `Charging` is absent on purpose: gmid 45 is emitted directly on the op46 button-DOWN
-/// path, which is capture-pinned, and nothing sets the `Charging` actor state.
+/// `Charging` → 45, the wind-up. It is part of the same walk rather than a special
+/// case: every one of the 593 decoded retail swings begins with a 45 for the same
+/// avatar 300-400 ms before its 52.
 pub fn drain_state_changes(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
     let viewers = combat.fighters.len();
     let mut out = Vec::new();
@@ -1901,6 +1919,12 @@ pub fn drain_state_changes(combat: &mut MatchCombat, now: Instant) -> Vec<(usize
             };
             let t = change.time_in_previous;
             let bytes = match change.to {
+                ActorStateType::Charging => {
+                    // The wind-up. Its side is the one classified at the press, which
+                    // is what retail carries through the whole swing.
+                    let side = combat.fighters[slot].charge_side.unwrap_or(swing_side);
+                    messages_state::player_charging_state_change(&ctx, side, t)
+                }
                 ActorStateType::Blocking => {
                     // prop 10 `OptimalBlockAllowed`: retail sent `true` in 231 of 248
                     // frames and no decoded correlation explains the other 17, so the
@@ -2028,13 +2052,38 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
         if combat.fighters[target].is_dead() {
             continue;
         }
+        // A bot swings in TWO steps, because retail's swing is two steps.
+        //
+        // Step 1, the wind-up: enter `Charging` and note when the swing should land.
+        // Step 2, `BOT_CHARGE_WINDUP` later: resolve the swing, which walks
+        // AutoAttack → FollowThrough → Recovery → Idle.
+        //
+        // Doing it in one tick is what made the opponent's swing invisible: the client
+        // received the charge and the attack in the same breath, with no wind-up to
+        // play. Retail never does that — all 593 decoded swings have a 300-400 ms gap.
+        if let Some(at) = combat.fighters[bot].bot_swing_at {
+            if now >= at {
+                combat.fighters[bot].bot_swing_at = None;
+                // Bots don't hold a button — always ×1.0 (no held-charge crit).
+                out.extend(resolve_swing(combat, bot, target, 1.0, now));
+            }
+            continue;
+        }
         let ready = combat.fighters[bot]
             .last_swing
             .map(|t| now.duration_since(t) >= BOT_SWING_COOLDOWN)
             .unwrap_or(true);
         if ready {
-            // Bots don't charge — always ×1.0 (no held-charge crit for bot swings).
-            out.extend(resolve_swing(combat, bot, target, 1.0, now));
+            // The side is decided now, at the start of the wind-up, and
+            // `resolve_swing`'s alternation fallback will produce the same one when the
+            // swing lands — retail carries one side across all four beats (593/593).
+            let side = match combat.fighters[bot].last_combo_side {
+                ActiveSide::Right => ActiveSide::Left,
+                _ => ActiveSide::Right,
+            };
+            combat.fighters[bot].charge_side = Some(side);
+            combat.fighters[bot].set_actor_state(ActorStateType::Charging, now);
+            combat.fighters[bot].bot_swing_at = Some(now + BOT_CHARGE_WINDUP);
         }
     }
     out
@@ -2322,15 +2371,23 @@ mod tests {
         let mut combat = make_live_combat(now);
 
         let down_frame = make_op46_frame(0x1234_5678, true);
-        let out = on_c2s_input(&mut combat, 0, &down_frame, now);
+        let resolved = on_c2s_input(&mut combat, 0, &down_frame, now);
+        assert!(resolved.is_empty(), "the press itself emits nothing — the drain does");
 
         assert!(
             combat.fighters[0].charge_press_at.is_some(),
             "op46 DOWN must record charge_press_at"
         );
+        assert_eq!(
+            combat.fighters[0].actor_state(),
+            super::super::state::ActorStateType::Charging,
+            "op46 DOWN must enter the Charging wind-up"
+        );
 
         // Both viewers get it: the charging player (own circle) and the opponent
-        // (sees the wind-up).
+        // (sees the wind-up). The frames come from the actor-state drain, which the
+        // engine runs at the end of every on_c2s/on_tick.
+        let out = drain_state_changes(&mut combat, now);
         assert_eq!(out.len(), 2, "op45 must go to both viewers");
         let viewers: Vec<usize> = out.iter().map(|(v, _)| *v).collect();
         assert!(viewers.contains(&0), "the charging player gets its own circle");

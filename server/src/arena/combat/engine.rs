@@ -1242,6 +1242,15 @@ impl MatchInstance {
     pub(crate) fn fighter_max_health(&self, slot: usize) -> u32 {
         self.combat.fighters[slot].max_health
     }
+
+    /// The Avatar net-object id a slot's state-change frames are addressed to — the
+    /// value at propId 0. Tests use it to tell "my own avatar's frames" apart from
+    /// "the opponent's", which is the whole distinction the enemy-swing animation
+    /// depends on.
+    #[cfg(test)]
+    pub(crate) fn fighter_avatar_id(&self, slot: usize) -> i32 {
+        self.combat.fighters[slot].net_object_id
+    }
 }
 
 #[cfg(test)]
@@ -1524,8 +1533,25 @@ pub(in crate::arena::combat) mod tests {
         drive_to_live(&mut m, 1, now); // walk the MatchState progression → live round
         assert_eq!(m.phase(), FlowState::StateTimeout);
         let before = m.fighter_health(0);
-        // Past the bot's swing cadence → the bot (slot 1) damages the player (slot 0).
-        m.on_tick(1, now + setup_to_live() + Duration::from_secs(3));
+        // Past the bot's swing cadence, the bot WINDS UP first: it enters Charging and
+        // broadcasts gmid 45, and lands the hit ~350 ms later. Retail never charges and
+        // swings in the same instant — all 593 decoded swings have a 300-400 ms gap,
+        // and collapsing it is what left the opponent's swing with no animation to
+        // play. So the swing takes two ticks now, and this test walks both.
+        let t = now + setup_to_live() + Duration::from_secs(3);
+        let windup = m.on_tick(1, t);
+        assert!(
+            m.fighter_health(0) == before,
+            "the wind-up tick must not deal damage yet"
+        );
+        assert!(
+            windup.iter().any(|(_, b)| {
+                b.len() > 2 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(45)
+            }),
+            "the wind-up tick must broadcast gmid 45 PlayerChargingStateChange"
+        );
+        // A tick after the wind-up completes → the bot damages the player.
+        m.on_tick(1, t + Duration::from_millis(400));
         assert!(m.fighter_health(0) < before, "bot should damage the player on tick");
     }
 

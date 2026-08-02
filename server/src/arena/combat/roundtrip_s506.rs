@@ -1173,3 +1173,130 @@ fn non_block_zone_press_never_raises_the_shield() {
         "retail never once followed a `held=true, blockZone=false` press with a gmid 41"
     );
 }
+
+/// **The enemy-swing case, as the owner actually played it.**
+///
+/// On-device 2026-08-02: the shield now rises (gmid 41 works end to end) but the
+/// opponent's swing still does not animate. A solo match's opponent is a BOT — slots
+/// at or after `expected_peers`, driven by `resolve::on_tick`, never by a c2s frame.
+/// Every animation test written so far drives slot 0's own presses, so the bot path
+/// was untested: if bot swings never produced a gmid 52, no test would have said so.
+///
+/// This drives a real bot match and asserts the human viewer (slot 0) receives the
+/// bot's swing states, addressed to the BOT's avatar net-object id.
+#[test]
+fn a_bot_opponents_swing_reaches_the_human_viewer() {
+    // capacity 2, expected_peers 1 → slot 1 has no peer and is a bot.
+    let t0 = Instant::now();
+    let mut m = MatchInstance::new(2, 1, vec![], t0);
+    let mut live = None;
+    let step = Duration::from_millis(100);
+    for i in 0..=1200u32 {
+        let now = t0 + step * i;
+        m.on_tick(1, now);
+        if m.phase() == FlowState::StateTimeout {
+            live = Some(now);
+            break;
+        }
+    }
+    let live = live.expect("the round must go live");
+    let bot_avatar = m.fighter_avatar_id(1);
+    let human_avatar = m.fighter_avatar_id(0);
+
+    // Several bot swing cadences' worth of ticks.
+    let mut to_human: Vec<(i64, i64)> = Vec::new(); // (gmid, actor net object id)
+    for i in 0..600u32 {
+        let now = live + Duration::from_millis(10) * i;
+        for (viewer, f) in m.on_tick(1, now) {
+            if viewer != 0 {
+                continue;
+            }
+            if let (Some(g), Some((_, body))) = (gmid_of(&f), user_data(&f)) {
+                if let Some(obj) = parse_netdata(body).int(0) {
+                    to_human.push((g, obj));
+                }
+            }
+        }
+    }
+
+    let bot_swings: Vec<i64> = to_human
+        .iter()
+        .filter(|(_, obj)| *obj == bot_avatar as i64)
+        .map(|(g, _)| *g)
+        .collect();
+    assert!(
+        !bot_swings.is_empty(),
+        "the human viewer received NOTHING about the bot's avatar ({bot_avatar}); \
+         human avatar is {human_avatar}"
+    );
+    for gmid in [45, 52, 43, 44] {
+        assert!(
+            bot_swings.contains(&gmid),
+            "the human viewer must be told the OPPONENT entered gmid-{gmid} state — \
+             this is the enemy-swing animation. Got {bot_swings:?}"
+        );
+    }
+}
+
+/// **The wind-up is the swing.** Reported on device 2026-08-02: the shield animated
+/// but the opponent's swing did not, even though the server was demonstrably sending
+/// 52/43/44 (the test above).
+///
+/// The cause was that we began a swing at `PlayerAutoAttack`. Retail begins it at
+/// `Charging`, 300-400 ms earlier: **593 of 593** decoded swings across prod sessions
+/// 503/615/616 have a gmid 45 for the same avatar before their gmid 52, on both
+/// avatars, with no exceptions and a corpus-minimum gap of 215 ms. That wind-up is
+/// about six times the whole 52 → 43 → 44 tail, which runs in 66 ms.
+///
+/// So this asserts the ORDER and the GAP, not merely the presence of a 45. Emitting
+/// the charge and the attack in the same tick would satisfy "contains 45" while still
+/// giving the client nothing to play.
+#[test]
+fn an_opponents_swing_is_preceded_by_a_visible_windup() {
+    let t0 = Instant::now();
+    let mut m = MatchInstance::new(2, 1, vec![], t0);
+    let step = Duration::from_millis(100);
+    let mut live = None;
+    for i in 0..=1200u32 {
+        let now = t0 + step * i;
+        m.on_tick(1, now);
+        if m.phase() == FlowState::StateTimeout {
+            live = Some(now);
+            break;
+        }
+    }
+    let live = live.expect("the round must go live");
+    let bot_avatar = m.fighter_avatar_id(1) as i64;
+
+    // (tick_index, gmid) for frames about the BOT, delivered to the human viewer.
+    let mut seen: Vec<(u32, i64)> = Vec::new();
+    for i in 0..600u32 {
+        let now = live + Duration::from_millis(10) * i;
+        for (viewer, f) in m.on_tick(1, now) {
+            if viewer != 0 {
+                continue;
+            }
+            if let (Some(g), Some((_, body))) = (gmid_of(&f), user_data(&f)) {
+                if parse_netdata(body).int(0) == Some(bot_avatar) {
+                    seen.push((i, g));
+                }
+            }
+        }
+    }
+
+    let first = |gmid: i64| seen.iter().find(|(_, g)| *g == gmid).map(|(i, _)| *i);
+    let charge = first(45).expect("gmid 45 PlayerChargingStateChange for the opponent");
+    let attack = first(52).expect("gmid 52 PlayerAutoAttackStateChange for the opponent");
+    assert!(
+        charge < attack,
+        "the wind-up must come FIRST: 45 at tick {charge}, 52 at tick {attack}"
+    );
+    // 10 ms per tick. Retail's gap is 300-400 ms and never below 215 ms; anything
+    // under ~20 ticks means the client has no wind-up to animate.
+    let gap_ms = (attack - charge) * 10;
+    assert!(
+        gap_ms >= 200,
+        "45 → 52 must be a VISIBLE wind-up, not the same breath: got {gap_ms} ms, \
+         retail is 300-400 ms (corpus minimum 215 ms)"
+    );
+}
