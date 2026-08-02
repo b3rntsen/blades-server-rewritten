@@ -735,10 +735,21 @@ impl MatchInstance {
                     MATCH_STATE_INTERROUND_PROGRESSION.get(self.combat.interround_step)
                 {
                     if now.duration_since(self.combat.phase_entered) >= hold_before {
-                        // Bump the round at the FIRST between-rounds step (ChooseLoadout),
-                        // so the round-2/3 MatchState updates + the live round carry the
-                        // new round index (s506: ChooseLoadout(8) is sent with round=1).
-                        if self.combat.interround_step == 0 {
+                        // Bump the round when the LIVE round actually starts — i.e. at
+                        // InRound(13), the LAST between-rounds step — not at the first.
+                        //
+                        // The old code bumped at step 0 while its own comment recorded the
+                        // retail behaviour it was contradicting: "s506: ChooseLoadout(8) is
+                        // sent with round=1". Retail carries the OLD round number through the
+                        // whole between-rounds walk and only the live round carries the new
+                        // one; we were announcing round 2 from ChooseLoadout onwards.
+                        //
+                        // Reported from a real match (report #5, session 772): round 1 was
+                        // labelled correctly, round 2 was labelled "round 3". The server's own
+                        // counter was right the whole time — the log shows `round 1 live` then
+                        // `round 2 live` — so the client was adding its own increment on top of
+                        // the one we had already applied.
+                        if matches!(state, MatchState::InRound) {
                             self.combat.round = self.combat.round.saturating_add(1);
                         }
                         let is_inround = matches!(state, MatchState::InRound);
@@ -2144,9 +2155,14 @@ mod tests {
         };
         block[0] = 0x84; // c2s marker
 
-        // The block frame itself: no s2c, no damage, and B is now guarding.
+        // The block frame itself: no DAMAGE, but it does relay the guard state so the
+        // shield actually appears (report #5 — this used to assert no s2c at all).
         let out = m.on_c2s(1, &block, t0);
-        assert!(out.is_empty(), "a block input produces no s2c and no damage");
+        assert!(!out.is_empty(), "a block input must relay the blocking state");
+        assert!(
+            out.iter().all(|(_, f)| messages::is_player_blocking_state_change(f)),
+            "a block emits only the gmid-41 relay, never damage"
+        );
         assert_eq!(m.fighter_health(1), full, "the block itself deals no damage");
 
         // A (slot 0) swings Right into B's Right guard → OPTIMAL block: physical NEGATED,

@@ -1021,6 +1021,13 @@ pub fn player_charging_state_change(
 /// captured frames.
 pub const ACTOR_STATE_CHARGING: u8 = 2;
 
+/// Constants retail put in every captured `PlayerBlockingStateChange` (41). Copied,
+/// not derived: 400/400 decoded frames carry these exact values. See
+/// [`player_blocking_state_change`].
+const BLOCK_STATE_P4_P5: i64 = 4_611_686_014_132_420_712;
+const BLOCK_STATE_P7: &str = "0300001c0001";
+const BLOCK_STATE_P8: f32 = 2.500_160_7;
+
 /// The s2c relay of a client's `PlayEmote` (72) — sent back as `PlayEmote` (72).
 ///
 /// CAPTURE-PINNED 2026-07-30, and it corrects what was here before. The server does
@@ -1056,6 +1063,54 @@ pub fn play_emote_relay(emoting_avatar_net_object_id: i32, emote_id: &str) -> Ve
         .byte(2, NetRole::Autonomous as u8) // 3 — NOT Authority; see below
         .byte(3, GameMessageId::PlayEmote as u8) // 72 — the SAME id the client sent
         .string(4, emote_id);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// s2c `PlayerBlockingStateChange` (41) — the frame that actually RAISES THE SHIELD.
+///
+/// CAPTURE-PINNED against 400 decoded retail frames, all with an identical prop set
+/// {0..10}. Retail sent this **6,664 times, every one of them s2c**.
+///
+/// That number is the point. The previous code decoded gmid 41 and deliberately sent
+/// nothing back, on the reasoning — written in `resolve.rs` — that "the client
+/// animates its own guard". It does not. Reported from a real match (report #5):
+/// pressing block reduced incoming damage exactly as intended, and no shield ever
+/// appeared, because the client waits to be told. Same mistake that was made about
+/// emotes (gmid 72), and the fix has the same shape.
+///
+/// ```text
+///   0:Int  avatar netObjectId   1:Byte 56 Avatar   2:Byte 1 AUTHORITY
+///   3:Byte 41 PlayerBlockingStateChange
+///   4:Int / 5:Int  0x3FFFFFFF00000068 — an IEEE-754 double ≈ 2.0 carried as an
+///                  int64 bit pattern; matches BLOCK_OPTIMAL_TIME (2.0s)
+///   6:Int  1       7:Str  "0300001c0001"   8:Float 2.5001607
+///   9:Int  ActiveSide (guard side)         10:Bool blocking on/off
+/// ```
+///
+/// NOTE the role: **Authority (1)**, not the Autonomous (3) the emote relay uses.
+/// Retail is consistent about this across all 400 frames, so we match it rather than
+/// copying the emote shape.
+///
+/// p4/p5/p6/p7/p8 are reproduced as the constants retail sent. Their semantics are not
+/// pinned by a two-sided capture, so they are copied rather than computed — a wrong
+/// guess at a *meaning* is worse than a faithful replay of a *value*.
+pub fn player_blocking_state_change(
+    blocking_avatar_net_object_id: i32,
+    side: ActiveSide,
+    blocking: bool,
+) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, blocking_avatar_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8) // 56
+        .byte(2, NetRole::Authority as u8) // 1 — retail uses Authority here, not Autonomous
+        .byte(3, GameMessageId::PlayerBlockingStateChange as u8) // 41
+        .long(4, BLOCK_STATE_P4_P5)
+        .long(5, BLOCK_STATE_P4_P5)
+        .int(6, 1)
+        .string(7, BLOCK_STATE_P7)
+        .float(8, BLOCK_STATE_P8)
+        .int(9, side as i32)
+        .bool(10, blocking);
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
@@ -1808,6 +1863,47 @@ mod tests {
     /// The c2s PlayEmote (72) / PlayerBlockingStateChange (41) classifiers + their
     /// payload extractors. A PlayEmote's string is read back; a non-emote returns None.
     #[test]
+    /// The shield-raising frame, pinned to the 400 decoded retail frames it was
+    /// built from. Retail sent gmid 41 s2c 6,664 times; we sent it zero times, which
+    /// is why blocking reduced damage but never raised a shield (report #5).
+    #[test]
+    fn player_blocking_state_change_matches_the_captured_shape() {
+        let got = player_blocking_state_change(565, ActiveSide::Middle, true);
+        assert_eq!(&got[0..2], &[0xBE, 0x36], "marker + UserMessage carrier");
+        let nd = arena_proto::parse_netdata(&got[2..]);
+        assert_eq!(nd.int(0), Some(565), "p0 blocking avatar obj");
+        assert_eq!(nd.int(1), Some(56), "p1 Avatar");
+        // Retail uses AUTHORITY here, unlike the emote relay's Autonomous. 400/400.
+        assert_eq!(nd.int(2), Some(1), "p2 Authority — NOT Autonomous(3)");
+        assert_eq!(nd.int(3), Some(41), "p3 PlayerBlockingStateChange");
+        assert_eq!(nd.int(4), Some(4_611_686_014_132_420_712), "p4 as captured");
+        assert_eq!(nd.int(5), Some(4_611_686_014_132_420_712), "p5 as captured");
+        assert_eq!(nd.int(6), Some(1), "p6 as captured");
+        assert_eq!(nd.string(7), Some("0300001c0001"), "p7 as captured");
+        assert_eq!(nd.int(9), Some(1), "p9 ActiveSide::Middle");
+        assert_eq!(
+            nd.props.get(&10),
+            Some(&arena_proto::NetDataValue::Bool(true)),
+            "p10 is the blocking on/off flag"
+        );
+        // Our own decoder must read the frame back, exactly as for the emote relay.
+        assert!(is_player_blocking_state_change(&got));
+        assert_eq!(blocking_active_side(&got), Some(ActiveSide::Middle));
+    }
+
+    /// Lowering the guard is the same frame with p10 false, and the side round-trips.
+    #[test]
+    fn player_blocking_state_change_carries_side_and_off_state() {
+        let down = player_blocking_state_change(565, ActiveSide::Left, false);
+        let nd = arena_proto::parse_netdata(&down[2..]);
+        assert_eq!(
+            nd.props.get(&10),
+            Some(&arena_proto::NetDataValue::Bool(false)),
+            "p10 false = guard down"
+        );
+        assert_eq!(blocking_active_side(&down), Some(ActiveSide::Left));
+    }
+
     fn play_emote_and_block_decode() {
         // c2s PlayEmote (72): {0:obj · 1:55 · 2:role · 3:72 · 4:String id}.
         let emote = {

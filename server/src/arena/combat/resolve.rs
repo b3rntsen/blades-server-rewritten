@@ -550,11 +550,14 @@ pub fn on_c2s_input(
     // reduced/negated per `damage::block_outcome` (optimal on the matching side,
     // late/half otherwise). This is the block-as-input wiring (was a resolve.rs TODO).
     // Bounded by `BLOCK_WINDOW` (the dump's `BLOCK_OPTIMAL_TIME` 2.0s) and auto-expired
-    // by `reconcile_block`, since the on/off flag isn't byte-pinned from a two-sided
-    // capture — a fresh op41 simply refreshes the window. No damage, no s2c (the client
-    // animates its own guard; the opponent learns of the block via the reduced
-    // ReceiveDamage flags when it lands a hit). Handled BEFORE the swing fallback so a
-    // block frame is never mis-resolved as an attack.
+    // by `reconcile_block` — a fresh op41 simply refreshes the window. No damage.
+    //
+    // DOES emit s2c. This used to say "no s2c (the client animates its own guard)",
+    // which is false: retail sent gmid 41 **6,664 times, all s2c**, and a player
+    // reported that blocking reduced damage exactly as intended while no shield ever
+    // appeared. The client waits to be told. Relayed to BOTH viewers so the opponent
+    // sees the guard go up too. Handled BEFORE the swing fallback so a block frame is
+    // never mis-resolved as an attack.
     if messages::is_player_blocking_state_change(user_data) {
         if sender < combat.fighters.len() {
             let side = messages::blocking_active_side(user_data).unwrap_or(ActiveSide::Middle);
@@ -568,7 +571,13 @@ pub fn on_c2s_input(
             f.blocking_side = side;
             f.blocking_until = Some(now + BLOCK_WINDOW);
             f.block_raised_at = Some(now);
+            let avatar_obj = f.net_object_id;
             debug!("combat: slot {sender} raised guard ({side:?}) for {BLOCK_WINDOW:?}");
+            // Tell every client someone is blocking — this is what raises the shield.
+            let relay = messages::player_blocking_state_change(avatar_obj, side, true);
+            return (0..combat.fighters.len())
+                .map(|viewer| (viewer, relay.clone()))
+                .collect();
         }
         return Vec::new();
     }
@@ -1853,12 +1862,21 @@ mod tests {
 
         let out = on_c2s_input(&mut combat, 0, &block_frame, now);
 
-        // A block MUST produce zero outbound frames (no damage, no error, no phantom swing).
-        assert!(
-            out.is_empty(),
-            "block input must emit zero s2c frames (no damage), got {} frame(s)",
+        // A block produces NO DAMAGE, but it DOES relay the blocking state — that
+        // relay is what raises the shield on screen. This assertion used to demand
+        // zero frames, which is what kept the shield down (report #5).
+        assert_eq!(
+            out.len(),
+            combat.fighters.len(),
+            "block must relay PlayerBlockingStateChange to every viewer, got {} frame(s)",
             out.len()
         );
+        for (_, f) in &out {
+            assert!(
+                super::messages::is_player_blocking_state_change(f),
+                "the only frame a block emits is the gmid-41 relay — never damage"
+            );
+        }
         // And the fighter should now be in the Blocking state.
         assert_eq!(
             combat.fighters[0].actor_state,
