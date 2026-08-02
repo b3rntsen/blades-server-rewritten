@@ -49,6 +49,7 @@ pub mod gamedata;
 pub mod input;
 pub mod loadout;
 pub mod messages;
+pub mod messages_state;
 pub mod resolve;
 pub mod state;
 pub mod tables;

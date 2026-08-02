@@ -42,7 +42,9 @@ const GMID_MATCH_STATE_CHANGE_REQUEST: u8 = 79; // 0x4F, s2c
 const GMID_MATCH_STATE_CHANGE_ACK: u8 = 80; // 0x50, c2s echo
 
 /// Wrap a NetData `body` as a complete s2c `user_data`: `0xBE ‖ msg_type ‖ body`.
-fn frame(msg_type: u8, body: Vec<u8>) -> Vec<u8> {
+/// `pub(super)` so the `PlayerStateChange`-family builders in
+/// [`super::messages_state`] frame their messages identically to these.
+pub(super) fn frame(msg_type: u8, body: Vec<u8>) -> Vec<u8> {
     let mut out = Vec::with_capacity(2 + body.len());
     out.push(MARKER_S2C);
     out.push(msg_type);

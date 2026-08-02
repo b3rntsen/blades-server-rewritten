@@ -336,7 +336,26 @@ impl MatchInstance {
 
     /// Drive the engine on a decrypted inbound c2s `user_data` (`marker ‖
     /// MessageType ‖ body`) from player `sender`.
+    ///
+    /// Appends the actor-state animation stream: any transition the resolution queued
+    /// on a fighter is turned into its `PlayerStateChange`-family frame here, for both
+    /// viewers. Draining at this ONE seam — rather than at each of the dozen sites that
+    /// change an actor state — is what makes it impossible to add a state change that
+    /// silently fails to animate. [`resolve::drain_state_changes`]
     pub fn on_c2s(&mut self, sender: usize, user_data: &[u8], now: Instant) -> Vec<(usize, Vec<u8>)> {
+        let mut out = self.on_c2s_resolved(sender, user_data, now);
+        out.extend(resolve::drain_state_changes(&mut self.combat, now));
+        out
+    }
+
+    /// The body of [`Self::on_c2s`], minus the actor-state drain. Split out only so the
+    /// drain cannot be skipped by one of this function's several early returns.
+    fn on_c2s_resolved(
+        &mut self,
+        sender: usize,
+        user_data: &[u8],
+        now: Instant,
+    ) -> Vec<(usize, Vec<u8>)> {
         let mut out = Vec::new();
         debug!(
             "combat c2s: slot {sender} carrier 0x{:02x} ({} bytes) in phase {}",
@@ -490,7 +509,20 @@ impl MatchInstance {
 
     /// Server-initiated messages for this tick. `connected` is the number of
     /// peers that have completed the handshake (from the match's player list).
+    ///
+    /// Also flushes the actor-state animation stream. The tick is the only thing that
+    /// advances a swing's scheduled `FollowThrough`/`Recovery`/`Idle` beats and expires
+    /// a lapsed block, so for a player who stops sending input mid-swing this is the
+    /// path that finishes the animation.
     pub fn on_tick(&mut self, connected: usize, now: Instant) -> Vec<(usize, Vec<u8>)> {
+        let mut out = self.on_tick_resolved(connected, now);
+        out.extend(resolve::drain_state_changes(&mut self.combat, now));
+        out
+    }
+
+    /// The body of [`Self::on_tick`], minus the actor-state drain. Split for the same
+    /// reason as [`Self::on_c2s_resolved`].
+    fn on_tick_resolved(&mut self, connected: usize, now: Instant) -> Vec<(usize, Vec<u8>)> {
         let mut out = Vec::new();
         match self.combat.phase {
             // Wait for everyone to connect, then create the match: announce
@@ -1645,15 +1677,33 @@ mod tests {
         let (mut m, t0) = live_inst(2); // → live round (StateTimeout); combat resolves
 
         // A (slot 0) sends a combat-input (carrier 54) → B (slot 1) takes damage;
-        // a ReceiveDamage goes to both target and attacker.
+        // a ReceiveDamage goes to both target and attacker, AND the swing announces
+        // itself as an actor-state change so both clients animate it.
         let out = m.on_c2s(0, &[0x84, 0x36], t0);
-        assert_eq!(out.len(), 2, "ReceiveDamage to both target and attacker");
-        for (_, ud) in &out {
-            assert_eq!(ud[1], 0x36, "carrier 54");
-            assert_eq!(
-                arena_proto::parse_netdata(&ud[2..]).int(3),
-                Some(50),
-                "real GameMessageId 50 at propId 3"
+        let gmids: Vec<i64> = out
+            .iter()
+            .map(|(_, ud)| {
+                assert_eq!(ud[1], 0x36, "carrier 54");
+                arena_proto::parse_netdata(&ud[2..]).int(3).expect("propId 3 GameMessageId")
+            })
+            .collect();
+        let damage: Vec<&(usize, Vec<u8>)> = out
+            .iter()
+            .filter(|(_, ud)| arena_proto::parse_netdata(&ud[2..]).int(3) == Some(50))
+            .collect();
+        assert_eq!(damage.len(), 2, "ReceiveDamage to both target and attacker: {gmids:?}");
+        assert_eq!(
+            gmids.iter().filter(|g| **g == 52).count(),
+            2,
+            "gmid 52 PlayerAutoAttackStateChange to BOTH viewers — the swing animation \
+             the client never used to be told about: {gmids:?}"
+        );
+        // Every viewer sees both frames; nothing is addressed to only the attacker.
+        for viewer in 0..2 {
+            assert!(
+                out.iter().any(|(v, ud)| *v == viewer
+                    && arena_proto::parse_netdata(&ud[2..]).int(3) == Some(52)),
+                "viewer {viewer} must receive the auto-attack state change"
             );
         }
         // B's RAW HP dropped by the model swing. Starter = L30 **Light** weapon (the new
@@ -1664,14 +1714,21 @@ mod tests {
         // the hit is the honest model value. HP is raw (×3 arena pool); wire is a fraction.
         assert_eq!(m.fighter_max_health(1) - m.fighter_health(1), 105, "B raw HP −105 (combo-0 Light swing, un-clamped)");
         if let Some(arena_proto::NetDataValue::ULong(v)) =
-            arena_proto::parse_netdata(&out[0].1[2..]).props.get(&4)
+            arena_proto::parse_netdata(&damage[0].1[2..]).props.get(&4)
         {
             // Health is the low 10 bits of the HIGH 32 (stat word); seq is the low 32.
             assert!(((v >> 32) & 0x3ff) < 1023, "wire health is a fraction below full");
         }
 
-        // A second swing within the cooldown is throttled (no double-hit).
-        assert!(m.on_c2s(0, &[0x84, 0x36], t0).is_empty(), "throttled within cooldown");
+        // A second swing within the cooldown is throttled (no double-hit). It may still
+        // carry queued actor-state beats, so assert on DAMAGE, not on emptiness.
+        let again = m.on_c2s(0, &[0x84, 0x36], t0);
+        assert!(
+            !again
+                .iter()
+                .any(|(_, ud)| arena_proto::parse_netdata(&ud[2..]).int(3) == Some(50)),
+            "throttled within cooldown — no second ReceiveDamage"
+        );
     }
 
     /// Swing `attacker` into its opponent (past the swing cooldown each time, from
@@ -2087,14 +2144,21 @@ mod tests {
         }
         assert!(saw_paralyze, "poison accumulation must land Paralyzed (op51 status 9) within the window");
         assert_eq!(
-            m.combat.fighters[1].actor_state,
+            m.combat.fighters[1].actor_state(),
             ActorStateType::Paralyzed,
             "the target is in the Paralyzed actor-state"
         );
         // A paralysed fighter's combat inputs are LOCKED (no damage dealt back).
         let attacker_full = m.fighter_health(0);
         let out = m.on_c2s(1, &[0x84, 0x36], t + Duration::from_millis(600));
-        assert!(out.is_empty(), "a paralysed fighter's swing is dropped (inputs locked)");
+        // The swing itself is dropped. The burst may still carry actor-state frames —
+        // a lapsed paralysis reconciles to Idle and retail announces that with gmid 39 —
+        // so the assertion is "no swing was resolved", not "no bytes were sent".
+        for (_, ud) in &out {
+            let gmid = arena_proto::parse_netdata(&ud[2..]).int(3);
+            assert_ne!(gmid, Some(50), "a paralysed fighter's swing must deal no damage");
+            assert_ne!(gmid, Some(52), "a paralysed fighter must not enter an attack state");
+        }
         assert_eq!(m.fighter_health(0), attacker_full, "paralysed target dealt no damage");
     }
 
