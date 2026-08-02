@@ -44,25 +44,77 @@ services:
     volumes:
       - ./migrations:/migrations:ro
     networks: [arena_net]
+    # A real ledger, replacing "skip everything if the users table exists".
+    #
+    # The old rule meant this container did nothing on every deployment after
+    # the first — while still exiting 0, which arena-server treats via
+    # `service_completed_successfully` as "the schema is ready". So a new binary
+    # could start against a schema that lacked its columns, and the only thing
+    # standing between us and that was remembering to hand-apply ALTERs on the
+    # box. The newest migration's own header says exactly that:
+    #
+    #     NOTE FOR DEPLOY: the migrate one-shot skips everything once 'users'
+    #     exists, so this must be applied BY HAND on the box before the new
+    #     binary ships.
+    #
+    # A deploy step that lives in a comment is not a deploy step. Now: apply
+    # what has not been applied, record it, and FAIL if anything errors so the
+    # dependency gate actually gates.
     entrypoint:
       - sh
       - -c
       - |
         set -e
-        if psql -h arena-db -U blades -d blades -tAc "SELECT to_regclass('public.users')" | grep -q users; then
-          echo "[arena-migrate] schema already present; nothing to do"; exit 0
+        PSQL="psql -h arena-db -U blades -d blades -v ON_ERROR_STOP=1 -tA"
+        $$PSQL -c "CREATE TABLE IF NOT EXISTS schema_migrations (
+                     version    text PRIMARY KEY,
+                     applied_at timestamptz NOT NULL DEFAULT now())"
+
+        # ADOPTION. The live database predates this ledger and already has all
+        # 16 migrations applied by hand, so an empty ledger must NOT be read as
+        # "apply everything" — that would re-run 16 non-idempotent scripts
+        # against production. Empty ledger + existing users table means an
+        # established database: record the current migrations as applied and
+        # change nothing. A genuinely fresh database has no users table and
+        # falls through to the normal path below.
+        if [ "$$($$PSQL -c 'SELECT count(*) FROM schema_migrations')" = "0" ] \
+           && [ -n "$$($$PSQL -c "SELECT to_regclass('public.users')")" ]; then
+          echo "[arena-migrate] established schema, empty ledger -> adopting, applying nothing"
+          for d in $$(ls -d /migrations/*/ | sort); do
+            v=$$(basename "$$d")
+            $$PSQL -c "INSERT INTO schema_migrations(version) VALUES ('$$v') ON CONFLICT DO NOTHING"
+            echo "  adopted $$v"
+          done
+          exit 0
         fi
+
+        n=0
         for d in $$(ls -d /migrations/*/ | sort); do
-          if [ -f "$$d/up.sql" ]; then
-            echo "[arena-migrate] applying $$d"
-            psql -h arena-db -U blades -d blades -v ON_ERROR_STOP=1 -f "$$d/up.sql"
+          v=$$(basename "$$d")
+          [ -f "$$d/up.sql" ] || continue
+          if [ -n "$$($$PSQL -c "SELECT 1 FROM schema_migrations WHERE version = '$$v'")" ]; then
+            continue
           fi
+          echo "[arena-migrate] applying $$v"
+          psql -h arena-db -U blades -d blades -v ON_ERROR_STOP=1 -f "$$d/up.sql"
+          $$PSQL -c "INSERT INTO schema_migrations(version) VALUES ('$$v')"
+          n=$$((n + 1))
         done
-        echo "[arena-migrate] done"
+        echo "[arena-migrate] done ($$n newly applied)"
     restart: "no"
 
   arena-server:
-    image: blades-arena-server
+    # Published by .github/workflows/release.yml on merge to main. Production
+    # PULLS this; it does not build. The box is 2 vCPU / 1.9 GB and the release
+    # build OOMs there, and a forgotten --no-cache silently ships a stale binary
+    # — both problems disappear when the artifact is built once, elsewhere, from
+    # a clean checkout.
+    #
+    # ARENA_IMAGE_TAG exists for rollback: set it to a previous sha-<short> tag
+    # and `up -d` to go back. Defaults to the tag the box tracks.
+    image: ghcr.io/b3rntsen/blades-arena-server:${ARENA_IMAGE_TAG:-main}
+    # Kept for local development only — `docker compose build arena-server`.
+    # Production never reaches it: the deploy helper runs `up -d --no-build`.
     build:
       context: .
       dockerfile: Dockerfile

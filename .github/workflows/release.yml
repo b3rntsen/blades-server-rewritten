@@ -1,0 +1,98 @@
+name: Build and publish arena-server
+
+# Merging a PR here publishes a container image. The box pulls it; the box never
+# builds it.
+#
+# WHY NOT BUILD ON THE BOX
+#
+# The runbook's deploy step is an on-box `docker build --no-cache`, and it is a
+# bad step three times over:
+#
+#   * The box has 2 vCPUs and ~1.9 GB of RAM. The Dockerfile's own header warns
+#     the release build OOMs there; the documented workaround is to build a
+#     DEBUG binary in production. A heavy build on this box has taken the whole
+#     thing down before, and it hosts someone else's site too.
+#   * `COPY . .` sits before `cargo build`, so any source change busts the
+#     dependency layer and all 292 crates recompile — ~7 minutes of both cores.
+#   * Forgetting `--no-cache` silently ships a stale binary. `deploy/arena.sh
+#     build` does not pass it, despite a comment claiming arena builds do.
+#
+# A GitHub runner is 4 vCPU / 16 GB and free for public repos. It builds from a
+# known-clean checkout, so the stale-layer question disappears rather than being
+# managed.
+#
+# NO SECRETS ARE INVOLVED. The registry is this repository's own package
+# namespace and the token is the automatic per-run GITHUB_TOKEN — nothing to
+# rotate, nothing that could leak from a fork PR (this job does not run on PRs).
+# The package is public, so the box pulls it anonymously and needs no
+# credentials either.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: arena-release
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/blades-arena-server
+
+jobs:
+  # The gate. Publishing an image that fails its own tests would just move the
+  # breakage closer to production.
+  test:
+    name: cargo test --workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+      - run: cargo test --workspace --locked
+
+  publish:
+    needs: test
+    name: build + push image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: log in to ghcr
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      # Plain docker CLI rather than docker/build-push-action: this needs no
+      # buildx features, and every third-party action is supply-chain surface on
+      # a job that can publish what production runs.
+      - name: build
+        run: |
+          set -euo pipefail
+          SHA_TAG="sha-$(git rev-parse --short HEAD)"
+          echo "SHA_TAG=$SHA_TAG" >> "$GITHUB_ENV"
+          docker build -t "$IMAGE:$SHA_TAG" -t "$IMAGE:main" .
+
+      - name: push
+        run: |
+          set -euo pipefail
+          docker push "$IMAGE:$SHA_TAG"
+          docker push "$IMAGE:main"
+          echo "### Published" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`$IMAGE:$SHA_TAG\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`$IMAGE:main\` (what the box tracks)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "The box picks this up within ~5 min via blades-arena-deploy.timer." >> "$GITHUB_STEP_SUMMARY"
+          echo "To roll back, pin the previous \`sha-…\` tag — see docs/the-loop.md." >> "$GITHUB_STEP_SUMMARY"
