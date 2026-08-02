@@ -1026,3 +1026,150 @@ fn animation_frames_reach_both_viewers() {
         "both viewers get the same stream; got {per_viewer:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The BLOCK trigger — tracker report #5
+// ---------------------------------------------------------------------------
+
+/// A `PlayerCombatInputActivate` (gmid 46) press/release with an explicit block-zone
+/// flag, at the pointer X retail actually observed for that class of press.
+fn act_frame_zone(held: bool, block_zone: bool) -> Vec<u8> {
+    let mut w = arena_proto::NetDataWriter::new();
+    w.int(0, 565)
+        .byte(1, 56)
+        .byte(2, 3)
+        .byte(3, 46)
+        .bool(4, held)
+        .float(5, 0.0)
+        .bool(6, block_zone);
+    let mut f = super::messages::frame_for_test(w.finish());
+    f[0] = 0x84;
+    f
+}
+
+/// A `PlayerCombatInputPosition` (gmid 47) sample, so the swing path has geometry to
+/// classify from. Retail's block presses sit at X ≈ 0.077, attack presses at X ≈ 0.769.
+fn pos_frame(x: f32) -> Vec<u8> {
+    let mut w = arena_proto::NetDataWriter::new();
+    w.int(0, 565)
+        .byte(1, 56)
+        .byte(2, 3)
+        .byte(3, 47)
+        .float(4, x)
+        .float(5, 0.35)
+        .float(6, 0.033_334)
+        .float(7, 0.0)
+        .int(8, 410);
+    let mut f = super::messages::frame_for_test(w.finish());
+    f[0] = 0x84;
+    f
+}
+
+/// **Tracker report #5.** Pressing block must raise the shield on both screens.
+///
+/// The trigger is capture-proven: working backwards from every s2c gmid 41 across prod
+/// sessions 503/506/486/615/616, the nearest preceding c2s 46 carried `blockZone=true`
+/// in 432 of 433 cases, and never once `held=true, blockZone=false`.
+///
+/// Before this, the ONLY thing that could set the `Blocking` state was a handler gated
+/// on an inbound gmid 41 — a frame retail's client sends **zero** of. So no shield, and
+/// `damage::block_outcome` never saw a blocking defender either.
+#[test]
+fn block_zone_press_raises_the_shield_for_both_viewers() {
+    let (mut m, _t0, live) = super::engine::tests::live_inst_at(2);
+    let t = live + Duration::from_millis(100);
+
+    // The client streams pointer geometry, then presses inside the block zone.
+    m.on_c2s(0, &pos_frame(0.077), t);
+    let out = m.on_c2s(0, &act_frame_zone(true, true), t + Duration::from_millis(10));
+
+    let blocking: Vec<usize> = out
+        .iter()
+        .filter(|(_, f)| gmid_of(f) == Some(41))
+        .map(|(v, _)| *v)
+        .collect();
+    assert_eq!(
+        blocking.len(),
+        2,
+        "gmid 41 must reach BOTH viewers — the opponent has to see the guard go up too; \
+         got {:?}",
+        out.iter().map(|(v, f)| (*v, gmid_of(f))).collect::<Vec<_>>()
+    );
+    assert!(blocking.contains(&0) && blocking.contains(&1));
+
+    // A block press is NOT a swing. Retail's block presses sit at X ≈ 0.077, which
+    // `classify_side_from_x` would otherwise read as a Left swing on every guard.
+    assert!(
+        !out.iter().any(|(_, f)| gmid_of(f) == Some(50)),
+        "a block press must deal no damage"
+    );
+    assert!(
+        !out.iter().any(|(_, f)| gmid_of(f) == Some(52)),
+        "a block press must not enter an attack state"
+    );
+}
+
+/// A guard comes DOWN with a gmid 39 carrying stateId 0 (Idle) — never a second gmid
+/// 41. All 578 decoded retail gmid-41 frames carry stateId Blocking; 199 of 225
+/// own-avatar block exits are a `39/Idle` immediately after the release.
+#[test]
+fn releasing_the_block_zone_lowers_the_shield_with_gmid_39_idle() {
+    let (mut m, _t0, live) = super::engine::tests::live_inst_at(2);
+    let t = live + Duration::from_millis(100);
+    m.on_c2s(0, &pos_frame(0.077), t);
+    m.on_c2s(0, &act_frame_zone(true, true), t + Duration::from_millis(10));
+
+    let out = m.on_c2s(0, &act_frame_zone(false, true), t + Duration::from_millis(700));
+    let idle: Vec<&(usize, Vec<u8>)> = out
+        .iter()
+        .filter(|(_, f)| {
+            gmid_of(f) == Some(39)
+                && parse_netdata(user_data(f).unwrap().1).int(6) == Some(0)
+        })
+        .collect();
+    assert_eq!(
+        idle.len(),
+        2,
+        "the guard drops via gmid 39 stateId 0, to both viewers; got {:?}",
+        out.iter().map(|(v, f)| (*v, gmid_of(f))).collect::<Vec<_>>()
+    );
+    assert!(
+        !out.iter().any(|(_, f)| gmid_of(f) == Some(41)),
+        "there is no shield-down variant of gmid 41 — retail never sends one"
+    );
+}
+
+/// An ATTACK press cancels a standing guard: 94 of 225 real block exits end that way
+/// rather than by a release.
+#[test]
+fn attack_press_cancels_a_standing_guard() {
+    let (mut m, _t0, live) = super::engine::tests::live_inst_at(2);
+    let t = live + Duration::from_millis(100);
+    m.on_c2s(0, &pos_frame(0.077), t);
+    m.on_c2s(0, &act_frame_zone(true, true), t + Duration::from_millis(10));
+
+    // Pointer moves to the attack side, then presses outside the block zone.
+    m.on_c2s(0, &pos_frame(0.769), t + Duration::from_millis(300));
+    let out = m.on_c2s(0, &act_frame_zone(true, false), t + Duration::from_millis(310));
+    assert!(
+        out.iter().any(|(_, f)| {
+            gmid_of(f) == Some(39) && parse_netdata(user_data(f).unwrap().1).int(6) == Some(0)
+        }),
+        "an attack press must lower the guard: got {:?}",
+        out.iter().map(|(_, f)| gmid_of(f)).collect::<Vec<_>>()
+    );
+}
+
+/// The pre-fix trigger is still dead, and must stay dead in the histogram sense: a
+/// press OUTSIDE the block zone must never raise a shield.
+#[test]
+fn non_block_zone_press_never_raises_the_shield() {
+    let (mut m, _t0, live) = super::engine::tests::live_inst_at(2);
+    let t = live + Duration::from_millis(100);
+    m.on_c2s(0, &pos_frame(0.769), t);
+    let out = m.on_c2s(0, &act_frame_zone(true, false), t + Duration::from_millis(10));
+    assert!(
+        !out.iter().any(|(_, f)| gmid_of(f) == Some(41)),
+        "retail never once followed a `held=true, blockZone=false` press with a gmid 41"
+    );
+}

@@ -108,6 +108,17 @@ fn ability_cooldown(ability_uuid: &str, rank: u8) -> Duration {
 /// block window since the on/off flag isn't byte-pinned from a two-sided capture.
 const BLOCK_WINDOW: Duration = Duration::from_secs(2);
 
+/// Safety cap on a guard held with no matching release — a LEAK GUARD, not a game rule.
+///
+/// Retail has **no** auto-expiry: a block ends when the player lets go, or when an
+/// attack press cancels it. Measured from `propId8` of the closing state change over
+/// 539 decoded blocks, the durations are a continuous distribution with no cliff —
+/// median 0.750 s, p90 1.800 s, p99 2.717 s, max **4.767 s**, and 42 of 539 ran past
+/// two seconds. The old two-second `BLOCK_WINDOW` would have silently truncated ~8 % of
+/// real guards, so it is not used as the block's lifetime any more. This cap exists
+/// only so a dropped release packet cannot leave a fighter guarding forever.
+const BLOCK_LEAK_GUARD: Duration = Duration::from_secs(8);
+
 /// True iff `user_data` is a `PlayerCombatInputActivate` (op46) frame.
 /// These have carrier `0x2e` (46) — NOT the generic `0x36` UserMessage carrier.
 fn is_op46(user_data: &[u8]) -> bool {
@@ -674,9 +685,61 @@ pub fn on_c2s_input(
                 f.last_client_charge = Some(cc);
             }
         }
+        // ---- THE BLOCK TRIGGER ----
+        //
+        // `_isWithinBlockZone` IS the guard signal. This corrects the note that used to
+        // sit further down ("recorded but deliberately does NOT gate the swing… prod
+        // attack hits occur after both block-zone and non-block-zone bursts"). That
+        // reasoning did not separate the blocker's frames from the opponent's.
+        //
+        // CAPTURE-PROVEN over prod sessions 503/506/486/615/616. Working backwards from
+        // every s2c gmid 41, the nearest preceding c2s 46 carried blockZone=true in
+        // **432 of 433** cases (99.8 %), and NOT ONCE was it `held=true, blockZone=false`.
+        // Forwards, a `held=true, blockZone=true` press is followed by a 41 within one
+        // second 83.8 % of the time with a median gap of 2 messages, against a 27-41 %
+        // background rate at a median gap of 13-25 messages for the three control
+        // classes. Of the presses with no 41, every one inspected is explained: the
+        // avatar was already Blocking, or was locked in another state.
+        //
+        // This must run BEFORE the swing path, and not only to avoid a phantom attack:
+        // block presses land at pointer X ≈ 0.077 (a dedicated button on the far left
+        // edge; 344 of 351 below 0.5), so `classify_side_from_x` would label every
+        // single one `ActiveSide::Left` and register a left swing on every guard.
+        if act.block_zone == Some(true) {
+            let f = &mut combat.fighters[sender];
+            if act.held {
+                // Guard UP. `set_actor_state` queues the transition; the drain turns it
+                // into the gmid 41 that raises the shield on BOTH screens.
+                f.set_actor_state(ActorStateType::Blocking, now);
+                f.blocking_side = ActiveSide::Middle; // retail: propId 9 == 1 in 578/578
+                f.blocking_until = Some(now + BLOCK_LEAK_GUARD);
+                f.block_raised_at = Some(now);
+                debug!("combat: slot {sender} op46 blockZone DOWN — guard UP");
+            } else {
+                // Guard DOWN on release. Retail ends a block with a gmid 39 carrying
+                // stateId 0, not a second 41 — 199 of 225 own-avatar exits are exactly
+                // this, immediately after the release. `reconcile_block` already maps
+                // Blocking → Idle, so clearing the window is all that is needed and the
+                // drain emits the 39.
+                f.blocking_until = None;
+                f.reconcile_block(now);
+                debug!("combat: slot {sender} op46 blockZone UP — guard DOWN");
+            }
+            // A block press is not a charge and never a swing.
+            f.charge_press_at = None;
+            return Vec::new();
+        }
         if act.held {
+            // An ATTACK press also ends a guard — 94 of 225 real block exits are cut
+            // short this way rather than by a release.
+            let f = &mut combat.fighters[sender];
+            if f.actor_state() == ActorStateType::Blocking {
+                f.blocking_until = None;
+                f.reconcile_block(now);
+                debug!("combat: slot {sender} attack press cancels the guard");
+            }
             // Button DOWN — start the server's charge stopwatch. No damage.
-            combat.fighters[sender].charge_press_at = Some(now);
+            f.charge_press_at = Some(now);
             debug!(
                 "combat: slot {sender} op46 DOWN (carrier 0x36) — charge press recorded \
                  (blockZone={:?})",
@@ -685,11 +748,6 @@ pub fn on_c2s_input(
             return Vec::new();
         }
         // Button UP — commit the swing.
-        //
-        // NOTE on `_isWithinBlockZone`: prod attack hits occur after both block-zone
-        // and non-block-zone bursts, so this flag is recorded but deliberately does
-        // NOT gate the swing. Gating on it would silently swallow legitimate attacks
-        // if the zone semantics are anything other than assumed.
         let hold_secs = combat.fighters[sender]
             .charge_press_at
             .map(|t| now.saturating_duration_since(t).as_secs_f32())
