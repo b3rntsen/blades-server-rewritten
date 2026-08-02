@@ -310,7 +310,7 @@ fn s506_optimal_block_negates_physical_halves_elemental() {
     // (≈0), Poison 137.32→68.65 (=÷2.0).
     let now = Instant::now();
     let mut def = blank();
-    def.actor_state = ActorStateType::Blocking;
+    def.set_actor_state(ActorStateType::Blocking, now);
     def.blocking_side = ActiveSide::Right;
     def.block_raised_at = Some(now);
     def.blocking_until = Some(now + std::time::Duration::from_secs(2));
@@ -457,7 +457,7 @@ fn s506_anchor_report() {
     rows.push(("combo-4 Slashing", slash_of(&c4), 469.30));
 
     let mut def = blank();
-    def.actor_state = ActorStateType::Blocking;
+    def.set_actor_state(ActorStateType::Blocking, now);
     def.blocking_side = ActiveSide::Right;
     def.block_raised_at = Some(now);
     def.blocking_until = Some(now + std::time::Duration::from_secs(2));

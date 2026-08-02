@@ -197,7 +197,7 @@ impl BlockOutcome {
 pub fn block_outcome(target: &Fighter, active_side: ActiveSide, now: Instant) -> BlockOutcome {
     use super::state::ActorStateType;
     let none = BlockOutcome { flag: 0, optimal: false, blocking: false, rating: 0.0 };
-    if target.actor_state != ActorStateType::Blocking || active_side == ActiveSide::None {
+    if target.actor_state() != ActorStateType::Blocking || active_side == ActiveSide::None {
         return none;
     }
     let Some(phase) = target.block_phase(now) else {
@@ -594,7 +594,7 @@ mod tests {
         let mut def = target();
         def.loadout.block_rating = 330.0 + 49.5;
         def.loadout.shield_optimal_block_boost = 1.0;
-        def.actor_state = ActorStateType::Blocking;
+        def.set_actor_state(ActorStateType::Blocking, now);
         def.blocking_side = ActiveSide::Right;
         def.block_raised_at = Some(now);
         def.blocking_until = Some(now + Duration::from_secs(2));
@@ -727,7 +727,7 @@ mod tests {
         let mut tgt = target();
         tgt.loadout.resistances = vec![(DamageType::Poison, 40.0)];
         tgt.loadout.block_rating = 379.5;
-        tgt.actor_state = ActorStateType::Blocking;
+        tgt.set_actor_state(ActorStateType::Blocking, now);
         tgt.blocking_side = ActiveSide::Right;
         tgt.block_raised_at = Some(now);
         tgt.blocking_until = Some(now + Duration::from_secs(2));

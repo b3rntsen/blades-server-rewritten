@@ -36,7 +36,10 @@ use log::{debug, info};
 use super::damage::{DamageModel, ResolvedDamage, RetailDamageModel};
 use super::input;
 use super::messages;
-use super::state::{ActiveSide, DamageSource, FlowState, MatchCombat, MatchState, NetObjectType};
+use super::messages_state::{self, StateFrame};
+use super::state::{
+    ActiveSide, ActorStateType, DamageSource, FlowState, MatchCombat, MatchState, NetObjectType,
+};
 use super::tables;
 
 /// Carrier MessageType (`user_data[1]`) of the combat-input family — `0x36` (54).
@@ -104,6 +107,17 @@ fn ability_cooldown(ability_uuid: &str, rank: u8) -> Duration {
 /// `BLOCK_OPTIMAL_TIME` is 2.0s (docs/blades-combat-formulae.md §2); we use it as the
 /// block window since the on/off flag isn't byte-pinned from a two-sided capture.
 const BLOCK_WINDOW: Duration = Duration::from_secs(2);
+
+/// Safety cap on a guard held with no matching release — a LEAK GUARD, not a game rule.
+///
+/// Retail has **no** auto-expiry: a block ends when the player lets go, or when an
+/// attack press cancels it. Measured from `propId8` of the closing state change over
+/// 539 decoded blocks, the durations are a continuous distribution with no cliff —
+/// median 0.750 s, p90 1.800 s, p99 2.717 s, max **4.767 s**, and 42 of 539 ran past
+/// two seconds. The old two-second `BLOCK_WINDOW` would have silently truncated ~8 % of
+/// real guards, so it is not used as the block's lifetime any more. This cap exists
+/// only so a dropped release packet cannot leave a fighter guarding forever.
+const BLOCK_LEAK_GUARD: Duration = Duration::from_secs(8);
 
 /// True iff `user_data` is a `PlayerCombatInputActivate` (op46) frame.
 /// These have carrier `0x2e` (46) — NOT the generic `0x36` UserMessage carrier.
@@ -499,6 +513,7 @@ pub fn on_c2s_input(
                 // Now run the usual pre-swing checks (paralysis, opponent, cooldown).
                 for f in combat.fighters.iter_mut() {
                     f.reconcile_block(now);
+                    f.reconcile_scheduled_states(now);
                     reconcile_paralysis(f, now);
                     f.prune_negation_pools(now);
                 }
@@ -542,6 +557,7 @@ pub fn on_c2s_input(
     // damage), expire lapsed paralysis / negation pools, using `now`. Cheap; both fighters.
     for f in combat.fighters.iter_mut() {
         f.reconcile_block(now);
+        f.reconcile_scheduled_states(now);
         reconcile_paralysis(f, now);
         f.prune_negation_pools(now);
     }
@@ -552,12 +568,24 @@ pub fn on_c2s_input(
     // Bounded by `BLOCK_WINDOW` (the dump's `BLOCK_OPTIMAL_TIME` 2.0s) and auto-expired
     // by `reconcile_block` — a fresh op41 simply refreshes the window. No damage.
     //
-    // DOES emit s2c. This used to say "no s2c (the client animates its own guard)",
-    // which is false: retail sent gmid 41 **6,664 times, all s2c**, and a player
-    // reported that blocking reduced damage exactly as intended while no shield ever
-    // appeared. The client waits to be told. Relayed to BOTH viewers so the opponent
-    // sees the guard go up too. Handled BEFORE the swing fallback so a block frame is
-    // never mis-resolved as an attack.
+    // DOES emit s2c — but no longer from here. ENTERING the `Blocking` actor state is
+    // what raises the shield, and [`drain_state_changes`] turns that transition into
+    // the gmid 41 broadcast for both viewers. That is the point of routing every state
+    // change through one seam: the notification is not this handler's job, so a block
+    // raised by any OTHER path animates too, for free.
+    //
+    // ⚠️ THIS HANDLER IS UNREACHABLE IN PRODUCTION — a separate, still-open bug.
+    // Retail's corpus holds **784 s2c gmid 41 frames and ZERO c2s**, verified across
+    // sessions 503/506/486/615/616; the same holds for the whole family (39/42/43/44/
+    // 52/59/75 — zero c2s, every gmid, every session). The client never sends gmid 41.
+    // So nothing in production ever puts a fighter into `Blocking`, which means the
+    // shield cannot rise AND `damage::block_outcome` never sees a blocking defender.
+    // Finding the real c2s block signal is tracked separately; the leading candidate is
+    // gmid 46 `PlayerCombatInputActivate`'s `_isWithinBlockZone` (17,817 c2s frames),
+    // whose semantics are not yet pinned.
+    //
+    // The handler is kept because it is correct if a client ever does send op41, and it
+    // is what the block tests drive. Do NOT read its existence as "blocking works".
     if messages::is_player_blocking_state_change(user_data) {
         if sender < combat.fighters.len() {
             let side = messages::blocking_active_side(user_data).unwrap_or(ActiveSide::Middle);
@@ -567,17 +595,11 @@ pub fn on_c2s_input(
             // + OPTIMAL_BLOCK_RECOVERY_SECS), the new block starts as LATE (not OPTIMAL).
             // `block_phase()` in damage::block_outcome handles this via `block_raised_at` +
             // `last_block_dropped_at`. [PvpDefaultSettings dump.cs 427014-427015]
-            f.actor_state = super::state::ActorStateType::Blocking;
+            f.set_actor_state(super::state::ActorStateType::Blocking, now);
             f.blocking_side = side;
             f.blocking_until = Some(now + BLOCK_WINDOW);
             f.block_raised_at = Some(now);
-            let avatar_obj = f.net_object_id;
             debug!("combat: slot {sender} raised guard ({side:?}) for {BLOCK_WINDOW:?}");
-            // Tell every client someone is blocking — this is what raises the shield.
-            let relay = messages::player_blocking_state_change(avatar_obj, side, true);
-            return (0..combat.fighters.len())
-                .map(|viewer| (viewer, relay.clone()))
-                .collect();
         }
         return Vec::new();
     }
@@ -663,9 +685,61 @@ pub fn on_c2s_input(
                 f.last_client_charge = Some(cc);
             }
         }
+        // ---- THE BLOCK TRIGGER ----
+        //
+        // `_isWithinBlockZone` IS the guard signal. This corrects the note that used to
+        // sit further down ("recorded but deliberately does NOT gate the swing… prod
+        // attack hits occur after both block-zone and non-block-zone bursts"). That
+        // reasoning did not separate the blocker's frames from the opponent's.
+        //
+        // CAPTURE-PROVEN over prod sessions 503/506/486/615/616. Working backwards from
+        // every s2c gmid 41, the nearest preceding c2s 46 carried blockZone=true in
+        // **432 of 433** cases (99.8 %), and NOT ONCE was it `held=true, blockZone=false`.
+        // Forwards, a `held=true, blockZone=true` press is followed by a 41 within one
+        // second 83.8 % of the time with a median gap of 2 messages, against a 27-41 %
+        // background rate at a median gap of 13-25 messages for the three control
+        // classes. Of the presses with no 41, every one inspected is explained: the
+        // avatar was already Blocking, or was locked in another state.
+        //
+        // This must run BEFORE the swing path, and not only to avoid a phantom attack:
+        // block presses land at pointer X ≈ 0.077 (a dedicated button on the far left
+        // edge; 344 of 351 below 0.5), so `classify_side_from_x` would label every
+        // single one `ActiveSide::Left` and register a left swing on every guard.
+        if act.block_zone == Some(true) {
+            let f = &mut combat.fighters[sender];
+            if act.held {
+                // Guard UP. `set_actor_state` queues the transition; the drain turns it
+                // into the gmid 41 that raises the shield on BOTH screens.
+                f.set_actor_state(ActorStateType::Blocking, now);
+                f.blocking_side = ActiveSide::Middle; // retail: propId 9 == 1 in 578/578
+                f.blocking_until = Some(now + BLOCK_LEAK_GUARD);
+                f.block_raised_at = Some(now);
+                debug!("combat: slot {sender} op46 blockZone DOWN — guard UP");
+            } else {
+                // Guard DOWN on release. Retail ends a block with a gmid 39 carrying
+                // stateId 0, not a second 41 — 199 of 225 own-avatar exits are exactly
+                // this, immediately after the release. `reconcile_block` already maps
+                // Blocking → Idle, so clearing the window is all that is needed and the
+                // drain emits the 39.
+                f.blocking_until = None;
+                f.reconcile_block(now);
+                debug!("combat: slot {sender} op46 blockZone UP — guard DOWN");
+            }
+            // A block press is not a charge and never a swing.
+            f.charge_press_at = None;
+            return Vec::new();
+        }
         if act.held {
+            // An ATTACK press also ends a guard — 94 of 225 real block exits are cut
+            // short this way rather than by a release.
+            let f = &mut combat.fighters[sender];
+            if f.actor_state() == ActorStateType::Blocking {
+                f.blocking_until = None;
+                f.reconcile_block(now);
+                debug!("combat: slot {sender} attack press cancels the guard");
+            }
             // Button DOWN — start the server's charge stopwatch. No damage.
-            combat.fighters[sender].charge_press_at = Some(now);
+            f.charge_press_at = Some(now);
             debug!(
                 "combat: slot {sender} op46 DOWN (carrier 0x36) — charge press recorded \
                  (blockZone={:?})",
@@ -674,11 +748,6 @@ pub fn on_c2s_input(
             return Vec::new();
         }
         // Button UP — commit the swing.
-        //
-        // NOTE on `_isWithinBlockZone`: prod attack hits occur after both block-zone
-        // and non-block-zone bursts, so this flag is recorded but deliberately does
-        // NOT gate the swing. Gating on it would silently swallow legitimate attacks
-        // if the zone semantics are anything other than assumed.
         let hold_secs = combat.fighters[sender]
             .charge_press_at
             .map(|t| now.saturating_duration_since(t).as_secs_f32())
@@ -770,6 +839,12 @@ fn resolve_swing_with_side(
     } else {
         combat.fighters[sender].register_combo_swing(next_side)
     };
+
+    // The swing is committed: walk the attacker's actor state through
+    // AutoAttack → FollowThrough → Recovery → Idle so BOTH clients animate it. Runs
+    // after `register_combo_swing` so `last_combo_side` is this swing's side, and
+    // before damage so the wind-up precedes the hit on the wire, as in retail.
+    begin_swing_animation(combat, sender, now);
 
     let attacker_loadout = combat.fighters[sender].loadout.clone();
     let resolved = RetailDamageModel.resolve_attack(
@@ -985,7 +1060,7 @@ fn try_paralyze(
     use super::state::{ActorStateType, DamageType, StatusEffectType};
     let mut out = Vec::new();
     if !combat.fighters[target_slot].can_be_paralyzed
-        || combat.fighters[target_slot].actor_state == ActorStateType::Paralyzed
+        || combat.fighters[target_slot].actor_state() == ActorStateType::Paralyzed
     {
         return out;
     }
@@ -996,8 +1071,8 @@ fn try_paralyze(
     }
     let secs = super::state::paralyze_duration_secs(rank);
     let f = &mut combat.fighters[target_slot];
-    f.actor_state = ActorStateType::Paralyzed;
-    f.state_entered = now;
+    f.set_actor_state(ActorStateType::Paralyzed, now);
+    f.clear_scheduled_states();
     f.blocking_until = None;
     let obj = f.net_object_id;
     info!("combat: slot {target_slot} PARALYZED (poison {recent:.1} ≥ {threshold:.1}) for {secs}s");
@@ -1294,11 +1369,11 @@ fn apply_status_conditioning(
                 let paralyze_threshold = super::state::paralyze_damage_threshold(rank);
                 let secs = super::state::paralyze_duration_secs(rank);
                 let not_already_paralyzed =
-                    combat.fighters[target_slot].actor_state != ActorStateType::Paralyzed;
+                    combat.fighters[target_slot].actor_state() != ActorStateType::Paralyzed;
                 if recent >= paralyze_threshold && not_already_paralyzed {
                     let f = &mut combat.fighters[target_slot];
-                    f.actor_state = ActorStateType::Paralyzed; // locks inputs (is_paralyzed)
-                    f.state_entered = now;
+                    f.set_actor_state(ActorStateType::Paralyzed, now); // locks inputs (is_paralyzed)
+                    f.clear_scheduled_states();
                     f.blocking_until = None; // paralysed → guard drops
                     f.paralyze_secs = secs;
                     let frame = messages::change_combat_status_effect(
@@ -1322,10 +1397,10 @@ fn apply_status_conditioning(
 /// the apply carried the duration.) No-op for a non-paralysed fighter.
 fn reconcile_paralysis(f: &mut super::state::Fighter, now: Instant) {
     use super::state::ActorStateType;
-    if f.actor_state == ActorStateType::Paralyzed
+    if f.actor_state() == ActorStateType::Paralyzed
         && now.duration_since(f.state_entered) >= Duration::from_secs_f32(f.paralyze_secs.max(0.1))
     {
-        f.actor_state = ActorStateType::Idle;
+        f.set_actor_state(ActorStateType::Idle, now);
     }
     // Phase 3.13: a lapsed stagger also returns the actor to Idle.
     f.reconcile_stagger(now);
@@ -1761,6 +1836,138 @@ fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u
     out
 }
 
+// ---------------------------------------------------------------------------
+// Actor-state broadcast — the animation stream
+// ---------------------------------------------------------------------------
+
+/// Delay from `PlayerAutoAttackStateChange` (52) to `PlayerFollowThroughStateChange`
+/// (43). **Capture-pinned**: the measured 52→43 gaps in retail are 49, 49, 49, 53 and
+/// 65 ms, and the 43 frame's own `_timeInPreviousState` is 0.050 — the message states
+/// its own delay, and the two agree.
+const FOLLOW_THROUGH_DELAY: Duration = Duration::from_millis(50);
+
+/// Delay from `PlayerFollowThroughStateChange` (43) to `PlayerRecoveryStateChange`
+/// (44) — one 60 Hz frame. Measured retail gaps: 16, 17, 17, 20, 21 ms, against a
+/// `_timeInPreviousState` of 1/60 s on the 44 frame.
+const RECOVERY_DELAY: Duration = Duration::from_millis(17);
+
+/// Turn every queued actor-state transition into its s2c frame, for **both** viewers.
+///
+/// This is the one place the animation stream is produced. It is deliberately not a
+/// dozen `emit` calls next to the dozen state assignments: writers push onto
+/// `Fighter::pending_state_changes` via [`super::state::Fighter::set_actor_state`] and
+/// this drains them, so a new writer cannot forget to notify the client — which is the
+/// failure mode that left the whole family unsent in the first place.
+///
+/// Called once at the end of each `MatchInstance::on_c2s` / `on_tick`, so no early
+/// return in this module can skip it.
+///
+/// Retail's mapping of state → message, from the decoded corpus:
+/// * `Blocking` → 41, the frame that raises the shield;
+/// * `PlayerAutoAttack` / `PlayerFollowThrough` / `PlayerRecovery` → 52 / 43 / 44, the
+///   three beats of a swing;
+/// * `PlayerDraining` → 42;
+/// * everything else → 39, the generic member. That includes `Idle`, which is how a
+///   block **ends**: there is no shield-down variant of 41 (all 248 decoded 41 frames
+///   carry prop6 = Blocking), so the guard comes down with a 39 carrying stateId 0.
+///
+/// `Charging` is absent on purpose: gmid 45 is emitted directly on the op46 button-DOWN
+/// path, which is capture-pinned, and nothing sets the `Charging` actor state.
+pub fn drain_state_changes(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
+    let viewers = combat.fighters.len();
+    let mut out = Vec::new();
+    for slot in 0..viewers {
+        let changes = combat.fighters[slot].take_state_changes();
+        if changes.is_empty() {
+            continue;
+        }
+        let own = combat.fighters[slot].packed_stats();
+        let opponent = combat
+            .opponent_of(slot)
+            .and_then(|o| combat.fighters.get(o))
+            .map(|f| f.packed_stats())
+            .unwrap_or(0);
+        let actor_net_object_id = combat.fighters[slot].net_object_id;
+        // `InitialActiveSide` for the swing family. The three beats of one swing share
+        // the side the swing was committed on, which is what `last_combo_side` holds
+        // until the next swing replaces it.
+        let swing_side = combat.fighters[slot].last_combo_side;
+        for change in changes {
+            let ctx = StateFrame {
+                actor_net_object_id,
+                own_packed_stats: own,
+                opponent_packed_stats: opponent,
+                state_history: &change.history,
+            };
+            let t = change.time_in_previous;
+            let bytes = match change.to {
+                ActorStateType::Blocking => {
+                    // prop 10 `OptimalBlockAllowed`: retail sent `true` in 231 of 248
+                    // frames and no decoded correlation explains the other 17, so the
+                    // majority value is sent rather than a guessed derivation.
+                    messages_state::player_blocking_state_change(&ctx, t, true)
+                }
+                ActorStateType::PlayerAutoAttack => {
+                    // prop 10 `Direction`: (0,0) in 21 of 25 retail frames. We have
+                    // pointer samples, but they are screen coordinates, not the unit
+                    // swipe vector the field carries — so send the value retail
+                    // overwhelmingly sent rather than a converted guess.
+                    messages_state::player_auto_attack_state_change(
+                        &ctx,
+                        swing_side,
+                        (0.0, 0.0),
+                        t,
+                    )
+                }
+                ActorStateType::PlayerFollowThrough => {
+                    messages_state::player_follow_through_state_change(&ctx, swing_side, t)
+                }
+                ActorStateType::PlayerRecovery => {
+                    messages_state::player_recovery_state_change(&ctx, swing_side, t)
+                }
+                ActorStateType::PlayerDraining => {
+                    messages_state::player_draining_state_change(&ctx, swing_side, t)
+                }
+                other => messages_state::player_state_change(&ctx, other, t),
+            };
+            debug!(
+                "combat: slot {slot} actor state {:?} → {:?} (t_prev {t:.4}s) → gmid broadcast",
+                change.from, change.to,
+            );
+            for viewer in 0..viewers {
+                out.push((viewer, bytes.clone()));
+            }
+        }
+    }
+    let _ = now;
+    out
+}
+
+/// Walk the attacker through the three beats of a swing.
+///
+/// `PlayerAutoAttack` now, then `PlayerFollowThrough` and `PlayerRecovery` on the
+/// capture-measured delays, then back to `Idle` when the weapon's own cadence is up
+/// (which is exactly when the next swing becomes legal). The transitions land on the
+/// outbox; [`drain_state_changes`] puts them on the wire.
+///
+/// Retail's per-session counts corroborate one of each per swing: s503 sent 330 × gmid
+/// 52, 325 × 43 and 291 × 44 — near-1:1, with 44 slightly lower because a swing that
+/// is interrupted never reaches recovery.
+fn begin_swing_animation(combat: &mut MatchCombat, slot: usize, now: Instant) {
+    let cadence = swing_cooldown_for(&combat.fighters[slot]);
+    let f = &mut combat.fighters[slot];
+    f.set_actor_state(ActorStateType::PlayerAutoAttack, now);
+    f.schedule_state(now + FOLLOW_THROUGH_DELAY, ActorStateType::PlayerFollowThrough);
+    f.schedule_state(
+        now + FOLLOW_THROUGH_DELAY + RECOVERY_DELAY,
+        ActorStateType::PlayerRecovery,
+    );
+    // Idle at the end of the weapon's cadence — never earlier than the recovery beat
+    // it must follow, so a very fast weapon still walks the states in order.
+    let idle_at = (now + cadence).max(now + FOLLOW_THROUGH_DELAY + RECOVERY_DELAY * 2);
+    f.schedule_state(idle_at, ActorStateType::Idle);
+}
+
 /// A bot fighter's auto-swing cadence. Slower than a human's `SWING_COOLDOWN` so the
 /// player wins comfortably but sees real incoming damage — a fight, not a static dummy.
 const BOT_SWING_COOLDOWN: Duration = Duration::from_millis(1800);
@@ -1786,6 +1993,10 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
     // blocking with no inbound input to reconcile it).
     for f in combat.fighters.iter_mut() {
         f.reconcile_block(now);
+        // Advance any in-flight swing: AutoAttack → FollowThrough → Recovery → Idle.
+        // The tick is the ONLY thing that moves it for a player who stops sending
+        // input mid-swing, so this must run here as well as on the input path.
+        f.reconcile_scheduled_states(now);
     }
     let mut out = Vec::new();
 
@@ -1860,11 +2071,18 @@ mod tests {
             f
         };
 
-        let out = on_c2s_input(&mut combat, 0, &block_frame, now);
+        let resolved = on_c2s_input(&mut combat, 0, &block_frame, now);
+        assert!(
+            resolved.is_empty(),
+            "resolution itself emits nothing for a block — no damage, and the gmid-41 \
+             relay is the drain's job"
+        );
 
-        // A block produces NO DAMAGE, but it DOES relay the blocking state — that
-        // relay is what raises the shield on screen. This assertion used to demand
-        // zero frames, which is what kept the shield down (report #5).
+        // The relay comes from the actor-state drain, which the engine runs at the end
+        // of every on_c2s/on_tick. It is what raises the shield on screen; this test
+        // used to assert zero frames anywhere, which is what kept the shield down
+        // (report #5).
+        let out = drain_state_changes(&mut combat, now);
         assert_eq!(
             out.len(),
             combat.fighters.len(),
@@ -1872,14 +2090,17 @@ mod tests {
             out.len()
         );
         for (_, f) in &out {
-            assert!(
-                super::messages::is_player_blocking_state_change(f),
+            let nd = arena_proto::parse_netdata(&f[2..]);
+            assert_eq!(
+                nd.int(3),
+                Some(41),
                 "the only frame a block emits is the gmid-41 relay — never damage"
             );
+            assert_eq!(nd.int(6), Some(1), "prop6 = ActorStateType::Blocking");
         }
         // And the fighter should now be in the Blocking state.
         assert_eq!(
-            combat.fighters[0].actor_state,
+            combat.fighters[0].actor_state(),
             super::super::state::ActorStateType::Blocking,
             "block input must put fighter 0 into Blocking state"
         );
@@ -2991,13 +3212,13 @@ mod phase4_tests {
         let mut f = Fighter::new(0, 564, super::super::loadout::starter(), now);
         f.apply_stagger(now);
         assert!(f.is_staggered(now));
-        assert_eq!(f.actor_state, super::super::state::ActorStateType::Staggered);
+        assert_eq!(f.actor_state(), super::super::state::ActorStateType::Staggered);
         assert!(f.blocking_until.is_none(), "a stagger drops the guard");
         // Still locked just before the duration, recovered just after.
         assert!(f.is_staggered(now + Duration::from_millis(1400)));
         assert!(!f.is_staggered(now + Duration::from_millis(1600)));
         assert!(f.reconcile_stagger(now + Duration::from_millis(1600)));
-        assert_eq!(f.actor_state, super::super::state::ActorStateType::Idle);
+        assert_eq!(f.actor_state(), super::super::state::ActorStateType::Idle);
     }
 
     /// Phase 3.14: a simultaneous double-KO scores nothing; a 1-1 draw at the final

@@ -5,7 +5,7 @@
 //! capture repo's `docs/archive/arena-combat-reference.md`. Where an enum is only
 //! partially mapped it is marked `// …` — extend as more values are confirmed.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 /// Max value of a **packed wire stat** — 10 bits each (Health/Stamina/Magicka pack
@@ -111,28 +111,88 @@ pub enum DamageType {
 }
 
 /// `ActorStateType` — an actor's current combat animation/logic state
-/// (`PlayerChannelingStateChange` stateId etc.). Partially mapped.
+/// (`PlayerChannelingStateChange` stateId etc.).
+///
+/// **Fully mapped.** These are the client's own `ActorStateType.StateId` values,
+/// transcribed verbatim from `reference/il2cpp/dump.cs` lines 340171–340200
+/// (`public enum ActorStateType.StateId // TypeDefIndex: 6252`) in the
+/// `blades-capture` repo. The seven discriminants that were already
+/// capture-confirmed here before the transcription — `Idle`, `Channeling`,
+/// `Staggered`, `Dialogue`, `Paralyzed`, `PlayerAutoAttack`, `Emote` — all match
+/// the dump exactly, which is what makes the remaining values trustworthy enough
+/// to put on the wire. `Blocking = 1` was a server-internal placeholder and turns
+/// out to be the real wire value too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ActorStateType {
     Idle = 0,
-    /// Blocking. NOTE: the real wire `stateId` is TBD (not yet confirmed from
-    /// dump.cs); this discriminant is used **server-internally only** (block
-    /// resolution) and must not collide with the confirmed values below. Fix the
-    /// value before serializing a blocking state-change on the wire.
+    /// Shield up. Serialized in `PlayerBlockingStateChange` (gmid 41).
     Blocking = 1,
+    /// Winding up a charged attack. Serialized in `PlayerChargingStateChange` (gmid 45).
+    Charging = 2,
+    Dead = 3,
     Channeling = 4,
     Staggered = 5,
+    Moving = 6,
+    MovingToPoint = 7,
     Dialogue = 8,
+    Crafting = 9,
+    PreFight = 10,
+    /// Sidestep / reposition. Serialized in `PlayerStateChange` (gmid 39).
+    Maneuver = 11,
+    Notify = 12,
     /// `ActorParalyzedState` — the paralysed actor state. **StateId 13**
     /// (`dump.cs` 340018/340188; `arena-status-resistance-spec.md` §5.4). The victim's
-    /// inputs are blocked for the `Paralyzed` status duration (3.1 s). Was previously a
-    /// placeholder; fixed to the dump's real StateId.
+    /// inputs are blocked for the `Paralyzed` status duration (3.1 s).
     Paralyzed = 13,
+    /// Draining an enemy (life/magicka leech). `PlayerDrainingStateChange` (gmid 42).
+    PlayerDraining = 14,
+    /// An ability swing in progress. Distinct from `PlayerAutoAttack`.
+    PlayerAttack = 15,
+    /// Post-swing recovery — the window in which the player may NOT act again.
+    /// `PlayerRecoveryStateChange` (gmid 44) is what tells the client when the
+    /// ability buttons come back.
+    PlayerRecovery = 16,
+    /// The follow-through of a swing. `PlayerFollowThroughStateChange` (gmid 43).
+    PlayerFollowThrough = 17,
+    PlayerBreakingItem = 18,
+    /// A basic (non-ability) swing. `PlayerAutoAttackStateChange` (gmid 52).
     PlayerAutoAttack = 19,
+    EnemyNonLethal = 20,
+    EnemyAttackAndMove = 21,
+    EnemyCritterAttacking = 22,
+    EnemyCritterStepBack = 23,
+    EnemyCritterIdle = 24,
+    OpponentChargedAttacking = 25,
+    SocialInteraction = 26,
+    OpponentVictory = 27,
     Emote = 28,
-    // … (Recovery / FollowThrough / Charging / Draining / Maneuver discriminants
-    //    TBD from dump.cs when those state-change messages are built).
+}
+
+/// How many entries the client's `PvpPlayerStateHistory` ring retains. Capture-pinned:
+/// the `retainedCount` byte at the head of propId 7 rises to 20 and then saturates,
+/// and the widest ByteArray in the retail corpus is 23 bytes = 3 header + 20 entries.
+pub const STATE_HISTORY_MAX: usize = 20;
+
+/// One recorded `old → new` actor-state transition, queued on the fighter until the
+/// resolver drains it into the matching s2c `PlayerStateChange`-family frame.
+///
+/// `from` is carried as well as `to` because leaving a state can be as meaningful as
+/// entering one: `Blocking → anything` is what LOWERS the shield (gmid 41 with
+/// `blocking=false`), and there is no other message that says it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StateTransition {
+    pub from: ActorStateType,
+    pub to: ActorStateType,
+    /// The `PvpPlayerStateHistory` ring as it stood **at this transition**, already in
+    /// wire layout for propId 7. Snapshotted rather than read at drain time because a
+    /// tick can queue several transitions, and the newest history entry must equal the
+    /// frame's own propId 6 — capture-pinned in 479/479 retail frames.
+    pub history: Vec<u8>,
+    /// Seconds the actor spent in `from` — the `_timeInPreviousState` float the
+    /// family carries at propId 8. Captured at the moment of the transition, not at
+    /// drain time, because the drain happens after `state_entered` was restamped.
+    pub time_in_previous: f32,
 }
 
 /// `StatusEffectType` — combat status effects (`ChangeCombatStatusEffect`, op51 propId5).
@@ -535,7 +595,42 @@ pub struct Fighter {
     /// Ability instance UUID → time it comes off cooldown.
     pub cooldowns: HashMap<String, Instant>,
     pub effects: Vec<ActiveEffect>,
-    pub actor_state: ActorStateType,
+    /// The fighter's current animation/logic state.
+    ///
+    /// **PRIVATE ON PURPOSE.** Every write must go through
+    /// [`Fighter::set_actor_state`] so the transition lands in
+    /// [`Fighter::pending_state_changes`] and the resolver can put it on the wire.
+    /// This field used to be `pub` and was assigned in a dozen scattered places,
+    /// none of which told the client anything — which is precisely why nothing
+    /// animated. Read it with [`Fighter::actor_state`].
+    actor_state: ActorStateType,
+    /// Actor-state transitions that have happened since the resolver last drained
+    /// this fighter, oldest first. Drained by
+    /// [`super::resolve::drain_state_changes`] at the end of every input/tick and
+    /// turned into the `PlayerStateChange`-family s2c frames (39/41/42/43/44/52).
+    ///
+    /// A per-tick outbox rather than an emit-at-the-callsite, because four of the
+    /// writers (`damage::block_outcome`, `reconcile_block`, …) run deep inside the
+    /// damage model with no viewer list and no message context in scope.
+    pending_state_changes: Vec<StateTransition>,
+    /// Actor states this fighter should enter LATER, `(when, state)`, kept sorted by
+    /// `when`. Applied by [`Fighter::reconcile_scheduled_states`] on the next
+    /// input/tick at or after the instant.
+    ///
+    /// A swing is not one state — retail walks the actor through
+    /// `PlayerAutoAttack → PlayerFollowThrough → PlayerRecovery → Idle` over the
+    /// weapon's own `attackDelay + recoveryTime`. Firing all four the instant the
+    /// swing resolves would make the client flash through the animation instead of
+    /// playing it. The arena loop ticks every 2 ms, so scheduling is accurate to
+    /// far finer than the ~230 ms shortest phase.
+    scheduled_states: Vec<(Instant, ActorStateType)>,
+    /// The last [`STATE_HISTORY_MAX`] states this actor entered, oldest first — the
+    /// `PvpPlayerStateHistory` ring the family carries at propId 7.
+    state_history: VecDeque<ActorStateType>,
+    /// How many transitions this actor has made this round in total, including the
+    /// ones that have aged out of [`Self::state_history`]. The wire `firstIndex` is
+    /// `transitions_total - state_history.len()`.
+    transitions_total: u32,
     pub state_entered: Instant,
     /// Slot of the implicit arena target (the opponent) for `RequestExecuteAbility`.
     pub arena_target: usize,
@@ -726,7 +821,13 @@ impl Fighter {
             loadout,
             cooldowns: HashMap::new(),
             effects: Vec::new(),
+            // Construction, not a transition — nothing to tell a client that has no
+            // avatar yet, so the field is set directly rather than via the mutator.
             actor_state: ActorStateType::Idle,
+            pending_state_changes: Vec::new(),
+            scheduled_states: Vec::new(),
+            state_history: VecDeque::new(),
+            transitions_total: 0,
             state_entered: now,
             arena_target: 1 - slot.min(1), // 2-player: the other slot
             blocking_side: ActiveSide::None,
@@ -751,6 +852,107 @@ impl Fighter {
             equipped_consumable: None,
             paralyze_secs: paralyze_duration_secs(1),
         }
+    }
+
+    /// This fighter's current actor state. The only way to read the private field.
+    pub fn actor_state(&self) -> ActorStateType {
+        self.actor_state
+    }
+
+    /// **The single seam for every actor-state change.** Records the `old → new`
+    /// transition on [`Self::pending_state_changes`] and restamps
+    /// [`Self::state_entered`]; a no-op when the state is already `next`.
+    ///
+    /// The resolver drains the queue at the end of each input/tick and puts each
+    /// transition on the wire ([`super::resolve::drain_state_changes`]). Emitting
+    /// here instead — at each of the dozen call sites — is exactly how the previous
+    /// attempt would have missed one; the queue means a writer cannot forget.
+    ///
+    /// No-op on an unchanged state because retail does not spam a state change per
+    /// tick: s503 sent 330 `PlayerAutoAttackStateChange` against 894 `ReceiveDamage`.
+    pub fn set_actor_state(&mut self, next: ActorStateType, now: Instant) {
+        if self.actor_state == next {
+            return;
+        }
+        let from = self.actor_state;
+        let time_in_previous = self.time_in_state(now);
+        self.actor_state = next;
+        self.state_entered = now;
+        // The ring already contains the state being ENTERED — capture-pinned: the
+        // last history byte equals propId 6 in all 479 decoded retail frames. So it is
+        // updated BEFORE the snapshot is taken.
+        if self.state_history.len() == STATE_HISTORY_MAX {
+            self.state_history.pop_front();
+        }
+        self.state_history.push_back(next);
+        self.transitions_total = self.transitions_total.saturating_add(1);
+        self.pending_state_changes.push(StateTransition {
+            from,
+            to: next,
+            history: self.packed_state_history(),
+            time_in_previous,
+        });
+    }
+
+    /// `PvpPlayerStateHistory` packed for propId 7, exactly as retail lays it out:
+    ///
+    /// ```text
+    /// [u8 retainedCount] [u16-LE firstIndex] [retainedCount × u8 stateId]   (oldest → newest)
+    /// ```
+    ///
+    /// `firstIndex` is the index of the oldest retained transition within the round's
+    /// whole transition stream, so `firstIndex + retainedCount` is the running total.
+    /// Capture-pinned against 479 retail frames: 479/479 conform, every history byte
+    /// is a valid `ActorStateType`, and the newest entry always equals the frame's
+    /// propId 6.
+    pub fn packed_state_history(&self) -> Vec<u8> {
+        let count = self.state_history.len();
+        let first_index = (self.transitions_total as usize).saturating_sub(count) as u16;
+        let mut out = Vec::with_capacity(3 + count);
+        out.push(count as u8);
+        out.extend_from_slice(&first_index.to_le_bytes());
+        out.extend(self.state_history.iter().map(|s| *s as u8));
+        out
+    }
+
+    /// Take everything queued since the last drain, leaving the queue empty.
+    pub fn take_state_changes(&mut self) -> Vec<StateTransition> {
+        std::mem::take(&mut self.pending_state_changes)
+    }
+
+    /// Queue `state` to be entered at `when`. Replaces any schedule already standing
+    /// for that same state, so a re-swing re-times its own phases rather than
+    /// stacking a second copy.
+    pub fn schedule_state(&mut self, when: Instant, state: ActorStateType) {
+        self.scheduled_states.retain(|(_, s)| *s != state);
+        self.scheduled_states.push((when, state));
+        self.scheduled_states.sort_by_key(|(t, _)| *t);
+    }
+
+    /// Drop every pending schedule — used when something overrides the swing the
+    /// schedule belonged to (a stagger, a paralyse, death, a round reset). Without
+    /// this, a swing's queued `Recovery`/`Idle` would fire *after* the interrupt and
+    /// silently un-stagger the fighter.
+    pub fn clear_scheduled_states(&mut self) {
+        self.scheduled_states.clear();
+    }
+
+    /// Apply every scheduled transition now due, oldest first. Each one goes through
+    /// [`Self::set_actor_state`], so it lands on the outbox like any other.
+    pub fn reconcile_scheduled_states(&mut self, now: Instant) {
+        while let Some(&(when, state)) = self.scheduled_states.first() {
+            if when > now {
+                break;
+            }
+            self.scheduled_states.remove(0);
+            self.set_actor_state(state, now);
+        }
+    }
+
+    /// Seconds spent in the current actor state — the `timeInState` float the
+    /// `PlayerStateChange` family carries at propId 8.
+    pub fn time_in_state(&self, now: Instant) -> f32 {
+        now.saturating_duration_since(self.state_entered).as_secs_f32()
     }
 
     /// This fighter's live **Block Rating** while guarding (Phase 3.5): the summed
@@ -779,8 +981,11 @@ impl Fighter {
     pub fn apply_stagger(&mut self, now: Instant) {
         self.staggered_until =
             Some(now + std::time::Duration::from_secs_f32(BASE_STAGGER_DURATION_SECS));
-        self.actor_state = ActorStateType::Staggered;
-        self.state_entered = now;
+        self.set_actor_state(ActorStateType::Staggered, now);
+        // A stagger overrides whatever swing was in flight: drop its queued
+        // follow-through/recovery/idle, which would otherwise fire mid-stagger and
+        // return the actor to Idle early.
+        self.clear_scheduled_states();
         // A staggered fighter's guard drops and its combo chain breaks.
         self.blocking_until = None;
         self.block_raised_at = None;
@@ -793,8 +998,7 @@ impl Fighter {
             if now >= t {
                 self.staggered_until = None;
                 if self.actor_state == ActorStateType::Staggered {
-                    self.actor_state = ActorStateType::Idle;
-                    self.state_entered = now;
+                    self.set_actor_state(ActorStateType::Idle, now);
                 }
                 return true;
             }
@@ -855,7 +1059,9 @@ impl Fighter {
     pub fn reconcile_block(&mut self, now: Instant) -> bool {
         let up = matches!(self.blocking_until, Some(t) if now < t);
         if !up && self.actor_state == ActorStateType::Blocking {
-            self.actor_state = ActorStateType::Idle;
+            // Blocking → Idle. This transition is what LOWERS the shield on both
+            // screens; before the outbox existed it happened silently.
+            self.set_actor_state(ActorStateType::Idle, now);
             self.blocking_side = ActiveSide::None;
             self.blocking_until = None;
             self.block_raised_at = None;
@@ -1258,7 +1464,16 @@ impl MatchCombat {
             f.stats_seq = f.stats_seq.wrapping_add(1);
             f.cooldowns.clear();
             f.effects.clear();
+            // Between rounds the client tears the combat scene down and rebuilds it,
+            // so a queued transition from the round that just ended would arrive
+            // against a stale avatar. Reset the state silently and drop the outbox.
             f.actor_state = ActorStateType::Idle;
+            f.pending_state_changes.clear();
+            f.scheduled_states.clear();
+            // The history ring and its index are per-ROUND (retail's firstIndex
+            // restarts at 0 each round), so they reset with everything else.
+            f.state_history.clear();
+            f.transitions_total = 0;
             f.state_entered = now;
             f.blocking_side = ActiveSide::None;
             f.blocking_until = None;
@@ -1476,7 +1691,7 @@ mod tests {
         let block_window = std::time::Duration::from_secs(5); // long window so it doesn't expire
 
         // Fresh block: raised just now → OPTIMAL.
-        f.actor_state = ActorStateType::Blocking;
+        f.set_actor_state(ActorStateType::Blocking, now);
         f.blocking_side = ActiveSide::Right;
         f.blocking_until = Some(now + block_window);
         f.block_raised_at = Some(now);
@@ -1516,7 +1731,7 @@ mod tests {
 
         // Re-raise inside the `postOptimalBlockResetTime` (1.4 s) recovery window.
         let reraise = now + std::time::Duration::from_millis(300);
-        f.actor_state = ActorStateType::Blocking;
+        f.set_actor_state(ActorStateType::Blocking, reraise);
         f.blocking_side = ActiveSide::Right;
         f.blocking_until = Some(reraise + block_window);
         f.block_raised_at = Some(reraise);
