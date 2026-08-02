@@ -1,3 +1,5 @@
+pub mod arena_economy;
+pub mod arena_ladder;
 pub mod avatar;
 pub mod combat;
 pub mod config;

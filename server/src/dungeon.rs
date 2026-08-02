@@ -1,7 +1,9 @@
 use std::{collections::HashMap, sync::Arc};
 
 use actix_web::{
-    get, post,
+    get,
+    http::StatusCode,
+    post,
     web::{self, Json},
 };
 use blades_lib::user_data::{B64EncodedData, DungeonState, DungeonStatus};
@@ -104,11 +106,15 @@ pub async fn enter_quest_dungeon(
 
     let quest = match app_state.game_data.quests.get(&quest_id) {
         Some(v) => v,
-        None => todo!("error handling for non-existand quest dungeon enter"),
+        // Unknown quest template. This also fires for a runtime-GENERATED town JOB
+        // (not in game_data.quests) — a clean 404 instead of a panic (which would drop
+        // the connection = the client's "network error"). Full job-dungeon-run is a
+        // follow-up (synthesize the dungeon from the job's jobSetup).
+        None => return Err(BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2)),
     };
     let dungeon_info = match quest.dungeon_info.as_ref() {
         Some(v) => v,
-        None => todo!("error handling enter dungeon of quest without dungepn"),
+        None => return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2)),
     };
 
     let _ = check_permission_for_character_and_get_it(&mut conn, &session.session, character_id)
@@ -129,13 +135,13 @@ pub async fn enter_quest_dungeon(
 
             let quest = match quest_query.into_iter().next() {
                 Some(v) => v,
-                None => todo!("Error on accept non-started quest"),
+                None => return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 20002, 2)),
             };
 
             if let Some(dungeon_instance) = body.dungeon_instance {
                 // first time entering
                 if quest.dungeon_state.is_some() {
-                    todo!("Error on enter already entered dungeon (or handle it properly?)")
+                    return Err(BladeApiError::new(StatusCode::CONFLICT, 20003, 1));
                 }
                 let status = DungeonStatus {
                     dungeon_settings_ids: vec![dungeon_info.dungeon_uuid],
@@ -172,7 +178,7 @@ pub async fn enter_quest_dungeon(
                 let mut dungeon_state_actual = if let Some(dungeon_state) = quest.dungeon_state {
                     dungeon_state.0
                 } else {
-                    todo!("Properly handle dungeon state not existing");
+                    return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 20004, 2));
                 };
                 dungeon_state_actual.dungeon_status.current_state = body.current_state;
                 {

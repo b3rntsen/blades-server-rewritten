@@ -14,8 +14,8 @@ use blades_lib::features::challenges::ChallengeTemplate;
 use blades_lib::features::daily_reward::DailyRewardDef;
 use blades_lib::features::game_events::EventDef;
 use blades_lib::static_data::{
-    Announcement, AbyssStaticData, GiftDef, ItemModRecipe, Recipe, ShopBundle, ShopData,
-    StaticData,
+    Announcement, AbyssStaticData, GiftDef, ItemModRecipe, QuestsDailyData, Recipe, ShopBundle,
+    ShopData, SmithCraftables, SmithCraftablesFile, StaticData,
 };
 use log::warn;
 use serde::de::DeserializeOwned;
@@ -66,6 +66,13 @@ pub fn load(dir: &Path) -> StaticData {
     let quest_rewards: HashMap<Uuid, RewardGrant> =
         read_json(&dir.join("quest_rewards.json"));
     let abyss: AbyssStaticData = read_json(&dir.join("abyss.json"));
+    // The forge craftables file has a rich schema; deserialize the raw shape and resolve
+    // it into by-recipe / by-template lookups (a missing file → empty lookups, and the
+    // smith craft keeps its lenient placeholder path rather than failing).
+    let smith_craftables_raw: SmithCraftablesFile =
+        read_json(&dir.join("smith_craftables.json"));
+    let smith_craftables = SmithCraftables::from_raw(smith_craftables_raw);
+    let quests_daily: QuestsDailyData = read_json(&dir.join("quests_daily.json"));
 
     StaticData {
         gifts: gifts.into_iter().map(|g| (g.global_gift_id, g)).collect::<HashMap<_, _>>(),
@@ -84,6 +91,8 @@ pub fn load(dir: &Path) -> StaticData {
         item_mod_recipes,
         quest_rewards,
         abyss,
+        smith_craftables,
+        quests_daily,
     }
 }
 
@@ -117,5 +126,24 @@ mod tests {
         assert!(!sd.quest_rewards.is_empty(), "quest_rewards.json");
         assert!(!sd.abyss.fixed_slices.is_empty(), "abyss.json fixedSlices");
         assert!(!sd.abyss.random_pool.is_empty(), "abyss.json randomPool");
+        // New abyss keys wire in.
+        assert!(!sd.abyss.difficulty_curve.is_empty(), "abyss.json difficultyCurve");
+        assert!(!sd.abyss.monster_tiers.is_empty(), "abyss.json monsterTiers");
+        assert!(!sd.abyss.depth_bands.is_empty(), "abyss.json depthBands");
+        assert!(!sd.abyss.dungeon_pool.is_empty(), "abyss.json dungeonPool");
+        // Smith craftables resolve into both lookups + carry the smithing type id.
+        assert!(!sd.smith_craftables.by_template.is_empty(), "smith_craftables.json byTemplate");
+        assert!(!sd.smith_craftables.by_recipe.is_empty(), "smith_craftables.json byRecipe (captured)");
+        assert!(
+            sd.smith_craftables.smithing_crafting_type_id.is_some(),
+            "smith_craftables.json smithingCraftingTypeId"
+        );
+        // Daily quests: pool + non-dungeon exclusion list + a scaling table.
+        assert!(!sd.quests_daily.daily_quest_pool.is_empty(), "quests_daily.json dailyQuestPool");
+        assert!(!sd.quests_daily.non_dungeon_quests.is_empty(), "quests_daily.json nonDungeonQuests");
+        assert!(
+            !sd.quests_daily.level_scaling.enemy_level_from_player_level.offset_by_skull.is_empty(),
+            "quests_daily.json levelScaling"
+        );
     }
 }

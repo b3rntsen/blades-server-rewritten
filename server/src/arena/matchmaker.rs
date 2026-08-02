@@ -36,16 +36,78 @@ use crate::{
     },
     models::CharacterDbEntryCharacterWalletInventory,
     schema::characters,
-    session::SessionLookedUpMaybe,
+    session::{Session, SessionLookedUpMaybe},
 };
 
-/// A queued matchmaking ticket handed to the matchmaker actor. Carries a clone
-/// of the requesting session's RMS sender so the matchmaker can push frames
-/// back to exactly that client.
+/// How the matchmaker reaches a ticket's client over its RMS WebSocket.
+///
+/// The RMS sender is NOT captured once at enqueue time. The client reconnects its
+/// rms WS repeatedly (each reconnect overwrites `Session.matchmaking_ws`), so a sender
+/// cloned at `create_match` time can be a STALE channel the client no longer reads —
+/// `Succeeded` sent into it silently vanishes and the client hangs at "determining
+/// server" forever (the 2026-07 stale-sender race). Instead we hold the `Arc<Session>`
+/// and re-fetch the CURRENT live sender at every send, so a client that reconnected
+/// still receives the address.
+///
+/// `Direct` is the unit-test variant: an `UnboundedSender` with no backing session
+/// (the matchmaker tests have no `SessionStore`), behaving as before.
+pub enum RmsHandle {
+    /// Production: re-fetch `session.matchmaking_ws` live on each access.
+    Session(Arc<Session>),
+    /// Tests: a fixed sender (no session store to re-fetch from).
+    Direct(UnboundedSender<MatchmakingMessage>),
+}
+
+impl RmsHandle {
+    /// Snapshot the CURRENT live sender (None if the client has no rms WS open right
+    /// now). For `Session` this reads `matchmaking_ws` under its async lock, so a
+    /// reconnect since enqueue is picked up.
+    async fn current(&self) -> Option<UnboundedSender<MatchmakingMessage>> {
+        match self {
+            RmsHandle::Session(s) => s.matchmaking_ws.lock().await.clone(),
+            RmsHandle::Direct(tx) => Some(tx.clone()),
+        }
+    }
+
+    /// True iff the client currently has NO live rms sender (never connected, or the
+    /// sender is closed because its WS reader task exited). Used to skip resolving a
+    /// ticket whose client is gone.
+    async fn is_gone(&self) -> bool {
+        match self.current().await {
+            Some(tx) => tx.is_closed(),
+            None => true,
+        }
+    }
+
+    /// Send `msg` to the client's CURRENT live sender. `Ok(())` on success; `Err(())`
+    /// when there is no live sender or the send failed (logged by the caller).
+    async fn send(&self, msg: MatchmakingMessage) -> Result<(), ()> {
+        match self.current().await {
+            Some(tx) => tx.send(msg).map_err(|_| ()),
+            None => Err(()),
+        }
+    }
+}
+
+/// A command handed to the matchmaker actor over its single channel. Cancellation is
+/// routed through the SAME channel as enqueue so the actor (the sole owner of the
+/// `waiting` slot) can actually DEQUEUE a cancelled ticket — a `cancel` handler can't
+/// touch `waiting` directly (no shared lock), which is why the old cancel was a no-op
+/// and a cancelled ticket still zombie-resolved on the fallback timer.
+pub enum MatchmakerCommand {
+    /// Enqueue a new ticket.
+    Enqueue(TicketRequest),
+    /// Remove a ticket from the queue (client cancelled) — never zombie-resolves.
+    Cancel { ticket_id: Uuid, user_id: Uuid },
+}
+
+/// A queued matchmaking ticket handed to the matchmaker actor. Carries an [`RmsHandle`]
+/// so the matchmaker re-fetches the requesting client's CURRENT rms sender at send time
+/// (surviving rms-WS reconnects), rather than a stale sender captured at enqueue.
 pub struct TicketRequest {
     pub ticket_id: Uuid,
     pub user_id: Uuid,
-    pub rms: UnboundedSender<MatchmakingMessage>,
+    pub rms: RmsHandle,
 }
 
 /// Status of a recorded matchmaking ticket, for the web /arena activity feed.
@@ -157,30 +219,60 @@ async fn load_loadout(db: &Option<DbPool>, user_id: Uuid) -> crate::arena::comba
         .ok()
         .and_then(|rows| rows.into_iter().next());
     match row {
-        Some(r) => {
-            let mut lo = loadout::from_character(&r.character.0, &r.inventory.0);
-            lo.character_uuid = r.id.to_string(); // the character UUID for the op50 spawn
-            // op54 round-start PROFILE JSON, serialized faithfully from the stored
-            // character (the structs ARE the game wire format — camelCase + verbatim
-            // Value sub-objects): p4 = {"equippedItems":{…}}, p5 = data + id + character.
-            // MUST include `data` (customization) — retail's profile carries it
-            // (data.customization.CharacterUID = the avatar visual); without it the
-            // opponent has no appearance and the client's resource-load hangs at
-            // "connecting" (the 2026-06-17 gate, found via the on-device matchstate probe).
-            // TODO(arena-profile): `equippedItems` shape still diverges from retail
-            // (missing per-item `grade` / `arcaneTier`). Fixing it needs data-model
-            // changes (those fields aren't stored on the item), so it's a separate
-            // follow-up — left as-is for now. The op54 hang is driven by the CHARACTER
-            // JSON schema (below), which this fix makes retail-identical.
-            lo.profile_equipped_json =
-                serde_json::json!({ "equippedItems": &r.inventory.0.loadout.equipped_items }).to_string();
-            // op54 round-start PROFILE character JSON, trimmed to retail's schema.
-            lo.profile_character_json =
-                build_profile_character_json(&r.data.0, r.id, &r.character.0);
-            lo
-        }
+        Some(r) => loadout_from_row(&r),
         None => loadout::starter(),
     }
+}
+
+/// Build a full combat [`Loadout`] from a loaded `characters` row: the parsed combat
+/// stats PLUS the identity the round-start emit needs — `character_uuid` (op50 spawn
+/// `p4` / avatar propId4) and the op54 PROFILE JSON. Shared by [`load_loadout`] (the
+/// human) and [`load_bot_loadout`] (the solo bot), so a bot gets the SAME non-empty
+/// profile a human does — the op54 PROFILE (GameMessageId 35) is the frame that makes
+/// the opponent VISIBLE and bindable. An empty starter profile → invisible/unkillable
+/// bot + a match-end hang (the 2026-07-03 solo-bot bug).
+///
+/// The profile MUST include `data.customization` (the opponent's avatar visual) or the
+/// client's resource-load hangs at "Connecting"; `build_profile_character_json` also
+/// trims it to retail's exact schema (dropping keys retail never sends, which the
+/// client's deserializer would reject). `equippedItems` shape still diverges slightly
+/// from retail (missing per-item `grade`/`arcaneTier`) — a separate data-model follow-up.
+fn loadout_from_row(
+    r: &CharacterDbEntryCharacterWalletInventory,
+) -> crate::arena::combat::Loadout {
+    use crate::arena::combat::loadout;
+    let mut lo = loadout::from_character(&r.character.0, &r.inventory.0);
+    lo.character_uuid = r.id.to_string();
+    lo.profile_equipped_json =
+        serde_json::json!({ "equippedItems": &r.inventory.0.loadout.equipped_items }).to_string();
+    lo.profile_character_json = build_profile_character_json(&r.data.0, r.id, &r.character.0);
+
+    // DIAGNOSTIC for "no ability buttons in a match", reported 2026-08-01 by two
+    // players (Taheen, Swanne) while a third (Flappety) is unaffected.
+    //
+    // Ruled out from the stored data already: all three have 6 equipped abilities
+    // with identical slot-keyed shape, no equipped ability is missing from the
+    // owned map, loadout profiles / inventory / customization are structurally the
+    // same, ability RANKS are not out of range, and every one of the 13 distinct
+    // equipped UUIDs is known to both this server and reference/game-defs.
+    //
+    // So the difference is not the character row. The remaining candidates are all
+    // per-match and need a live match to distinguish: how many abilities survive
+    // into the Loadout, and how big the profile is — retail's op54 profile is
+    // ~17 KB / 16 ENet fragments, and ours was 31 KB / 26 before trimming, so a
+    // player whose profile is unusually large is a real suspect. Log both, per
+    // fighter, so the next match by an affected player produces the evidence
+    // rather than requiring them to be online while someone watches.
+    info!(
+        "arena loadout: char {} \"{}\" — equipped_abilities={} profile_json={}B equipped_json={}B",
+        r.id,
+        lo.display_name,
+        lo.abilities.len(),
+        lo.profile_character_json.len(),
+        lo.profile_equipped_json.len(),
+    );
+
+    lo
 }
 
 /// Build the op54 round-start PROFILE character JSON, **trimmed to retail's
@@ -260,6 +352,145 @@ fn is_self_match(human_char_uuid: &str, ghost_char_uuid: &str) -> bool {
     !ghost_char_uuid.is_empty() && ghost_char_uuid == human_char_uuid
 }
 
+/// True iff a loaded `characters` row has a non-empty `data.customization` — the
+/// opponent avatar's appearance. A bot WITHOUT it renders nothing and the client's
+/// resource-load hangs at "Connecting", so solo-bot selection filters on this.
+fn row_has_customization(r: &CharacterDbEntryCharacterWalletInventory) -> bool {
+    serde_json::to_value(&r.data.0)
+        .ok()
+        .and_then(|v| v.get("customization").cloned())
+        .and_then(|c| c.as_object().map(|o| !o.is_empty()))
+        .unwrap_or(false)
+}
+
+/// Pure selection: from `(character_uuid, is_complete)` candidates, choose a bot that is
+/// COMPLETE (renders) AND distinct from the human (not a self-match), rotated by the
+/// match's `gsid` for variety. Returns the chosen index, or `None` if none qualifies.
+fn pick_bot_index(
+    candidates: &[(String, bool)],
+    human_char_uuid: &str,
+    gsid: Uuid,
+) -> Option<usize> {
+    let eligible: Vec<usize> = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, (uuid, complete))| *complete && !is_self_match(human_char_uuid, uuid))
+        .map(|(i, _)| i)
+        .collect();
+    if eligible.is_empty() {
+        return None;
+    }
+    // Rotate by the (random) gsid's first byte → variety across matches, deterministic
+    // for a given match. No RNG (Date/rand are unavailable/undesired in this actor).
+    let seed = gsid.as_bytes()[0] as usize;
+    Some(eligible[seed % eligible.len()])
+}
+
+/// Load a SOLO-match bot opponent: a real, COMPLETE, distinct character so the bot has a
+/// non-empty op54 PROFILE (a visible/bindable/killable opponent + a resolvable match-end
+/// card — the 2026-07-03 solo-bot fix). Pool = the configured `ARENA_BOT_USER_IDS`
+/// roster if set, else any OTHER character in the DB. Filters to complete + non-self,
+/// rotates by gsid. Falls back to the empty `starter()` (logged) only if NOTHING
+/// qualifies (e.g. no other complete character exists yet).
+async fn load_bot_loadout(
+    db: &Option<DbPool>,
+    human_char_uuid: &str,
+    config: &ArenaConfig,
+    gsid: Uuid,
+) -> crate::arena::combat::Loadout {
+    use crate::arena::combat::loadout;
+    let Some(db) = db else {
+        return loadout::starter();
+    };
+    let Ok(mut conn) = db.get().await else {
+        return loadout::starter();
+    };
+
+    let rows: Vec<CharacterDbEntryCharacterWalletInventory> = if !config.bot_user_ids.is_empty() {
+        characters::table
+            .filter(characters::user_id.eq_any(config.bot_user_ids.clone()))
+            .select(CharacterDbEntryCharacterWalletInventory::as_select())
+            .load(&mut conn)
+            .await
+            .unwrap_or_default()
+    } else {
+        // No roster → any OTHER character (cap the scan; the pool is small today — this
+        // self-heals as more players transfer characters with appearance).
+        let mut q = characters::table
+            .select(CharacterDbEntryCharacterWalletInventory::as_select())
+            .limit(200)
+            .into_boxed();
+        if let Ok(h) = Uuid::parse_str(human_char_uuid) {
+            q = q.filter(characters::id.ne(h));
+        }
+        q.load(&mut conn).await.unwrap_or_default()
+    };
+
+    let candidates: Vec<(String, bool)> = rows
+        .iter()
+        .map(|r| (r.id.to_string(), row_has_customization(r)))
+        .collect();
+    match pick_bot_index(&candidates, human_char_uuid, gsid) {
+        Some(i) => loadout_from_row(&rows[i]),
+        None => {
+            warn!(
+                "matchmaker: no COMPLETE distinct bot character available (pool {}) — bot falls \
+                 back to the empty starter (INVISIBLE opponent). Seed ARENA_BOT_USER_IDS or \
+                 transfer more characters with appearance.",
+                candidates.len()
+            );
+            loadout::starter()
+        }
+    }
+}
+
+#[cfg(test)]
+mod bot_pick_tests {
+    use super::*;
+
+    fn gsid_with_first_byte(b: u8) -> Uuid {
+        let mut bytes = [0u8; 16];
+        bytes[0] = b;
+        Uuid::from_bytes(bytes)
+    }
+
+    #[test]
+    fn pick_bot_index_prefers_complete_and_distinct() {
+        let human = "aaaaaaaa-0000-0000-0000-000000000001";
+        let cands = vec![
+            (human.to_string(), true),                              // self-match → excluded
+            ("bbbbbbbb-0000-0000-0000-000000000002".into(), false), // incomplete → excluded
+            ("cccccccc-0000-0000-0000-000000000003".into(), true),  // the only eligible
+        ];
+        assert_eq!(pick_bot_index(&cands, human, gsid_with_first_byte(0)), Some(2));
+        assert_eq!(pick_bot_index(&cands, human, gsid_with_first_byte(123)), Some(2));
+    }
+
+    #[test]
+    fn pick_bot_index_none_when_no_complete_distinct() {
+        let human = "aaaaaaaa-0000-0000-0000-000000000001";
+        let cands = vec![
+            (human.to_string(), true),                              // self
+            ("dddddddd-0000-0000-0000-000000000004".into(), false), // incomplete
+        ];
+        assert_eq!(pick_bot_index(&cands, human, gsid_with_first_byte(0)), None);
+    }
+
+    #[test]
+    fn pick_bot_index_rotates_across_matches() {
+        let human = "zzzzzzzz-0000-0000-0000-000000000009";
+        let cands = vec![
+            ("11111111-0000-0000-0000-000000000001".into(), true),
+            ("22222222-0000-0000-0000-000000000002".into(), true),
+            ("33333333-0000-0000-0000-000000000003".into(), true),
+        ];
+        // Three eligible → gsid first-byte selects eligible[b % 3]; distinct seeds differ.
+        assert_eq!(pick_bot_index(&cands, human, gsid_with_first_byte(0)), Some(0));
+        assert_eq!(pick_bot_index(&cands, human, gsid_with_first_byte(1)), Some(1));
+        assert_eq!(pick_bot_index(&cands, human, gsid_with_first_byte(2)), Some(2));
+    }
+}
+
 /// Derive one `playerSessionId` per player for a match, sharing the `gameSessionId`.
 ///
 /// playerSessionId shape (retail GameLift, capture-confirmed s506
@@ -332,6 +563,50 @@ fn check_paired_uuids_distinct(loadouts: &[crate::arena::combat::Loadout]) -> Re
     Ok(())
 }
 
+/// The symmetric half of [`check_paired_uuids_distinct`], for the op54 PROFILE.
+///
+/// `character_uuid` is the KEY the client binds appearance by; `profile_character_json`
+/// is the VALUE it dresses the avatar from. A distinct key with a missing or shared
+/// value collapses identity just as thoroughly, and it fails in a way that is easy to
+/// ship by accident, because [`loadout::starter`] — the fallback whenever a character
+/// load is slow, errors, or the row is missing — has an EMPTY profile:
+///   - **empty** → `broadcast_profiles` skips that fighter, so the opponent never gets
+///     an op54 profile at all and the client leaves the opponent body wearing whatever
+///     it already has (the local character's customization);
+///   - **identical** → both clients dress both avatars from the same blob.
+///
+/// `Ok(())` when every fighter has a non-empty, distinct `profile_character_json`.
+/// Kept separate from the UUID guard so each failure names its own cause (and so the
+/// UUID guard's own unit test can keep using bare `starter()` loadouts).
+fn check_paired_profiles_present_and_distinct(
+    loadouts: &[crate::arena::combat::Loadout],
+) -> Result<(), String> {
+    for (i, lo) in loadouts.iter().enumerate() {
+        if lo.profile_character_json.is_empty() {
+            return Err(format!(
+                "fighter {i} (\"{}\", char {}) has an EMPTY profile_character_json — a degraded \
+                 loadout::starter() fallback. broadcast_profiles skips empty profiles, so the \
+                 opponent never receives this fighter's op54 PROFILE and renders its body with \
+                 the LOCAL character's appearance.",
+                lo.display_name, lo.character_uuid,
+            ));
+        }
+        for (j, other) in loadouts.iter().enumerate().skip(i + 1) {
+            if lo.profile_character_json == other.profile_character_json {
+                return Err(format!(
+                    "fighters {i} (\"{}\") and {j} (\"{}\") share an IDENTICAL \
+                     profile_character_json ({} B) — both clients would dress both avatars from \
+                     the same customization blob.",
+                    lo.display_name,
+                    other.display_name,
+                    lo.profile_character_json.len(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Newest-first view of `arena_matches`, capped at `limit`, marking `mine`
 /// against `filter`. Backs the dev `recent-matches` endpoint; durable across
 /// restarts (#NB-3). Returns empty on a DB error (the endpoint stays up).
@@ -375,7 +650,7 @@ pub async fn query_recent_matches(
 /// single-owner matchmaker task.
 pub struct ArenaGlobal {
     pub config: ArenaConfig,
-    pub matchmaker_tx: UnboundedSender<TicketRequest>,
+    pub matchmaker_tx: UnboundedSender<MatchmakerCommand>,
     pub registry: Arc<MatchRegistry>,
 }
 
@@ -389,7 +664,7 @@ impl ArenaGlobal {
         let key_submitter = KeySubmitter::from_config(KeySubmitConfig::from_env()).map(Arc::new);
         let registry = MatchRegistry::new_with_submitter(config.max_concurrent_matches, key_submitter);
 
-        let (tx, rx) = unbounded_channel::<TicketRequest>();
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         let mm_cfg = config.clone();
         let mm_reg = registry.clone();
         actix_web::rt::spawn(async move {
@@ -412,7 +687,7 @@ impl ArenaGlobal {
 /// arrives it falls back to a solo match against a server-driven bot, so a single
 /// tester always gets a fight instead of being stuck "Searching".
 async fn matchmaker_loop(
-    mut rx: UnboundedReceiver<TicketRequest>,
+    mut rx: UnboundedReceiver<MatchmakerCommand>,
     config: ArenaConfig,
     registry: Arc<MatchRegistry>,
     db: Option<DbPool>,
@@ -425,16 +700,16 @@ async fn matchmaker_loop(
     // A single ticket held while it waits for an opponent to pair with.
     let mut waiting: Option<TicketRequest> = None;
     loop {
-        // If a ticket is already waiting, race the next ticket against a fallback
-        // timer; otherwise just block for the next ticket.
+        // If a ticket is already waiting, race the next command against a fallback
+        // timer; otherwise just block for the next command.
         let next = if waiting.is_some() {
             tokio::select! {
                 r = rx.recv() => r,
                 _ = tokio::time::sleep(Duration::from_secs(config.solo_fallback_secs)) => {
                     let lone = waiting.take().expect("waiting is some");
                     // Don't spin up a bot match for a client that's already gone.
-                    if lone.rms.is_closed() {
-                        info!("matchmaker: waiting ticket {} abandoned (RMS closed) — dropped, no fallback", lone.ticket_id);
+                    if lone.rms.is_gone().await {
+                        info!("matchmaker: waiting ticket {} abandoned (RMS gone) — dropped, no fallback", lone.ticket_id);
                         continue;
                     }
                     info!("matchmaker: no opponent for ticket {} — solo fallback (vs bot)", lone.ticket_id);
@@ -445,23 +720,47 @@ async fn matchmaker_loop(
         } else {
             rx.recv().await
         };
-        let Some(req) = next else { break };
+        let Some(cmd) = next else { break };
+
+        let req = match cmd {
+            MatchmakerCommand::Enqueue(req) => req,
+            // Cancellation is routed through the actor so the ONLY owner of `waiting`
+            // can dequeue the cancelled ticket. Before this, cancel was a no-op and a
+            // cancelled ticket still zombie-resolved into a bot match on the fallback
+            // timer — the client saw a `Succeeded` for a match it had abandoned. Match
+            // on both ticket_id AND user_id so a cancel can only drop THAT user's ticket.
+            MatchmakerCommand::Cancel { ticket_id, user_id } => {
+                match &waiting {
+                    Some(w) if w.ticket_id == ticket_id && w.user_id == user_id => {
+                        info!("matchmaker: cancelled waiting ticket {ticket_id} (user {user_id}) — dequeued");
+                        waiting = None;
+                    }
+                    _ => {
+                        info!("matchmaker: cancel for ticket {ticket_id} — not the waiting ticket (already resolved/gone)");
+                    }
+                }
+                continue;
+            }
+        };
 
         info!("matchmaker: ticket {} (user {})", req.ticket_id, req.user_id);
         record_match_queued(&db, req.ticket_id, req.user_id).await;
         // Push the captured 3-frame progression's first two frames now; the
-        // `Succeeded` frame follows once the match resolves (pair or fallback).
+        // `Succeeded` frame follows once the match resolves (pair or fallback). Sent to
+        // the client's CURRENT live rms sender (re-fetched by `RmsHandle::send`).
         let _ = req
             .rms
-            .send(MatchmakingMessage::Searching { ticket_id: req.ticket_id });
+            .send(MatchmakingMessage::Searching { ticket_id: req.ticket_id })
+            .await;
         let _ = req
             .rms
-            .send(MatchmakingMessage::PotentialMatch { ticket_id: req.ticket_id });
+            .send(MatchmakingMessage::PotentialMatch { ticket_id: req.ticket_id })
+            .await;
 
         match waiting.take() {
             // A LIVE second player is already waiting → pair the two into ONE shared
             // match (no bot).
-            Some(first) if !first.rms.is_closed() => {
+            Some(first) if !first.rms.is_gone().await => {
                 resolve(&registry, &config, &db, &[first, req], 0).await
             }
             // The waiting ticket's client is gone — its RMS feed closed (it cancelled,
@@ -472,7 +771,7 @@ async fn matchmaker_loop(
             // ticket wait for a live opponent instead.
             Some(stale) => {
                 info!(
-                    "matchmaker: discarded stale waiting ticket {} (RMS closed); {} now waiting",
+                    "matchmaker: discarded stale waiting ticket {} (RMS gone); {} now waiting",
                     stale.ticket_id, req.ticket_id
                 );
                 waiting = Some(req);
@@ -610,6 +909,48 @@ async fn resolve(
         }
     }
 
+    // PRODUCTION BOT FILL (2026-07-03 solo-bot fix). Any bot slot NOT filled by a
+    // configured debug ghost gets a REAL, COMPLETE, DISTINCT opponent character. A real
+    // character has a non-empty op54 PROFILE, so the engine's broadcast emits the
+    // opponent → the client RENDERS + BINDS the NPC (visible), dispatches the player's
+    // attacks against it (killable), and the match-end result card carries a resolvable
+    // winner (no post-match "stuck on loading" hang). Without this the bot slot falls to
+    // loadout::starter() (empty profile) → the invisible/unkillable-bot bug. Bounded by
+    // the same 1.5s timeout so a slow query never hangs the single matchmaker actor.
+    if bots > 0 && loadouts.len() < tickets.len() + bots {
+        let human_char_uuid = loadouts
+            .get(0)
+            .map(|l| l.character_uuid.clone())
+            .unwrap_or_default();
+        while loadouts.len() < tickets.len() + bots {
+            let bot = match tokio::time::timeout(
+                std::time::Duration::from_millis(1500),
+                load_bot_loadout(db, &human_char_uuid, config, game_session_id),
+            )
+            .await
+            {
+                Ok(b) => b,
+                Err(_) => {
+                    warn!("matchmaker: bot loadout load timed out — empty starter bot");
+                    crate::arena::combat::loadout::starter()
+                }
+            };
+            info!(
+                "matchmaker: solo bot slot {} → \"{}\" (char {}, profile {} B → {})",
+                loadouts.len(),
+                bot.display_name,
+                bot.character_uuid,
+                bot.profile_character_json.len(),
+                if bot.profile_character_json.is_empty() {
+                    "INVISIBLE (no complete bot available)"
+                } else {
+                    "opponent op54 PROFILE will broadcast"
+                },
+            );
+            loadouts.push(bot);
+        }
+    }
+
     // APPEARANCE GUARD (docs/arena-appearance-bug-spec.md). Log each fighter's
     // binding UUID at allocation — the client binds opponent appearance by the
     // avatar's propId4 = this `character_uuid`, so distinctness here is what keeps the
@@ -646,7 +987,13 @@ async fn resolve(
     // incomplete (e.g. the prod DB hasn't been migrated yet or a device has never
     // been bound).
     if paired && bots == 0 {
-        if let Err(reason) = check_paired_uuids_distinct(&loadouts) {
+        // Both halves of the identity are checked: the binding KEY (character_uuid,
+        // what the client's GetPvpPlayer looks the avatar up by) and the VALUE it
+        // dresses that avatar from (profile_character_json). Either one collapsing is
+        // the same visible bug, so both are hard failures.
+        let identity_check = check_paired_uuids_distinct(&loadouts)
+            .and_then(|()| check_paired_profiles_present_and_distinct(&loadouts));
+        if let Err(reason) = identity_check {
             warn!(
                 "matchmaker: PAIRED-MATCH APPEARANCE COLLAPSE rejected (gsid {game_session_id}) — {reason} \
                  Sending MatchmakingFailed to both clients (Fix 2 un-stick). Root cause: two peers \
@@ -659,7 +1006,10 @@ async fn resolve(
                     t.ticket_id
                 );
                 // Best-effort: if the client's RMS feed is already closed this is a no-op.
-                let _ = t.rms.send(MatchmakingMessage::Failed { ticket_id: t.ticket_id });
+                let _ = t
+                    .rms
+                    .send(MatchmakingMessage::Failed { ticket_id: t.ticket_id })
+                    .await;
             }
             return;
         }
@@ -690,11 +1040,16 @@ async fn resolve(
             address: config.advertise_host.clone(),
             port: config.udp_port,
         };
-        if t.rms.send(succeeded).is_err() {
+        // Send to the client's CURRENT live rms sender (re-fetched here, not the sender
+        // captured at enqueue): the client reconnects its rms WS repeatedly, so a
+        // captured sender would be a stale channel it no longer reads → the ONLY frame
+        // carrying the arena address vanishes → permanent "determining server". If the
+        // live sender is closed/absent, log it (the client is genuinely gone).
+        if t.rms.send(succeeded).await.is_err() {
             // The match's capacity permit is held until both players connect; an
             // abandoned ticket leaks one slot until expiry (TODO: deadline sweep).
             warn!(
-                "matchmaker: ticket {} — client RMS gone before Succeeded",
+                "matchmaker: ticket {} — no live client RMS sender for Succeeded (client gone or reconnecting)",
                 t.ticket_id
             );
         }
@@ -738,22 +1093,33 @@ pub async fn create_match(
     let session = session.get_session_or_error()?;
     let ticket_id = Uuid::new_v4();
 
-    // The RMS WebSocket must already be open — the client holds it from login.
-    // Clone the sender out under a brief lock, then drop the guard.
-    let rms = {
-        let guard = session.session.matchmaking_ws.lock().await;
-        guard.clone()
+    // The RMS WebSocket must already be open — the client holds it from login. We
+    // require it open at enqueue (so a client without a feed can't queue), but we hand
+    // the matchmaker the `Arc<Session>` (not a cloned sender): the client reconnects
+    // its rms WS repeatedly, so the matchmaker must re-fetch the CURRENT live sender at
+    // resolve time (`RmsHandle::Session`) or `Succeeded` lands in a stale channel and
+    // the client hangs at "determining server" (the stale-sender race).
+    // 409-4-1 when there is no feed. NOTE: this being empty is not always the
+    // client's fault — until 2026-07-30 a reconnecting socket's predecessor
+    // blind-cleared the slot on teardown, so a client with a perfectly healthy
+    // WebSocket got 409-4-1 on every match for the rest of its session. See
+    // Session::clear_matchmaking_ws_if_owner.
+    if !session.session.has_matchmaking_ws().await {
+        log::warn!(
+            "matchmaker: refusing ticket for user {} — no rms feed registered",
+            session.session.user_id
+        );
+        return Err(BladeApiError::new(StatusCode::CONFLICT, 4, 1));
     }
-    .ok_or_else(|| BladeApiError::new(StatusCode::CONFLICT, 4, 1))?;
 
     app_state
         .arena
         .matchmaker_tx
-        .send(TicketRequest {
+        .send(MatchmakerCommand::Enqueue(TicketRequest {
             ticket_id,
             user_id: session.session.user_id,
-            rms,
-        })
+            rms: RmsHandle::Session(session.session.clone()),
+        }))
         .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, 4, 2))?;
 
     Ok(Json(CreateMatchResponse {
@@ -769,11 +1135,22 @@ pub async fn create_match(
 pub async fn cancel_match(
     path: web::Path<Uuid>,
     session: SessionLookedUpMaybe,
+    app_state: web::Data<Arc<ServerGlobal>>,
 ) -> Result<HttpResponse, BladeApiError> {
-    let _session = session.get_session_or_error()?;
-    info!("matchmaker: cancel ticket {}", path.into_inner());
-    // Captured behavior: 200 with a literal `null` body. v1 resolves tickets
-    // immediately, so cancellation is an acknowledged no-op.
+    let session = session.get_session_or_error()?;
+    let ticket_id = path.into_inner();
+    info!("matchmaker: cancel ticket {ticket_id}");
+    // Route the cancel INTO the matchmaker actor so it actually DEQUEUES the ticket
+    // from `waiting`. This was previously an acknowledged no-op, so a cancelled ticket
+    // still zombie-resolved into a bot match on the solo-fallback timer (the client got
+    // a `Succeeded`/"determining server" for a match it had abandoned). Scoped to this
+    // user's id so a cancel can only drop that user's own waiting ticket. Best-effort:
+    // if the actor's channel is gone the ticket can't be in-queue anyway.
+    let _ = app_state.arena.matchmaker_tx.send(MatchmakerCommand::Cancel {
+        ticket_id,
+        user_id: session.session.user_id,
+    });
+    // Captured behavior: 200 with a literal `null` body.
     Ok(HttpResponse::Ok()
         .content_type("application/json")
         .body("null"))
@@ -835,23 +1212,24 @@ mod tests {
             max_queued_players: 64,
             solo_fallback_secs: 15,
             debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
         };
-        let (tx, rx) = unbounded_channel::<TicketRequest>();
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
 
         let (rms_a, mut recv_a) = unbounded_channel();
         let (rms_b, mut recv_b) = unbounded_channel();
-        tx.send(TicketRequest {
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
-            rms: rms_a,
-        })
+            rms: RmsHandle::Direct(rms_a),
+        }))
         .unwrap();
-        tx.send(TicketRequest {
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
-            rms: rms_b,
-        })
+            rms: RmsHandle::Direct(rms_b),
+        }))
         .unwrap();
 
         // No `Succeeded` arrives on either channel (the empty-UUID pair is refused).
@@ -891,16 +1269,27 @@ mod tests {
             max_queued_players: 64,
             solo_fallback_secs: 600, // long fallback — the Failed must arrive BEFORE it
             debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
         };
-        let (tx, rx) = unbounded_channel::<TicketRequest>();
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
 
         let tid_a = Uuid::new_v4();
         let tid_b = Uuid::new_v4();
         let (rms_a, mut recv_a) = unbounded_channel();
         let (rms_b, mut recv_b) = unbounded_channel();
-        tx.send(TicketRequest { ticket_id: tid_a, user_id: Uuid::new_v4(), rms: rms_a }).unwrap();
-        tx.send(TicketRequest { ticket_id: tid_b, user_id: Uuid::new_v4(), rms: rms_b }).unwrap();
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            ticket_id: tid_a,
+            user_id: Uuid::new_v4(),
+            rms: RmsHandle::Direct(rms_a),
+        }))
+        .unwrap();
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            ticket_id: tid_b,
+            user_id: Uuid::new_v4(),
+            rms: RmsHandle::Direct(rms_b),
+        }))
+        .unwrap();
 
         // Drain until Failed arrives or 1 s elapses (Searching + PotentialMatch come first).
         let failed_a = {
@@ -958,18 +1347,19 @@ mod tests {
             max_queued_players: 64,
             solo_fallback_secs: 1,
             debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
         };
-        let (tx, rx) = unbounded_channel::<TicketRequest>();
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
 
         // The client goes away immediately: drop the RMS receiver so is_closed() == true.
         let (rms_a, recv_a) = unbounded_channel();
         drop(recv_a);
-        tx.send(TicketRequest {
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
-            rms: rms_a,
-        })
+            rms: RmsHandle::Direct(rms_a),
+        }))
         .unwrap();
 
         // Past the solo-fallback timer: the dead ticket is dropped, not bot-matched, so
@@ -979,6 +1369,101 @@ mod tests {
             registry.available_permits(),
             4,
             "a dead waiting ticket must not consume a match permit (dropped, not bot-matched)"
+        );
+    }
+
+    /// A CANCEL routed into the actor must DEQUEUE the waiting ticket so it never
+    /// zombie-resolves on the solo-fallback timer. Before the fix, cancel was a no-op:
+    /// the cancelled ticket stayed in `waiting` and still bot-matched after the timer,
+    /// pushing a `Succeeded` for a match the client had abandoned. Here the waiting
+    /// ticket is cancelled BEFORE the (short) fallback fires; past the timer no match
+    /// was allocated (no permit consumed) and no `Succeeded` was sent.
+    #[tokio::test]
+    async fn cancel_dequeues_waiting_ticket() {
+        let registry = MatchRegistry::new(4);
+        let config = ArenaConfig {
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 4,
+            max_queued_players: 64,
+            solo_fallback_secs: 1,
+            debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
+        };
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
+        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+
+        let tid = Uuid::new_v4();
+        let uid = Uuid::new_v4();
+        let (rms, mut recv) = unbounded_channel();
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            ticket_id: tid,
+            user_id: uid,
+            rms: RmsHandle::Direct(rms),
+        }))
+        .unwrap();
+
+        // Let Searching/PotentialMatch enqueue, then cancel BEFORE the 1s fallback.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        tx.send(MatchmakerCommand::Cancel { ticket_id: tid, user_id: uid }).unwrap();
+
+        // Past the fallback timer: the cancelled ticket must NOT have bot-matched.
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert_eq!(
+            registry.available_permits(),
+            4,
+            "a cancelled ticket must not consume a match permit (dequeued, not zombie-resolved)"
+        );
+        // Drain the channel: only Searching + PotentialMatch, never a Succeeded.
+        while let Ok(Some(msg)) = tokio::time::timeout(Duration::from_millis(50), recv.recv()).await {
+            assert!(
+                !matches!(msg, MatchmakingMessage::Succeeded { .. }),
+                "a cancelled ticket must never receive a Succeeded frame; got {msg:?}"
+            );
+        }
+    }
+
+    /// A cancel that does NOT match the waiting ticket's (ticket_id, user_id) must
+    /// leave the waiting ticket in place — a cancel can only drop its OWN ticket. Here
+    /// user A queues, a spurious cancel for a different ticket/user arrives, and A still
+    /// bot-matches on the fallback timer (permit consumed).
+    #[tokio::test]
+    async fn cancel_does_not_drop_a_different_users_ticket() {
+        let registry = MatchRegistry::new(4);
+        let config = ArenaConfig {
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 4,
+            max_queued_players: 64,
+            solo_fallback_secs: 1,
+            debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
+        };
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
+        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+
+        let tid = Uuid::new_v4();
+        let uid = Uuid::new_v4();
+        let (rms, _recv) = unbounded_channel();
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            ticket_id: tid,
+            user_id: uid,
+            rms: RmsHandle::Direct(rms),
+        }))
+        .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // A cancel for someone else's ticket must not touch A's waiting ticket.
+        tx.send(MatchmakerCommand::Cancel { ticket_id: Uuid::new_v4(), user_id: Uuid::new_v4() })
+            .unwrap();
+
+        // Past the fallback timer: A still bot-matched (a solo bot needs no DB — the
+        // starter bot fill allocates a permit), so one permit is consumed.
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert_eq!(
+            registry.available_permits(),
+            3,
+            "a spurious cancel must not dequeue another user's ticket — A still bot-matches"
         );
     }
 
@@ -1041,6 +1526,61 @@ mod tests {
         ];
         let err = check_paired_uuids_distinct(&empty).expect_err("empty UUID must be rejected");
         assert!(err.contains("EMPTY character_uuid"), "rejection names the empty-UUID collapse: {err}");
+    }
+
+    /// The symmetric half of the guard: distinct `character_uuid`s are necessary but
+    /// NOT sufficient. The op54 PROFILE is the blob the client dresses the avatar
+    /// from, and a bare `loadout::starter()` fallback carries an EMPTY one — which
+    /// `broadcast_profiles` skips, so the opponent's body keeps the local character's
+    /// appearance even though every UUID was distinct.
+    #[test]
+    fn paired_profile_presence_guard() {
+        use crate::arena::combat::loadout::starter;
+        let fighter = |uuid: &str, name: &str, profile: &str| {
+            let mut l = starter();
+            l.character_uuid = uuid.to_string();
+            l.display_name = name.to_string();
+            l.profile_character_json = profile.to_string();
+            l
+        };
+        const U1: &str = "38c987fd-c42b-4ea6-b869-c8d4c03055f9";
+        const U2: &str = "1131a037-716c-49cc-b165-32d8ddc14f49";
+
+        // Distinct UUIDs AND distinct non-empty profiles → OK.
+        let ok = vec![
+            fighter(U1, "Flappety", r#"{"id":"38c987fd","name":"Flappety"}"#),
+            fighter(U2, "Blank", r#"{"id":"1131a037","name":"Blank"}"#),
+        ];
+        assert!(check_paired_profiles_present_and_distinct(&ok).is_ok());
+
+        // Distinct UUIDs but one profile EMPTY (a degraded starter() fallback) →
+        // rejected: this passes the UUID guard yet still collapses appearance.
+        let degraded = vec![
+            fighter(U1, "Flappety", r#"{"id":"38c987fd","name":"Flappety"}"#),
+            fighter(U2, "DegradedToStarter", ""),
+        ];
+        assert!(
+            check_paired_uuids_distinct(&degraded).is_ok(),
+            "the UUID guard alone does NOT catch this — that is the point of the second guard"
+        );
+        let err = check_paired_profiles_present_and_distinct(&degraded)
+            .expect_err("an empty profile must be rejected");
+        assert!(
+            err.contains("EMPTY profile_character_json"),
+            "rejection names the empty-profile collapse: {err}"
+        );
+
+        // Two identical profiles → both clients dress both avatars from one blob.
+        let shared = vec![
+            fighter(U1, "Flappety", r#"{"id":"38c987fd","name":"Flappety"}"#),
+            fighter(U2, "WolfWalker", r#"{"id":"38c987fd","name":"Flappety"}"#),
+        ];
+        let err = check_paired_profiles_present_and_distinct(&shared)
+            .expect_err("an identical profile must be rejected");
+        assert!(
+            err.contains("IDENTICAL profile_character_json"),
+            "rejection names the shared-profile collapse: {err}"
+        );
     }
 
     /// The op54 round-start PROFILE character JSON must be schema-identical to

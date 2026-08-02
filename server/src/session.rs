@@ -53,6 +53,132 @@ impl Session {
     pub fn generate_token(&self, session_id: &Uuid) -> String {
         format!("{}|{}", session_id, self.extra_secret)
     }
+
+    /// Claim the matchmaking-feed slot for a freshly opened rms WebSocket.
+    ///
+    /// Last writer wins: the client reconnects this socket constantly, and the
+    /// newest one is always the live one.
+    pub async fn set_matchmaking_ws(&self, tx: UnboundedSender<MatchmakingMessage>) {
+        *self.matchmaking_ws.lock().await = Some(tx);
+    }
+
+    /// Release the slot on socket teardown, but ONLY if it still holds `tx`.
+    /// Returns whether it was cleared.
+    ///
+    /// A blind `= None` here is a real bug, not a tidiness question. A reconnect
+    /// registers the new sender BEFORE the old socket notices it is dead, so the
+    /// dying socket's teardown would wipe the live socket's sender. Since
+    /// `create_match` refuses to queue (409-4-1) whenever this slot is empty, that
+    /// left matchmaking permanently broken while the WebSocket kept exchanging
+    /// ping/pong normally — invisible until you correlate the 101 upgrades against
+    /// the 409s.
+    pub async fn clear_matchmaking_ws_if_owner(
+        &self,
+        tx: &UnboundedSender<MatchmakingMessage>,
+    ) -> bool {
+        let mut slot = self.matchmaking_ws.lock().await;
+        let is_owner = slot.as_ref().is_some_and(|cur| cur.same_channel(tx));
+        if is_owner {
+            *slot = None;
+        }
+        is_owner
+    }
+
+    /// Whether a matchmaking feed is currently registered (what `create_match`
+    /// gates on).
+    pub async fn has_matchmaking_ws(&self) -> bool {
+        self.matchmaking_ws.lock().await.is_some()
+    }
+}
+
+#[cfg(test)]
+mod matchmaking_slot_tests {
+    use super::*;
+    use crate::arena::MatchmakingMessage;
+    use std::time::Duration as StdDuration;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    fn session() -> Session {
+        Session::new(Uuid::new_v4(), Uuid::new_v4(), StdDuration::from_secs(3600))
+    }
+
+    fn chan() -> UnboundedSender<MatchmakingMessage> {
+        unbounded_channel::<MatchmakingMessage>().0
+    }
+
+    /// THE REGRESSION. Reproduces the production sequence of 2026-07-30: socket A
+    /// opens, a match is queued fine, the client reconnects as socket B, then A's
+    /// teardown fires. Before the fix that teardown emptied the slot and every
+    /// later matches/create answered 409-4-1.
+    #[tokio::test]
+    async fn reconnect_then_old_socket_teardown_keeps_the_live_feed() {
+        let s = session();
+        let a = chan();
+        let b = chan();
+
+        s.set_matchmaking_ws(a.clone()).await;
+        assert!(s.has_matchmaking_ws().await, "socket A should be queueable");
+
+        // Client reconnects; B takes over the slot.
+        s.set_matchmaking_ws(b.clone()).await;
+
+        // A finally notices it is dead and tears down — it must NOT clear B.
+        let cleared = s.clear_matchmaking_ws_if_owner(&a).await;
+        assert!(!cleared, "A must not clear a slot it no longer owns");
+        assert!(
+            s.has_matchmaking_ws().await,
+            "the live socket B must still be able to queue a match (409-4-1 bug)"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_owning_socket_does_clear_its_own_slot() {
+        let s = session();
+        let a = chan();
+        s.set_matchmaking_ws(a.clone()).await;
+
+        assert!(s.clear_matchmaking_ws_if_owner(&a).await);
+        assert!(
+            !s.has_matchmaking_ws().await,
+            "a genuine disconnect must leave no feed, so create_match correctly refuses"
+        );
+    }
+
+    #[tokio::test]
+    async fn clearing_an_empty_slot_is_a_no_op() {
+        let s = session();
+        assert!(!s.clear_matchmaking_ws_if_owner(&chan()).await);
+        assert!(!s.has_matchmaking_ws().await);
+    }
+
+    /// Clones of one socket's sender share a channel, so either must be able to
+    /// release it — `same_channel` compares the channel, not the handle.
+    #[tokio::test]
+    async fn a_clone_of_the_owner_still_counts_as_the_owner() {
+        let s = session();
+        let a = chan();
+        s.set_matchmaking_ws(a.clone()).await;
+        assert!(s.clear_matchmaking_ws_if_owner(&a.clone()).await);
+    }
+
+    /// Out-of-order teardown: several stale sockets closing in any order must
+    /// never disturb the newest registration.
+    #[tokio::test]
+    async fn many_stale_teardowns_cannot_starve_the_newest_socket() {
+        let s = session();
+        let stale: Vec<_> = (0..5).map(|_| chan()).collect();
+        for tx in &stale {
+            s.set_matchmaking_ws(tx.clone()).await;
+        }
+        let live = chan();
+        s.set_matchmaking_ws(live.clone()).await;
+
+        for tx in stale.iter().rev() {
+            assert!(!s.clear_matchmaking_ws_if_owner(tx).await);
+        }
+        assert!(s.has_matchmaking_ws().await, "newest socket must survive");
+        assert!(s.clear_matchmaking_ws_if_owner(&live).await);
+    }
 }
 
 //TODO: FromRequest for this SessionLookupUp

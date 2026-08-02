@@ -1,0 +1,1164 @@
+{
+  "_meta": {
+    "description": "Town job-board definitions + daily/weekly rotation. Authoritative source = APK il2cpp `JobData` / `JobPool` / `JobDuelBossList` (ScriptableObject, `BGS.Game.Quests`), cross-checked against prod /quests captures and UESP Blades:Jobs. Consumed by server/src/quest.rs `jobs_gen`, which loads this whole file as a raw serde_json::Value (unknown keys are ignored, so it is safe to add documentation/back-office blocks).",
+    "authoritative": "jobPools[], globals (JobData scalars), perTypeDifficulty (JobData.PerTypeData.JobDifficultyDistributionWithLevel), perTypeAndSourceData (boss loot tables), jobDuelBossList, spawn-group IDs. All read directly from the compiled client.",
+    "guessed": "The `jobTypes` catalog labels/objective-count hints and the level>=60 difficulty extrapolation rows are annotated `_guessed:true` where present. `dailyRotation` documents behaviour already implemented in quest.rs; the numbers there (slot counts) are authoritative from JobData, the seeding scheme is our deterministic impl choice.",
+    "enums": {
+      "jobType": {
+        "_source": "il2cpp Job.JobType (TypeDefIndex 11096) — CORRECTED: type 2 is Fetch, NOT 'Clear'.",
+        "0": "Defeat  — defeat enemies + collect reward",
+        "1": "Explore — defeat the boss and find the exit",
+        "2": "Fetch   — fetch objective items (rare in captures)",
+        "3": "Rescue  — rescue townsfolk and defeat the boss",
+        "4": "Gather  — gather items and defeat the boss",
+        "5": "Duel    — win against a gladiator (duel boss)",
+        "6": "COUNT (sentinel)",
+        "100": "None (sentinel)"
+      },
+      "jobSource": {
+        "_source": "il2cpp JobSource (TypeDefIndex 11901) — CORRECTED from prior draft labels.",
+        "0": "None",
+        "1": "Regular (the four rolling Normal-job slots)",
+        "2": "Daily (one Daily job, refreshes at the daily reset)",
+        "3": "Weekly (one Weekly job, refreshes Monday)"
+      },
+      "presentation": {
+        "_source": "il2cpp Job.JobPresentation (TypeDefIndex 11097) — CORRECTED from prior draft labels.",
+        "0": "Standard (the Regular/Normal rolling slots)",
+        "1": "Daily (the featured Daily job)",
+        "2": "Weekly (the featured Weekly boss job)",
+        "3": "Special",
+        "100": "None"
+      },
+      "recurrenceType": {
+        "_source": "il2cpp Recurrence.RecurrenceType.",
+        "1": "daily",
+        "2": "weekly"
+      },
+      "jobDifficulty": {
+        "_source": "il2cpp JobDifficulty enum (TypeDefIndex 11120) — the 0..4 'skull' rating the UI shows.",
+        "0": "VeryEasy",
+        "1": "Easy",
+        "2": "Normal",
+        "3": "Hard",
+        "4": "VeryHard"
+      },
+      "dayOfWeek": "0=Sunday .. 6=Saturday (matches quest.rs weekday_sun0; il2cpp uses Recurrence.JavaDayOfWeek)"
+    },
+    "notes": [
+      "jobPoolId values are the real APK Uids (JobPool._uid). The presentation field on each pool selects the board slot: presentation 0 = the four rolling Normal slots (maxActive 4); presentation 2 = the weekly Duel boss; presentation 1 = per-weekday featured Daily pools.",
+      "endTime/nextStartTime are DERIVED at runtime from recurrence by quest.rs jobs_gen::pool_timers; this file gives only the cadence (durationSecs/resetHour/resetMinute/type/dayOfWeek).",
+      "The per-instance jobSetup runtime shape (enemy spawn groups, counts, boss loot per type/source, difficulty level, gem-skip, duel boss) is GENERATED per character+day by jobs_gen::roll_job from these definitions plus the harvested constant pools baked into quest.rs (dungeon templates, enemy families, duel bosses, gather items). It is not a static table.",
+      "DIFFICULTY SCALING: quest.rs jobs_gen::roll_difficulty reads perTypeDifficulty[jobType].difficultyByLevel, picks the highest row whose level <= player level, and rolls difficultyLevel = playerLevel + rand(veryEasyMin .. veryHardMax) clamped to >=1. The client then maps difficultyLevel-vs-playerLevel into the 0..4 skull rating via the veryEasyMin/easyMin/normalMin/hardMin/veryHardMin thresholds (il2cpp QuestDifficultyCalculator.GetRelativeDifficulty). So raising these offsets makes a level band harder.",
+      "AUTO-EASING: UESP notes that after repeated failed jobs the game lowers difficulty. That live-adjust is character state (not in this file); a faithful server can decrement a per-character difficulty bias — see dailyRotation.autoEasing below (currently GUESSED, not yet implemented in quest.rs)."
+    ]
+  },
+  "jobTypes": [
+    {
+      "jobType": 0,
+      "name": "Defeat",
+      "presentationLabel": "defeat enemies and collect reward",
+      "objectivePairCaptured": true,
+      "usesBoss": false
+    },
+    {
+      "jobType": 1,
+      "name": "Explore",
+      "presentationLabel": "defeat the boss and find the exit",
+      "objectivePairCaptured": true,
+      "usesBoss": true
+    },
+    {
+      "jobType": 2,
+      "name": "Fetch",
+      "presentationLabel": "fetch objective items",
+      "objectivePairCaptured": false,
+      "usesBoss": false,
+      "_guessed": true,
+      "_note": "Type 2 (Fetch) never seen in captures; jobs_gen currently falls back to the Defeat objective pair for it and does not roll it into Standard pools."
+    },
+    {
+      "jobType": 3,
+      "name": "Rescue",
+      "presentationLabel": "rescue townsfolk and defeat the boss",
+      "objectivePairCaptured": true,
+      "usesBoss": true
+    },
+    {
+      "jobType": 4,
+      "name": "Gather",
+      "presentationLabel": "gather items and defeat the boss",
+      "objectivePairCaptured": true,
+      "usesBoss": true
+    },
+    {
+      "jobType": 5,
+      "name": "Duel",
+      "presentationLabel": "win against a gladiator",
+      "objectivePairCaptured": true,
+      "usesBoss": true,
+      "_note": "Weekly boss pool (presentation 2) always rolls Duel; duel boss drawn from jobDuelBossList."
+    }
+  ],
+  "dailyRotation": {
+    "_meta": "Documents the deterministic daily/weekly rotation quest.rs already implements, so a back-office editor can reason about it. Model = every player sees the SAME cadence, but each player's rolled jobs are seeded by (characterId, resetBoundary, poolId, slot) so boards differ per player yet are stable within a reset window and reproducible on re-fetch. Change the cadence by editing jobPools[].recurrence + globals; change difficulty by editing perTypeDifficulty.",
+    "resetModel": {
+      "dailyResetHourUtc": 5,
+      "dailyResetMinuteUtc": 0,
+      "weeklyResetDayOfWeek": 1,
+      "_note": "UESP + JobData: Normal + Daily jobs refresh every 24h at 05:00 UTC; the Weekly job refreshes Monday 05:00 UTC. quest.rs derives the reset boundary from globals.dailyJobsRefreshTimeHour/Minute (05:00) and rolls the weekly pool on its recurrence.dayOfWeek."
+    },
+    "boardComposition": {
+      "regularSlots": 4,
+      "dailyFeatured": 1,
+      "weeklyBoss": 1,
+      "_note": "Authoritative: globals.maxActiveJobs = 4 Standard slots. quest.rs adds 1 weekly Duel boss always, plus the per-weekday featured Daily pool that is active on its window (one job). Typical board = 4 + 1 boss + (0..1 featured) = 5-6 jobs."
+    },
+    "seeding": {
+      "scheme": "deterministic",
+      "seedInputs": [
+        "characterId",
+        "resetBoundary(epochSecs)",
+        "jobPoolId",
+        "slotIndex"
+      ],
+      "prng": "splitmix64 (self-contained in quest.rs jobs_gen)",
+      "_note": "IMPLEMENTATION CHOICE (not from the client): guarantees same board within a reset window, different board per character, reproducible on every /quests fetch without persisting job bodies."
+    },
+    "autoEasing": {
+      "_guessed": true,
+      "enabled": false,
+      "failuresBeforeEase": 3,
+      "difficultyStepDown": 1,
+      "_note": "UESP: after several unfinishable jobs the game eases difficulty. NOT yet implemented in quest.rs. A faithful impl would track a per-character difficultyBias (persisted on the character), subtract it in roll_difficulty, and increment it on repeated abandon/fail. Wire this before relying on it."
+    }
+  },
+  "globals": {
+    "maxActiveJobs": 4,
+    "maxDailyJobs": 100,
+    "dailyJobsRefreshTimeHour": 5,
+    "dailyJobsRefreshTimeMinute": 0,
+    "jobDifficultyOffsetDistributionMean": 2.0,
+    "jobDifficultyOffsetDeviance": 2.5,
+    "minJobPlayerLevel": 1,
+    "maxJobPlayerLevel": 100,
+    "jobDifficultyMinOffset": -3,
+    "jobDifficultyMaxOffset": 8,
+    "cleanupLevelRange": 3,
+    "difficultyCycle": [
+      0,
+      1,
+      2,
+      1,
+      0,
+      3,
+      0,
+      1,
+      2,
+      1,
+      0,
+      1,
+      2,
+      1,
+      0,
+      1,
+      3,
+      1,
+      1,
+      0,
+      1,
+      2,
+      1,
+      0,
+      1,
+      0,
+      1,
+      4,
+      1,
+      1,
+      2,
+      1,
+      1,
+      0,
+      1,
+      2,
+      3,
+      1,
+      0,
+      1,
+      0,
+      2,
+      1,
+      0,
+      1,
+      2,
+      1,
+      0,
+      3,
+      1,
+      0,
+      2,
+      1,
+      1,
+      0,
+      1,
+      2,
+      1,
+      0,
+      1,
+      1,
+      3,
+      1,
+      0,
+      1,
+      4,
+      1,
+      0,
+      1,
+      2,
+      1,
+      1,
+      0,
+      1,
+      3,
+      1,
+      2,
+      1,
+      0,
+      1
+    ],
+    "gemSkipCosts": [
+      50,
+      60,
+      70,
+      80,
+      90
+    ],
+    "skipExperienceMultiplier": 1.0,
+    "unlockJobsQuestId": "1709a8bc-79dd-4a7f-b7f8-3a6022646dda",
+    "baseJobDifficultyRange": {
+      "min": -2,
+      "max": 9
+    },
+    "enemySpawnGroups": {
+      "primary": "b2a7471e-7a44-47a6-b483-503a9e5cae3d",
+      "secondary": "c9ad5aae-200b-48fd-860e-ad45e0349ef0",
+      "boss": "690d51c4-46c3-4546-bf82-e267289aca02",
+      "secretBoss": "df0f7a93-5f9d-4d36-b9f9-c087da9858de"
+    },
+    "interactableItemSpawnGroups": [
+      {
+        "rarity": 1,
+        "spawnGroupId": "49adb60a-f5b2-4668-b96d-d69602a326cc"
+      },
+      {
+        "rarity": 2,
+        "spawnGroupId": "f1753fab-bd87-48a7-a2b4-79752b059c1c"
+      },
+      {
+        "rarity": 3,
+        "spawnGroupId": "f85079bc-4873-4773-b8fd-d78bf1a837c1"
+      }
+    ],
+    "interactableItemSpawnGroupsInSecrets": [
+      {
+        "rarity": 1,
+        "spawnGroupId": "da153b3a-8a61-460c-9384-9e12ba8f50e3"
+      },
+      {
+        "rarity": 2,
+        "spawnGroupId": "27f1e408-8cfd-4ded-b177-05edc3ae296c"
+      },
+      {
+        "rarity": 3,
+        "spawnGroupId": "d00e3919-826d-4476-9f36-4cf5a581ab37"
+      }
+    ]
+  },
+  "jobPools": [
+    {
+      "jobPoolId": "4956c6ab-1832-4edd-8bee-561b79f83ee2",
+      "jobSource": 1,
+      "jobSourceLabel": "daily",
+      "maxActive": 4,
+      "maxTotal": 100,
+      "presentation": 0,
+      "presentationLabel": "standard",
+      "recurrence": {
+        "durationSecs": 86400,
+        "resetHour": 5,
+        "resetMinute": 0,
+        "type": 1,
+        "typeLabel": "daily",
+        "dayOfWeek": 0
+      }
+    },
+    {
+      "jobPoolId": "717b3cf5-21d8-4f0c-a7a9-603fe37b8766",
+      "jobSource": 2,
+      "jobSourceLabel": "weekly",
+      "maxActive": 1,
+      "maxTotal": 1,
+      "presentation": 1,
+      "presentationLabel": "featured",
+      "recurrence": {
+        "durationSecs": 86400,
+        "resetHour": 5,
+        "resetMinute": 0,
+        "type": 1,
+        "typeLabel": "daily",
+        "dayOfWeek": 0
+      }
+    },
+    {
+      "jobPoolId": "361da91e-6860-4c31-a447-4010cbaad1dd",
+      "jobSource": 3,
+      "jobSourceLabel": "special",
+      "maxActive": 1,
+      "maxTotal": 1,
+      "presentation": 2,
+      "presentationLabel": "boss",
+      "recurrence": {
+        "durationSecs": 604800,
+        "resetHour": 5,
+        "resetMinute": 0,
+        "type": 2,
+        "typeLabel": "weekly",
+        "dayOfWeek": 0
+      }
+    },
+    {
+      "jobPoolId": "9d94baeb-96d4-49e9-bdf6-9f939be836d3",
+      "jobSource": 2,
+      "jobSourceLabel": "weekly",
+      "maxActive": 1,
+      "maxTotal": 1,
+      "presentation": 1,
+      "presentationLabel": "featured",
+      "recurrence": {
+        "durationSecs": 86400,
+        "resetHour": 5,
+        "resetMinute": 0,
+        "type": 2,
+        "typeLabel": "weekly",
+        "dayOfWeek": 6
+      }
+    },
+    {
+      "jobPoolId": "c5efa81d-18d9-47f3-a0ac-e108c0a50605",
+      "jobSource": 2,
+      "jobSourceLabel": "weekly",
+      "maxActive": 1,
+      "maxTotal": 1,
+      "presentation": 1,
+      "presentationLabel": "featured",
+      "recurrence": {
+        "durationSecs": 86400,
+        "resetHour": 5,
+        "resetMinute": 0,
+        "type": 2,
+        "typeLabel": "weekly",
+        "dayOfWeek": 0
+      }
+    },
+    {
+      "jobPoolId": "6b2a5baa-f64f-4cfe-8b03-fe7d632ea2f1",
+      "jobSource": 2,
+      "jobSourceLabel": "weekly",
+      "maxActive": 1,
+      "maxTotal": 1,
+      "presentation": 1,
+      "presentationLabel": "featured",
+      "recurrence": {
+        "durationSecs": 86400,
+        "resetHour": 5,
+        "resetMinute": 0,
+        "type": 2,
+        "typeLabel": "weekly",
+        "dayOfWeek": 1
+      }
+    },
+    {
+      "jobPoolId": "9fcbb01c-13bf-4cd9-916f-25d5faf5314e",
+      "jobSource": 2,
+      "jobSourceLabel": "weekly",
+      "maxActive": 1,
+      "maxTotal": 1,
+      "presentation": 1,
+      "presentationLabel": "featured",
+      "recurrence": {
+        "durationSecs": 86400,
+        "resetHour": 5,
+        "resetMinute": 0,
+        "type": 2,
+        "typeLabel": "weekly",
+        "dayOfWeek": 2
+      }
+    },
+    {
+      "jobPoolId": "df666a07-3539-426a-916e-ccdba580cb1d",
+      "jobSource": 2,
+      "jobSourceLabel": "weekly",
+      "maxActive": 1,
+      "maxTotal": 1,
+      "presentation": 1,
+      "presentationLabel": "featured",
+      "recurrence": {
+        "durationSecs": 86400,
+        "resetHour": 5,
+        "resetMinute": 0,
+        "type": 2,
+        "typeLabel": "weekly",
+        "dayOfWeek": 3
+      }
+    },
+    {
+      "jobPoolId": "a4e76931-02bf-4bfb-a472-286e968a03e1",
+      "jobSource": 2,
+      "jobSourceLabel": "weekly",
+      "maxActive": 1,
+      "maxTotal": 1,
+      "presentation": 1,
+      "presentationLabel": "featured",
+      "recurrence": {
+        "durationSecs": 86400,
+        "resetHour": 5,
+        "resetMinute": 0,
+        "type": 2,
+        "typeLabel": "weekly",
+        "dayOfWeek": 4
+      }
+    },
+    {
+      "jobPoolId": "8501a030-5009-4c73-a864-69c3d7fe6ae5",
+      "jobSource": 2,
+      "jobSourceLabel": "weekly",
+      "maxActive": 1,
+      "maxTotal": 1,
+      "presentation": 1,
+      "presentationLabel": "featured",
+      "recurrence": {
+        "durationSecs": 86400,
+        "resetHour": 5,
+        "resetMinute": 0,
+        "type": 2,
+        "typeLabel": "weekly",
+        "dayOfWeek": 5
+      }
+    }
+  ],
+  "perTypeAndSourceData": [
+    {
+      "jobType": 0,
+      "jobSource": 1,
+      "bossLootTableId": "9217b4cd-a698-4d19-ab94-889b8364b95c"
+    },
+    {
+      "jobType": 0,
+      "jobSource": 2,
+      "bossLootTableId": "fef12c6f-c32b-4637-827f-5829882415a2"
+    },
+    {
+      "jobType": 0,
+      "jobSource": 3,
+      "bossLootTableId": "f91463bf-febd-403a-92ff-e11e9298e68a"
+    },
+    {
+      "jobType": 1,
+      "jobSource": 1,
+      "bossLootTableId": "9b174500-1c14-4ea2-918e-ba0bb51351c6"
+    },
+    {
+      "jobType": 1,
+      "jobSource": 2,
+      "bossLootTableId": "c97b64de-bd8e-41b8-8afc-dcf6dbed6290"
+    },
+    {
+      "jobType": 1,
+      "jobSource": 3,
+      "bossLootTableId": "5bf0c138-e7ee-4b71-9ef4-c08d3a43803e"
+    },
+    {
+      "jobType": 2,
+      "jobSource": 1,
+      "bossLootTableId": "9217b4cd-a698-4d19-ab94-889b8364b95c"
+    },
+    {
+      "jobType": 2,
+      "jobSource": 2,
+      "bossLootTableId": "fef12c6f-c32b-4637-827f-5829882415a2"
+    },
+    {
+      "jobType": 2,
+      "jobSource": 3,
+      "bossLootTableId": "f91463bf-febd-403a-92ff-e11e9298e68a"
+    },
+    {
+      "jobType": 3,
+      "jobSource": 1,
+      "bossLootTableId": "9217b4cd-a698-4d19-ab94-889b8364b95c"
+    },
+    {
+      "jobType": 3,
+      "jobSource": 2,
+      "bossLootTableId": "fef12c6f-c32b-4637-827f-5829882415a2"
+    },
+    {
+      "jobType": 3,
+      "jobSource": 3,
+      "bossLootTableId": "f91463bf-febd-403a-92ff-e11e9298e68a"
+    },
+    {
+      "jobType": 4,
+      "jobSource": 1,
+      "bossLootTableId": "9217b4cd-a698-4d19-ab94-889b8364b95c"
+    },
+    {
+      "jobType": 4,
+      "jobSource": 2,
+      "bossLootTableId": "fef12c6f-c32b-4637-827f-5829882415a2"
+    },
+    {
+      "jobType": 4,
+      "jobSource": 3,
+      "bossLootTableId": "f91463bf-febd-403a-92ff-e11e9298e68a"
+    },
+    {
+      "jobType": 5,
+      "jobSource": 1,
+      "bossLootTableId": "5b4525d9-7e07-4149-ae45-2c2eba65e370"
+    },
+    {
+      "jobType": 5,
+      "jobSource": 2,
+      "bossLootTableId": "e7a35276-ef80-4f6e-8725-e685dcf1d6e8"
+    },
+    {
+      "jobType": 5,
+      "jobSource": 3,
+      "bossLootTableId": "a975f9d6-125e-404c-aa9e-0a2c869ddc30"
+    }
+  ],
+  "perTypeDifficulty": [
+    {
+      "jobType": 0,
+      "difficultyByLevel": [
+        {
+          "level": 1,
+          "veryEasyMin": -2,
+          "easyMin": 0,
+          "normalMin": 2,
+          "hardMin": 4,
+          "veryHardMin": 6,
+          "veryHardMax": 9
+        },
+        {
+          "level": 20,
+          "veryEasyMin": -4,
+          "easyMin": -2,
+          "normalMin": 0,
+          "hardMin": 2,
+          "veryHardMin": 4,
+          "veryHardMax": 7
+        },
+        {
+          "level": 30,
+          "veryEasyMin": -5,
+          "easyMin": -3,
+          "normalMin": -1,
+          "hardMin": 1,
+          "veryHardMin": 3,
+          "veryHardMax": 6
+        },
+        {
+          "level": 40,
+          "veryEasyMin": -7,
+          "easyMin": -5,
+          "normalMin": -3,
+          "hardMin": -1,
+          "veryHardMin": 1,
+          "veryHardMax": 4
+        },
+        {
+          "level": 50,
+          "veryEasyMin": -8,
+          "easyMin": -6,
+          "normalMin": -4,
+          "hardMin": -2,
+          "veryHardMin": 0,
+          "veryHardMax": 3
+        },
+        {
+          "level": 60,
+          "veryEasyMin": -9,
+          "easyMin": -7,
+          "normalMin": -5,
+          "hardMin": -3,
+          "veryHardMin": -1,
+          "veryHardMax": 2
+        },
+        {
+          "level": 80,
+          "veryEasyMin": -11,
+          "easyMin": -9,
+          "normalMin": -7,
+          "hardMin": -5,
+          "veryHardMin": -3,
+          "veryHardMax": 0,
+          "_guessed": true
+        },
+        {
+          "level": 100,
+          "veryEasyMin": -13,
+          "easyMin": -11,
+          "normalMin": -9,
+          "hardMin": -7,
+          "veryHardMin": -5,
+          "veryHardMax": -2,
+          "_guessed": true
+        }
+      ]
+    },
+    {
+      "jobType": 1,
+      "difficultyByLevel": [
+        {
+          "level": 1,
+          "veryEasyMin": -2,
+          "easyMin": 0,
+          "normalMin": 2,
+          "hardMin": 4,
+          "veryHardMin": 6,
+          "veryHardMax": 9
+        },
+        {
+          "level": 20,
+          "veryEasyMin": -4,
+          "easyMin": -2,
+          "normalMin": 0,
+          "hardMin": 2,
+          "veryHardMin": 4,
+          "veryHardMax": 7
+        },
+        {
+          "level": 30,
+          "veryEasyMin": -5,
+          "easyMin": -3,
+          "normalMin": -1,
+          "hardMin": 1,
+          "veryHardMin": 3,
+          "veryHardMax": 6
+        },
+        {
+          "level": 40,
+          "veryEasyMin": -7,
+          "easyMin": -5,
+          "normalMin": -3,
+          "hardMin": -1,
+          "veryHardMin": 1,
+          "veryHardMax": 4
+        },
+        {
+          "level": 50,
+          "veryEasyMin": -8,
+          "easyMin": -6,
+          "normalMin": -4,
+          "hardMin": -2,
+          "veryHardMin": 0,
+          "veryHardMax": 3
+        },
+        {
+          "level": 60,
+          "veryEasyMin": -9,
+          "easyMin": -7,
+          "normalMin": -5,
+          "hardMin": -3,
+          "veryHardMin": -1,
+          "veryHardMax": 2
+        },
+        {
+          "level": 80,
+          "veryEasyMin": -11,
+          "easyMin": -9,
+          "normalMin": -7,
+          "hardMin": -5,
+          "veryHardMin": -3,
+          "veryHardMax": 0,
+          "_guessed": true
+        },
+        {
+          "level": 100,
+          "veryEasyMin": -13,
+          "easyMin": -11,
+          "normalMin": -9,
+          "hardMin": -7,
+          "veryHardMin": -5,
+          "veryHardMax": -2,
+          "_guessed": true
+        }
+      ]
+    },
+    {
+      "jobType": 2,
+      "difficultyByLevel": [
+        {
+          "level": 1,
+          "veryEasyMin": -2,
+          "easyMin": 0,
+          "normalMin": 2,
+          "hardMin": 4,
+          "veryHardMin": 6,
+          "veryHardMax": 9
+        },
+        {
+          "level": 20,
+          "veryEasyMin": -4,
+          "easyMin": -2,
+          "normalMin": 0,
+          "hardMin": 2,
+          "veryHardMin": 4,
+          "veryHardMax": 7
+        },
+        {
+          "level": 30,
+          "veryEasyMin": -5,
+          "easyMin": -3,
+          "normalMin": -1,
+          "hardMin": 1,
+          "veryHardMin": 3,
+          "veryHardMax": 6
+        },
+        {
+          "level": 40,
+          "veryEasyMin": -7,
+          "easyMin": -5,
+          "normalMin": -3,
+          "hardMin": -1,
+          "veryHardMin": 1,
+          "veryHardMax": 4
+        },
+        {
+          "level": 50,
+          "veryEasyMin": -8,
+          "easyMin": -6,
+          "normalMin": -4,
+          "hardMin": -2,
+          "veryHardMin": 0,
+          "veryHardMax": 3
+        },
+        {
+          "level": 60,
+          "veryEasyMin": -9,
+          "easyMin": -7,
+          "normalMin": -5,
+          "hardMin": -3,
+          "veryHardMin": -1,
+          "veryHardMax": 2
+        },
+        {
+          "level": 80,
+          "veryEasyMin": -11,
+          "easyMin": -9,
+          "normalMin": -7,
+          "hardMin": -5,
+          "veryHardMin": -3,
+          "veryHardMax": 0,
+          "_guessed": true
+        },
+        {
+          "level": 100,
+          "veryEasyMin": -13,
+          "easyMin": -11,
+          "normalMin": -9,
+          "hardMin": -7,
+          "veryHardMin": -5,
+          "veryHardMax": -2,
+          "_guessed": true
+        }
+      ]
+    },
+    {
+      "jobType": 3,
+      "difficultyByLevel": [
+        {
+          "level": 1,
+          "veryEasyMin": -2,
+          "easyMin": 0,
+          "normalMin": 2,
+          "hardMin": 4,
+          "veryHardMin": 6,
+          "veryHardMax": 9
+        },
+        {
+          "level": 20,
+          "veryEasyMin": -4,
+          "easyMin": -2,
+          "normalMin": 0,
+          "hardMin": 2,
+          "veryHardMin": 4,
+          "veryHardMax": 7
+        },
+        {
+          "level": 30,
+          "veryEasyMin": -5,
+          "easyMin": -3,
+          "normalMin": -1,
+          "hardMin": 1,
+          "veryHardMin": 3,
+          "veryHardMax": 6
+        },
+        {
+          "level": 40,
+          "veryEasyMin": -7,
+          "easyMin": -5,
+          "normalMin": -3,
+          "hardMin": -1,
+          "veryHardMin": 1,
+          "veryHardMax": 4
+        },
+        {
+          "level": 50,
+          "veryEasyMin": -8,
+          "easyMin": -6,
+          "normalMin": -4,
+          "hardMin": -2,
+          "veryHardMin": 0,
+          "veryHardMax": 3
+        },
+        {
+          "level": 60,
+          "veryEasyMin": -9,
+          "easyMin": -7,
+          "normalMin": -5,
+          "hardMin": -3,
+          "veryHardMin": -1,
+          "veryHardMax": 2
+        },
+        {
+          "level": 80,
+          "veryEasyMin": -11,
+          "easyMin": -9,
+          "normalMin": -7,
+          "hardMin": -5,
+          "veryHardMin": -3,
+          "veryHardMax": 0,
+          "_guessed": true
+        },
+        {
+          "level": 100,
+          "veryEasyMin": -13,
+          "easyMin": -11,
+          "normalMin": -9,
+          "hardMin": -7,
+          "veryHardMin": -5,
+          "veryHardMax": -2,
+          "_guessed": true
+        }
+      ]
+    },
+    {
+      "jobType": 4,
+      "difficultyByLevel": [
+        {
+          "level": 1,
+          "veryEasyMin": -2,
+          "easyMin": 0,
+          "normalMin": 2,
+          "hardMin": 4,
+          "veryHardMin": 6,
+          "veryHardMax": 9
+        },
+        {
+          "level": 20,
+          "veryEasyMin": -4,
+          "easyMin": -2,
+          "normalMin": 0,
+          "hardMin": 2,
+          "veryHardMin": 4,
+          "veryHardMax": 7
+        },
+        {
+          "level": 30,
+          "veryEasyMin": -5,
+          "easyMin": -3,
+          "normalMin": -1,
+          "hardMin": 1,
+          "veryHardMin": 3,
+          "veryHardMax": 6
+        },
+        {
+          "level": 40,
+          "veryEasyMin": -7,
+          "easyMin": -5,
+          "normalMin": -3,
+          "hardMin": -1,
+          "veryHardMin": 1,
+          "veryHardMax": 4
+        },
+        {
+          "level": 50,
+          "veryEasyMin": -8,
+          "easyMin": -6,
+          "normalMin": -4,
+          "hardMin": -2,
+          "veryHardMin": 0,
+          "veryHardMax": 3
+        },
+        {
+          "level": 60,
+          "veryEasyMin": -9,
+          "easyMin": -7,
+          "normalMin": -5,
+          "hardMin": -3,
+          "veryHardMin": -1,
+          "veryHardMax": 2
+        },
+        {
+          "level": 80,
+          "veryEasyMin": -11,
+          "easyMin": -9,
+          "normalMin": -7,
+          "hardMin": -5,
+          "veryHardMin": -3,
+          "veryHardMax": 0,
+          "_guessed": true
+        },
+        {
+          "level": 100,
+          "veryEasyMin": -13,
+          "easyMin": -11,
+          "normalMin": -9,
+          "hardMin": -7,
+          "veryHardMin": -5,
+          "veryHardMax": -2,
+          "_guessed": true
+        }
+      ]
+    },
+    {
+      "jobType": 5,
+      "difficultyByLevel": [
+        {
+          "level": 1,
+          "veryEasyMin": -2,
+          "easyMin": 0,
+          "normalMin": 2,
+          "hardMin": 4,
+          "veryHardMin": 6,
+          "veryHardMax": 9
+        },
+        {
+          "level": 20,
+          "veryEasyMin": -4,
+          "easyMin": -2,
+          "normalMin": 0,
+          "hardMin": 2,
+          "veryHardMin": 4,
+          "veryHardMax": 7
+        },
+        {
+          "level": 30,
+          "veryEasyMin": -5,
+          "easyMin": -3,
+          "normalMin": -1,
+          "hardMin": 1,
+          "veryHardMin": 3,
+          "veryHardMax": 6
+        },
+        {
+          "level": 40,
+          "veryEasyMin": -7,
+          "easyMin": -5,
+          "normalMin": -3,
+          "hardMin": -1,
+          "veryHardMin": 1,
+          "veryHardMax": 4
+        },
+        {
+          "level": 50,
+          "veryEasyMin": -8,
+          "easyMin": -6,
+          "normalMin": -4,
+          "hardMin": -2,
+          "veryHardMin": 0,
+          "veryHardMax": 3
+        },
+        {
+          "level": 60,
+          "veryEasyMin": -9,
+          "easyMin": -7,
+          "normalMin": -5,
+          "hardMin": -3,
+          "veryHardMin": -1,
+          "veryHardMax": 2
+        },
+        {
+          "level": 80,
+          "veryEasyMin": -11,
+          "easyMin": -9,
+          "normalMin": -7,
+          "hardMin": -5,
+          "veryHardMin": -3,
+          "veryHardMax": 0,
+          "_guessed": true
+        },
+        {
+          "level": 100,
+          "veryEasyMin": -13,
+          "easyMin": -11,
+          "normalMin": -9,
+          "hardMin": -7,
+          "veryHardMin": -5,
+          "veryHardMax": -2,
+          "_guessed": true
+        }
+      ]
+    }
+  ],
+  "jobDuelBossList": [
+    {
+      "_duelBosses": [
+        {
+          "_compound": {
+            "m_FileID": 7,
+            "m_PathID": 943508119780801173
+          },
+          "_introDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": 2621360052024990436
+          },
+          "_outroDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": -8265965780807445392
+          }
+        },
+        {
+          "_compound": {
+            "m_FileID": 7,
+            "m_PathID": 6390616103215458649
+          },
+          "_introDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": 3597249026067837172
+          },
+          "_outroDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": -8547523419304889258
+          }
+        },
+        {
+          "_compound": {
+            "m_FileID": 7,
+            "m_PathID": 2573649081444519413
+          },
+          "_introDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": -3474850615114371994
+          },
+          "_outroDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": 2464911895930560261
+          }
+        },
+        {
+          "_compound": {
+            "m_FileID": 7,
+            "m_PathID": -446613220780103271
+          },
+          "_introDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": 680622289979041275
+          },
+          "_outroDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": -8657582661025505399
+          }
+        },
+        {
+          "_compound": {
+            "m_FileID": 7,
+            "m_PathID": 444855344703840326
+          },
+          "_introDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": 2150975405114730538
+          },
+          "_outroDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": 8321496580356180746
+          }
+        },
+        {
+          "_compound": {
+            "m_FileID": 7,
+            "m_PathID": -8762941383054783301
+          },
+          "_introDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": -8787100625576688605
+          },
+          "_outroDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": -5336040665860636015
+          }
+        },
+        {
+          "_compound": {
+            "m_FileID": 7,
+            "m_PathID": 150475926231347492
+          },
+          "_introDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": -5456488824360672000
+          },
+          "_outroDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": -8933357962774571328
+          }
+        },
+        {
+          "_compound": {
+            "m_FileID": 7,
+            "m_PathID": 1686389531818930199
+          },
+          "_introDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": 6558908582749274807
+          },
+          "_outroDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": 5119042800482452852
+          }
+        },
+        {
+          "_compound": {
+            "m_FileID": 7,
+            "m_PathID": 773897809888503457
+          },
+          "_introDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": 5660274554118079217
+          },
+          "_outroDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": 2032191684748922521
+          }
+        },
+        {
+          "_compound": {
+            "m_FileID": 7,
+            "m_PathID": -7073727347876508448
+          },
+          "_introDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": 3960012305935721633
+          },
+          "_outroDialogueId": {
+            "m_FileID": 19,
+            "m_PathID": 6397606560799182095
+          }
+        }
+      ]
+    }
+  ]
+}

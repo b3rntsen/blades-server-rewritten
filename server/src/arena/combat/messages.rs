@@ -531,6 +531,98 @@ pub fn change_combat_status_effect(
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
+/// The constant NetData propId 6 of every captured `PlayerChannelingStateChange` —
+/// `4` in **all 1 182** de-duplicated prod op53 frames. Semantics unconfirmed (most
+/// likely the `PlayerStateChange` base's `stateId`, i.e. the "channelling" actor
+/// state); kept verbatim rather than guessed at.
+const CHANNELING_STATE_ID: u8 = 4;
+
+/// op53 `PlayerChannelingStateChange` (carrier `0x36`, GameMessageId at NetData
+/// propId 3) — the caster's spell/ability CAST (channel) state change. This is what
+/// drives the client's cast animation and channelling VFX; with it missing, spells
+/// fire with no build-up. Retail sends it immediately after the
+/// `PerformExecuteAbility` (38) echo (s127: c2s op37 #954963 → s2c op38 #954965 →
+/// s2c op53 #954966).
+///
+/// **Capture-derived layout** — 1 182 de-duplicated prod frames (2 450 raw), every
+/// one of them s2c and carrier `0x36` (NOT `0x35`: that carrier is the net-object
+/// property update `MSGTYPE_NETOBJ_UPDATE`, a different family that older notes
+/// conflated with op53). propIds and type nibbles are identical in all 1 182:
+///
+/// `{0:Int avatarObj · 1:Byte 56 Avatar · 2:Byte 1 Authority · 3:Byte 53 ·
+///   4:ULong caster packed stats · 5:ULong opponent packed stats ·
+///   6:Byte 4 · 7:ByteArray <unmodelled> · 8:Float <time, s> · 9:String abilityUuid}`
+///
+/// propId 4/5 carry the same packed-pool word as `ReceiveDamage`/`PlayerStatsUpdate`
+/// (`Health|Stamina<<10|Magicka<<20` in the hi32, seq in the lo32) — decoding them
+/// against the captures tracks the caster's and the opponent's bars draining.
+///
+/// **Two fields could NOT be resolved from the corpus and are therefore not invented:**
+///
+/// * **propId 7** — a variable-length blob (6…23 B, 778 distinct values across 1 182
+///   frames) whose internal structure did not fall out of the corpus. On the wire it
+///   is a `ByteArray` with a **u8** length prefix (proven: with u8 all 1 182 frames
+///   parse to exactly their byte length, with u16 none do). `arena_proto`'s
+///   `NetDataWriter` now emits that u8 prefix natively — see
+///   [`arena_proto::NetDataType::len_prefix_width`] — so this builder round-trips a
+///   retail op53 with no post-processing. Production emission passes `state_blob = None`
+///   and simply OMITS the property — NetData is a sparse property bag, so the client
+///   leaves the field at its default rather than reading a fabricated blob.
+///   `Some(..)` exists so the byte-differential tests can rebuild a real captured
+///   frame exactly.
+/// * **propId 8** — a float, always a multiple of 1/60 s. It is demonstrably **NOT**
+///   the shipped `_channelDuration`: that value is rank-invariant per ability
+///   (Fireball 0.9, Lightning Bolt 0.5, Poison Cloud 1.3, `cfee0b02…` 1.12) whereas
+///   the captured floats spread widely for one ability (Lightning Bolt 0.15…1.27,
+///   Fireball 0.03…1.83), and `4be1d681…` — which defines no `_channelDuration` at
+///   all — still appears with 0.33/0.35/1.63. The deduped histogram peaks at
+///   0.12…0.35 s, which reads like an elapsed/latency offset. We send the caster's
+///   own shipped `_channelDuration` because that is the value with the right
+///   *meaning* for a cast-animation length; the exact retail semantics stay open.
+pub fn player_channeling_state_change(
+    caster_avatar_net_object_id: i32,
+    caster_packed_stats: u64,
+    opponent_packed_stats: u64,
+    channel_duration_secs: f32,
+    ability_uuid: &str,
+    state_blob: Option<&[u8]>,
+) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, caster_avatar_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GameMessageId::PlayerChannelingStateChange as u8)
+        .ulong(4, caster_packed_stats)
+        .ulong(5, opponent_packed_stats)
+        .byte(6, CHANNELING_STATE_ID);
+    if let Some(blob) = state_blob {
+        w.put(7, arena_proto::NetDataValue::ByteArray(blob.to_vec()));
+    }
+    w.float(8, channel_duration_secs).string(9, ability_uuid);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// op64 `PerformConsumeConsumable` (carrier `0x36`, GameMessageId at NetData propId
+/// 3) — the server's authoritative confirmation that a fighter drank its equipped
+/// consumable. Sent to BOTH players so each renders the drink animation.
+///
+/// Capture-derived layout (554 prod frames, all s2c, all carrier `0x36`, all this
+/// exact shape): `{0:Int avatarObj · 1:Byte 56 Avatar · 2:Byte 1 Authority ·
+/// 3:Byte 64 · 4:String consumableItemUuid}`. The UUIDs resolve against the capture
+/// platform's `uuid_labels` to real items (`d826ea12…` = "Potion of Light Healing",
+/// `819094ad…` = "Potion of Healing"), and match the UUID the same avatar declared
+/// in its `EquipAbilitiesAndConsumables` (56) upload — see
+/// [`super::input::parse_equip_consumables`]. Byte-for-byte vs s127 #962751.
+pub fn perform_consume_consumable(avatar_net_object_id: i32, consumable_uuid: &str) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, avatar_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GameMessageId::PerformConsumeConsumable as u8)
+        .string(4, consumable_uuid);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
 /// `DamageNegated` (66) — a Ward/Absorb/Dodge pool fully ate a hit (no damage payload).
 /// Carrier `0x36`, GMID at propId 3, on the defending Avatar. A bare NetObjectInfo +
 /// GMID signal (the captured op66 carries no further fields — §3.3/§4.5). Emitted
@@ -579,49 +671,118 @@ pub fn player_dead(
 /// `MatchPostRoundInfoMsg` (48) — the round/match RESULT, sent at the PostRound
 /// transition on the **Match** net-object. **This is the real retail "who won"
 /// message** (s506 sends op48, never op49): the client reads it to show the
-/// result/victory screen.
+/// per-round result and to TALLY the running score.
 ///
-/// **Capture-proven layout (s506 #3523671, the final round of a best-of-3):** carrier
-/// `0x36`, on Match obj 123 (type 54, Authority). NetData
-/// `{0:Int matchObj · 1:Byte 54 · 2:Byte 1 · 3:Byte 48 · 4:Int 3 · 5:String winnerCharUUID
-/// · 6:String loserCharUUID · 7:String winnerCharUUID · 8:String loserCharUUID ·
-/// 9:String "" · 10:String "" · 11:Byte 1 · 12:String winnerCharUUID · 13:String
-/// loserCharUUID · 14:Bool false · 15:Bool true · 16:String winnerCharUUID · 17:Bool
-/// false · 18:String matchId}`. The winner UUID repeats at p5/p7/p12/p16 and the loser
-/// at p6/p8/p13 (the client cross-checks them); p4 = a small Int (s506 = 3, the match's
-/// maxRounds / a result code — near-constant), p18 = the matchId. Byte-for-byte vs s506
-/// #3523671 (winner 1131a037…, loser 38c987fd…). [decoded from prod arena_udp_frames
-/// s506 2026-06-19.]
+/// **Field semantics (dump.cs `MatchPostRoundInfoMessage : MatchInfoMessage`, 589846):**
+/// beyond the NetObjectInfo header + gmid, the message carries `RoundNumber` (which
+/// round this result is for), `WinnerPlayerId`/`LoserPlayerId` (this round's result),
+/// `MatchConceded`/`OpponentDisconnected`/`IsMatchEnded` bools, `MatchWinnerPlayerId`
+/// (the OVERALL match winner — only meaningful once `IsMatchEnded`), and a trailing
+/// telemetry id. **The client accumulates the score from the per-round Winner/Loser it
+/// sees each round, and only closes the match when `IsMatchEnded` is true.**
+///
+/// **CAPTURE-PINNED 2026-07-30 — and it overturns two earlier claims.**
+///
+/// The previous comment said op48 "was never captured (0 rows in all prod sessions),
+/// so this layout is dump.cs-derived, not byte-pinned". That is wrong: there are
+/// **375 s2c op48 frames across 43 sessions**. Decoding all of them gives the exact
+/// contract, with no exceptions:
+///
+/// ```text
+///   {0:Int matchObj · 1:Byte 54 Match · 2:Byte 1 Authority · 3:Byte 48
+///    · 4:Int 3                      <- CONSTANT, never the live round number
+///    · 5,6   :String round-1 winner,loser
+///    · 7,8   :String round-2 winner,loser  ("" until round 2 completes)
+///    · 9,10  :String round-3 winner,loser  ("" until round 3 completes)
+///    · 11:Byte  completedRounds - 1
+///    · 12,13 :String most-recent round winner,loser
+///    · 14:Bool MatchConceded · 15:Bool IsMatchEnded
+///    · 16:String MatchWinnerPlayerId (non-empty iff IsMatchEnded)
+///    · 17:Bool OpponentDisconnected · 18:String matchId}
+/// ```
+///
+/// Observed combinations (375 frames): `pairs=1,p11=0,ended=false` ×45;
+/// `pairs=2,p11=1,ended=false` ×6 (a 1-1 match going to round 3);
+/// `pairs=2,p11=1,ended=true` ×271 (a 2-0 sweep); `pairs=3,p11=2,ended=true` ×53.
+/// propId 11 is ALWAYS `pairs-1`, and propId 4 is ALWAYS 3.
+///
+/// So the message is **cumulative**: the client reads the whole round-by-round array
+/// and tallies the score from it. That is why the earlier "bug-1 fix" made things
+/// worse rather than better — it started sending the live round number at propId 4
+/// (retail always sends 3) while still emitting a single result duplicated into the
+/// round-2 slot with `11` hardcoded to 1. After round 1 the client therefore saw two
+/// recorded rounds under a round number it did not expect; the reported symptoms were
+/// "0-0 after round 1, then 3-0 or 0-3, and the third round labelled the 4th".
+///
+/// The `RoundInfo[]` the base class serializes IS representable after all — it is just
+/// these three fixed (winner, loser) slot pairs.
 #[allow(clippy::too_many_arguments)]
 pub fn match_post_round_info(
     match_net_object_id: i32,
-    winner_char_uuid: &str,
-    loser_char_uuid: &str,
+    // Cumulative per-round results, round 1 first: (winner_uuid, loser_uuid).
+    round_results: &[(String, String)],
     match_id: &str,
-    result_code: i32,
+    is_match_ended: bool,
+    /* MatchConceded (propId 14). Capture-proven to be genuinely set: 4 of the 375
+       captured op48 frames carry true. It was hardcoded false here, which the
+       corpus disproves. */
+    conceded: bool,
 ) -> Vec<u8> {
+    // The client tallies the displayed score from this cumulative array, so every
+    // completed round must be present, in order. Slots are (5,6), (7,8), (9,10) —
+    // three, because the match is best-of-3 — and unused slots are empty strings.
+    let slot = |i: usize| -> (&str, &str) {
+        round_results
+            .get(i)
+            .map(|(w, l)| (w.as_str(), l.as_str()))
+            .unwrap_or(("", ""))
+    };
+    let (w1, l1) = slot(0);
+    let (w2, l2) = slot(1);
+    let (w3, l3) = slot(2);
+
+    // propId 11 = index of the LAST filled slot (= completed rounds - 1). Exact in all
+    // 375 captured frames: 1 round→0, 2→1, 3→2.
+    let last_index = round_results.len().saturating_sub(1) as u8;
+
+    // The most recent round's winner/loser is repeated at 12/13 in every capture.
+    let (latest_w, latest_l) = round_results
+        .last()
+        .map(|(w, l)| (w.as_str(), l.as_str()))
+        .unwrap_or(("", ""));
+
+    // MatchWinnerPlayerId names the OVERALL winner and is non-empty in exactly the
+    // frames where IsMatchEnded is true (271 + 53 captured frames, no exceptions).
+    let match_winner = if is_match_ended { latest_w } else { "" };
+
     let mut w = NetDataWriter::new();
     w.int(0, match_net_object_id)
         .byte(1, NetObjectType::Match as u8)
         .byte(2, NetRole::Authority as u8)
         .byte(3, GameMessageId::MatchPostRoundInfoMsg as u8)
-        .int(4, result_code)
-        .string(5, winner_char_uuid)
-        .string(6, loser_char_uuid)
-        .string(7, winner_char_uuid)
-        .string(8, loser_char_uuid)
-        .string(9, "")
-        .string(10, "")
-        .byte(11, 1)
-        .string(12, winner_char_uuid)
-        .string(13, loser_char_uuid)
-        .bool(14, false)
-        .bool(15, true)
-        .string(16, winner_char_uuid)
-        .bool(17, false)
+        // RoundNumber is a CONSTANT 3, not this round's index — it is 3 in all 375
+        // captured frames, including mid-match ones. Sending the live round number
+        // here is a deviation from retail (see the doc comment).
+        .int(4, ROUND_NUMBER_CONST)
+        .string(5, w1)
+        .string(6, l1)
+        .string(7, w2)
+        .string(8, l2)
+        .string(9, w3)
+        .string(10, l3)
+        .byte(11, last_index)
+        .string(12, latest_w)
+        .string(13, latest_l)
+        .bool(14, conceded) // MatchConceded — see the corpus note above
+        .bool(15, is_match_ended) // IsMatchEnded
+        .string(16, match_winner) // MatchWinnerPlayerId — empty until the match ends
+        .bool(17, false) // OpponentDisconnected
         .string(18, match_id);
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
+
+/// `RoundNumber` (op48 propId 4) is a fixed 3 on the wire — capture-pinned, 375/375.
+pub const ROUND_NUMBER_CONST: i32 = 3;
 
 /// The arena GOLD (soft) currency UUID — `reward.currencies[<this>]` is the per-match
 /// gold the victory card animates. CONSTANT across all captured sessions (s506/503/504/
@@ -687,9 +848,53 @@ pub struct MatchEndReward {
     /// The recipient's VISIBLE trophy count, post-match (`character.pvpTrophies`).
     pub pvp_trophies: i64,
     /// The matchmaking-internal trophies, post-match (`character.matchmakingPvpTrophies`).
+    ///
+    /// The 108 reassembled retail cards show this is the season **high-water mark**
+    /// (monotone non-decreasing, `= max(pvpTrophies)`), and that it — not the live
+    /// `pvpTrophies` — is what the arena ladder promotes on.
     pub matchmaking_pvp_trophies: i64,
     /// The recipient's challenge-season rank, post-match (`character.challengeSeason.rank`).
     pub challenge_rank: i64,
+    /// `character.pvpChestMeter`, post-match. Counts **rounds won** (not matches)
+    /// and wraps at `pvp_match_rewards.chest_meter_capacity` = 8. Capture-proven by
+    /// diffing consecutive cards against `numberPvpMatchPlayed`.
+    pub pvp_chest_meter: i64,
+    /// `character.pvpWinningStreak`, post-match. Positive counts consecutive wins,
+    /// negative consecutive losses; the sign is the card's own win/loss marker.
+    pub pvp_winning_streak: i64,
+    /// `character.numberPvpMatchPlayed`, post-match (pre-match + 1).
+    pub number_pvp_match_played: i64,
+    /// `character.highestArenaReached` — the ladder arena for the post-match
+    /// high-water mark.
+    pub highest_arena_reached: u64,
+    /// `character.highestLevelArenaReached` — the ladder level within that arena.
+    pub highest_level_arena_reached: u64,
+    /// The `rewardNewLevelArena` block. `{}` on every ordinary match; populated
+    /// only when this match crossed one or more ladder `required_trophy_count`
+    /// thresholds. See `arena_ladder::PromotionRewards` for the three retail
+    /// examples the shape is taken from.
+    pub reward_new_level_arena: serde_json::Value,
+}
+
+impl Default for MatchEndReward {
+    fn default() -> Self {
+        MatchEndReward {
+            gold: 0,
+            character_xp: 0,
+            wallet_gold: 0,
+            pvp_trophies: 0,
+            matchmaking_pvp_trophies: 0,
+            challenge_rank: 1,
+            pvp_chest_meter: 0,
+            pvp_winning_streak: 0,
+            number_pvp_match_played: 0,
+            highest_arena_reached: 1,
+            highest_level_arena_reached: 1,
+            // NOT `Value::Null` — the card's field is an empty OBJECT when there
+            // was no promotion, which is what every non-promotion retail card has.
+            reward_new_level_arena: serde_json::json!({}),
+        }
+    }
 }
 
 /// Build the op49 `ResultsJSON` (propId 13) — the victory-card payload
@@ -721,6 +926,18 @@ pub fn results_json(
         obj.insert("id".into(), json!(recipient_char_uuid));
         obj.insert("pvpTrophies".into(), json!(reward.pvp_trophies));
         obj.insert("matchmakingPvpTrophies".into(), json!(reward.matchmaking_pvp_trophies));
+        // The rest of the post-match PvP block. Retail's card carries all of these
+        // and the arena menu reads them straight back out of the snapshot, so
+        // leaving them at their stale pre-match values made the chest meter and the
+        // ladder position visibly rewind the moment the card appeared.
+        obj.insert("pvpChestMeter".into(), json!(reward.pvp_chest_meter));
+        obj.insert("pvpWinningStreak".into(), json!(reward.pvp_winning_streak));
+        obj.insert("numberPvpMatchPlayed".into(), json!(reward.number_pvp_match_played));
+        obj.insert("highestArenaReached".into(), json!(reward.highest_arena_reached));
+        obj.insert(
+            "highestLevelArenaReached".into(),
+            json!(reward.highest_level_arena_reached),
+        );
         // challengeSeason.rank — create/overlay just the rank (the card reads it for the
         // rank delta); preserve any other season fields already present.
         let mut season = obj.get("challengeSeason").cloned().unwrap_or_else(|| json!({}));
@@ -744,7 +961,7 @@ pub fn results_json(
             "currencies": { ARENA_GOLD_CURRENCY_UUID: reward.gold },
             "characterXp": reward.character_xp,
         },
-        "rewardNewLevelArena": {},
+        "rewardNewLevelArena": reward.reward_new_level_arena,
         "currentRequestIndex": request_index,
         "inventory": inventory,
         "wallet": [ { "currencyId": ARENA_GOLD_CURRENCY_UUID, "balance": reward.wallet_gold } ],
@@ -752,31 +969,148 @@ pub fn results_json(
     .to_string()
 }
 
-/// `PlayerEmoteStateChange` (73) — the s2c relay of a client's `PlayEmote` (72).
-/// `dump.cs:590906` (`PlayerEmoteStateChangeMessage : PlayerStateChangeMessage`,
-/// fields `ActorStateType.StateId stateId` + `string emoteId`). It is one of the
-/// avatar-state-change family on the EMOTING actor's net-object (the same
-/// NetObjectInfo + StateId shape as the other `Player*StateChange`), carrying the
-/// `emoteId` string the client maps to the emote animation. We relay it to the
-/// OPPONENT so the emote displays on the other player's screen.
+/// `PlayerChargingStateChange` (45) — the s2c "this actor is charging a swing"
+/// broadcast. **This is the charge/combo circle.**
 ///
-/// NetData `{0:Int actorObj · 1:Byte 56 Avatar · 2:Byte 1 Authority · 3:Byte 73
-/// (PlayerEmoteStateChange gmid) · 4:Byte stateId (Emote=28) · 5:String emoteId}`.
-/// The exact wire prop count of the `PlayerStateChange` base (the optional
-/// `_stateHistory`/`_timeInPreviousState`) is build-specific and not pinned from a
-/// two-sided capture; this minimal NetObjectInfo + StateId + emoteId shape is what
-/// the client needs to render the opponent's emote. [structure from dump.cs; the
-/// raw c2s PlayEmote frame is not byte-decodable from the retained ENet-framed
-/// captures — see the resolve.rs note.]
-pub fn player_emote_state_change(emoting_avatar_net_object_id: i32, emote_id: &str) -> Vec<u8> {
-    use super::state::ActorStateType;
+/// CAPTURE-PINNED 2026-07-30 from 13,060 decoded frames across 46 sessions, one
+/// prop-set, all s2c. We were sending it ZERO times, which is why a plain swing
+/// showed no circle while tapping an ability did (an ability path incidentally put
+/// the client into a charge state).
+///
+/// It is one member of the PlayerStateChange family (39/41/43/44/45/52), which all
+/// share this frame:
+///
+/// ```text
+///   {0:Int actorObj · 1:Byte 56 Avatar · 2:Byte 1 Authority · 3:Byte gmid
+///    · 4,5:Long packed stats · 6:Byte ActorStateType · 7:ByteArray stateHistory
+///    · 8:Single timeInState · 9:Byte ActiveSide}
+/// ```
+///
+/// propId 6 is the state id and is CONSTANT 2 for charging in all 13,060 frames
+/// (cf. Blocking=1, Recovery=16, FollowThrough=17, AutoAttack=19). propId 9 is the
+/// side and only ever holds 2 or 3 — Left/Right — never Middle, which fits: a
+/// charge always has a swipe direction.
+///
+/// NOT pinned per-instance, and deliberately conservative:
+///   * propId 7 `stateHistory` is a ByteArray whose contents vary per frame; we send
+///     it EMPTY. If the client turns out to need real history, that is the next
+///     thing to pin (correlate consecutive frames within one session).
+///   * propId 8 is the time already spent in the state; 0.0 is correct at entry
+///     (0.0 is also the single most common captured value).
+pub fn player_charging_state_change(
+    actor_net_object_id: i32,
+    own_packed_stats: u64,
+    opponent_packed_stats: u64,
+    side: ActiveSide,
+) -> Vec<u8> {
     let mut w = NetDataWriter::new();
-    w.int(0, emoting_avatar_net_object_id)
+    w.int(0, actor_net_object_id)
         .byte(1, NetObjectType::Avatar as u8)
         .byte(2, NetRole::Authority as u8)
-        .byte(3, GameMessageId::PlayerEmoteStateChange as u8)
-        .byte(4, ActorStateType::Emote as u8)
-        .string(5, emote_id);
+        .byte(3, GameMessageId::PlayerChargingStateChange as u8)
+        .long(4, own_packed_stats as i64)
+        .long(5, opponent_packed_stats as i64)
+        .byte(6, ACTOR_STATE_CHARGING)
+        .string(7, "")
+        .float(8, 0.0)
+        .byte(9, side as u8);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// `ActorStateType` for charging — propId 6 of gmid 45, constant across all 13,060
+/// captured frames.
+pub const ACTOR_STATE_CHARGING: u8 = 2;
+
+/// Constants retail put in every captured `PlayerBlockingStateChange` (41). Copied,
+/// not derived: 400/400 decoded frames carry these exact values. See
+/// [`player_blocking_state_change`].
+const BLOCK_STATE_P4_P5: i64 = 4_611_686_014_132_420_712;
+const BLOCK_STATE_P7: &str = "0300001c0001";
+const BLOCK_STATE_P8: f32 = 2.500_160_7;
+
+/// The s2c relay of a client's `PlayEmote` (72) — sent back as `PlayEmote` (72).
+///
+/// CAPTURE-PINNED 2026-07-30, and it corrects what was here before. The server does
+/// NOT answer with `PlayerEmoteStateChange` (73): across 264,302 decoded retail
+/// frames, gmid 73 appears ZERO times, while gmid 72 appears 1,230 times c2s and
+/// 2,014 times s2c over 45 sessions. Retail echoes the SAME message id back, and
+/// the s2c frame is shape-identical to the c2s one — every one of them 62 bytes
+/// with the single prop set {0,1,2,3,4}:
+///
+///   marker 0xBE · carrier 0x36 · {0:Int emoterObj · 1:Byte 56 Avatar
+///                                 · 2:Byte 3 Autonomous · 3:Byte 72 PlayEmote
+///                                 · 4:String emoteId}
+///
+/// `emoteId` is a 36-char UUID (e.g. "a654c0e8-bef2-4d9e-8384-642a68eba019"), not a
+/// symbolic name. There is NO ActorStateType/stateId property, and the string sits
+/// at propId 4 — the previous shape put a stateId at 4 and the string at 5, under a
+/// gmid the client never receives from retail, which is why pressing an emote
+/// animated nothing for either player.
+///
+/// Note prop2 is Autonomous (3), not Authority (1): every captured s2c relay uses 3.
+///
+/// The old comment claimed the raw c2s PlayEmote frame was "not byte-decodable from
+/// the retained ENet-framed captures". It is — the NetData frame begins at offset 10,
+/// after the ENet header; parsing from there decodes cleanly.
+///
+/// Relayed to the emoter (so its own animation plays — the server is authoritative
+/// over actor state) AND to the opponent (so it shows on the other screen).
+/// `dump.cs:588944` (`PlayEmoteMessage`, single `string _emoteId`).
+pub fn play_emote_relay(emoting_avatar_net_object_id: i32, emote_id: &str) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, emoting_avatar_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8) // 56
+        .byte(2, NetRole::Autonomous as u8) // 3 — NOT Authority; see below
+        .byte(3, GameMessageId::PlayEmote as u8) // 72 — the SAME id the client sent
+        .string(4, emote_id);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// s2c `PlayerBlockingStateChange` (41) — the frame that actually RAISES THE SHIELD.
+///
+/// CAPTURE-PINNED against 400 decoded retail frames, all with an identical prop set
+/// {0..10}. Retail sent this **6,664 times, every one of them s2c**.
+///
+/// That number is the point. The previous code decoded gmid 41 and deliberately sent
+/// nothing back, on the reasoning — written in `resolve.rs` — that "the client
+/// animates its own guard". It does not. Reported from a real match (report #5):
+/// pressing block reduced incoming damage exactly as intended, and no shield ever
+/// appeared, because the client waits to be told. Same mistake that was made about
+/// emotes (gmid 72), and the fix has the same shape.
+///
+/// ```text
+///   0:Int  avatar netObjectId   1:Byte 56 Avatar   2:Byte 1 AUTHORITY
+///   3:Byte 41 PlayerBlockingStateChange
+///   4:Int / 5:Int  0x3FFFFFFF00000068 — an IEEE-754 double ≈ 2.0 carried as an
+///                  int64 bit pattern; matches BLOCK_OPTIMAL_TIME (2.0s)
+///   6:Int  1       7:Str  "0300001c0001"   8:Float 2.5001607
+///   9:Int  ActiveSide (guard side)         10:Bool blocking on/off
+/// ```
+///
+/// NOTE the role: **Authority (1)**, not the Autonomous (3) the emote relay uses.
+/// Retail is consistent about this across all 400 frames, so we match it rather than
+/// copying the emote shape.
+///
+/// p4/p5/p6/p7/p8 are reproduced as the constants retail sent. Their semantics are not
+/// pinned by a two-sided capture, so they are copied rather than computed — a wrong
+/// guess at a *meaning* is worse than a faithful replay of a *value*.
+pub fn player_blocking_state_change(
+    blocking_avatar_net_object_id: i32,
+    side: ActiveSide,
+    blocking: bool,
+) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, blocking_avatar_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8) // 56
+        .byte(2, NetRole::Authority as u8) // 1 — retail uses Authority here, not Autonomous
+        .byte(3, GameMessageId::PlayerBlockingStateChange as u8) // 41
+        .long(4, BLOCK_STATE_P4_P5)
+        .long(5, BLOCK_STATE_P4_P5)
+        .int(6, 1)
+        .string(7, BLOCK_STATE_P7)
+        .float(8, BLOCK_STATE_P8)
+        .int(9, side as i32)
+        .bool(10, blocking);
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
@@ -792,7 +1126,13 @@ pub fn play_emote_id(user_data: &[u8]) -> Option<String> {
         return None;
     }
     let nd = arena_proto::parse_netdata(user_data.get(2..)?);
-    // The emoteId is a string property; take the first string prop id > 3.
+    // CAPTURE-PINNED: the emoteId is a String at propId 4 (a 36-char UUID). All
+    // 1,230 captured c2s PlayEmote frames carry exactly the prop set {0,1,2,3,4}.
+    if let Some(s) = nd.string(4) {
+        return Some(s.to_string());
+    }
+    // Fall back to the first string above the GameMessageId, then to empty — a
+    // PlayEmote we can't fully decode should still relay rather than vanish.
     let mut keys: Vec<&u8> = nd.props.keys().filter(|k| **k > 3).collect();
     keys.sort();
     for k in keys {
@@ -800,7 +1140,7 @@ pub fn play_emote_id(user_data: &[u8]) -> Option<String> {
             return Some(s.to_string());
         }
     }
-    Some(String::new()) // a PlayEmote with no decodable string → empty (still relay)
+    Some(String::new())
 }
 
 /// True iff a carrier-0x36 c2s frame is the client's `PlayEmote` (72).
@@ -825,20 +1165,61 @@ pub fn blocking_active_side(user_data: &[u8]) -> Option<ActiveSide> {
     if user_message_gmid(user_data) != Some(GameMessageId::PlayerBlockingStateChange as u8) {
         return None;
     }
+    active_side_of_state_change(user_data)
+}
+
+/// Read `ActiveSide` from any member of the PlayerStateChange family — propId **9**.
+///
+/// CAPTURE-PINNED 2026-07-30. The family (39, 41, 43, 44, 45, 52) shares one frame:
+///
+/// ```text
+///   {0:Int actorObj · 1:Byte 56 Avatar · 2:Byte 1 Authority · 3:Byte gmid
+///    · 4,5:Long packed stats · 6:Byte ActorStateType · 7:ByteArray stateHistory
+///    · 8:Single timeInState · 9:Byte ActiveSide}   (+ per-message tail at 10)
+/// ```
+///
+/// propId 6 is the STATE ID and is constant per message type — Blocking=1,
+/// Charging=2, Recovery=16, FollowThrough=17, AutoAttack=19 — while gmid 39, the
+/// generic member, varies it (0/5/13/27/28; 13=Paralyzed, 28=Emote). propId 9 is
+/// the side: constant **1 (Middle)** across all 6,643 captured op41 blocks, and
+/// {2,3} = Left/Right across the swing family (43/44/45/52). Only 1/2/3 ever
+/// appear, which is exactly `ActiveSide` minus `None`.
+///
+/// THE BUG THIS REPLACES: the previous reader took "the first int-typed property
+/// above 3", which is **propId 4 — a packed-stats u64**. That never matches 1/2/3,
+/// so it fell through to `ActiveSide::None` for EVERY block ever received. Block
+/// side was therefore never actually decoded.
+/// CAVEAT on direction: the pinned shape above is the SERVER's broadcast — all
+/// 6,643 captured op41 frames are s2c and retail shows **zero** c2s op41 (the
+/// client signals a guard some other way, most likely gmid 46
+/// `PlayerCombatInputActivate`, 17,817 c2s frames). So propId 9 is authoritative
+/// for s2c, and unverified for anything inbound. Hence: prefer propId 9, and for a
+/// frame that lacks it fall back to a scan — but one that SKIPS propIds 4 and 5,
+/// the packed-stat words whose accidental capture was the original bug.
+pub fn active_side_of_state_change(user_data: &[u8]) -> Option<ActiveSide> {
     let nd = arena_proto::parse_netdata(user_data.get(2..)?);
-    let mut keys: Vec<&u8> = nd.props.keys().filter(|k| **k > 3).collect();
-    keys.sort();
-    for k in keys {
-        if let Some(v) = nd.int(*k) {
-            return Some(match v {
-                1 => ActiveSide::Middle,
-                2 => ActiveSide::Left,
-                3 => ActiveSide::Right,
-                _ => ActiveSide::None,
-            });
-        }
+    let to_side = |v: i64| match v {
+        1 => Some(ActiveSide::Middle),
+        2 => Some(ActiveSide::Left),
+        3 => Some(ActiveSide::Right),
+        _ => None,
+    };
+    if let Some(side) = nd.int(9).and_then(to_side) {
+        return Some(side);
     }
-    None
+    // Fallback for un-pinned (inbound / short) shapes: the first property above 3
+    // whose value is actually in range. An ActiveSide is only ever 1..=3, so the
+    // packed-stat u64s at 4/5 are excluded BY VALUE and the scan simply continues.
+    // The original bug was not that it looked at propId 4 — it was that it
+    // *returned* `_ => None` on the first non-matching value instead of skipping it.
+    let mut keys: Vec<u8> = nd.props.keys().copied().filter(|k| *k > 3).collect();
+    keys.sort_unstable();
+    keys.into_iter().find_map(|k| nd.int(k).and_then(to_side))
+}
+
+/// The `ActorStateType` a PlayerStateChange-family frame carries (propId 6).
+pub fn state_change_actor_state(user_data: &[u8]) -> Option<i64> {
+    arena_proto::parse_netdata(user_data.get(2..)?).int(6)
 }
 
 /// `PerformExecuteAbility` (38) — the s2c echo of a `RequestExecuteAbility` (37).
@@ -1267,45 +1648,86 @@ mod tests {
         assert_eq!(got, want, "op29 props 0-6 must byte-match s506 #3523661");
     }
 
-    /// Byte-for-byte vs s506 #3523671 — op48 `MatchPostRoundInfoMsg`, the real retail
-    /// match-RESULT message (carrier 0x36 on the Match obj 123). winner=Blank
-    /// (1131a037…), loser=Flappety (38c987fd…), matchId 88e9347a…, result code 3.
-    /// This frame self-validates (ENet dataLength 339 == BE36+consumed 337).
+    /// op48 `MatchPostRoundInfoMsg` — pinned against ALL 375 captured s2c frames.
+    ///
+    /// The two things this guards, both of which were wrong before and produced the
+    /// reported "0-0 after round 1, then 3-0, and the third round labelled the 4th":
+    ///   1. propId 4 is a CONSTANT 3 (375/375), never the live round number.
+    ///   2. the message is CUMULATIVE — slots (5,6),(7,8),(9,10) hold rounds 1..3 in
+    ///      order and propId 11 is `completedRounds - 1`.
     #[test]
-    fn match_post_round_info_matches_s506() {
-        let got = match_post_round_info(
-            123,
-            "1131a037-716c-49cc-b165-32d8ddc14f49", // winner
-            "38c987fd-c42b-4ea6-b869-c8d4c03055f9", // loser
-            "88e9347a-f060-40d6-b796-a61b8c4d233e", // matchId
-            3,
-        );
-        // Carrier + structural framing, then every field decoded (the captured frame
-        // self-validates: ENet dataLength 339 == BE 36 + the 337-byte NetData).
-        assert_eq!(&got[0..2], &[0xBE, 0x36], "marker + UserMessage carrier");
-        assert_eq!(got.len(), 339, "op48 frame is 339 bytes (BE 36 + 337-byte NetData)");
-        let nd = arena_proto::parse_netdata(&got[2..]);
+    fn match_post_round_info_is_cumulative_and_pins_round_number() {
+        let a = "1131a037-716c-49cc-b165-32d8ddc14f49"; // player A char uuid
+        let b = "38c987fd-c42b-4ea6-b869-c8d4c03055f9"; // player B char uuid
+        let mid = "88e9347a-f060-40d6-b796-a61b8c4d233e";
+        let pair = |w: &str, l: &str| (w.to_string(), l.to_string());
+
+        // ---- after round 1 (A won), match still live ----
+        let r1 = match_post_round_info(123, &[pair(a, b)], mid, false, false);
+        assert_eq!(&r1[0..2], &[0xBE, 0x36], "marker + UserMessage carrier");
+        let nd = arena_proto::parse_netdata(&r1[2..]);
         assert_eq!(nd.int(0), Some(123), "p0 Match obj id");
         assert_eq!(nd.int(1), Some(54), "p1 Match");
         assert_eq!(nd.int(2), Some(1), "p2 Authority");
-        assert_eq!(nd.int(3), Some(48), "p3 MatchPostRoundInfoMsg gmid");
-        assert_eq!(nd.int(4), Some(3), "p4 result code = 3");
-        let w = "1131a037-716c-49cc-b165-32d8ddc14f49";
-        let l = "38c987fd-c42b-4ea6-b869-c8d4c03055f9";
-        // Winner repeats at p5/p7/p12/p16, loser at p6/p8/p13 (s506 cross-check).
-        for p in [5, 7, 12, 16] {
-            assert_eq!(nd.string(p), Some(w), "p{p} = winner char UUID");
-        }
-        for p in [6, 8, 13] {
-            assert_eq!(nd.string(p), Some(l), "p{p} = loser char UUID");
-        }
-        assert_eq!(nd.string(9), Some(""), "p9 empty");
-        assert_eq!(nd.string(10), Some(""), "p10 empty");
-        assert_eq!(nd.int(11), Some(1), "p11 Byte 1");
-        assert_eq!(nd.props.get(&14), Some(&arena_proto::NetDataValue::Bool(false)), "p14 false");
-        assert_eq!(nd.props.get(&15), Some(&arena_proto::NetDataValue::Bool(true)), "p15 true");
-        assert_eq!(nd.props.get(&17), Some(&arena_proto::NetDataValue::Bool(false)), "p17 false");
-        assert_eq!(nd.string(18), Some("88e9347a-f060-40d6-b796-a61b8c4d233e"), "p18 matchId");
+        assert_eq!(nd.int(3), Some(48), "p3 gmid");
+        assert_eq!(nd.int(4), Some(3), "p4 is a CONSTANT 3 in every captured frame");
+        assert_eq!(nd.string(5), Some(a), "p5 round-1 winner");
+        assert_eq!(nd.string(6), Some(b), "p6 round-1 loser");
+        assert_eq!(nd.string(7), Some(""), "p7 round-2 slot still empty");
+        assert_eq!(nd.string(8), Some(""), "p8 round-2 slot still empty");
+        assert_eq!(nd.string(9), Some(""), "p9 round-3 slot empty");
+        assert_eq!(nd.string(10), Some(""), "p10 round-3 slot empty");
+        assert_eq!(nd.int(11), Some(0), "p11 = completedRounds-1 = 0");
+        assert_eq!(nd.string(12), Some(a), "p12 latest winner");
+        assert_eq!(nd.string(13), Some(b), "p13 latest loser");
+        assert_eq!(nd.props.get(&15), Some(&arena_proto::NetDataValue::Bool(false)), "p15 not ended");
+        assert_eq!(nd.string(16), Some(""), "p16 empty until the match ends");
+        assert_eq!(nd.string(18), Some(mid), "p18 matchId");
+
+        // ---- after round 2, B won it: 1-1, match goes to round 3 (captured ×6) ----
+        let r2 = match_post_round_info(123, &[pair(a, b), pair(b, a)], mid, false, false);
+        let nd2 = arena_proto::parse_netdata(&r2[2..]);
+        assert_eq!(nd2.int(4), Some(3), "p4 still 3");
+        assert_eq!(nd2.string(5), Some(a), "round 1 preserved");
+        assert_eq!(nd2.string(7), Some(b), "round 2 winner in the second slot");
+        assert_eq!(nd2.string(8), Some(a), "round 2 loser in the second slot");
+        assert_eq!(nd2.int(11), Some(1), "p11 = 1");
+        assert_eq!(nd2.string(12), Some(b), "p12 tracks the LATEST round");
+        assert_eq!(nd2.props.get(&15), Some(&arena_proto::NetDataValue::Bool(false)));
+
+        // ---- 2-0 sweep: ends at round 2 (the most common captured frame, ×271) ----
+        let sweep = match_post_round_info(123, &[pair(a, b), pair(a, b)], mid, true, false);
+        let nds = arena_proto::parse_netdata(&sweep[2..]);
+        assert_eq!(nds.int(11), Some(1), "p11 = 1 for a two-round match");
+        assert_eq!(nds.props.get(&15), Some(&arena_proto::NetDataValue::Bool(true)), "p15 ended");
+        assert_eq!(nds.string(16), Some(a), "p16 = overall winner once ended");
+
+        // ---- went the distance: 3 rounds (captured ×53) ----
+        let full = match_post_round_info(123, &[pair(a, b), pair(b, a), pair(a, b)], mid, true, false);
+        let ndl = arena_proto::parse_netdata(&full[2..]);
+        assert_eq!(ndl.int(4), Some(3), "p4 constant 3");
+        assert_eq!(ndl.string(9), Some(a), "round 3 winner fills the third slot");
+        assert_eq!(ndl.string(10), Some(b), "round 3 loser fills the third slot");
+        assert_eq!(ndl.int(11), Some(2), "p11 = 2 for a three-round match");
+        assert_eq!(ndl.string(16), Some(a), "overall winner");
+
+        // MatchConceded (p14) is a real, capture-proven flag — 4 of the 375 frames
+        // carry true — and was previously hardcoded false.
+        let normal = arena_proto::parse_netdata(&sweep[2..]);
+        assert_eq!(
+            normal.props.get(&14),
+            Some(&arena_proto::NetDataValue::Bool(false)),
+            "a death-ended match is not conceded"
+        );
+        let conceded = match_post_round_info(123, &[pair(a, b)], mid, true, true);
+        let ndc = arena_proto::parse_netdata(&conceded[2..]);
+        assert_eq!(
+            ndc.props.get(&14),
+            Some(&arena_proto::NetDataValue::Bool(true)),
+            "a conceded match must set MatchConceded"
+        );
+        assert_eq!(ndc.int(4), Some(3), "p4 still the constant 3");
+        assert_eq!(ndc.string(16), Some(a), "the non-conceding player is the winner");
     }
 
     /// The carrier-`0x36` GameMessageId reader + the combat/non-combat split that
@@ -1346,24 +1768,142 @@ mod tests {
         assert_eq!(user_message_gmid(&[0x84, 0x3a, 0x00]), None);
     }
 
-    /// op73 PlayerEmoteStateChange (the s2c emote relay) carries the emoting avatar's
-    /// NetObjectInfo, the Emote state-id (28), and the emote id string; readable back
-    /// by the c2s `play_emote_id` decoder shape.
+    /// The s2c emote relay must be byte-shaped like RETAIL's, which echoes gmid 72
+    /// — not gmid 73. Pinned against the capture corpus (2026-07-30): gmid 73 occurs
+    /// 0 times in 264,302 decoded frames; gmid 72 occurs 2,014 times s2c across 45
+    /// sessions, always with the prop set {0,1,2,3,4} and the emoteId String at 4.
+    ///
+    /// This is the regression guard for "pressing an emote animates nothing": the
+    /// previous shape sent gmid 73 with a stateId at 4 and the string at 5, which the
+    /// client never receives from retail and therefore ignored.
     #[test]
-    fn player_emote_state_change_structure() {
-        let got = player_emote_state_change(124, "emote_taunt");
+    fn emote_relay_matches_retail_shape() {
+        let emote_uuid = "a654c0e8-bef2-4d9e-8384-642a68eba019";
+        let got = play_emote_relay(565, emote_uuid);
         assert_eq!(&got[0..2], &[0xBE, 0x36], "marker + UserMessage carrier");
         let nd = arena_proto::parse_netdata(&got[2..]);
-        assert_eq!(nd.int(0), Some(124), "p0 emoting avatar obj");
+        assert_eq!(nd.int(0), Some(565), "p0 emoter obj");
         assert_eq!(nd.int(1), Some(56), "p1 Avatar");
-        assert_eq!(nd.int(3), Some(73), "p3 PlayerEmoteStateChange gmid");
-        assert_eq!(nd.int(4), Some(28), "p4 stateId = Emote(28)");
-        assert_eq!(nd.string(5), Some("emote_taunt"), "p5 emote id");
+        assert_eq!(nd.int(2), Some(3), "p2 Autonomous — retail never uses Authority here");
+        assert_eq!(nd.int(3), Some(72), "p3 must be PlayEmote(72), NOT 73");
+        assert_eq!(nd.string(4), Some(emote_uuid), "p4 emoteId (a UUID)");
+        assert_eq!(nd.int(5), None, "no stateId/extra prop — retail stops at 4");
+
+        // The relay is shape-identical to a client frame, so our own c2s decoder
+        // must read it back. (Retail's s2c frames are byte-identical in structure.)
+        assert!(is_play_emote(&got));
+        assert_eq!(play_emote_id(&got).as_deref(), Some(emote_uuid));
+    }
+
+    /// A real captured c2s PlayEmote decodes to the pinned prop set. Bytes are the
+    /// NetData frame from session 127 (offset 10 onward, past the ENet header).
+    #[test]
+    fn decodes_a_real_captured_play_emote() {
+        let mut f = vec![0xBEu8, 0x36];
+        f.extend_from_slice(&hex_bytes(
+            "041F70770A35020000380348240061363534633065382D626566322D346439652D383338342D363432613638656261303139",
+        ));
+        assert!(is_play_emote(&f), "captured frame must classify as PlayEmote");
+        assert_eq!(
+            play_emote_id(&f).as_deref(),
+            Some("a654c0e8-bef2-4d9e-8384-642a68eba019"),
+            "emoteId is the 36-char UUID at propId 4"
+        );
+    }
+
+    fn hex_bytes(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))
+            .collect()
+    }
+
+    /// ActiveSide lives at propId 9, capture-pinned across the whole
+    /// PlayerStateChange family. Regression for a reader that scanned "first int
+    /// prop > 3" and so returned the packed-stats u64 at propId 4 — which matches
+    /// no ActiveSide arm, making EVERY block decode as `None`.
+    #[test]
+    fn active_side_reads_prop9_not_the_packed_stats() {
+        // A realistic op41: propIds 4/5 are huge packed-stat words, 6 is the state
+        // id (Blocking=1), 9 is the side. Values taken from the captured shape.
+        let build = |side: u8| {
+            let mut w = NetDataWriter::new();
+            w.int(0, 312)
+                .byte(1, NetObjectType::Avatar as u8)
+                .byte(2, NetRole::Authority as u8)
+                .byte(3, GameMessageId::PlayerBlockingStateChange as u8)
+                .long(4, 1_078_416_444_930_130_123_i64)
+                .long(5, 4_530_621_220_839_751_883_i64)
+                .byte(6, 1) // ActorStateType Blocking — NOT the side
+                .string(7, "0300001c0001")
+                .float(8, 0.533_377_3)
+                .byte(9, side);
+            let mut f = frame(MSGTYPE_USERMESSAGE, w.finish());
+            f[0] = 0x84;
+            f
+        };
+
+        // The captured constant: every one of the 6,643 op41 frames has side = 1.
+        assert_eq!(blocking_active_side(&build(1)), Some(ActiveSide::Middle));
+        assert_eq!(blocking_active_side(&build(2)), Some(ActiveSide::Left));
+        assert_eq!(blocking_active_side(&build(3)), Some(ActiveSide::Right));
+
+        // The bug: prop 4 is a packed-stats word and must never be read as a side.
+        let nd = arena_proto::parse_netdata(&build(2)[2..]);
+        assert!(
+            nd.int(4).unwrap() > 1_000_000,
+            "prop4 is a packed-stats word — the old reader took THIS as the side"
+        );
+        assert_eq!(nd.int(6), Some(1), "prop6 is the state id, not the side");
+
+        // The state id is exposed separately now.
+        assert_eq!(state_change_actor_state(&build(2)), Some(1));
     }
 
     /// The c2s PlayEmote (72) / PlayerBlockingStateChange (41) classifiers + their
     /// payload extractors. A PlayEmote's string is read back; a non-emote returns None.
     #[test]
+    /// The shield-raising frame, pinned to the 400 decoded retail frames it was
+    /// built from. Retail sent gmid 41 s2c 6,664 times; we sent it zero times, which
+    /// is why blocking reduced damage but never raised a shield (report #5).
+    #[test]
+    fn player_blocking_state_change_matches_the_captured_shape() {
+        let got = player_blocking_state_change(565, ActiveSide::Middle, true);
+        assert_eq!(&got[0..2], &[0xBE, 0x36], "marker + UserMessage carrier");
+        let nd = arena_proto::parse_netdata(&got[2..]);
+        assert_eq!(nd.int(0), Some(565), "p0 blocking avatar obj");
+        assert_eq!(nd.int(1), Some(56), "p1 Avatar");
+        // Retail uses AUTHORITY here, unlike the emote relay's Autonomous. 400/400.
+        assert_eq!(nd.int(2), Some(1), "p2 Authority — NOT Autonomous(3)");
+        assert_eq!(nd.int(3), Some(41), "p3 PlayerBlockingStateChange");
+        assert_eq!(nd.int(4), Some(4_611_686_014_132_420_712), "p4 as captured");
+        assert_eq!(nd.int(5), Some(4_611_686_014_132_420_712), "p5 as captured");
+        assert_eq!(nd.int(6), Some(1), "p6 as captured");
+        assert_eq!(nd.string(7), Some("0300001c0001"), "p7 as captured");
+        assert_eq!(nd.int(9), Some(1), "p9 ActiveSide::Middle");
+        assert_eq!(
+            nd.props.get(&10),
+            Some(&arena_proto::NetDataValue::Bool(true)),
+            "p10 is the blocking on/off flag"
+        );
+        // Our own decoder must read the frame back, exactly as for the emote relay.
+        assert!(is_player_blocking_state_change(&got));
+        assert_eq!(blocking_active_side(&got), Some(ActiveSide::Middle));
+    }
+
+    /// Lowering the guard is the same frame with p10 false, and the side round-trips.
+    #[test]
+    fn player_blocking_state_change_carries_side_and_off_state() {
+        let down = player_blocking_state_change(565, ActiveSide::Left, false);
+        let nd = arena_proto::parse_netdata(&down[2..]);
+        assert_eq!(
+            nd.props.get(&10),
+            Some(&arena_proto::NetDataValue::Bool(false)),
+            "p10 false = guard down"
+        );
+        assert_eq!(blocking_active_side(&down), Some(ActiveSide::Left));
+    }
+
     fn play_emote_and_block_decode() {
         // c2s PlayEmote (72): {0:obj · 1:55 · 2:role · 3:72 · 4:String id}.
         let emote = {
@@ -1474,6 +2014,7 @@ mod tests {
             pvp_trophies: 755,
             matchmaking_pvp_trophies: 817,
             challenge_rank: 1,
+            ..Default::default()
         };
         let char_json = r#"{"id":"old","name":"Flappety","level":86,"experience":291458}"#;
         let equipped = r#"{"equippedItems":{}}"#;
@@ -1498,6 +2039,82 @@ mod tests {
         assert_eq!(v["currentRequestIndex"], 789104);
     }
 
+    /// The rest of the post-match PvP block (Phase 5.2). Retail's cards carry
+    /// `pvpChestMeter` / `pvpWinningStreak` / `numberPvpMatchPlayed` /
+    /// `highestArenaReached` / `highestLevelArenaReached`, and the arena menu reads
+    /// them back out of this snapshot.
+    ///
+    /// The values below are Flappety's real card from prod session **s615 at
+    /// 2026-06-27 21:18:21** — the winner half of the two-sided s615/s616 pair.
+    #[test]
+    fn results_json_carries_the_full_post_match_pvp_block() {
+        let reward = MatchEndReward {
+            gold: 14961,
+            character_xp: 691,
+            wallet_gold: 65_808_256,
+            pvp_trophies: 773,
+            matchmaking_pvp_trophies: 847,
+            challenge_rank: 1,
+            pvp_chest_meter: 7,
+            pvp_winning_streak: 1,
+            number_pvp_match_played: 138,
+            highest_arena_reached: 2,
+            highest_level_arena_reached: 7,
+            reward_new_level_arena: serde_json::json!({}),
+        };
+        let char_json = r#"{"id":"old","name":"Flappety","level":86,"pvpChestMeter":5}"#;
+        let out = results_json(
+            "38c987fd-c42b-4ea6-b869-c8d4c03055f9",
+            char_json,
+            "{}",
+            &reward,
+            789416,
+        );
+        let v: serde_json::Value = serde_json::from_str(&out).expect("ResultsJSON must parse");
+
+        assert_eq!(v["reward"]["currencies"][ARENA_GOLD_CURRENCY_UUID], 14961);
+        assert_eq!(v["reward"]["characterXp"], 691);
+        assert_eq!(v["wallet"][0]["balance"], 65_808_256i64);
+        assert_eq!(v["character"]["pvpTrophies"], 773);
+        assert_eq!(v["character"]["matchmakingPvpTrophies"], 847);
+        // The stale pre-match meter (5) must be overwritten by the post-match 7.
+        assert_eq!(v["character"]["pvpChestMeter"], 7);
+        assert_eq!(v["character"]["pvpWinningStreak"], 1);
+        assert_eq!(v["character"]["numberPvpMatchPlayed"], 138);
+        assert_eq!(v["character"]["highestArenaReached"], 2);
+        assert_eq!(v["character"]["highestLevelArenaReached"], 7);
+        assert_eq!(v["currentRequestIndex"], 789416);
+    }
+
+    /// A promotion card. The shape is capture-derived, not authored: prod s168
+    /// (flapdroid L5 crossing 50 trophies into arena 1 level 2, `chest_rarity` 3)
+    /// carried exactly `{"chests":[{"id":"1","tier":3,"level":5}],"characterXp":0}`.
+    #[test]
+    fn results_json_carries_a_populated_reward_new_level_arena_on_promotion() {
+        let reward = MatchEndReward {
+            gold: 1170,
+            character_xp: 42,
+            pvp_trophies: 51,
+            matchmaking_pvp_trophies: 51,
+            pvp_chest_meter: 2,
+            pvp_winning_streak: 1,
+            number_pvp_match_played: 3,
+            highest_arena_reached: 1,
+            highest_level_arena_reached: 2,
+            reward_new_level_arena: serde_json::json!({
+                "chests": [ { "id": "1", "tier": 3, "level": 5 } ],
+                "characterXp": 0,
+            }),
+            ..Default::default()
+        };
+        let out = results_json("aaaaaaaa-0000-0000-0000-000000000000", "{}", "{}", &reward, 1);
+        let v: serde_json::Value = serde_json::from_str(&out).expect("ResultsJSON must parse");
+        assert_eq!(v["rewardNewLevelArena"]["chests"][0]["tier"], 3);
+        assert_eq!(v["rewardNewLevelArena"]["chests"][0]["level"], 5);
+        assert_eq!(v["rewardNewLevelArena"]["characterXp"], 0);
+        assert_eq!(v["character"]["highestLevelArenaReached"], 2);
+    }
+
     /// op51 `ChangeCombatStatusEffect` byte shape (`docs/arena-status-resistance-spec.md`
     /// §5.3): carrier 0x36 on the Avatar, GMID 51, apply bool, status byte, duration,
     /// source-damage byte. A Poisoned(4.89s) apply with source 0 (an elemental condition).
@@ -1517,6 +2134,132 @@ mod tests {
         // A Paralyzed(3.1s) apply rides the same shape (status byte 9).
         let par = change_combat_status_effect(125, true, StatusEffectType::Paralyzed, 3.1, 0);
         assert_eq!(arena_proto::parse_netdata(&par[2..]).int(5), Some(9), "Paralyzed = StatusEffectType 9");
+    }
+
+    /// Three REAL prod `PlayerChannelingStateChange` (53) frames, stored as their exact
+    /// decrypted `user_data` hex. Each is `marker 0xBE ‖ carrier 0x36 ‖ NetData`.
+    ///   * s127 #954966 — Lightning Bolt, propId-7 blob 7 B, propId 8 = 1.35024
+    ///   * s127 #961429 — Fireball, blob 9 B, propId 8 = 1.21714
+    ///   * s168 #1041484 — `cfee0b02…`, blob 7 B, propId 8 = 2.78354
+    const OP53_S127_954966: &str = "be3609ff03707722d7a5350200003801351f000000f4216d251f000000ffffff3f04\
+0704000000\
+1c000483d4ac3f240037666331353830342d313633372d343061392d386463632d336561316562306637373864";
+    const OP53_S127_961429: &str = "be3609ff03707722d7a53b020000380135340000006ffe6f3e34000000ffffff3f04\
+09060000001c0001000439cb9b3f240064303761386433302d396131632d343962302d383636642d393761386161313533346366";
+    const OP53_S168_1041484: &str = "be3609ff03707722d7a5140000003801351400000080feff3f14000000ffffff3f04\
+07040000001c00044b253240240063666565306230322d366439312d346433342d383639632d613765353433323930363064";
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+
+    /// **Byte-differential**: rebuild three real captured op53 frames from their decoded
+    /// field values and assert byte-for-byte equality with the capture. This pins the
+    /// carrier (`0x36`, NOT `0x35`), the propId set, the type nibbles, the ULong
+    /// packed-stat pair, the constant propId 6 = 4, the u8-length `ByteArray` at propId
+    /// 7, the float, and the trailing ability UUID string.
+    #[test]
+    fn player_channeling_state_change_matches_capture() {
+        struct Case {
+            hex: &'static str,
+            obj: i32,
+            caster: u64,
+            opponent: u64,
+            blob: &'static [u8],
+            secs: f32,
+            uuid: &'static str,
+        }
+        let cases = [
+            Case {
+                hex: OP53_S127_954966,
+                obj: 565,
+                caster: 0x256D_21F4_0000_001F,
+                opponent: 0x3FFF_FFFF_0000_001F,
+                blob: &[0x04, 0x00, 0x00, 0x00, 0x1C, 0x00, 0x04],
+                secs: f32::from_bits(0x3FAC_D483),
+                uuid: "7fc15804-1637-40a9-8dcc-3ea1eb0f778d",
+            },
+            Case {
+                hex: OP53_S127_961429,
+                obj: 571,
+                caster: 0x3E6F_FE6F_0000_0034,
+                opponent: 0x3FFF_FFFF_0000_0034,
+                blob: &[0x06, 0x00, 0x00, 0x00, 0x1C, 0x00, 0x01, 0x00, 0x04],
+                secs: f32::from_bits(0x3F9B_CB39),
+                uuid: "d07a8d30-9a1c-49b0-866d-97a8aa1534cf",
+            },
+            Case {
+                hex: OP53_S168_1041484,
+                obj: 20,
+                caster: 0x3FFF_FE80_0000_0014,
+                opponent: 0x3FFF_FFFF_0000_0014,
+                blob: &[0x04, 0x00, 0x00, 0x00, 0x1C, 0x00, 0x04],
+                secs: f32::from_bits(0x4032_254B),
+                uuid: "cfee0b02-6d91-4d34-869c-a7e54329060d",
+            },
+        ];
+        for (i, c) in cases.iter().enumerate() {
+            let want = unhex(c.hex);
+            let got = player_channeling_state_change(
+                c.obj,
+                c.caster,
+                c.opponent,
+                c.secs,
+                c.uuid,
+                Some(c.blob),
+            );
+            assert_eq!(hex_of(&got), hex_of(&want), "op53 case {i} must be byte-identical to the capture");
+            // The retail carrier is the UserMessage one; op53 is NOT a 0x35 net-object update.
+            assert_eq!(got[1], MSGTYPE_USERMESSAGE, "op53 rides carrier 0x36");
+            assert_eq!(user_message_gmid(&got), Some(53), "gmid 53 at propId 3");
+            assert_eq!(retail_channel(&got), 0, "op53 rides ENet channel 0");
+        }
+    }
+
+    /// Production emission omits the unmodelled propId-7 blob. NetData is a sparse
+    /// property bag, so the frame stays well-formed and every other field is unchanged
+    /// from the captured layout — asserted against the same s127 #954966 values.
+    #[test]
+    fn player_channeling_state_change_omits_the_unmodelled_blob() {
+        let sparse = player_channeling_state_change(
+            565,
+            0x256D_21F4_0000_001F,
+            0x3FFF_FFFF_0000_001F,
+            0.9,
+            "d07a8d30-9a1c-49b0-866d-97a8aa1534cf",
+            None,
+        );
+        assert_eq!(&sparse[0..2], &[0xBE, 0x36]);
+        let nd = arena_proto::parse_netdata(&sparse[2..]);
+        assert!(nd.ok, "the sparse form is a well-formed NetData stream");
+        assert_eq!(nd.int(0), Some(565));
+        assert_eq!(nd.int(1), Some(56), "Avatar");
+        assert_eq!(nd.int(2), Some(1), "Authority");
+        assert_eq!(nd.int(3), Some(53));
+        assert_eq!(nd.props.get(&4), Some(&arena_proto::NetDataValue::ULong(0x256D_21F4_0000_001F)));
+        assert_eq!(nd.props.get(&5), Some(&arena_proto::NetDataValue::ULong(0x3FFF_FFFF_0000_001F)));
+        assert_eq!(nd.int(6), Some(CHANNELING_STATE_ID as i64));
+        assert!(!nd.props.contains_key(&7), "the unmodelled blob is omitted, not invented");
+        assert_eq!(nd.props.get(&8), Some(&arena_proto::NetDataValue::Float(0.9)));
+        assert_eq!(nd.string(9), Some("d07a8d30-9a1c-49b0-866d-97a8aa1534cf"));
+    }
+
+    /// **Byte-differential**: op64 `PerformConsumeConsumable` vs the real prod frame
+    /// s127 #962751 (avatar 571 drinking "Potion of Light Healing").
+    #[test]
+    fn perform_consume_consumable_matches_capture() {
+        let want = unhex(
+            "be36041f70770a3b0200003801402400\
+64383236656131322d653538332d343763312d613530662d346465363038323831373335",
+        );
+        let got = perform_consume_consumable(571, "d826ea12-e583-47c1-a50f-4de608281735");
+        assert_eq!(hex_of(&got), hex_of(&want), "op64 must be byte-identical to the capture");
+        assert_eq!(user_message_gmid(&got), Some(64));
+        assert_eq!(retail_channel(&got), 0, "op64 rides ENet channel 0");
+    }
+
+    fn hex_of(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{x:02x}")).collect()
     }
 
     /// op66 `DamageNegated` is a bare NetObjectInfo + GMID signal (no damage payload) on

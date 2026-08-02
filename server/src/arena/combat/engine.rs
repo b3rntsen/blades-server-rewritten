@@ -138,20 +138,55 @@ const MATCH_STATE_MATCHEND_PROGRESSION: &[(MatchState, Duration, f32)] = &[
     (MatchState::DisconnectingPlayersAfterMatch, Duration::from_secs(5), 0.0),
 ];
 
-/// op49 ResultsJSON reward magnitudes — simple win/loss deltas
-/// (`docs/arena-match-end-spec.md` §5 step 2: "the magnitude doesn't gate the screen";
-/// retail's exact per-match formula isn't in the captures). The card animates these; the
-/// trophy values are post-match snapshots the client diffs vs its pre-match totals.
-/// **Flagged as placeholder magnitudes** (calibrate against a winning capture if exact
-/// deltas are ever needed — the op49 SHAPE is what matters).
-const MATCH_END_WIN_GOLD: i64 = 4047; // s506-era order of magnitude
-const MATCH_END_LOSS_GOLD: i64 = 302; // s127/s167 loss value
-const MATCH_END_WIN_XP: i64 = 280;
-const MATCH_END_LOSS_XP: i64 = 16;
-const MATCH_END_WIN_TROPHIES: i64 = 30; // a representative trophy gain on a win
-const MATCH_END_LOSS_TROPHIES: i64 = 0;
 /// The op49/op48 result_code (s506 = 3; near-constant, ≈ maxRounds/result enum).
 const MATCH_END_RESULT_CODE: i32 = 3;
+
+/// The pre-match PvP counters a recipient's op49 card has to advance, read off the
+/// character snapshot the matchmaker loaded (`Loadout::profile_character_json`).
+///
+/// Phase 5 replaced the old hard-coded placeholder magnitudes with a real economy:
+/// the card now reports the character's ACTUAL post-match trophies, streak, chest
+/// meter, match count and ladder rung, and `arena_economy` persists exactly the
+/// same numbers. Everything defaults to zero for a bot / starter loadout that has
+/// no character row behind it.
+#[derive(Debug, Clone, Copy, Default)]
+struct PrePvpState {
+    trophies: i64,
+    high_water: i64,
+    chest_meter: i64,
+    winning_streak: i64,
+    matches_played: i64,
+    challenge_rank: i64,
+    level: u16,
+}
+
+impl PrePvpState {
+    /// Parse the PvP block out of a character profile blob. An empty/unparseable
+    /// blob (bot, starter loadout) yields all-zero, which the reward path handles.
+    fn from_profile(character_json: &str, fallback_level: u16) -> Self {
+        let v: serde_json::Value = serde_json::from_str(character_json).unwrap_or(serde_json::Value::Null);
+        let i = |k: &str| v.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
+        PrePvpState {
+            trophies: i("pvpTrophies"),
+            // `matchmakingPvpTrophies` is the season high-water mark; never let it
+            // start below the live count or the ladder would demote on load.
+            high_water: i("matchmakingPvpTrophies").max(i("pvpTrophies")),
+            chest_meter: i("pvpChestMeter"),
+            winning_streak: i("pvpWinningStreak"),
+            matches_played: i("numberPvpMatchPlayed"),
+            challenge_rank: v
+                .get("challengeSeason")
+                .and_then(|s| s.get("rank"))
+                .and_then(|r| r.as_i64())
+                .unwrap_or(1),
+            level: v
+                .get("level")
+                .and_then(|x| x.as_u64())
+                .map(|l| l as u16)
+                .unwrap_or(fallback_level),
+        }
+    }
+}
 
 /// The retail BETWEEN-ROUNDS `MatchState` walk — the path from a NON-final round end
 /// back into the next live round (best-of-3). Same `(state, hold_before, timeout)`
@@ -275,6 +310,20 @@ impl MatchInstance {
         matches!(self.combat.phase, FlowState::Finished)
     }
 
+    /// True while the FSM is still waiting for its peers (`Connecting`) — i.e. the
+    /// round-start identity burst has NOT been emitted yet.
+    ///
+    /// The registry uses this to hold the burst back until every peer's fighter slot
+    /// is *authoritatively* known. The burst is per-viewer by construction
+    /// (`broadcast_spawns` / `broadcast_avatars` / `broadcast_profiles` all branch on
+    /// `actor.slot == viewer`), so its content is only ever as correct as the
+    /// slot→peer addressing applied one layer up; emitting it while a peer is still
+    /// bound by FIFO admission order is what swaps the two players' identities.
+    /// See `MatchRegistry::tick_matches`.
+    pub fn is_connecting(&self) -> bool {
+        matches!(self.combat.phase, FlowState::Connecting)
+    }
+
     /// The character display name of the fighter in `slot`, if any (empty for a
     /// starter/bot loadout). Used by the DEBUG peer listing to label a target.
     pub fn fighter_display_name(&self, slot: usize) -> &str {
@@ -343,25 +392,29 @@ impl MatchInstance {
             return out;
         }
 
-        // op72 PlayEmote (c2s) — the client played an emote. RELAY it to the opponent as
-        // op73 PlayerEmoteStateChange so the emote displays on the other player's screen
-        // (server-authoritative; a client can't fabricate an opponent's emote). Echoed
-        // for the EMOTING actor's Avatar net-object, addressed to the opponent only
-        // (the emoter already sees its own). Intercepted HERE (not in `resolve`) because
-        // op72/73 are classified non-combat — `resolve` would drop them. No damage, no
-        // phase change. Works in any live-ish phase; gated to a real 2-player match.
+        // op72 PlayEmote (c2s) — the client played an emote. The server is AUTHORITATIVE
+        // over actor state, so it broadcasts op73 PlayerEmoteStateChange on the emoting
+        // actor's Avatar net-object to BOTH players: the OPPONENT (so it displays on the
+        // other screen — a client can't fabricate an opponent's emote) AND the EMOTER
+        // itself (the emoter's Emote actor-state is applied only when the server echoes
+        // it, exactly like `PerformExecuteAbility` is echoed to the caster — without the
+        // echo the emoter presses the wheel and NOTHING happens: bug 2). Intercepted HERE
+        // (not in `resolve`) because op72/73 are classified non-combat — `resolve` would
+        // drop them. No damage, no phase change. Works in any live-ish phase.
         if messages::is_play_emote(user_data) {
             let emote_id = messages::play_emote_id(user_data).unwrap_or_default();
-            if let Some(opp) = self.combat.opponent_of(sender) {
-                if let Some(emoter) = self.combat.fighters.get(sender) {
-                    let relay = messages::player_emote_state_change(emoter.net_object_id, &emote_id);
+            if let Some(emoter) = self.combat.fighters.get(sender) {
+                let relay = messages::play_emote_relay(emoter.net_object_id, &emote_id);
+                // Echo to the emoter first (its own animation), then relay to the opponent.
+                out.push((sender, relay.clone()));
+                if let Some(opp) = self.combat.opponent_of(sender) {
                     info!(
-                        "combat c2s: slot {sender} op72 PlayEmote (\"{emote_id}\") → relaying op73 PlayerEmoteStateChange to opponent slot {opp}"
+                        "combat c2s: slot {sender} op72 PlayEmote (\"{emote_id}\") → op73 PlayerEmoteStateChange to emoter + opponent slot {opp}"
                     );
                     out.push((opp, relay));
+                } else {
+                    debug!("combat c2s: slot {sender} op72 PlayEmote (\"{emote_id}\") → echoed to emoter (no opponent — solo/bot)");
                 }
-            } else {
-                debug!("combat c2s: slot {sender} op72 PlayEmote ignored — no opponent (solo/bot)");
             }
             return out;
         }
@@ -374,7 +427,45 @@ impl MatchInstance {
         {
             info!("combat: slot {sender} conceded → match Finished");
             self.combat.phase = FlowState::Finished;
+
+            // Emit the op48 result card with MatchConceded=true. Retail does send
+            // op48 on a concession — 4 of the 375 captured frames carry
+            // MatchConceded=true — but we previously sent only the flow-state
+            // change, so a conceded match gave the client NO result at all and the
+            // builder could hardcode the flag to false.
+            //
+            // The concession counts as the final round, won by the opponent. op48 is
+            // cumulative, so it carries every completed round plus this one.
+            let conceder = sender;
+            let winner = self.combat.opponent_of(sender).unwrap_or(1 - sender);
+            self.combat.round_winners.push(winner);
+            let uuid_of = |slot: usize| -> String {
+                self.combat
+                    .fighters
+                    .get(slot)
+                    .map(|f| f.loadout.character_uuid.clone())
+                    .unwrap_or_default()
+            };
+            let round_results: Vec<(String, String)> = self
+                .combat
+                .round_winners
+                .iter()
+                .map(|&w| (uuid_of(w), uuid_of(1 - w)))
+                .collect();
+            let result = messages::match_post_round_info(
+                self.combat.match_net_object_id,
+                &round_results,
+                &self.combat.game_session_id,
+                true, // the concession ends the match
+                true, // MatchConceded
+            );
+            debug!(
+                "combat: concede by slot {conceder} → op48 winner slot {winner}, {} round(s)",
+                round_results.len()
+            );
+
             for slot in 0..self.combat.fighters.len() {
+                out.push((slot, result.clone()));
                 if let Some(m) = messages::flow_state(self.combat.flow_controller_id, FlowState::RoundEnd) {
                     out.push((slot, m));
                 }
@@ -644,10 +735,21 @@ impl MatchInstance {
                     MATCH_STATE_INTERROUND_PROGRESSION.get(self.combat.interround_step)
                 {
                     if now.duration_since(self.combat.phase_entered) >= hold_before {
-                        // Bump the round at the FIRST between-rounds step (ChooseLoadout),
-                        // so the round-2/3 MatchState updates + the live round carry the
-                        // new round index (s506: ChooseLoadout(8) is sent with round=1).
-                        if self.combat.interround_step == 0 {
+                        // Bump the round when the LIVE round actually starts — i.e. at
+                        // InRound(13), the LAST between-rounds step — not at the first.
+                        //
+                        // The old code bumped at step 0 while its own comment recorded the
+                        // retail behaviour it was contradicting: "s506: ChooseLoadout(8) is
+                        // sent with round=1". Retail carries the OLD round number through the
+                        // whole between-rounds walk and only the live round carries the new
+                        // one; we were announcing round 2 from ChooseLoadout onwards.
+                        //
+                        // Reported from a real match (report #5, session 772): round 1 was
+                        // labelled correctly, round 2 was labelled "round 3". The server's own
+                        // counter was right the whole time — the log shows `round 1 live` then
+                        // `round 2 live` — so the client was adding its own increment on top of
+                        // the one we had already applied.
+                        if matches!(state, MatchState::InRound) {
                             self.combat.round = self.combat.round.saturating_add(1);
                         }
                         let is_inround = matches!(state, MatchState::InRound);
@@ -852,37 +954,117 @@ impl MatchInstance {
     /// ONE PER PLAYER at match-end (`docs/arena-match-end-spec.md` §5 step 3). Each
     /// player gets their OWN ResultsJSON (their character snapshot + reward + wallet);
     /// the winner/loser identity for the card comes from the op49 HEADER (p5/p6), not the
-    /// JSON. The reward magnitudes use simple win/loss deltas — retail's exact formula
-    /// isn't in the captures, and the magnitude doesn't gate the card (§5 step 2). ENet
-    /// auto-fragments the ~4 KB frame on ch4. Sent exactly once (the `matchend_step == 0`
-    /// guard at the call site), only on the FINAL round.
+    /// JSON. ENet auto-fragments the ~4 KB frame on ch4. Sent exactly once (the
+    /// `matchend_step == 0` guard at the call site), only on the FINAL round.
+    ///
+    /// **Phase 5 — the economy is real now.** The magnitudes used to be hard-coded
+    /// placeholders (`4047` gold win / `302` loss, a flat `30` trophies) and, worse,
+    /// nothing was ever written down: the card animated numbers that evaporated on the
+    /// next REST sync. Now gold and XP come from
+    /// [`arena_ladder::match_reward`](crate::arena::arena_ladder::match_reward) —
+    /// calibrated against 108 retail op49 cards, including the two-sided s615/s616 pair
+    /// that finally pinned the WINNER side — trophies move by an Elo swing, the chest
+    /// meter advances by rounds won, the ladder rung is recomputed from the trophy
+    /// high-water mark, and crossing a rung pays out its `rewards_once_reached` chests.
+    /// Every one of those numbers is queued to
+    /// [`arena_economy`](crate::arena::arena_economy) so it survives the walk back to
+    /// the menu.
     fn broadcast_match_end_results(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        use crate::arena::arena_economy::{self, MatchEconomyOutcome};
+        use crate::arena::arena_ladder::{self, MatchOutcome};
+
         let (winner_uuid, loser_uuid) = self.combat.winner_loser_uuids();
-        for slot in 0..self.combat.fighters.len() {
+        let game_session_id = uuid::Uuid::parse_str(&self.combat.game_session_id).ok();
+        let n = self.combat.fighters.len();
+
+        // Pre-match PvP state per slot, read off the loaded character profiles. The
+        // opponent's trophies feed the Elo swing, so both sides are resolved up front.
+        let pre: Vec<PrePvpState> = (0..n)
+            .map(|s| {
+                let f = &self.combat.fighters[s];
+                PrePvpState::from_profile(&f.loadout.profile_character_json, f.loadout.level)
+            })
+            .collect();
+
+        for slot in 0..n {
             let f = &self.combat.fighters[slot];
             let is_winner = self.combat.winner == Some(slot);
-            // Simple, faithful-enough per-match deltas (win > loss); the card animates
-            // these but doesn't depend on the exact values. Trophy/rank are post-match
-            // snapshots the client diffs against its pre-match values.
-            let reward = if is_winner {
-                messages::MatchEndReward {
-                    gold: MATCH_END_WIN_GOLD,
-                    character_xp: MATCH_END_WIN_XP,
-                    wallet_gold: MATCH_END_WIN_GOLD,
-                    pvp_trophies: MATCH_END_WIN_TROPHIES,
-                    matchmaking_pvp_trophies: MATCH_END_WIN_TROPHIES,
-                    challenge_rank: 1,
-                }
+            let p = pre[slot];
+            let opponent = (0..n).find(|&o| o != slot);
+            let opponent_trophies = opponent.map(|o| pre[o].trophies).unwrap_or(p.trophies);
+
+            // Round score from the authoritative match state (best-of-3). It is the
+            // sole driver of the reward multiplier, and that is capture-proven: the
+            // retail loss payout is byte-identical across dozens of matches for the
+            // same character EXCEPT when a round was won, and the chest-meter delta
+            // (which counts rounds won) corroborates every case.
+            let rounds_won = self.combat.rounds_won.get(slot).copied().unwrap_or(0);
+            let rounds_lost = opponent
+                .and_then(|o| self.combat.rounds_won.get(o).copied())
+                .unwrap_or(0);
+            let outcome = MatchOutcome { rounds_won, rounds_lost, win: is_winner };
+
+            let level = if p.level > 0 { p.level } else { f.loadout.level };
+            let payout = arena_ladder::match_reward(level, outcome);
+            let trophy_delta = arena_ladder::trophy_delta(is_winner, p.trophies, opponent_trophies);
+
+            // Post-match counters, computed once so the card and the durable write are
+            // literally the same numbers.
+            let post_trophies = (p.trophies + trophy_delta).max(0);
+            let post_high_water = p.high_water.max(post_trophies);
+            let (post_meter, _filled) = arena_ladder::advance_chest_meter(p.chest_meter, rounds_won);
+            let post_streak = if is_winner {
+                if p.winning_streak > 0 { p.winning_streak + 1 } else { 1 }
+            } else if p.winning_streak < 0 {
+                p.winning_streak - 1
             } else {
-                messages::MatchEndReward {
-                    gold: MATCH_END_LOSS_GOLD,
-                    character_xp: MATCH_END_LOSS_XP,
-                    wallet_gold: MATCH_END_LOSS_GOLD,
-                    pvp_trophies: MATCH_END_LOSS_TROPHIES,
-                    matchmaking_pvp_trophies: MATCH_END_LOSS_TROPHIES,
-                    challenge_rank: 1,
-                }
+                -1
             };
+            let tier = arena_ladder::tier_for_trophies(post_high_water);
+            let promo = arena_ladder::promotion_rewards(p.high_water, post_high_water, level);
+
+            // `rewardNewLevelArena` stays `{}` unless a ladder rung was crossed. The
+            // populated shape is capture-derived (prod s168 / s460 / s607), not
+            // authored: each chest carries the rung's `chest_rarity` as `tier` and the
+            // CHARACTER level as `level`, and `characterXp` is always 0 there (the
+            // match XP rides the separate `reward` block).
+            let reward_new_level_arena = if promo.chests.is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::json!({
+                    "chests": promo
+                        .chests
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (rarity, lvl))| serde_json::json!({
+                            "id": (i + 1).to_string(),
+                            "tier": rarity,
+                            "level": lvl,
+                        }))
+                        .collect::<Vec<_>>(),
+                    "characterXp": 0,
+                })
+            };
+
+            let reward = messages::MatchEndReward {
+                gold: payout.gold,
+                character_xp: payout.character_xp,
+                // The true post-credit balance lives in `characters.wallet`, which the
+                // engine has no handle on (Loadout carries no wallet — see the Phase-5
+                // handoff note). The client re-reads `/wallets/current` on returning to
+                // the menu, by which time `arena_economy` has credited it.
+                wallet_gold: payout.gold,
+                pvp_trophies: post_trophies,
+                matchmaking_pvp_trophies: post_high_water,
+                challenge_rank: p.challenge_rank.max(1),
+                pvp_chest_meter: post_meter,
+                pvp_winning_streak: post_streak,
+                number_pvp_match_played: p.matches_played + 1,
+                highest_arena_reached: tier.arena as u64,
+                highest_level_arena_reached: tier.level as u64,
+                reward_new_level_arena,
+            };
+
             let rj = messages::results_json(
                 &f.loadout.character_uuid,
                 &f.loadout.profile_character_json,
@@ -898,13 +1080,45 @@ impl MatchInstance {
                 &rj,
             );
             info!(
-                "combat: op49 MatchEndMatchMsg → slot {slot} ({}), ResultsJSON {} B (gold {}, xp {})",
+                "combat: op49 MatchEndMatchMsg → slot {slot} ({}, L{level} {rounds_won}-{rounds_lost}), \
+                 ResultsJSON {} B (gold {}, xp {}, trophies {} → {} [{:+}], meter {}, arena {}/{}{})",
                 if is_winner { "winner" } else { "loser" },
                 rj.len(),
                 reward.gold,
                 reward.character_xp,
+                p.trophies,
+                post_trophies,
+                trophy_delta,
+                post_meter,
+                tier.arena,
+                tier.level,
+                if promo.chests.is_empty() {
+                    String::new()
+                } else {
+                    format!(", PROMOTED +{} chest(s)", promo.chests.len())
+                },
             );
             out.push((slot, frame));
+
+            // Persist. A bot / starter loadout has no character uuid to write to, and
+            // the queue is a no-op when the server runs without a database (unit tests,
+            // the offline round-trip harness).
+            if let Ok(character_id) = uuid::Uuid::parse_str(&f.loadout.character_uuid) {
+                arena_economy::record(MatchEconomyOutcome {
+                    character_id,
+                    game_session_id,
+                    level,
+                    gold: payout.gold,
+                    character_xp: payout.character_xp,
+                    trophy_delta,
+                    rounds_won,
+                    rounds_lost,
+                    win: is_winner,
+                    opponent_character_id: opponent.and_then(|o| {
+                        uuid::Uuid::parse_str(&self.combat.fighters[o].loadout.character_uuid).ok()
+                    }),
+                });
+            }
         }
     }
 
@@ -1575,6 +1789,92 @@ mod tests {
         assert!(!m.is_finished(), "peers NOT disconnected — the match continues");
     }
 
+    /// Round scoring, end to end. The op48 the CLIENT receives must be CUMULATIVE —
+    /// the round-1 result stays in slots (5,6) while round 2 fills (7,8), and propId 11
+    /// counts completed rounds minus one — with propId 4 pinned at the constant 3 that
+    /// all 375 captured frames carry, and IsMatchEnded true only on the closing round.
+    ///
+    /// Regression for the reported "0-0 after round 1, then 3-0, third round labelled
+    /// the 4th": we previously sent the live round number at p4 and a single result
+    /// duplicated into the round-2 slot with p11 hardcoded to 1, so the client could
+    /// not tally.
+    #[test]
+    fn op48_is_cumulative_with_constant_round_number() {
+        // Parse the op48 (carrier 0x36, gmid 48) out of a death-burst: RoundNumber(p4),
+        // IsMatchEnded(p15), MatchWinnerPlayerId(p16).
+        // (p4, IsMatchEnded, MatchWinnerPlayerId, [p5..p10 slots], p11)
+        type Op48 = (i64, bool, String, Vec<String>, i64);
+        let parse_op48 = |out: &[(usize, Vec<u8>)]| -> Option<Op48> {
+            out.iter().find_map(|(_, b)| {
+                if b.len() > 3 && b[1] == 0x36 {
+                    let nd = arena_proto::parse_netdata(&b[2..]);
+                    if nd.int(3) == Some(48) {
+                        let round = nd.int(4)?;
+                        let ended = matches!(nd.props.get(&15), Some(NetDataValue::Bool(true)));
+                        let mwid = nd.string(16).unwrap_or("").to_string();
+                        let slots: Vec<String> = (5..=10)
+                            .map(|p| nd.string(p).unwrap_or("").to_string())
+                            .collect();
+                        let p11 = nd.int(11)?;
+                        return Some((round, ended, mwid, slots, p11));
+                    }
+                }
+                None
+            })
+        };
+
+        // Named fighters (distinct UUIDs) so the match-ending op48 carries a real
+        // MatchWinnerPlayerId (the starter loadout has an empty character_uuid).
+        let now = Instant::now();
+        let mk = |name: &str, uuid: &str| {
+            let mut l = crate::arena::combat::loadout::starter();
+            l.display_name = name.into();
+            l.character_uuid = uuid.into();
+            l
+        };
+        let mut m = MatchInstance::new(
+            2,
+            2,
+            vec![
+                mk("Flappety", "38c987fd-c42b-4ea6-b869-c8d4c03055f9"),
+                mk("Blank", "1131a037-716c-49cc-b165-32d8ddc14f49"),
+            ],
+            now,
+        );
+        let t0 = drive_to_live(&mut m, 2, now);
+
+        // Round 1: slot 0 wins → op48 must say RoundNumber=1, IsMatchEnded=false,
+        // MatchWinnerPlayerId empty (the match is NOT over — best-of-3, score 1-0).
+        let (d1, t1) = swing_until_death(&mut m, 0, t0);
+        let (r1, ended1, mw1, slots1, p11_1) = parse_op48(&d1).expect("op48 emitted on the round-1 death");
+        assert_eq!(r1, 3, "p4 is the CONSTANT 3 retail always sends, not the live round");
+        assert!(!ended1, "round 1 is NOT the match end → IsMatchEnded=false");
+        assert_eq!(mw1, "", "no overall MatchWinnerPlayerId on an intermediate round");
+        assert_eq!(slots1[0], "38c987fd-c42b-4ea6-b869-c8d4c03055f9", "round-1 winner in slot 1");
+        assert_eq!(slots1[1], "1131a037-716c-49cc-b165-32d8ddc14f49", "round-1 loser in slot 1");
+        assert_eq!(slots1[2], "", "round-2 slot must still be EMPTY after round 1");
+        assert_eq!(slots1[3], "", "round-2 slot must still be EMPTY after round 1");
+        assert_eq!(p11_1, 0, "p11 = completedRounds-1 = 0 after round 1");
+        assert_eq!(m.combat.rounds_won, [1, 0], "server score 1-0 after round 1");
+        let (_s1, live2) = drive_interround_to_live(&mut m, t1);
+
+        // Round 2: slot 0 wins again → 2-0 → the MATCH ends. op48 RoundNumber=2,
+        // IsMatchEnded=true, MatchWinnerPlayerId = the winner.
+        let (d2, _t2) = swing_until_death(&mut m, 0, live2);
+        let (r2, ended2, mw2, slots2, p11_2) = parse_op48(&d2).expect("op48 emitted on the round-2 death");
+        assert_eq!(r2, 3, "p4 still the constant 3");
+        assert!(ended2, "2-0 ends the match → IsMatchEnded=true");
+        assert_eq!(slots2[0], "38c987fd-c42b-4ea6-b869-c8d4c03055f9", "round 1 is PRESERVED (cumulative)");
+        assert_eq!(slots2[2], "38c987fd-c42b-4ea6-b869-c8d4c03055f9", "round 2 winner fills the second slot");
+        assert_eq!(slots2[3], "1131a037-716c-49cc-b165-32d8ddc14f49", "round 2 loser fills the second slot");
+        assert_eq!(p11_2, 1, "p11 = 1 after two rounds");
+        assert_eq!(
+            mw2, "38c987fd-c42b-4ea6-b869-c8d4c03055f9",
+            "the match-ending op48 names the overall winner (slot 0) as MatchWinnerPlayerId"
+        );
+        assert_eq!(m.combat.rounds_won, [2, 0], "server score 2-0 → match won");
+    }
+
     /// BEST-OF-3 end: when a fighter reaches 2 round-wins, the NEXT round-ending death
     /// ENDS the match (terminal walk → Finished), instead of looping. Drive to a 1-1
     /// score, then a third death must take the winner to 2 and end the match.
@@ -1855,9 +2155,14 @@ mod tests {
         };
         block[0] = 0x84; // c2s marker
 
-        // The block frame itself: no s2c, no damage, and B is now guarding.
+        // The block frame itself: no DAMAGE, but it does relay the guard state so the
+        // shield actually appears (report #5 — this used to assert no s2c at all).
         let out = m.on_c2s(1, &block, t0);
-        assert!(out.is_empty(), "a block input produces no s2c and no damage");
+        assert!(!out.is_empty(), "a block input must relay the blocking state");
+        assert!(
+            out.iter().all(|(_, f)| messages::is_player_blocking_state_change(f)),
+            "a block emits only the gmid-41 relay, never damage"
+        );
         assert_eq!(m.fighter_health(1), full, "the block itself deals no damage");
 
         // A (slot 0) swings Right into B's Right guard → OPTIMAL block: physical NEGATED,
@@ -1904,13 +2209,15 @@ mod tests {
         assert!(m.fighter_health(1) < full, "after the block window expires, the hit lands");
     }
 
-    /// EMOTE relay: a `PlayEmote` (72) from one player is relayed to the OPPONENT as a
-    /// `PlayerEmoteStateChange` (73) carrying the emote id, so it displays on the other
-    /// screen. No damage; the emoter is not echoed its own emote.
+    /// BUG-2 (emotes): a `PlayEmote` (72) is echoed back as `PlayEmote` (72) — retail's own shape
+    /// to BOTH the emoter (server-authoritative echo → the emoter's own animation plays)
+    /// and the opponent (so it displays on the other screen). Both frames carry the
+    /// EMOTER's avatar obj + the emote id. No damage; no phase change.
     #[test]
-    fn emote_relays_to_opponent() {
+    fn emote_broadcasts_to_both_players() {
         let (mut m, t0) = live_inst(2);
         let full = m.fighter_health(1);
+        let emoter_avatar = m.combat.fighters[0].net_object_id as i64;
 
         // Build A's (slot 0) PlayEmote (72): {0:obj · 1:55 · 2:role · 3:72 · 4:String id}.
         let mut emote = {
@@ -1925,15 +2232,21 @@ mod tests {
         emote[0] = 0x84; // c2s marker
 
         let out = m.on_c2s(0, &emote, t0);
-        // Exactly one s2c, to the OPPONENT (slot 1), an op73 PlayerEmoteStateChange.
-        assert_eq!(out.len(), 1, "emote relays exactly once, to the opponent only");
-        let (viewer, body) = &out[0];
-        assert_eq!(*viewer, 1, "relayed to the opponent (slot 1), not echoed to the emoter");
-        assert_eq!(body[1], 0x36, "carrier 0x36");
-        let nd = arena_proto::parse_netdata(&body[2..]);
-        assert_eq!(nd.int(3), Some(73), "GMID 73 PlayerEmoteStateChange");
-        assert_eq!(nd.int(0), Some(m.combat.fighters[0].net_object_id as i64), "carries the EMOTER's avatar obj");
-        assert_eq!(nd.string(5), Some("emote_wave"), "the emote id is relayed");
+        // Broadcast to BOTH: the emoter (slot 0, the echo — bug-2 fix) AND the opponent (slot 1).
+        assert_eq!(out.len(), 2, "emote is broadcast to both players (emoter echo + opponent relay)");
+        let viewers: Vec<usize> = out.iter().map(|(v, _)| *v).collect();
+        assert!(viewers.contains(&0), "the EMOTER (slot 0) is echoed its own emote — without this the emote does nothing");
+        assert!(viewers.contains(&1), "the opponent (slot 1) sees the emote");
+        // Every relayed frame echoes gmid 72 in retail's shape, carrying the emoter's
+        // avatar + id. Retail never sends 73 (0 of 264,302 captured frames); sending it
+        // was why an emote press animated nothing. See messages::play_emote_relay.
+        for (_, body) in &out {
+            assert_eq!(body[1], 0x36, "carrier 0x36");
+            let nd = arena_proto::parse_netdata(&body[2..]);
+            assert_eq!(nd.int(3), Some(72), "GMID must be PlayEmote(72), not 73");
+            assert_eq!(nd.int(0), Some(emoter_avatar), "carries the EMOTER's avatar obj");
+            assert_eq!(nd.string(4), Some("emote_wave"), "the emote id is relayed at propId 4");
+        }
         // No damage from an emote.
         assert_eq!(m.fighter_health(1), full, "an emote deals no damage");
         assert_eq!(m.phase(), FlowState::StateTimeout, "emote doesn't change the match phase");

@@ -50,6 +50,7 @@ mod repair;
 mod salvage;
 pub mod schema;
 mod shop;
+mod shop_gen;
 mod session;
 mod static_loader;
 mod status;
@@ -103,6 +104,20 @@ pub struct ServerGlobal {
     /// Keyed by lowercase UUID string -> tempering-level string -> max durability.
     /// Empty if the file is missing/invalid (repair then leaves durability as-is).
     pub item_max_durability: std::collections::HashMap<String, std::collections::HashMap<String, f64>>,
+    /// Faithful town game-data extracted from the APK bundles (server/data/static/):
+    /// building upgrade cost/time/material tables, town job-pool definitions, and the
+    /// appearance-change currency cost. Raw JSON parsed by the town/quest/character
+    /// handlers; a missing/invalid file loads as `Null` and that feature degrades
+    /// gracefully (no panic at startup).
+    pub building_upgrades: serde_json::Value,
+    pub job_pools: serde_json::Value,
+    pub appearance_change_cost: serde_json::Value,
+    /// Authored, admin-editable per-level town-shop STOCK generation config
+    /// (`shop_stock.json`). Drives [`shop_gen::generate_catalog`] so a vendor
+    /// stocks level-appropriate items. A missing/invalid file loads as an empty
+    /// config; the shop endpoint then falls back to the capture-derived templates
+    /// (never empty). Pure data — a future admin route can hot-reload it.
+    pub shop_stock: shop_gen::ShopStockConfig,
     pub arena: Arc<arena::matchmaker::ArenaGlobal>,
     /// Static dev token for the `/api/dev/v1/import-character` endpoint, read
     /// from `ARENA_IMPORT_TOKEN` at startup. `None` (unset) disables the
@@ -173,6 +188,48 @@ async fn main() -> Result<()> {
                 }
             };
 
+            // Faithful town game-data extracted from the APK (building upgrade costs,
+            // job pools, appearance-change cost). Missing/invalid → Null; the consuming
+            // handler degrades gracefully rather than panicking at startup.
+            let load_static_json = |name: &str| -> serde_json::Value {
+                let p = static_data.join(name);
+                match File::open(&p) {
+                    Ok(f) => serde_json::from_reader(std::io::BufReader::new(f))
+                        .unwrap_or_else(|e| {
+                            log::warn!("[static] invalid {p:?}: {e}; feature degraded to Null");
+                            serde_json::Value::Null
+                        }),
+                    Err(_) => {
+                        log::warn!("[static] no {p:?}; feature degraded to Null");
+                        serde_json::Value::Null
+                    }
+                }
+            };
+            let building_upgrades = load_static_json("building_upgrades.json");
+            let job_pools = load_static_json("job_pools.json");
+            let appearance_change_cost = load_static_json("appearance_change_cost.json");
+
+            // Authored per-level shop-stock generation config. Parsed straight into
+            // the typed `ShopStockConfig` (only the `generation` block is read);
+            // missing/invalid → empty config and the shop endpoint falls back to the
+            // capture-derived templates rather than panicking at startup.
+            let shop_stock: shop_gen::ShopStockConfig = {
+                let p = static_data.join("shop_stock.json");
+                match File::open(&p) {
+                    Ok(f) => serde_json::from_reader(std::io::BufReader::new(f))
+                        .unwrap_or_else(|e| {
+                            log::warn!(
+                                "[shop] invalid {p:?}: {e}; shop stock falls back to templates"
+                            );
+                            Default::default()
+                        }),
+                    Err(_) => {
+                        log::warn!("[shop] no {p:?}; shop stock falls back to templates");
+                        Default::default()
+                    }
+                }
+            };
+
             // Capture-derived static definitions (gifts, announcements, …). Missing
             // files degrade gracefully (empty → endpoint returns an empty list).
             let static_data_defs = static_loader::load(&static_data);
@@ -181,6 +238,13 @@ async fn main() -> Result<()> {
                 arena::config::ArenaConfig::from_env(),
                 db_pool.clone(),
             );
+
+            // Phase 5.4 — start the match-end economy writer. The combat engine is
+            // synchronous and cannot touch the async pool from inside the ENet tick,
+            // so it pushes finished matches onto a queue that this task drains.
+            // Without it the victory card's gold / XP / trophies are wire-only and
+            // vanish the moment the client re-syncs from REST.
+            arena::arena_economy::install(db_pool.clone());
 
             let arena_import_token = std::env::var("ARENA_IMPORT_TOKEN").ok();
             // DEBUG: dedicated token for the arena packet-injection routes;
@@ -198,6 +262,10 @@ async fn main() -> Result<()> {
                 game_data,
                 static_data: static_data_defs,
                 item_max_durability,
+                building_upgrades,
+                job_pools,
+                appearance_change_cost,
+                shop_stock,
                 arena,
                 arena_import_token,
                 arena_debug_token,
@@ -294,6 +362,13 @@ async fn main() -> Result<()> {
                     .service(abyss::end_abyss)
                     .service(abyss::get_abyss)
                     .service(town::get_town)
+                    // Town building lifecycle. Register the deeper `/buildings/{id}/…`
+                    // paths BEFORE the bare `/buildings` collection POST so the latter
+                    // (place) doesn't shadow the per-building actions.
+                    .service(town::upgrade_building)
+                    .service(town::complete_building)
+                    .service(town::destroy_building)
+                    .service(town::place_building)
                     // Crafting: finish (specific path) BEFORE create (bare /crafts).
                     .service(craft::finish_craft)
                     .service(craft::create_craft)

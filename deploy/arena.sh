@@ -45,7 +45,16 @@ usage() { sed -n '3,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 cmd="${1:-}"
 [ $# -gt 0 ] && shift || true
 case "$cmd" in
-  build)        docker build -t "$IMAGE" "$ROOT" ;;
+  build)
+    docker build -t "$IMAGE" "$ROOT"
+    # Cap build-cache growth: arena builds run --no-cache (cache is never reused),
+    # so every build leaves ~7min of dangling layers. Left unpruned this reached
+    # 116 GB and filled the prod disk (2026-07). Drop cache older than 48h after
+    # each build — keeps same-session iteration fast, caps accumulation by time.
+    # A weekly blades-docker-prune.timer on the box is the backstop for on-box
+    # `docker build` runs that bypass this subcommand.
+    docker builder prune -f --filter until=48h >/dev/null 2>&1 || true
+    ;;
   push)         docker save "$IMAGE" | gzip | ssh -i "$SSH_KEY" "$BOX" 'gunzip | sudo docker load' ;;
   sync)
     # rsync the SOURCE to the box's compose dir for an in-place `build` (the box

@@ -195,6 +195,15 @@
     },
     "townXp": 0
   },
+  "1275d959-bbe5-460d-8f6a-1c31106a8eb2": {
+    "chests": [
+      {
+        "tier": 5,
+        "level": 42
+      }
+    ],
+    "townXp": 0
+  },
   "16d100ba-e553-496f-b938-9e75e2a39a7c": {
     "currencies": {
       "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 5580

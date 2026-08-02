@@ -23,6 +23,13 @@ pub struct ArenaConfig {
     /// shorter = a solo tester gets a bot fight sooner; longer = a wider window for
     /// two near-simultaneous players to PAIR (coordinated taps pair instantly either
     /// way, since the 2nd ticket arrives while the 1st is waiting).
+    ///
+    /// This is deliberately SHORT (default 4s): the frame carrying the arena server
+    /// address (`MatchmakingSucceeded`) is only sent once a ticket RESOLVES, so a lone
+    /// player stares at "determining server" for exactly this long before the bot
+    /// fallback fires. A real second human still pairs INSTANTLY within the window
+    /// (the 2nd ticket arrives while the 1st waits), so keeping a brief window costs
+    /// coordinated pairs nothing while un-sticking the common solo case fast.
     pub solo_fallback_secs: u64,
     /// **DEBUG (`ARENA_DEBUG_GHOST`).** When set to an arena `characters.user_id`
     /// UUID, the **solo-fallback** match (one lone human → vs bot) loads THAT
@@ -36,6 +43,14 @@ pub struct ArenaConfig {
     /// `None` when unset / unparseable → unchanged (today's empty-starter bot). Does
     /// NOT affect a real PvP pair (both players upload their own profiles).
     pub debug_ghost_user_id: Option<Uuid>,
+    /// Roster of arena `characters.user_id` UUIDs to use as solo-match BOT opponents
+    /// (env `ARENA_BOT_USER_IDS`, comma-separated). When set, a solo-fallback bot loads
+    /// one of these (COMPLETE + distinct from the human, rotated by gsid). When EMPTY,
+    /// the bot is instead any random COMPLETE character in the DB. Either way the bot
+    /// gets a non-empty op54 PROFILE → the opponent is visible/bindable, killable, and
+    /// the match-end card resolves (the 2026-07-03 invisible-bot / post-match-hang fix).
+    /// Unlike `debug_ghost_user_id` this is the PRODUCTION bot path (not a debug crutch).
+    pub bot_user_ids: Vec<Uuid>,
 }
 
 impl ArenaConfig {
@@ -49,11 +64,25 @@ impl ArenaConfig {
             udp_port: parse("ARENA_UDP_PORT", 7777),
             max_concurrent_matches: parse("ARENA_MAX_MATCHES", 16),
             max_queued_players: parse("ARENA_MAX_QUEUED", 64),
-            solo_fallback_secs: parse("ARENA_SOLO_FALLBACK_SECS", 20),
+            // SHORT by default (4s): the arena address only ships on resolve, so this
+            // is the felt "determining server" wait for a solo player. A genuine 2nd
+            // human still pairs instantly within the window (its ticket arrives while
+            // the 1st waits). Bump ARENA_SOLO_FALLBACK_SECS to widen the pairing window.
+            solo_fallback_secs: parse("ARENA_SOLO_FALLBACK_SECS", 4),
             // DEBUG ghost opponent (off when unset / unparseable → normal bot).
             debug_ghost_user_id: env::var("ARENA_DEBUG_GHOST")
                 .ok()
                 .and_then(|s| Uuid::parse_str(s.trim()).ok()),
+            // Production solo-bot roster (comma-separated user_id UUIDs). Empty → any
+            // random COMPLETE character in the DB is used as the bot.
+            bot_user_ids: env::var("ARENA_BOT_USER_IDS")
+                .ok()
+                .map(|s| {
+                    s.split(',')
+                        .filter_map(|p| Uuid::parse_str(p.trim()).ok())
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 }

@@ -112,6 +112,16 @@ pub fn destroy_items(
 /// Apply equipment changes (`{slotId: itemId | null}`): equip moves an item from the
 /// backpack into the slot (returning any previously-equipped item to the backpack);
 /// `null` unequips the slot back to the backpack.
+///
+/// GEAR is instanced (`backpack.items`, one row per item), so a normal equip moves that
+/// instance into the slot. POTIONS/consumables are STACKABLE (`backpack.stackableItems`,
+/// template id + count) and carry no per-instance id — the client normally equips them
+/// via the separate `equippedConsumables` field (see [`set_equipped_consumables`]). But
+/// if a consumable's TEMPLATE id ever arrives here (in `equipmentUpdates`) it must NOT
+/// be silently dropped: the old code only checked `backpack.items`, so the potion was
+/// never equipped, never appeared in the diff, and the client surfaced "Unable to
+/// connect". We now route such an id to the consumable list so the equip lands and is
+/// reflected in the loadout diff. Instanced gear equips are unchanged.
 pub fn apply_equipment_updates(
     inv: &mut CompleteInventory,
     updates: &HashMap<Uuid, Option<Uuid>>,
@@ -125,7 +135,7 @@ pub fn apply_equipment_updates(
             tracker.modified_backpack.items.insert(prev.id);
         }
         if let Some(item_id) = target {
-            // Equip from the backpack (skip silently if the id isn't there — stale client).
+            // Equip an instanced gear item from the backpack.
             if let Some(item) = inv.backpack.items.0.remove(item_id) {
                 tracker.modified_backpack.items.insert(*item_id);
                 inv.loadout.equipped_items.0.insert(
@@ -137,8 +147,51 @@ pub fn apply_equipment_updates(
                     },
                 );
                 tracker.modified_loadout.modified_equipped_items.insert(*slot);
+            } else if inv.backpack.stackable_items.count(*item_id) > 0 {
+                // Not instanced gear, but the id IS a stackable consumable the player
+                // owns → treat it as a consumable equip rather than silently skipping.
+                // (A client can route a potion through equipmentUpdates; without this it
+                // fell through and the client saw "Unable to connect".)
+                add_equipped_consumable(&mut inv.loadout.equipped_consumables, *item_id);
+                tracker.modified_loadout.consumables_changed = true;
             }
+            // else: unknown id (stale client) — skip silently, as before.
         }
+    }
+}
+
+/// Insert a consumable template id into the equipped-consumable list (idempotent: no
+/// duplicates). Extracted so both the `equippedConsumables` request path and the
+/// `equipmentUpdates` fallback share one definition.
+fn add_equipped_consumable(equipped: &mut Vec<Uuid>, template: Uuid) {
+    if !equipped.contains(&template) {
+        equipped.push(template);
+    }
+}
+
+/// Set the equipped consumables to exactly `templates` (the `equippedConsumables` field
+/// of `POST /loadouts/current` — a full replacement, matching how the client sends the
+/// current equipped-consumable list). Only templates the player actually OWNS in
+/// `backpack.stackableItems` are accepted (an unowned id is dropped, never equipped);
+/// duplicates are collapsed. Marks the tracker so the loadout diff echoes the result.
+/// Returns true iff the equipped-consumable list changed.
+pub fn set_equipped_consumables(
+    inv: &mut CompleteInventory,
+    templates: &[Uuid],
+    tracker: &mut InventoryChangeTracker,
+) -> bool {
+    let mut next: Vec<Uuid> = Vec::with_capacity(templates.len());
+    for t in templates {
+        if inv.backpack.stackable_items.count(*t) > 0 {
+            add_equipped_consumable(&mut next, *t);
+        }
+    }
+    if next != inv.loadout.equipped_consumables {
+        inv.loadout.equipped_consumables = next;
+        tracker.modified_loadout.consumables_changed = true;
+        true
+    } else {
+        false
     }
 }
 
@@ -234,5 +287,74 @@ mod tests {
         apply_equipment_updates(&mut i, &HashMap::from([(slot, None)]), &mut t2);
         assert!(!i.loadout.equipped_items.0.contains_key(&slot));
         assert!(i.backpack.items.0.contains_key(&item_id), "returned to backpack");
+    }
+
+    /// Equipping a STACKABLE consumable (potion) via the `equippedConsumables` field
+    /// must land in the loadout, be reflected in the loadout diff, and NOT touch the
+    /// stackable count (equipping a potion doesn't consume it). Before the fix a potion
+    /// equip was silently skipped and the client showed "Unable to connect".
+    #[test]
+    fn equip_stackable_consumable_updates_loadout_and_diff() {
+        let mut i = inv();
+        let potion = Uuid::from_u128(42);
+        i.backpack.stackable_items.add(potion, 5);
+        let mut t = InventoryChangeTracker::default();
+
+        let changed = set_equipped_consumables(&mut i, &[potion], &mut t);
+        assert!(changed, "equipping a potion changes the loadout");
+        assert_eq!(i.loadout.equipped_consumables, vec![potion], "potion is equipped");
+        assert_eq!(i.backpack.stackable_items.count(potion), 5, "equipping does not consume the stack");
+        assert!(t.modified_loadout.consumables_changed, "tracker flags the change");
+
+        // The loadout diff echoes the equipped-consumable list so the client sees it.
+        let diff = i.loadout.generate_client_update(&t.modified_loadout);
+        assert_eq!(diff.equipped_consumables, Some(vec![potion]), "diff carries the equipped consumable");
+    }
+
+    /// A consumable that the player does NOT own is dropped (never equipped), and an
+    /// idempotent re-equip of the same list reports no change (no spurious diff).
+    #[test]
+    fn equip_consumable_ignores_unowned_and_is_idempotent() {
+        let mut i = inv();
+        let owned = Uuid::from_u128(1);
+        let unowned = Uuid::from_u128(2);
+        i.backpack.stackable_items.add(owned, 3);
+        let mut t = InventoryChangeTracker::default();
+
+        set_equipped_consumables(&mut i, &[owned, unowned, owned], &mut t);
+        assert_eq!(i.loadout.equipped_consumables, vec![owned], "unowned dropped, duplicate collapsed");
+
+        // Re-applying the same effective list → no change.
+        let mut t2 = InventoryChangeTracker::default();
+        let changed = set_equipped_consumables(&mut i, &[owned], &mut t2);
+        assert!(!changed, "re-equipping the same list is a no-op");
+        assert!(!t2.modified_loadout.consumables_changed, "no spurious diff");
+    }
+
+    /// A potion TEMPLATE id routed through `equipmentUpdates` (the exact reported path)
+    /// must NOT be silently skipped — it is treated as a consumable equip. Instanced
+    /// gear in the same batch still equips normally.
+    #[test]
+    fn equipment_updates_routes_a_potion_id_to_consumables() {
+        let mut i = inv();
+        let potion = Uuid::from_u128(99);
+        i.backpack.stackable_items.add(potion, 2);
+        let gear_id = Uuid::from_u128(7);
+        let gear_slot = Uuid::from_u128(100);
+        i.backpack.items.0.insert(gear_id, item());
+        let mut t = InventoryChangeTracker::default();
+
+        // The client sends both a gear equip and a potion (template id) in equipmentUpdates.
+        apply_equipment_updates(
+            &mut i,
+            &HashMap::from([
+                (gear_slot, Some(gear_id)),
+                (Uuid::from_u128(200), Some(potion)),
+            ]),
+            &mut t,
+        );
+        assert!(i.loadout.equipped_items.0.contains_key(&gear_slot), "gear equipped normally");
+        assert_eq!(i.loadout.equipped_consumables, vec![potion], "potion routed to consumables, not dropped");
+        assert!(t.modified_loadout.consumables_changed, "consumable change tracked for the diff");
     }
 }

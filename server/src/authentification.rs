@@ -62,7 +62,16 @@ impl SessionResponseInner {
             token: session.generate_token(&session_id),
             schema: "blades_v1".to_string(),
             feature_status: 7,
-            linked_accounts_status: 4,
+            // Session.LinkedAccountsStatus bitmask (client dump.cs:484710). The client's
+            // "Do you want to sign in?" AnonymousWarning nag (shown at spend/commit points
+            // like the customization FINISH) fires when the account is ONLY
+            // BNET_ANONYMOUS_ACCOUNT(4). We force anon login (no Bethesda/Google, and their
+            // servers are gone), so 4 reproduced the nag. Report BNET_GAME_ACCOUNT(8)
+            // instead — the "has a real account" family retail returned when it did NOT nag
+            // (captured: gc=9=1|8, bnet=16, link=24 all suppress it; anon=4 shows it). The
+            // session itself is unaffected; this only tells the client it's linked so it
+            // stops nudging. No Bethesda contact. [investigated 2026-07-04]
+            linked_accounts_status: 8,
             token_expiration_seconds: session.expire_unix_timestamp,
             denied_features,
         }
