@@ -1225,14 +1225,25 @@ const REGEN_TICK_INTERVAL: Duration = Duration::from_secs(1);
 const STAMINA_REGEN_RATE_PER_S: f32 = 0.05;
 const MAGICKA_REGEN_RATE_PER_S: f32 = 0.05;
 
-/// In-combat health regen: **ZERO** — video ground-truth (s293) shows NO passive HP
-/// recovery during a fight; health only changes on hits.  Between rounds the server
-/// already calls `reset_fighters_for_next_round` (full HP reset), so no in-round regen
-/// is needed.  The old UESP-derived 0.5 %/s figure was wrong for arena PvP.
-/// `BlockHealthRegen` status suppression is kept (still correct to gate any future
-/// out-of-arena regen path).
-/// [ground-truth: §1 "Health regen: 0 in-round; full reset between rounds"]
-const HEALTH_REGEN_RATE_PER_S: f32 = 0.0; // NO in-round health regen (video-proven)
+/// In-combat health regen: **modelled as ZERO — an approximation, not a rule.**
+///
+/// There is no *baseline* passive HP recovery in a fight: video ground-truth (s293)
+/// shows health only changing on hits, and the old UESP-derived 0.5 %/s baseline was
+/// wrong for arena PvP. Between rounds `reset_fighters_for_next_round` restores full
+/// HP anyway.
+///
+/// **But health CAN rise mid-round.** A regen perk plus the right rings/armour gives
+/// real in-round health recovery. It is rare, and on most builds too slow to matter,
+/// which is why a flat zero is a good approximation of the field today — but it is
+/// not a law of the game. Two things follow:
+///   * do not write "health cannot increase in a round" anywhere. It can.
+///   * when a regen build does show up, this becomes a per-fighter rate summed from
+///     the perk and the equipped items, not a global constant.
+/// [owner, 2026-08-02, correcting a claim this file previously stated as fact]
+///
+/// `BlockHealthRegen` status suppression is kept — it is what will gate that rate
+/// once it is non-zero.
+const HEALTH_REGEN_RATE_PER_S: f32 = 0.0;
 
 /// **Phase 3.10 — the invented Ward / Resist-Elements constants are GONE.**
 ///
@@ -1803,7 +1814,8 @@ fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u
         let before_s = f.stamina;
         let before_m = f.magicka;
 
-        // Health regen: NONE in-round (HEALTH_REGEN_RATE_PER_S = 0.0).
+        // Health regen: modelled as none in-round (HEALTH_REGEN_RATE_PER_S = 0.0).
+        // A regen perk + rings/armour CAN recover health mid-round; not modelled yet.
         // Video ground-truth: HP only changes on hits; full reset happens between rounds.
 
         // Stamina regen: 5% of pool per second (video-pinned, s293 §1).

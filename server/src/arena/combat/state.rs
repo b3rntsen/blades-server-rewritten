@@ -384,8 +384,8 @@ impl FlowState {
 /// walking every ENet command in the packet (labelling by the packet's first command
 /// hides ~40 % of these frames):
 ///
-/// **1. Health is bits 20-29 — it is the only field that is monotone within a round
-/// and reaches exactly 0 at death.** Avatar 91's op50 track, one round:
+/// **1. Health is bits 20-29 — it is the field that empties to exactly 0 at death.**
+/// Avatar 91's op50 track, one round:
 ///
 /// ```text
 ///   990 → 972 → 835 → 643 → 555 → 488 → 396 → 305 → 120 → 84 → 26 → 0
@@ -393,7 +393,14 @@ impl FlowState {
 ///
 /// then it resets to 814 for the next round and walks down again. Bits 0-9 and 10-19
 /// oscillate over the same frames (517 → 350 → 207 → 233 → 403 …), because those
-/// pools regenerate at ~5 %/s and health does not regenerate in-round at all.
+/// pools regenerate at ~5 %/s.
+///
+/// Note the careful wording. Health never rises *in this trace*, but that is a
+/// property of this fighter, **not of the game**: a regen perk with the right
+/// rings/armour does recover health mid-round. It is rare and usually too slow to
+/// notice, which is why the trace looks monotone. The load-bearing evidence is the
+/// terminal zero — on the killing blow health reads 0 while stamina reads 22 and
+/// magicka 240, and only one pool is the one that empties at death.
 ///
 /// **2. Magicka is bits 0-9 — it is what a cast spends.** Same avatar: frame 3503950
 /// is a `PlayerChannelingStateChange` (53), the start of a cast, and the very next
@@ -1606,8 +1613,17 @@ mod tests {
     /// a symmetric test. So this one asserts against bytes retail actually sent.
     ///
     /// Prod session 503, avatar 91, one round of `ReceiveDamage` (50) propId 4,
-    /// frames 3503930 → 3504497 in order. Health is the field that only ever falls
-    /// and ends at exactly 0 on the killing blow; the other two regenerate.
+    /// frames 3503930 → 3504497 in order.
+    ///
+    /// Discriminators, strongest first: health is the pool that reads exactly 0 on the
+    /// killing blow while the other two do not; a cast spends magicka and barely
+    /// touches health; and health nets out at a collapse across the round while the
+    /// regenerating pools recover.
+    ///
+    /// **Monotonicity is asserted only as a property of THIS fixture** (check 4). A
+    /// regen perk plus rings/armour does let health rise mid-round — rare, and usually
+    /// too slow to matter, which is why this fighter's trace never rises. The frames
+    /// are hardcoded so the assertion is stable; do not lift it out as a general rule.
     #[test]
     fn packed_stats_layout_matches_retail_capture() {
         // (frame id, captured propId-4 ULong)
@@ -1634,34 +1650,27 @@ mod tests {
             .map(|(fid, v)| (*fid, PackedStats::unpack(*v)))
             .collect();
 
-        // 1. Health only ever falls, across the whole round.
-        for w in decoded.windows(2) {
-            let ((fid_a, a), (fid_b, b)) = (w[0], w[1]);
-            assert!(
-                b.0 <= a.0,
-                "health must never rise within a round: frame {fid_a} had {} then \
-                 frame {fid_b} had {} — the field being read is not health",
-                a.0,
-                b.0,
-            );
-        }
-
-        // 2. It starts high and ends at EXACTLY zero on the killing blow. Zero is the
-        //    single most discriminating value in the word: no other field reaches it
-        //    on the death frame (stamina reads 22, magicka 240).
+        // 1. THE decisive check: on the killing blow health is EXACTLY zero and the
+        //    other two pools are not. Only one pool empties at death, and unlike
+        //    monotonicity (check 4) that holds for every build.
         assert_eq!(decoded.first().unwrap().1 .0, 990, "health at the top of the round");
         let (fid, (h, s, m, _)) = *decoded.last().unwrap();
         assert_eq!(h, 0, "frame {fid} is the killing blow — health is 0");
         assert_eq!((s, m), (22, 240), "and the other two pools are NOT 0 there");
 
-        // 3. The pools that regenerate do rise again, which health never does. If the
-        //    fields were swapped this assertion and (1) could not both hold.
+        // 2. The regenerating pools recover mid-round, while health nets out at a
+        //    collapse. A comparison of net behaviour — not "health cannot rise".
         assert!(
             decoded.windows(2).any(|w| w[1].1 .2 > w[0].1 .2),
-            "magicka must rise somewhere in the round (it regenerates; health does not)"
+            "magicka must recover somewhere in the round — it regenerates at ~5%/s"
+        );
+        assert_eq!(
+            (decoded.first().unwrap().1 .0, decoded.last().unwrap().1 .0),
+            (990, 0),
+            "health nets out at a collapse across the round"
         );
 
-        // 4. A cast spends magicka. Frame 3503950 is a PlayerChannelingStateChange
+        // 3. A cast spends magicka. Frame 3503950 is a PlayerChannelingStateChange
         //    (53); the next stat word drops magicka 1023 → 531 while health only goes
         //    990 → 972. Reading these two fields the other way round would say the
         //    cast cost 18 health and healed 492 magicka.
@@ -1669,6 +1678,22 @@ mod tests {
         let after = PackedStats::unpack(0x3cc3_4613_0000_0044);
         assert_eq!((before.2, after.2), (1023, 531), "the cast spent magicka");
         assert_eq!((before.0, after.0), (990, 972), "health barely moved across it");
+
+        // 4. FIXTURE-SCOPED: this fighter had no health-regen source, so its health
+        //    never rises. Kept as extra signal against a re-swap on these exact bytes —
+        //    NOT because health cannot rise in a round. It can: a regen perk with the
+        //    right rings/armour does it, just rarely and slowly. [owner, 2026-08-02]
+        for w in decoded.windows(2) {
+            let ((fid_a, a), (fid_b, b)) = (w[0], w[1]);
+            assert!(
+                b.0 <= a.0,
+                "health rose in THIS fixture (frame {fid_a} = {}, frame {fid_b} = {}). \
+                 These frames are hardcoded and this fighter had no regen source, so \
+                 suspect the field order, not a regen build.",
+                a.0,
+                b.0,
+            );
+        }
 
         // 5. And the sequence id is still the LOW half — that part was always right.
         assert_eq!(decoded.first().unwrap().1 .3, 48);
