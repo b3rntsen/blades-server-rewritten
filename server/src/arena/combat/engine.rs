@@ -1720,8 +1720,11 @@ pub(in crate::arena::combat) mod tests {
         if let Some(arena_proto::NetDataValue::ULong(v)) =
             arena_proto::parse_netdata(&damage[0].1[2..]).props.get(&4)
         {
-            // Health is the low 10 bits of the HIGH 32 (stat word); seq is the low 32.
-            assert!(((v >> 32) & 0x3ff) < 1023, "wire health is a fraction below full");
+            // Health is bits 20-29 of the stat word = bits 52-61 of the ULong. Reading
+            // the low 10 bits of the high half gives MAGICKA, which is the bug this
+            // shift replaces. [PackedStats]
+            let hp = (v >> super::super::state::PackedStats::HEALTH_SHIFT) & 0x3ff;
+            assert!(hp < 1023, "wire health is a fraction below full (got {hp})");
         }
 
         // A second swing within the cooldown is throttled (no double-hit). It may still

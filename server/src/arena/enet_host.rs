@@ -674,8 +674,9 @@ mod tests {
             Some(arena_proto::NetDataValue::ULong(v)) => *v,
             _ => panic!("ReceiveDamage missing packed stats"),
         };
-        // Health = low 10 bits of the HIGH 32 (stat word); the low 32 is the seq id.
-        let hp = ((packed >> 32) & 0x3ff) as u16;
+        // Health is bits 20-29 of the stat word, i.e. bits 52-61 of the full ULong —
+        // NOT the low 10 bits of the high half, which is Magicka. [PackedStats]
+        let hp = ((packed >> crate::arena::combat::state::PackedStats::HEALTH_SHIFT) & 0x3ff) as u16;
         assert!(hp > 0 && hp < 1023, "B's wire HP is a fraction below full after the swing (got {hp})");
     }
 }
