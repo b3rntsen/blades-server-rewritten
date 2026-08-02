@@ -229,6 +229,42 @@ pub fn player_blocking_state_change(
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
+/// gmid 45 `PlayerChargingStateChange` — **the wind-up, and the reason a swing is
+/// visible at all.**
+///
+/// `PlayerChargingStateChangeMessage` (dump.cs:590703), tail
+/// `PlayerChargingState.Parameters` (dump.cs:597230): a single `ActiveSide
+/// InitialActiveSide` at prop 9 (597233), a **Byte**. State id `Charging = 2`
+/// (dump.cs:340177).
+///
+/// **Every swing starts here.** Across prod sessions 503/615/616, all **593** decoded
+/// gmid-52 frames have a gmid 45 for the same avatar immediately before them — 100 %,
+/// both avatars, no exceptions — and the gap is 300-400 ms (median 318 ms for the
+/// capturing player, 383 ms for the opponent; the minimum in the whole corpus is
+/// 215 ms). That wind-up is roughly six times the entire 52 → 43 → 44 tail, which
+/// runs in 66 ms. Retail sent 45 *more often* than 52 (491 vs 330 in s503).
+///
+/// prop 9 is the same `ActiveSide` the rest of the swing carries — identical in
+/// 593/593 pairs.
+///
+/// This replaces `messages::player_charging_state_change`, which wrote prop 7 as a
+/// String and props 4/5 as `Long`, and hardcoded prop 8 to 0.0.
+pub fn player_charging_state_change(
+    ctx: &StateFrame<'_>,
+    side: ActiveSide,
+    time_in_previous_state: f32,
+) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    ctx.prefix(
+        &mut w,
+        GameMessageId::PlayerChargingStateChange,
+        ActorStateType::Charging,
+        time_in_previous_state,
+    );
+    w.byte(9, wire_side(side));
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
 /// gmid 52 `PlayerAutoAttackStateChange` — **the missing enemy swing.**
 ///
 /// `PlayerAutoAttackStateChangeMessage` (dump.cs:590736), tail

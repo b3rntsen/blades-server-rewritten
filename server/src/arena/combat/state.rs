@@ -700,6 +700,23 @@ pub struct Fighter {
     pub last_block_dropped_at: Option<Instant>,
     /// Time of this fighter's last landed swing (combat throttle / swing cadence).
     pub last_swing: Option<Instant>,
+    /// The `ActiveSide` classified at the moment the attack button went DOWN, i.e.
+    /// the side the wind-up (gmid 45 `Charging`) is announced with.
+    ///
+    /// Retail carries ONE side across all four beats of a swing — `45.prop9 ==
+    /// 52.prop9` in 593 of 593 captured pairs — so the charge and the swing must
+    /// agree. We classify at press for the charge and again at release for the swing
+    /// (release-classification is what the damage model is calibrated on), and use
+    /// this as the release fallback when the pointer sample has gone stale. They can
+    /// still differ if the finger crosses the screen midpoint mid-hold; retail
+    /// evidently latches at press, and matching that exactly would change the
+    /// damage-side behaviour, which is not this change's job.
+    pub charge_side: Option<ActiveSide>,
+    /// For a BOT: when its already-started wind-up should land as an actual swing.
+    /// A bot has no button to press, so `on_tick` enters `Charging` first and resolves
+    /// the swing `CHARGE_WINDUP` later — otherwise the charge and the swing would be
+    /// drained in the same tick and the client would flash through the animation.
+    pub bot_swing_at: Option<Instant>,
     /// Server-side timestamp when this fighter last pressed the attack button (op46
     /// `_held=1`). Used with the release timestamp (op46 `_held=0`) to compute the
     /// server-measured hold duration for the held-charge crit gate (bug 4).
@@ -886,6 +903,8 @@ impl Fighter {
             last_block_dropped_at: None,
             last_swing: None,
             charge_press_at: None,
+            charge_side: None,
+            bot_swing_at: None,
             combo_count: 0,
             last_combo_side: ActiveSide::None,
             last_input_x: None,
@@ -1531,6 +1550,8 @@ impl MatchCombat {
             f.last_block_dropped_at = None;
             f.last_swing = None;
             f.charge_press_at = None;
+            f.charge_side = None;
+            f.bot_swing_at = None;
             f.reset_combo();
             // Phase 4.1: drop last round's pointer geometry so the first swing of the
             // new round can never be classified from a stale pre-reset sample.
