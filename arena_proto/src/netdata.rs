@@ -830,13 +830,17 @@ mod tests {
 
     #[test]
     fn packed_stats_roundtrip() {
-        // ReceiveDamage propId 4/5 pack Health|Stamina<<10|Magicka<<20 with a
-        // sequenceId in the hi32. Prove the ULong path is exact.
-        let health = 812u64;
+        // ReceiveDamage propId 4/5 pack Magicka|Stamina<<10|Health<<20 into the stat
+        // word, with the sequenceId in the OTHER half. (Both the field order and the
+        // half-split were once believed the other way round; see
+        // `combat::state::PackedStats` for the capture evidence.) This test only
+        // proves the ULong writer/parser path is exact, so it packs a value and reads
+        // the same bits back — but it should not restate a layout that was wrong.
+        let magicka = 812u64;
         let stamina = 640u64;
-        let magicka = 300u64;
+        let health = 300u64;
         let seq = 627_048_447u64;
-        let packed = (health | (stamina << 10) | (magicka << 20)) | (seq << 32);
+        let packed = (magicka | (stamina << 10) | (health << 20)) | (seq << 32);
         let mut w = NetDataWriter::new();
         w.ulong(4, packed);
         let bytes = w.finish();
@@ -844,9 +848,9 @@ mod tests {
         assert_eq!(p.get(4), Some(&NetDataValue::ULong(packed)));
         // unpack back
         if let Some(NetDataValue::ULong(v)) = p.get(4) {
-            assert_eq!(v & 0x3ff, health);
+            assert_eq!(v & 0x3ff, magicka);
             assert_eq!((v >> 10) & 0x3ff, stamina);
-            assert_eq!((v >> 20) & 0x3ff, magicka);
+            assert_eq!((v >> 20) & 0x3ff, health);
             assert_eq!(v >> 32, seq);
         }
     }

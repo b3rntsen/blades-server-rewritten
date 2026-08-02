@@ -362,12 +362,50 @@ impl FlowState {
 // Packed stats (ReceiveDamage propId 4/5)
 // ---------------------------------------------------------------------------
 
-/// `ReceiveDamage` propIds 4/5 pack a player's pools + a sequence id into one
-/// ULong. **Layout (verified against captures, s293):** the **HIGH 32 bits** hold
-/// the stat word `Health | Stamina<<10 | Magicka<<20` (10 bits each, `STAT_MAX`),
-/// and the **LOW 32 bits** hold the `sequenceId` (a small rising counter). (The
-/// first-pass RE + the archived `arena-combat-reference.md` had these halves
-/// backwards — a full actor reads 1023 from the HIGH half, not the low.)
+/// The packed pools + sequence id carried at propIds 4/5 of `ReceiveDamage` (50),
+/// `PlayerStatsUpdate` (65) and every member of the `PlayerStateChange` family.
+///
+/// ```text
+///   bits 63..32  sequenceId   (a per-round monotonic counter, shared by p4 and p5)
+///   bits 29..20  HEALTH       10-bit fraction of max, STAT_MAX = full
+///   bits 19..10  STAMINA
+///   bits  9..0   MAGICKA
+/// ```
+///
+/// ## Health and Magicka were the wrong way round until 2026-08-02
+///
+/// This used to write `Health | Stamina<<10 | Magicka<<20`, i.e. health in the LOW
+/// ten bits. The half-split (stats high, seq low) was capture-verified; the order of
+/// the fields *within* the stat word never was, and it was backwards. Every
+/// `ReceiveDamage` we have ever sent has been showing the client our health value as
+/// its magicka bar, and vice versa.
+///
+/// Two independent capture signals fix it, both from prod session 503, decoded by
+/// walking every ENet command in the packet (labelling by the packet's first command
+/// hides ~40 % of these frames):
+///
+/// **1. Health is bits 20-29 — it is the only field that is monotone within a round
+/// and reaches exactly 0 at death.** Avatar 91's op50 track, one round:
+///
+/// ```text
+///   990 → 972 → 835 → 643 → 555 → 488 → 396 → 305 → 120 → 84 → 26 → 0
+/// ```
+///
+/// then it resets to 814 for the next round and walks down again. Bits 0-9 and 10-19
+/// oscillate over the same frames (517 → 350 → 207 → 233 → 403 …), because those
+/// pools regenerate at ~5 %/s and health does not regenerate in-round at all.
+///
+/// **2. Magicka is bits 0-9 — it is what a cast spends.** Same avatar: frame 3503950
+/// is a `PlayerChannelingStateChange` (53), the start of a cast, and the very next
+/// stat word has bits 0-9 dropping 1023 → 531 while bits 20-29 barely move
+/// (992 → 972). Stamina is then the only slot left, at bits 10-19 — consistent with
+/// it reading 0 through the heavy-melee stretches and refilling between them.
+///
+/// Soft third check, from the s506 byte-differential below: the damaged fighter in
+/// `receive_damage_matches_capture` took 85.17 health damage and a 24.44 magicka
+/// drain. Read this way it is health 925 / magicka 914 — the big pool losing the
+/// smaller *fraction*, which is what an arena ×3 health pool should do. The old
+/// reading had it backwards.
 pub struct PackedStats;
 
 impl PackedStats {
@@ -375,19 +413,24 @@ impl PackedStats {
         let h = (health.min(STAT_MAX) as u64) & 0x3ff;
         let s = (stamina.min(STAT_MAX) as u64) & 0x3ff;
         let m = (magicka.min(STAT_MAX) as u64) & 0x3ff;
-        let stats = h | (s << 10) | (m << 20);
+        let stats = m | (s << 10) | (h << 20);
         (stats << 32) | (seq as u64) // stats in the HIGH 32, sequence id in the LOW 32
     }
 
     /// Returns `(health, stamina, magicka, seq)`.
     pub fn unpack(v: u64) -> (u16, u16, u16, u32) {
         let stats = (v >> 32) as u32;
-        let health = (stats & 0x3ff) as u16;
+        let magicka = (stats & 0x3ff) as u16;
         let stamina = ((stats >> 10) & 0x3ff) as u16;
-        let magicka = ((stats >> 20) & 0x3ff) as u16;
+        let health = ((stats >> 20) & 0x3ff) as u16;
         let seq = (v & 0xffff_ffff) as u32;
         (health, stamina, magicka, seq)
     }
+
+    /// Bit offset of the HEALTH field inside the full 64-bit word — for the places
+    /// that read health straight out of a wire value instead of going through
+    /// [`Self::unpack`].
+    pub const HEALTH_SHIFT: u32 = 52;
 }
 
 // ---------------------------------------------------------------------------
@@ -1553,6 +1596,84 @@ impl MatchCombat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The layout is pinned to real captured words, because nothing else was.**
+    ///
+    /// Health and Magicka sat swapped in `PackedStats` for the whole life of the
+    /// arena server and the full 319-test suite stayed green, because every test
+    /// either round-tripped `pack`/`unpack` against itself or passed a pre-packed
+    /// literal straight through. A symmetric bug in a symmetric pair is invisible to
+    /// a symmetric test. So this one asserts against bytes retail actually sent.
+    ///
+    /// Prod session 503, avatar 91, one round of `ReceiveDamage` (50) propId 4,
+    /// frames 3503930 → 3504497 in order. Health is the field that only ever falls
+    /// and ends at exactly 0 on the killing blow; the other two regenerate.
+    #[test]
+    fn packed_stats_layout_matches_retail_capture() {
+        // (frame id, captured propId-4 ULong)
+        const S503_AVATAR_91_ROUND: &[(u32, u64)] = &[
+            (3_503_930, 0x3de2_0fff_0000_0030),
+            (3_503_966, 0x3cc3_4613_0000_0044),
+            (3_504_012, 0x37d0_02cd_0000_005e),
+            (3_504_025, 0x3430_0292_0000_006c),
+            (3_504_036, 0x2ec0_023b_0000_0076),
+            (3_504_049, 0x2830_01b4_0000_0080),
+            (3_504_062, 0x22b0_012d_0000_008a),
+            (3_504_174, 0x1e80_857d_0000_00bc),
+            (3_504_187, 0x18c0_d560_0000_00c6),
+            (3_504_202, 0x1311_2142_0000_00d0),
+            (3_504_212, 0x0d61_6d24_0000_00da),
+            (3_504_365, 0x0780_4984_0000_011a),
+            (3_504_398, 0x0541_1060_0000_012b),
+            (3_504_482, 0x01a0_10db_0000_014e),
+            (3_504_497, 0x0000_58f0_0000_015a), // the killing blow
+        ];
+
+        let decoded: Vec<(u32, (u16, u16, u16, u32))> = S503_AVATAR_91_ROUND
+            .iter()
+            .map(|(fid, v)| (*fid, PackedStats::unpack(*v)))
+            .collect();
+
+        // 1. Health only ever falls, across the whole round.
+        for w in decoded.windows(2) {
+            let ((fid_a, a), (fid_b, b)) = (w[0], w[1]);
+            assert!(
+                b.0 <= a.0,
+                "health must never rise within a round: frame {fid_a} had {} then \
+                 frame {fid_b} had {} — the field being read is not health",
+                a.0,
+                b.0,
+            );
+        }
+
+        // 2. It starts high and ends at EXACTLY zero on the killing blow. Zero is the
+        //    single most discriminating value in the word: no other field reaches it
+        //    on the death frame (stamina reads 22, magicka 240).
+        assert_eq!(decoded.first().unwrap().1 .0, 990, "health at the top of the round");
+        let (fid, (h, s, m, _)) = *decoded.last().unwrap();
+        assert_eq!(h, 0, "frame {fid} is the killing blow — health is 0");
+        assert_eq!((s, m), (22, 240), "and the other two pools are NOT 0 there");
+
+        // 3. The pools that regenerate do rise again, which health never does. If the
+        //    fields were swapped this assertion and (1) could not both hold.
+        assert!(
+            decoded.windows(2).any(|w| w[1].1 .2 > w[0].1 .2),
+            "magicka must rise somewhere in the round (it regenerates; health does not)"
+        );
+
+        // 4. A cast spends magicka. Frame 3503950 is a PlayerChannelingStateChange
+        //    (53); the next stat word drops magicka 1023 → 531 while health only goes
+        //    990 → 972. Reading these two fields the other way round would say the
+        //    cast cost 18 health and healed 492 magicka.
+        let before = PackedStats::unpack(0x3de2_0fff_0000_0030);
+        let after = PackedStats::unpack(0x3cc3_4613_0000_0044);
+        assert_eq!((before.2, after.2), (1023, 531), "the cast spent magicka");
+        assert_eq!((before.0, after.0), (990, 972), "health barely moved across it");
+
+        // 5. And the sequence id is still the LOW half — that part was always right.
+        assert_eq!(decoded.first().unwrap().1 .3, 48);
+        assert_eq!(decoded.last().unwrap().1 .3, 346);
+    }
 
     #[test]
     fn packed_stats_exact() {
