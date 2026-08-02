@@ -1,0 +1,50 @@
+name: Checks
+
+# Runs the workspace test suite on every pull request.
+#
+# This repo is a PUBLIC fork of marius851000/blades-server-rewritten, so pull
+# requests can come from anyone. That is fine and deliberate — this workflow
+# holds no secrets and needs none. GitHub does not expose secrets to workflows
+# triggered by a fork PR anyway, and there are none here to expose.
+#
+# The deploy half lives in release.yml, which runs only on push to main (i.e.
+# after a human has merged) and publishes to this repo's own package registry.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: cargo test --workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # zstd-sys needs a C toolchain; ubuntu-latest has one, but pkg-config is
+      # what the Dockerfile installs explicitly, so match it.
+      - name: build deps
+        run: sudo apt-get update && sudo apt-get install -y pkg-config
+
+      # 292 locked crates. Without a cache every run is a cold build and the
+      # gate becomes something people want to skip.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: cargo test
+        run: cargo test --workspace --locked
