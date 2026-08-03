@@ -392,7 +392,72 @@ fn pick_bot_index(
 /// roster if set, else any OTHER character in the DB. Filters to complete + non-self,
 /// rotates by gsid. Falls back to the empty `starter()` (logged) only if NOTHING
 /// qualifies (e.g. no other complete character exists yet).
+/// The suffix a bot opponent's name carries so a player can tell at a glance that
+/// they are not fighting a person.
+///
+/// Requested 2026-08-03. It matters for a reason beyond politeness: a solo match
+/// loads a REAL, complete character from the bot roster, so the opponent shows a
+/// real player's name, gear and appearance. Without a marker there is no way to
+/// know whether you just beat a human or a script — and no way to know whether a
+/// loss is worth taking personally.
+const BOT_NAME_SUFFIX: &str = " (AI)";
+
+/// What the engine calls a fighter with no name (`engine.rs`, the op50 Player
+/// spawn). Duplicated deliberately and named, so the two cannot silently diverge
+/// into "Fighter" on one path and " (AI)" on the other.
+const BOT_FALLBACK_NAME: &str = "Fighter";
+
+/// Mark a loadout as a bot's, everywhere the client reads a name.
+///
+/// The name reaches the client TWICE and they must agree, or the HUD and the
+/// match-end card disagree about who you fought:
+///   * `display_name` — the op50 Player spawn's name field (`engine.rs`), and what
+///     `fighter_display_name` feeds into the match-end result card;
+///   * `name` inside `profile_character_json` — the op54 PROFILE, which is what the
+///     client actually renders for the opponent's plate.
+///
+/// Idempotent: `load_bot_loadout` has two return paths and a future third would
+/// otherwise be able to produce "Blank (AI) (AI)".
+fn mark_loadout_as_bot(lo: &mut crate::arena::combat::Loadout) {
+    if lo.display_name.is_empty() {
+        // The `starter()` fallback carries no name, and the engine substitutes
+        // "Fighter" for an empty one when it writes the op50 Player spawn. Appending
+        // to "" would make the field non-empty and defeat that, putting a bare
+        // " (AI)" on screen — so spell out the same fallback here.
+        lo.display_name = format!("{BOT_FALLBACK_NAME}{BOT_NAME_SUFFIX}");
+    } else if !lo.display_name.ends_with(BOT_NAME_SUFFIX) {
+        lo.display_name.push_str(BOT_NAME_SUFFIX);
+    }
+    // The profile is JSON we built ourselves a moment ago, so a parse failure here
+    // means it was already malformed; leave it alone rather than replacing a broken
+    // profile with a differently broken one — an unnamed opponent still fights.
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&lo.profile_character_json) {
+        if let Some(name) = v.get_mut("name").and_then(|n| n.as_str().map(String::from)) {
+            if !name.ends_with(BOT_NAME_SUFFIX) {
+                v["name"] = serde_json::Value::String(format!("{name}{BOT_NAME_SUFFIX}"));
+                lo.profile_character_json = v.to_string();
+            }
+        }
+    }
+}
+
+/// Load a bot opponent and ALWAYS mark it. A thin wrapper over
+/// [`pick_bot_loadout`] for one reason: that function has four return paths
+/// (no DB, no connection, a picked row, the starter fallback) and an unmarked one
+/// ships a bot wearing a real player's name. Marking here instead of at each
+/// return makes an unmarked path impossible to write.
 async fn load_bot_loadout(
+    db: &Option<DbPool>,
+    human_char_uuid: &str,
+    config: &ArenaConfig,
+    gsid: Uuid,
+) -> crate::arena::combat::Loadout {
+    let mut lo = pick_bot_loadout(db, human_char_uuid, config, gsid).await;
+    mark_loadout_as_bot(&mut lo);
+    lo
+}
+
+async fn pick_bot_loadout(
     db: &Option<DbPool>,
     human_char_uuid: &str,
     config: &ArenaConfig,
@@ -447,6 +512,105 @@ async fn load_bot_loadout(
 #[cfg(test)]
 mod bot_pick_tests {
     use super::*;
+
+    /// A bot opponent must be identifiable as one, in BOTH places the client
+    /// reads a name. Requested 2026-08-03: a solo match loads a real character
+    /// from the bot roster, so without this the opponent wears a real player's
+    /// name and there is no way to tell a script from a person.
+    #[test]
+    fn bot_loadout_is_marked_ai_in_both_name_fields() {
+        let mut lo = crate::arena::combat::loadout::starter();
+        lo.display_name = "Blank".into();
+        lo.profile_character_json =
+            r#"{"id":"abc","name":"Blank","tagId":7}"#.to_string();
+
+        mark_loadout_as_bot(&mut lo);
+
+        assert_eq!(lo.display_name, "Blank (AI)", "the op50 Player spawn name");
+        let v: serde_json::Value =
+            serde_json::from_str(&lo.profile_character_json).expect("profile stays valid JSON");
+        assert_eq!(v["name"], "Blank (AI)", "the op54 PROFILE name the HUD renders");
+        // Everything else in the profile survives untouched — this is a rename,
+        // not a rebuild.
+        assert_eq!(v["id"], "abc");
+        assert_eq!(v["tagId"], 7);
+    }
+
+    /// **The wiring, not just the helper.** The unit tests above pass even if
+    /// nothing ever CALLS `mark_loadout_as_bot` — which is exactly how a fix ships
+    /// green and does nothing. This drives the real entry point.
+    ///
+    /// The no-database path is the one testable without a pool, and it was also
+    /// one of the two early returns the first version of this change forgot: a bot
+    /// loaded with no DB came back wearing an unmarked name.
+    #[test]
+    fn load_bot_loadout_marks_even_the_no_database_path() {
+        let config = ArenaConfig {
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 4,
+            max_queued_players: 64,
+            solo_fallback_secs: 15,
+            debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
+        };
+        // No DB pool → the function's first early return. `block_on` because the
+        // path never awaits anything real once `db` is None.
+        let lo = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(load_bot_loadout(
+                &None,
+                "00000000-0000-0000-0000-000000000000",
+                &config,
+                Uuid::nil(),
+            ));
+        assert!(
+            lo.display_name.ends_with(" (AI)"),
+            "a bot loaded without a database must still be marked, got {:?}",
+            lo.display_name
+        );
+    }
+
+    /// `load_bot_loadout` has several return paths and could grow another. Marking
+    /// twice must not produce "Blank (AI) (AI)".
+    #[test]
+    fn marking_a_bot_twice_does_not_stack_the_suffix() {
+        let mut lo = crate::arena::combat::loadout::starter();
+        lo.display_name = "Blank".into();
+        lo.profile_character_json = r#"{"name":"Blank"}"#.to_string();
+        mark_loadout_as_bot(&mut lo);
+        mark_loadout_as_bot(&mut lo);
+        assert_eq!(lo.display_name, "Blank (AI)");
+        let v: serde_json::Value = serde_json::from_str(&lo.profile_character_json).unwrap();
+        assert_eq!(v["name"], "Blank (AI)");
+    }
+
+    /// The `starter()` fallback has NO name, and the engine substitutes "Fighter"
+    /// for an empty one. Appending to "" would make it non-empty and put a bare
+    /// " (AI)" on screen instead.
+    #[test]
+    fn a_nameless_bot_becomes_fighter_ai_not_just_ai() {
+        let mut lo = crate::arena::combat::loadout::starter();
+        assert_eq!(lo.display_name, "", "precondition: starter has no name");
+        mark_loadout_as_bot(&mut lo);
+        assert_eq!(lo.display_name, "Fighter (AI)");
+    }
+
+    /// A malformed or empty profile must not be replaced by a differently broken
+    /// one — an unnamed opponent still has to be able to fight.
+    #[test]
+    fn a_profile_that_is_not_json_is_left_alone() {
+        let mut lo = crate::arena::combat::loadout::starter();
+        lo.display_name = "Blank".into();
+        lo.profile_character_json = "not json at all".to_string();
+        mark_loadout_as_bot(&mut lo);
+        assert_eq!(lo.display_name, "Blank (AI)", "the name still gets marked");
+        assert_eq!(
+            lo.profile_character_json, "not json at all",
+            "a broken profile is left exactly as it was"
+        );
+    }
 
     fn gsid_with_first_byte(b: u8) -> Uuid {
         let mut bytes = [0u8; 16];
