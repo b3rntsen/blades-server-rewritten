@@ -1890,8 +1890,22 @@ const REGEN_TICK_INTERVAL: Duration = Duration::from_secs(1);
 /// fractions, thousands of samples, versus reading a bar off video frames), but
 /// the 5 %/s figure was an explicit owner call from the video and is left in
 /// place here rather than changed on my own initiative. Raised with the owner.
-const STAMINA_REGEN_RATE_PER_S: f32 = 0.05;
-const MAGICKA_REGEN_RATE_PER_S: f32 = 0.05;
+///
+/// **SET FROM THE WIRE, 2026-08-22, on the owner's call.** The video figure was
+/// 5 %/s for both; the captured `packedStats` series says 3.03 %/s stamina and
+/// 2.93 %/s magicka. Tracker #53 established that these are measurements of the
+/// SAME quantity — `PvpPlayerActor::ShouldApplyRegeneration()` returns false
+/// unconditionally, so the client applies no regeneration of its own in PvP and
+/// every pool change a player sees is server-authored. Two readings of one
+/// signal cannot both be right, and the wire is the finer instrument: 10-bit
+/// pool fractions across thousands of samples, against reading a bar off video
+/// frames. The owner made the call to take the wire.
+///
+/// This is a ~40 % nerf to both pools. Expect fights to run longer and stamina
+/// management to matter more; if it feels wrong in play, the video number is one
+/// line away and the argument for it is above.
+const STAMINA_REGEN_RATE_PER_S: f32 = 0.0303;
+const MAGICKA_REGEN_RATE_PER_S: f32 = 0.0293;
 
 /// In-combat health regen: **modelled as ZERO — an approximation, not a rule.**
 ///
@@ -2677,16 +2691,25 @@ fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u
         let before_s = f.stamina;
         let before_m = f.magicka;
 
-        // Health regen: modelled as none in-round (HEALTH_REGEN_RATE_PER_S = 0.0).
-        // A regen perk + rings/armour CAN recover health mid-round; not modelled yet.
-        // Video ground-truth: HP only changes on hits; full reset happens between rounds.
+        // Health regen: NOT APPLIED HERE, and note that `HEALTH_REGEN_RATE_PER_S`
+        // is referenced by no code at all — only by comments. Setting it does
+        // nothing; wiring health regen means adding a branch here (and honouring
+        // `BlockHealthRegen`, which is already decoded).
+        //
+        // The captured wire shows ~0.20 %/s health, so the measured set says this
+        // should be non-zero. It was left at zero deliberately when the
+        // stamina/magicka rates were taken from the wire on 2026-08-22: the owner
+        // was asked about the two POOLS, and switching health on makes HP climb in
+        // every fight — a far larger change to how a match feels than a rate tweak,
+        // and one that contradicts a standing owner decision from 2026-08-02.
+        // Raise it as its own question rather than smuggling it in here.
 
-        // Stamina regen: 5% of pool per second (video-pinned, s293 §1).
+        // Stamina regen: 3.03 %/s — the captured wire rate (see the constant).
         if !block_stam && f.stamina < f.max_stamina {
             let regen = ((STAMINA_REGEN_RATE_PER_S * f.max_stamina as f32).round() as u32).max(1);
             f.stamina = (f.stamina + regen).min(f.max_stamina);
         }
-        // Magicka regen: 5% of pool per second (video-pinned, s293 §1).
+        // Magicka regen: 2.93 %/s — the captured wire rate (see the constant).
         if !block_mag && f.magicka < f.max_magicka {
             let regen = ((MAGICKA_REGEN_RATE_PER_S * f.max_magicka as f32).round() as u32).max(1);
             f.magicka = (f.magicka + regen).min(f.max_magicka);
@@ -3199,6 +3222,30 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
 
 #[cfg(test)]
 mod tests {
+
+    /// The regen rates are PINNED, not derived.
+    ///
+    /// The other regen tests compute their expectation from the same constant
+    /// they check, so they follow any edit silently — they verify the arithmetic,
+    /// not the number. This figure has already flipped once (video 5 %/s -> wire
+    /// 3.03 %/s, owner's call 2026-08-22) and is exactly the kind of value that
+    /// gets "tidied" back. Changing it should mean changing this test and saying
+    /// why.
+    #[test]
+    fn the_regen_rates_are_the_measured_wire_values() {
+        assert_eq!(
+            STAMINA_REGEN_RATE_PER_S, 0.0303,
+            "stamina regen is the captured 3.03 %/s, not the video 5 %/s",
+        );
+        assert_eq!(
+            MAGICKA_REGEN_RATE_PER_S, 0.0293,
+            "magicka regen is the captured 2.93 %/s, not the video 5 %/s",
+        );
+        // Health is still zero AND still unwired — no code reads this constant.
+        // Asserting both halves so "I set the constant" cannot be mistaken for
+        // "health now regenerates".
+        assert_eq!(HEALTH_REGEN_RATE_PER_S, 0.0);
+    }
 
     /// Advance past the FollowThrough beat so a committed swing lands.
     ///
