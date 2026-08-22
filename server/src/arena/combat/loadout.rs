@@ -385,6 +385,40 @@ fn push_enchant(lo: &mut Loadout, ty: DamageType, tier: u8) {
 /// ring gives. Treating a cap as a grant is how `+5` got here, and that step was
 /// unsound regardless of which number turns out to be right.
 ///
+/// ## RESOLVED ENOUGH TO STOP CHANGING IT (2026-08-22, second pass)
+///
+/// The `+1 / +2` reading above is WRONG, and so was my alarm about it. Both it
+/// and the contributor's asset dump report `_xValueByTier`, and that field is
+/// not the answer — it is one term of a calculation. Disassembled
+/// `AbilityBonusRanksBonusInstance::InitializeData` (libil2cpp.so, RVA
+/// 0x1E827CC) and the arithmetic that writes `_calculatedBonus` reads:
+///
+/// ```text
+///   w20 = ability[0x70]                 w21 = ability[0x3c]
+///   w22 = (int) xValueByTier[tier]      w23 = BONUS_RANKS_DIVISOR (static)
+///
+///   w8 = (w20 - w21) / w23              ; integer divide
+///   w0 = g(w8)                          ; call at 0x28AAD04
+///   _calculatedBonus = w0 + w22         ; stored at +0x38
+/// ```
+///
+/// So the grant is `(int)xValue + g(headroom / DIVISOR)` — the tier value ADDED
+/// to an ability-dependent term, which is why `GetBonusRanks` takes the ability
+/// and why the class holds a DIVISOR at all. `w20 - w21` is 10 for every ability
+/// checked (Frostbite, Ice Spike, Ward, Paralyze, Fireball: `maximum_level -
+/// maximum_purchaseable_level`), matching the headroom measured off the table.
+///
+/// **Still unresolved:** the value of `BONUS_RANKS_DIVISOR` (a `static readonly
+/// int`, so absent from any dump) and what `g` at 0x28AAD04 does — its entry is
+/// il2cpp class-init boilerplate and needs a real decompiler to follow.
+///
+/// **Therefore leave `4 / 5` where it is.** It is consistent with the owner's
+/// own skills menu ("Frostbite 4+10" on two tier-2 rings), and every alternative
+/// proposed so far has come from reading one input and calling it the output.
+/// This function has now been wrong three times — `floor(n_ranks/3)`, then a
+/// flat `4/5` justified by the wrong argument, then `1/2`. The next change to it
+/// should come with the divisor's actual value, not another inference.
+///
 /// ## Left alone deliberately
 ///
 /// Changing this to `1 / 2` would be a 2.5x nerf to every graded ability on every
