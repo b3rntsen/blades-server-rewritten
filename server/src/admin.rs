@@ -18,7 +18,7 @@
 //!     this handler accepts the four `blades_lib` parts (`character`, `data`,
 //!     `inventory`, `wallet`) directly.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use actix_web::{
     HttpRequest,
@@ -28,7 +28,8 @@ use actix_web::{
     web::{self, Json},
 };
 use blades_lib::user_data::{
-    CompleteCharacter, CompleteCharacterData, CompleteInventory, CompleteWallet, UserAccount,
+    CompleteCharacter, CompleteCharacterData, CompleteInventory, CompleteWallet,
+    DungeonGeneratedData, DungeonGeneratedDataWithId, QuestWithId, UserAccount,
 };
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper, insert_into};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
@@ -40,8 +41,8 @@ use crate::{
     BladeApiError, ServerGlobal,
     arena::matchmaker::{RecentTicketView, query_recent_matches},
     json_db::JsonDbWrapper,
-    models::{CharacterDbAlone, CharacterDbEntry, UserDBEntry},
-    schema::{characters, users},
+    models::{CharacterDbAlone, CharacterDbEntry, QuestDbEntry, UserDBEntry},
+    schema::{characters, quests, users},
 };
 
 // service id used in the BladeApiError envelope for this dev endpoint. Not a
@@ -64,6 +65,17 @@ pub struct ImportCharacterRequest {
     /// when absent the existing stored town (if any) is left untouched.
     #[serde(default)]
     pub town: Option<Value>,
+    /// The character's captured story quests — the `quests[]` array of a retail
+    /// `/quests` response. Without these an imported character arrives with an
+    /// empty quest table, so `get_quests` returns `quests: []` and the in-game
+    /// quest map has nothing to draw (report #58). Job rows are not sent: those
+    /// are rolled server-side per reset window.
+    #[serde(default)]
+    pub quests: Vec<QuestWithId>,
+    /// Dungeon bodies for the quests above, matched by `questId`. A quest whose
+    /// dungeon was never generated in the capture simply has no entry here.
+    #[serde(default)]
+    pub dungeon_generated_data_list: Vec<DungeonGeneratedDataWithId>,
 }
 
 #[derive(Serialize)]
@@ -199,6 +211,40 @@ pub async fn import_character(
                         diesel::update(characters::table)
                             .filter(characters::id.eq(character_id))
                             .set(characters::town.eq(town))
+                            .execute(&mut conn)
+                            .await?;
+                    }
+                }
+
+                // 3. Seed the character's captured story quests. Before this an
+                //    imported character had no `quests` rows at all, so
+                //    `get_quests` returned `quests: []` and the quest map was
+                //    empty for every transferred player (report #58).
+                //
+                //    `do_nothing` on conflict: a re-import restores what the
+                //    capture holds without clobbering progress the player has
+                //    made on the live server since. Same reasoning as `town`
+                //    above, and the same conflict target the job upsert in
+                //    `quest.rs` uses.
+                if !body.quests.is_empty() {
+                    let mut dungeons: HashMap<Uuid, DungeonGeneratedData> = body
+                        .dungeon_generated_data_list
+                        .into_iter()
+                        .map(|d| (d.quest_id, d.inner))
+                        .collect();
+
+                    for quest in body.quests {
+                        let entry = QuestDbEntry {
+                            id: quest.quest_id,
+                            character_id,
+                            info: JsonDbWrapper(quest.quest),
+                            generated_data: JsonDbWrapper(dungeons.remove(&quest.quest_id)),
+                            dungeon_state: None,
+                        };
+                        insert_into(quests::table)
+                            .values(&entry)
+                            .on_conflict((quests::id, quests::character_id))
+                            .do_nothing()
                             .execute(&mut conn)
                             .await?;
                     }
@@ -404,5 +450,79 @@ mod tests {
         let parsed: ImportCharacterRequest =
             serde_json::from_value(body).expect("body with new-flags must deserialize");
         assert_eq!(parsed.data.new_flags["seen_intro"], serde_json::json!(true));
+    }
+
+    /// The inert parts of an import body, so the quest tests below show only
+    /// what they are about.
+    fn body_without_quests() -> serde_json::Value {
+        serde_json::json!({
+            "userId": "11111111-2222-3333-4444-555555555555",
+            "character": CompleteCharacter::default(),
+            "data": CompleteCharacterData::default(),
+            "inventory": {
+                "backpack": serde_json::to_value(blades_lib::user_data::Backpack::default()).unwrap(),
+                "loadout": serde_json::to_value(blades_lib::user_data::Loadout::default()).unwrap(),
+                "treasury": serde_json::to_value(blades_lib::user_data::Treasury::default()).unwrap(),
+                "overflowTreasury": serde_json::to_value(blades_lib::user_data::Treasury::default()).unwrap(),
+                "backpackVersion": 1,
+                "treasuryVersion": 0,
+            },
+            "wallet": CompleteWallet::default(),
+        })
+    }
+
+    /// Report #58: transferred characters arrived with an empty `quests` table,
+    /// so `get_quests` returned `quests: []` and the in-game quest map was
+    /// blank. The import body must carry the captured story quests.
+    ///
+    /// The fixture is a verbatim entry from a real pre-shutdown capture of
+    /// `GET /characters/{id}/quests` (capture 462), not an invented shape —
+    /// including the `difficultyLevel: -1` that marks a story quest and the
+    /// `questId == gldQuestId` identity retail used for them.
+    #[test]
+    fn import_request_carries_captured_story_quests() {
+        let quest_id = "159bc1e7-454c-4e2a-90cf-e200c74b961a";
+        let objective_id = "64b2ac8f-9500-4101-b25b-87b41df1b6d7";
+
+        let mut body = body_without_quests();
+        body["quests"] = serde_json::json!([{
+            "questId": quest_id,
+            "version": 2,
+            "type": "NORMAL",
+            "objectiveStatuses": {
+                objective_id: { "status": "Active", "progress": 0.0, "completed": false }
+            },
+            "difficultyLevel": -1,
+            "seed": 485975867u64,
+            "gldQuestId": quest_id,
+            "completed": false,
+        }]);
+
+        let parsed: ImportCharacterRequest =
+            serde_json::from_value(body).expect("a captured quests array must deserialize");
+
+        assert_eq!(parsed.quests.len(), 1, "the captured quest must survive");
+        let q = &parsed.quests[0];
+        assert_eq!(q.quest_id, Uuid::parse_str(quest_id).unwrap());
+        assert_eq!(q.quest.gld_quest_id, Uuid::parse_str(quest_id).unwrap());
+        assert_eq!(q.quest.seed, 485975867);
+        // -1 is what retail sends for story quests; jobs carry a real difficulty.
+        assert_eq!(q.quest.difficulty_level, -1);
+        assert!(!q.quest.completed);
+        assert_eq!(
+            q.quest.objective_statuses.len(),
+            1,
+            "objective progress must not be dropped — it is what the map draws"
+        );
+    }
+
+    /// Older capture-side callers send no `quests` key at all. They must keep
+    /// working and simply seed nothing, rather than failing the whole import.
+    #[test]
+    fn import_request_without_quests_still_deserializes() {
+        let parsed: ImportCharacterRequest = serde_json::from_value(body_without_quests())
+            .expect("a body predating the quests field must still deserialize");
+        assert!(parsed.quests.is_empty());
+        assert!(parsed.dungeon_generated_data_list.is_empty());
     }
 }
