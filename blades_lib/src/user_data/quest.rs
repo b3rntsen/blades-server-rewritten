@@ -186,6 +186,82 @@ mod tests {
         }
     }
 
+    /// Corpus preflight against REAL production rows.
+    ///
+    /// Every fixture above is hand-written, which means every one of them encodes
+    /// what I *believed* retail sends. That belief has been wrong three times this
+    /// year, each time taking character import or the whole load sequence down. So
+    /// this one reads actual stored rows instead.
+    ///
+    /// Inert by default — no player data lives in this repo. To run it, dump rows
+    /// from the arena database and point the env var at the file:
+    ///
+    /// ```sql
+    /// SELECT json_agg(row_to_json(t)) FROM (
+    ///   SELECT id AS "questId", info FROM quests WHERE info ? 'seed' LIMIT 500
+    /// ) t;
+    /// ```
+    /// ```sh
+    /// NB_QUEST_CORPUS=/tmp/quests.json cargo test -p blades_lib quest_corpus -- --nocapture
+    /// ```
+    ///
+    /// Verified 2026-08-23 against 40 rows carrying seeds above `i64::MAX`,
+    /// including `13753969001480220957` — the exact value whose rejection hung the
+    /// game on the loading spinner.
+    #[test]
+    fn quest_corpus_from_production_deserializes() {
+        let Ok(path) = std::env::var("NB_QUEST_CORPUS") else {
+            eprintln!("NB_QUEST_CORPUS unset — corpus preflight skipped");
+            return;
+        };
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read corpus {path}: {e}"));
+        let rows: Vec<serde_json::Value> =
+            serde_json::from_str(&raw).expect("corpus must be a JSON array");
+        assert!(!rows.is_empty(), "an empty corpus proves nothing — check the query");
+
+        let mut failures = Vec::new();
+        let mut above_i64 = 0usize;
+        for row in &rows {
+            let info = row.get("info").unwrap_or(row);
+            if let Some(seed) = info.get("seed").and_then(|s| s.as_u64()) {
+                if seed > i64::MAX as u64 {
+                    above_i64 += 1;
+                }
+            }
+            match serde_json::from_value::<Quest>(info.clone()) {
+                Ok(q) => {
+                    // Round-trip: a stored seed must come back byte-identical, or we
+                    // would rewrite which quest the player actually generated.
+                    let back = serde_json::to_value(&q).unwrap();
+                    if back["seed"] != info["seed"] {
+                        failures.push(format!(
+                            "seed rewritten: {} -> {}",
+                            info["seed"], back["seed"]
+                        ));
+                    }
+                }
+                Err(e) => failures.push(format!(
+                    "quest {} failed: {e}",
+                    row.get("questId").unwrap_or(&serde_json::Value::Null)
+                )),
+            }
+        }
+
+        eprintln!(
+            "corpus: {} rows, {above_i64} with a seed above i64::MAX",
+            rows.len()
+        );
+        // Non-vacuity: a corpus with no out-of-range seeds would pass against the
+        // very build that broke production, so say so rather than report success.
+        assert!(
+            above_i64 > 0,
+            "this corpus contains no seed above i64::MAX, so it does not exercise \
+             the bug it exists to catch — widen the query",
+        );
+        assert!(failures.is_empty(), "{} row(s) failed:\n{}", failures.len(), failures.join("\n"));
+    }
+
     /// `u64::MAX` and `i64::MIN`, the two ends. Guards against a future "tidy this
     /// up into an untagged enum" that quietly loses one boundary.
     #[test]
