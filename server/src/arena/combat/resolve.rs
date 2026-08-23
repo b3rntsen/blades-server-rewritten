@@ -4242,7 +4242,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     /// Build a minimal 2-player `MatchCombat` already in the live `StateTimeout` phase.
-    fn make_live_combat(now: Instant) -> MatchCombat {
+    pub(super) fn make_live_combat(now: Instant) -> MatchCombat {
         use super::super::loadout::starter;
         let mut combat = MatchCombat::new(2, 2, now);
         for slot in 0..2 {
@@ -4843,7 +4843,41 @@ fn on_consume_consumable(
     }
 
     let frame = messages::perform_consume_consumable(obj, &uuid);
-    (0..combat.fighters.len()).map(|s| (s, frame.clone())).collect()
+    let mut out: Vec<(usize, Vec<u8>)> =
+        (0..combat.fighters.len()).map(|s| (s, frame.clone())).collect();
+
+    // ...and the drink VISUAL. gmid 78 `PlayerPlayVFX` existed in the opcode enum
+    // and was emitted by nothing, so a potion healed silently. All 284 captured
+    // op78 frames are potion effects, which is what makes this the right home for
+    // it. Sent to both players: propId 4 is the drinker's first-person effect,
+    // propId 5 the third-person one their opponent sees.
+    if let Some(vfx) = potion_vfx_for_stat(&uuid) {
+        let f = messages::player_play_vfx(obj, vfx.0, vfx.1);
+        for slot in 0..combat.fighters.len() {
+            out.push((slot, f.clone()));
+        }
+    }
+    out
+}
+
+/// The (first-person, third-person) VFX pair for a restoration potion.
+///
+/// Only health and magicka appear in the corpus. **Stamina returns `None` on
+/// purpose:** no captured op78 names a stamina effect, and a guessed uuid is
+/// dropped silently by the client — which looks like a working feature that does
+/// nothing. Better to send no visual than a fabricated one.
+fn potion_vfx_for_stat(item_uuid: &str) -> Option<(&'static str, &'static str)> {
+    match super::gamedata::restoration(item_uuid)?.affected_stat {
+        0 => Some((
+            "71396acd-1caa-414b-a249-57e35e1e69b6", // VFX_AlchemyVFX_PotionVFX_Health
+            "0fef0efe-57b5-46c1-814a-47211103a673", // ..._Health_3rd
+        )),
+        2 => Some((
+            "ca784a31-a574-4a8d-8840-6b5d432cbbb4", // VFX_AlchemyVFX_PotionVFX_Magicka
+            "2f5405f6-054d-451b-8671-3b21f9a7ef9e", // ..._Magicka_3rd
+        )),
+        _ => None, // stamina: not in the corpus, so not invented
+    }
 }
 
 #[cfg(test)]
@@ -4864,6 +4898,112 @@ mod potion_tests {
         assert_eq!(r.affected_stat, 0, "health");
         assert_eq!(r.value, 225.0);
         assert_eq!(r.duration, 2.5);
+    }
+
+    /// END TO END: drinking must actually PUT the frame on the wire.
+    ///
+    /// The other tests here check `potion_vfx_for_stat` and the frame builder in
+    /// isolation, and red-proofing showed that is not enough — with the emission
+    /// deleted from `on_consume_consumable`, all of them still passed. This one
+    /// drives the real consumable path and looks for gmid 78 in what comes out.
+    #[test]
+    fn drinking_a_health_potion_emits_the_vfx_frame() {
+        use super::super::messages;
+        let now = std::time::Instant::now();
+        let mut combat = super::tests::make_live_combat(now);
+        combat.fighters[0].equipped_consumable =
+            Some("61b31323-8ba2-49f2-befe-f43111c6e2c7".to_string()); // Health Tier 9
+
+        let out = super::on_consume_consumable(&mut combat, 0, now);
+        let ids: Vec<u8> = out
+            .iter()
+            .filter_map(|(_, f)| messages::user_message_gmid(f))
+            .collect();
+
+        // Non-vacuity: the drink must actually have resolved.
+        assert!(
+            ids.contains(&64),
+            "expected the op64 consume confirmation, got {ids:?}",
+        );
+        assert!(
+            ids.contains(&78),
+            "drinking must emit the op78 visual — retail sends one on every potion. \
+             Got gmids {ids:?}",
+        );
+
+        // ...and it must carry the health pair, not just any op78.
+        let vfx = out
+            .iter()
+            .find(|(_, f)| messages::user_message_gmid(f) == Some(78))
+            .expect("op78 present");
+        let nd = arena_proto::parse_netdata(&vfx.1[2..]);
+        assert_eq!(
+            nd.string(4).as_deref(),
+            Some("71396acd-1caa-414b-a249-57e35e1e69b6"),
+            "first-person health potion effect",
+        );
+    }
+
+    /// gmid 78 `PlayerPlayVFX` existed in the opcode enum and was emitted by
+    /// nothing, so a potion healed in silence. All 284 captured op78 frames are
+    /// potion effects — health and magicka, each with a first- and third-person
+    /// variant.
+    #[test]
+    fn a_health_potion_names_its_captured_vfx_pair() {
+        // Items.Name.Potion.Restoration.Health.Tier9
+        let (first, third) = super::potion_vfx_for_stat("61b31323-8ba2-49f2-befe-f43111c6e2c7")
+            .expect("a health potion must have a visual");
+        assert_eq!(first, "71396acd-1caa-414b-a249-57e35e1e69b6");
+        assert_eq!(third, "0fef0efe-57b5-46c1-814a-47211103a673");
+        assert_ne!(first, third, "the drinker and the opponent see different effects");
+    }
+
+    /// Stamina potions get NO visual, deliberately. No captured op78 names a
+    /// stamina effect, and the client drops an unknown uuid silently — which
+    /// looks like a working feature doing nothing. This asserts the absence so
+    /// nobody "completes the set" with a guessed id.
+    #[test]
+    fn a_stamina_potion_has_no_invented_vfx() {
+        let stamina: Vec<&str> = gamedata::RESTORATIONS
+            .iter()
+            .filter(|r| r.affected_stat == 1)
+            .map(|r| r.uuid)
+            .collect();
+        assert!(!stamina.is_empty(), "there are stamina potions to check");
+        for uuid in stamina {
+            assert!(
+                super::potion_vfx_for_stat(uuid).is_none(),
+                "stamina potion {uuid} must not carry a fabricated effect uuid",
+            );
+        }
+    }
+
+    /// Magicka is the other half of the captured pair, and the control that stops
+    /// `potion_vfx_for_stat` from being "health or nothing".
+    #[test]
+    fn a_magicka_potion_names_the_magicka_pair() {
+        let magicka = gamedata::RESTORATIONS
+            .iter()
+            .find(|r| r.affected_stat == 2)
+            .expect("magicka potions exist");
+        let (first, third) =
+            super::potion_vfx_for_stat(magicka.uuid).expect("magicka has a visual");
+        assert_eq!(first, "ca784a31-a574-4a8d-8840-6b5d432cbbb4");
+        assert_eq!(third, "2f5405f6-054d-451b-8671-3b21f9a7ef9e");
+    }
+
+    /// The frame itself, against the shape all 284 captured frames share.
+    #[test]
+    fn the_play_vfx_frame_matches_the_captured_shape() {
+        let f = super::super::messages::player_play_vfx(431, "aaa", "bbb");
+        let nd = arena_proto::parse_netdata(&f[2..]);
+        assert_eq!(nd.int(0), Some(431), "avatar object id");
+        assert_eq!(nd.int(1), Some(56), "NetObjectType::Avatar");
+        assert_eq!(nd.int(2), Some(1), "NetRole::Authority");
+        assert_eq!(nd.int(3), Some(78), "gmid");
+        assert_eq!(nd.int(6), Some(1), "constant in all 284 frames");
+        assert_eq!(nd.int(7), Some(1), "constant in all 284 frames");
+        assert_eq!(nd.int(8), Some(2), "constant in all 284 frames");
     }
 
     /// Every restoration consumable is present: three pools, ten tiers each.
@@ -5302,11 +5442,23 @@ mod phase4_tests {
         // op63 → op64 to both players.
         let target_hp_before = combat.fighters[1].health;
         let out = on_c2s_input(&mut combat, 0, &make_request_consume_frame(obj), now);
-        assert_eq!(out.len(), 2, "op64 goes to both players");
+        // Assert on the op64 frames specifically rather than on a bare length: a
+        // drink now also emits the op78 visual, so a length check silently couples
+        // this test to how many OTHER frames the path happens to send.
+        let op64: Vec<_> = out
+            .iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(64))
+            .collect();
+        assert_eq!(op64.len(), 2, "op64 goes to both players");
         let expect = messages::perform_consume_consumable(obj, POTION);
-        assert_eq!(out[0].1, expect, "byte-identical to the op64 builder");
-        assert_eq!(out[1].1, expect);
-        assert_eq!(messages::user_message_gmid(&out[0].1), Some(64));
+        assert_eq!(op64[0].1, expect, "byte-identical to the op64 builder");
+        assert_eq!(op64[1].1, expect);
+        // ...and the drink visual accompanies it, to both players.
+        let op78 = out
+            .iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(78))
+            .count();
+        assert_eq!(op78, 2, "the op78 drink visual also goes to both players");
         assert_eq!(
             combat.fighters[1].health, target_hp_before,
             "an op63 must NOT be resolved as a phantom weapon swing"
@@ -5319,7 +5471,11 @@ mod phase4_tests {
         combat.reset_fighters_for_next_round(now);
         combat.phase = FlowState::StateTimeout;
         let out2 = on_c2s_input(&mut combat, 0, &make_request_consume_frame(obj), now);
-        assert_eq!(out2.len(), 2, "the budget resets between rounds");
+        let op64_again = out2
+            .iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(64))
+            .count();
+        assert_eq!(op64_again, 2, "the budget resets between rounds");
     }
 
     /// op56 is a loadout declaration, so it must latch even OUTSIDE the live round —

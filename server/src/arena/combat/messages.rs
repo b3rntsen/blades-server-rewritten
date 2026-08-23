@@ -894,6 +894,50 @@ pub fn player_maneuver_state_change(
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
+/// op78 `PlayerPlayVFX` — "play this effect now".
+///
+/// CAPTURE-PINNED against all 284 captured s2c frames, every one carrying exactly
+/// propIds 0..=8 and the same three trailing constants:
+///
+/// ```text
+///   {0:Int avatarObj · 1:Byte 56 Avatar · 2:Byte 1 Authority · 3:Byte 78
+///    · 4:String firstPersonVfx · 5:String thirdPersonVfx
+///    · 6:Byte 1 · 7:Byte 1 · 8:Byte 2}
+/// ```
+///
+/// propId 4 is what the acting player sees and propId 5 what everyone else sees —
+/// the game ships a first- and third-person variant of each effect and names both
+/// in one message.
+///
+/// **Every one of the 284 captured frames is a potion effect**, health or magicka.
+/// So this is the drink visual, and the "missing visual effects" line on the
+/// public issues list is at least partly this message never being sent: gmid 78
+/// existed in the opcode enum with nothing behind it, exactly as gmid 58 did
+/// before the shield-bash fix.
+///
+/// Weapon glow is NOT this message — it does not appear in the corpus at all, and
+/// is most likely client-side from the item's enchantment. Do not extend this to
+/// cover it without evidence.
+pub fn player_play_vfx(
+    avatar_net_object_id: i32,
+    first_person_vfx: &str,
+    third_person_vfx: &str,
+) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, avatar_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GameMessageId::PlayerPlayVFX as u8)
+        .string(4, first_person_vfx)
+        .string(5, third_person_vfx)
+        // 1 / 1 / 2 in all 284 frames. Constant, so carried as constants rather
+        // than modelled as fields whose meaning we would be guessing at.
+        .byte(6, 1)
+        .byte(7, 1)
+        .byte(8, 2);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
 /// op64 `PerformConsumeConsumable` (carrier `0x36`, GameMessageId at NetData propId
 /// 3) — the server's authoritative confirmation that a fighter drank its equipped
 /// consumable. Sent to BOTH players so each renders the drink animation.
