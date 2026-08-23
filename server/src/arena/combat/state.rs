@@ -93,6 +93,57 @@ pub enum DamageSource {
     ShieldManeuver = 11,
 }
 
+/// `ActorAnimation` (`BGS.Game.Animation`, `dump.cs:12812`) — the animation a
+/// maneuver plays, carried at propId 10 of op58 `PlayerManeuverStateChange`.
+///
+/// CAPTURE-PINNED. propId 10 is **constant per ability** across all 2,941 captured
+/// op58 frames — 16 distinct maneuvers, not one of them varying — and every value
+/// matches the same-named member of this enum: Power Attack 3, Quick Strikes 5,
+/// Dodging Strike 6, Skullcrusher 12, Guardbreaker 13, Indomitable Smash 14,
+/// Piercing Strikes 15, Venom Strikes 16, Recovery Strikes 17, Adrenaline Dodge 21,
+/// Focusing Dodge 22, Renewing Dodge 23.
+///
+/// The one rule that is not "same name": all four shield bashes send
+/// **`ShieldBashBegin` (26)**, not their own members (`ShieldBash` 4,
+/// `HarryingBash` 18, `StaggeringBash` 19, `ReflectingBash` 20) — Shield Bash 61
+/// frames, Staggering Bash 380, Harrying Bash 243, Reflecting Bash 7, all 26. That
+/// matches both the class hierarchy (`AbilityDoShieldBash : AbilityDoManeuver`,
+/// `dump.cs:604149`, with the other three deriving from it) and the shipped
+/// description — *"The fighter first blocks with the shield"* — the begin
+/// animation is the shared shield-raise every bash opens with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ActorAnimation {
+    None = 0,
+    Cast = 1,
+    Channeling = 2,
+    PowerAttack = 3,
+    ShieldBash = 4,
+    QuickStrikes = 5,
+    DodgingStrike = 6,
+    Notify = 7,
+    Staggered = 8,
+    Burning = 9,
+    Paralyzed = 10,
+    BreakObject = 11,
+    Skullcrusher = 12,
+    Guardbreaker = 13,
+    IndomitableSmash = 14,
+    PiercingStrikes = 15,
+    VenomStrikes = 16,
+    RecoveryStrikes = 17,
+    HarryingBash = 18,
+    StaggeringBash = 19,
+    ReflectingBash = 20,
+    AdrenalineDodge = 21,
+    FocusingDodge = 22,
+    RenewingDodge = 23,
+    RecklessFury = 24,
+    Breath = 25,
+    ShieldBashBegin = 26,
+    Concede = 27,
+}
+
 /// `DamageType` — per-component damage type. `ReceiveDamage` damageByType[].type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]

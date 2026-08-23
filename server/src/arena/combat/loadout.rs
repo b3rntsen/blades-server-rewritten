@@ -29,7 +29,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::gamedata;
-use super::state::{AbilityTag, DamageType, EquippedAbility, Loadout, StatusEffectType, WeaponProfile};
+use super::state::{AbilityTag, ActorAnimation, DamageType, EquippedAbility, Loadout, StatusEffectType, WeaponProfile};
 use super::tables;
 
 /// A representative starter loadout, used when there is no character row / no DB
@@ -516,6 +516,45 @@ const STATUS_THRESHOLD_REFERENCE_HP: f32 = 3150.0;
 
 /// Classify an ability by its shipped `editor_name` / `kind` — the **full 63-row
 /// table**, replacing the single `"91078132" => ResistElements` prefix match.
+/// The [`ActorAnimation`] a maneuver plays, for op58 propId 10.
+///
+/// Derived from the ability's shipped `editor_name`, never a UUID table: the
+/// captured value is the same-named `ActorAnimation` member for every maneuver
+/// except the shield-bash family, which all send `ShieldBashBegin`. See the enum's
+/// own doc comment for the per-ability frame counts behind that.
+///
+/// Returns `None` for anything that is not a maneuver — a spell animates off op53
+/// instead, and a caller that gets `None` must not emit an op58.
+pub fn actor_animation_for_maneuver(uuid_str: &str) -> Option<ActorAnimation> {
+    let a = gamedata::ability(uuid_str)?;
+    if a.kind != gamedata::AbilityKind::Maneuver {
+        return None;
+    }
+    Some(match a.editor_name {
+        // The shield-bash family — the shared wind-up, not each ability's own member.
+        "ShieldBash" | "HarryingBash" | "StaggeringBash" | "ReflectingBash" => {
+            ActorAnimation::ShieldBashBegin
+        }
+        "PowerAttack" => ActorAnimation::PowerAttack,
+        "QuickStrikes" => ActorAnimation::QuickStrikes,
+        "DodgingStrike" => ActorAnimation::DodgingStrike,
+        "Skullcrusher" => ActorAnimation::Skullcrusher,
+        "Guardbreaker" => ActorAnimation::Guardbreaker,
+        "IndomitableSmash" => ActorAnimation::IndomitableSmash,
+        "PiercingStrikes" => ActorAnimation::PiercingStrikes,
+        "VenomStrikes" => ActorAnimation::VenomStrikes,
+        "RecoveryStrikes" => ActorAnimation::RecoveryStrikes,
+        "AdrenalineDodge" => ActorAnimation::AdrenalineDodge,
+        "FocusingDodge" => ActorAnimation::FocusingDodge,
+        "RenewingDodge" => ActorAnimation::RenewingDodge,
+        "RecklessFury" => ActorAnimation::RecklessFury,
+        // A maneuver the corpus never showed. Emitting `None` (0) would ask the
+        // client to play nothing, which is the bug we are fixing; skip the frame
+        // instead so the omission is visible rather than silently wrong.
+        _ => return None,
+    })
+}
+
 pub fn ability_tag_for_template(uuid_str: &str) -> AbilityTag {
     let Some(a) = gamedata::ability(uuid_str) else {
         return AbilityTag::Generic;

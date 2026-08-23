@@ -1170,20 +1170,41 @@ fn resolve_ability_cast(
     // instant is the reported "shield bashes had no animation" (report #24): strikes
     // take no op53 and animate, spells take one with a real duration and animate,
     // bashes took one with 0.0 and did not.
-    if tag != AbilityTag::Maneuver {
+    // A MANEUVER animates off op58 instead. The split is exact in the corpus:
+    // 100% of the 788 bash op38 echoes are followed by an op58 and none by an op53,
+    // and 100% of the 1,330 spell echoes by an op53 and none by an op58.
+    let state_frame = if tag == AbilityTag::Maneuver {
+        // `actor_animation_for_maneuver` returns None for a maneuver the corpus
+        // never showed. Emitting `ActorAnimation::None` would tell the client to
+        // play nothing — the very bug being fixed — so skip the frame instead and
+        // leave the omission visible.
+        super::loadout::actor_animation_for_maneuver(&ea.ability_uuid).map(|anim| {
+            messages::player_maneuver_state_change(
+                combat.fighters[sender].net_object_id,
+                combat.fighters[sender].packed_stats(),
+                combat.fighters[target_slot].packed_stats(),
+                0.0, // timeInState at state entry
+                &ea.ability_uuid,
+                anim,
+                None, // propId 7: unmodelled in the corpus — omitted, never invented
+            )
+        })
+    } else {
         let channel_secs = super::gamedata::ability_rank_clamped(&ea.ability_uuid, level as u16)
             .and_then(|r| r.channel_duration())
             .unwrap_or(0.0);
-        let channeling = messages::player_channeling_state_change(
+        Some(messages::player_channeling_state_change(
             combat.fighters[sender].net_object_id,
             combat.fighters[sender].packed_stats(),
             combat.fighters[target_slot].packed_stats(),
             channel_secs,
             &ea.ability_uuid,
             None, // propId 7: unmodelled in the corpus — omitted, never invented
-        );
-        out.push((sender, channeling.clone()));
-        out.push((target_slot, channeling));
+        ))
+    };
+    if let Some(f) = state_frame {
+        out.push((sender, f.clone()));
+        out.push((target_slot, f));
     }
 
     debug!("combat: slot {sender} casts ability {} (tag {tag:?}, level {level}) → slot {target_slot}", ea.ability_uuid);
@@ -3756,13 +3777,13 @@ mod tests {
         );
     }
 
-    /// Retail sends op53 for channelled spells only. Across 60 decrypted sessions the
-    /// ten abilities carrying an op53 are all spells, and the five bashes carry zero
-    /// between them despite 788 bash op38 echoes. We used to send one for every
-    /// ability - with a 0.0 s duration for a bash, since maneuvers ship no
-    /// `_channelDuration`. That is report #24's missing shield-bash animation.
+    /// The wire split, measured over 60 decrypted sessions: after a bash op38 echo
+    /// retail sends op58 `PlayerManeuverStateChange` 785 times out of 788 and op53
+    /// zero times; after a spell echo it sends op53 1,324 of 1,330 and op58 zero.
+    /// We sent op53 for both and never sent op58 at all, so a bash had no animation
+    /// frame on the wire — report #24's missing shield-bash animation.
     #[test]
-    fn a_bash_emits_the_cast_echo_but_no_channeling_frame() {
+    fn a_bash_animates_on_op58_not_op53() {
         for (uuid, name) in BASHES {
             let now = Instant::now();
             let mut combat = make_live_combat(now);
@@ -3771,17 +3792,59 @@ mod tests {
 
             // Non-vacuity: the cast must actually have resolved. Without this, an
             // ability rejected on cost or cooldown would emit nothing at all and
-            // "no op53" would pass for entirely the wrong reason.
+            // the op53 assertion would pass for entirely the wrong reason.
             assert!(
                 ids.contains(&38),
                 "{name}: expected the op38 cast echo, got gmids {ids:?}",
             );
             assert!(
+                ids.contains(&58),
+                "{name}: a bash must animate on op58 — retail sends one after 100% \
+                 of 788 captured bash echoes. Got gmids {ids:?}",
+            );
+            assert!(
                 !ids.contains(&53),
-                "{name}: a bash must not emit op53 - retail sends none across 788 \
-                 captured bash echoes. Got gmids {ids:?}",
+                "{name}: a bash must not emit op53 — retail sends none across those \
+                 same 788 echoes. Got gmids {ids:?}",
             );
         }
+    }
+
+    /// The op58 must carry the right animation, or the client plays the wrong one —
+    /// which from the player's seat is indistinguishable from playing none.
+    /// `ShieldBashBegin` (26) is what all four shield bashes send in every captured
+    /// frame; Guardbreaker sends its own member (13) and is the discriminator here,
+    /// since a mapping that returned 26 for everything would otherwise pass.
+    #[test]
+    fn op58_carries_the_captured_actor_animation() {
+        // (uuid, name, propId-10 value observed in EVERY captured op58 for it)
+        let pinned: [(&str, &str, u8); 6] = [
+            ("f9a2373b-a84f-4716-90ce-165baa2dd6ed", "Shield Bash", 26),
+            ("9b915ec3-c63b-4b62-b417-4c5436d45fc1", "Staggering Bash", 26),
+            ("69ffa3fd-deb7-4824-bab6-ac6450f19676", "Harrying Bash", 26),
+            ("ba61ce46-163f-4a61-8ede-f5b7ae365e40", "Reflecting Bash", 26),
+            ("cc768bae-a063-4885-8207-f39c6542fb36", "Guardbreaker", 13),
+            ("eb0cb7e6-47cf-48e7-8cc9-dbf80fc77f13", "Quick Strikes", 5),
+        ];
+        for (uuid, name, want) in pinned {
+            let got = super::super::loadout::actor_animation_for_maneuver(uuid)
+                .unwrap_or_else(|| panic!("{name}: no ActorAnimation resolved"));
+            assert_eq!(
+                got as u8, want,
+                "{name}: op58 propId 10 is {want} in every captured frame, got {}",
+                got as u8,
+            );
+        }
+    }
+
+    /// A spell must not resolve a maneuver animation — the guard that stops a future
+    /// edit from emitting op58 for everything.
+    #[test]
+    fn a_spell_resolves_no_maneuver_animation() {
+        assert!(
+            super::super::loadout::actor_animation_for_maneuver(FIREBALL).is_none(),
+            "Fireball is a spell — it animates on op53 and must resolve no ActorAnimation",
+        );
     }
 
     /// The control, and what makes the test above non-vacuous: a real channelled

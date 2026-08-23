@@ -15,7 +15,7 @@
 
 use arena_proto::{GameMessageId, NetDataWriter};
 
-use super::state::{ActiveSide, ActorStateType, DamageSource, DamageType, FlowState, MatchState, NetObjectType, NetRole, StatusEffectType};
+use super::state::{ActiveSide, ActorAnimation, ActorStateType, DamageSource, DamageType, FlowState, MatchState, NetObjectType, NetRole, StatusEffectType};
 
 /// `NetTransportMessage.MAGIC_HEADER` — present on every message, both directions.
 pub const MARKER_S2C: u8 = 0xBE;
@@ -827,6 +827,70 @@ pub fn player_channeling_state_change(
         w.put(7, arena_proto::NetDataValue::ByteArray(blob.to_vec()));
     }
     w.float(8, channel_duration_secs).string(9, ability_uuid);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// op58 `PlayerManeuverStateChange` — the MANEUVER ANIMATION frame, and the
+/// maneuver's exact counterpart to op53 for a spell.
+///
+/// CAPTURE-PINNED against all 2,941 captured s2c frames, every one of which carries
+/// exactly propIds 0..=10 and `NetObjectType::Avatar` / `NetRole::Authority`:
+///
+/// ```text
+///   {0:Int avatarObj · 1:Byte 56 Avatar · 2:Byte 1 Authority · 3:Byte 58
+///    · 4:ULong caster packed stats · 5:ULong opponent packed stats
+///    · 6:Byte 11 ActorStateType::Maneuver · 7:ByteArray stateHistory
+///    · 8:Float timeInState · 9:String abilityUuid · 10:Byte ActorAnimation}
+/// ```
+///
+/// propId 6 is **11 (Maneuver) in all 2,941 frames** — the value that never appears
+/// on gmid 39, which is why an actor-state search that omits 58 concludes retail
+/// never sends `Maneuver` at all.
+///
+/// **Why this exists (report #24, "shield bashes had no animation").** The cast
+/// echo splits cleanly by ability kind, measured over 60 decrypted sessions:
+///
+/// ```text
+///   after a bash  op38 (n=788):   op58 in 785  (100%),  op53 in 0
+///   after a spell op38 (n=1330):  op53 in 1324 (100%),  op58 in 0
+/// ```
+///
+/// We sent op53 for both and never sent op58 at all, so a bash had no animation
+/// frame on the wire — nothing for the client to play.
+///
+/// **propId 7** — a variable-length blob (6…23 B, 941 distinct values across the
+/// 2,941 frames), the same unmodelled `stateHistory` as op53's propId 7 and left
+/// out for the same reason: NetData is a sparse property bag, so omitting it lets
+/// the client keep its default rather than read something fabricated.
+///
+/// **propId 8** is `timeInState`, and at state ENTRY — the only moment we emit —
+/// that is 0.0. Retail's spread (0.0 … 8.0 s, with genuine zeros in every ability:
+/// 18/590, 16/485, 4/243) is consistent with elapsed time accruing on later frames
+/// of the same state; we send one frame, at entry, so 0.0 is the honest value. The
+/// exact retail semantics stay open, exactly as they do for op53's propId 8.
+pub fn player_maneuver_state_change(
+    caster_avatar_net_object_id: i32,
+    caster_packed_stats: u64,
+    opponent_packed_stats: u64,
+    time_in_state_secs: f32,
+    ability_uuid: &str,
+    animation: ActorAnimation,
+    state_blob: Option<&[u8]>,
+) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, caster_avatar_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GameMessageId::PlayerManeuverStateChange as u8)
+        .ulong(4, caster_packed_stats)
+        .ulong(5, opponent_packed_stats)
+        .byte(6, ActorStateType::Maneuver as u8);
+    if let Some(blob) = state_blob {
+        w.put(7, arena_proto::NetDataValue::ByteArray(blob.to_vec()));
+    }
+    w.float(8, time_in_state_secs)
+        .string(9, ability_uuid)
+        .byte(10, animation as u8);
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
