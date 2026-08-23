@@ -544,7 +544,7 @@ mod tests {
         let q = &parsed.quests[0];
         assert_eq!(q.quest_id, Uuid::parse_str(quest_id).unwrap());
         assert_eq!(q.quest.gld_quest_id, Uuid::parse_str(quest_id).unwrap());
-        assert_eq!(q.quest.seed, 485975867);
+        assert_eq!(q.quest.seed, serde_json::Number::from(485975867));
         // -1 is what retail sends for story quests; jobs carry a real difficulty.
         assert_eq!(q.quest.difficulty_level, -1);
         assert!(!q.quest.completed);

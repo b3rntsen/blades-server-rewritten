@@ -996,7 +996,7 @@ mod jobs_gen {
             r#type: QuestType::Normal,
             objective_statuses,
             difficulty_level: get_i64(job, "difficultyLevel", 1),
-            seed: get_i64(job, "seed", 0),
+            seed: get_i64(job, "seed", 0).into(),
             gld_quest_id: JOB_SENTINEL_GLD,
             completed: false,
         };
