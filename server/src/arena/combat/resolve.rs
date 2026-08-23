@@ -1216,6 +1216,54 @@ fn resolve_ability_cast(
     // Health damage this cast dealt, if any — the gate for threshold effects (Blind).
     // Zero for buffs and for a maneuver that missed, which is correct: a threshold
     // effect must not fire on a cast that did not land.
+    // A spell with a wind-up does not land now. Queue it; `land_due_impacts`
+    // delivers it when the cast completes. Zero-delay abilities (maneuvers,
+    // Frostbite, anything shipping no `channelDuration`) run inline exactly as
+    // before, so this changes nothing for them.
+    let delay = ability_impact_delay(&ea.ability_uuid, level);
+    if delay.is_zero() {
+        out.extend(apply_ability_impact(
+            combat, sender, target_slot, &ea.ability_uuid, level, tag, now,
+        ));
+    } else {
+        debug!(
+            "combat: slot {sender} cast {} — impact in {delay:?}",
+            ea.ability_uuid
+        );
+        combat.pending_impacts.push(super::state::PendingImpact {
+            sender,
+            target: target_slot,
+            ability_uuid: ea.ability_uuid.clone(),
+            level,
+            tag,
+            due: now + delay,
+        });
+    }
+    out
+}
+
+/// The EFFECT half of a cast: damage, control, and every shipped side effect.
+///
+/// Split out of [`resolve_ability_cast`] so it can run either immediately or from
+/// the deferred queue. A spell that ships a `channelDuration` does not land the
+/// instant the button is pressed — Ice Spike ships **1.12 s** and Paralyze **1.5 s**
+/// — and we were applying damage, stun and paralysis at the moment of the cast.
+/// From the player's seat the target is stunned before the spike has left the hand.
+///
+/// Swings already work this way: [`resolve_swing`] queues a `PendingHit` and
+/// [`land_due_hits`] delivers it after `FOLLOW_THROUGH_DELAY`. This is the same
+/// pattern for casts.
+fn apply_ability_impact(
+    combat: &mut MatchCombat,
+    sender: usize,
+    target_slot: usize,
+    ability_uuid: &str,
+    level: u8,
+    tag: super::state::AbilityTag,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    use super::state::AbilityTag;
+    let mut out: Vec<(usize, Vec<u8>)> = Vec::new();
     let mut last_hit_total = 0.0f32;
     // The `ReceiveDamage` block bits this cast produced on the TARGET
     // (`WAS_LATE_BLOCKING` / `WAS_OPTIMAL_BLOCKING`). Guardbreaker and Staggering Bash
@@ -1253,7 +1301,7 @@ fn resolve_ability_cast(
             // These are FLAT RATINGS despite `armor_piercing_percent`'s name — the
             // shipped values are 225.00 and 60.00, and a percentage reading would make
             // Skullcrusher pierce 22,500% of armor.
-            if let Some(r) = super::gamedata::ability_rank_clamped(&ea.ability_uuid, level as u16) {
+            if let Some(r) = super::gamedata::ability_rank_clamped(ability_uuid, level as u16) {
                 if let Some(ap) = r.armor_piercing_percent() {
                     attacker_loadout.armor_piercing_rating += ap;
                 }
@@ -1281,7 +1329,7 @@ fn resolve_ability_cast(
             );
             info!(
                 "combat: slot {sender} maneuver {} → weapon damage {:.1} (Middle)",
-                ea.ability_uuid, resolved.total,
+                ability_uuid, resolved.total,
             );
             last_hit_total = resolved.total;
             block_flags = resolved.flags;
@@ -1289,7 +1337,7 @@ fn resolve_ability_cast(
         }
         AbilityTag::Paralyze | AbilityTag::Damage | AbilityTag::Generic => {
             let resolved = RetailDamageModel.resolve_ability(
-                &ea.ability_uuid,
+                ability_uuid,
                 level,
                 &combat.fighters[target_slot],
                 ActiveSide::Middle,
@@ -1300,12 +1348,12 @@ fn resolve_ability_cast(
             out.extend(emit_damage(combat, sender, target_slot, &resolved, now));
             // A CHANNELLED spell just emitted tick 1 of many. Schedule the rest;
             // `apply_channel_ticks` delivers them on the shipped PvP tick.
-            if let Some(total_ticks) = super::damage::channel_ticks(&ea.ability_uuid, level) {
+            if let Some(total_ticks) = super::damage::channel_ticks(ability_uuid, level) {
                 if total_ticks > 1 {
                     combat.channels.push(super::state::ActiveChannel {
                         caster_slot: sender,
                         target_slot,
-                        ability_uuid: ea.ability_uuid.clone(),
+                        ability_uuid: ability_uuid.to_string(),
                         ability_level: level,
                         remaining_ticks: total_ticks - 1,
                         next_tick_at: now
@@ -1330,9 +1378,54 @@ fn resolve_ability_cast(
     // rather than from the ability's name. Seven abilities used to spend a resource
     // and do nothing because these fields were read by no code.
     out.extend(apply_shipped_effects(
-        combat, sender, target_slot, &ea.ability_uuid, level, last_hit_total, block_flags,
+        combat, sender, target_slot, ability_uuid, level, last_hit_total, block_flags,
         now,
     ));
+    out
+}
+
+/// The cast time before a spell's impact lands, from the shipped rank data.
+///
+/// `channelDuration` is the wind-up the client animates: Ice Spike 1.12 s,
+/// Paralyze 1.5 s, Poison Cloud 1.3 s, Fireball 0.9 s, Lightning Bolt 0.5 s.
+/// Frostbite ships none and lands immediately, which is correct — it is a
+/// channelled stream, not a projectile.
+///
+/// **Projectile travel is deliberately NOT added.** Ranks also ship a
+/// `projectileSpeed` (Ice Spike 10, Fireball 15), but travel time needs a distance
+/// between the two fighters and the arena has no positional model here. Inventing
+/// a distance would be inventing a number; the cast time is the part the data
+/// actually gives us.
+fn ability_impact_delay(ability_uuid: &str, level: u8) -> Duration {
+    let secs = super::gamedata::ability_rank_clamped(ability_uuid, level as u16)
+        .and_then(|r| r.channel_duration())
+        .unwrap_or(0.0);
+    if secs.is_finite() && secs > 0.0 {
+        Duration::from_secs_f32(secs)
+    } else {
+        Duration::ZERO
+    }
+}
+
+/// Deliver casts whose wind-up has elapsed. Mirrors [`land_due_hits`].
+pub(super) fn land_due_impacts(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
+    if combat.pending_impacts.is_empty() {
+        return Vec::new();
+    }
+    let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut combat.pending_impacts)
+        .into_iter()
+        .partition(|p| now >= p.due);
+    combat.pending_impacts = waiting;
+
+    let mut out = Vec::new();
+    for p in due {
+        if p.sender >= combat.fighters.len() || p.target >= combat.fighters.len() {
+            continue;
+        }
+        out.extend(apply_ability_impact(
+            combat, p.sender, p.target, &p.ability_uuid, p.level, p.tag, now,
+        ));
+    }
     out
 }
 
@@ -3121,6 +3214,7 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
     // the bot's turn, so a swing thrown last tick resolves in the order it would have
     // if it had landed instantly (tracker #21).
     out.extend(land_due_hits(combat, now));
+    out.extend(land_due_impacts(combat, now));
     if matches!(combat.phase, FlowState::RoundEnd | FlowState::NextState) {
         // A landing blow just ended the round.
         return out;
@@ -3864,6 +3958,116 @@ mod tests {
             ids.contains(&53),
             "Fireball is channelled - it must still emit op53. Got gmids {ids:?}",
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Cast time: a spell lands after its wind-up, not at the button press
+    // -----------------------------------------------------------------------
+
+    const ICE_SPIKE: &str = "cfee0b02-6d91-4d34-869c-a7e54329060d";
+    const FROSTBITE: &str = "4be1d681-c35d-4540-b255-c2910ac80664";
+    const PARALYZE: &str = "9fdc4d52-ce90-44f8-9b5d-21f31e27dbda";
+
+    /// The delays are read from shipped rank data, so pin the actual numbers. If a
+    /// gamedata regeneration changes them, that should be a visible decision rather
+    /// than a silent shift in how the game feels.
+    #[test]
+    fn the_shipped_cast_times_are_what_we_defer_by() {
+        for (uuid, name, want_ms) in [
+            (ICE_SPIKE, "Ice Spike", 1120u64),
+            (PARALYZE, "Paralyze", 1500),
+            (FROSTBITE, "Frostbite", 0),
+        ] {
+            let got = super::ability_impact_delay(uuid, 1).as_millis() as u64;
+            assert_eq!(
+                got, want_ms,
+                "{name}: shipped channelDuration says {want_ms} ms, got {got} ms",
+            );
+        }
+    }
+
+    /// Report from live play: "Ice Spike now stuns, but it does it instantaneously,
+    /// and in recordings there is a delay from sending the spike to them being
+    /// stunned."
+    ///
+    /// Ice Spike ships `channelDuration` 1.12 s. We applied its damage and stun at
+    /// the instant of the cast, so the target was stunned before the spike had
+    /// visibly left the caster's hand.
+    #[test]
+    fn ice_spike_impact_waits_for_its_cast_time() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let hp_before = combat.fighters[1].health;
+
+        let out = cast(&mut combat, ICE_SPIKE, AbilityTag::Damage, now);
+        let ids = gmids(&out);
+
+        // Non-vacuity: the cast itself must have resolved.
+        assert!(ids.contains(&38), "expected the op38 cast echo, got {ids:?}");
+        // ...but nothing may have LANDED yet.
+        assert!(
+            !ids.contains(&50),
+            "Ice Spike must not deal damage at cast time — it ships a 1.12 s wind-up. \
+             Got gmids {ids:?}",
+        );
+        assert_eq!(
+            combat.fighters[1].health, hp_before,
+            "target health must be untouched during the wind-up",
+        );
+
+        // Just before the wind-up completes: still nothing.
+        let early = super::land_due_impacts(&mut combat, now + Duration::from_millis(1100));
+        assert!(early.is_empty(), "impact landed early: {:?}", gmids(&early));
+
+        // After it: the damage arrives.
+        let late = super::land_due_impacts(&mut combat, now + Duration::from_millis(1130));
+        assert!(
+            gmids(&late).contains(&50),
+            "Ice Spike must land once its 1.12 s wind-up elapses, got {:?}",
+            gmids(&late),
+        );
+        assert!(
+            combat.fighters[1].health < hp_before,
+            "target must actually take the damage on impact",
+        );
+    }
+
+    /// The control, and the reason this is not just "delay everything": Frostbite
+    /// ships NO `channelDuration` — it is a channelled stream, not a projectile — so
+    /// it must still land immediately. A change that deferred every ability would
+    /// pass the test above and fail this one.
+    #[test]
+    fn an_ability_with_no_cast_time_still_lands_immediately() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let out = cast(&mut combat, FROSTBITE, AbilityTag::Damage, now);
+        let ids = gmids(&out);
+        assert!(ids.contains(&38), "expected the op38 cast echo, got {ids:?}");
+        assert!(
+            ids.contains(&50),
+            "Frostbite ships no cast time and must land at once, got {ids:?}",
+        );
+        assert!(
+            combat.pending_impacts.is_empty(),
+            "an ability with no wind-up must not be queued",
+        );
+    }
+
+    /// A queued cast must not be lost if the round ends first, and must not fire
+    /// against a slot that no longer exists.
+    #[test]
+    fn a_queued_impact_is_drained_only_once() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        cast(&mut combat, ICE_SPIKE, AbilityTag::Damage, now);
+        assert_eq!(combat.pending_impacts.len(), 1);
+
+        let first = super::land_due_impacts(&mut combat, now + Duration::from_millis(1200));
+        assert!(gmids(&first).contains(&50));
+        assert!(combat.pending_impacts.is_empty(), "queue must be emptied on delivery");
+
+        let second = super::land_due_impacts(&mut combat, now + Duration::from_millis(2000));
+        assert!(second.is_empty(), "a delivered impact must not fire twice");
     }
 
     /// Op46 UP after a FULL-CHARGE hold (≥ CRIT_HOLD_HEAVY_SECS) → crit ×1.325 on a Light weapon.

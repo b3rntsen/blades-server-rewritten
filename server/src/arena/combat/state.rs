@@ -1778,6 +1778,8 @@ pub struct MatchCombat {
     pub last_regen_tick: std::time::Instant,
     /// Swings committed but not yet landed — see [`PendingHit`].
     pub pending_hits: Vec<PendingHit>,
+    /// Casts waiting on their shipped wind-up. See [`PendingImpact`].
+    pub pending_impacts: Vec<PendingImpact>,
 }
 
 /// A committed swing whose damage has not been applied yet.
@@ -1791,6 +1793,22 @@ pub struct MatchCombat {
 /// Everything needed to resolve the hit is captured at commit, EXCEPT the
 /// defender's guard. That is read when the hit lands, which is the entire point:
 /// a block raised during the swing now counts.
+/// A cast whose wind-up has not finished yet.
+///
+/// A spell that ships a `channelDuration` lands after it, not at the moment the
+/// button is pressed. Ice Spike ships 1.12 s and Paralyze 1.5 s; applying their
+/// damage and stun at cast time is what made a spike stun before it visibly left
+/// the caster's hand.
+#[derive(Debug, Clone)]
+pub struct PendingImpact {
+    pub sender: usize,
+    pub target: usize,
+    pub ability_uuid: String,
+    pub level: u8,
+    pub tag: AbilityTag,
+    pub due: Instant,
+}
+
 #[derive(Debug, Clone)]
 pub struct PendingHit {
     pub sender: usize,
@@ -1823,6 +1841,7 @@ impl MatchCombat {
             interround_step: 0,
             last_regen_tick: now,
             pending_hits: Vec::new(),
+            pending_impacts: Vec::new(),
         }
     }
 

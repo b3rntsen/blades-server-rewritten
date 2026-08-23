@@ -3297,11 +3297,25 @@ pub(in crate::arena::combat) mod tests {
 
         // PerformExecuteAbility (38) echoed (gmid byte at sep+5 = index 13).
         assert!(out.iter().any(|(_, b)| b.get(13) == Some(&38)), "PerformExecuteAbility echoed");
+
+        // The CAST echoes immediately; the IMPACT does not. Lightning Bolt ships
+        // `channelDuration` 0.5 s, so its damage now lands after the wind-up rather
+        // than at the moment the button is pressed. This test advances a CLOCK — it
+        // does not relax an assertion; the damage source below is unchanged. Same
+        // treatment the swing tests got when tracker #21 moved impact to match the
+        // animation.
+        assert!(
+            !out.iter().any(|(_, b)| b[1] == 0x36
+                && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50)),
+            "a spell with a 0.5 s wind-up must NOT have dealt damage at cast time",
+        );
+        let landed = m.on_tick(2, t0 + Duration::from_millis(600));
+
         // A ReceiveDamage with Spell source (propId 6 = 2).
-        let rd = out
+        let rd = landed
             .iter()
             .find(|(_, b)| b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50))
-            .expect("ReceiveDamage present");
+            .expect("ReceiveDamage present once the wind-up has elapsed");
         assert_eq!(arena_proto::parse_netdata(&rd.1[2..]).int(6), Some(2), "Spell damage source");
 
         // The same ability is on cooldown immediately after.
