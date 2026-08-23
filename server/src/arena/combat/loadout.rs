@@ -46,14 +46,18 @@ pub fn starter() -> Loadout {
         weapon_optimal_block_boost: 1.0,
         ..Default::default()
     };
-    match gamedata::weapon(STARTER_WEAPON) {
-        Some(w) => install_weapon(&mut lo, w, STARTER_TEMPERING),
-        None => lo.weapon = fallback_weapon_profile(STARTER_LEVEL),
-    }
+    // The shield goes on FIRST. `install_weapon` reads `has_shield` to decide
+    // whether the weapon is being wielded two-handed, and the starter carries a
+    // Chaurus Shield — installing the weapon first would classify it as
+    // two-handed and quietly hand the starter 15% more damage.
     if let Some(sh) = gamedata::shield(STARTER_SHIELD) {
         lo.has_shield = true;
         lo.block_rating += sh.block_base;
         lo.shield_optimal_block_boost = sh.optimal_block_boost.max(1.0);
+    }
+    match gamedata::weapon(STARTER_WEAPON) {
+        Some(w) => install_weapon(&mut lo, w, STARTER_TEMPERING),
+        None => lo.weapon = fallback_weapon_profile(STARTER_LEVEL),
     }
     lo.enchants = vec![(DamageType::Shock, STARTER_ENCHANT_TIER)];
     lo
@@ -81,10 +85,43 @@ pub fn weapon_profile(w: &'static gamedata::WeaponStats, tempering_level: u64) -
     }
 }
 
+/// The base damage a template deals in the hands it is actually being used in.
+///
+/// Every one of the 370 shipped weapon templates carries BOTH figures and nothing
+/// read the two-handed one, so every two-handed wielder has been swinging at the
+/// one-handed number. 129 templates set it 1.15x higher (Steel Longsword
+/// 132 → 151.8, Thunderfell 192 → 220.8); 238 set the two figures equal, where
+/// this changes nothing.
+///
+/// **Guard on zero.** Three templates — Goblin Caster Staff, Lich Sword, Outcast
+/// Staff — ship `base_two_handed_damage: 0.0`. Taking that literally would make
+/// them deal nothing at all, so a zero falls back to the one-handed figure rather
+/// than being treated as data.
+fn base_damage_in_hand(w: &gamedata::WeaponStats, two_handed: bool) -> f32 {
+    if two_handed && w.base_two_handed_damage > 0.0 {
+        w.base_two_handed_damage
+    } else {
+        w.base_damage
+    }
+}
+
 /// Install a resolved weapon template onto `lo`: the damage profile, the template
 /// (for cadence, Phase 3.12) and the weapon's Block Rating contribution.
+///
+/// Handedness comes from `lo.has_shield`: Blades lets the same weapon be used
+/// one-handed with a shield or two-handed without one, and the shipped data
+/// carries a separate base damage for each. So the shield must already be
+/// installed when this runs — see the ordering note in [`starter`].
 fn install_weapon(lo: &mut Loadout, w: &'static gamedata::WeaponStats, tempering_level: u64) {
-    lo.weapon = weapon_profile(w, tempering_level);
+    let two_handed = !lo.has_shield;
+    let weight = tables::Weight::from_class(w.weapon_class);
+    let ty = map_damage_type(w.damage_type);
+    let base = base_damage_in_hand(w, two_handed) + tables::tempering_bonus(weight, tempering_level);
+    lo.weapon = WeaponProfile {
+        primary_type: Some(ty),
+        base_by_type: vec![(ty, base)],
+        weight: Some(weight),
+    };
     lo.weapon_template = Some(w);
     lo.weapon_optimal_block_boost = w.optimal_block_boost.max(1.0);
     lo.block_rating += w.block_base;
@@ -1084,5 +1121,103 @@ mod tests {
     #[test]
     fn empty_abilities_value_is_safe() {
         assert!(parse_equipped_abilities(&Value::Null, &Value::Null).is_empty());
+    }
+}
+
+
+#[cfg(test)]
+mod two_handed_tests {
+    use super::*;
+
+    /// Steel Longsword: 132.0 one-handed, 151.8 two-handed (1.15x).
+    const STEEL_LONGSWORD: &str = "68577fab-83f5-4bd1-983c-f396963ac14b";
+    /// Lich Sword ships `base_two_handed_damage: 0.0` — a value that must NOT be
+    /// taken literally.
+    const LICH_SWORD: &str = "474165c0-7657-48ee-ab54-aa443f5c009e";
+
+    fn base_of(lo: &Loadout) -> f32 {
+        lo.weapon.base_by_type.iter().map(|(_, v)| *v).sum()
+    }
+
+    fn with_weapon(uuid: &str, has_shield: bool) -> Loadout {
+        let mut lo = Loadout {
+            level: 30,
+            status_dur_mult: 1.0,
+            shield_optimal_block_boost: 1.0,
+            weapon_optimal_block_boost: 1.0,
+            ..Default::default()
+        };
+        lo.has_shield = has_shield;           // handedness, before the weapon goes on
+        let w = gamedata::weapon(uuid).expect("template must resolve");
+        install_weapon(&mut lo, w, 0);
+        lo
+    }
+
+    /// Every shipped template carries a two-handed base damage and nothing read it,
+    /// so a two-handed wielder swung at the one-handed number. 129 of 370 templates
+    /// set it 1.15x higher.
+    #[test]
+    fn a_weapon_without_a_shield_uses_the_two_handed_base() {
+        let two = base_of(&with_weapon(STEEL_LONGSWORD, false));
+        assert!(
+            (two - 151.8).abs() < 0.01,
+            "Steel Longsword two-handed ships 151.8, got {two}",
+        );
+    }
+
+    /// The control. Same weapon, shield equipped, must be unchanged at 132.0 — a
+    /// change that simply raised all weapon damage would pass the test above and
+    /// fail this one.
+    #[test]
+    fn the_same_weapon_with_a_shield_is_unchanged() {
+        let one = base_of(&with_weapon(STEEL_LONGSWORD, true));
+        assert!(
+            (one - 132.0).abs() < 0.01,
+            "Steel Longsword one-handed ships 132.0, got {one}",
+        );
+    }
+
+    /// Three templates ship `base_two_handed_damage: 0.0`. Believing that would make
+    /// them deal nothing at all.
+    #[test]
+    fn a_zero_two_handed_value_falls_back_rather_than_disarming_the_weapon() {
+        let two = base_of(&with_weapon(LICH_SWORD, false));
+        assert!(
+            two > 0.0,
+            "Lich Sword ships 0.0 two-handed; a literal reading disarms it (got {two})",
+        );
+        assert!(
+            (two - 7.0).abs() < 0.01,
+            "it should fall back to the one-handed 7.0, got {two}",
+        );
+    }
+
+    /// The starter carries a Chaurus Shield, so it is one-handed, and its damage is
+    /// the one-handed figure.
+    ///
+    /// **This test does NOT pin the ordering inside `starter()`, though I first
+    /// claimed it did.** Red-proofing showed why: the starter's Glass Dagger ships
+    /// `base_damage` 72.0 and `base_two_handed_damage` 72.0 — identical — so the
+    /// starter is insensitive to which way round the shield and weapon go in, and
+    /// reverting that ordering leaves this test green. The ordering is guarded by
+    /// the comment in `starter()` and by `the_same_weapon_with_a_shield_is_unchanged`,
+    /// which uses a weapon whose two figures actually differ.
+    #[test]
+    fn the_starter_loadout_is_one_handed() {
+        let lo = starter();
+        assert!(lo.has_shield, "the starter carries a shield");
+        let dagger_one_handed = 72.0 + tables::tempering_bonus(tables::Weight::Light, 4);
+        let got = base_of(&lo);
+        assert!(
+            (got - dagger_one_handed).abs() < 0.01,
+            "starter must stay one-handed at {dagger_one_handed}, got {got}",
+        );
+        // Why this cannot detect an ordering regression — asserted, not just claimed.
+        let w = gamedata::weapon(STARTER_WEAPON).unwrap();
+        assert_eq!(
+            w.base_damage, w.base_two_handed_damage,
+            "if the starter weapon ever ships differing figures this becomes an \
+             ordering guard, and the note above is then out of date",
+        );
     }
 }
