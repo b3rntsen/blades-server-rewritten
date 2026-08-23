@@ -1154,19 +1154,37 @@ fn resolve_ability_cast(
     // semantics are NOT pinned by the captures (the captured values are not the shipped
     // `_channelDuration`), and the unmodelled propId-7 blob is deliberately omitted
     // rather than fabricated.
-    let channel_secs = super::gamedata::ability_rank_clamped(&ea.ability_uuid, level as u16)
-        .and_then(|r| r.channel_duration())
-        .unwrap_or(0.0);
-    let channeling = messages::player_channeling_state_change(
-        combat.fighters[sender].net_object_id,
-        combat.fighters[sender].packed_stats(),
-        combat.fighters[target_slot].packed_stats(),
-        channel_secs,
-        &ea.ability_uuid,
-        None, // propId 7: unmodelled in the corpus — omitted, never invented
-    );
-    out.push((sender, channeling.clone()));
-    out.push((target_slot, channeling));
+    //
+    // op53 is for CHANNELLED casts only — a maneuver never gets one. Measured over
+    // 60 decrypted sessions, scanning every coalesced `0xBE` rather than one message
+    // per packet: the ten abilities that carry an op53 are all spells (Resist
+    // Elements, Lightning Bolt, Fireball, Ice Spike, Frostbite, Paralyze, Poison
+    // Cloud, Delayed Lightning Bolt, Blind, Consuming Inferno) and the five bashes
+    // carry **zero** between them — across 788 bash op38 echoes (Guardbreaker 96,
+    // Harrying Bash 245, Reflecting Bash 7, Shield Bash 61, Staggering Bash 379).
+    //
+    // We used to send one for every ability. A maneuver ships no `_channelDuration`,
+    // so a bash went out as a `PlayerChannelingStateChange` of 0.0 s — a frame retail
+    // never sends, carrying a value it almost never sends (12 of 2 860 captured op53
+    // floats are 0.0). Putting the caster into a channelling state that ends the same
+    // instant is the reported "shield bashes had no animation" (report #24): strikes
+    // take no op53 and animate, spells take one with a real duration and animate,
+    // bashes took one with 0.0 and did not.
+    if tag != AbilityTag::Maneuver {
+        let channel_secs = super::gamedata::ability_rank_clamped(&ea.ability_uuid, level as u16)
+            .and_then(|r| r.channel_duration())
+            .unwrap_or(0.0);
+        let channeling = messages::player_channeling_state_change(
+            combat.fighters[sender].net_object_id,
+            combat.fighters[sender].packed_stats(),
+            combat.fighters[target_slot].packed_stats(),
+            channel_secs,
+            &ea.ability_uuid,
+            None, // propId 7: unmodelled in the corpus — omitted, never invented
+        );
+        out.push((sender, channeling.clone()));
+        out.push((target_slot, channeling));
+    }
 
     debug!("combat: slot {sender} casts ability {} (tag {tag:?}, level {level}) → slot {target_slot}", ea.ability_uuid);
 
@@ -3679,6 +3697,110 @@ mod tests {
         combat.phase = FlowState::StateTimeout;
         combat.phase_entered = now;
         combat
+    }
+
+    // -----------------------------------------------------------------------
+    // Report #24: a shield bash must NOT emit op53 PlayerChannelingStateChange
+    // -----------------------------------------------------------------------
+
+    /// The five bash abilities, by shipped template UUID.
+    const BASHES: [(&str, &str); 5] = [
+        ("cc768bae-a063-4885-8207-f39c6542fb36", "Guardbreaker"),
+        ("69ffa3fd-deb7-4824-bab6-ac6450f19676", "Harrying Bash"),
+        ("ba61ce46-163f-4a61-8ede-f5b7ae365e40", "Reflecting Bash"),
+        ("f9a2373b-a84f-4716-90ce-165baa2dd6ed", "Shield Bash"),
+        ("9b915ec3-c63b-4b62-b417-4c5436d45fc1", "Staggering Bash"),
+    ];
+    const FIREBALL: &str = "d07a8d30-9a1c-49b0-866d-97a8aa1534cf";
+
+    /// Cast `uuid` from slot 0 at slot 1 through the real cast path and return the
+    /// emitted frames.
+    fn cast(
+        combat: &mut MatchCombat,
+        uuid: &str,
+        tag: AbilityTag,
+        now: Instant,
+    ) -> Vec<(usize, Vec<u8>)> {
+        combat.fighters[0].loadout.abilities.push(EquippedAbility {
+            instance_uuid: uuid.to_string(),
+            level: 1,
+            tag,
+        });
+        let frame = messages::request_execute_ability(uuid);
+        let ea = input::parse_execute_ability(&frame).expect("synthesised op37 must parse");
+        resolve_ability_cast(combat, 0, 1, &frame, &ea, now)
+    }
+
+    fn gmids(out: &[(usize, Vec<u8>)]) -> Vec<u8> {
+        out.iter()
+            .filter_map(|(_, f)| messages::user_message_gmid(f))
+            .collect()
+    }
+
+    /// The production classifier must call every bash a `Maneuver`, or the gate in
+    /// `resolve_ability_cast` never fires on a real loadout and the fix is inert in
+    /// production while the test below still passes.
+    #[test]
+    fn the_five_bashes_classify_as_maneuvers() {
+        for (uuid, name) in BASHES {
+            assert_eq!(
+                super::super::loadout::ability_tag_for_template(uuid),
+                AbilityTag::Maneuver,
+                "{name} must classify as a Maneuver for the op53 gate to apply",
+            );
+        }
+        assert_eq!(
+            super::super::loadout::ability_tag_for_template(FIREBALL),
+            AbilityTag::Damage,
+            "Fireball is the control - it must NOT be a Maneuver",
+        );
+    }
+
+    /// Retail sends op53 for channelled spells only. Across 60 decrypted sessions the
+    /// ten abilities carrying an op53 are all spells, and the five bashes carry zero
+    /// between them despite 788 bash op38 echoes. We used to send one for every
+    /// ability - with a 0.0 s duration for a bash, since maneuvers ship no
+    /// `_channelDuration`. That is report #24's missing shield-bash animation.
+    #[test]
+    fn a_bash_emits_the_cast_echo_but_no_channeling_frame() {
+        for (uuid, name) in BASHES {
+            let now = Instant::now();
+            let mut combat = make_live_combat(now);
+            let out = cast(&mut combat, uuid, AbilityTag::Maneuver, now);
+            let ids = gmids(&out);
+
+            // Non-vacuity: the cast must actually have resolved. Without this, an
+            // ability rejected on cost or cooldown would emit nothing at all and
+            // "no op53" would pass for entirely the wrong reason.
+            assert!(
+                ids.contains(&38),
+                "{name}: expected the op38 cast echo, got gmids {ids:?}",
+            );
+            assert!(
+                !ids.contains(&53),
+                "{name}: a bash must not emit op53 - retail sends none across 788 \
+                 captured bash echoes. Got gmids {ids:?}",
+            );
+        }
+    }
+
+    /// The control, and what makes the test above non-vacuous: a real channelled
+    /// spell on the same path still gets its op53. A gate that suppressed op53
+    /// wholesale would pass the bash test and fail this one.
+    #[test]
+    fn a_spell_still_emits_its_channeling_frame() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let out = cast(&mut combat, FIREBALL, AbilityTag::Damage, now);
+        let ids = gmids(&out);
+        assert!(
+            ids.contains(&38),
+            "Fireball: expected the op38 cast echo, got gmids {ids:?}",
+        );
+        assert!(
+            ids.contains(&53),
+            "Fireball is channelled - it must still emit op53. Got gmids {ids:?}",
+        );
     }
 
     /// Op46 UP after a FULL-CHARGE hold (≥ CRIT_HOLD_HEAVY_SECS) → crit ×1.325 on a Light weapon.
