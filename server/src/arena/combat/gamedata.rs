@@ -427,6 +427,14 @@ pub struct WeaponStats {
     pub required_level: u16,
     /// Item tier (1..=10, smithy material tier).
     pub tier: u8,
+    /// Properties the TEMPLATE always carries: `(property_uuid, tier)`.
+    ///
+    /// Artifact effects live here rather than in the item instance's
+    /// `properties.ENCHANTING`, which is `null` on every captured artifact — so
+    /// dropping this field made all 24 artifacts pure stat-sticks. Ebony Mail's
+    /// poison aura, Dawnbreaker's fire damage and EDIR, Dragon's Blight's
+    /// armour piercing all arrive through here or not at all.
+    pub mandatory_properties: &'static [(&'static str, u8)],
 }
 
 /// All 370 weapon templates, **sorted by `uuid`** (binary-searchable).
@@ -445,6 +453,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "0140c7f3-c4b0-4804-add2-17f13376d57e",
@@ -460,6 +469,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "02503c3a-52f4-4d1a-b05c-75a76272966b",
@@ -475,6 +485,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "02e24de3-8a40-483c-a404-eee6a0016ed0",
@@ -490,6 +501,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "03507d71-e1dd-4963-85d8-a2152c5f94bc",
@@ -505,6 +517,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "03863f12-5202-4d44-aeaa-e1bf4ed118cb",
@@ -520,6 +533,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "039b26ec-53eb-4fbb-81f9-3a1343d876cb",
@@ -535,6 +549,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "03b1e366-3d2a-48b8-99f2-f06be005e207",
@@ -550,6 +565,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "054d7e97-0111-462c-8c3b-a5461d7d1c2a",
@@ -565,6 +581,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "05ac826b-fb7f-4c5d-b17c-648ca1d6ee1d",
@@ -580,6 +597,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "0631caaf-28a6-43a3-8ac3-763a5dd95614",
@@ -595,6 +613,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("af1e56bf-1974-452c-aa70-36b2140cbb07", 10), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10), ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 10)],
     },
     WeaponStats {
         uuid: "071f4b42-5356-49ca-b2f4-6df2056db241",
@@ -610,6 +629,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "074dc210-2cd0-4c9a-8c43-48b481d010c3",
@@ -625,6 +645,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "084b9f5b-a5e3-4000-8fa3-28e7f0e87cc0",
@@ -640,6 +661,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "0874712e-81e6-418f-8a86-ed0bfa6529d5",
@@ -655,6 +677,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "0970b90d-9b35-4d13-aecf-57ea97e7df2a",
@@ -670,6 +693,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "0aac930a-f25c-445f-878f-dbd6a3573730",
@@ -685,6 +709,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 40,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "0bb745aa-9a4a-483f-a23f-e8c773391321",
@@ -700,6 +725,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "0d138dcb-cdd0-4a04-b540-ee3db46f19e9",
@@ -715,6 +741,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "0e74f0ae-d58a-41aa-976f-014426a7d7f5",
@@ -730,6 +757,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "0f2f990b-99fd-4ac8-9fbb-2d45abcabe6a",
@@ -745,6 +773,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "11565fed-66a0-40a4-ac8d-65c7161c3283",
@@ -760,6 +789,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "11f62e71-c013-4b78-8d12-bf225bc73b4f",
@@ -775,6 +805,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("c40ed851-8777-4d09-b169-0223dae8f67d", 10), ("bf107d7d-8777-4411-b07a-56819a58a709", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
     },
     WeaponStats {
         uuid: "1201033d-4d70-405b-95a1-1e0cb827e180",
@@ -790,6 +821,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "12b5c065-2094-43f3-b7cc-260745bff3f0",
@@ -805,6 +837,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "12bc6bad-15df-4fa1-8335-22fbb4eb8d9f",
@@ -820,6 +853,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "132cb9e8-49c7-4b29-b61b-9541d24a0671",
@@ -835,6 +869,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 30,
         tier: 8,
+        mandatory_properties: &[("63b6c73a-af1a-4f95-8ffe-9434b8e68d56", 8), ("a869f868-c23f-45bb-9159-d62b42236a4a", 8), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 8)],
     },
     WeaponStats {
         uuid: "14333bde-b5ea-4f3e-9347-69f76cc7390e",
@@ -850,6 +885,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "14b4262e-3490-493e-8b24-6e870fe1bfc3",
@@ -865,6 +901,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "15459a64-96b7-473d-b4d8-9434891410a6",
@@ -880,6 +917,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "156ee6fd-0bd6-42b8-98ef-e51e248c7eae",
@@ -895,6 +933,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "161e8270-c07e-4d31-b952-bcddb8144ca9",
@@ -910,6 +949,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "16eeaee8-8a04-460b-9b98-42468b390969",
@@ -925,6 +965,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "172d5f1c-839a-4949-888d-9fdf80993001",
@@ -940,6 +981,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "174b6bec-9795-42cb-a4ac-a6312601e577",
@@ -955,6 +997,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "17760bf8-03a8-44a0-b2a8-73732fe60c3f",
@@ -970,6 +1013,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "179231f0-af9c-4d1d-8d8b-9d2d310d7116",
@@ -985,6 +1029,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "182da96a-01e4-4668-9e67-0abe80254233",
@@ -1000,6 +1045,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "1923fd01-e399-4f3d-865e-bcc1ac1694e8",
@@ -1015,6 +1061,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "19f7c6e0-dabd-48bd-abe9-51d9153fb3a9",
@@ -1030,6 +1077,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "1a6a2b2e-ec3d-479e-886d-725f496c5804",
@@ -1045,6 +1093,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "1a8bd31f-3538-41c6-8db5-76e31b4ce6d1",
@@ -1060,6 +1109,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "1ac5f725-b6e2-4bfa-b4bf-1b5787e7eaa5",
@@ -1075,6 +1125,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "1baaa5a1-ed9d-4817-8c39-c47b807aac0f",
@@ -1090,6 +1141,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "1d473c61-d4b3-4cea-9779-e76f30ae8736",
@@ -1105,6 +1157,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "1d6c0fb1-50e2-401f-939e-b8860d9fe026",
@@ -1120,6 +1173,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "1f174bab-d765-4f9c-917a-69d4c1abcd82",
@@ -1135,6 +1189,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("63b6c73a-af1a-4f95-8ffe-9434b8e68d56", 10), ("a869f868-c23f-45bb-9159-d62b42236a4a", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
     },
     WeaponStats {
         uuid: "1fc67296-aa50-4de8-b23e-11c80cee9361",
@@ -1150,6 +1205,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("af1e56bf-1974-452c-aa70-36b2140cbb07", 10), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
     },
     WeaponStats {
         uuid: "21e0b402-b1be-4bdc-822b-033d41bf9e84",
@@ -1165,6 +1221,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "21ed2758-5cf5-4b7d-9047-59bbdbd61820",
@@ -1180,6 +1237,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 50,
         tier: 10,
+        mandatory_properties: &[("af1e56bf-1974-452c-aa70-36b2140cbb07", 9), ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 9), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 9), ("6100fab3-3522-4ee3-bbdc-6063dba21c30", 0)],
     },
     WeaponStats {
         uuid: "21f8b677-c1a9-4d5f-87ef-294fc6ba4ba5",
@@ -1195,6 +1253,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 33,
         tier: 7,
+        mandatory_properties: &[("cc432e27-813c-4afa-a3df-d587cfd550d2", 7), ("9e2361af-1893-4c3d-8ce0-3894937c9972", 0)],
     },
     WeaponStats {
         uuid: "21f9f03f-250c-4f37-b725-b96733183e4c",
@@ -1210,6 +1269,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "22e7d97c-cb89-4bb4-8051-0673cdc20a3e",
@@ -1225,6 +1285,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "244ab654-adfd-4b63-acdd-80793d9bb8e7",
@@ -1240,6 +1301,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "24c5f3a7-d89a-4582-8d06-d6c59b2b34d3",
@@ -1255,6 +1317,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "25f94085-72b7-4b84-852d-679a50b31675",
@@ -1270,6 +1333,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "26e46ca5-cee6-45a4-9f46-41fb9364b0ec",
@@ -1285,6 +1349,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "2772e3de-814d-4b00-9ad1-a030e1d85f25",
@@ -1300,6 +1365,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "28000fc8-4208-4036-90d4-5e698b680d96",
@@ -1315,6 +1381,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 30,
         tier: 8,
+        mandatory_properties: &[("08ea75d0-5cf1-44a9-9816-d3c6740c4191", 8), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 8), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 8)],
     },
     WeaponStats {
         uuid: "29a02cb7-048b-4dc7-96f3-f684e3707c99",
@@ -1330,6 +1397,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "2b4c67f8-da25-4d80-9c8f-e08532f3bd54",
@@ -1345,6 +1413,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 30,
         tier: 8,
+        mandatory_properties: &[("c40ed851-8777-4d09-b169-0223dae8f67d", 8), ("bf107d7d-8777-4411-b07a-56819a58a709", 8), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 8)],
     },
     WeaponStats {
         uuid: "2f49aa6b-dc14-4e07-887e-9068a752ce5f",
@@ -1360,6 +1429,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("08ea75d0-5cf1-44a9-9816-d3c6740c4191", 10), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
     },
     WeaponStats {
         uuid: "309029c8-4c16-49f3-8947-ff643540af4c",
@@ -1375,6 +1445,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "30e1e024-6336-4395-ba7a-caf86977e313",
@@ -1390,6 +1461,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 10,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "32b04409-536c-4ac1-9a5f-b19419e13811",
@@ -1405,6 +1477,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "342335b4-064e-4856-9585-4500e2e13dc2",
@@ -1420,6 +1493,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "347d1331-f81c-468d-a6cd-cc412e72f87a",
@@ -1435,6 +1509,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "3567538a-18ea-4101-9380-8997b36cb65e",
@@ -1450,6 +1525,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "373d4247-0b86-4353-ab0a-27f884461d19",
@@ -1465,6 +1541,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "386a558b-1530-4839-a58d-1b68744fc316",
@@ -1480,6 +1557,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "38825725-21f4-4ab5-be4e-7ad615472d63",
@@ -1495,6 +1573,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "388dd1da-b5c2-4484-840b-56c7adace1d9",
@@ -1510,6 +1589,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 30,
         tier: 8,
+        mandatory_properties: &[("c40ed851-8777-4d09-b169-0223dae8f67d", 8), ("bf107d7d-8777-4411-b07a-56819a58a709", 8), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 8)],
     },
     WeaponStats {
         uuid: "3ae6d46a-bbc7-497c-8c1b-10d1f51a4453",
@@ -1525,6 +1605,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "3b3a73cb-50c6-4ef4-8c0a-549ad3b7151a",
@@ -1540,6 +1621,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "3bde9d20-14c7-4b15-b881-d593d7f0cd21",
@@ -1555,6 +1637,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "3c1de8ab-474f-4a68-a3a8-55cdf5efaea1",
@@ -1570,6 +1653,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "3d9627f1-81db-496e-8769-6e545d779fa3",
@@ -1585,6 +1669,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("5a145cf8-3a20-4b8a-bf6d-8ee1607d3417", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10), ("fea58213-6a41-4500-9f09-cd9c745bcc1e", 10)],
     },
     WeaponStats {
         uuid: "3e09e1ea-8763-4b3b-b994-49e03107f5ee",
@@ -1600,6 +1685,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "40ab6f8f-ef43-417a-a8e6-182837f4c10f",
@@ -1615,6 +1701,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "412eeed6-da52-4e20-a03f-ca8459f7792c",
@@ -1630,6 +1717,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "41b54ee3-0e05-4dfd-bcf0-44f70460b519",
@@ -1645,6 +1733,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("63b6c73a-af1a-4f95-8ffe-9434b8e68d56", 10), ("a869f868-c23f-45bb-9159-d62b42236a4a", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
     },
     WeaponStats {
         uuid: "4345a3ab-1582-48e4-845e-6aa2ba5dd766",
@@ -1660,6 +1749,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "451dc092-2df6-4299-81cc-4d38b6780c1d",
@@ -1675,6 +1765,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "45984297-ee47-4ed5-b7be-810e7b04c958",
@@ -1690,6 +1781,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "46b6c709-3409-4ecf-8bd4-5646fbb38e55",
@@ -1705,6 +1797,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "474165c0-7657-48ee-ab54-aa443f5c009e",
@@ -1720,6 +1813,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "48500816-3dd2-4e51-8ea9-e92064668197",
@@ -1735,6 +1829,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "48cf4bad-4f19-48e4-9f16-9c8c8cbf268d",
@@ -1750,6 +1845,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "48d1c9cc-2468-458d-9656-8da4a0ac6145",
@@ -1765,6 +1861,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "4b59cdbe-f857-4673-9e40-741ca06aa5d0",
@@ -1780,6 +1877,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 23,
         tier: 5,
+        mandatory_properties: &[("139024a7-3965-4e90-a4c1-60e3d7ca3133", 4), ("1674a05b-355a-4c01-9994-7a28e2654d4c", 5), ("1d85511d-66bf-46ad-87b5-bd7a115afafd", 4), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 3)],
     },
     WeaponStats {
         uuid: "4ca4837e-dbff-423a-8372-8c0a160c2e02",
@@ -1795,6 +1893,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "4cf81431-7cb5-41cd-9eea-608b7a112dff",
@@ -1810,6 +1909,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "4db5dc10-0283-4a54-8bb8-313a9c911016",
@@ -1825,6 +1925,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "4e841f5e-c5d7-47cd-899a-116846dbbfc0",
@@ -1840,6 +1941,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 6,
         tier: 2,
+        mandatory_properties: &[("13a46a9b-3d02-48c7-b57c-f9424f10ab1d", 1), ("874f28f1-cdc3-4af5-af4e-4e4d0e2a4969", 1), ("fea58213-6a41-4500-9f09-cd9c745bcc1e", 1)],
     },
     WeaponStats {
         uuid: "4edb65be-0ebc-4698-bb97-2a012656c238",
@@ -1855,6 +1957,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "512e8401-0d2a-4be6-b317-8793e11989f4",
@@ -1870,6 +1973,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "515450b1-ab21-4cbf-a8ed-c4e0e51df4c0",
@@ -1885,6 +1989,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 33,
         tier: 7,
+        mandatory_properties: &[("59c3b082-e57a-4243-ace5-9b55475e9b17", 8), ("8601e739-412b-4b6b-b4af-476cf1283a72", 0)],
     },
     WeaponStats {
         uuid: "525c267a-1891-462e-a833-5465f9ce20c8",
@@ -1900,6 +2005,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "52c5e882-a66d-422d-a074-5153142d511c",
@@ -1915,6 +2021,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "52ed3c48-5bc9-4236-baa2-983e3d5b3ea8",
@@ -1930,6 +2037,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "53167599-9ccc-4cf9-b275-40e1f2babc70",
@@ -1945,6 +2053,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "537af13c-8038-4e00-aece-20df3365aa71",
@@ -1960,6 +2069,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "54f92dc7-7b26-4b07-bcb4-6c14732ca3ba",
@@ -1975,6 +2085,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "56057258-58d7-4b4e-86ea-9ca47b04a14a",
@@ -1990,6 +2101,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "570c2405-ca30-4cdb-89f1-cca98a2f772c",
@@ -2005,6 +2117,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "58a0170b-5037-4487-8be4-04a2bc6cc22b",
@@ -2020,6 +2133,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "59333672-07ad-4def-a2ee-0d90568768e9",
@@ -2035,6 +2149,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "59c720fb-d761-4ad1-b14c-2aa8c1a4d554",
@@ -2050,6 +2165,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 18,
         tier: 4,
+        mandatory_properties: &[("9fdbb542-ff37-4199-93a3-d9444cca9090", 3), ("5a145cf8-3a20-4b8a-bf6d-8ee1607d3417", 3)],
     },
     WeaponStats {
         uuid: "5a47b50c-76f3-4880-a560-5a35806bbc4e",
@@ -2065,6 +2181,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("c40ed851-8777-4d09-b169-0223dae8f67d", 10), ("bf107d7d-8777-4411-b07a-56819a58a709", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
     },
     WeaponStats {
         uuid: "5a6c2eb7-b430-4574-aad9-72f0657fc694",
@@ -2080,6 +2197,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "5d64e438-2af7-4554-adcf-f46d2cb99930",
@@ -2095,6 +2213,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "5dbdf6ab-71ce-44ce-8d31-a8522291f43d",
@@ -2110,6 +2229,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "5e44502e-35cd-40b8-9a55-51fda3d2d7e7",
@@ -2125,6 +2245,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "606c8bf6-9dc7-4c5f-b44b-36eb02306c96",
@@ -2140,6 +2261,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "60994d55-022c-4918-a524-ce90e84b5922",
@@ -2155,6 +2277,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6225ea23-85e3-4d74-ac54-f91e77b36867",
@@ -2170,6 +2293,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6291cd12-cda1-438a-ad40-30175e02dd60",
@@ -2185,6 +2309,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "62d86cb2-54a2-4106-83b7-b8f4d11e276c",
@@ -2200,6 +2325,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "634b184a-b80c-4a57-9351-aaccb4d5c13a",
@@ -2215,6 +2341,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6359f8fd-0ff1-4579-bffa-a4e1ef72f56d",
@@ -2230,6 +2357,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "64b537a3-83c7-4bc7-bf9b-285b54045e1f",
@@ -2245,6 +2373,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "652a5ecf-56f5-4782-b1be-f70622fa1a52",
@@ -2260,6 +2389,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6542bb21-a7d7-4581-ae3d-95fd44533a19",
@@ -2275,6 +2405,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "657f9abf-11bf-4278-938d-2cc3e1573ef1",
@@ -2290,6 +2421,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 30,
         tier: 8,
+        mandatory_properties: &[("139024a7-3965-4e90-a4c1-60e3d7ca3133", 7), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 8), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 8)],
     },
     WeaponStats {
         uuid: "667b42ba-190b-4600-a289-feaee6af2af8",
@@ -2305,6 +2437,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "673fed3d-5d6b-40a4-a032-5848942914e2",
@@ -2320,6 +2453,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "68577fab-83f5-4bd1-983c-f396963ac14b",
@@ -2335,6 +2469,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "69448727-ce84-4942-bc04-47b26f67d1ef",
@@ -2350,6 +2485,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6a307853-3bc7-4cbc-a5bf-41b93110df8f",
@@ -2365,6 +2501,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6a970282-7c77-4ea6-858a-4243dbae300a",
@@ -2380,6 +2517,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6ab76008-dd08-461f-bdcc-6373799ea489",
@@ -2395,6 +2533,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 18,
         tier: 4,
+        mandatory_properties: &[("9fdbb542-ff37-4199-93a3-d9444cca9090", 3), ("fea58213-6a41-4500-9f09-cd9c745bcc1e", 1), ("4822df01-8163-4c11-8bde-3ffbb565de4b", 0)],
     },
     WeaponStats {
         uuid: "6acaf2f5-3c5a-4529-9392-9a6dfba09e3e",
@@ -2410,6 +2549,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6ae0f33c-edb4-4fbd-9cbc-ffede890ed12",
@@ -2425,6 +2565,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6ae666e4-875c-4c65-80d9-44ec626d0fda",
@@ -2440,6 +2581,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6cac9081-a5ca-4429-bccc-af745d8f98ab",
@@ -2455,6 +2597,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6d140514-aa61-4532-8d84-f9c9cda5c7d1",
@@ -2470,6 +2613,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6d4fd4bc-c439-4fcd-9004-85d9aa0c7bf4",
@@ -2485,6 +2629,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6dcd49db-7b92-4f34-9d29-e2c535bede2b",
@@ -2500,6 +2645,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6ddb56a9-0635-453d-bc76-43988bef433f",
@@ -2515,6 +2661,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6e0441a2-7577-4a9e-950e-e56449637a3c",
@@ -2530,6 +2677,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6f2ccd71-c9f2-437d-a07e-e32c9fda0c56",
@@ -2545,6 +2693,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6f4d3002-37f8-4396-9caf-33143f464911",
@@ -2560,6 +2709,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6f543736-441b-4068-bb51-d0829abc0cac",
@@ -2575,6 +2725,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "6fe63664-4252-4269-9f51-8546b5f138da",
@@ -2590,6 +2741,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "72310406-876a-415b-b50e-88d797accfa8",
@@ -2605,6 +2757,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "727ea9a4-0c59-4ea7-ab23-6400ad32030e",
@@ -2620,6 +2773,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "745244a6-0ac0-44e5-b728-5563df61e1e6",
@@ -2635,6 +2789,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "747e4b70-45ef-4081-ac7d-f688fdfc15e0",
@@ -2650,6 +2805,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "74876a6b-9e51-41d3-b44b-7b36381e5339",
@@ -2665,6 +2821,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "7542b407-43bf-4ff9-b0d1-e8280b630a25",
@@ -2680,6 +2837,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "7643bed4-801b-4b13-bbb1-4b276deb5631",
@@ -2695,6 +2853,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "767b01b9-42e3-4a9a-a263-f71799b8f6b9",
@@ -2710,6 +2869,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "767e0dde-f70c-4c27-b896-ac70ad6c8aed",
@@ -2725,6 +2885,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "768a8194-cda8-4a1a-b802-64b9b2e59901",
@@ -2740,6 +2901,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "7790f1c0-54b5-483d-940a-169a9bbd73ce",
@@ -2755,6 +2917,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "780cc7c6-a472-43ec-abdc-02419d0c0ade",
@@ -2770,6 +2933,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "785f023c-f9b5-4ad2-a874-b16458daf4ef",
@@ -2785,6 +2949,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "78f0e3a6-a538-4060-92e0-b0a5b5dfaf14",
@@ -2800,6 +2965,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "7964666b-e189-4aeb-99d7-ef3118769beb",
@@ -2815,6 +2981,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "7a8b3af3-c936-4e44-b81b-2b5157eddfb1",
@@ -2830,6 +2997,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "7bd71afd-f831-4be2-a086-2898ee17c30b",
@@ -2845,6 +3013,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "7bf2ddab-fa1e-45d5-a41c-e85de16b0597",
@@ -2860,6 +3029,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "7c291ca0-d86c-411e-b3d5-fdd8855c7e88",
@@ -2875,6 +3045,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "7d2dfa88-e7ca-4fd6-a173-862cfb077c04",
@@ -2890,6 +3061,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 44,
         tier: 9,
+        mandatory_properties: &[("9fdbb542-ff37-4199-93a3-d9444cca9090", 10), ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 10), ("eb885073-2576-4298-ae93-986f2cd261a2", 0)],
     },
     WeaponStats {
         uuid: "7d7fe9d2-3965-416f-839a-42f30663b78e",
@@ -2905,6 +3077,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "7dc650cf-4a9c-4650-b9fb-f1dcdb7192b9",
@@ -2920,6 +3093,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 30,
         tier: 8,
+        mandatory_properties: &[("af1e56bf-1974-452c-aa70-36b2140cbb07", 7), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 8), ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 8)],
     },
     WeaponStats {
         uuid: "7e354002-2d94-4296-a4a5-592f81ba04e3",
@@ -2935,6 +3109,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "7f0fbb92-1535-42a0-b34e-b6babd467a64",
@@ -2950,6 +3125,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "80344fa2-2c4a-4ef3-a5e3-7533b712a740",
@@ -2965,6 +3141,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "8140c378-f532-4845-a320-42fd16235db6",
@@ -2980,6 +3157,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "82ed9c7a-bda4-446d-a83f-586d239e2fb9",
@@ -2995,6 +3173,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "840be317-ad69-411b-8018-8e4e4988c1e4",
@@ -3010,6 +3189,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "85234482-0baf-4ac2-8dee-5e086368f7dc",
@@ -3025,6 +3205,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "8535e31c-a154-40e2-96af-cd5258a5ba8d",
@@ -3040,6 +3221,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "8579ebe1-204f-4735-b764-e4b891f27d78",
@@ -3055,6 +3237,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "85f117e7-5476-4938-aaf4-d700f044b90f",
@@ -3070,6 +3253,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "881e91f3-a5bb-4c71-ab42-39614cc4dc33",
@@ -3085,6 +3269,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "893142cb-42fe-432a-a363-bd92601d00e6",
@@ -3100,6 +3285,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "899b63a7-6eb7-4689-a450-8c6b507763c6",
@@ -3115,6 +3301,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 13,
         tier: 3,
+        mandatory_properties: &[("f8e9dec5-c6e7-4976-b24b-2155f1921692", 1), ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 1), ("10f57d40-98e9-4181-972b-d654f81afc27", 1)],
     },
     WeaponStats {
         uuid: "89b885bf-cbd4-405a-a19b-3bb945955e7c",
@@ -3130,6 +3317,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "8a1e3519-ecca-4116-9261-1eff11a7d865",
@@ -3145,6 +3333,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "8a69bdb2-d179-4f2d-984a-322f9397aedf",
@@ -3160,6 +3349,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 28,
         tier: 6,
+        mandatory_properties: &[("23746263-41c1-4023-8859-41e698dcf49d", 5), ("262ece9b-bd65-4876-b698-5926ca4422be", 5), ("59144365-ceb5-47a0-8f48-6eceecb15d2c", 0)],
     },
     WeaponStats {
         uuid: "8c6be63c-65e7-4855-b7f5-eb4e9fbdcb8d",
@@ -3175,6 +3365,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "8d5a227b-9660-4f6a-b3b7-c9e8cb76651a",
@@ -3190,6 +3381,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "8d7eb505-5531-4d57-9279-51fdbff6d211",
@@ -3205,6 +3397,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "8def746b-3102-457e-92fd-42cef6feb97b",
@@ -3220,6 +3413,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "8e4e4847-b204-4d92-b19d-9239063da50d",
@@ -3235,6 +3429,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "8f5d77e5-6db7-44ae-b7d4-a5b17d49bc1f",
@@ -3250,6 +3445,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "900b34ad-61c9-4f97-adac-4ff0f099de04",
@@ -3265,6 +3461,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "90381284-f800-4239-baa7-eef0f53daf21",
@@ -3280,6 +3477,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("139024a7-3965-4e90-a4c1-60e3d7ca3133", 10), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
     },
     WeaponStats {
         uuid: "905ee635-200e-445a-89de-db5ecbb17989",
@@ -3295,6 +3493,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9094f0d1-20c8-4013-ab38-77177a009a78",
@@ -3310,6 +3509,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9107fb63-f88b-45fa-bca9-7fe2f9bceb2c",
@@ -3325,6 +3525,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 50,
         tier: 10,
+        mandatory_properties: &[("63b6c73a-af1a-4f95-8ffe-9434b8e68d56", 10), ("a869f868-c23f-45bb-9159-d62b42236a4a", 10), ("be17fe64-c8f9-47e1-8803-49227119c2b3", 10), ("d6647f03-de86-40e2-9e7c-5b053f057d86", 0)],
     },
     WeaponStats {
         uuid: "912cd6ac-d0ec-480e-8565-f721baf41c95",
@@ -3340,6 +3541,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9141509a-54aa-4d43-8f03-350e67578a3d",
@@ -3355,6 +3557,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "91cc0563-6717-4275-abf5-a97eeee84847",
@@ -3370,6 +3573,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9348934d-c966-48f8-9780-112874cbeec5",
@@ -3385,6 +3589,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "95559755-dc57-4b0f-b71c-c37b73a06bdb",
@@ -3400,6 +3605,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "95fa311e-e025-46c7-8277-b4e880fa6544",
@@ -3415,6 +3621,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "965a1b6c-ac12-45c6-b4a5-25c3d7aec594",
@@ -3430,6 +3637,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("08ea75d0-5cf1-44a9-9816-d3c6740c4191", 10), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
     },
     WeaponStats {
         uuid: "96a1a962-e2ab-4d0d-a0af-63978e67e818",
@@ -3445,6 +3653,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "980c823b-8edc-463f-a6b0-f901a1db1dc5",
@@ -3460,6 +3669,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9814bcf0-a984-49e2-84f6-a8b0f3695f84",
@@ -3475,6 +3685,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "982a2fe2-c5d1-4aaf-ab43-bf80c90b669a",
@@ -3490,6 +3701,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9837e077-7dd4-4a93-97d8-d8348a17d0a0",
@@ -3505,6 +3717,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "99007305-7e07-42ae-a1b2-aa5f3fa08fd7",
@@ -3520,6 +3733,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9903bcc8-4565-418c-9bfe-e1898a3f08ee",
@@ -3535,6 +3749,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "99525bb7-84d4-4520-877d-2f21f6b059ec",
@@ -3550,6 +3765,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "995a487c-3221-4622-bfd3-67f8a7d08919",
@@ -3565,6 +3781,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "99c42ddf-815f-467a-9c1d-5b1dbceb61ba",
@@ -3580,6 +3797,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9a7e526e-00c3-4ed5-8df4-b774bcc0c873",
@@ -3595,6 +3813,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9a808759-3e96-4fc1-be3f-c22def38e886",
@@ -3610,6 +3829,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9af187a5-a7b9-4999-b4b4-1f07c34c0212",
@@ -3625,6 +3845,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9bef0d75-3ad0-49fd-aeb1-4c1f212e67a0",
@@ -3640,6 +3861,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9c61729e-2117-4291-9e2b-fc4789fe0444",
@@ -3655,6 +3877,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9ce6b55d-3661-47b4-8d27-b3040550533a",
@@ -3670,6 +3893,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9d0fb326-bf7f-4380-bb91-3d7aa16ec4a5",
@@ -3685,6 +3909,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9d13d24d-f4df-4653-871a-1f0401802025",
@@ -3700,6 +3925,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9d269f59-e9c2-46ae-8b19-b68e13365387",
@@ -3715,6 +3941,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9d70a58c-75dc-4724-82e3-33a70ea2f803",
@@ -3730,6 +3957,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9d95e5d8-0534-4c80-8edc-69277f3355c5",
@@ -3745,6 +3973,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9eff3765-6849-4f46-8cfb-afd43aae4b32",
@@ -3760,6 +3989,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9f47f292-0e97-4234-ae50-c15399aea627",
@@ -3775,6 +4005,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "9f62e950-87ac-4b18-bfd1-8f958f0f3f70",
@@ -3790,6 +4021,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "a0058769-7d47-43da-8aaa-5d2c60ca6de6",
@@ -3805,6 +4037,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "a04c6261-f0bb-48fb-84e4-51517bc04b7c",
@@ -3820,6 +4053,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "a0d7dd5e-692e-4fbb-bbf2-19c6a874f3f5",
@@ -3835,6 +4069,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 33,
         tier: 7,
+        mandatory_properties: &[("5dc5d4e7-75a3-4fd2-87d9-bb9b8723cae7", 0)],
     },
     WeaponStats {
         uuid: "a1cda4eb-7b4a-47c9-a8c8-627a2b931ddc",
@@ -3850,6 +4085,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "a3afdc1f-dbb1-4f37-b8e9-2c7d1fb31db3",
@@ -3865,6 +4101,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "a5566f9d-a3df-42f6-85ce-5670d1a40fa5",
@@ -3880,6 +4117,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "a56f9a46-85d3-4d11-8da3-f8073a2eb064",
@@ -3895,6 +4133,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "a61b7342-50dc-43ea-aeca-fd7eb4200cc0",
@@ -3910,6 +4149,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "a6698394-a03a-4ae8-96c9-a71f26bfb181",
@@ -3925,6 +4165,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "a6966f6a-bc99-44d2-a188-b1586e12132a",
@@ -3940,6 +4181,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "a7a6660c-e46a-479b-bcfc-cdd09752328e",
@@ -3955,6 +4197,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "a8a1bcd3-59fa-4545-ab71-29bcee1378f9",
@@ -3970,6 +4213,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "a94fd137-a4f6-4018-b457-b5097ee11812",
@@ -3985,6 +4229,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "a9a0800e-4363-41a0-ae4c-465f2d1c0089",
@@ -4000,6 +4245,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "aa13c5c7-864d-4b77-9d1d-2909b7cd4d92",
@@ -4015,6 +4261,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "aadb81ec-bcca-422d-ac3e-0519b83ab022",
@@ -4030,6 +4277,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "aadb8911-d7bb-4ea9-a7f4-6aeb99ad8ed3",
@@ -4045,6 +4293,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ab52dd8d-9292-4055-be5e-368b3c62db5f",
@@ -4060,6 +4309,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "abb5db28-a599-450c-b3d4-315e60bde6e1",
@@ -4075,6 +4325,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ade3e935-3882-44bc-9c3f-583c6da7c5fb",
@@ -4090,6 +4341,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ae6d3eea-d5a0-4948-9ad4-8202a4a59de8",
@@ -4105,6 +4357,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "af7759d9-f38e-4384-bf36-1de0c3d150a7",
@@ -4120,6 +4373,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 28,
         tier: 6,
+        mandatory_properties: &[("9fdbb542-ff37-4199-93a3-d9444cca9090", 5), ("652d5ac9-3076-405b-a163-dde1a950fb26", 5)],
     },
     WeaponStats {
         uuid: "b0e1d1b5-fbe5-484f-aa05-b2d7fe592783",
@@ -4135,6 +4389,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "b17c79b5-3c4b-4f22-b8f8-149c393218d2",
@@ -4150,6 +4405,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "b1b8aa27-152c-42f2-b3a1-90ba6fcf4bf6",
@@ -4165,6 +4421,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "b3990bd6-4784-41ca-9e05-e53e77cdef73",
@@ -4180,6 +4437,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "b3ba11cd-21c6-46de-9e63-7564f437363c",
@@ -4195,6 +4453,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "b8326c8d-9537-4507-ad10-bfda780ab540",
@@ -4210,6 +4469,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "b89474fa-ed6e-4006-91b3-8b7b455b978d",
@@ -4225,6 +4485,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "b8d7291b-f1d6-4037-9b91-b9da693aa0e6",
@@ -4240,6 +4501,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "b9404aa2-ec6d-430d-90f4-e17411221bc7",
@@ -4255,6 +4517,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "bacb3089-2378-45d2-b717-2dd3f01e5939",
@@ -4270,6 +4533,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "bb037815-a606-4dea-9ad9-7792b83b127b",
@@ -4285,6 +4549,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "bb45d4a9-e29d-43c2-9e0d-90c5fd06dc62",
@@ -4300,6 +4565,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "bdc7b6f4-d304-477e-b058-fb97d9acec1f",
@@ -4315,6 +4581,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "bdcc2e6c-e464-483e-a5e9-5f380ea5c192",
@@ -4330,6 +4597,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "be1484e6-c156-47db-bdab-3cf5b75096a0",
@@ -4345,6 +4613,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 23,
         tier: 5,
+        mandatory_properties: &[("464bedb7-a631-43b6-a2df-f65f089d39da", 6), ("5a145cf8-3a20-4b8a-bf6d-8ee1607d3417", 4), ("94aa3774-cd7e-400c-9d17-a4652fb88a93", 4), ("80980773-a388-4f71-9ba5-ac69a7e307be", 3)],
     },
     WeaponStats {
         uuid: "be5b7eed-c53f-4dca-8853-eeda797804f8",
@@ -4360,6 +4629,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "beb26169-965e-4b77-9baa-f3d6a3a0980b",
@@ -4375,6 +4645,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c0384643-5f94-419e-9ada-b498a17cfa21",
@@ -4390,6 +4661,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c10f8e7f-146d-432f-b8d3-5d7c39cc64b2",
@@ -4405,6 +4677,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c12d107b-5dc7-4cb3-8166-23644e94d03a",
@@ -4420,6 +4693,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c16518e9-065c-4d96-b866-f718ab4287ba",
@@ -4435,6 +4709,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c1d682a7-d07d-43c9-b022-c3a033a6976d",
@@ -4450,6 +4725,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c29abcdd-505d-4ffd-a6d7-b094e842d449",
@@ -4465,6 +4741,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c34f8b76-0b45-4702-a37f-e363e6e59cf6",
@@ -4480,6 +4757,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c451f484-bde1-47d9-87af-137688216c35",
@@ -4495,6 +4773,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c4539fa0-ef1f-43de-8372-c339ab52b063",
@@ -4510,6 +4789,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c469682f-6fb5-4323-b06e-b20c21d0ad44",
@@ -4525,6 +4805,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c4b0634d-7f3a-4afd-9724-dfd4adf427b3",
@@ -4540,6 +4821,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c4d6db09-6aec-4447-bec3-65aefeb79823",
@@ -4555,6 +4837,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c4e077d7-2a55-4b4d-a5b8-bcec9121d3d6",
@@ -4570,6 +4853,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c64765ec-85fb-4265-b77d-ad9d8bb22298",
@@ -4585,6 +4869,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c756bb4f-3717-4e18-a003-23f1fa0b3f32",
@@ -4600,6 +4885,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c7eceb24-878e-49b9-b5a6-5ed2a65a4bd7",
@@ -4615,6 +4901,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c83447e1-740b-4db8-accf-276e3e35623d",
@@ -4630,6 +4917,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c83e2044-6c37-470a-8c5e-a6d09f9f858c",
@@ -4645,6 +4933,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "c8702c49-aced-4255-9f74-45a12352b751",
@@ -4660,6 +4949,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ca1e2d0f-b902-4c82-b8d6-e82b83dcc9e0",
@@ -4675,6 +4965,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 38,
         tier: 8,
+        mandatory_properties: &[("c40ed851-8777-4d09-b169-0223dae8f67d", 8), ("bf107d7d-8777-4411-b07a-56819a58a709", 8), ("98757a01-33b8-40ea-bb45-6acd89811ae3", 8), ("9c4f5df1-9c67-4557-a103-822797ce58b4", 0)],
     },
     WeaponStats {
         uuid: "ca6ca2b2-5152-4b3a-822e-2293790b7454",
@@ -4690,6 +4981,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "cadac95d-bf21-4c62-9d6a-23cafccfb292",
@@ -4705,6 +4997,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "cb942551-5e93-493d-ab61-0d8ccfd9fe85",
@@ -4720,6 +5013,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "cbd15ed5-9a32-447c-8fa5-ee547f1f685c",
@@ -4735,6 +5029,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "cbe1b160-74c9-433b-aa7a-aa8c339f3087",
@@ -4750,6 +5045,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "cc3de495-c8d3-497d-9d1e-f9c4e014f54f",
@@ -4765,6 +5061,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "cdbabba6-a6a2-46ed-a086-93d77acc274a",
@@ -4780,6 +5077,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ce0c2c25-98d6-48c9-a4db-80f85506d191",
@@ -4795,6 +5093,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ce7acc15-5ab3-4c33-b349-da03d7222c5f",
@@ -4810,6 +5109,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "cf218589-5e95-4dcf-a91a-e91406c74ba7",
@@ -4825,6 +5125,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "cf3e7430-ef8d-4d57-95be-773373540f99",
@@ -4840,6 +5141,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "cfa0d17e-401f-45a8-8ca3-872a8f486b79",
@@ -4855,6 +5157,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "cfa5b02b-ae0c-486a-babb-d6dc76fb1a73",
@@ -4870,6 +5173,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d028c583-84bf-4cde-a0be-a648a5efa563",
@@ -4885,6 +5189,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d0386ef9-9e0f-47a8-b091-976def4d63b2",
@@ -4900,6 +5205,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d0e0885e-85cc-407f-b8c2-27836551435c",
@@ -4915,6 +5221,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d21205fe-0009-4208-bffd-6c5ca42938ad",
@@ -4930,6 +5237,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d244dfe8-1ae0-43a7-8146-2b2cef44521c",
@@ -4945,6 +5253,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d257c893-cbaf-4abd-bf73-5a680fcfe018",
@@ -4960,6 +5269,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d25e2ddd-854a-4e36-b970-d00c1f893bd4",
@@ -4975,6 +5285,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d2c97cf1-60ed-461e-8c58-06841df84dd7",
@@ -4990,6 +5301,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d317fe01-641f-4a96-931d-0f0e10f10702",
@@ -5005,6 +5317,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d3ce5d9d-c75b-4926-b08a-0ee1d01da819",
@@ -5020,6 +5333,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d4e55349-36b7-4adf-b16f-19b35368a7cd",
@@ -5035,6 +5349,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d501df03-0366-4ee7-9808-5626d1b5f58a",
@@ -5050,6 +5365,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d55700e0-16c5-4e92-9b6a-2d5f38f0ea75",
@@ -5065,6 +5381,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d7fbfbff-3a86-4f20-8301-fe9f28133584",
@@ -5080,6 +5397,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d85462ed-fa08-4d38-9718-db7c975edba1",
@@ -5095,6 +5413,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d86ca585-68b4-4133-9773-90dc7a2ebae8",
@@ -5110,6 +5429,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d9712b22-a50b-4ee9-b59e-b99edd2278ef",
@@ -5125,6 +5445,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "d9f8bb82-0e42-4061-aa5a-fc4be083693a",
@@ -5140,6 +5461,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "da0cf5aa-6d37-48da-8b18-3f4e914145d3",
@@ -5155,6 +5477,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 50,
         tier: 10,
+        mandatory_properties: &[("af1e56bf-1974-452c-aa70-36b2140cbb07", 9), ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 9), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 9), ("72893e14-4bfe-4eca-b556-3b217c8dc9bf", 0)],
     },
     WeaponStats {
         uuid: "da35b882-dde4-44ce-ad03-8d472c20b91b",
@@ -5170,6 +5493,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "dad106ff-62e9-4d23-b7a7-e897b554bd5d",
@@ -5185,6 +5509,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "dae84e5b-6345-480d-af80-6d96eb90637c",
@@ -5200,6 +5525,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "db5a2e9e-be6a-49f0-8158-03669791bd91",
@@ -5215,6 +5541,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("63b6c73a-af1a-4f95-8ffe-9434b8e68d56", 10), ("a869f868-c23f-45bb-9159-d62b42236a4a", 10), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10)],
     },
     WeaponStats {
         uuid: "dc733e9f-d69e-4fb6-bcc3-4ba4cbfaf527",
@@ -5230,6 +5557,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "dc8f205f-577a-4239-a0f7-4625230aa145",
@@ -5245,6 +5573,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "dcaaade2-7eb6-4175-876b-f40a35a36919",
@@ -5260,6 +5589,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ddce8d9f-154f-4cb3-8376-e12159eaf634",
@@ -5275,6 +5605,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "dddadcb6-81a1-4e16-88e0-c141e6c87e0d",
@@ -5290,6 +5621,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "dfa6be04-f10e-46ff-8ba8-8d7b4bb0ce3b",
@@ -5305,6 +5637,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "e3e4b409-60c6-4ba9-aa5d-5fbdc5621cb0",
@@ -5320,6 +5653,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "e41154c6-dcfd-48af-b808-24bb2d259aee",
@@ -5335,6 +5669,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "e5f4f10d-2607-49ff-955c-43d4e2b260d5",
@@ -5350,6 +5685,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "e7b0e118-86d2-4251-8bd0-2fc8958cec59",
@@ -5365,6 +5701,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "e86a6f9a-4e40-40d6-a9dd-1036b4190caa",
@@ -5380,6 +5717,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 13,
         tier: 3,
+        mandatory_properties: &[("a9b9695e-78f6-42cb-9f54-5f2e11e3cafd", 1), ("98d45845-ffd2-4e99-a2b4-acb270aa9666", 0)],
     },
     WeaponStats {
         uuid: "ea66242a-82a2-42da-a3f0-ea37f33bc407",
@@ -5395,6 +5733,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ea727af8-8f45-412e-9cba-8b269412046f",
@@ -5410,6 +5749,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ebcdf42d-c7d1-4bdf-9f25-15200fa5ddf2",
@@ -5425,6 +5765,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ebea463a-8084-400c-b583-6fab3fab0258",
@@ -5440,6 +5781,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("af1e56bf-1974-452c-aa70-36b2140cbb07", 10), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
     },
     WeaponStats {
         uuid: "ec9f3927-6a79-4ac0-a0a5-0babe46892ba",
@@ -5455,6 +5797,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ee1ff934-d84c-4c1b-a2b0-974d8a8a8501",
@@ -5470,6 +5813,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ef2d3e37-5703-4091-ac44-f94367098bef",
@@ -5485,6 +5829,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ef2e3d2d-b42e-4538-b8c5-5867dd2ba88d",
@@ -5500,6 +5845,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ef6f6965-f75d-4443-a992-630709262c0f",
@@ -5515,6 +5861,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "efb049d6-d787-49d2-b94e-c23cfda0d297",
@@ -5530,6 +5877,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "efb6d38f-ecc9-47bd-bde2-397cd35d888b",
@@ -5545,6 +5893,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "f0135579-e4af-413e-81b5-a0eb6fcb3371",
@@ -5560,6 +5909,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "f083d578-b181-4f82-9cf2-f0c8def9272c",
@@ -5575,6 +5925,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "f16bf157-d02f-40ae-b271-9cc06a50b9cc",
@@ -5590,6 +5941,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "f25cd627-34ef-4b00-930f-e797e1d893db",
@@ -5605,6 +5957,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "f263a284-00cb-4c2c-9012-6455df1e8ee3",
@@ -5620,6 +5973,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "f2d95dae-92b4-4f84-ab6d-bba4469031da",
@@ -5635,6 +5989,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "f3ee5b67-5aca-48fc-97de-834dbe9a0059",
@@ -5650,6 +6005,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "f40cc035-f2d6-43b9-8be8-66ce483ce71e",
@@ -5665,6 +6021,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "f42c7165-635f-4430-9490-7cf0799ffb32",
@@ -5680,6 +6037,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "f49b1546-8d71-4d68-98e8-9ec706a11b2a",
@@ -5695,6 +6053,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "f4f65a35-7fee-4ee8-9fcc-7d792001ab7d",
@@ -5710,6 +6069,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "f644872a-3723-4fe5-b0a0-edfdefdba28c",
@@ -5725,6 +6085,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "f7475d9a-7a3a-426e-b604-05afa46a2b05",
@@ -5740,6 +6101,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "f7e25d17-1fef-4cca-a18e-0d4faaaa6eda",
@@ -5755,6 +6117,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "f9176e04-09bd-4785-a473-0110d7129b99",
@@ -5770,6 +6133,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "fa1a3a6e-6752-4157-b7a6-f8ec19c12e7e",
@@ -5785,6 +6149,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::LightHammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "fa92876c-1840-4610-88ea-e5fa9d7b1639",
@@ -5800,6 +6165,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "fafd68b5-1f3f-481d-a5b6-862e640af6e8",
@@ -5815,6 +6181,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "fb0f0f5c-2814-446c-9ca5-166062e091c5",
@@ -5830,6 +6197,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "fb4cd249-fb01-4604-8cf3-5bc3e4c9a4d8",
@@ -5845,6 +6213,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "fc2d457f-8c4f-4af1-8de0-628814fb7834",
@@ -5860,6 +6229,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "fdc258c6-91c6-4a59-a35b-0f9bea15f0d5",
@@ -5875,6 +6245,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "fe4599df-d7a4-4f7e-aaf5-9a9cfa917303",
@@ -5890,6 +6261,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "fe798cb9-b5bf-4c19-bf7f-15ba4207a70d",
@@ -5905,6 +6277,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "fea76505-2356-4040-9d5a-feaadb5efaea",
@@ -5920,6 +6293,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "febbfefd-ba1d-4e42-9d93-9ecff222a012",
@@ -5935,6 +6309,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ff0589e4-03c4-46dd-b943-60641b080a73",
@@ -5950,6 +6325,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ff1f3743-5092-49cc-8e10-39c524cea07c",
@@ -5965,6 +6341,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::HandAxe,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     WeaponStats {
         uuid: "ffe89dce-b3c8-4904-9cfc-17c64bcc01b3",
@@ -5980,6 +6357,7 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
 ];
 
@@ -6007,6 +6385,14 @@ pub struct ArmorStats {
     pub required_level: u16,
     /// Item tier.
     pub tier: u8,
+    /// Properties the TEMPLATE always carries: `(property_uuid, tier)`.
+    ///
+    /// Artifact effects live here rather than in the item instance's
+    /// `properties.ENCHANTING`, which is `null` on every captured artifact — so
+    /// dropping this field made all 24 artifacts pure stat-sticks. Ebony Mail's
+    /// poison aura, Dawnbreaker's fire damage and EDIR, Dragon's Blight's
+    /// armour piercing all arrive through here or not at all.
+    pub mandatory_properties: &'static [(&'static str, u8)],
 }
 
 /// All 254 armor templates, **sorted by `uuid`**.
@@ -6020,6 +6406,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "00aae6fe-458a-42e9-b0c4-2ad1e7ee914d",
@@ -6030,6 +6417,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "00ba1e1f-b24b-4a41-a2a8-e4cbdfb60d1b",
@@ -6040,6 +6428,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "01d19d80-cd29-4afc-80d1-0d8ff4a0219f",
@@ -6050,6 +6439,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "023bbfbb-d156-46ce-8eb9-2cad079142fd",
@@ -6060,6 +6450,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "040c9078-6c7d-4bd8-b834-f8974e573146",
@@ -6070,6 +6461,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 13), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 13)],
     },
     ArmorStats {
         uuid: "046053f6-21a8-46ec-8fa6-6eb8e520ac48",
@@ -6080,6 +6472,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 30), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 30)],
     },
     ArmorStats {
         uuid: "0781c33a-d73c-4d61-894f-2fbc103b0a32",
@@ -6090,6 +6483,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "08b25643-7449-4012-9591-611fc6228f9a",
@@ -6100,6 +6494,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "09f736c8-528e-4a4c-bf42-189e2b06543e",
@@ -6110,6 +6505,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "0a354320-1b3a-4349-bf5c-da6178523e09",
@@ -6120,6 +6516,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 30,
         tier: 8,
+        mandatory_properties: &[("da0ebf22-6d7b-4504-bfc1-b78b674c7c5c", 8), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 8), ("10f57d40-98e9-4181-972b-d654f81afc27", 8)],
     },
     ArmorStats {
         uuid: "0a407b83-d146-438b-bfe5-1ad95b7f2bf7",
@@ -6130,6 +6527,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 29), ("11af0ed4-72de-4884-90d1-d465078247bc", 29)],
     },
     ArmorStats {
         uuid: "0a7a1e8b-29ae-4053-9cbb-b1584386fe78",
@@ -6140,6 +6538,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 29), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 29)],
     },
     ArmorStats {
         uuid: "0b9263a4-e482-4bc7-a183-ba0aeda1eb22",
@@ -6150,6 +6549,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "0c2869fb-3a95-45c6-8dcc-706d43f0fab0",
@@ -6160,6 +6560,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 20), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 20)],
     },
     ArmorStats {
         uuid: "0c39d0f3-79c8-4e58-b435-3622a42e4d3d",
@@ -6170,6 +6571,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 10), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10), ("10f57d40-98e9-4181-972b-d654f81afc27", 10)],
     },
     ArmorStats {
         uuid: "0e24274c-1f9f-4a75-b724-59237776a6f5",
@@ -6180,6 +6582,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "0e67f3fc-8988-473f-ad7b-b49abbb89b88",
@@ -6190,6 +6593,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "1063c3f9-1bbf-4962-b80d-fb9832075c1c",
@@ -6200,6 +6604,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 10), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 10)],
     },
     ArmorStats {
         uuid: "12ab9076-3c03-4e62-8f89-f36fbe08bd0c",
@@ -6210,6 +6615,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "12c4920e-a9e0-4498-b134-3ce66fb9558f",
@@ -6220,6 +6626,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 6,
         tier: 2,
+        mandatory_properties: &[("dbc82d4d-3be1-4735-af21-316c54cfae55", 1), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 1), ("5d3eb782-7789-4f28-81b8-3b547f6633ea", 1), ("6c23174f-d4a4-4b4d-8dd7-88253b934b5a", 0), ("82f79c45-cf51-4287-9215-f53a75a19757", 42)],
     },
     ArmorStats {
         uuid: "13694c03-9b48-4980-be36-408c1c5aa9d4",
@@ -6230,6 +6637,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "15f9963e-059c-464c-86ad-3a7eaa7cea9d",
@@ -6240,6 +6648,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 30), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30)],
     },
     ArmorStats {
         uuid: "167a5a42-9c76-4396-a02e-479ecaa15928",
@@ -6250,6 +6659,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "167ce4ec-a043-48ae-bd9c-037ad90f15b4",
@@ -6260,6 +6670,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "172fed3b-0f68-4858-a9b3-169782010b6f",
@@ -6270,6 +6681,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "17f9a8d1-8b89-4efe-bd1c-2bbe3da84f22",
@@ -6280,6 +6692,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 40,
         tier: 9,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "19bf17ce-784c-4ab6-b1a4-e517f0e5f2b7",
@@ -6290,6 +6703,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 22), ("01842871-7f8c-48c1-86ce-6576601d6f02", 22)],
     },
     ArmorStats {
         uuid: "19dced7a-6fc2-41e4-961f-0ec6ec8faa0c",
@@ -6300,6 +6714,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "1a8c007c-5fbb-421d-bc6e-d0144c19e0dc",
@@ -6310,6 +6725,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 8), ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 8), ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 8), ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 20), ("01842871-7f8c-48c1-86ce-6576601d6f02", 20)],
     },
     ArmorStats {
         uuid: "1acd0bf2-db47-4fdd-ba0e-aa89d312f3f5",
@@ -6320,6 +6736,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "1c6fe3b5-def5-45d8-9b34-4962765f5431",
@@ -6330,6 +6747,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 30), ("01842871-7f8c-48c1-86ce-6576601d6f02", 30)],
     },
     ArmorStats {
         uuid: "1ca43e6a-be5b-4161-9377-d626eab14740",
@@ -6340,6 +6758,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "1de04edd-0089-4516-8b60-434e781771d6",
@@ -6350,6 +6769,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "1f763acc-0aee-4e69-beb3-28a672aa62d5",
@@ -6360,6 +6780,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 15), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 15)],
     },
     ArmorStats {
         uuid: "207acfa0-2d32-4db6-8778-216dbe3a0e8e",
@@ -6370,6 +6791,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "208d05ed-74bf-4fef-b5e1-ed407d52432f",
@@ -6380,6 +6802,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 23), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 23)],
     },
     ArmorStats {
         uuid: "21218dd7-596a-401c-a079-a30907a2fa66",
@@ -6390,6 +6813,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 30,
         tier: 8,
+        mandatory_properties: &[("5297713f-c60e-42fd-ade0-500daf0d632e", 7), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 8), ("10f57d40-98e9-4181-972b-d654f81afc27", 8)],
     },
     ArmorStats {
         uuid: "21a977f0-1382-4956-a7ce-afe9bb8f0fe7",
@@ -6400,6 +6824,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("5297713f-c60e-42fd-ade0-500daf0d632e", 10), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10), ("10f57d40-98e9-4181-972b-d654f81afc27", 10), ("82f79c45-cf51-4287-9215-f53a75a19757", 30), ("01842871-7f8c-48c1-86ce-6576601d6f02", 30)],
     },
     ArmorStats {
         uuid: "228f2ef9-c63e-4f26-8616-274e3e3456c8",
@@ -6410,6 +6835,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "239453b0-6b7d-4a8b-bccc-50563d51ccfb",
@@ -6420,6 +6846,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 22), ("01842871-7f8c-48c1-86ce-6576601d6f02", 22)],
     },
     ArmorStats {
         uuid: "2571f818-6ae4-4355-b89a-4a6253089e6c",
@@ -6430,6 +6857,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "2648b379-d118-48c0-a893-57bba6f85d5f",
@@ -6440,6 +6868,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "295cbc17-a845-4788-8950-3f841b5fc57b",
@@ -6450,6 +6879,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "29c8803f-3db9-4949-bd69-d32efde9f714",
@@ -6460,6 +6890,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "2aedce5f-fe36-423d-a1d1-67704d232760",
@@ -6470,6 +6901,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 20), ("01842871-7f8c-48c1-86ce-6576601d6f02", 20)],
     },
     ArmorStats {
         uuid: "2af57d1b-2674-4dd5-b981-c3e7baca84bf",
@@ -6480,6 +6912,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "2c9ac3da-4a90-4fcb-bb59-4202fdecffe0",
@@ -6490,6 +6923,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 30), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30)],
     },
     ArmorStats {
         uuid: "2d870d4b-e242-4267-8d0f-b1bce775a0dc",
@@ -6500,6 +6934,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "2e1fd199-7d1e-4ac1-b6a1-c51d3a92389b",
@@ -6510,6 +6945,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "2f2ca094-8e82-49ba-8fa0-c8dc9f3138d0",
@@ -6520,6 +6956,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 19), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 19)],
     },
     ArmorStats {
         uuid: "2f62ac95-a300-4bab-b39b-f2574224279a",
@@ -6530,6 +6967,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 70)],
     },
     ArmorStats {
         uuid: "2f74d8bd-69a3-42d9-a58e-1e52c3b7b1ad",
@@ -6540,6 +6978,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "2fee3aa3-7ce8-4f28-85fc-bc03bf467bea",
@@ -6550,6 +6989,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 10), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10), ("10f57d40-98e9-4181-972b-d654f81afc27", 10)],
     },
     ArmorStats {
         uuid: "3152a7c9-bdbc-46c8-b661-b99c58ce0a01",
@@ -6560,6 +7000,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "31e8ee1f-076b-46d9-b8ff-8d4f87faa244",
@@ -6570,6 +7011,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "32794b6c-eba7-4535-967c-69f89bbb6599",
@@ -6580,6 +7022,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "333d367c-d490-45be-b9ed-0429eed8e491",
@@ -6590,6 +7033,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "342620e5-31fc-4dd3-8f78-50a8f6d2a446",
@@ -6600,6 +7044,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "35552ecd-f584-43bf-be8c-50fe5474022c",
@@ -6610,6 +7055,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 30), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30)],
     },
     ArmorStats {
         uuid: "36839916-9d47-4d9e-bace-d45acd184cbf",
@@ -6620,6 +7066,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "37d25e27-ce74-4a40-96c7-6f042ce9eb9a",
@@ -6630,6 +7077,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "38d48d68-684e-4394-996b-e0922b2a7f8a",
@@ -6640,6 +7088,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "394380ed-00cb-4b7d-b868-b2b012ef2420",
@@ -6650,6 +7099,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "3c974366-7f94-4d29-b0d2-8bc7b8b74e64",
@@ -6660,6 +7110,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "3d1a4db9-6a16-4c56-af55-7a612ceb2dc3",
@@ -6670,6 +7121,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "3f0f41ec-6e92-40c4-9aab-9b58ab02f41b",
@@ -6680,6 +7132,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 10), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 10)],
     },
     ArmorStats {
         uuid: "4079609b-9692-4742-aab7-6701d9b34d97",
@@ -6690,6 +7143,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 60)],
     },
     ArmorStats {
         uuid: "40d31be2-28c6-41dd-9e36-1e6e0b6487db",
@@ -6700,6 +7154,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "42b6fad8-5ac9-4215-aeff-133715c4c22e",
@@ -6710,6 +7165,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "43243245-e75a-4501-a31f-7d92cede29ed",
@@ -6720,6 +7176,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "43cdb462-23ed-4045-9e78-19aabb7ace1e",
@@ -6730,6 +7187,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "43df600e-8db3-49a5-9e5a-6e679390925e",
@@ -6740,6 +7198,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "4535a4bf-490a-46d5-b49c-a9bc0cc81fe6",
@@ -6750,6 +7209,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 18), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 18)],
     },
     ArmorStats {
         uuid: "476f7ffd-130b-45c4-be06-9a1563af9aa1",
@@ -6760,6 +7220,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "477e7add-c76a-4692-8424-6a52aceef75b",
@@ -6770,6 +7231,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "478547d5-2fef-469d-a287-9425a0729e46",
@@ -6780,6 +7242,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "48879d04-5675-4f64-8198-1cdef1e96c8a",
@@ -6790,6 +7253,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 50)],
     },
     ArmorStats {
         uuid: "49698526-0c8f-4cd7-bab4-f5c802cbf6ad",
@@ -6800,6 +7264,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 70)],
     },
     ArmorStats {
         uuid: "4a9fd901-aaf8-40bd-941e-971febf4daf8",
@@ -6810,6 +7275,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 51)],
     },
     ArmorStats {
         uuid: "4b7b59bb-b3e9-4d24-b551-9885550dbde8",
@@ -6820,6 +7286,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 30), ("11af0ed4-72de-4884-90d1-d465078247bc", 30)],
     },
     ArmorStats {
         uuid: "4c52cf55-7d88-4506-91ce-648a7855de84",
@@ -6830,6 +7297,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "4ca123c5-4891-4e78-9d48-5ecda6b6a797",
@@ -6840,6 +7308,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 29), ("11af0ed4-72de-4884-90d1-d465078247bc", 29)],
     },
     ArmorStats {
         uuid: "4d1d2403-b721-4c84-b5ac-e331f1e11dcc",
@@ -6850,6 +7319,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "4ddd62b3-7f85-4bf1-b5f0-bba529343eb7",
@@ -6860,6 +7330,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "4e52fca7-2961-49b7-bafc-9d3c1cac86cd",
@@ -6870,6 +7341,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 10), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 10)],
     },
     ArmorStats {
         uuid: "4fdf0640-c109-4f6c-ad1d-37c332d01180",
@@ -6880,6 +7352,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "51774ac1-69a5-4d60-8d2a-3ecb285fee34",
@@ -6890,6 +7363,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "523f8b2a-b5ff-40e9-8ced-3306c8036a93",
@@ -6900,6 +7374,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 19), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 19)],
     },
     ArmorStats {
         uuid: "52d083b1-0770-4fd6-9e00-ed67b91c2b71",
@@ -6910,6 +7385,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 30), ("01842871-7f8c-48c1-86ce-6576601d6f02", 30)],
     },
     ArmorStats {
         uuid: "52db2806-124d-405e-b246-e74c758bb8dd",
@@ -6920,6 +7396,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 30), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 30)],
     },
     ArmorStats {
         uuid: "52dc6085-3c3c-4a2e-96a2-2078f647272a",
@@ -6930,6 +7407,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 10), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 10)],
     },
     ArmorStats {
         uuid: "54890366-e54e-4e87-9dd3-8984d7324926",
@@ -6940,6 +7418,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "55853c6c-f62e-457e-9ee9-48fc453e7832",
@@ -6950,6 +7429,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 9), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 9)],
     },
     ArmorStats {
         uuid: "55a5ccb3-445e-4cd6-abd3-f66bd44a302e",
@@ -6960,6 +7440,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "56499845-e596-4f31-8ba4-a1fc2a9a3898",
@@ -6970,6 +7451,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "59640134-520a-4a55-bd41-99704de3a044",
@@ -6980,6 +7462,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 30), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30)],
     },
     ArmorStats {
         uuid: "5b1893b0-32d2-49e5-bd64-f270e4d28561",
@@ -6990,6 +7473,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "5c175b79-dfbf-411d-90ab-fc57335df4e6",
@@ -7000,6 +7484,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "5c1d2998-2544-4969-be3e-38171ebdb093",
@@ -7010,6 +7495,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 50)],
     },
     ArmorStats {
         uuid: "5d967276-7ac0-423e-a032-44c369beb469",
@@ -7020,6 +7506,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "5f5dd00d-7d88-46b9-81b6-0b6665e805da",
@@ -7030,6 +7517,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 30), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30)],
     },
     ArmorStats {
         uuid: "622d1317-bb1a-4e0a-a0b6-cf85c6fc94b1",
@@ -7040,6 +7528,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "63130cda-c55b-4dac-b0f7-580c4da34cfc",
@@ -7050,6 +7539,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 70)],
     },
     ArmorStats {
         uuid: "631ffc41-7385-4e3c-b571-76dc9a621922",
@@ -7060,6 +7550,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 5), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 5)],
     },
     ArmorStats {
         uuid: "653a04ec-462c-4e58-9a2f-626d0efc53e2",
@@ -7070,6 +7561,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "659dd496-f71e-4cf8-aaee-8f0c4723410e",
@@ -7080,6 +7572,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 10), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 10)],
     },
     ArmorStats {
         uuid: "65cc3763-4f65-4565-887f-5cfedc236f10",
@@ -7090,6 +7583,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "67b78223-916e-440b-8ec6-fc14b83e1150",
@@ -7100,6 +7594,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 28), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 28)],
     },
     ArmorStats {
         uuid: "68022d5a-21ff-4bce-b1f8-148ef1788ff5",
@@ -7110,6 +7605,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "6bee2ed3-5e33-4dbb-922f-ea1d9e2d6168",
@@ -7120,6 +7616,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "6d0224b0-28ad-4802-84ea-48044570c419",
@@ -7130,6 +7627,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "6edb4102-9986-4bbb-80bf-283cb4a7aa53",
@@ -7140,6 +7638,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 3), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 3)],
     },
     ArmorStats {
         uuid: "6f6ed8a2-cb2a-42c9-af2c-31b8310d4b48",
@@ -7150,6 +7649,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "6f9a61b5-e79f-4f71-8e74-230c266139b2",
@@ -7160,6 +7660,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "71deea44-d1c7-4109-b5c9-90c912a75475",
@@ -7170,6 +7671,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "72402010-1a8c-4cae-a5e4-a2fe98614564",
@@ -7180,6 +7682,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 20), ("11af0ed4-72de-4884-90d1-d465078247bc", 20)],
     },
     ArmorStats {
         uuid: "7278524f-02b2-4f10-a277-a6378e1909c7",
@@ -7190,6 +7693,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 27), ("01842871-7f8c-48c1-86ce-6576601d6f02", 27)],
     },
     ArmorStats {
         uuid: "7381c72d-b8a9-4de0-bbb2-c542b76fdaa9",
@@ -7200,6 +7704,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "73b6d6e6-4bdb-434d-b2ac-d07a9fd1a9a5",
@@ -7210,6 +7715,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 9), ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 9), ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 9), ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 20), ("01842871-7f8c-48c1-86ce-6576601d6f02", 20)],
     },
     ArmorStats {
         uuid: "75146589-f9dc-4ffc-85ba-b741ee5117fe",
@@ -7220,6 +7726,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "7515e595-fcbc-48d6-a453-81bc54bb2aef",
@@ -7230,6 +7737,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 20), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 20)],
     },
     ArmorStats {
         uuid: "769fdae8-2341-494f-931e-40d8a4468286",
@@ -7240,6 +7748,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 10), ("11af0ed4-72de-4884-90d1-d465078247bc", 10)],
     },
     ArmorStats {
         uuid: "77017cae-e2c1-4de7-9f12-414b4c83b764",
@@ -7250,6 +7759,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "7721c775-6728-47d0-8215-a1fad880aa63",
@@ -7260,6 +7770,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("dbc82d4d-3be1-4735-af21-316c54cfae55", 10), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10), ("10f57d40-98e9-4181-972b-d654f81afc27", 10), ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 10), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 10)],
     },
     ArmorStats {
         uuid: "7755f120-33da-4c9b-b4e0-d41a52650082",
@@ -7270,6 +7781,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "77895df0-be70-4bfd-b369-eae67763dfdb",
@@ -7280,6 +7792,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "7a1bb403-519e-4974-8ff3-7172f2b38ee9",
@@ -7290,6 +7803,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 27), ("01842871-7f8c-48c1-86ce-6576601d6f02", 27)],
     },
     ArmorStats {
         uuid: "7a7d8acf-c3fb-4952-abc2-209c0e1965d2",
@@ -7300,6 +7814,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "7a9154d7-8e28-49df-868c-531f45f5c4fb",
@@ -7310,6 +7825,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "7c59c041-36f0-400b-afc2-93f4f9a044b0",
@@ -7320,6 +7836,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "7d2fd594-cae2-48c9-80da-9370a543f0da",
@@ -7330,6 +7847,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "7d4743aa-7c81-438d-b11f-f23d54d53662",
@@ -7340,6 +7858,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "7db7e798-5765-4241-8dc0-b225846122d4",
@@ -7350,6 +7869,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "7f495ddd-f2ca-44d8-aeba-df09e25deda5",
@@ -7360,6 +7880,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 10), ("01842871-7f8c-48c1-86ce-6576601d6f02", 10)],
     },
     ArmorStats {
         uuid: "86518ee9-45d5-4807-b27a-4629162c0d60",
@@ -7370,6 +7891,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("464bedb7-a631-43b6-a2df-f65f089d39da", 10), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10), ("10f57d40-98e9-4181-972b-d654f81afc27", 10), ("b989c011-48de-492d-aca7-a2644fb3ca1b", 20), ("11af0ed4-72de-4884-90d1-d465078247bc", 20)],
     },
     ArmorStats {
         uuid: "87fd054f-e38d-4d0d-8927-e59523b24312",
@@ -7380,6 +7902,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 14), ("11af0ed4-72de-4884-90d1-d465078247bc", 14)],
     },
     ArmorStats {
         uuid: "8851a883-40d2-4b04-9cce-8943a0ba9ac3",
@@ -7390,6 +7913,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 30,
         tier: 8,
+        mandatory_properties: &[("464bedb7-a631-43b6-a2df-f65f089d39da", 8), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 8), ("10f57d40-98e9-4181-972b-d654f81afc27", 8)],
     },
     ArmorStats {
         uuid: "887cbbef-19df-47e2-a226-4d5776e06e37",
@@ -7400,6 +7924,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "88abfa20-6657-4bd0-a515-99111ec0b081",
@@ -7410,6 +7935,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "894a8d94-9ee7-49d7-a78e-102026a06f80",
@@ -7420,6 +7946,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 12,
         tier: 4,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 14), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 14), ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 14)],
     },
     ArmorStats {
         uuid: "89833d3d-bdea-4ed1-8604-d7b51851c7c8",
@@ -7430,6 +7957,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "89a955a3-2a9f-4f08-9d9a-68f13a5eb374",
@@ -7440,6 +7968,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "919009b4-e38c-408b-a972-b873831204bf",
@@ -7450,6 +7979,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 30), ("11af0ed4-72de-4884-90d1-d465078247bc", 30)],
     },
     ArmorStats {
         uuid: "9226cc62-0dbb-40b4-b547-e292542d53e6",
@@ -7460,6 +7990,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "92874598-06e2-40da-83e9-fe0c2f2ec76b",
@@ -7470,6 +8001,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "94a36621-f4dd-46b6-9475-ea25d314d537",
@@ -7480,6 +8012,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "9586ac2b-5ee1-4377-ae08-04bb61edfba7",
@@ -7490,6 +8023,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 30), ("11af0ed4-72de-4884-90d1-d465078247bc", 30)],
     },
     ArmorStats {
         uuid: "95bed312-dd25-4907-b7c5-80f3e462251e",
@@ -7500,6 +8034,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "96e38a04-6687-4e7d-8ec4-b9c2d1621068",
@@ -7510,6 +8045,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "96f64bbd-97fc-46c3-ac42-9116f64fc9da",
@@ -7520,6 +8056,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "975509a9-196f-41c9-8df4-6f0e2d1f02ce",
@@ -7530,6 +8067,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 50,
         tier: 10,
+        mandatory_properties: &[("dbc82d4d-3be1-4735-af21-316c54cfae55", 10), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10), ("f1dff6c4-aa71-4989-ab77-448f9c220f0d", 0), ("d4b5dcd3-c08c-4a4a-83f9-e64e3b16f0fc", 0)],
     },
     ArmorStats {
         uuid: "9935f4e7-74aa-4223-80c4-97fcfa4ee7f5",
@@ -7540,6 +8078,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 20), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 20)],
     },
     ArmorStats {
         uuid: "9a92d6dc-4167-4f65-9541-37abdcdccaa3",
@@ -7550,6 +8089,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 10,
         tier: 5,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "9b1492a9-1085-4081-a691-b6199a201c75",
@@ -7560,6 +8100,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "9b491b7f-d278-45ca-a353-9079f51f55e6",
@@ -7570,6 +8111,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "9bdcdbd1-2713-406a-ac6c-245b6964010a",
@@ -7580,6 +8122,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 30), ("01842871-7f8c-48c1-86ce-6576601d6f02", 30)],
     },
     ArmorStats {
         uuid: "9cdda3f8-eea5-40fd-9e36-bd7137392552",
@@ -7590,6 +8133,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "9dd7847c-47c5-41ec-9348-cadbbfe9eb3d",
@@ -7600,6 +8144,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 56)],
     },
     ArmorStats {
         uuid: "9e0f3889-90c4-40a2-b4e1-427bef12baa7",
@@ -7610,6 +8155,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "9e59290b-4276-48dc-81bb-8314f65a872e",
@@ -7620,6 +8166,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "9fdc4010-f23d-4d60-93db-e580158aac98",
@@ -7630,6 +8177,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 7), ("01842871-7f8c-48c1-86ce-6576601d6f02", 7)],
     },
     ArmorStats {
         uuid: "a0c419d0-613c-44fe-91a3-6e48f88e01cc",
@@ -7640,6 +8188,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 20), ("11af0ed4-72de-4884-90d1-d465078247bc", 20)],
     },
     ArmorStats {
         uuid: "a1865b9a-4582-479d-ae33-c914c7aac8a2",
@@ -7650,6 +8199,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 19), ("11af0ed4-72de-4884-90d1-d465078247bc", 19)],
     },
     ArmorStats {
         uuid: "a2c629d2-65a9-445d-9594-ca992aed624b",
@@ -7660,6 +8210,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "a34681fc-31ee-4327-ba48-6fb7c30cdf52",
@@ -7670,6 +8221,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 61)],
     },
     ArmorStats {
         uuid: "a5e6aed0-427e-452e-a7f7-20735e2eed9e",
@@ -7680,6 +8232,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "a6e4698f-2828-4dd6-ad03-7e1ae7499128",
@@ -7690,6 +8243,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "a7630f30-40c4-4485-afee-eeeb95fb397d",
@@ -7700,6 +8254,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "a8308cf2-8206-4b3a-9ebb-e3747ea131bb",
@@ -7710,6 +8265,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 41)],
     },
     ArmorStats {
         uuid: "a8bfebbd-e525-47d2-93d2-0f9c978a4185",
@@ -7720,6 +8276,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "a9f2aefa-2e20-4293-afd1-a5779cfce68d",
@@ -7730,6 +8287,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 30), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 30)],
     },
     ArmorStats {
         uuid: "aa7337ca-52dd-44ac-9ca4-2c8102a29f0e",
@@ -7740,6 +8298,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 25), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 25)],
     },
     ArmorStats {
         uuid: "aa96f1a4-9324-4dc6-83a0-5b24dc1b438a",
@@ -7750,6 +8309,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 60)],
     },
     ArmorStats {
         uuid: "aaae854b-7afd-4a96-b39e-409144a2aa9e",
@@ -7760,6 +8320,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "adc4c390-3352-44e6-8d86-90f2d6d872a1",
@@ -7770,6 +8331,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 17), ("01842871-7f8c-48c1-86ce-6576601d6f02", 17)],
     },
     ArmorStats {
         uuid: "ae6586c4-47df-4ff3-bf2e-adb37577015a",
@@ -7780,6 +8342,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "aea22654-f535-41ac-b772-b236edff94cd",
@@ -7790,6 +8353,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "afc82c9e-2620-4144-bc71-0ee0414a046d",
@@ -7800,6 +8364,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "b0af182d-d15f-4fed-8be5-b09a3ee02eb2",
@@ -7810,6 +8375,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "b162ebdc-5133-44b6-875f-b0394aaa492e",
@@ -7820,6 +8386,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 30), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 30)],
     },
     ArmorStats {
         uuid: "b1941146-f63a-4f96-9add-5a2be06117de",
@@ -7830,6 +8397,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 23), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 23)],
     },
     ArmorStats {
         uuid: "b4426e19-d9f6-4387-a23e-41c79247d886",
@@ -7840,6 +8408,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "b46c9671-73ef-4c27-9151-cec622812f40",
@@ -7850,6 +8419,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "b5710964-6ec9-48bd-8401-90282747136e",
@@ -7860,6 +8430,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("da0ebf22-6d7b-4504-bfc1-b78b674c7c5c", 10), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10), ("10f57d40-98e9-4181-972b-d654f81afc27", 10), ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 50)],
     },
     ArmorStats {
         uuid: "b57d9da7-fb5b-411b-ab0b-70bf2932b80a",
@@ -7870,6 +8441,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "b655af3b-c24f-4751-ac87-44ffe8d0a466",
@@ -7880,6 +8452,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "b6f82704-790b-4623-aed2-439189724b4c",
@@ -7890,6 +8463,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "b73fa9ab-fdd0-49a0-8b16-de3b8a8961fd",
@@ -7900,6 +8474,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 28), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 28)],
     },
     ArmorStats {
         uuid: "b755f9a5-8017-4224-8835-7b6c82604b58",
@@ -7910,6 +8485,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "b7720f92-6838-4b9d-ab4a-37c5fd0ce724",
@@ -7920,6 +8496,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("94aa3774-cd7e-400c-9d17-a4652fb88a93", 10), ("1d85511d-66bf-46ad-87b5-bd7a115afafd", 10), ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 10), ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 70)],
     },
     ArmorStats {
         uuid: "b7fa73f6-4a8b-40d6-b66f-5cd1b2b52b53",
@@ -7930,6 +8507,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("652d5ac9-3076-405b-a163-dde1a950fb26", 10), ("1d85511d-66bf-46ad-87b5-bd7a115afafd", 10), ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 10)],
     },
     ArmorStats {
         uuid: "b88a7da6-2acc-496b-a422-3691abbafdb0",
@@ -7940,6 +8518,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "b9a0c308-48b7-48f3-91f3-d9f6af177406",
@@ -7950,6 +8529,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "bab5c847-7b2f-4b79-9b93-d96b2fa10b80",
@@ -7960,6 +8540,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 61)],
     },
     ArmorStats {
         uuid: "bbff5eeb-43bf-41c1-83a9-f4b59bdb0fad",
@@ -7970,6 +8551,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 19), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 19)],
     },
     ArmorStats {
         uuid: "bd2776db-a5a9-49cd-b1ac-244a3b36a995",
@@ -7980,6 +8562,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 12), ("01842871-7f8c-48c1-86ce-6576601d6f02", 12)],
     },
     ArmorStats {
         uuid: "be35f7a9-32b9-4055-9c0b-a1689b395ddd",
@@ -7990,6 +8573,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "c02f3a45-52b3-49db-aeac-03da41e41158",
@@ -8000,6 +8584,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "c27073f5-a144-4c3a-a950-ad207e6ba94b",
@@ -8010,6 +8595,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 46)],
     },
     ArmorStats {
         uuid: "c3370503-4601-427d-8dc2-6855d58bc327",
@@ -8020,6 +8606,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "c3699344-ac25-463c-bfc8-f0dc3ded1c8b",
@@ -8030,6 +8617,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "c3ef8fda-5698-468e-9553-7a84f8cd9418",
@@ -8040,6 +8628,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 66)],
     },
     ArmorStats {
         uuid: "c5a677d0-5451-45cd-a290-85dfa629d76e",
@@ -8050,6 +8639,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "c74b89cb-19cc-4529-9c7e-ec6b53bcac17",
@@ -8060,6 +8650,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 8), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 8)],
     },
     ArmorStats {
         uuid: "c85ff78a-8e4f-469c-8b76-94df3b3f4cbb",
@@ -8070,6 +8661,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "c98fad5d-37a2-4aa7-aad5-2e3ac7bef5ce",
@@ -8080,6 +8672,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "c9bf803f-e850-4aef-bade-0837bf90037a",
@@ -8090,6 +8683,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "caba5e87-aac0-4745-b941-3b039fc19822",
@@ -8100,6 +8694,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "ccdd863b-ef2a-425f-a391-c524e2b42b48",
@@ -8110,6 +8705,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "cff74dd7-9cc0-4e90-9186-693928a40ced",
@@ -8120,6 +8716,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "d00c04af-562d-48d8-b38d-10621e55dadd",
@@ -8130,6 +8727,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 20), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 20)],
     },
     ArmorStats {
         uuid: "d02538d2-5bba-4dbc-87b0-2347274d3b4f",
@@ -8140,6 +8738,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 9), ("11af0ed4-72de-4884-90d1-d465078247bc", 9)],
     },
     ArmorStats {
         uuid: "d0da3047-a813-412a-a16f-d42585110828",
@@ -8150,6 +8749,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 66)],
     },
     ArmorStats {
         uuid: "d11338a1-c5f2-4a80-b326-f9c47c12d642",
@@ -8160,6 +8760,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 30), ("01842871-7f8c-48c1-86ce-6576601d6f02", 30)],
     },
     ArmorStats {
         uuid: "d124bb0d-4653-40fc-be7c-076811540157",
@@ -8170,6 +8771,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 20), ("01842871-7f8c-48c1-86ce-6576601d6f02", 20)],
     },
     ArmorStats {
         uuid: "d3182227-5ec3-487c-a94d-8df708de76f5",
@@ -8180,6 +8782,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "d366c29f-5e4c-46c9-ba0d-e243e3df2849",
@@ -8190,6 +8793,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "d6923896-4d90-4545-9faa-956e43771ce9",
@@ -8200,6 +8804,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 24), ("11af0ed4-72de-4884-90d1-d465078247bc", 24)],
     },
     ArmorStats {
         uuid: "d7c9caba-4133-436e-b7bb-6d96f2283dcf",
@@ -8210,6 +8815,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 4), ("11af0ed4-72de-4884-90d1-d465078247bc", 4)],
     },
     ArmorStats {
         uuid: "d9530f4c-5a93-4491-9116-2b49805f93f7",
@@ -8220,6 +8826,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "db48367e-772a-4d55-90c9-5ba9d7a3ed10",
@@ -8230,6 +8837,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 30), ("11af0ed4-72de-4884-90d1-d465078247bc", 30)],
     },
     ArmorStats {
         uuid: "def810af-e9f5-4e23-9247-1edf391d82e1",
@@ -8240,6 +8848,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 28,
         tier: 6,
+        mandatory_properties: &[("2b8fd511-80da-4128-81b1-bd7ab6023223", 6), ("1d85511d-66bf-46ad-87b5-bd7a115afafd", 6), ("7bb4c21c-c908-4d57-b406-eb402a5a0f9f", 0), ("4697a590-43e1-46a7-85e3-18975ea84d17", 0)],
     },
     ArmorStats {
         uuid: "dfbf0135-2b27-4467-9e2b-3e88538f1d59",
@@ -8250,6 +8859,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 25), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 25)],
     },
     ArmorStats {
         uuid: "e06bc02b-f460-4f05-bcd9-b5f57e03b317",
@@ -8260,6 +8870,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "e0869da6-abbc-48af-ac18-7e365709fa46",
@@ -8270,6 +8881,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "e1fe3011-731e-402f-8fbf-e63d702616fe",
@@ -8280,6 +8892,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 30,
         tier: 8,
+        mandatory_properties: &[("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 8), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 8), ("10f57d40-98e9-4181-972b-d654f81afc27", 8)],
     },
     ArmorStats {
         uuid: "e26330b3-fcba-41b2-8bd5-bd3b42f7e453",
@@ -8290,6 +8903,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "e2f58428-334e-446d-a2b4-9a34935b3e23",
@@ -8300,6 +8914,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "e3f20220-391e-4548-a791-8798430651b8",
@@ -8310,6 +8925,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "e4a25391-9c8f-4353-9d48-4e30c4367312",
@@ -8320,6 +8936,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 10), ("11af0ed4-72de-4884-90d1-d465078247bc", 10)],
     },
     ArmorStats {
         uuid: "e69b8df8-ecde-4c00-b2c5-884dca4740c4",
@@ -8330,6 +8947,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "e7389711-4911-413e-b156-d439e73c9e14",
@@ -8340,6 +8958,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 20), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 20)],
     },
     ArmorStats {
         uuid: "e7be6731-5db2-48d7-8072-8bfbf923b25f",
@@ -8350,6 +8969,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 70)],
     },
     ArmorStats {
         uuid: "e8579306-4543-4bc8-8a03-1999ffe60204",
@@ -8360,6 +8980,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "e8ed4e66-2957-431e-a0a5-810ad443a88c",
@@ -8370,6 +8991,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 10), ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 10), ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 10), ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 20), ("01842871-7f8c-48c1-86ce-6576601d6f02", 20)],
     },
     ArmorStats {
         uuid: "e9dd4127-cbe7-4701-a1b5-e31649091a9c",
@@ -8380,6 +9002,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "ecb35ffc-02fc-426a-b6b6-6150f4f09a49",
@@ -8390,6 +9013,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 2), ("01842871-7f8c-48c1-86ce-6576601d6f02", 2)],
     },
     ArmorStats {
         uuid: "ecbca865-c722-4e8d-9046-86407e226f8f",
@@ -8400,6 +9024,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "edb7414d-1672-4f34-aa23-a5f5e5b9dd94",
@@ -8410,6 +9035,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 30), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30)],
     },
     ArmorStats {
         uuid: "f11986c2-dc3c-4810-a5b8-7a5bd015013c",
@@ -8420,6 +9046,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "f12c0c70-4d13-4028-aefd-18008a356808",
@@ -8430,6 +9057,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "f3cb91ab-6ee6-4f49-aed1-3946145dccd8",
@@ -8440,6 +9068,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 10), ("01842871-7f8c-48c1-86ce-6576601d6f02", 10)],
     },
     ArmorStats {
         uuid: "f5159522-601a-4d4c-82d4-d059427c0c25",
@@ -8450,6 +9079,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "f6d699a7-a90b-4038-90a0-262f35ac79fa",
@@ -8460,6 +9090,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 29), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 29)],
     },
     ArmorStats {
         uuid: "f9a87486-39c1-49f8-9024-0c08ee090165",
@@ -8470,6 +9101,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "fa103f99-0c36-40d7-8839-db9426880904",
@@ -8480,6 +9112,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "fbf92b28-883a-4e59-b253-62cd42f7a865",
@@ -8490,6 +9123,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 0,
         tier: 1,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "fc55da04-2c41-4035-a824-bcab760416ed",
@@ -8500,6 +9134,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "fce28f7f-f2f7-4098-b823-87ef526bb1e5",
@@ -8510,6 +9145,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 24), ("11af0ed4-72de-4884-90d1-d465078247bc", 24)],
     },
     ArmorStats {
         uuid: "fe39aece-fab8-4447-a7db-e5827a793044",
@@ -8520,6 +9156,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "fe3c91b1-ffbf-4fe4-938b-8b7568244d6e",
@@ -8530,6 +9167,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "ff0728f4-1fab-43a7-a411-088d787a3dfa",
@@ -8540,6 +9178,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ArmorStats {
         uuid: "ff4fb7d5-4365-4af6-9704-120c47578b83",
@@ -8550,6 +9189,7 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
 ];
 
@@ -8572,6 +9212,14 @@ pub struct ShieldStats {
     pub required_level: u16,
     /// Item tier.
     pub tier: u8,
+    /// Properties the TEMPLATE always carries: `(property_uuid, tier)`.
+    ///
+    /// Artifact effects live here rather than in the item instance's
+    /// `properties.ENCHANTING`, which is `null` on every captured artifact — so
+    /// dropping this field made all 24 artifacts pure stat-sticks. Ebony Mail's
+    /// poison aura, Dawnbreaker's fire damage and EDIR, Dragon's Blight's
+    /// armour piercing all arrive through here or not at all.
+    pub mandatory_properties: &'static [(&'static str, u8)],
 }
 
 /// All 51 shield templates, **sorted by `uuid`**.
@@ -8585,6 +9233,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "08a302c9-fc5b-4a03-bd6c-e7974a81009f",
@@ -8595,6 +9244,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("d2f7ca93-7234-4890-886d-60820350716b", 10), ("f5cba266-96df-45c2-b8c6-60bf37de2849", 10)],
     },
     ShieldStats {
         uuid: "0d491a77-762d-4c31-85ad-5baf39eb90a7",
@@ -8605,6 +9255,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 40), ("73e3dc29-0f39-4874-9761-b36ca07c4e59", 10)],
     },
     ShieldStats {
         uuid: "1d248608-7347-4122-8b42-840b6304c203",
@@ -8615,6 +9266,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "1d672027-b5b2-4229-97f9-44579981341e",
@@ -8625,6 +9277,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "1da31a6c-e872-47a1-b880-5a95b9a38b70",
@@ -8635,6 +9288,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 28,
         tier: 7,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 37), ("0b414904-c1e5-40e0-9cdb-52969b0a4e65", 7)],
     },
     ShieldStats {
         uuid: "220a74e3-f4c8-474d-adfa-3ecac4ca4187",
@@ -8645,6 +9299,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "3339d589-7ace-4aee-b011-6eebe6557b74",
@@ -8655,6 +9310,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "33ffc2ba-10d7-4f2a-9c1c-1dd9667334d6",
@@ -8665,6 +9321,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 40), ("0b414904-c1e5-40e0-9cdb-52969b0a4e65", 10)],
     },
     ShieldStats {
         uuid: "4a0ee1ba-7e61-485b-9ed0-3a5eaabcadab",
@@ -8675,6 +9332,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "4e173739-f52c-4223-bdb5-b46b294fd609",
@@ -8685,6 +9343,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("338ec948-d1b7-4390-8a88-ab6ac11841aa", 10), ("9701ded5-e1d1-4436-8b14-d5d726ff4434", 10), ("2ac1e2f6-8f97-444e-97af-7efd46c71cca", 10), ("67e1de28-c9e1-44cc-bad8-338b912ce352", 10), ("0b414904-c1e5-40e0-9cdb-52969b0a4e65", 10)],
     },
     ShieldStats {
         uuid: "4e622931-ebfc-4a78-872c-5b52a8722212",
@@ -8695,6 +9354,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 13,
         tier: 4,
+        mandatory_properties: &[("a99ab22b-9d16-46cd-9616-eb1ed40a135d", 4), ("f5cba266-96df-45c2-b8c6-60bf37de2849", 4)],
     },
     ShieldStats {
         uuid: "5250abf2-e4cb-419d-b18b-0edcca3b1c3e",
@@ -8705,6 +9365,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "575aa9f3-d127-4dfa-8634-12969a7e146b",
@@ -8715,6 +9376,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("a99ab22b-9d16-46cd-9616-eb1ed40a135d", 10), ("f5cba266-96df-45c2-b8c6-60bf37de2849", 10)],
     },
     ShieldStats {
         uuid: "616b64ef-4184-4efb-af55-1a3f122431dc",
@@ -8725,6 +9387,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 80)],
     },
     ShieldStats {
         uuid: "61718d60-46a5-4a86-bbe2-ffb1fc35599a",
@@ -8735,6 +9398,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "6362ecf3-42d9-4d8d-af30-2b9fc2deb92a",
@@ -8745,6 +9409,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("a99ab22b-9d16-46cd-9616-eb1ed40a135d", 10), ("73e3dc29-0f39-4874-9761-b36ca07c4e59", 10)],
     },
     ShieldStats {
         uuid: "7073b48c-fa9a-4451-ba34-55b4c66d0664",
@@ -8755,6 +9420,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "73c9bef2-2c2d-4a49-843c-a973fb7c3ee6",
@@ -8765,6 +9431,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "74450631-90d1-4ac4-a3f2-6b42aaf1890f",
@@ -8775,6 +9442,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "751a1afa-a053-4ed2-a4ba-236a15787d39",
@@ -8785,6 +9453,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "7561328c-0f17-4fe5-b67d-da8dc9d34e4c",
@@ -8795,6 +9464,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "80af12db-32e9-47b5-aa04-14a3d610e426",
@@ -8805,6 +9475,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("67e1de28-c9e1-44cc-bad8-338b912ce352", 10), ("34469735-f126-46a5-bc26-ec8234c8c13f", 10)],
     },
     ShieldStats {
         uuid: "863dd538-f520-40c5-886c-6e54539c1d23",
@@ -8815,6 +9486,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 30,
         tier: 8,
+        mandatory_properties: &[("38ca6ee2-1765-4122-a5e5-d036a7d31fe3", 8), ("9701ded5-e1d1-4436-8b14-d5d726ff4434", 8), ("2ac1e2f6-8f97-444e-97af-7efd46c71cca", 8), ("67e1de28-c9e1-44cc-bad8-338b912ce352", 8), ("34469735-f126-46a5-bc26-ec8234c8c13f", 8)],
     },
     ShieldStats {
         uuid: "86a4ad9d-e2e8-49cd-9642-b553475b6580",
@@ -8825,6 +9497,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 18,
         tier: 4,
+        mandatory_properties: &[("b64fa9d4-4f13-4bb4-9129-16df08e84757", 3), ("366ce3d7-ac40-459b-b363-4565e3c5ce17", 3), ("2b253847-5061-4a07-acfe-fbdc3c702922", 3)],
     },
     ShieldStats {
         uuid: "875aa16e-9d26-46a0-934e-6ba5b2a5299f",
@@ -8835,6 +9508,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[("67e1de28-c9e1-44cc-bad8-338b912ce352", 8), ("34469735-f126-46a5-bc26-ec8234c8c13f", 8)],
     },
     ShieldStats {
         uuid: "909a4028-12df-4ac9-b333-102817c788e1",
@@ -8845,6 +9519,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "97193263-c9b7-4946-a86d-91250776e56c",
@@ -8855,6 +9530,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 8,
         tier: 3,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 33), ("73e3dc29-0f39-4874-9761-b36ca07c4e59", 3)],
     },
     ShieldStats {
         uuid: "9a22b59a-cdbc-4987-bf4a-0cc812428aeb",
@@ -8865,6 +9541,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 38,
         tier: 8,
+        mandatory_properties: &[("5137a7eb-27a5-4b11-92b1-69ef3a3287b0", 0)],
     },
     ShieldStats {
         uuid: "9dff48fb-39f9-47f1-a4d2-175744ea7da3",
@@ -8875,6 +9552,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 39), ("73e3dc29-0f39-4874-9761-b36ca07c4e59", 9)],
     },
     ShieldStats {
         uuid: "a6d3d7dd-2193-462b-b28e-1a4b1e902df1",
@@ -8885,6 +9563,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 1,
         tier: 2,
+        mandatory_properties: &[("67e1de28-c9e1-44cc-bad8-338b912ce352", 2), ("0b414904-c1e5-40e0-9cdb-52969b0a4e65", 2)],
     },
     ShieldStats {
         uuid: "aa4ffedf-ad74-4aa1-bd82-18a041100f79",
@@ -8895,6 +9574,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("67e1de28-c9e1-44cc-bad8-338b912ce352", 10), ("0b414904-c1e5-40e0-9cdb-52969b0a4e65", 10)],
     },
     ShieldStats {
         uuid: "b20d466a-1720-4040-a8ed-941a53f7e3eb",
@@ -8905,6 +9585,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 18,
         tier: 5,
+        mandatory_properties: &[("d2f7ca93-7234-4890-886d-60820350716b", 5), ("34469735-f126-46a5-bc26-ec8234c8c13f", 5)],
     },
     ShieldStats {
         uuid: "b59ec6b4-88ee-4424-8ca8-e86ce59b8bca",
@@ -8915,6 +9596,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 0,
         required_level: 44,
         tier: 1,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "b9420781-e34e-414e-a5af-3c0c0d1d6c14",
@@ -8925,6 +9607,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 0,
         required_level: 44,
         tier: 1,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "c6f7fab4-eadc-4e8c-bf7f-e0ea095a3acf",
@@ -8935,6 +9618,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "d3851100-d3ee-4b24-b2b1-2d46a907bd56",
@@ -8945,6 +9629,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("38ca6ee2-1765-4122-a5e5-d036a7d31fe3", 10), ("9701ded5-e1d1-4436-8b14-d5d726ff4434", 10), ("2ac1e2f6-8f97-444e-97af-7efd46c71cca", 10), ("67e1de28-c9e1-44cc-bad8-338b912ce352", 10), ("34469735-f126-46a5-bc26-ec8234c8c13f", 10)],
     },
     ShieldStats {
         uuid: "d454df43-e765-449f-9a4d-8e807c36d023",
@@ -8955,6 +9640,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "d8e5cc8b-eebe-4ab6-bc0c-4360bcbcb4f5",
@@ -8965,6 +9651,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 1,
         tier: 1,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 71)],
     },
     ShieldStats {
         uuid: "dc2c3bd9-fb5a-4203-ad29-30c9d1724b75",
@@ -8975,6 +9662,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "ded7cfb8-5e4c-419a-8acb-792fb5b6c646",
@@ -8985,6 +9673,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "df4ca132-ba7a-4a9e-8b4d-6f5c5088202f",
@@ -8995,6 +9684,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "e225e0bf-1fbb-432a-a118-e94a70507203",
@@ -9005,6 +9695,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 23,
         tier: 6,
+        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 76)],
     },
     ShieldStats {
         uuid: "e271e240-480b-4d3d-b55d-bdf5b2695d61",
@@ -9015,6 +9706,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "e301a86f-ca52-4f21-bfcc-6810a45a0b6c",
@@ -9025,6 +9717,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "e5766843-04ef-49bb-91f7-eead31de26c8",
@@ -9035,6 +9728,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("d2f7ca93-7234-4890-886d-60820350716b", 10), ("34469735-f126-46a5-bc26-ec8234c8c13f", 10)],
     },
     ShieldStats {
         uuid: "e5bf5f11-665a-4ca4-83c8-4bbaaebd6ada",
@@ -9045,6 +9739,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 80)],
     },
     ShieldStats {
         uuid: "f07efbab-f73a-4a36-870a-b41635db4a57",
@@ -9055,6 +9750,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 45,
         tier: 10,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "fc5ef036-e045-4920-b95f-b32067b00163",
@@ -9065,6 +9761,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[],
     },
     ShieldStats {
         uuid: "fd3bd675-feb7-4656-a66c-a27fe15232c2",
@@ -9075,6 +9772,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 39,
         tier: 9,
+        mandatory_properties: &[("d2f7ca93-7234-4890-886d-60820350716b", 9), ("f5cba266-96df-45c2-b8c6-60bf37de2849", 9)],
     },
     ShieldStats {
         uuid: "fe9afa7b-3805-474c-9b6a-0a73561942e5",
@@ -9085,6 +9783,7 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 33,
         tier: 8,
+        mandatory_properties: &[],
     },
 ];
 
@@ -38444,6 +39143,23 @@ pub fn weapon(template_uuid: &str) -> Option<&'static WeaponStats> {
 }
 
 /// Armor stats for an item template UUID.
+/// The TEMPLATE's always-on properties, whichever kind of item it is.
+///
+/// Empty for the overwhelming majority; non-empty for the 165 templates that carry
+/// them, which is where every artifact effect lives.
+pub fn mandatory_properties(template_uuid: &str) -> &'static [(&'static str, u8)] {
+    if let Some(w) = weapon(template_uuid) {
+        return w.mandatory_properties;
+    }
+    if let Some(a) = armor(template_uuid) {
+        return a.mandatory_properties;
+    }
+    if let Some(s) = shield(template_uuid) {
+        return s.mandatory_properties;
+    }
+    &[]
+}
+
 pub fn armor(template_uuid: &str) -> Option<&'static ArmorStats> {
     ARMORS
         .binary_search_by(|a| a.uuid.cmp(template_uuid))

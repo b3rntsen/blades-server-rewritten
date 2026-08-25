@@ -206,6 +206,29 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         // the abilities they raise do not exist on the loadout yet at this point.
         collect_grade_bonus(&eq.item.properties.grading, &mut grade_bonus);
 
+        // --- the TEMPLATE's mandatory properties -------------------------------
+        //
+        // Artifact effects live on the template, not on the item instance. Captured
+        // artifact instances carry `properties: null` outright — Ebony Mail,
+        // Dragon's Blight and Warlock's Ring all do — while ordinary items carry an
+        // ENCHANTING array. So the instance loop below sees ZERO properties for every
+        // artifact, and all 24 of them were pure stat-sticks: Dawnbreaker's fire
+        // damage and its EDIR, Dragon's Blight's 4961 armour piercing, Lord's Mail's
+        // poison resist, Guardian's Claymore's PowerfulBlock — every one discarded.
+        //
+        // These run through the SAME `apply_enchant` as instance enchants, so nothing
+        // new is modelled here; the properties simply arrive. A property whose logic
+        // has no arm yet still falls through `apply_enchant`'s `_ => {}` exactly as
+        // before, so this cannot switch on anything unmodelled by accident.
+        for (property_uuid, tier) in gamedata::mandatory_properties(&template) {
+            // The generated table stores the uuid as a string; `apply_enchant` keys on
+            // `Uuid`. A malformed one is skipped rather than panicking — a bad row in a
+            // 37k-line generated file must not take the arena down.
+            if let Ok(id) = uuid::Uuid::parse_str(property_uuid) {
+                apply_enchant(&mut lo, &id, *tier);
+            }
+        }
+
         // --- enchantments, dispatched on the family's LOGIC CLASS (Phase 3.6/3.7) ---
         for prop in &eq.item.properties.enchanting {
             let tier = prop.tier.min(u8::MAX as u64) as u8;
@@ -1142,6 +1165,72 @@ mod tests {
 
 #[cfg(test)]
 mod two_handed_tests {
+
+    /// THE ARTIFACT BUG: every artifact was a stat-stick.
+    ///
+    /// Artifact effects live on the item TEMPLATE's `mandatory_properties`, not on the
+    /// item instance's `properties.ENCHANTING` — and captured artifact instances carry
+    /// `properties: null` outright, while ordinary items carry an ENCHANTING array. The
+    /// generated table dropped the template field entirely, so all 24 artifacts arrived
+    /// with zero properties and `apply_enchant` ran zero times for them.
+    ///
+    /// Dawnbreaker is the sharpest case: it carries the SAME EDIR family that was just
+    /// fixed on the spell path, so fixing EDIR did not fix Dawnbreaker — the property
+    /// never arrived to be piercing with.
+    #[test]
+    fn dawnbreaker_delivers_its_template_properties() {
+        const DAWNBREAKER: &str = "ca1e2d0f-b902-4c82-b8d6-e82b83dcc9e0";
+        let props = super::super::gamedata::mandatory_properties(DAWNBREAKER);
+        assert!(
+            !props.is_empty(),
+            "Dawnbreaker's template properties must reach the generated table"
+        );
+        let mut lo = Loadout::default();
+        for (id, tier) in props {
+            if let Ok(u) = uuid::Uuid::parse_str(id) {
+                super::apply_enchant(&mut lo, &u, *tier);
+            }
+        }
+        assert!(
+            lo.elem_resist_piercing_rating > 0.0,
+            "Dawnbreaker carries the EDIR family — it must pierce, got {}",
+            lo.elem_resist_piercing_rating
+        );
+        assert!(
+            lo.enchants.iter().any(|(t, _)| *t == DamageType::Fire),
+            "and its fire damage must land: {:?}",
+            lo.enchants
+        );
+    }
+
+    /// Dragon's Blight ships 4961 armour piercing — a real PvP number, silently lost.
+    #[test]
+    fn dragons_blight_delivers_its_armour_piercing() {
+        const DRAGONS_BLIGHT: &str = "515450b1-ab21-4cbf-a8ed-c4e0e51df4c0";
+        let mut lo = Loadout::default();
+        for (id, tier) in super::super::gamedata::mandatory_properties(DRAGONS_BLIGHT) {
+            if let Ok(u) = uuid::Uuid::parse_str(id) {
+                super::apply_enchant(&mut lo, &u, *tier);
+            }
+        }
+        assert!(
+            lo.armor_piercing_rating > 0.0,
+            "Dragon's Blight must pierce armour, got {}",
+            lo.armor_piercing_rating
+        );
+    }
+
+    /// An ordinary, non-artifact template must carry NOTHING here — otherwise the new
+    /// path is handing out free stats across the board rather than fixing artifacts.
+    #[test]
+    fn an_ordinary_item_has_no_mandatory_properties() {
+        let ordinary = super::super::gamedata::ARMORS
+            .iter()
+            .find(|a| a.mandatory_properties.is_empty())
+            .expect("most armours carry none");
+        assert!(super::super::gamedata::mandatory_properties(ordinary.uuid).is_empty());
+    }
+
     use super::*;
 
     /// Steel Longsword: 132.0 one-handed, 151.8 two-handed (1.15x).
