@@ -2505,6 +2505,13 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
                 combat.fighters[caster].health,
                 combat.fighters[caster].max_health,
             ),
+            // Each channel TICK re-enters the damage model, so EDIR has to be carried
+            // here too — otherwise a frost build's Elemental Damage Ignores Resistance
+            // would apply to the first tick and to nothing after it.
+            elem_resist_piercing: combat.fighters[caster].loadout.elem_resist_piercing,
+            elem_resist_piercing_rating: combat.fighters[caster]
+                .loadout
+                .elem_resist_piercing_rating,
         };
         let resolved = RetailDamageModel.resolve_ability(
             &uuid,
@@ -4850,6 +4857,58 @@ mod tests {
         assert!(
             frost > unresisted * 0.75,
             "one resist affix must not delete the spell — {frost:.1} of {unresisted:.1}"
+        );
+    }
+
+    /// EDIR — "Elemental Damage Ignores Resistance" — must work on elemental SPELLS.
+    ///
+    /// It did not. `resolve_ability` built a `Loadout::default()` and copied only the
+    /// caster's perks, so `elem_resist_piercing_rating` was 0 on every spell and every
+    /// channel tick. A frost build wearing four EDIR pieces got nothing from any of
+    /// them; the WEAPON path (`resolve.rs`, which clones the real loadout) had honoured
+    /// them the whole time. Reported by a player running exactly that build.
+    #[test]
+    fn edir_gear_pierces_resistance_on_a_frost_channel() {
+        use super::super::gamedata;
+        use super::super::state::DamageType;
+        const RATING: f32 = 35.11; // one Resist Frost t4 affix on the defender
+
+        let channel_frost = |edir: f32| -> f32 {
+            let now = Instant::now();
+            let mut combat = make_prod_scale_combat(now);
+            combat.fighters[1].loadout.resistances = vec![(DamageType::Frost, RATING)];
+            combat.fighters[0].loadout.elem_resist_piercing_rating = edir;
+            let mut out = cast_frostbite(&mut combat, now);
+            out.extend(run_channel(&mut combat, now));
+            let viewers = combat.fighters.len();
+            damage_frames(&out)
+                .iter()
+                .filter(|(src, _, _)| {
+                    *src == super::super::state::DamageSource::ContinuousSpell as u8
+                })
+                .flat_map(|(_, _, comps)| comps.iter())
+                .filter(|(t, _)| *t == 5)
+                .map(|(_, v)| *v)
+                .sum::<f32>()
+                / viewers as f32
+        };
+
+        let bare = channel_frost(0.0);
+        let pierced = channel_frost(RATING); // enough EDIR to cancel the affix
+
+        assert!(
+            pierced > bare,
+            "EDIR must raise damage through resistance: {pierced:.1} vs {bare:.1}"
+        );
+
+        let r = gamedata::ability_rank_clamped(FROSTBITE_UUID, FROSTBITE_RANK as u16)
+            .expect("Frostbite rank 4");
+        let unresisted = r.damage_per_second().expect("dps")
+            * r.get(gamedata::AbilityField::ChannelMaxLength).expect("channel");
+        assert!(
+            (pierced - unresisted).abs() < 1.0,
+            "EDIR equal to the defender's rating should fully cancel it: {pierced:.1} vs \
+             {unresisted:.1} unresisted"
         );
     }
 

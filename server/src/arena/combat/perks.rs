@@ -269,12 +269,25 @@ pub struct CasterPerks<'a> {
     pub magicka_full: bool,
     /// Health is at or below [`CRITICAL_HEALTH_THRESHOLD`] — the Mettle condition.
     pub health_critical: bool,
+    /// The caster's **Elemental Damage Ignores Resistance** gear, carried here because
+    /// the spell damage path has no other view of the caster's loadout.
+    ///
+    /// It used to have none, so EDIR did nothing on elemental SPELLS — the one place
+    /// its own text promises it works. The weapon path honoured it the whole time.
+    pub elem_resist_piercing: f32,
+    pub elem_resist_piercing_rating: f32,
 }
 
 impl CasterPerks<'static> {
     /// No caster, no perks, no conditions met.
     pub fn none() -> Self {
-        CasterPerks { perks: &NO_PERKS, magicka_full: false, health_critical: false }
+        CasterPerks {
+            perks: &NO_PERKS,
+            magicka_full: false,
+            health_critical: false,
+            elem_resist_piercing: 0.0,
+            elem_resist_piercing_rating: 0.0,
+        }
     }
 }
 
@@ -285,6 +298,8 @@ impl<'a> CasterPerks<'a> {
             perks: &f.loadout.perks,
             magicka_full: f.magicka >= f.max_magicka,
             health_critical: health_is_critical(f.health, f.max_health),
+            elem_resist_piercing: f.loadout.elem_resist_piercing,
+            elem_resist_piercing_rating: f.loadout.elem_resist_piercing_rating,
         }
     }
 }

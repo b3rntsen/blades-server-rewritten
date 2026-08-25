@@ -527,12 +527,30 @@ impl DamageModel for RetailDamageModel {
             .unwrap_or(true);
         let base = base * caster.magnitude_multiplier(is_spell);
 
-        // The caster's PERKS, and nothing else, are visible to `finish_resolved`.
-        // Every other field stays `Default` on purpose: switching on the caster's
-        // piercing ratings for spells is a real change to the damage model, and it
-        // is not this one's to make.
+        // The caster's PERKS **and elemental-resistance piercing**.
+        //
+        // The piercing ratings used to be left at `Default` — the note here said
+        // switching them on for spells was "a real change to the damage model, and
+        // it is not this one's to make". The consequence is that
+        // `Elemental Damage Ignores Resistance` gear did NOTHING on elemental SPELLS,
+        // which is the one place its own text promises it works. A player with four
+        // EDIR pieces on a frost build got zero benefit from all four; the weapon path
+        // (`resolve.rs`, which clones the real loadout) honoured them the whole time.
+        //
+        // `finish_resolved` reads exactly three things from `attacker` —
+        // `perks.element_bonus`, `perks.element_damage`, and these two piercing fields
+        // — so copying them is the complete fix and touches nothing else.
         let mut caster_loadout = Loadout::default();
         caster_loadout.perks = caster.perks.clone();
+        caster_loadout.elem_resist_piercing = caster.elem_resist_piercing;
+        caster_loadout.elem_resist_piercing_rating = caster.elem_resist_piercing_rating;
+        // The ABILITY's own `_elementalResistancePiercing`, the same field the weapon
+        // path adds in `resolve.rs`. A spell that ships one was ignoring it too.
+        if let Some(erp) = super::gamedata::ability_rank_clamped(ability_uuid, ability_level.max(1) as u16)
+            .and_then(|r| r.elemental_resistance_piercing())
+        {
+            caster_loadout.elem_resist_piercing_rating += erp;
+        }
 
         // The mirrored stat drain is appended by `finish_resolved` from the
         // post-block value — see [`append_mirrored_drains`].
