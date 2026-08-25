@@ -268,7 +268,13 @@ fn apply_enchant(lo: &mut Loadout, id: &Uuid, tier: u8) {
         return;
     };
     let value = family.value(tier).unwrap_or(0.0);
-    let magnitude = value * tables::ENCHANT_DAMAGE_PER_VALUE;
+    // SHIPPED magnitude first. `enchant_value x ENCHANT_DAMAGE_PER_VALUE` is a
+    // back-solve from ONE capture of ONE family and is wrong by 0.5x to 915x
+    // elsewhere; the client ships the real per-family curve. Falls back to the old
+    // inference only where the client ships no table, so nothing silently drops to
+    // zero. See `gamedata::ENCHANT_MAGNITUDES`.
+    let magnitude = gamedata::enchant_magnitude(&uuid, tier)
+        .unwrap_or_else(|| value * tables::ENCHANT_DAMAGE_PER_VALUE);
 
     match family.logic {
         // ---- offensive weapon damage tracks -------------------------------
@@ -907,10 +913,17 @@ mod tests {
         assert_eq!(lo.revenge.len(), 1, "the enchantment must register exactly once");
         let (ty, mag) = lo.revenge[0];
         assert_eq!(ty, DamageType::Frost);
+        // 36.86 is the SHIPPED `RevengeFrostPropertyLogic._xValueByTier[10]`.
+        //
+        // This used to assert 137.32 "matching the wire". It never matched the wire:
+        // 137.32 is `7591 x ENCHANT_DAMAGE_PER_VALUE`, and that constant was
+        // back-solved from s506's *Weapon Poison Damage*, a different family entirely.
+        // The 203 recorded Revenge frames in s615/s616 carry magnitudes like 105.0 —
+        // never 137.32 — so the old number was the shared tier-weight curve times a
+        // borrowed constant, not an observation.
         assert!(
-            (mag - 137.32).abs() < 0.05,
-            "expected the scaled 137.32 (matching the wire), got {mag} — \
-             an unscaled value would be 7591",
+            (mag - 36.86).abs() < 0.05,
+            "expected the SHIPPED 36.86, got {mag} — 137.32 was the old inferred value",
         );
     }
 
@@ -981,6 +994,58 @@ mod tests {
     /// [`tables::ENCHANT_DAMAGE_PER_VALUE`] first. Since
     /// [`tables::block_reduction`] saturates at `MAXIMUM_BLOCK_REDUCTION` from a
     /// rating of `BLOCK_RATING_SCALE / REDUCTION_PER_BLOCK_RATING` = 950 up, a
+
+    /// THE CALIBRATION. The shipped tables are the wire magnitudes; the old global
+    /// constant was a back-solve that only ever fitted the one family it came from.
+    ///
+    /// Two independent exact matches against the s506 capture, using nothing but
+    /// shipped numbers:
+    ///
+    ///   1. `ShieldMagickaDamage` t10 ships **255.83**, and seq 342 records the
+    ///      opponent's ShieldManeuver dealing **255.83 Magicka**. Exact.
+    ///   2. `WeaponDamagePoison` t10 light **57.25** + `FortifyPoison` t10 **11.45**
+    ///      = **68.70**, and seq 323's connected-block elemental is **68.65**. The
+    ///      unblocked 137.32 (seq 27/37/277/287/488) is exactly 2x that.
+    ///
+    /// The second also settles the shape question independently of the loc text:
+    /// Fortify only lands on 68.70 if it is a FLAT ADD.
+    #[test]
+    fn shipped_magnitudes_reproduce_the_s506_anchors() {
+        const SHIELD_MAGICKA: &str = "ShieldMagickaDamagePropertyLogic";
+        const WEAPON_POISON: &str = "WeaponDamagePoisonPropertyLogic";
+        const FORTIFY_POISON: &str = "FortifyPoisonPropertyLogic";
+
+        let by_logic = |logic: &str| -> &'static gamedata::EnchantMagnitude {
+            gamedata::ENCHANT_MAGNITUDES
+                .iter()
+                .find(|e| e.logic == logic)
+                .unwrap_or_else(|| panic!("{logic} must ship a magnitude table"))
+        };
+
+        // 1. the shield anchor — shipped == wire, exactly.
+        let shield = by_logic(SHIELD_MAGICKA).tiers[10];
+        assert!(
+            (shield - 255.83).abs() < 0.05,
+            "ShieldMagickaDamage t10 must be the recorded 255.83, got {shield}"
+        );
+
+        // 2. the poison anchor — base + fortify == the connected-block elemental.
+        let poison = by_logic(WEAPON_POISON).tiers[10]; // the LIGHT table: a dagger
+        let fortify = by_logic(FORTIFY_POISON).tiers[10];
+        assert!(
+            (poison + fortify - 68.65).abs() < 0.10,
+            "shipped poison {poison} + fortify {fortify} must reproduce the recorded \
+             blocked elemental 68.65, got {}",
+            poison + fortify
+        );
+        // ...and the unblocked hit is exactly twice it.
+        assert!(
+            ((poison + fortify) * 2.0 - 137.32).abs() < 0.20,
+            "and 2x that must reproduce the recorded unblocked 137.32, got {}",
+            (poison + fortify) * 2.0
+        );
+    }
+
     /// single tier-10 `Powerful Block` on its own pinned every guard at the 0.95 cap.
     #[test]
     fn a_block_enchant_is_scaled_like_its_siblings_not_raw() {
@@ -993,8 +1058,13 @@ mod tests {
         let mut l = lo();
         apply_enchant(&mut l, &Uuid::parse_str(POWERFUL_BLOCK).unwrap(), top);
 
-        // The rating is the SCALED magnitude, not the raw curve value.
-        let want = raw * tables::ENCHANT_DAMAGE_PER_VALUE;
+        // The rating is the SHIPPED magnitude, not the raw curve value and not the
+        // old `raw x ENCHANT_DAMAGE_PER_VALUE` inference. The point of the test — that
+        // the raw 7591 must never reach the loadout — is unchanged; only the correct
+        // answer moved, from a borrowed constant to the client's own table.
+        let want = gamedata::enchant_magnitude(POWERFUL_BLOCK, top)
+            .expect("Powerful Block ships a magnitude table");
+        assert!(want < raw / 10.0, "the shipped magnitude is nothing like the raw curve");
         assert!(
             (l.block_rating - want).abs() < 1e-3,
             "block rating {} should be the scaled magnitude {want} (raw curve {raw})",
