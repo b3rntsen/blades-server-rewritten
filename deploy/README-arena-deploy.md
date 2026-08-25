@@ -7,6 +7,30 @@ blades.bgs.services REST + matchmaking + the live `rusty_enet` UDP arena host),
 Both app containers are memory-capped (256 MB) and cgroup-isolated so they can't
 starve a co-located stack.
 
+## Reading the logs
+
+Container logs go to the **host journal**, not `docker logs`, because
+`docker compose up -d` recreates containers and destroys their json-file logs.
+That cost us the entire first human-vs-human arena session: it was investigated a
+day later and every combat line was already gone, wiped by the deploy that
+followed. Only the Postgres rows survived, and they do not record what the engine
+decided.
+
+```sh
+journalctl CONTAINER_NAME=arena-server --since '2026-08-25 20:00'
+journalctl CONTAINER_NAME=arena-server -f            # follow a live match
+journalctl CONTAINER_NAME=arena-server | grep -E 'matchmaker:|combat:'
+journalctl CONTAINER_NAME=arena-db --since today     # deploy-time schema errors
+```
+
+`docker logs arena-server` still works for the CURRENT container; it is the
+history that now lives elsewhere. The journal on this box is persistent
+(`/var/log/journal`) and rotates itself.
+
+Set `ARENA_LOG_DRIVER=json-file` in `arena.env` to opt out on a host without
+persistent journald — the logs then die with the container again.
+
+
 ## Prerequisites
 - **Build host** with Docker + ≥ 4 GB RAM (a release build OOMs the 1.9 GB prod
   box — build off-box, ship the image).

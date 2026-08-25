@@ -25,6 +25,12 @@ services:
     volumes:
       - arena-db-data:/var/lib/postgresql/data
     mem_limit: 256m
+    # Same reasoning as arena-server: a connection or schema error raised during a
+    # deploy is precisely the log a recreate would erase.
+    logging:
+      driver: ${ARENA_LOG_DRIVER:-journald}
+      options:
+        tag: arena-db
     networks: [arena_net]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U blades -d blades"]
@@ -131,6 +137,12 @@ services:
       # Seconds a lone matchmaking ticket waits for a human opponent before falling
       # back to a solo match vs a bot. Tunable without a rebuild (recreate to apply).
       ARENA_SOLO_FALLBACK_SECS: ${ARENA_SOLO_FALLBACK_SECS:-20}
+      # The other two fallback tiers (see matchmaker.rs). `busy` applies while
+      # somebody else is mid-match; `recent` covers a player BETWEEN fights, who is
+      # neither queued nor live and whom the other two tiers used to miss entirely.
+      ARENA_BUSY_FALLBACK_SECS: ${ARENA_BUSY_FALLBACK_SECS:-230}
+      ARENA_RECENT_FALLBACK_SECS: ${ARENA_RECENT_FALLBACK_SECS:-30}
+      ARENA_RECENT_WINDOW_SECS: ${ARENA_RECENT_WINDOW_SECS:-300}
       ARENA_BOT_USER_IDS: ${ARENA_BOT_USER_IDS:-}
       # Dev override: pin EVERY anon login to this user (a Transfer'd character),
       # since there's no Bethesda/Google identity. Empty/unset = normal behaviour.
@@ -186,6 +198,27 @@ services:
       # (security-group / iptables), since the handshake is not yet authenticated.
       - "${ARENA_UDP_PORT:-7777}:7777/udp"
     mem_limit: 256m
+    # Logs must OUTLIVE THE CONTAINER.
+    #
+    # The default json-file driver stores logs in the container's own directory,
+    # so `docker compose up -d` — which RECREATES rather than restarts — destroys
+    # them. That is not theoretical: the first human-vs-human arena session was
+    # investigated a day later and every combat log line from it was already gone,
+    # wiped by the deploy that followed. Only the Postgres rows survived, and they
+    # do not record what the engine decided.
+    #
+    # journald keeps them in the host journal instead, which on this box is
+    # persistent (/var/log/journal) and rotates itself. Read them with:
+    #
+    #     journalctl CONTAINER_NAME=arena-server --since '2026-08-25 20:00'
+    #     journalctl CONTAINER_NAME=arena-server -f          # follow
+    #
+    # Override with ARENA_LOG_DRIVER=json-file for a box without persistent
+    # journald (the logs then die with the container again).
+    logging:
+      driver: ${ARENA_LOG_DRIVER:-journald}
+      options:
+        tag: arena-server
     networks: [arena_net, edge_net]
 
 volumes:
