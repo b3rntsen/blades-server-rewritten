@@ -660,6 +660,14 @@ pub struct Loadout {
     /// attacker's enchants — subtracted from the defender's resistance rating before
     /// the reduction is computed. [Phase 3.4]
     pub elem_resist_piercing_rating: f32,
+    /// **PDOC / EDOC** — `Opportunist{Physical,Elemental}PropertyLogic`, flat damage
+    /// "against targets suffering a condition".
+    ///
+    /// The gate is not a guess: the shipped asset carries
+    /// `_triggerStatusEffects = [4, 5, 6, 7]` — Burning, Frozen, Enervated, Poisoned,
+    /// the elemental four. Staggered, Blind and Paralyzed do NOT count.
+    pub opportunist_physical: f32,
+    pub opportunist_elemental: f32,
     /// Flat BLOCK-piercing ratings, subtracted from the defender's Block Rating before
     /// the block reduction is computed — the block-stage mirror of
     /// `armor_piercing_rating`. `block_piercing_rating` applies to physical,
@@ -1710,6 +1718,24 @@ impl Fighter {
     }
 
     /// True iff this fighter is currently paralysed (its inputs are blocked).
+    /// Is this fighter suffering one of the four ELEMENTAL conditions?
+    ///
+    /// The gate for `Opportunist` (PDOC / EDOC). Not a guess: the shipped asset
+    /// carries `_triggerStatusEffects = [4, 5, 6, 7]` = Burning / Frozen / Enervated /
+    /// Poisoned. Staggered(3), Blind(8) and Paralyzed(9) are modelled elsewhere and
+    /// deliberately do NOT count.
+    pub fn is_conditioned(&self, now: Instant) -> bool {
+        const TRIGGERS: [StatusEffectType; 4] = [
+            StatusEffectType::Burning,
+            StatusEffectType::Frozen,
+            StatusEffectType::Enervated,
+            StatusEffectType::Poisoned,
+        ];
+        self.effects
+            .iter()
+            .any(|e| TRIGGERS.contains(&e.effect) && now < e.expires_at)
+    }
+
     pub fn is_paralyzed(&self) -> bool {
         self.actor_state == ActorStateType::Paralyzed
     }

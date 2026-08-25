@@ -344,6 +344,12 @@ fn apply_enchant(lo: &mut Loadout, id: &Uuid, tier: u8) {
 
         // ---- piercing ------------------------------------------------------
         "ResistancePiercingElementalPropertyLogic" => lo.elem_resist_piercing_rating += magnitude,
+
+        // ---- Opportunist (PDOC / EDOC) ---------------------------------------
+        // "Increases physical damage by {0} against targets suffering a condition."
+        // No percent sign, so a FLAT add — the same shape as Fortify.
+        "OpportunistPhysicalPropertyLogic" => lo.opportunist_physical += magnitude,
+        "OpportunistElementalPropertyLogic" => lo.opportunist_elemental += magnitude,
         "ArmorPiercingPhysicalPropertyLogic" => lo.armor_piercing_rating += magnitude,
 
         // ---- status-threshold fortifies (Phase 3.8) ------------------------
