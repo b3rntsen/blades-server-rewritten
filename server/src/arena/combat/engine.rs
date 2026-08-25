@@ -3005,74 +3005,72 @@ pub(in crate::arena::combat) mod tests {
         );
     }
 
-    /// PARALYSE (§5.4): a poison-heavy attacker accumulates poison on the target's
-    /// sliding window; once it crosses the absolute paralyse threshold the target enters
-    /// the `Paralyzed` actor-state (op51 status 9 emitted) and its combat inputs LOCK.
+    /// PARALYSE (§5.4): CASTING the Paralyze spell paralyses. Nothing else does.
+    ///
+    /// This used to swing a poison-ENCHANTED weapon and assert paralysis, which is the
+    /// bug it now guards against — see `a_poison_enchant_alone_does_not_paralyse`.
+    /// Paralysis comes from the cast, via `try_paralyze` on the Paralyze tag arm:
+    /// the spell's own venom crossing the spell's own `_damageToCauseParalyze`. That
+    /// is what s506 recorded — "every Paralyzed(3.1 s) apply is immediately preceded
+    /// by a big Poisoned(4.89 s) apply" (arena-status-resistance-spec.md §5.4) — and
+    /// the accumulated damage is the CASTER's, not any poison the target has taken.
     #[test]
-    fn poison_accumulation_paralyses_and_locks_inputs() {
-        use crate::arena::combat::state::{ActorStateType, DamageType, WeaponProfile};
-        use crate::arena::combat::tables::Weight;
+    fn casting_paralyze_paralyses_and_locks_inputs() {
+        use crate::arena::combat::state::ActorStateType;
         let now = Instant::now();
-        // A heavy-poison dagger so a few swings cross the paralyse threshold.
-        let poison = {
-            let mut l = crate::arena::combat::loadout::starter();
-            l.weapon = WeaponProfile {
-                primary_type: Some(DamageType::Slashing),
-                base_by_type: vec![(DamageType::Slashing, 60.0)],
-                weight: Some(Weight::Light),
-            };
-            l.enchants = vec![(DamageType::Poison, 10)]; // ~137/swing, amplifying with stacks
-            // The attacker must HAVE the Paralyze spell. Paralysis is "a Poison-damage
-            // SPELL + a paralyse threshold" (arena-status-resistance-spec.md §5.4,
-            // dump+cap, proven in s506) — not a property of any poison source. Before
-            // this the test passed with rank 0, because `paralyze_damage_threshold`
-            // substituted rank 1 via `rank.max(1)`, which is what let a plain poison
-            // enchant paralyse people.
-            l.paralyze_rank = 1;
-            l
-        };
-        let mut m = MatchInstance::new(2, 2, vec![poison, crate::arena::combat::loadout::starter()], now);
+        let mut m = MatchInstance::new(
+            2,
+            2,
+            vec![
+                crate::arena::combat::loadout::starter(),
+                crate::arena::combat::loadout::starter(),
+            ],
+            now,
+        );
         let live = drive_to_live(&mut m, 2, now);
+        m.combat.fighters[0].magicka = 100_000;
 
-        // Slot 0 (poison) swings slot 1 repeatedly. Within the 5 s window the poison
-        // accumulates and eventually paralyses slot 1 (op51 status 9 to both players).
+        // Paralyze deals its own poison on impact; a single cast may not cross the
+        // threshold, so cast until it does (or give up and fail loudly).
+        let paralyze = crate::arena::combat::gamedata::ids::PARALYZE;
+        let mut frame = vec![
+            0xBE, 0x36, 0x04, 0x1F, 0x70, 0x77, 0x0A, 0x35, 0x02, 0x00, 0x00, 0x38, 0x03, 0x25,
+            0x24, 0x00,
+        ];
+        frame.extend_from_slice(paralyze.as_bytes());
+
         let is_op51_paralyze = |b: &[u8]| {
             b.len() > 5
                 && b[1] == 0x36
                 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(51)
                 && arena_proto::parse_netdata(&b[2..]).int(5) == Some(9)
         };
-        let mut saw_paralyze = false;
+
         let mut t = live;
-        for _ in 0..12 {
-            t += Duration::from_millis(500); // > SWING_COOLDOWN, < the 5 s window
-            let out = swing(&mut m, 0, t);
+        let mut saw = false;
+        for _ in 0..10 {
+            t += Duration::from_millis(600);
+            m.combat.fighters[0].magicka = 100_000; // never let the cost gate the test
+            let mut out = m.on_c2s(0, &frame, t);
+            out.extend(m.on_tick(2, t + Duration::from_millis(1500)));
             if out.iter().any(|(_, b)| is_op51_paralyze(b)) {
-                saw_paralyze = true;
+                saw = true;
                 break;
             }
             if m.combat.fighters[1].is_dead() {
                 break;
             }
         }
-        assert!(saw_paralyze, "poison accumulation must land Paralyzed (op51 status 9) within the window");
+        assert!(saw, "casting Paralyze must land Paralyzed (op51 status 9)");
         assert_eq!(
             m.combat.fighters[1].actor_state(),
             ActorStateType::Paralyzed,
             "the target is in the Paralyzed actor-state"
         );
-        // A paralysed fighter's combat inputs are LOCKED (no damage dealt back).
-        let attacker_full = m.fighter_health(0);
-        let out = m.on_c2s(1, &[0x84, 0x36], t + Duration::from_millis(600));
-        // The swing itself is dropped. The burst may still carry actor-state frames —
-        // a lapsed paralysis reconciles to Idle and retail announces that with gmid 39 —
-        // so the assertion is "no swing was resolved", not "no bytes were sent".
-        for (_, ud) in &out {
-            let gmid = arena_proto::parse_netdata(&ud[2..]).int(3);
-            assert_ne!(gmid, Some(50), "a paralysed fighter's swing must deal no damage");
-            assert_ne!(gmid, Some(52), "a paralysed fighter must not enter an attack state");
-        }
-        assert_eq!(m.fighter_health(0), attacker_full, "paralysed target dealt no damage");
+        assert!(
+            m.combat.fighters[1].is_paralyzed(),
+            "and its combat inputs are LOCKED"
+        );
     }
 
     /// Push a bare status onto a fighter, with no DoT and no transient resistance.

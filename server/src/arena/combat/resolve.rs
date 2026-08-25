@@ -2293,7 +2293,7 @@ fn apply_status_conditioning(
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
     use super::damage::is_elemental;
-    use super::state::{condition_for_element, ActorStateType, DamageType, StatusEffectType};
+    use super::state::{condition_for_element, DamageType, StatusEffectType};
 
     let mut out = Vec::new();
     let target_obj = combat.fighters[target_slot].net_object_id;
@@ -2386,52 +2386,31 @@ fn apply_status_conditioning(
             // **Phase 3.9:** the threshold is the shipped, ABSOLUTE
             // `ParalyzeAbility._damageToCauseParalyze` (32.7 @ R1) — not a fraction of
             // max HP — and the lock lasts the rank's own `_duration` (2.0 s @ R1).
-            // The attacker must actually HAVE the Paralyze spell. `paralyze_rank` is 0
-            // unless one is equipped (`loadout.rs`), and `paralyze_damage_threshold`
-            // then silently substituted rank 1 via `rank.max(1)` — so a plain poison
-            // WEAPON ENCHANT paralysed people. Reported after the first arena session:
-            // "first match I got paralysed from a block."
+            // PARALYSE USED TO BE LAYERED HERE, on any poison hit. It is gone.
             //
-            // Blocking is no defence either: an optimal block zeroes PHYSICAL damage
-            // but only rating-reduces elemental, so half the poison still reaches
-            // `damage_history`. With a 5 s poison window and a 2 s lock, the next tick
-            // re-paralysed — a stun-lock from behind a raised shield.
+            // Paralysis comes from CASTING the Paralyze spell — not from taking poison
+            // damage, whether or not the attacker has the spell equipped. `try_paralyze`
+            // is called from the Paralyze tag arm on the cast itself and is a complete
+            // duplicate of what stood here: same `can_be_paralyzed` gate, same
+            // `recent_element_damage(Poison)`, same shipped threshold and duration. It
+            // remains the only source, alongside FlashFreeze's own `_paralyzeDuration`.
             //
-            // The spec is explicit that this belongs to the spell:
-            // "Paralyse = a Poison-damage SPELL + a paralyse threshold. Proven in s506:
-            // every Paralyzed(3.1 s) apply is immediately preceded by a big
-            // Poisoned(4.89 s) apply" [arena-status-resistance-spec.md §5.4, dump+cap].
-            // s506's paralysis came from a Paralyze cast, not from an enchant — so the
-            // mechanic stays, gated on the caster actually having it.
-            let attacker_paralyze_rank = combat
-                .opponent_of(target_slot)
-                .and_then(|s| combat.fighters.get(s))
-                .map(|f| f.loadout.paralyze_rank)
-                .unwrap_or(0);
-            if *ty == DamageType::Poison
-                && attacker_paralyze_rank > 0
-                && combat.fighters[target_slot].can_be_paralyzed
-            {
-                let rank = attacker_paralyze_rank;
-                let paralyze_threshold = super::state::paralyze_damage_threshold(rank);
-                let secs = super::state::paralyze_duration_secs(rank);
-                let not_already_paralyzed =
-                    combat.fighters[target_slot].actor_state() != ActorStateType::Paralyzed;
-                if recent >= paralyze_threshold && not_already_paralyzed {
-                    let f = &mut combat.fighters[target_slot];
-                    f.set_actor_state(ActorStateType::Paralyzed, now); // locks inputs (is_paralyzed)
-                    f.clear_scheduled_states();
-                    f.blocking_until = None; // paralysed → guard drops
-                    f.paralyze_secs = secs;
-                    let frame = messages::change_combat_status_effect(
-                        target_obj, true, StatusEffectType::Paralyzed, secs,
-                    );
-                    info!("combat: slot {target_slot} PARALYZED (poison {recent:.1} ≥ {paralyze_threshold:.1}) for {secs}s");
-                    for slot in 0..combat.fighters.len() {
-                        out.push((slot, frame.clone()));
-                    }
-                }
-            }
+            // The spec is not evidence against this. "Paralyse = a Poison-damage SPELL
+            // + a paralyse threshold. Proven in s506: every Paralyzed(3.1 s) apply is
+            // immediately preceded by a big Poisoned(4.89 s) apply"
+            // [arena-status-resistance-spec.md §5.4, dump+cap] describes the Paralyze
+            // spell's OWN venom crossing its OWN threshold — which is exactly what
+            // `try_paralyze` does on the cast. It does not say poison from any other
+            // source paralyses, and s506's paralysis came from a cast.
+            //
+            // What stood here read the ATTACKER's `paralyze_rank` — 0 unless a Paralyze
+            // ability is equipped — after which `paralyze_damage_threshold` silently
+            // substituted rank 1 via `rank.max(1)`. So a plain poison WEAPON ENCHANT
+            // paralysed people, and blocking was no defence: an optimal block zeroes
+            // PHYSICAL damage but only rating-reduces elemental, so half the poison
+            // still reached `damage_history`. With a 5 s poison window and a 2 s lock
+            // the next tick re-paralysed — a stun-lock from behind a raised shield.
+            // Reported as "first match I got paralysed from a block".
         }
     }
     out
