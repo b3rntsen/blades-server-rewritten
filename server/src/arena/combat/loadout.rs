@@ -359,10 +359,18 @@ fn apply_enchant(lo: &mut Loadout, id: &Uuid, tier: u8) {
 
         // ---- offensive element amplification --------------------------------
         // `Fortify <Element> Damage` raises the attacker's own element track.
-        "FortifyFirePropertyLogic" => push_fortify(lo, DamageType::Fire, curve_fraction(family, tier)),
-        "FortifyFrostPropertyLogic" => push_fortify(lo, DamageType::Frost, curve_fraction(family, tier)),
-        "FortifyShockPropertyLogic" => push_fortify(lo, DamageType::Shock, curve_fraction(family, tier)),
-        "FortifyPoisonPropertyLogic" => push_fortify(lo, DamageType::Poison, curve_fraction(family, tier)),
+        //
+        // A FLAT add, in damage units — the shipped text is "Increases frost damage
+        // by {0}." with no percent sign, where `Haste` next to it reads "{0}%". It
+        // used to store `curve_fraction` and be consumed as `(1.0 + f) x`, which was
+        // wrong twice over: wrong shape, and it under-paid every sub-tier-10 enchant.
+        // (At tier 10 the two happen to coincide exactly, because the weapon-enchant
+        // base and the fortify magnitude share the same curve — which is why this
+        // survived so long.)
+        "FortifyFirePropertyLogic" => push_fortify(lo, DamageType::Fire, magnitude),
+        "FortifyFrostPropertyLogic" => push_fortify(lo, DamageType::Frost, magnitude),
+        "FortifyShockPropertyLogic" => push_fortify(lo, DamageType::Shock, magnitude),
+        "FortifyPoisonPropertyLogic" => push_fortify(lo, DamageType::Poison, magnitude),
 
         _ => {}
     }

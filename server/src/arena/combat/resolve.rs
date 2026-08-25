@@ -2496,21 +2496,15 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
             continue;
         }
 
-        // Maximum Power is frozen at cast; Mettle is re-read live off the caster.
+        // Maximum Power is frozen at cast; Mettle and the caster's gear are re-read
+        // live. Built from `CasterPerks::of` with only the one frozen field
+        // overridden, rather than field-by-field: hand-building it here is what makes
+        // "works on tick 1, nothing after" bugs — a field added to `of()` and
+        // forgotten here silently stops applying partway through every channel. EDIR
+        // and Fortify both had to be patched in two places because of this.
         let caster_perks = super::perks::CasterPerks {
-            perks: &combat.fighters[caster].loadout.perks,
             magicka_full: magicka_full_at_cast,
-            health_critical: super::perks::health_is_critical(
-                combat.fighters[caster].health,
-                combat.fighters[caster].max_health,
-            ),
-            // Each channel TICK re-enters the damage model, so EDIR has to be carried
-            // here too — otherwise a frost build's Elemental Damage Ignores Resistance
-            // would apply to the first tick and to nothing after it.
-            elem_resist_piercing: combat.fighters[caster].loadout.elem_resist_piercing,
-            elem_resist_piercing_rating: combat.fighters[caster]
-                .loadout
-                .elem_resist_piercing_rating,
+            ..super::perks::CasterPerks::of(&combat.fighters[caster])
         };
         let resolved = RetailDamageModel.resolve_ability(
             &uuid,

@@ -125,7 +125,7 @@ fn augmented_flames_raises_a_fire_spell() {
     let fireball = super::gamedata::ids::FIREBALL;
 
     let bonuses = perks(&[perk(AUGMENTED_FLAMES, 11)]);
-    let perked = CasterPerks { perks: &bonuses, magicka_full: false, health_critical: false, elem_resist_piercing: 0.0, elem_resist_piercing_rating: 0.0 };
+    let perked = CasterPerks { perks: &bonuses, magicka_full: false, health_critical: false, elem_resist_piercing: 0.0, elem_resist_piercing_rating: 0.0, element_fortify: &[] };
 
     let with = m.resolve_ability(fireball, 1, &perked, &plain_target(), ActiveSide::Middle, now);
     let without =
@@ -146,8 +146,8 @@ fn maximum_power_pays_only_at_full_magicka() {
     let fireball = super::gamedata::ids::FIREBALL;
 
     let bonuses = perks(&[perk(MAXIMUM_POWER, 6)]);
-    let full = CasterPerks { perks: &bonuses, magicka_full: true, health_critical: false, elem_resist_piercing: 0.0, elem_resist_piercing_rating: 0.0 };
-    let ravaged = CasterPerks { perks: &bonuses, magicka_full: false, health_critical: false, elem_resist_piercing: 0.0, elem_resist_piercing_rating: 0.0 };
+    let full = CasterPerks { perks: &bonuses, magicka_full: true, health_critical: false, elem_resist_piercing: 0.0, elem_resist_piercing_rating: 0.0, element_fortify: &[] };
+    let ravaged = CasterPerks { perks: &bonuses, magicka_full: false, health_critical: false, elem_resist_piercing: 0.0, elem_resist_piercing_rating: 0.0, element_fortify: &[] };
 
     let a = comp(
         &m.resolve_ability(fireball, 1, &full, &plain_target(), ActiveSide::Middle, now),

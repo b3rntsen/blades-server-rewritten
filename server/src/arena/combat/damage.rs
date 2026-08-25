@@ -395,7 +395,10 @@ impl RetailDamageModel {
         // enchantment; a lone enchantment is not stacked and gets nothing.
         let synergy = attacker.perks.enchantment_synergy;
         for (ench_ty, magnitude) in enchant_tracks(attacker) {
-            let amp = target.element_amp_for(ench_ty) * (1.0 + fortify_for(attacker, ench_ty));
+            // Fortify is a FLAT add and is paid once per hit in `finish_resolved`
+            // step 0, alongside the Augmented* perks it shares its shape with — not
+            // as a multiplier here, and not once per enchant track.
+            let amp = target.element_amp_for(ench_ty);
             let stacked = synergy > 0.0
                 && attacker.enchants.iter().filter(|(t, _)| *t == ench_ty).count() > 1;
             let synergy_mult = if stacked { 1.0 + synergy } else { 1.0 };
@@ -542,6 +545,7 @@ impl DamageModel for RetailDamageModel {
         // — so copying them is the complete fix and touches nothing else.
         let mut caster_loadout = Loadout::default();
         caster_loadout.perks = caster.perks.clone();
+        caster_loadout.element_fortify = caster.element_fortify.to_vec();
         caster_loadout.elem_resist_piercing = caster.elem_resist_piercing;
         caster_loadout.elem_resist_piercing_rating = caster.elem_resist_piercing_rating;
         // The ABILITY's own `_elementalResistancePiercing`, the same field the weapon
@@ -747,10 +751,20 @@ fn finish_resolved(
     //    a DoT: it re-enters here once per 0.2 s tick, so a per-tick flat bonus would
     //    pay the perk 15 times for one cast.
     let single_impact = !continuous && source != DamageSource::ContinuousSpell;
-    if single_impact && !attacker.perks.element_damage.is_empty() {
+    // `Fortify <Element> Damage` gear joins the Augmented* perks here. Same shipped
+    // shape ("Increases frost damage by {0}", no percent), so same treatment: a flat
+    // add, once per hit, on the SHARED path — which is the fix. It used to be read in
+    // exactly one place, inside `swing_components`, reachable only from the weapon
+    // path. Every damaging spell is elemental, so a frost build's Fortify Frost was
+    // discarded on 100% of its spells. A tier-10 suffix is 137.32 against
+    // AugmentedFrost's 18.60 — 7.4x the perk, applied to nothing.
+    //
+    // `single_impact` keeps a 15-tick channel from paying it 15 times, exactly as it
+    // already does for the perks.
+    if single_impact {
         for (ty, v) in components.iter_mut() {
             if is_elemental(*ty) && *v > 0.0 {
-                *v += attacker.perks.element_bonus(*ty);
+                *v += attacker.perks.element_bonus(*ty) + fortify_for(attacker, *ty);
             }
         }
     }
@@ -1056,6 +1070,97 @@ mod tests {
         wall.loadout.resistances = vec![(DamageType::Poison, 100_000.0)];
         let rd3 = m.resolve_attack(&poison_dagger(), &wall, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
         assert!((comp(&rd3, DamageType::Poison) - 137.32 * 0.05).abs() < 0.5);
+    }
+
+    /// THE FORTIFY BUG — EDIR's twin, on the same frost build.
+    ///
+    /// `Fortify <Element> Damage` was read in exactly ONE place: inside
+    /// `swing_components`, reachable only from `resolve_attack`. `resolve_ability`
+    /// never calls it, and the `caster_loadout` it built left `element_fortify` empty
+    /// — two independent reasons a spell could never see it. Every damaging spell in
+    /// the shipped table is elemental, so a frost build's Fortify Frost was discarded
+    /// on 100% of its spells.
+    ///
+    /// Scale: a tier-10 suffix is 137.32 against AugmentedFrost's 18.60 — 7.4x the
+    /// perk, applied to nothing.
+    #[test]
+    fn fortify_element_applies_to_spells_not_only_weapons() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        // Fireball is the module's standing reference spell; the bug is path-shaped,
+        // not element-specific, so any elemental spell exercises it.
+        let spell = gamedata::ids::FIREBALL;
+
+        let bare = m.resolve_ability(
+            spell, 1, &crate::arena::combat::perks::CasterPerks::none(), &target(), ActiveSide::Middle, now);
+
+        let fortify = vec![(DamageType::Fire, 137.32_f32)];
+        let perks = crate::arena::combat::perks::PerkBonuses::default();
+        let fortified_caster = crate::arena::combat::perks::CasterPerks {
+            perks: &perks,
+            magicka_full: false,
+            health_critical: false,
+            elem_resist_piercing: 0.0,
+            elem_resist_piercing_rating: 0.0,
+            element_fortify: &fortify,
+        };
+        let fortified = m.resolve_ability(
+            spell, 1, &fortified_caster, &target(), ActiveSide::Middle, now);
+
+        let gain = comp(&fortified, DamageType::Fire) - comp(&bare, DamageType::Fire);
+        assert!(
+            (gain - 137.32).abs() < 0.5,
+            "Fortify must add its flat 137.32 to a SPELL, got {gain}"
+        );
+    }
+
+    /// It is a FLAT add, not a multiplier. The shipped text is "Increases frost damage
+    /// by {0}." with no percent sign, where `Haste` beside it reads "{0}%".
+    ///
+    /// The old code stored a `curve_fraction` and applied `(1.0 + f) x`. At tier 10
+    /// that coincides exactly with the flat value — the weapon-enchant base and the
+    /// fortify magnitude share one curve — which is why the bug survived. At tier 8 it
+    /// under-paid by about a third, and with no matching weapon enchant it paid zero.
+    #[test]
+    fn fortify_element_is_flat_not_a_multiplier() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        // Two attackers differing ONLY in the size of their poison enchant track.
+        let mk = |ench_tier: u8| {
+            let mut a = poison_dagger();
+            a.element_fortify = vec![(DamageType::Poison, 89.74)]; // tier 8
+            a.enchants = vec![(DamageType::Poison, ench_tier)];
+            a
+        };
+        let small = m.resolve_attack(
+            &mk(4), &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let large = m.resolve_attack(
+            &mk(10), &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+
+        // A flat add contributes the SAME amount to both. A multiplier would scale
+        // with the track it multiplies, so the gap would differ.
+        let base_small = comp(&small, DamageType::Poison);
+        let base_large = comp(&large, DamageType::Poison);
+        let mut nofort4 = mk(4);
+        nofort4.element_fortify.clear();
+        let mut nofort10 = mk(10);
+        nofort10.element_fortify.clear();
+        let plain_small = comp(&m.resolve_attack(
+            &nofort4, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now), DamageType::Poison);
+        let plain_large = comp(&m.resolve_attack(
+            &nofort10, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now), DamageType::Poison);
+
+        let gain_small = base_small - plain_small;
+        let gain_large = base_large - plain_large;
+        assert!(
+            (gain_small - gain_large).abs() < 0.5,
+            "a flat add pays the same regardless of the track it sits on: \
+             {gain_small} vs {gain_large}"
+        );
+        assert!(
+            (gain_small - 89.74).abs() < 0.5,
+            "and it pays its own magnitude, got {gain_small}"
+        );
     }
 
     /// WEAKNESS is a separate flat INCREASE, capped at ×1 of the component — it no

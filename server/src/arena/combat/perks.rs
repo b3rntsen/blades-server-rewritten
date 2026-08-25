@@ -276,6 +276,9 @@ pub struct CasterPerks<'a> {
     /// its own text promises it works. The weapon path honoured it the whole time.
     pub elem_resist_piercing: f32,
     pub elem_resist_piercing_rating: f32,
+    /// The caster's `Fortify <Element> Damage` gear. A slice, not a Vec, because
+    /// `CasterPerks` is `Copy`.
+    pub element_fortify: &'a [(super::state::DamageType, f32)],
 }
 
 impl CasterPerks<'static> {
@@ -287,6 +290,7 @@ impl CasterPerks<'static> {
             health_critical: false,
             elem_resist_piercing: 0.0,
             elem_resist_piercing_rating: 0.0,
+            element_fortify: &[],
         }
     }
 }
@@ -300,6 +304,7 @@ impl<'a> CasterPerks<'a> {
             health_critical: health_is_critical(f.health, f.max_health),
             elem_resist_piercing: f.loadout.elem_resist_piercing,
             elem_resist_piercing_rating: f.loadout.elem_resist_piercing_rating,
+            element_fortify: &f.loadout.element_fortify,
         }
     }
 }
