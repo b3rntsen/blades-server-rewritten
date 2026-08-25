@@ -2386,13 +2386,33 @@ fn apply_status_conditioning(
             // **Phase 3.9:** the threshold is the shipped, ABSOLUTE
             // `ParalyzeAbility._damageToCauseParalyze` (32.7 @ R1) — not a fraction of
             // max HP — and the lock lasts the rank's own `_duration` (2.0 s @ R1).
-            if *ty == DamageType::Poison && combat.fighters[target_slot].can_be_paralyzed {
-                // The ATTACKER's Paralyze rank selects the row (0 → the R1 default).
-                let rank = combat
-                    .opponent_of(target_slot)
-                    .and_then(|s| combat.fighters.get(s))
-                    .map(|f| f.loadout.paralyze_rank)
-                    .unwrap_or(0);
+            // The attacker must actually HAVE the Paralyze spell. `paralyze_rank` is 0
+            // unless one is equipped (`loadout.rs`), and `paralyze_damage_threshold`
+            // then silently substituted rank 1 via `rank.max(1)` — so a plain poison
+            // WEAPON ENCHANT paralysed people. Reported after the first arena session:
+            // "first match I got paralysed from a block."
+            //
+            // Blocking is no defence either: an optimal block zeroes PHYSICAL damage
+            // but only rating-reduces elemental, so half the poison still reaches
+            // `damage_history`. With a 5 s poison window and a 2 s lock, the next tick
+            // re-paralysed — a stun-lock from behind a raised shield.
+            //
+            // The spec is explicit that this belongs to the spell:
+            // "Paralyse = a Poison-damage SPELL + a paralyse threshold. Proven in s506:
+            // every Paralyzed(3.1 s) apply is immediately preceded by a big
+            // Poisoned(4.89 s) apply" [arena-status-resistance-spec.md §5.4, dump+cap].
+            // s506's paralysis came from a Paralyze cast, not from an enchant — so the
+            // mechanic stays, gated on the caster actually having it.
+            let attacker_paralyze_rank = combat
+                .opponent_of(target_slot)
+                .and_then(|s| combat.fighters.get(s))
+                .map(|f| f.loadout.paralyze_rank)
+                .unwrap_or(0);
+            if *ty == DamageType::Poison
+                && attacker_paralyze_rank > 0
+                && combat.fighters[target_slot].can_be_paralyzed
+            {
+                let rank = attacker_paralyze_rank;
                 let paralyze_threshold = super::state::paralyze_damage_threshold(rank);
                 let secs = super::state::paralyze_duration_secs(rank);
                 let not_already_paralyzed =

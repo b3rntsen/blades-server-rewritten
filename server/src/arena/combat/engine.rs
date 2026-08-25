@@ -2943,6 +2943,68 @@ pub(in crate::arena::combat) mod tests {
         }
     }
 
+    /// THE REPORTED BUG: "first match I got paralysed from a block."
+    ///
+    /// The same poison-heavy attacker as the test below, but with NO Paralyze spell.
+    /// `paralyze_rank` is 0, and `paralyze_damage_threshold` used to substitute rank 1
+    /// via `rank.max(1)` — so a plain poison WEAPON ENCHANT paralysed people, and an
+    /// optimal block was no defence (it zeroes physical damage but only rating-reduces
+    /// elemental, so half the poison still reaches `damage_history`). With a 5 s poison
+    /// window and a 2 s lock, the next tick re-paralysed: a stun-lock from behind a
+    /// raised shield.
+    #[test]
+    fn a_poison_enchant_alone_does_not_paralyse() {
+        use crate::arena::combat::state::{ActorStateType, DamageType, WeaponProfile};
+        use crate::arena::combat::tables::Weight;
+        let now = Instant::now();
+        let poison = {
+            let mut l = crate::arena::combat::loadout::starter();
+            l.weapon = WeaponProfile {
+                primary_type: Some(DamageType::Slashing),
+                base_by_type: vec![(DamageType::Slashing, 60.0)],
+                weight: Some(Weight::Light),
+            };
+            l.enchants = vec![(DamageType::Poison, 10)];
+            assert_eq!(l.paralyze_rank, 0, "precondition: no Paralyze spell equipped");
+            l
+        };
+        let mut m = MatchInstance::new(2, 2, vec![poison, crate::arena::combat::loadout::starter()], now);
+        let live = drive_to_live(&mut m, 2, now);
+        let is_op51_paralyze = |b: &[u8]| {
+            b.len() > 5
+                && b[1] == 0x36
+                && arena_proto::parse_netdata(&b[2..]).int(3) == Some(51)
+                && arena_proto::parse_netdata(&b[2..]).int(5) == Some(9)
+        };
+        let mut t = live;
+        let mut poisoned = false;
+        for _ in 0..12 {
+            t += Duration::from_millis(500);
+            let out = swing(&mut m, 0, t);
+            assert!(
+                !out.iter().any(|(_, b)| is_op51_paralyze(b)),
+                "a poison enchant with no Paralyze spell must never paralyse"
+            );
+            // Poisoned (status 4) SHOULD still land — otherwise this passes vacuously
+            // because no poison accumulated at all.
+            poisoned |= out.iter().any(|(_, b)| {
+                b.len() > 5
+                    && b[1] == 0x36
+                    && arena_proto::parse_netdata(&b[2..]).int(3) == Some(51)
+                    && arena_proto::parse_netdata(&b[2..]).int(5) == Some(7)
+            });
+            if m.combat.fighters[1].is_dead() {
+                break;
+            }
+        }
+        assert!(poisoned, "precondition: the Poisoned condition must still land");
+        assert_ne!(
+            m.combat.fighters[1].actor_state(),
+            ActorStateType::Paralyzed,
+            "and the target is never locked"
+        );
+    }
+
     /// PARALYSE (§5.4): a poison-heavy attacker accumulates poison on the target's
     /// sliding window; once it crosses the absolute paralyse threshold the target enters
     /// the `Paralyzed` actor-state (op51 status 9 emitted) and its combat inputs LOCK.
@@ -2960,6 +3022,13 @@ pub(in crate::arena::combat) mod tests {
                 weight: Some(Weight::Light),
             };
             l.enchants = vec![(DamageType::Poison, 10)]; // ~137/swing, amplifying with stacks
+            // The attacker must HAVE the Paralyze spell. Paralysis is "a Poison-damage
+            // SPELL + a paralyse threshold" (arena-status-resistance-spec.md §5.4,
+            // dump+cap, proven in s506) — not a property of any poison source. Before
+            // this the test passed with rank 0, because `paralyze_damage_threshold`
+            // substituted rank 1 via `rank.max(1)`, which is what let a plain poison
+            // enchant paralyse people.
+            l.paralyze_rank = 1;
             l
         };
         let mut m = MatchInstance::new(2, 2, vec![poison, crate::arena::combat::loadout::starter()], now);
