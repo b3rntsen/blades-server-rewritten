@@ -16,3 +16,6 @@ build-app/*.apk
 
 # arena deploy secrets (docker-compose.arena.yml --env-file)
 deploy/arena.env
+
+# My local game data
+data/192.168.15.3
