@@ -33,3 +33,5 @@ where it was given in the last column.
 **Marius DAVID** — his 75 commits predate the fork and arrived under the MIT
 licence, which already permits relicensing them under any terms. He is not
 covered by this CLA and does not need to be; see `NOTICE`.
+
+<!-- verifying the required-check name; branch deleted after -->
