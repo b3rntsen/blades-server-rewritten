@@ -35,7 +35,7 @@ struct CollectResponse {
     inventory: CompleteInventoryUpdate,
 }
 
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/chests/{chest_id}/collect")]
+#[post("/api/game/v1/public/characters/{character_id}/chests/{chest_id}/collect")]
 pub async fn collect_chest(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,

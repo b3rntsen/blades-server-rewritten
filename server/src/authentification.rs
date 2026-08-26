@@ -58,7 +58,7 @@ impl SessionResponseInner {
 
         SessionResponseInner {
             session_id: session_id.to_string(),
-            user_id: session.secret_user_id.to_string(),
+            user_id: session.user_id.to_string(),
             token: session.generate_token(&session_id),
             schema: "blades_v1".to_string(),
             feature_status: 7,
@@ -84,7 +84,7 @@ struct DeniedFeatureResponse {
     deny_reason_code: u64,
 }
 
-#[post("/blades.bgs.services/api/authentication/v1/public/auth/anon")]
+#[post("/api/authentication/v1/public/auth/anon")]
 async fn anon_log_in(
     req: HttpRequest,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -300,4 +300,80 @@ async fn anon_log_in(
             session: SessionResponseInner::from_session(session_id, session.as_ref()),
         }));
     }
+}
+
+#[post("/api/authentication/v1/public/auth/refresh")]
+pub async fn refresh(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+) -> Result<web::Json<SessionResponse>, BladeApiError> {
+    let authorization = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 1))?;
+
+    let token = authorization
+        .strip_prefix("blades_v1=")
+        .ok_or_else(|| BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 1))?;
+
+    let (session_id_str, extra_secret_str) = token
+        .split_once('|')
+        .ok_or_else(|| BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 1))?;
+
+    let session_id = Uuid::parse_str(session_id_str)
+        .map_err(|_| BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 1))?;
+
+    let extra_secret = Uuid::parse_str(extra_secret_str)
+        .map_err(|_| BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 1))?;
+
+    let session = match app_state.session_store.get(session_id) {
+        Some(session) => session,
+        None => match crate::session::load_persisted_session(
+            &app_state.db_pool,
+            session_id,
+        )
+        .await
+        {
+            Some(session) => {
+                let session = Arc::new(session);
+                app_state
+                    .session_store
+                    .insert_existing(session_id, session.clone());
+                session
+            }
+            None => {
+                return Err(BladeApiError::new(
+                    StatusCode::UNAUTHORIZED,
+                    3,
+                    1,
+                ));
+            }
+        },
+    };
+
+    if session.extra_secret != extra_secret {
+        return Err(BladeApiError::new(
+            StatusCode::UNAUTHORIZED,
+            3,
+            1,
+        ));
+    }
+
+    // Same response as anon_log_in(), but refresh the expiration
+    // timestamp to three days from now.
+    let new_expiration = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 1))?
+        .as_secs()
+        + 3600 * 24 * 3;
+
+    let mut session_response =
+        SessionResponseInner::from_session(session_id, session.as_ref());
+
+    session_response.token_expiration_seconds = new_expiration;
+
+    Ok(web::Json(SessionResponse {
+        session: session_response,
+    }))
 }

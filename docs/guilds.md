@@ -160,7 +160,7 @@ Length bounds (1–500 characters) *are* enforced.
 
 Paths are il2cpp's, from the `URL_PATH` constants on the request classes in
 `BGS.Shared.Rest.Api.BladeServer`. All are under
-`/blades.bgs.services/api/game/v1/public/characters/{characterId}`.
+`/api/game/v1/public/characters/{characterId}`.
 
 | Method | Path | Who | Response |
 |--------|------|-----|----------|

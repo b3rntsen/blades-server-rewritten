@@ -12,7 +12,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::{BladeApiError, arena::MatchmakingMessage, session::SessionLookedUpMaybe};
 
-#[get("/blades.bgs.services/api/rms/v1/public/")]
+#[get("/api/rms/v1/public/")]
 async fn matchmaking_ws(
     req: HttpRequest,
     stream: web::Payload,

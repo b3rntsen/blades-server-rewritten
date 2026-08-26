@@ -600,7 +600,7 @@ struct CurrentGuildResponse {
     members: Vec<MemberWire>,
 }
 
-#[get("/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current")]
+#[get("/api/game/v1/public/characters/{character_id}/guilds/current")]
 pub async fn get_current_guild(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -649,7 +649,7 @@ struct GuildDetailResponse {
     members: Vec<MemberWire>,
 }
 
-#[get("/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/{guild_id}")]
+#[get("/api/game/v1/public/characters/{character_id}/guilds/{guild_id}")]
 pub async fn get_guild(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -731,7 +731,7 @@ struct GuildListResponse {
 /// implementation accepted the parameters and ignored all of them, returning the
 /// first 50 guilds in table order — so "Open guilds with room in my region" and
 /// "any guild at all" produced identical results.
-#[get("/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/search")]
+#[get("/api/game/v1/public/characters/{character_id}/guilds/search")]
 pub async fn search_guilds(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -855,7 +855,7 @@ struct PageQuery {
 /// Page size is 100, capture-derived: every captured `page=1` response carried
 /// exactly 100 entries ranked 1..100, with `totalPages` varying by how many guilds
 /// existed. Pages are 1-based.
-#[get("/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/leaderboard")]
+#[get("/api/game/v1/public/characters/{character_id}/guilds/leaderboard")]
 pub async fn guild_leaderboard(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -960,7 +960,7 @@ fn invalid_text() -> BladeApiError {
 /// Retail charged 50 Gems for this (`GuildData._createCosts`, corroborated by
 /// `UI.Help.Guilds.Description`: "You can create a new guild for 50 Gems"). This
 /// server does NOT charge — see docs/guilds.md § "Known gaps".
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds")]
+#[post("/api/game/v1/public/characters/{character_id}/guilds")]
 pub async fn create_guild(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -1161,7 +1161,7 @@ async fn update_guild_impl(
     }))
 }
 
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current")]
+#[post("/api/game/v1/public/characters/{character_id}/guilds/current")]
 pub async fn update_guild_post(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -1171,7 +1171,7 @@ pub async fn update_guild_post(
     update_guild_impl(session, app_state, path, body).await
 }
 
-#[put("/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current")]
+#[put("/api/game/v1/public/characters/{character_id}/guilds/current")]
 pub async fn update_guild_put(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -1225,7 +1225,7 @@ async fn build_join_context(
 /// Before this change join performed no checks beyond "does the guild exist and
 /// are you already in one", so a CLOSED guild was joinable, a full guild was
 /// joinable, and a just-kicked player could rejoin immediately.
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/{guild_id}/join")]
+#[post("/api/game/v1/public/characters/{character_id}/guilds/{guild_id}/join")]
 pub async fn join_guild(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -1290,7 +1290,7 @@ struct GuildApplicationResponse {
 /// The "allow a join" path, and the one piece of the guild feature set that had no
 /// server implementation whatsoever: retail ships `ApplyToGuildRequest`
 /// (dump.cs:462204) and this route did not exist.
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/{guild_id}/apply")]
+#[post("/api/game/v1/public/characters/{character_id}/guilds/{guild_id}/apply")]
 pub async fn apply_to_guild(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -1352,7 +1352,7 @@ struct GuildApplicationsResponse {
 /// GRANDMASTER only: `GuildRankData._canApproveGuildApplications` is true for that
 /// rank alone, and the applicant list is what the approve/deny buttons act on.
 #[get(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/applications"
+    "/api/game/v1/public/characters/{character_id}/guilds/current/applications"
 )]
 pub async fn list_applications(
     session: SessionLookedUpMaybe,
@@ -1389,7 +1389,7 @@ pub async fn list_applications(
 /// one transaction: an approval that inserted the member but failed to clear the
 /// application would leave the applicant both seated and still queued.
 #[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/approve/{applicant_user_id}"
+    "/api/game/v1/public/characters/{character_id}/guilds/current/approve/{applicant_user_id}"
 )]
 pub async fn approve_application(
     session: SessionLookedUpMaybe,
@@ -1477,7 +1477,7 @@ pub async fn approve_application(
 
 /// `POST /guilds/current/deny/{applicantUserId}` — reject a join request.
 #[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/deny/{applicant_user_id}"
+    "/api/game/v1/public/characters/{character_id}/guilds/current/deny/{applicant_user_id}"
 )]
 pub async fn deny_application(
     session: SessionLookedUpMaybe,
@@ -1645,7 +1645,7 @@ async fn append_promote_message(
 /// Posts a `LEAVE` entry (captured shape: empty typeSpecificData, 14 examples),
 /// starts the re-join cooldown, and hands the guild on if the departing member was
 /// its Grand Master.
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/leave")]
+#[post("/api/game/v1/public/characters/{character_id}/guilds/current/leave")]
 pub async fn leave_guild(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -1760,7 +1760,7 @@ async fn remove_other_member(
 /// `LEADER` or `OFFICER` could kick anyone at all, including the guild's owner,
 /// and a member of one guild could kick a member of another.
 #[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/kick/{member_user_id}"
+    "/api/game/v1/public/characters/{character_id}/guilds/current/kick/{member_user_id}"
 )]
 pub async fn kick_member(
     session: SessionLookedUpMaybe,
@@ -1791,7 +1791,7 @@ pub async fn kick_member(
 /// The difference from a kick is only the removal record: a ban never expires,
 /// where a kick lapses after the asset's seven days.
 #[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/ban/{member_user_id}"
+    "/api/game/v1/public/characters/{character_id}/guilds/current/ban/{member_user_id}"
 )]
 pub async fn ban_member(
     session: SessionLookedUpMaybe,
@@ -1870,7 +1870,7 @@ async fn message_board(
     Ok(rows.into_iter().map(MessageWire::from_row).collect())
 }
 
-#[get("/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/messages")]
+#[get("/api/game/v1/public/characters/{character_id}/guilds/current/messages")]
 pub async fn get_messages(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -1909,7 +1909,7 @@ struct PostMessageRequest {
 /// latter appears in 94 of 903 captured CLIENT messages — i.e. only when filtering
 /// changed something). This server has no profanity list, so `text` is always the
 /// player's own words and `unfilteredText` is correctly never emitted.
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/messages")]
+#[post("/api/game/v1/public/characters/{character_id}/guilds/current/messages")]
 pub async fn post_message(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -2066,7 +2066,7 @@ struct ExchangeListResponse {
 /// `GET /guilds/current/exchanges` — list all active (non-redeemed) exchanges in
 /// the caller's guild.
 #[get(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/exchanges"
+    "/api/game/v1/public/characters/{character_id}/guilds/current/exchanges"
 )]
 pub async fn list_exchanges(
     session: SessionLookedUpMaybe,
@@ -2107,7 +2107,7 @@ struct CreateExchangeResponse {
 /// `POST /guilds/current/exchanges` — create an exchange request (requestedAmount=10,
 /// maxDonationAmount=5, donationSum=0).
 #[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/exchanges"
+    "/api/game/v1/public/characters/{character_id}/guilds/current/exchanges"
 )]
 pub async fn create_exchange(
     session: SessionLookedUpMaybe,
@@ -2172,7 +2172,7 @@ struct DonateResponse {
 /// `itemTemplateId` stackable from the donor's backpack. The donor must be in the same
 /// guild as the requester. The item is debited from the donor's inventory.
 #[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/exchanges/donate"
+    "/api/game/v1/public/characters/{character_id}/guilds/current/exchanges/donate"
 )]
 pub async fn donate_exchange(
     session: SessionLookedUpMaybe,
@@ -2320,7 +2320,7 @@ struct RedeemResponse {
 /// non-redeemed exchanges that have a donationSum > 0. Credits the requester the
 /// donated stackables and marks each exchange as redeemed.
 #[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/exchanges/redeem"
+    "/api/game/v1/public/characters/{character_id}/guilds/current/exchanges/redeem"
 )]
 pub async fn redeem_exchange(
     session: SessionLookedUpMaybe,

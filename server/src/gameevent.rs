@@ -25,7 +25,7 @@ struct GetGameEventsResponse {
     game_events: Vec<GameEvent>,
 }
 
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/gameevents")]
+#[post("/api/game/v1/public/characters/{character_id}/gameevents")]
 pub async fn get_game_events(app_state: web::Data<Arc<ServerGlobal>>) -> Json<GetGameEventsResponse> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)

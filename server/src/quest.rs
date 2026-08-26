@@ -164,7 +164,7 @@ fn assemble_generated_data_list(
     from_rows
 }
 
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/quests")]
+#[post("/api/game/v1/public/characters/{character_id}/quests")]
 pub async fn get_quests(
     session: SessionLookedUpMaybe,
     request: Json<Option<()>>,
@@ -408,7 +408,7 @@ struct AcceptQuestResponse {
 }
 
 #[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/quests/{quest_id}/accept"
+    "/api/game/v1/public/characters/{character_id}/quests/{quest_id}/accept"
 )]
 async fn accept_quest(
     session: SessionLookedUpMaybe,
@@ -650,7 +650,7 @@ struct CompleteQuestResponse {
 }
 
 #[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/quests/{quest_id}/complete"
+    "/api/game/v1/public/characters/{character_id}/quests/{quest_id}/complete"
 )]
 pub async fn complete_quest(
     session: SessionLookedUpMaybe,
@@ -879,7 +879,7 @@ fn objective_reward(
 }
 
 #[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/quests/{quest_id}/objectives"
+    "/api/game/v1/public/characters/{character_id}/quests/{quest_id}/objectives"
 )]
 pub async fn update_quest_objectives(
     session: SessionLookedUpMaybe,

@@ -22,7 +22,7 @@ struct AnnouncementsResponse {
     announcements: Vec<Announcement>,
 }
 
-#[get("/blades.bgs.services/api/game/v1/public/characters/{character_id}/announcements")]
+#[get("/api/game/v1/public/characters/{character_id}/announcements")]
 pub async fn get_announcements(app_state: web::Data<Arc<ServerGlobal>>) -> Json<AnnouncementsResponse> {
     // The captured retail news, plus one entry per arena season this build
     // configures. The season entries are generated from `arena_season::SEASONS`

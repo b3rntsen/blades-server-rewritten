@@ -79,7 +79,7 @@ fn status_for(
 }
 
 #[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/towns/current/rewards/current"
+    "/api/game/v1/public/characters/{character_id}/towns/current/rewards/current"
 )]
 pub async fn get_daily_reward(
     session: SessionLookedUpMaybe,
@@ -117,7 +117,7 @@ struct CollectResponse {
 }
 
 #[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/towns/current/rewards/current/collect"
+    "/api/game/v1/public/characters/{character_id}/towns/current/rewards/current/collect"
 )]
 pub async fn collect_daily_reward(
     session: SessionLookedUpMaybe,

@@ -7,12 +7,12 @@ use actix_web::{
 use serde::Serialize;
 use uuid::Uuid;
 
-#[post("/blades.bgs.services/api/analytics/v1/public/stats/client")]
+#[post("/api/analytics/v1/public/stats/client")]
 pub async fn blades_bgs_stat_analytics() -> Json<Option<()>> {
     return Json(None);
 }
 
-#[post("/blades.bgs.services/api/analytics/v1/public/events")]
+#[post("/api/analytics/v1/public/events")]
 pub async fn blades_bgs_event_analytics() -> Json<Option<()>> {
     return Json(None);
 }

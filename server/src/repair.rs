@@ -90,7 +90,7 @@ struct RepairResponse {
     wallet: CompleteWallet,
 }
 
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/repairs")]
+#[post("/api/game/v1/public/characters/{character_id}/repairs")]
 pub async fn repair_items(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,

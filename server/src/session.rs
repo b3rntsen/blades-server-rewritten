@@ -415,7 +415,7 @@ pub async fn persist_session(db: &DbPool, session_id: Uuid, session: &Session) {
 /// Reconstruct a session from the `sessions` table on a cold lookup (after a restart
 /// emptied the in-memory map). Filters expired rows. request_count resets to 1;
 /// matchmaking_ws is re-established when the client reconnects the rms WebSocket.
-async fn load_persisted_session(db: &DbPool, session_id: Uuid) -> Option<Session> {
+pub async fn load_persisted_session(db: &DbPool, session_id: Uuid) -> Option<Session> {
     use diesel_async::RunQueryDsl; // scoped (see persist_session)
     let mut conn = db.get().await.ok()?;
     let row: SessionRow = diesel::sql_query(
@@ -443,7 +443,7 @@ struct SyncResponse {
     request_index: u64,
 }
 
-#[get("/blades.bgs.services/api/game/v1/public/sync")]
+#[get("/api/game/v1/public/sync")]
 async fn sync(session: SessionLookedUpMaybe) -> Result<web::Json<SyncResponse>, BladeApiError> {
     let session = session.get_session_or_error()?;
     Ok(web::Json(SyncResponse {

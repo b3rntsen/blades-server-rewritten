@@ -41,7 +41,7 @@ struct DataUpdateRequestInner {
     new_flags: Option<Value>,
 }
 
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/data")]
+#[post("/api/game/v1/public/characters/{character_id}/data")]
 async fn update_data(
     session: SessionLookedUpMaybe,
     app_state: Data<Arc<ServerGlobal>>,

@@ -27,7 +27,7 @@ pub struct SetAvatarResponse {
     character: CompleteCharacterWithIdWithoutData,
 }
 
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/avatar")]
+#[post("/api/game/v1/public/characters/{character_id}/avatar")]
 pub async fn set_avatar(
     path: web::Path<Uuid>,
     session: SessionLookedUpMaybe,

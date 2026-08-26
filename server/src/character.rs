@@ -27,12 +27,19 @@ struct CharacterListResponse {
     characters: Vec<CompleteCharacterWithIdAndData>,
 }
 
-#[get("/blades.bgs.services/api/game/v1/public/characters")]
+#[get("/api/game/v1/public/characters")]
 async fn list_characters(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
 ) -> Result<web::Json<CharacterListResponse>, BladeApiError> {
     let session = session.get_session_or_error()?;
+
+    println!(
+        "LIST_CHARACTERS: user_id={} secret_user_id={}",
+        session.session.user_id,
+        session.session.secret_user_id
+    );
+
     let mut conn = app_state.db_pool.get().await.unwrap();
     let query_result = {
         use schema::characters::dsl::*;
@@ -44,6 +51,12 @@ async fn list_characters(
             .unwrap()
     };
 
+    println!("LIST_CHARACTERS: found {} characters", query_result.len());
+
+    for character in &query_result {
+        println!("LIST_CHARACTERS: character id={}", character.id);
+    }
+
     let mut result = Vec::with_capacity(query_result.len());
     for character in query_result.iter() {
         result.push(CompleteCharacterWithIdAndData {
@@ -52,7 +65,24 @@ async fn list_characters(
             data: character.data.0.clone(),
         });
     }
-    Ok(web::Json(CharacterListResponse { characters: result }))
+
+    println!("LIST_CHARACTERS: result len={}", result.len());
+
+    println!(
+        "LIST_CHARACTERS: result json={}",
+        serde_json::to_string(&result).unwrap()
+    );
+
+    let response = CharacterListResponse {
+        characters: result,
+    };
+
+    println!(
+        "LIST_CHARACTERS: FINAL RESPONSE={}",
+        serde_json::to_string(&response).unwrap()
+    );
+
+    Ok(web::Json(response))
 }
 
 #[derive(Serialize)]
@@ -60,7 +90,7 @@ struct CompleteCharacterWithIdAndDataContainer {
     character: CompleteCharacterWithIdAndData,
 }
 
-#[get("/blades.bgs.services/api/game/v1/public/characters/{character_id}")]
+#[get("/api/game/v1/public/characters/{character_id}")]
 async fn get_character(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -108,7 +138,7 @@ struct CharacterCreationResponse {
     inventory: CompleteInventory,
 }
 
-#[post("/blades.bgs.services/api/game/v1/public/characters")]
+#[post("/api/game/v1/public/characters")]
 async fn create_characters(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,

@@ -2,7 +2,7 @@
   "_meta": {
     "description": "Cost to change a character's appearance/sex/race at the town appearance NPC.",
     "source": "APK bundle gameplaymetadata -> UpdateCostData._characterCustomizationCost (authoritative); currency matches capture wallet debit.",
-    "endpoint": "POST /blades.bgs.services/api/game/v1/public/characters/{characterId}/data (body data.customization)"
+    "endpoint": "POST /api/game/v1/public/characters/{characterId}/data (body data.customization)"
   },
   "characterCustomizationCost": {
     "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",

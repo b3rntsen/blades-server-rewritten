@@ -72,7 +72,7 @@ fn apply_inventory_filters(
     out
 }
 
-#[get("/blades.bgs.services/api/game/v1/public/character/{character_id}/inventories/current")]
+#[get("/api/game/v1/public/character/{character_id}/inventories/current")]
 pub async fn get_inventory(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,

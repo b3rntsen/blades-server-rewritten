@@ -20,7 +20,7 @@ struct GetWalletResponse {
     wallet: CompleteWallet,
 }
 
-#[get("/blades.bgs.services/api/game/v1/public/characters/{character_id}/wallets/current")]
+#[get("/api/game/v1/public/characters/{character_id}/wallets/current")]
 pub async fn get_wallet(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,

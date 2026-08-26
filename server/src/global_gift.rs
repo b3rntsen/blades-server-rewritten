@@ -66,7 +66,7 @@ struct ClaimedGiftsResponse {
 }
 
 /// List the gifts this character has already claimed (and how many times).
-#[get("/blades.bgs.services/api/game/v1/public/characters/{character_id}/globalgifts")]
+#[get("/api/game/v1/public/characters/{character_id}/globalgifts")]
 pub async fn get_global_gifts(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -117,7 +117,7 @@ struct GiftViewResponse {
 }
 
 /// View a single gift definition + this character's claim count.
-#[get("/blades.bgs.services/api/game/v1/public/characters/{character_id}/globalgifts/{gift_id}")]
+#[get("/api/game/v1/public/characters/{character_id}/globalgifts/{gift_id}")]
 pub async fn get_global_gift(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -181,7 +181,7 @@ struct GiftClaimResponse {
 /// Claim a gift: validate the window + per-character claim limit, grant the reward
 /// (currencies credit the wallet, other templates grant stackables), bump the claim
 /// count, and return the uniform `{reward, globalGift, inventory, wallet}` shape.
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/globalgifts/{gift_id}")]
+#[post("/api/game/v1/public/characters/{character_id}/globalgifts/{gift_id}")]
 pub async fn claim_global_gift(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,

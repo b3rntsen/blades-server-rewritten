@@ -408,7 +408,7 @@ async fn main() -> Result<()> {
                     .wrap_fn(|mut req, srv| {
                         let start_timestamp = SystemTime::now();
                         let is_from_blades_api =
-                            req.uri().path().starts_with("/blades.bgs.services/");
+                            req.uri().path().starts_with("/api/");
                         let session_fut = req.extract::<SessionLookedUpMaybe>();
                         let res_fut = srv.call(req);
                         async move {
@@ -467,6 +467,7 @@ async fn main() -> Result<()> {
                     .service(status::check_status)
                     .service(session::sync)
                     .service(authentification::anon_log_in)
+                    .service(authentification::refresh)
                     .service(character::list_characters)
                     .service(character::create_characters)
                     .service(character::get_character)

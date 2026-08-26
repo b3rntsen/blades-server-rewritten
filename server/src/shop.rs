@@ -370,7 +370,7 @@ fn prune_stale_shops(shops: &mut HashMap<Uuid, MerchantWindow>, now: i64) {
 }
 
 /// `POST /shops/{id}` — open a vendor (returns its current catalog).
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/shops/{shop_id}")]
+#[post("/api/game/v1/public/characters/{character_id}/shops/{shop_id}")]
 pub async fn open_shop(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -392,7 +392,7 @@ pub async fn open_shop(
 /// `POST /shops/{id}/auth/refreshloot` — the client's explicit restock: re-roll the
 /// catalog and the merchant's budget, starting a fresh window.
 #[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/shops/{shop_id}/auth/refreshloot"
+    "/api/game/v1/public/characters/{character_id}/shops/{shop_id}/auth/refreshloot"
 )]
 pub async fn refresh_loot(
     session: SessionLookedUpMaybe,
@@ -480,7 +480,7 @@ fn txn_state(shop_id: Uuid, window: &MerchantWindow) -> ShopTxnState {
 /// Stock is finite: a request for more than remains is clamped, and buying draws
 /// down `remaining_stock` while pushing `revenue` positive — which is what lets the
 /// merchant afford to buy from the player again.
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/shops/{shop_id}/purchase")]
+#[post("/api/game/v1/public/characters/{character_id}/shops/{shop_id}/purchase")]
 pub async fn buy_from_shop(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -615,7 +615,7 @@ struct SellResponse {
 /// Price is the item's APK `sellValue` scaled by its temper multiplier plus its
 /// enchantment values, clamped to what the merchant can still afford. A drained
 /// merchant still takes the item and pays 0, which is what retail did.
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/shops/{shop_id}/sell")]
+#[post("/api/game/v1/public/characters/{character_id}/shops/{shop_id}/sell")]
 pub async fn sell_to_shop(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,

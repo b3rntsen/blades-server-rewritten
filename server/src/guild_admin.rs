@@ -254,7 +254,7 @@ fn to_summary(r: GuildRow) -> GuildSummary {
 ///
 /// One aggregate query, not a per-guild count: the guild leaderboard shipped an
 /// N+1 and this is the same shape.
-#[get("/blades.bgs.services/api/dev/v1/guilds")]
+#[get("/api/dev/v1/guilds")]
 pub async fn list_guilds(
     req: HttpRequest,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -269,7 +269,7 @@ pub async fn list_guilds(
 }
 
 /// `GET /…/api/dev/v1/guilds/{guild_id}` — one guild and its roster.
-#[get("/blades.bgs.services/api/dev/v1/guilds/{guild_id}")]
+#[get("/api/dev/v1/guilds/{guild_id}")]
 pub async fn get_guild_detail(
     req: HttpRequest,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -326,7 +326,7 @@ pub async fn get_guild_detail(
 }
 
 /// `POST /…/api/dev/v1/guilds/{guild_id}/grandmaster` — hand a guild over.
-#[post("/blades.bgs.services/api/dev/v1/guilds/{guild_id}/grandmaster")]
+#[post("/api/dev/v1/guilds/{guild_id}/grandmaster")]
 pub async fn set_grandmaster(
     req: HttpRequest,
     app_state: web::Data<Arc<ServerGlobal>>,
