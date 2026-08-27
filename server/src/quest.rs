@@ -697,6 +697,31 @@ pub async fn complete_quest(
 
             quest_entry.info.0.completed = true;
 
+            // Update the character's completedQuests JSON.
+            // The client expects: { "<gldQuestId>": <completion_count> }
+            if !entry.character.0.completed_quests.is_object() {
+                entry.character.0.completed_quests = json!({});
+            }
+
+            let completed_quests = entry
+                .character
+                .0
+                .completed_quests
+                .as_object_mut()
+                .unwrap();
+
+            let key = quest_entry.info.0.gld_quest_id.to_string();
+
+            let current_count = completed_quests
+                .get(&key)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            completed_quests.insert(
+                key,
+                json!(current_count + 1),
+            );
+
             let reward = resolve_completion_reward(
                 &globals.static_data,
                 quest_id,
