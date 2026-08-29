@@ -492,6 +492,8 @@ async fn main() -> Result<()> {
                     .service(town::destroy_building)
                     .service(town::set_building_style)
                     .service(town::place_building)
+                    .service(town::remove_town_props)
+                    .service(town::place_town_props)
                     // Crafting: finish (specific path) BEFORE create (bare /crafts).
                     .service(craft::finish_craft)
                     .service(craft::create_craft)

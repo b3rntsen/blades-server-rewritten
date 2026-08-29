@@ -33,7 +33,7 @@ use actix_web::{
     web::{self, Json},
 };
 use blades_lib::economy::{GEMS, GOLD};
-use blades_lib::user_data::{CompleteInventoryUpdate, CompleteWallet, InventoryChangeTracker};
+use blades_lib::user_data::{CompleteInventory, CompleteInventoryUpdate, CompleteWallet, InventoryChangeTracker};
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,9 @@ use crate::{
 /// Out-of-band service id for town-lifecycle error envelopes (not a real Blades
 /// service id; the client pre-checks affordability/level so these rarely fire).
 const TOWN_SERVICE_ID: u64 = 9005;
+
+/// Service ID for props-related errors
+const PROPS_SERVICE_ID: u64 = 9006;
 
 /// Wall-clock milliseconds since the unix epoch. This is a real server — no
 /// determinism requirement — so `SystemTime` is fine (a pre-1970 clock, which can't
@@ -561,6 +564,7 @@ pub async fn complete_building(
     path: web::Path<(Uuid, Uuid)>,
     body: Json<CompleteRequest>,
 ) -> Result<Json<CompleteResponse>, BladeApiError> {
+    
     let session = session.get_session_or_error()?;
     let user_id = session.session.user_id;
     let (character_id, building_id) = path.into_inner();
@@ -596,6 +600,7 @@ pub async fn complete_building(
             let building = find_building_mut(&mut town, building_id).ok_or_else(|| {
                 BladeApiError::new(StatusCode::NOT_FOUND, TOWN_SERVICE_ID, 1)
             })?;
+
             apply_complete_transition(building);
 
             // No inventory mutation on complete → empty diff, no version bump.
@@ -1011,6 +1016,666 @@ fn remove_building(town: &mut Value, building_id: Uuid) -> bool {
         }
     }
     false
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Prop related Endpoints.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize, Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletedProp {
+    pub prop_id: Uuid,
+    pub district_id: Uuid,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovePropsRequest {
+    pub deleted_props: Vec<DeletedProp>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovePropsResponse {
+    pub wallet: CompleteWallet,
+    pub inventory: CompleteInventoryUpdate,
+    pub town: Value,
+    pub validation_flags: u64,
+    pub removed_count: usize,
+    pub failed_props: Vec<String>,
+    pub removed_props: Vec<String>,
+    pub placed_props: Vec<String>,
+    pub success: bool,
+}
+
+#[derive(Deserialize, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlacedProp {
+    pub anchor_id: Uuid,
+    pub decoration_id: Uuid,
+    pub district_id: Uuid,
+}
+
+#[derive(Deserialize, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlacePropsRequest {
+    pub placed_props: Vec<PlacedProp>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlacePropsResponse {
+    pub wallet: CompleteWallet,
+    pub inventory: CompleteInventoryUpdate,
+    pub town: Value,
+    pub validation_flags: u64,
+    pub placed_count: usize,
+    pub failed_props: Vec<String>,
+    pub placed_props: Vec<String>,
+}
+
+/// POST /api/game/v1/public/characters/{character_id}/towns/current/props/remove
+///
+/// Remove one or more props from the character's current town.
+/// Props are located in districts under `town.districts[].props`.
+///
+/// The client sends a list of {propId, districtId} pairs to remove.
+/// Returns updated wallet, inventory, and town state.
+#[post(
+    "/api/game/v1/public/characters/{character_id}/towns/current/props/remove"
+)]
+pub async fn remove_town_props(
+    session: SessionLookedUpMaybe,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<Uuid>,
+    body: Json<RemovePropsRequest>,
+) -> Result<Json<RemovePropsResponse>, BladeApiError> {
+    use crate::schema::characters;
+    use diesel::update;
+    
+    let session = session.get_session_or_error()?;
+    let user_id = session.session.user_id;
+    let character_id = path.into_inner();
+    let req = body.into_inner();
+    let mut conn = app_state.db_pool.get().await?;
+
+    if req.deleted_props.is_empty() {
+        return Err(BladeApiError::new(
+            StatusCode::BAD_REQUEST,
+            PROPS_SERVICE_ID,
+            1,
+        ));
+    }
+
+    conn.transaction(move |mut conn| {
+        async move {
+            let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
+            let mut town = take_town(&mut entry)?;
+
+            // Process prop removals and get decoration IDs removed
+            let (removed_count, failed_props, removed_decoration_ids, removed_prop_ids) = 
+                remove_props_from_town(&mut town, &req.deleted_props);
+
+            let mut tracker = InventoryChangeTracker::default();
+            
+            // RETURN decorations to inventory (add them back)
+            for decoration_id_str in &removed_decoration_ids {
+                if let Ok(decoration_uuid) = Uuid::parse_str(decoration_id_str) {
+                    entry
+                        .inventory
+                        .0
+                        .backpack
+                        .stackable_items
+                        .add(decoration_uuid, 1);
+                    tracker.modified_backpack.stackable_items.insert(decoration_uuid);
+                }
+            }
+            
+            if !removed_decoration_ids.is_empty() {
+                entry.inventory.0.backpack_version += 1;
+            }
+
+            let inventory = entry.inventory.0.generate_client_update(&tracker);
+            let wallet = entry.wallet.0.clone();
+
+            // Add a removedProps marker to the town response (like removedBuilding for buildings)
+            let mut town_col = town.clone();
+            if let Some(obj) = town_col.as_object_mut() {
+                // The client expects the prop IDs that were removed
+                obj.insert("removedProps".to_string(), json!(removed_prop_ids));
+            }
+
+            let mut changeset = entry;
+            changeset.town = Some(JsonDbWrapper(town.clone()));
+            update(characters::table)
+                .filter(characters::id.eq(character_id))
+                .set(changeset)
+                .execute(&mut conn)
+                .await?;
+
+            // The client needs the prop IDs that were removed
+            let client_prop_ids: Vec<String> = req.deleted_props
+                .iter()
+                .map(|p| p.prop_id.to_string())
+                .collect();
+
+            Ok(Json(RemovePropsResponse {
+                wallet,
+                inventory,
+                town: town_col,
+                validation_flags: 1,
+                removed_count,
+                failed_props,
+                removed_props: client_prop_ids,
+                placed_props: vec![],
+                success: removed_count > 0,
+            }))
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// Remove props from the town JSON structure and track what was removed.
+/// 
+/// Returns (removed_count, failed_prop_ids, removed_decoration_ids, removed_prop_ids)
+fn remove_props_from_town(
+    town: &mut Value,
+    props_to_remove: &[DeletedProp],
+) -> (usize, Vec<String>, Vec<String>, Vec<String>) {
+    let mut removed_count = 0;
+    let mut failed_props = Vec::new();
+    let mut removed_decoration_ids = Vec::new();
+    let mut removed_prop_ids = Vec::new(); // Track the actual prop IDs (id field) that were removed
+
+    let districts = match town.get_mut("districts").and_then(Value::as_array_mut) {
+        Some(d) => d,
+        None => return (0, props_to_remove.iter().map(|p| p.prop_id.to_string()).collect(), vec![], vec![]),
+    };
+
+    for deleted_prop in props_to_remove {
+        let target_prop_id = deleted_prop.prop_id.to_string();
+        let target_district_id = deleted_prop.district_id.to_string();
+        let mut found = false;
+
+        for district in districts.iter_mut() {
+            let district_id = match district.get("id").and_then(Value::as_str) {
+                Some(id) => id,
+                None => continue,
+            };
+
+            if district_id != target_district_id {
+                continue;
+            }
+
+            let props = match district.get_mut("props").and_then(Value::as_object_mut) {
+                Some(p) => p,
+                None => continue,
+            };
+
+            let prop_key_to_remove = props.iter().find_map(|(key, prop_obj)| {
+                let matches_id = prop_obj
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|&id| id == target_prop_id)
+                    .is_some();
+                
+                let matches_prop_id = prop_obj
+                    .get("propId")
+                    .and_then(Value::as_str)
+                    .filter(|&prop_id| prop_id == target_prop_id)
+                    .is_some();
+                
+                if matches_id || matches_prop_id {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            });
+
+            if let Some(key) = prop_key_to_remove {
+                // Get the prop data before removing
+                if let Some(prop_obj) = props.get(&key) {
+                    // Track the decoration_id (propId field)
+                    if let Some(decoration_id) = prop_obj
+                        .get("propId")
+                        .and_then(Value::as_str)
+                    {
+                        removed_decoration_ids.push(decoration_id.to_string());
+                    }
+                    // Track the actual prop ID (id field) - this is what the client sent
+                    if let Some(prop_id) = prop_obj
+                        .get("id")
+                        .and_then(Value::as_str)
+                    {
+                        removed_prop_ids.push(prop_id.to_string());
+                    }
+                }
+                
+                props.remove(&key);
+                removed_count += 1;
+                found = true;
+                break;
+            }
+        }
+
+        if !found {
+            failed_props.push(target_prop_id);
+        }
+    }
+
+    (removed_count, failed_props, removed_decoration_ids, removed_prop_ids)
+}
+
+/// Remove props from inventory after they're removed from the town.
+fn remove_decoration_from_inventory(
+    inventory: &mut CompleteInventory,
+    decoration_id: Uuid,
+    tracker: &mut InventoryChangeTracker,
+) -> Result<(), BladeApiError> {
+    // Remove 1 of the decoration item from stackable items
+    // The decoration is stored as a stackable item in the backpack
+    let count = inventory.backpack.stackable_items.count(decoration_id);
+    if count > 0 {
+        inventory
+            .backpack
+            .stackable_items
+            .remove(decoration_id, 1)
+            .map_err(|_| {
+                BladeApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    PROPS_SERVICE_ID,
+                    3,
+                )
+            })?;
+        tracker.modified_backpack.stackable_items.insert(decoration_id);
+        inventory.backpack_version += 1;
+        Ok(())
+    } else {
+        // The decoration might be in the treasury or elsewhere
+        // For now, just log and continue
+        log::warn!("Decoration {} not found in inventory", decoration_id);
+        Ok(())
+    }
+}
+
+#[post(
+    "/api/game/v1/public/characters/{character_id}/towns/current/props"
+)]
+pub async fn place_town_props(
+    session: SessionLookedUpMaybe,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<Uuid>,
+    body: Json<PlacePropsRequest>,
+) -> Result<Json<PlacePropsResponse>, BladeApiError> {
+    use crate::schema::characters;
+    use diesel::update;
+    
+    let session = session.get_session_or_error()?;
+    let user_id = session.session.user_id;
+    let character_id = path.into_inner();
+    let req = body.into_inner();
+    let mut conn = app_state.db_pool.get().await?;
+
+    if req.placed_props.is_empty() {
+        return Err(BladeApiError::new(
+            StatusCode::BAD_REQUEST,
+            PROPS_SERVICE_ID,
+            2,
+        ));
+    }
+
+    conn.transaction(move |mut conn| {
+        async move {
+            let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
+            let mut town = take_town(&mut entry)?;
+
+            // Process prop placements and get decoration IDs placed
+            let (placed_count, failed_props, placed_decoration_ids) = 
+                place_props_in_town(&mut town, &req.placed_props);
+
+            // REMOVE decorations from inventory (consuming the items)
+            let mut tracker = InventoryChangeTracker::default();
+            
+            for decoration_id_str in &placed_decoration_ids {
+                if let Ok(decoration_uuid) = Uuid::parse_str(decoration_id_str) {
+                    remove_decoration_from_inventory(
+                        &mut entry.inventory.0,
+                        decoration_uuid,
+                        &mut tracker,
+                    )?;
+                }
+            }
+            
+            if !placed_decoration_ids.is_empty() {
+                entry.inventory.0.backpack_version += 1;
+            }
+
+            let inventory = entry.inventory.0.generate_client_update(&tracker);
+            let wallet = entry.wallet.0.clone();
+
+            let town_col = town.clone();
+            let mut changeset = entry;
+            changeset.town = Some(JsonDbWrapper(town_col.clone()));
+            update(characters::table)
+                .filter(characters::id.eq(character_id))
+                .set(changeset)
+                .execute(&mut conn)
+                .await?;
+
+            Ok(Json(PlacePropsResponse {
+                wallet,
+                inventory,
+                town: town_col,
+                validation_flags: 1,
+                placed_count,
+                failed_props,
+                placed_props: placed_decoration_ids, // Send back what was placed
+            }))
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// Place props into the town JSON structure.
+/// 
+/// Returns (placed_count, failed_prop_anchor_ids_as_strings, placed_decoration_ids)
+/// 
+/// Props are stored in `town.districts[].props` as an object/dictionary.
+fn place_props_in_town(
+    town: &mut Value,
+    props_to_place: &[PlacedProp],
+) -> (usize, Vec<String>, Vec<String>) {
+    let mut placed_count = 0;
+    let mut failed_props = Vec::new();
+    let mut placed_decoration_ids = Vec::new(); // Track decoration IDs placed
+
+    let districts = match town.get_mut("districts").and_then(Value::as_array_mut) {
+        Some(d) => d,
+        None => return (0, props_to_place.iter().map(|p| p.anchor_id.to_string()).collect(), vec![]),
+    };
+
+    for placed_prop in props_to_place {
+        let anchor_id = placed_prop.anchor_id;
+        let decoration_id = placed_prop.decoration_id;
+        let district_id = placed_prop.district_id;
+        let anchor_id_str = anchor_id.to_string();
+        let decoration_id_str = decoration_id.to_string();
+        let mut found_district = false;
+
+        for district in districts.iter_mut() {
+            let district_id_field = match district.get("id").and_then(Value::as_str) {
+                Some(id) => id,
+                None => continue,
+            };
+
+            if district_id_field != district_id.to_string() {
+                continue;
+            }
+
+            found_district = true;
+
+            let props = match district.get_mut("props") {
+                Some(Value::Object(obj)) => obj,
+                _ => {
+                    let new_props = serde_json::Map::new();
+                    district.as_object_mut()
+                        .expect("district must be an object")
+                        .insert("props".to_string(), Value::Object(new_props));
+                    
+                    district.get_mut("props")
+                        .and_then(Value::as_object_mut)
+                        .expect("props should exist now")
+                }
+            };
+
+            if props.contains_key(&anchor_id_str) {
+                log::warn!("Prop with anchor_id {} already exists, overwriting", anchor_id_str);
+            }
+
+            let prop_id = Uuid::new_v4();
+            let prop_type = "2a529107-9561-4d23-91a8-becfd7fe76fa";
+
+            let prop_obj = json!({
+                "anchorId": anchor_id_str,
+                "id": prop_id.to_string(),
+                "propId": decoration_id_str,
+                "type": prop_type,
+            });
+
+            props.insert(anchor_id_str.clone(), prop_obj);
+            placed_count += 1;
+            
+            // Track the decoration ID that was placed
+            placed_decoration_ids.push(decoration_id_str);
+            break;
+        }
+
+        if !found_district {
+            failed_props.push(anchor_id_str);
+        }
+    }
+
+    (placed_count, failed_props, placed_decoration_ids)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_town_with_props() -> Value {
+        json!({
+            "levelInfo": { "level": 6 },
+            "districts": [
+                {
+                    "id": "9a12c0d3-218c-4ef2-b78c-b6e3bca60719",
+                    "props": {
+                        "key1": {
+                            "id": "e915e0f4-3f86-41cb-b9e2-1ead10025c06",
+                            "propId": "e915e0f4-3f86-41cb-b9e2-1ead10025c06",
+                            "districtId": "9a12c0d3-218c-4ef2-b78c-b6e3bca60719",
+                            "typeId": "some-prop-type",
+                            "x": 10.0,
+                            "y": 20.0,
+                            "rotation": 45.0
+                        },
+                        "key2": {
+                            "id": "f1234567-89ab-cdef-0123-456789abcdef",
+                            "propId": "f1234567-89ab-cdef-0123-456789abcdef",
+                            "districtId": "9a12c0d3-218c-4ef2-b78c-b6e3bca60719",
+                            "typeId": "another-prop",
+                            "x": 30.0,
+                            "y": 40.0,
+                            "rotation": 90.0
+                        }
+                    }
+                },
+                {
+                    "id": "another-district-id",
+                    "props": {
+                        "key3": {
+                            "id": "g9876543-21ab-cdef-0123-456789abcdef",
+                            "propId": "g9876543-21ab-cdef-0123-456789abcdef",
+                            "districtId": "another-district-id",
+                            "typeId": "prop-in-other-district",
+                            "x": 50.0,
+                            "y": 60.0,
+                            "rotation": 0.0
+                        }
+                    }
+                }
+            ]
+        })
+    }
+
+    #[test]
+    fn remove_props_removes_specified_props() {
+        let mut town = sample_town_with_props();
+        let prop_id = Uuid::parse_str("e915e0f4-3f86-41cb-b9e2-1ead10025c06").unwrap();
+        let district_id = Uuid::parse_str("9a12c0d3-218c-4ef2-b78c-b6e3bca60719").unwrap();
+        
+        let props_to_remove = vec![
+            DeletedProp { prop_id, district_id }
+        ];
+
+        let (removed_count, failed) = remove_props_from_town(&mut town, &props_to_remove);
+        
+        assert_eq!(removed_count, 1);
+        assert!(failed.is_empty());
+        
+        // Verify the prop was removed
+        let district = &town["districts"][0];
+        let props = district["props"].as_array().unwrap();
+        assert_eq!(props.len(), 1);
+        assert_eq!(props[0]["id"], "f1234567-89ab-cdef-0123-456789abcdef");
+    }
+
+    #[test]
+    fn remove_props_handles_multiple_props() {
+        let mut town = sample_town_with_props();
+        let prop1 = Uuid::parse_str("e915e0f4-3f86-41cb-b9e2-1ead10025c06").unwrap();
+        let prop2 = Uuid::parse_str("f1234567-89ab-cdef-0123-456789abcdef").unwrap();
+        let district_id = Uuid::parse_str("9a12c0d3-218c-4ef2-b78c-b6e3bca60719").unwrap();
+        
+        let props_to_remove = vec![
+            DeletedProp { prop_id: prop1, district_id },
+            DeletedProp { prop_id: prop2, district_id },
+        ];
+
+        let (removed_count, failed) = remove_props_from_town(&mut town, &props_to_remove);
+        
+        assert_eq!(removed_count, 2);
+        assert!(failed.is_empty());
+        
+        // Verify all props were removed from the district
+        let district = &town["districts"][0];
+        let props = district["props"].as_array().unwrap();
+        assert_eq!(props.len(), 0);
+    }
+
+    #[test]
+    fn remove_props_reports_failed_removals() {
+        let mut town = sample_town_with_props();
+        let existing_prop = Uuid::parse_str("e915e0f4-3f86-41cb-b9e2-1ead10025c06").unwrap();
+        let non_existing_prop = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
+        let district_id = Uuid::parse_str("9a12c0d3-218c-4ef2-b78c-b6e3bca60719").unwrap();
+        
+        let props_to_remove = vec![
+            DeletedProp { prop_id: existing_prop, district_id },
+            DeletedProp { prop_id: non_existing_prop, district_id },
+        ];
+
+        let (removed_count, failed) = remove_props_from_town(&mut town, &props_to_remove);
+        
+        assert_eq!(removed_count, 1);
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0], "00000000-0000-0000-0000-000000000000");
+        
+        // Verify the existing prop was removed
+        let district = &town["districts"][0];
+        let props = district["props"].as_array().unwrap();
+        assert_eq!(props.len(), 1);
+    }
+
+    #[test]
+    fn remove_props_handles_district_without_props() {
+        let mut town = json!({
+            "levelInfo": { "level": 6 },
+            "districts": [
+                {
+                    "id": "9a12c0d3-218c-4ef2-b78c-b6e3bca60719",
+                    // No props array
+                }
+            ]
+        });
+
+        let prop_id = Uuid::parse_str("e915e0f4-3f86-41cb-b9e2-1ead10025c06").unwrap();
+        let district_id = Uuid::parse_str("9a12c0d3-218c-4ef2-b78c-b6e3bca60719").unwrap();
+        
+        let props_to_remove = vec![
+            DeletedProp { prop_id, district_id }
+        ];
+
+        let (removed_count, failed) = remove_props_from_town(&mut town, &props_to_remove);
+        
+        assert_eq!(removed_count, 0);
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0], "e915e0f4-3f86-41cb-b9e2-1ead10025c06");
+    }
+
+    #[test]
+    fn remove_props_handles_wrong_district() {
+        let mut town = sample_town_with_props();
+        let prop_id = Uuid::parse_str("e915e0f4-3f86-41cb-b9e2-1ead10025c06").unwrap();
+        let wrong_district_id = Uuid::parse_str("ffffffff-ffff-ffff-ffff-ffffffffffff").unwrap();
+        
+        let props_to_remove = vec![
+            DeletedProp { prop_id, district_id: wrong_district_id }
+        ];
+
+        let (removed_count, failed) = remove_props_from_town(&mut town, &props_to_remove);
+        
+        assert_eq!(removed_count, 0);
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0], "e915e0f4-3f86-41cb-b9e2-1ead10025c06");
+        
+        // Verify the prop is still there (unchanged)
+        let district = &town["districts"][0];
+        let props = district["props"].as_array().unwrap();
+        assert_eq!(props.len(), 2);
+    }
+
+    #[test]
+    fn remove_props_handles_empty_request() {
+        let mut town = sample_town_with_props();
+        let props_to_remove: Vec<DeletedProp> = vec![];
+
+        let (removed_count, failed) = remove_props_from_town(&mut town, &props_to_remove);
+        
+        assert_eq!(removed_count, 0);
+        assert!(failed.is_empty());
+        
+        // Town should be unchanged
+        let district = &town["districts"][0];
+        let props = district["props"].as_array().unwrap();
+        assert_eq!(props.len(), 2);
+    }
+
+    #[test]
+    fn remove_props_handles_props_in_multiple_districts() {
+        let mut town = sample_town_with_props();
+        let prop1 = Uuid::parse_str("e915e0f4-3f86-41cb-b9e2-1ead10025c06").unwrap();
+        let district1 = Uuid::parse_str("9a12c0d3-218c-4ef2-b78c-b6e3bca60719").unwrap();
+        let prop2 = Uuid::parse_str("g9876543-21ab-cdef-0123-456789abcdef").unwrap();
+        let district2 = Uuid::parse_str("another-district-id").unwrap();
+        
+        let props_to_remove = vec![
+            DeletedProp { prop_id: prop1, district_id: district1 },
+            DeletedProp { prop_id: prop2, district_id: district2 },
+        ];
+
+        let (removed_count, failed) = remove_props_from_town(&mut town, &props_to_remove);
+        
+        assert_eq!(removed_count, 2);
+        assert!(failed.is_empty());
+        
+        // Verify first district props
+        let district = &town["districts"][0];
+        let props = district["props"].as_array().unwrap();
+        assert_eq!(props.len(), 1); // Only prop2 remains
+        assert_eq!(props[0]["id"], "f1234567-89ab-cdef-0123-456789abcdef");
+        
+        // Verify second district props
+        let district2 = &town["districts"][1];
+        let props2 = district2["props"].as_array().unwrap();
+        assert_eq!(props2.len(), 0);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
