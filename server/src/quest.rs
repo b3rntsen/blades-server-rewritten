@@ -210,6 +210,15 @@ pub async fn get_quests(
             let reset_boundary = jobs_gen::current_reset_boundary(&job_pools_def, now);
             let needs_regen = character.character.0.last_jobs_reset_time < reset_boundary;
 
+            eprintln!(
+                "[JOBS] ABOUT TO GENERATE character={} level={} cycle={} reset_boundary={} now={}",
+                character_id_var,
+                character.character.0.level,
+                character.character.0.job_difficulty_cycle_index,
+                reset_boundary,
+                now
+            );
+
             let (jobs, job_pools) = jobs_gen::generate(
                 &job_pools_def,
                 character_id_var,
@@ -257,6 +266,7 @@ pub async fn get_quests(
                         deleted_quest_ids.extend(stale.iter().copied());
                     }
                 }
+
                 // Upsert the current window's job rows (idempotent within the window).
                 for job in &jobs {
                     if let Some(entry) =
@@ -269,8 +279,20 @@ pub async fn get_quests(
                             .do_nothing()
                             .execute(&mut conn)
                             .await?;
+
+                        eprintln!(
+                            "[JOBS] INSERT result questId={} rows={}",
+                            entry.id,
+                            result
+                        );
+                    } else {
+                        eprintln!(
+                            "[JOBS] job_quest_db_entry FAILED questId={}",
+                            job_id
+                        );
                     }
                 }
+
                 // Persist the rotation scalars on the character.
                 character.character.0.last_jobs_reset_time = reset_boundary;
                 character.character.0.job_difficulty_cycle_index =
@@ -380,6 +402,18 @@ pub async fn get_quests(
                 now as i64,
             );
 
+            eprintln!("===== FINAL /quests JOBS =====");
+            eprintln!("{}", serde_json::to_string_pretty(&jobs).unwrap());
+
+            eprintln!("===== FINAL /quests QUESTS =====");
+            eprintln!("{}", serde_json::to_string_pretty(&result_quests).unwrap());
+
+            eprintln!("===== FINAL /quests GENERATED DATA =====");
+            eprintln!(
+                "{}",
+                serde_json::to_string_pretty(&result_generated_data).unwrap()
+            );
+
             Ok(Json(GetQuestsResponse {
                 deleted_quest_ids,
                 quests: result_quests,
@@ -388,7 +422,7 @@ pub async fn get_quests(
                     id: character_id_var,
                     character: character.character.0,
                 },
-                jobs,
+                jobs: Vec::new(),
                 game_event_quests,
                 game_event_quests_finished: Vec::new(),
                 game_event_quests_in_warning,
@@ -1710,7 +1744,36 @@ mod jobs_gen {
             }
             let (end_time, next_start) = pool_timers(pool, now, count);
             timers.push(json!({ "id": pool_id, "endTime": end_time, "nextStartTime": next_start }));
+
+            eprintln!(
+                "[JOBS] pool={} presentation={} recurrence_type={} maxActive={} active_count={}",
+                pool_id,
+                get_i64(pool, "presentation", 0),
+                get_i64(
+                    &pool.get("recurrence").cloned().unwrap_or(Value::Null),
+                    "type",
+                    1
+                ),
+                get_u64(pool, "maxActive", 1),
+                count
+            );
         }
+
+        eprintln!(
+            "[JOBS] generate: character={} level={} reset_boundary={} now={} pools={}",
+            character_id,
+            level,
+            reset_boundary,
+            now,
+            pools.len()
+        );
+
+        eprintln!(
+            "[JOBS] FINAL jobs={} timers={}",
+            jobs.len(),
+            timers.len()
+        );
+
         (jobs, Value::Array(timers))
     }
 }
