@@ -8,7 +8,7 @@ from resolve_refs import resolve_refs
 import parse_util
 import argparse
 
-QUESTDATA_GUID = "5cc072dcf7a2ad3459c439adc756d484"
+QUESTDATA_GUID = "471940a6099299c4eaf61f7dcd00c2f5"
 LEVELDATA_PATH = "Assets/export/gameplaymetadata/LevelData.asset"
 INTERACTABLE_ITEM_PATH = "Assets/MonoBehaviour/InteractableItemData.asset"
 COMMON_PATH = "Assets/BGS/Scenes/common.unity"
