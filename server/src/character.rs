@@ -34,11 +34,7 @@ async fn list_characters(
 ) -> Result<web::Json<CharacterListResponse>, BladeApiError> {
     let session = session.get_session_or_error()?;
 
-    println!(
-        "LIST_CHARACTERS: user_id={} secret_user_id={}",
-        session.session.user_id,
-        session.session.secret_user_id
-    );
+    println!("Login: user_id={}", session.session.user_id);
 
     let mut conn = app_state.db_pool.get().await.unwrap();
     let query_result = {
@@ -51,10 +47,10 @@ async fn list_characters(
             .unwrap()
     };
 
-    println!("LIST_CHARACTERS: found {} characters", query_result.len());
+    println!("Login: found {} characters", query_result.len());
 
     for character in &query_result {
-        println!("LIST_CHARACTERS: character id={}", character.id);
+        println!("Login: character id={}", character.id);
     }
 
     let mut result = Vec::with_capacity(query_result.len());
@@ -66,21 +62,9 @@ async fn list_characters(
         });
     }
 
-    println!("LIST_CHARACTERS: result len={}", result.len());
-
-    println!(
-        "LIST_CHARACTERS: result json={}",
-        serde_json::to_string(&result).unwrap()
-    );
-
     let response = CharacterListResponse {
         characters: result,
     };
-
-    println!(
-        "LIST_CHARACTERS: FINAL RESPONSE={}",
-        serde_json::to_string(&response).unwrap()
-    );
 
     Ok(web::Json(response))
 }
