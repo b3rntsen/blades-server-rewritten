@@ -94,16 +94,13 @@ pub async fn get_town(
     // error"). Handle each failure as a 500 so the worker survives and logs why.
     let path = app_state.static_data_path.join("default_town.json");
     let mut file = File::open(&path).await.map_err(|e| {
-        eprintln!("[town] cannot open {path:?}: {e}");
         BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0)
     })?;
     let mut content = String::new();
     file.read_to_string(&mut content).await.map_err(|e| {
-        eprintln!("[town] cannot read {path:?}: {e}");
         BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0)
     })?;
     let town = serde_json::from_str(&content).map_err(|e| {
-        eprintln!("[town] invalid json in {path:?}: {e}");
         BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0)
     })?;
     Ok(Json(GetTownResponse { town }))
@@ -1708,7 +1705,20 @@ async fn load_town_economy(
 fn take_town(entry: &mut CharacterDbEntryTownEconomy) -> Result<Value, BladeApiError> {
     match entry.town.take() {
         Some(JsonDbWrapper(v)) if !v.is_null() => Ok(v),
-        _ => Err(BladeApiError::new(StatusCode::CONFLICT, TOWN_SERVICE_ID, 7)),
+        _ => {
+            // No town exists - load from default template
+            let path = app_state.static_data_path.join("default_town.json");
+            let content = std::fs::read_to_string(&path).map_err(|e| {
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0)
+            })?;
+            let town: Value = serde_json::from_str(&content).map_err(|e| {
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0)
+            })?;
+            
+            // Store it back in the entry so it gets saved
+            entry.town = Some(JsonDbWrapper(town.clone()));
+            Ok(town)
+        }
     }
 }
 

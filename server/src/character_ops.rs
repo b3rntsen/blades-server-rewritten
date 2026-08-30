@@ -14,6 +14,7 @@ use actix_web::{
     web::{self, Json},
 };
 use blades_lib::features::character_ops::{self, Attribute};
+use blades_lib::economy::RewardGrant;
 use blades_lib::user_data::{
     CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
     InventoryChangeTracker,
@@ -107,12 +108,69 @@ pub async fn levelup(
     let character_id = path.into_inner();
     let attribute = Attribute::parse(&body.attribute)
         .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, CHAR_OPS_SERVICE_ID, 1))?;
-    let mut conn = app_state.db_pool.get().await.unwrap();
+    let app_state_clone = app_state.into_inner().clone();
+    let db_pool = app_state_clone.db_pool.clone();
+    let mut conn = db_pool.get().await.unwrap();
 
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
             character_ops::apply_levelup(&mut entry.character.0, attribute);
+
+            // Grant level-up rewards based on the new level
+            let new_level = entry.character.0.level;
+            if let Some(reward) = app_state_clone.level_up_data.get_reward(new_level.into()) {
+                let mut tracker = InventoryChangeTracker::default();
+                
+                // Build a reward grant from the level-up data
+                let mut reward_grant = RewardGrant::default();
+                
+                // Add Gold
+                if reward.gold_reward > 0 {
+                    let gold_currency_id = Uuid::parse_str("f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2")
+                        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, CHAR_OPS_SERVICE_ID, 99))?;
+                    reward_grant.currencies.insert(gold_currency_id, reward.gold_reward.into());
+                }
+
+                // Add Gems
+                if reward.gems_reward > 0 {
+                    let gems_currency_id = Uuid::parse_str("470c8f58-a8dd-4c07-8c92-843b785e1139")
+                        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, CHAR_OPS_SERVICE_ID, 99))?;
+                    reward_grant.currencies.insert(gems_currency_id, reward.gems_reward.into());
+                }
+
+                /*
+                // Add Sygils
+                if reward.sygils_reward > 0 {
+                    let sygils_currency_id = Uuid::parse_str("c64bcb53-41f4-41ba-892a-fe2cca423caa")
+                        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, CHAR_OPS_SERVICE_ID, 99))?;
+                    reward_grant.currencies.insert(sygils_currency_id, reward.sygils_reward.into());
+                }
+                */
+
+                // Add Items
+                for item in &reward.items {
+                    let template_id = Uuid::parse_str(&item.template_id)
+                        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, CHAR_OPS_SERVICE_ID, 99))?;
+                    reward_grant.stackable_items.insert(template_id, item.quantity as u64);
+                }
+                log::debug!("Reward stackable_items: {:?}", reward_grant.stackable_items);
+
+                // Apply the reward
+                blades_lib::economy::apply_reward(
+                    &reward_grant,
+                    &mut entry.wallet.0,
+                    &mut entry.inventory.0,
+                    &mut entry.character.0,
+                    &mut tracker,
+                );
+                
+                if !reward_grant.stackable_items.is_empty() || !reward_grant.items.is_empty() {
+                    entry.inventory.0.backpack_version += 1;
+                }
+                log::debug!("Inventory stackables after apply: {:?}", entry.inventory.0.backpack.stackable_items);
+            }
+
             let resp = CharacterWalletInventory {
                 character: CompleteCharacterWithIdWithoutData {
                     id: character_id,
@@ -428,6 +486,10 @@ pub async fn update_loadout(
     })
     .await
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Tests
+///////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
