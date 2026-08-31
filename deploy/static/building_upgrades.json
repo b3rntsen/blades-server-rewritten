@@ -36,6 +36,11 @@
         "This is NOT gemsPayment:true on /upgrade (pay gems to cover missing gold/materials). That price depends on the resource shortfall at click time and is still unsolved - nothing models it.",
         "Regenerating this file (blades-capture tools/apk-extract/extract_town_static.py) MUST preserve this key. server/src/town.rs::the_shipped_static_carries_the_measured_skip_time_table fails if it is dropped."
       ],
+      "notes": [
+        "c462a43a-0547-4cd0-a755-5c0aff0f74f8 :: Castle Style",
+        "aa133662-053d-434e-8779-3f2a41d1271e :: Timber Style",
+        "1d6696b3-963b-48d4-8924-d43505cb2807 :: Stone Style"
+      ],
       "rateList": [
         {
           "currency": "470c8f58-a8dd-4c07-8c92-843b785e1139",
@@ -69,24 +74,33 @@
           "constructionTimeMs": null,
           "buildInputs": {},
           "styleInputs": {
-            "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
-              "e7193116-d761-479b-8a20-5633737977f5": 6,
-              "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 5,
-              "42d91529-c88b-4c5b-815b-b55508b4e7ef": 4
-            },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
-              "e7193116-d761-479b-8a20-5633737977f5": 2,
-              "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 2,
-              "42d91529-c88b-4c5b-815b-b55508b4e7ef": 1
+              "goldCost": 650,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 72,
+              "e7193116-d761-479b-8a20-5633737977f5": 49,
+              "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
-              "e7193116-d761-479b-8a20-5633737977f5": 3,
-              "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 3,
-              "42d91529-c88b-4c5b-815b-b55508b4e7ef": 2
+              "goldCost": 1300,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 82,
+              "e7193116-d761-479b-8a20-5633737977f5": 42,
+              "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46,
+              "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4
+            },
+            "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 2600,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 104,
+              "e7193116-d761-479b-8a20-5633737977f5": 42,
+              "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35,
+              "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+              "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9
             }
           },
-          "requireTownLevel": 5,
-          "prestigeForLevel": 0,
+          "requireTownLevel": 1,
+          "prestigeForLevel": 72,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
         }
@@ -110,24 +124,33 @@
           "constructionTimeMs": null,
           "buildInputs": {},
           "styleInputs": {
-            "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
-              "e7193116-d761-479b-8a20-5633737977f5": 10,
-              "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 9,
-              "42d91529-c88b-4c5b-815b-b55508b4e7ef": 7
+            "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 650,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 72,
+              "e7193116-d761-479b-8a20-5633737977f5": 49,
+              "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
-              "e7193116-d761-479b-8a20-5633737977f5": 3,
-              "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 3,
-              "42d91529-c88b-4c5b-815b-b55508b4e7ef": 2
+              "goldCost": 1300,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 82,
+              "e7193116-d761-479b-8a20-5633737977f5": 42,
+              "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46,
+              "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4
             },
-            "aa133662-053d-434e-8779-3f2a41d1271e": {
-              "e7193116-d761-479b-8a20-5633737977f5": 5,
-              "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 5,
-              "42d91529-c88b-4c5b-815b-b55508b4e7ef": 4
+            "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 2600,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 104,
+              "e7193116-d761-479b-8a20-5633737977f5": 42,
+              "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35,
+              "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+              "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9
             }
           },
-          "requireTownLevel": 5,
-          "prestigeForLevel": 0,
+          "requireTownLevel": 1,
+          "prestigeForLevel": 72,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
         }
@@ -150,8 +173,8 @@
       ],
       "levels": {
         "0": {
-          "goldCost": 29000,
-          "constructionTimeMs": 8099915,
+          "goldCost": 2100,
+          "constructionTimeMs": 0,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 60,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 50,
@@ -159,29 +182,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "prestigeForLevel": 108,
+              "requireTownLevel": 5,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 25,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 8,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 13
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
-              "e7193116-d761-479b-8a20-5633737977f5": 10,
+              "goldCost": 100,
+              "prestigeForLevel": 18,
+              "requireTownLevel": 1,
+              "42d91529-c88b-4c5b-815b-b55508b4e7ef": 10,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 10,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 8
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "prestigeForLevel": 45,
+              "requireTownLevel": 2,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 15,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 13,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 2,
           "prestigeForLevel": 180,
           "_capture_gold_samples": 14,
           "_capture_time_samples": 14
         },
         "1": {
-          "goldCost": 3500,
-          "constructionTimeMs": 1499911,
+          "goldCost": 3400,
+          "constructionTimeMs": 750000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 60,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 50,
@@ -189,29 +221,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "prestigeForLevel": 123,
+              "requireTownLevel": 5,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 25,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 8,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 13
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "prestigeForLevel": 21,
+              "requireTownLevel": 1,
               "e7193116-d761-479b-8a20-5633737977f5": 10,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 10,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 8
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "prestigeForLevel": 52,
+              "requireTownLevel": 2,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 15,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 13,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 2,
           "prestigeForLevel": 205,
           "_capture_gold_samples": 4,
           "_capture_time_samples": 4
         },
         "2": {
-          "goldCost": 5880,
-          "constructionTimeMs": 2999911,
+          "goldCost": 5780,
+          "constructionTimeMs": 3000000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 93,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 78,
@@ -219,29 +260,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "prestigeForLevel": 147,
+              "requireTownLevel": 5,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 39,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 12,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 20
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "prestigeForLevel": 25,
+              "requireTownLevel": 1,
               "e7193116-d761-479b-8a20-5633737977f5": 16,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 16,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 12
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "prestigeForLevel": 62,
+              "requireTownLevel": 2,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 23,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 20,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 8
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 3,
           "prestigeForLevel": 245,
           "_capture_gold_samples": 3,
           "_capture_time_samples": 4
         },
         "3": {
-          "goldCost": 9925,
-          "constructionTimeMs": 5999915,
+          "goldCost": 9825,
+          "constructionTimeMs": 6000000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 126,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 105,
@@ -249,29 +299,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "prestigeForLevel": 172,
+              "requireTownLevel": 5,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 53,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 17,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 27
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "prestigeForLevel": 29,
+              "requireTownLevel": 1,
               "e7193116-d761-479b-8a20-5633737977f5": 21,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 21,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 17
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "prestigeForLevel": 72,
+              "requireTownLevel": 2,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 32,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 27,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 11
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 4,
           "prestigeForLevel": 285,
           "_capture_gold_samples": 5,
           "_capture_time_samples": 5
         },
         "4": {
-          "goldCost": 16805,
-          "constructionTimeMs": 11999911,
+          "goldCost": 16705,
+          "constructionTimeMs": 12000000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 147,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 123,
@@ -279,16 +338,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "prestigeForLevel": 195,
+              "requireTownLevel": 5,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 61,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 20,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 32
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "prestigeForLevel": 33,
+              "requireTownLevel": 1,
               "e7193116-d761-479b-8a20-5633737977f5": 25,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 25,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 20
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "prestigeForLevel": 82,
+              "requireTownLevel": 2,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 37,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 32,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 12
@@ -300,8 +368,8 @@
           "_capture_time_samples": 4
         },
         "5": {
-          "goldCost": 28500,
-          "constructionTimeMs": 23999911,
+          "goldCost": 28400,
+          "constructionTimeMs": 24000000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 210,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 175,
@@ -309,16 +377,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "prestigeForLevel": 219,
+              "requireTownLevel": 5,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 88,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 28,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 46
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "prestigeForLevel": 37,
+              "requireTownLevel": 1,
               "e7193116-d761-479b-8a20-5633737977f5": 35,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 28
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "prestigeForLevel": 92,
+              "requireTownLevel": 2,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 53,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 46,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 18
@@ -330,8 +407,8 @@
           "_capture_time_samples": 4
         },
         "6": {
-          "goldCost": 48380,
-          "constructionTimeMs": 47999903,
+          "goldCost": 48280,
+          "constructionTimeMs": 48000000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 300,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 250,
@@ -339,16 +416,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "prestigeForLevel": 243,
+              "requireTownLevel": 5,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 125,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 40,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 65
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "prestigeForLevel": 41,
+              "requireTownLevel": 1,
               "e7193116-d761-479b-8a20-5633737977f5": 50,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 50,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 40
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "prestigeForLevel": 102,
+              "requireTownLevel": 2,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 75,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 65,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 25
@@ -360,8 +446,8 @@
           "_capture_time_samples": 5
         },
         "7": {
-          "goldCost": 82175,
-          "constructionTimeMs": 95999912,
+          "goldCost": 82075,
+          "constructionTimeMs": 96000000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 510,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 425,
@@ -369,16 +455,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "prestigeForLevel": 267,
+              "requireTownLevel": 5,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 213,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 68,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 111
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "prestigeForLevel": 45,
+              "requireTownLevel": 1,
               "e7193116-d761-479b-8a20-5633737977f5": 85,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 85,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 68
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "prestigeForLevel": 112,
+              "requireTownLevel": 2,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 128,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 111,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 43
@@ -390,8 +485,8 @@
           "_capture_time_samples": 4
         },
         "8": {
-          "goldCost": 139630,
-          "constructionTimeMs": 191999910,
+          "goldCost": 139530,
+          "constructionTimeMs": 192000000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 720,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 600,
@@ -399,16 +494,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "prestigeForLevel": 291,
+              "requireTownLevel": 5,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 300,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 96,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 156
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "prestigeForLevel": 49,
+              "requireTownLevel": 1,
               "e7193116-d761-479b-8a20-5633737977f5": 120,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 120,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 96
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "prestigeForLevel": 122,
+              "requireTownLevel": 2,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 180,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 156,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 60
@@ -420,8 +524,8 @@
           "_capture_time_samples": 4
         },
         "9": {
-          "goldCost": 237300,
-          "constructionTimeMs": 383999910,
+          "goldCost": 237200,
+          "constructionTimeMs": 384000000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 960,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 800,
@@ -429,16 +533,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "prestigeForLevel": 315,
+              "requireTownLevel": 5,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 400,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 128,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 208
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "prestigeForLevel": 53,
+              "requireTownLevel": 1,
               "e7193116-d761-479b-8a20-5633737977f5": 160,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 160,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 128
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "prestigeForLevel": 132,
+              "requireTownLevel": 2,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 240,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 208,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 80
@@ -468,8 +581,8 @@
       ],
       "levels": {
         "0": {
-          "goldCost": 65000,
-          "constructionTimeMs": 16199909,
+          "goldCost": 6000,
+          "constructionTimeMs": 7200000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 76,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 63,
@@ -477,29 +590,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 144,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 32,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 9,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 16
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 24,
               "e7193116-d761-479b-8a20-5633737977f5": 13,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 13,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 9
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 60,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 19,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 16,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 6
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 4,
           "prestigeForLevel": 240,
           "_capture_gold_samples": 7,
           "_capture_time_samples": 7
         },
         "1": {
-          "goldCost": 9700,
-          "constructionTimeMs": 1799912,
+          "goldCost": 9600,
+          "constructionTimeMs": 1800000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 76,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 63,
@@ -507,29 +629,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 138,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 32,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 9,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 16
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 23,
               "e7193116-d761-479b-8a20-5633737977f5": 13,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 13,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 9
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 58,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 19,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 16,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 6
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 4,
           "prestigeForLevel": 230,
           "_capture_gold_samples": 3,
           "_capture_time_samples": 3
         },
         "2": {
-          "goldCost": 15460,
-          "constructionTimeMs": 3599912,
+          "goldCost": 15360,
+          "constructionTimeMs": 3600000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 118,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 98,
@@ -537,29 +668,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 162,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 50,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 14,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 25
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 27,
               "e7193116-d761-479b-8a20-5633737977f5": 20,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 20,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 14
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 68,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 29,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 25,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 9
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 4,
           "prestigeForLevel": 270,
           "_capture_gold_samples": 2,
           "_capture_time_samples": 3
         },
         "3": {
-          "goldCost": 24675,
-          "constructionTimeMs": 7199908,
+          "goldCost": 24575,
+          "constructionTimeMs": 7200000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 160,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 132,
@@ -567,29 +707,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 186,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 67,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 19,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 34
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 31,
               "e7193116-d761-479b-8a20-5633737977f5": 27,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 27,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 19
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 78,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 40,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 34,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 13
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 4,
           "prestigeForLevel": 310,
           "_capture_gold_samples": 3,
           "_capture_time_samples": 4
         },
         "4": {
-          "goldCost": 39420,
-          "constructionTimeMs": 14399910,
+          "goldCost": 39320,
+          "constructionTimeMs": 14400000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 186,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 154,
@@ -597,16 +746,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 210,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 78,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 22,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 39
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 35,
               "e7193116-d761-479b-8a20-5633737977f5": 32,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 32,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 22
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 88,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 47,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 39,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 15
@@ -618,8 +776,8 @@
           "_capture_time_samples": 3
         },
         "5": {
-          "goldCost": 63010,
-          "constructionTimeMs": 28799911,
+          "goldCost": 62910,
+          "constructionTimeMs": 28800000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 266,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 221,
@@ -627,16 +785,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 234,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 112,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 32,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 56
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 39,
               "e7193116-d761-479b-8a20-5633737977f5": 46,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 32
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 98,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 67,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 56,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 21
@@ -648,8 +815,8 @@
           "_capture_time_samples": 4
         },
         "6": {
-          "goldCost": 100755,
-          "constructionTimeMs": 57599913,
+          "goldCost": 100655,
+          "constructionTimeMs": 57600000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 380,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 315,
@@ -657,16 +824,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 258,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 160,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 45,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 80
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 43,
               "e7193116-d761-479b-8a20-5633737977f5": 65,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 65,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 45
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 108,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 95,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 80,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 30
@@ -678,8 +854,8 @@
           "_capture_time_samples": 4
         },
         "7": {
-          "goldCost": 161150,
-          "constructionTimeMs": 115199911,
+          "goldCost": 161050,
+          "constructionTimeMs": 115200000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 646,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 536,
@@ -687,16 +863,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 282,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 272,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 77,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 136
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 47,
               "e7193116-d761-479b-8a20-5633737977f5": 111,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 111,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 77
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 118,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 162,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 136,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 51
@@ -708,8 +893,8 @@
           "_capture_time_samples": 4
         },
         "8": {
-          "goldCost": 257780,
-          "constructionTimeMs": 230399911,
+          "goldCost": 257680,
+          "constructionTimeMs": 230400000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 912,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 756,
@@ -717,16 +902,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 306,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 384,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 108,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 192
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 51,
               "e7193116-d761-479b-8a20-5633737977f5": 156,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 156,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 108
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 128,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 228,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 192,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 72
@@ -738,8 +932,8 @@
           "_capture_time_samples": 4
         },
         "9": {
-          "goldCost": 412390,
-          "constructionTimeMs": 460799911,
+          "goldCost": 412290,
+          "constructionTimeMs": 460800000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 1216,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 1008,
@@ -747,16 +941,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 330,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 512,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 144,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 256
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 55,
               "e7193116-d761-479b-8a20-5633737977f5": 208,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 208,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 144
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 138,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 304,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 256,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 96
@@ -788,8 +991,8 @@
       ],
       "levels": {
         "0": {
-          "goldCost": 15000,
-          "constructionTimeMs": 3604904,
+          "goldCost": 500,
+          "constructionTimeMs": 5000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 43,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 36,
@@ -797,29 +1000,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 75,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 13,
               "e7193116-d761-479b-8a20-5633737977f5": 7,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 7,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 5
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 32,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 11,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 9,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 1,
           "prestigeForLevel": 125,
           "_capture_gold_samples": 20,
           "_capture_time_samples": 25
         },
         "1": {
-          "goldCost": 1140,
-          "constructionTimeMs": 1199911,
+          "goldCost": 1040,
+          "constructionTimeMs": 1200000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 43,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 36,
@@ -827,29 +1039,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 108,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 18,
               "e7193116-d761-479b-8a20-5633737977f5": 7,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 7,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 5
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 45,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 11,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 9,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 2,
           "prestigeForLevel": 180,
           "_capture_gold_samples": 1,
           "_capture_time_samples": 5
         },
         "2": {
-          "goldCost": 2265,
-          "constructionTimeMs": 2399913,
+          "goldCost": 2165,
+          "constructionTimeMs": 2400000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 67,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 56,
@@ -857,29 +1078,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 132,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 28,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 8,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 14
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 22,
               "e7193116-d761-479b-8a20-5633737977f5": 11,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 11,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 8
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 55,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 17,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 14,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 6
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 3,
           "prestigeForLevel": 220,
           "_capture_gold_samples": 2,
           "_capture_time_samples": 4
         },
         "3": {
-          "goldCost": 4605,
-          "constructionTimeMs": 4799910,
+          "goldCost": 4505,
+          "constructionTimeMs": 4800000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 90,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 76,
@@ -887,29 +1117,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 156,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 38,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 11,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 19
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 26,
               "e7193116-d761-479b-8a20-5633737977f5": 15,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 15,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 11
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 65,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 23,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 19,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 8
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 4,
           "prestigeForLevel": 260,
           "_capture_gold_samples": 1,
           "_capture_time_samples": 4
         },
         "4": {
-          "goldCost": 9470,
-          "constructionTimeMs": 9599912,
+          "goldCost": 9370,
+          "constructionTimeMs": 9600000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 105,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 88,
@@ -917,16 +1156,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 180,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 44,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 12,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 22
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 30,
               "e7193116-d761-479b-8a20-5633737977f5": 17,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 17,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 12
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 75,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 27,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 22,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 10
@@ -938,8 +1186,8 @@
           "_capture_time_samples": 4
         },
         "5": {
-          "goldCost": 19590,
-          "constructionTimeMs": 19199909,
+          "goldCost": 19490,
+          "constructionTimeMs": 19200000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 151,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 126,
@@ -947,16 +1195,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 204,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 63,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 18,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 32
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 34,
               "e7193116-d761-479b-8a20-5633737977f5": 25,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 25,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 85,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 39,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 32,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 14
@@ -968,8 +1225,8 @@
           "_capture_time_samples": 5
         },
         "6": {
-          "goldCost": 40640,
-          "constructionTimeMs": 38399913,
+          "goldCost": 40540,
+          "constructionTimeMs": 38400000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 215,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 180,
@@ -977,16 +1234,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 228,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 90,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 25,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 45
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 38,
               "e7193116-d761-479b-8a20-5633737977f5": 35,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 25
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 95,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 55,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 45,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 20
@@ -998,8 +1264,8 @@
           "_capture_time_samples": 4
         },
         "7": {
-          "goldCost": 84425,
-          "constructionTimeMs": 76799914,
+          "goldCost": 84325,
+          "constructionTimeMs": 76800000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 366,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 306,
@@ -1007,16 +1273,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 252,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 153,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 43,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 77
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 42,
               "e7193116-d761-479b-8a20-5633737977f5": 60,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 60,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 43
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 105,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 94,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 77,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 34
@@ -1028,8 +1303,8 @@
           "_capture_time_samples": 4
         },
         "8": {
-          "goldCost": 170737,
-          "constructionTimeMs": 153599911,
+          "goldCost": 170637,
+          "constructionTimeMs": 153600000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 516,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 432,
@@ -1037,16 +1312,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 276,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 216,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 60,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 108
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 46,
               "e7193116-d761-479b-8a20-5633737977f5": 84,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 84,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 60
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 115,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 132,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 108,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 48
@@ -1058,8 +1342,8 @@
           "_capture_time_samples": 2
         },
         "9": {
-          "goldCost": 364920,
-          "constructionTimeMs": 307199915,
+          "goldCost": 364820,
+          "constructionTimeMs": 307200000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 688,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 576,
@@ -1067,16 +1351,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5000,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 300,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 288,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 80,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 144
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 100,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 50,
               "e7193116-d761-479b-8a20-5633737977f5": 112,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 112,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 80
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1500,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 125,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 176,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 144,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 64
@@ -1103,8 +1396,8 @@
       ],
       "levels": {
         "0": {
-          "goldCost": 24425,
-          "constructionTimeMs": 11099918,
+          "goldCost": 600,
+          "constructionTimeMs": 30000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 24,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 20,
@@ -1112,29 +1405,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 60,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 10,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 3,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 5
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 11,
               "e7193116-d761-479b-8a20-5633737977f5": 4,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 4,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 3
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 25,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 6,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 5,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 2
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 1,
           "prestigeForLevel": 100,
           "_capture_gold_samples": 15,
           "_capture_time_samples": 16
         },
         "1": {
-          "goldCost": 3850,
-          "constructionTimeMs": 899912,
+          "goldCost": 3750,
+          "constructionTimeMs": 900000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 197,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 164,
@@ -1142,29 +1444,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 192,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 82,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 25,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 41
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 32,
               "e7193116-d761-479b-8a20-5633737977f5": 33,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 33,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 25
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 80,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 49,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 41,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 16
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 2,
           "prestigeForLevel": 320,
           "_capture_gold_samples": 2,
           "_capture_time_samples": 2
         },
         "2": {
-          "goldCost": null,
-          "constructionTimeMs": null,
+          "goldCost": 15000,
+          "constructionTimeMs": 1380000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 672,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 560,
@@ -1172,22 +1483,31 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 480,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 280,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 84,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 140
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 80,
               "e7193116-d761-479b-8a20-5633737977f5": 112,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 112,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 84
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 200,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 168,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 140,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 56
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 3,
           "prestigeForLevel": 800,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
@@ -1208,8 +1528,8 @@
       ],
       "levels": {
         "0": {
-          "goldCost": 350,
-          "constructionTimeMs": 2159913,
+          "goldCost": 600,
+          "constructionTimeMs": 30000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 24,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 20,
@@ -1217,29 +1537,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 60,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 10,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 3,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 5
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 11,
               "e7193116-d761-479b-8a20-5633737977f5": 4,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 4,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 3
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 25,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 6,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 5,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 2
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 1,
           "prestigeForLevel": 100,
-          "_capture_gold_samples": 37,
-          "_capture_time_samples": 41
+          "_capture_gold_samples": 15,
+          "_capture_time_samples": 16
         },
         "1": {
-          "goldCost": 3850,
-          "constructionTimeMs": 1199917,
+          "goldCost": 3750,
+          "constructionTimeMs": 900000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 197,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 164,
@@ -1247,29 +1576,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 192,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 82,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 25,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 41
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 32,
               "e7193116-d761-479b-8a20-5633737977f5": 33,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 33,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 25
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 80,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 49,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 41,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 16
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 2,
           "prestigeForLevel": 320,
           "_capture_gold_samples": 2,
           "_capture_time_samples": 2
         },
         "2": {
-          "goldCost": 16000,
-          "constructionTimeMs": 1799909,
+          "goldCost": 15000,
+          "constructionTimeMs": 1380000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 672,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 560,
@@ -1277,22 +1615,31 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 480,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 280,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 84,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 140
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 80,
               "e7193116-d761-479b-8a20-5633737977f5": 112,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 112,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 84
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 200,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 168,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 140,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 56
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 3,
           "prestigeForLevel": 800,
           "_capture_gold_samples": 1,
           "_capture_time_samples": 1
@@ -1313,8 +1660,8 @@
       ],
       "levels": {
         "0": {
-          "goldCost": 58365,
-          "constructionTimeMs": 27479914,
+          "goldCost": 600,
+          "constructionTimeMs": 30000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 24,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 20,
@@ -1322,29 +1669,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 60,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 10,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 3,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 5
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 11,
               "e7193116-d761-479b-8a20-5633737977f5": 4,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 4,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 3
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 25,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 6,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 5,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 2
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 1,
           "prestigeForLevel": 100,
-          "_capture_gold_samples": 5,
-          "_capture_time_samples": 5
+          "_capture_gold_samples": 15,
+          "_capture_time_samples": 16
         },
         "1": {
-          "goldCost": 3850,
-          "constructionTimeMs": 1499909,
+          "goldCost": 3750,
+          "constructionTimeMs": 900000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 197,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 164,
@@ -1352,29 +1708,38 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 192,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 82,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 25,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 41
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 32,
               "e7193116-d761-479b-8a20-5633737977f5": 33,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 33,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 25
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 80,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 49,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 41,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 16
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 2,
           "prestigeForLevel": 320,
-          "_capture_gold_samples": 9,
-          "_capture_time_samples": 9
+          "_capture_gold_samples": 2,
+          "_capture_time_samples": 2
         },
         "2": {
-          "goldCost": 15100,
-          "constructionTimeMs": 2279909,
+          "goldCost": 15000,
+          "constructionTimeMs": 1380000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 672,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 560,
@@ -1382,22 +1747,31 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 480,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 280,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 84,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 140
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 80,
               "e7193116-d761-479b-8a20-5633737977f5": 112,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 112,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 84
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 200,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 168,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 140,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 56
             }
           },
-          "requireTownLevel": 5,
+          "requireTownLevel": 3,
           "prestigeForLevel": 800,
           "_capture_gold_samples": 7,
           "_capture_time_samples": 8
@@ -1453,7 +1827,7 @@
       "categoryId": "d34e334c-b99a-4699-af42-05d3f28d681d",
       "lotSize": 1,
       "allowedCraftingTypes": [],
-      "maxLevel": 10,
+      "maxLevel": 9,
       "styleIds": [
         "aa133662-053d-434e-8779-3f2a41d1271e",
         "1d6696b3-963b-48d4-8924-d43505cb2807",
@@ -1462,31 +1836,37 @@
       "levels": {
         "0": {
           "goldCost": 200,
-          "constructionTimeMs": 4919,
+          "constructionTimeMs": 5000,
           "buildInputs": {
-            "e7193116-d761-479b-8a20-5633737977f5": 87,
-            "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42,
-            "42d91529-c88b-4c5b-815b-b55508b4e7ef": 40
+            "e7193116-d761-479b-8a20-5633737977f5": 104,
+            "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 50,
+            "42d91529-c88b-4c5b-815b-b55508b4e7ef": 48
           },
           "styleInputs": {
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 200,
+             "requireTownLevel": 0,
               "e7193116-d761-479b-8a20-5633737977f5": 17,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 8,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 8
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 2000,
+             "requireTownLevel": 2,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 14,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 13,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 6
             },
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 6000,
+             "requireTownLevel": 5,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 26,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 10,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 13
             }
           },
           "requireTownLevel": 0,
-          "prestigeForLevel": 400,
+          "prestigeForLevel": 525,
           "_capture_gold_samples": 1,
           "_capture_time_samples": 2
         },
@@ -1496,22 +1876,30 @@
           "buildInputs": {},
           "styleInputs": {
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 200,
+             "requireTownLevel": 1,
               "e7193116-d761-479b-8a20-5633737977f5": 17,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 8,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 8
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 2000,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 94,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 14,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 13,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 6
             },
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 6000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 94,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 26,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 10,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 13
             }
           },
-          "requireTownLevel": 0,
+          "requireTownLevel": 2,
           "prestigeForLevel": 0,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
@@ -1522,22 +1910,30 @@
           "buildInputs": {},
           "styleInputs": {
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 200,
+             "requireTownLevel": 1,
               "e7193116-d761-479b-8a20-5633737977f5": 17,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 8,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 8
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 2000,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 114,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 14,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 13,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 6
             },
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 6000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 114,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 26,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 10,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 13
             }
           },
-          "requireTownLevel": 0,
+          "requireTownLevel": 3,
           "prestigeForLevel": 0,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
@@ -1548,22 +1944,30 @@
           "buildInputs": {},
           "styleInputs": {
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 200,
+             "requireTownLevel": 1,
               "e7193116-d761-479b-8a20-5633737977f5": 26,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 12,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 12
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 2000,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 134,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 22,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 20,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 9
             },
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 6000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 134,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 40,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 16,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 20
             }
           },
-          "requireTownLevel": 0,
+          "requireTownLevel": 4,
           "prestigeForLevel": 0,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
@@ -1574,22 +1978,31 @@
           "buildInputs": {},
           "styleInputs": {
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 200,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 362,
               "e7193116-d761-479b-8a20-5633737977f5": 36,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 17,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 17
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 2000,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 154,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 29,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 27,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 13
             },
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 6000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 154,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 55,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 21,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 27
             }
           },
-          "requireTownLevel": 0,
+          "requireTownLevel": 5,
           "prestigeForLevel": 0,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
@@ -1600,22 +2013,31 @@
           "buildInputs": {},
           "styleInputs": {
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 200,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 408,
               "e7193116-d761-479b-8a20-5633737977f5": 42,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 20,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 20
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 2000,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 174,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 34,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 32,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 15
             },
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 6000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 174,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 64,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 25,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 32
             }
           },
-          "requireTownLevel": 0,
+          "requireTownLevel": 6,
           "prestigeForLevel": 0,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
@@ -1626,22 +2048,31 @@
           "buildInputs": {},
           "styleInputs": {
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 200,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 454,
               "e7193116-d761-479b-8a20-5633737977f5": 60,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 28,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 28
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 2000,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 194,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 49,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 46,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 21
             },
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 6000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 194,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 91,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 35,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 46
             }
           },
-          "requireTownLevel": 0,
+          "requireTownLevel": 7,
           "prestigeForLevel": 0,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
@@ -1652,22 +2083,31 @@
           "buildInputs": {},
           "styleInputs": {
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 200,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 500,
               "e7193116-d761-479b-8a20-5633737977f5": 85,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 40,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 40
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 2000,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 214,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 70,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 65,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 30
             },
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 6000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 214,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 130,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 50,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 65
             }
           },
-          "requireTownLevel": 0,
+          "requireTownLevel": 8,
           "prestigeForLevel": 0,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
@@ -1678,22 +2118,31 @@
           "buildInputs": {},
           "styleInputs": {
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 200,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 564,
               "e7193116-d761-479b-8a20-5633737977f5": 145,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 68,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 68
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 2000,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 234,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 119,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 111,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 51
             },
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 6000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 234,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 221,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 85,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 111
             }
           },
-          "requireTownLevel": 0,
+          "requireTownLevel": 9,
           "prestigeForLevel": 0,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
@@ -1704,48 +2153,31 @@
           "buildInputs": {},
           "styleInputs": {
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 200,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 568,
               "e7193116-d761-479b-8a20-5633737977f5": 204,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 96,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 96
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 2000,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 256,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 168,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 156,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 72
             },
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 6000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 256,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 312,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 120,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 156
             }
           },
-          "requireTownLevel": 0,
-          "prestigeForLevel": 0,
-          "_capture_gold_samples": 0,
-          "_capture_time_samples": 0
-        },
-        "10": {
-          "goldCost": null,
-          "constructionTimeMs": null,
-          "buildInputs": {},
-          "styleInputs": {
-            "aa133662-053d-434e-8779-3f2a41d1271e": {
-              "e7193116-d761-479b-8a20-5633737977f5": 272,
-              "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 128,
-              "42d91529-c88b-4c5b-815b-b55508b4e7ef": 128
-            },
-            "1d6696b3-963b-48d4-8924-d43505cb2807": {
-              "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 224,
-              "42d91529-c88b-4c5b-815b-b55508b4e7ef": 208,
-              "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 96
-            },
-            "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
-              "42d91529-c88b-4c5b-815b-b55508b4e7ef": 416,
-              "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 160,
-              "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 208
-            }
-          },
-          "requireTownLevel": 0,
+          "requireTownLevel": 10,
           "prestigeForLevel": 0,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
@@ -1792,8 +2224,8 @@
       ],
       "levels": {
         "0": {
-          "goldCost": 40100,
-          "constructionTimeMs": 10499917,
+          "goldCost": 4000,
+          "constructionTimeMs": 4500000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 64,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 53,
@@ -1801,16 +2233,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 126,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 27,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 8,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 13
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 21,
               "e7193116-d761-479b-8a20-5633737977f5": 11,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 11,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 8
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 53,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 16,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 13,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5
@@ -1822,8 +2263,8 @@
           "_capture_time_samples": 6
         },
         "1": {
-          "goldCost": 6100,
-          "constructionTimeMs": 899917,
+          "goldCost": 6000,
+          "constructionTimeMs": 900000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 64,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 53,
@@ -1831,16 +2272,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 93,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 27,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 8,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 13
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 16,
               "e7193116-d761-479b-8a20-5633737977f5": 11,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 11,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 8
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 39,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 16,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 13,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5
@@ -1852,8 +2302,8 @@
           "_capture_time_samples": 4
         },
         "2": {
-          "goldCost": 9100,
-          "constructionTimeMs": 1799913,
+          "goldCost": 9000,
+          "constructionTimeMs": 1800000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 99,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 82,
@@ -1861,16 +2311,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 117,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 42,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 12,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 20
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 20,
               "e7193116-d761-479b-8a20-5633737977f5": 17,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 17,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 12
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 49,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 25,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 20,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 8
@@ -1882,8 +2341,8 @@
           "_capture_time_samples": 4
         },
         "3": {
-          "goldCost": 13600,
-          "constructionTimeMs": 3599911,
+          "goldCost": 13500,
+          "constructionTimeMs": 3600000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 134,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 111,
@@ -1891,16 +2350,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 141,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 57,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 17,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 27
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 24,
               "e7193116-d761-479b-8a20-5633737977f5": 23,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 23,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 17
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 59,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 34,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 27,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 11
@@ -1912,8 +2380,8 @@
           "_capture_time_samples": 4
         },
         "4": {
-          "goldCost": 20350,
-          "constructionTimeMs": 7199915,
+          "goldCost": 20250,
+          "constructionTimeMs": 7200000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 157,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 130,
@@ -1921,16 +2389,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 165,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 66,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 20,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 32
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 28,
               "e7193116-d761-479b-8a20-5633737977f5": 27,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 27,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 20
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 69,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 39,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 32,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 12
@@ -1942,8 +2419,8 @@
           "_capture_time_samples": 4
         },
         "5": {
-          "goldCost": 30475,
-          "constructionTimeMs": 14399912,
+          "goldCost": 30375,
+          "constructionTimeMs": 14400000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 224,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 186,
@@ -1951,16 +2428,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 189,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 95,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 28,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 46
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 32,
               "e7193116-d761-479b-8a20-5633737977f5": 39,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 39,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 28
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 79,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 56,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 46,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 18
@@ -1972,8 +2458,8 @@
           "_capture_time_samples": 3
         },
         "6": {
-          "goldCost": 45665,
-          "constructionTimeMs": 28799909,
+          "goldCost": 45565,
+          "constructionTimeMs": 28800000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 320,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 265,
@@ -1981,16 +2467,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 213,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 135,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 40,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 65
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 36,
               "e7193116-d761-479b-8a20-5633737977f5": 55,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 55,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 40
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 89,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 80,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 65,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 25
@@ -2002,8 +2497,8 @@
           "_capture_time_samples": 3
         },
         "7": {
-          "goldCost": 68450,
-          "constructionTimeMs": 57599906,
+          "goldCost": 68350,
+          "constructionTimeMs": 57600000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 544,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 451,
@@ -2011,16 +2506,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 237,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 230,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 68,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 111
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 40,
               "e7193116-d761-479b-8a20-5633737977f5": 94,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 94,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 68
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 99,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 136,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 111,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 43
@@ -2032,8 +2536,8 @@
           "_capture_time_samples": 3
         },
         "8": {
-          "goldCost": 102625,
-          "constructionTimeMs": 115199916,
+          "goldCost": 102525,
+          "constructionTimeMs": 115200000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 768,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 636,
@@ -2041,16 +2545,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 261,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 324,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 96,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 156
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 44,
               "e7193116-d761-479b-8a20-5633737977f5": 132,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 132,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 96
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 109,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 192,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 156,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 60
@@ -2062,8 +2575,8 @@
           "_capture_time_samples": 2
         },
         "9": {
-          "goldCost": 153890,
-          "constructionTimeMs": 230399918,
+          "goldCost": 153790,
+          "constructionTimeMs": 230400000,
           "buildInputs": {
             "e7193116-d761-479b-8a20-5633737977f5": 1024,
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 848,
@@ -2071,16 +2584,25 @@
           },
           "styleInputs": {
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+             "goldCost": 5000,
+             "requireTownLevel": 5,
+             "prestigeForLevel": 285,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 432,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 128,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 208
             },
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+             "goldCost": 100,
+             "requireTownLevel": 1,
+             "prestigeForLevel": 48,
               "e7193116-d761-479b-8a20-5633737977f5": 176,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 176,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 128
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+             "goldCost": 1500,
+             "requireTownLevel": 2,
+             "prestigeForLevel": 119,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 256,
               "42d91529-c88b-4c5b-815b-b55508b4e7ef": 208,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 80
@@ -2111,28 +2633,35 @@
           "goldCost": null,
           "constructionTimeMs": null,
           "buildInputs": {
-            "e7193116-d761-479b-8a20-5633737977f5": 49,
-            "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
           },
           "styleInputs": {
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 650,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 72,
               "e7193116-d761-479b-8a20-5633737977f5": 49,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1300,
+              "requireTownLevel": 3,
+              "prestigeForLevel": 82,
               "e7193116-d761-479b-8a20-5633737977f5": 42,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4
             },
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 2600,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 104,
               "e7193116-d761-479b-8a20-5633737977f5": 42,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9
             }
           },
-          "requireTownLevel": 3,
-          "prestigeForLevel": 65,
+          "requireTownLevel": 1,
+          "prestigeForLevel": 72,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
         }
@@ -2161,23 +2690,32 @@
           },
           "styleInputs": {
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 650,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 72,
               "e7193116-d761-479b-8a20-5633737977f5": 49,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1300,
+              "requireTownLevel": 3,
+              "prestigeForLevel": 82,
               "e7193116-d761-479b-8a20-5633737977f5": 42,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4
             },
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 2600,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 104,
               "e7193116-d761-479b-8a20-5633737977f5": 42,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9
             }
           },
-          "requireTownLevel": 3,
-          "prestigeForLevel": 65,
+          "requireTownLevel": 1,
+          "prestigeForLevel": 72,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
         }
@@ -2206,23 +2744,32 @@
           },
           "styleInputs": {
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 650,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 72,
               "e7193116-d761-479b-8a20-5633737977f5": 49,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1300,
+              "requireTownLevel": 3,
+              "prestigeForLevel": 82,
               "e7193116-d761-479b-8a20-5633737977f5": 42,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4
             },
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 2600,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 104,
               "e7193116-d761-479b-8a20-5633737977f5": 42,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9
             }
           },
-          "requireTownLevel": 3,
-          "prestigeForLevel": 65,
+          "requireTownLevel": 1,
+          "prestigeForLevel": 72,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
         }
@@ -2251,23 +2798,32 @@
           },
           "styleInputs": {
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 650,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 72,
               "e7193116-d761-479b-8a20-5633737977f5": 49,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 1300,
+              "requireTownLevel": 3,
+              "prestigeForLevel": 82,
               "e7193116-d761-479b-8a20-5633737977f5": 42,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4
             },
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 2600,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 104,
               "e7193116-d761-479b-8a20-5633737977f5": 42,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9
             }
           },
-          "requireTownLevel": 3,
-          "prestigeForLevel": 65,
+          "requireTownLevel": 1,
+          "prestigeForLevel": 72,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
         }
@@ -2291,28 +2847,35 @@
           "goldCost": null,
           "constructionTimeMs": null,
           "buildInputs": {
-            "e7193116-d761-479b-8a20-5633737977f5": 191,
-            "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 164
           },
           "styleInputs": {
             "aa133662-053d-434e-8779-3f2a41d1271e": {
+              "goldCost": 1300,
+              "requireTownLevel": 1,
+              "prestigeForLevel": 127,
               "e7193116-d761-479b-8a20-5633737977f5": 191,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 164
             },
             "1d6696b3-963b-48d4-8924-d43505cb2807": {
+              "goldCost": 2600,
+              "requireTownLevel": 2,
+              "prestigeForLevel": 144,
               "e7193116-d761-479b-8a20-5633737977f5": 164,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 180,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 16
             },
             "c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+              "goldCost": 5200,
+              "requireTownLevel": 5,
+              "prestigeForLevel": 184,
               "e7193116-d761-479b-8a20-5633737977f5": 164,
               "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 137,
               "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 20,
               "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 35
             }
           },
-          "requireTownLevel": 3,
-          "prestigeForLevel": 115,
+          "requireTownLevel": 1,
+          "prestigeForLevel": 127,
           "_capture_gold_samples": 0,
           "_capture_time_samples": 0
         }
