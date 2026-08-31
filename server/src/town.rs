@@ -93,16 +93,21 @@ pub async fn get_town(
     // actix worker and the client saw a dropped connection ("Communication/Network
     // error"). Handle each failure as a 500 so the worker survives and logs why.
     let path = app_state.static_data_path.join("default_town.json");
-    let mut file = File::open(&path).await.map_err(|e| {
+
+    let mut file = File::open(&path).await.map_err(|_e| {
         BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0)
     })?;
+
     let mut content = String::new();
-    file.read_to_string(&mut content).await.map_err(|e| {
+
+    file.read_to_string(&mut content).await.map_err(|_e| {
         BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0)
     })?;
-    let town = serde_json::from_str(&content).map_err(|e| {
+
+    let town = serde_json::from_str(&content).map_err(|_e| {
         BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0)
     })?;
+
     Ok(Json(GetTownResponse { town }))
 }
 
@@ -132,6 +137,60 @@ async fn load_personal_town(
     }
 }
 
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct TownNameRequest {
+    name: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TownNameResponse {
+    town: Value,
+}
+
+#[post("/api/game/v1/public/characters/{character_id}/towns/current/name")]
+pub async fn set_town_name(
+    session: SessionLookedUpMaybe,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<Uuid>,
+    body: Json<TownNameRequest>,
+) -> Result<Json<TownNameResponse>, BladeApiError> {
+    let session = session.get_session_or_error()?;
+    let user_id = session.session.user_id;
+    let character_id = path.into_inner();
+    let req = body.into_inner();
+    let globals: Arc<ServerGlobal> = app_state.get_ref().clone();
+    let mut conn = app_state.db_pool.get().await?;
+
+    conn.transaction(move |mut conn| {
+        async move {
+            let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
+            let mut town = take_town(&mut entry, &globals)?;
+
+            // Set the town name
+            if let Some(obj) = town.as_object_mut() {
+                obj.insert("name".to_string(), json!(req.name));
+            }
+
+            // Persist the changes
+            use crate::schema::characters;
+            let town_col = town.clone();
+            let mut changeset = entry;
+            changeset.town = Some(JsonDbWrapper(town_col.clone()));
+            diesel::update(characters::table)
+                .filter(characters::id.eq(character_id))
+                .set(changeset)
+                .execute(&mut conn)
+                .await?;
+
+            Ok(Json(TownNameResponse { town: town_col }))
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Cost model (parsed out of the raw `building_upgrades.json` `Value`).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -147,6 +206,7 @@ struct LevelCost {
     materials: Vec<(Uuid, u64)>,
     require_town_level: u64,
     max_level: u64,
+    prestige: u64,
 }
 
 /// Errors from resolving/validating a building operation against the cost table.
@@ -211,13 +271,17 @@ fn lookup_level_cost(
         .and_then(|l| l.get(target_level.to_string()))
         .ok_or(CostError::NoSuchLevel)?;
 
-    let gold = level.get("goldCost").and_then(Value::as_u64).unwrap_or(0);
+    let mut gold = level.get("goldCost").and_then(Value::as_u64).unwrap_or(0);
     let construction_time_ms = level
         .get("constructionTimeMs")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let require_town_level = level
+    let mut require_town_level = level
         .get("requireTownLevel")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let mut prestige = level
+        .get("prestigeForLevel")
         .and_then(Value::as_u64)
         .unwrap_or(0);
 
@@ -229,15 +293,39 @@ fn lookup_level_cost(
             }
         }
     }
+    
     // Per-style extra inputs. Only the chosen style's row is charged; an unknown /
     // absent style just adds nothing.
     if let (Some(style), Some(style_inputs)) =
         (style_id, level.get("styleInputs").and_then(Value::as_object))
     {
-        if let Some(row) = style_inputs.get(&style.to_string()).and_then(Value::as_object) {
-            for (k, v) in row {
-                if let (Ok(id), Some(q)) = (Uuid::parse_str(k), v.as_u64()) {
-                    *materials.entry(id).or_insert(0) += q;
+        // Get the style data
+        if let Some(style_data) = style_inputs.get(&style.to_string()) {
+            // Check for style-specific gold cost
+            if let Some(style_gold) = style_data.get("goldCost").and_then(Value::as_u64) {
+                gold = style_gold;
+            }
+
+            // Check if the style has a requireTownLevel
+            if let Some(style_require) = style_data.get("requireTownLevel").and_then(Value::as_u64) {
+                require_town_level = std::cmp::max(require_town_level, style_require);
+            }
+
+            // Check for style-specific prestige
+            if let Some(style_prestige) = style_data.get("prestigeForLevel").and_then(Value::as_u64) {
+                prestige = style_prestige;
+            }
+
+            // Add style materials (skip special fields)
+            if let Some(row) = style_data.as_object() {
+                for (k, v) in row {
+                    // Skip special fields that we already processed
+                    if k == "goldCost" || k == "requireTownLevel" || k == "prestigeForLevel" {
+                        continue;
+                    }
+                    if let (Ok(id), Some(q)) = (Uuid::parse_str(k), v.as_u64()) {
+                        *materials.entry(id).or_insert(0) += q;
+                    }
                 }
             }
         }
@@ -249,6 +337,7 @@ fn lookup_level_cost(
         materials: materials.into_iter().collect(),
         require_town_level,
         max_level,
+        prestige,
     })
 }
 
@@ -433,7 +522,7 @@ pub async fn upgrade_building(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
-            let mut town = take_town(&mut entry)?;
+            let mut town = take_town(&mut entry, &globals)?;
 
             // Resolve the building's current facts, then the cost of the NEXT level.
             let (type_id, style_id, cur_level) = read_building_facts(&town, building_id)
@@ -475,7 +564,7 @@ pub async fn upgrade_building(
             })?;
             apply_upgrade_transition(building, target_level, cost.construction_time_ms, now_ms());
 
-            finish_town_mutation(&mut conn, entry, town, &tracker).await
+            finish_town_mutation(&mut conn, entry, town, &tracker, cost.prestige).await
         }
         .scope_boxed()
     })
@@ -567,12 +656,13 @@ pub async fn complete_building(
     let (character_id, building_id) = path.into_inner();
     let speed_up = body.into_inner().speed_up;
     let globals: Arc<ServerGlobal> = app_state.get_ref().clone();
+    let app_state_clone = globals.clone();
     let mut conn = app_state.db_pool.get().await?;
 
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
-            let mut town = take_town(&mut entry)?;
+            let mut town = take_town(&mut entry, &app_state_clone)?;
 
             // A 404 before anything is charged: an unknown building must never cost
             // gems. (`find_building` is the read-only pre-scan; the mutation borrows
@@ -733,7 +823,7 @@ pub async fn place_building(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
-            let mut town = take_town(&mut entry)?;
+            let mut town = take_town(&mut entry, &globals)?;
 
             // Placement is the level-0 build (initial construction on an empty lot).
             let cost = lookup_level_cost(
@@ -775,7 +865,7 @@ pub async fn place_building(
             )
             .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, TOWN_SERVICE_ID, 6))?;
 
-            finish_town_mutation(&mut conn, entry, town, &tracker).await
+            finish_town_mutation(&mut conn, entry, town, &tracker, cost.prestige).await
         }
         .scope_boxed()
     })
@@ -852,12 +942,13 @@ pub async fn destroy_building(
     let session = session.get_session_or_error()?;
     let user_id = session.session.user_id;
     let (character_id, building_id) = path.into_inner();
+    let app_state_clone = app_state.clone();
     let mut conn = app_state.db_pool.get().await?;
 
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
-            let mut town = take_town(&mut entry)?;
+            let mut town = take_town(&mut entry, &app_state_clone)?;
 
             if !remove_building(&mut town, building_id) {
                 return Err(BladeApiError::new(StatusCode::NOT_FOUND, TOWN_SERVICE_ID, 1));
@@ -898,7 +989,7 @@ pub async fn destroy_building(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 5. STYLE — the reported "stuck loading, can't leave" on a town building.
+// Style endpoints
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Apply a cosmetic STYLE to a town building.
@@ -930,12 +1021,13 @@ pub async fn set_building_style(
     let session = session.get_session_or_error()?;
     let user_id = session.session.user_id;
     let (character_id, building_id, style_id) = path.into_inner();
+    let app_state_clone = app_state.clone();
     let mut conn = app_state.db_pool.get().await?;
 
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
-            let mut town = take_town(&mut entry)?;
+            let mut town = take_town(&mut entry, &app_state_clone)?;
 
             // 404 on an unknown building — same as `destroy`. Silently succeeding
             // would tell the client a style was applied that the town does not
@@ -1095,6 +1187,7 @@ pub async fn remove_town_props(
     let user_id = session.session.user_id;
     let character_id = path.into_inner();
     let req = body.into_inner();
+    let app_state_clone = app_state.clone();
     let mut conn = app_state.db_pool.get().await?;
 
     if req.deleted_props.is_empty() {
@@ -1108,7 +1201,7 @@ pub async fn remove_town_props(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
-            let mut town = take_town(&mut entry)?;
+            let mut town = take_town(&mut entry, &app_state_clone)?;
 
             // Process prop removals and get decoration IDs removed
             let (removed_count, failed_props, removed_decoration_ids, removed_prop_ids) = 
@@ -1313,6 +1406,7 @@ pub async fn place_town_props(
     let user_id = session.session.user_id;
     let character_id = path.into_inner();
     let req = body.into_inner();
+    let app_state_clone = app_state.clone();
     let mut conn = app_state.db_pool.get().await?;
 
     if req.placed_props.is_empty() {
@@ -1326,7 +1420,7 @@ pub async fn place_town_props(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
-            let mut town = take_town(&mut entry)?;
+            let mut town = take_town(&mut entry, &app_state_clone)?;
 
             // Process prop placements and get decoration IDs placed
             let (placed_count, failed_props, placed_decoration_ids) = 
@@ -1700,18 +1794,20 @@ async fn load_town_economy(
 }
 
 /// Take the character's town JSON out of the loaded row for in-place mutation.
-/// A character with no captured town (or a null town) can't have buildings modified
-/// — 409 rather than fabricate one.
-fn take_town(entry: &mut CharacterDbEntryTownEconomy) -> Result<Value, BladeApiError> {
+/// If the character has no captured town (or a null town), create one from the default.
+fn take_town(
+    entry: &mut CharacterDbEntryTownEconomy,
+    app_state: &ServerGlobal,
+) -> Result<Value, BladeApiError> {
     match entry.town.take() {
         Some(JsonDbWrapper(v)) if !v.is_null() => Ok(v),
         _ => {
             // No town exists - load from default template
             let path = app_state.static_data_path.join("default_town.json");
-            let content = std::fs::read_to_string(&path).map_err(|e| {
+            let content = std::fs::read_to_string(&path).map_err(|_e| {
                 BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0)
             })?;
-            let town: Value = serde_json::from_str(&content).map_err(|e| {
+            let town: Value = serde_json::from_str(&content).map_err(|_e| {
                 BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0)
             })?;
             
@@ -1722,16 +1818,112 @@ fn take_town(entry: &mut CharacterDbEntryTownEconomy) -> Result<Value, BladeApiE
     }
 }
 
+/// Apply prestige and check for town level up
+fn apply_prestige_and_level_up(
+    town: &mut Value,
+    prestige_to_add: u64,
+) -> u64 {
+    // Get or initialize levelInfo
+    let level_info_exists = town
+        .get("levelInfo")
+        .and_then(Value::as_object)
+        .is_some();
+    
+    if !level_info_exists {
+        // Create levelInfo if it doesn't exist
+        if let Some(obj) = town.as_object_mut() {
+            obj.insert("levelInfo".to_string(), json!({
+                "level": 0,
+                "experiencePoints": 0
+            }));
+        }
+    }
+    
+    // Now get mutable access to levelInfo
+    let level_info = town
+        .get_mut("levelInfo")
+        .and_then(Value::as_object_mut)
+        .unwrap();
+    
+    let current_xp = level_info
+        .get("experiencePoints")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    
+    let new_xp = current_xp + prestige_to_add;
+    level_info.insert("experiencePoints".to_string(), json!(new_xp));
+    
+    // Get current level and calculate new level
+    let current_level = level_info
+        .get("level")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let new_level = calculate_town_level(new_xp);
+    
+    // Update level if it changed
+    if new_level > current_level {
+        level_info.insert("level".to_string(), json!(new_level));
+    }
+
+    new_level
+}
+
+/// Prestige thresholds for town levels
+const PRESTIGE_THRESHOLDS: &[u64] = &[
+    0,      // Level 0
+    500,    // Level 1
+    2500,   // Level 2
+    5000,   // Level 3
+    8500,   // Level 4
+    13000,  // Level 5
+    19000,  // Level 6
+    26500,  // Level 7
+    35500,  // Level 8
+    46000,  // Level 9
+    69500,  // Level 10
+];
+
+/// Get the maximum town level based on current prestige
+fn calculate_town_level(prestige: u64) -> u64 {
+    let mut level = 0;
+    for (i, &threshold) in PRESTIGE_THRESHOLDS.iter().enumerate() {
+        if prestige >= threshold {
+            level = i as u64;
+        } else {
+            break;
+        }
+    }
+    level
+}
+
 /// Persist the mutated town + charged wallet/inventory back to the row and build the
 /// standard `{wallet, inventory, town, validationFlags}` response. Takes the
 /// `tracker` `charge_cost` populated so the inventory diff carries the consumed
 /// materials. Consumes the entry (moved into the diesel changeset).
 async fn finish_town_mutation(
     conn: &mut diesel_async::AsyncPgConnection,
-    entry: CharacterDbEntryTownEconomy,
-    town: Value,
+    mut entry: CharacterDbEntryTownEconomy,  // Make mut
+    mut town: Value,
     tracker: &InventoryChangeTracker,
+    prestige: u64,
 ) -> Result<Json<TownMutationResponse>, BladeApiError> {
+    if prestige > 0 {
+        let new_level = apply_prestige_and_level_up(&mut town, prestige);
+
+        // Update character root townLevel
+        // Convert the character to a Value to modify it
+        let mut character_value = serde_json::to_value(&entry.character.0)
+            .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0))?;
+        
+        if let Some(obj) = character_value.as_object_mut() {
+            obj.insert("townLevel".to_string(), json!(new_level));
+        }
+        
+        // Deserialize back to CompleteCharacter
+        entry.character.0 = serde_json::from_value(character_value)
+            .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0))?;
+    }
+
     let inventory = entry.inventory.0.generate_client_update(tracker);
     let wallet = entry.wallet.0.clone();
     let character_id = entry.id;
