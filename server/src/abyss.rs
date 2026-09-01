@@ -797,6 +797,7 @@ fn build_generated_data(
 ) -> Option<DungeonGeneratedData> {
     blades_lib::util::dungeon::generate_for_dungeon(
         &app_state.game_data,
+        &app_state.static_data,
         &slice.dungeon_settings_id,
         slice.difficulty_level as i64,
         0,

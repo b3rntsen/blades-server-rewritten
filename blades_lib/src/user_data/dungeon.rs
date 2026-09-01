@@ -1,7 +1,6 @@
-use std::{collections::HashMap, fmt};
-
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
+use std::{collections::{HashMap, HashSet}, fmt};
 
 use crate::user_data::{B64EncodedData, Items};
 
@@ -113,6 +112,12 @@ impl DungeonGeneratedData {
             .and_then(|spawner_data| spawner_data.get(index.spawner_index))
             .and_then(|enemy_data| enemy_data.get(index.enemy_index))
     }
+
+    pub fn get_chest(&self, spawn_group_id: &Uuid, spawn_group_index: usize) -> Option<&ChestGeneratedData> {
+        self.chest_generated_data
+            .get(spawn_group_id)
+            .and_then(|chests| chests.get(spawn_group_index))
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -145,6 +150,7 @@ pub struct DungeonStatus {
     pub version: i64,
     #[serde(default)]
     pub enemy_status: HashMap<EnemyIndex, EnemyStatus>,
+    pub collected_chests: HashSet<Uuid>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

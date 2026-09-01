@@ -3,9 +3,11 @@ use std::collections::HashMap;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::util::dungeon::generate_for_dungeon;
+
 use crate::{
     game_data::GameData,
-    static_data::QuestLevelScaling,
+    static_data::{QuestLevelScaling, StaticData},
     user_data::{
         DungeonGeneratedData,
         ObjectiveStatus, Quest, QuestStatus, QuestType,
@@ -32,6 +34,7 @@ pub enum GenerateQuestDataError {
 /// `.ok_or(DungeonNotFound)` crashed those on accept.
 pub fn generate_quest_data(
     game_data: &GameData,
+    static_data: &StaticData,
     quest_id: Uuid,
     player_level: i64,
     scaling: &QuestLevelScaling,
@@ -91,9 +94,13 @@ pub fn generate_quest_data(
     // Shared with the Abyss — see `util::dungeon`. The Abyss used to have its
     // own hard-coded copy of this shape, which served floor 1's spawn groups on
     // every floor and hung every deeper run.
-    let generated_dungeon_data =
-        crate::util::dungeon::generate_for_dungeon(game_data, &dungeon_info.dungeon_uuid, enemy_level, given_xp)
-            .ok_or(GenerateQuestDataError::DungeonNotFound(dungeon_info.dungeon_uuid))?;
+    let generated_dungeon_data = generate_for_dungeon(
+        game_data,
+        static_data,
+        &dungeon_info.dungeon_uuid,
+        enemy_level,
+        given_xp
+    ).ok_or(GenerateQuestDataError::DungeonNotFound(dungeon_info.dungeon_uuid))?;
 
     Ok((quest, Some(generated_dungeon_data)))
 }

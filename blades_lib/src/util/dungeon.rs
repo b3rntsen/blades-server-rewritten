@@ -24,6 +24,8 @@ use uuid::Uuid;
 
 use crate::{
     game_data::GameData,
+    static_data::StaticData,
+    economy::RewardGrant,
     user_data::{
         ChestGeneratedData, DungeonEnemyResult, DungeonGeneratedData, DungeonItemResult,
         LootTableResult,
@@ -39,11 +41,15 @@ use crate::{
 /// simply does not appear.
 pub fn generate_for_dungeon(
     game_data: &GameData,
+    static_data: &StaticData,
     dungeon_uuid: &Uuid,
     enemy_level: i64,
     given_xp: u64,
 ) -> Option<DungeonGeneratedData> {
     let dungeon = game_data.dungeons.get(dungeon_uuid)?;
+
+    // Get chest_loots for item generation
+    let chest_loots = &static_data.chest_loots;
 
     Some(DungeonGeneratedData {
         enemy_generated_data: dungeon
@@ -76,14 +82,20 @@ pub fn generate_for_dungeon(
             .filter_map(|(item_spawn_id, spawn_info)| {
                 let picked = spawn_info.apparition_settings.first()?;
                 let interactable = game_data.interactables.get(&picked.interactable_uuid)?;
+                
+                // Generate loot for the item
+                let mut loot_table_loot = HashMap::new();
+                for (loot_key, _) in &interactable.loot_table {
+                    // Pick a random loot entry from chest_loots
+                    if let Some(loot_entry) = pick_loot_for_item(chest_loots, loot_key) {
+                        loot_table_loot.insert(*loot_key, loot_entry);
+                    }
+                }
+                
                 Some((
                     *item_spawn_id,
                     vec![DungeonItemResult {
-                        loot_table_loot: interactable
-                            .loot_table
-                            .iter()
-                            .map(|(k, _)| (*k, LootTableResult::default()))
-                            .collect(),
+                        loot_table_loot,
                     }],
                 ))
             })
@@ -91,4 +103,37 @@ pub fn generate_for_dungeon(
         algorithm_version: 1,
         version: 0,
     })
+}
+
+/// Helper function to pick loot for an item based on the loot key
+fn pick_loot_for_item(chest_loots: &[RewardGrant], loot_key: &Uuid) -> Option<LootTableResult> {
+    if chest_loots.is_empty() {
+        return None;
+    }
+    
+    // Use the loot_key to deterministically pick a loot entry
+    let hash = loot_key.as_u128() as usize;
+    let selected = &chest_loots[hash % chest_loots.len()];
+    
+    // Convert RewardGrant to LootTableResult
+    let mut result = LootTableResult::default();
+    
+    // Add stackable items
+    for (item_id, quantity) in &selected.stackable_items {
+        result.stackable_items.insert(*item_id, *quantity);
+    }
+    
+    // Add currencies
+    for (currency_id, amount) in &selected.currencies {
+        result.currencies.insert(*currency_id, *amount);
+    }
+    
+    // Add items (copy them, IDs will be re-minted when collected)
+    for reward_item in &selected.items {
+        let new_item = reward_item.item.clone();
+
+        result.item.0.insert(reward_item.id, new_item);
+    }
+    
+    Some(result)
 }

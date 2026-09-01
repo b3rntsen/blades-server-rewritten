@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::{
     json_db::JsonDbWrapper,
     models::{CharacterDbEntryCharacterWalletInventory, QuestDbEntryDungeonStateAndGeneratedData},
@@ -11,12 +9,15 @@ use actix_web::{
 };
 use blades_lib::user_data::{
     B64EncodedData, CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, DungeonStatus,
-    EnemyIndex, EnemyStatus, InventoryChangeTracker,
+    EnemyIndex, EnemyStatus, InventoryChangeTracker, CompleteWallet,
 };
+use blades_lib::economy::{RewardGrant, apply_reward};
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{BladeApiError, ServerGlobal, session::SessionLookedUpMaybe};
 
@@ -46,9 +47,43 @@ struct CombatCompletedUpdate {
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct EnemyLootCollectedUpdate {
+    pub spawn_group_id: Uuid,
+    pub spawner_index: usize,
+    pub enemy_index: usize,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct ItemLootCollectedUpdate {
+    pub loot: LootData,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct ChestCollectedUpdate {
+    pub spawn_group_id: Uuid,
+    pub spawn_group_index: usize,
+    pub tier: u32,
+}
+
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+struct LootData {
+    #[serde(default)]
+    pub stackable_items: HashMap<Uuid, u32>,
+    #[serde(default)]
+    pub currencies: HashMap<Uuid, u32>,
+}
+
+#[derive(Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum DungeonUpdateAction {
     EnemyKilled(EnemyKilledUpdate),
+    EnemyLootCollected(EnemyLootCollectedUpdate),
+    ItemLootCollected(ItemLootCollectedUpdate),
+    ChestCollected(ChestCollectedUpdate),
     /// Accepted so a mixed `enemy_killed` + `combat_completed` batch deserializes —
     /// previously an unknown variant made serde reject the whole POST (→400), which is
     /// PaganBlueNose's "network error … with a quest".
@@ -72,6 +107,7 @@ struct DungeonUpdateResponse {
     inventory: CompleteInventoryUpdate,
     character: CompleteCharacterWithIdWithoutData,
     dungeon_status: DungeonStatus,
+    wallet: CompleteWallet,
 }
 
 #[post(
@@ -86,6 +122,9 @@ pub async fn dungeon_update(
     let session = session.get_session_or_error()?;
     let (character_id, quest_id) = path.into_inner();
     let mut conn = app_state.db_pool.get().await.unwrap();
+
+    let chest_loots = app_state.static_data.chest_loots.clone();
+    log::info!("chest_loots loaded: {} entries", chest_loots.len());
 
     conn.transaction(|mut conn| {
         async move {
@@ -111,6 +150,7 @@ pub async fn dungeon_update(
                     // (dropped connection = the client's "network error").
                     .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
             };
+            let mut wallet = character_data.wallet.0;
 
             // The dungeon must have been entered/generated first. A missing
             // generated_data / dungeon_state is a client/state error → 400, not a panic.
@@ -123,7 +163,7 @@ pub async fn dungeon_update(
                 .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2))?
                 .0;
 
-            let inventory_modification_tracker = InventoryChangeTracker::default();
+            let mut inventory_modification_tracker = InventoryChangeTracker::default();
 
             dungeon_state.dungeon_status.current_state = body.current_state.clone();
 
@@ -171,6 +211,78 @@ pub async fn dungeon_update(
 
                         character_data.character.0.experience += enemy_generated_data.given_xp;
                     }
+
+                    DungeonUpdateAction::EnemyLootCollected(enemy_loot) => {
+                        let enemy_index = EnemyIndex::new(
+                            enemy_loot.spawn_group_id,
+                            enemy_loot.spawner_index,
+                            enemy_loot.enemy_index,
+                        );
+
+                        // Get the enemy status to retrieve the loot
+                        if let Some(enemy_status) = dungeon_state.dungeon_status.enemy_status.get(&enemy_index)
+                        {
+                            let mut reward = RewardGrant::default();
+
+                            for (item_id, quantity) in &enemy_status.loot.stackable_items {
+                                reward.stackable_items.insert(*item_id, *quantity);
+                            }
+
+                            for (currency_id, amount) in &enemy_status.loot.currencies {
+                                reward.currencies.insert(*currency_id, *amount);
+                            }
+
+                            apply_reward(
+                                &reward,
+                                &mut wallet,
+                                &mut character_data.inventory.0,
+                                &mut character_data.character.0,
+                                &mut inventory_modification_tracker,
+                            );
+                        }
+                    }
+
+                    DungeonUpdateAction::ItemLootCollected(item_loot) => {
+                        let mut reward = RewardGrant::default();
+
+                        for (item_id, quantity) in &item_loot.loot.stackable_items {
+                            reward.stackable_items.insert(*item_id, (*quantity).into());
+                        }
+
+                        for (currency_id, amount) in &item_loot.loot.currencies {
+                            reward.currencies.insert(*currency_id, (*amount).into());
+                        }
+
+                        apply_reward(
+                            &reward,
+                            &mut wallet,
+                            &mut character_data.inventory.0,
+                            &mut character_data.character.0,
+                            &mut inventory_modification_tracker,
+                        );
+                    }
+
+                    DungeonUpdateAction::ChestCollected(chest) => {
+                        if let Some(chest_data) = generated_data.get_chest(&chest.spawn_group_id, chest.spawn_group_index) {
+                            let tier = if chest_data.tier > 0 { 
+                                chest_data.tier as u32 
+                            } else { 
+                                chest.tier
+                            };
+
+                            let chest_id = character_data.inventory.0.treasury.add_chest(
+                                tier as u64, 
+                                dungeon_state.dungeon_status.level
+                            );
+
+                            // Track the added chest so it appears in the response
+                            inventory_modification_tracker.modified_treasury.added.push(chest_id);
+
+                            // Mark as collected
+                            dungeon_state.dungeon_status.collected_chests.insert(chest.spawn_group_id);
+                        }
+                    }
+
                     // Room/combat finished — the kills (XP) arrived as EnemyKilled actions
                     // in this batch and the dungeon current_state blob is persisted below;
                     // no extra reward to apply here.
@@ -192,7 +304,8 @@ pub async fn dungeon_update(
                     id: character_id,
                     character: character_data.character.0.clone(),
                 },
-                inventory: character_data.inventory.0.generate_client_update(&inventory_modification_tracker)
+                inventory: character_data.inventory.0.generate_client_update(&inventory_modification_tracker),
+                wallet: wallet.clone(),
             };
 
             let quest_data_rebuilt = QuestDbEntryDungeonStateAndGeneratedData {
@@ -209,6 +322,8 @@ pub async fn dungeon_update(
                     .execute(&mut conn)
                     .await?;
             }
+
+            character_data.wallet.0 = wallet;
 
             {
                 use crate::schema::characters;

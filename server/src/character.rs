@@ -34,8 +34,6 @@ async fn list_characters(
 ) -> Result<web::Json<CharacterListResponse>, BladeApiError> {
     let session = session.get_session_or_error()?;
 
-    println!("Login: user_id={}", session.session.user_id);
-
     let mut conn = app_state.db_pool.get().await.unwrap();
     let query_result = {
         use schema::characters::dsl::*;
@@ -46,12 +44,6 @@ async fn list_characters(
             .await
             .unwrap()
     };
-
-    println!("Login: found {} characters", query_result.len());
-
-    for character in &query_result {
-        println!("Login: character id={}", character.id);
-    }
 
     let mut result = Vec::with_capacity(query_result.len());
     for character in query_result.iter() {

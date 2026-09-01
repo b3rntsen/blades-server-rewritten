@@ -7,6 +7,7 @@ use actix_web::{
 };
 use blades_lib::{
     economy::{RewardGrant, apply_reward, grant_chest},
+    static_data::StaticData,
     user_data::{
         CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
         DungeonGeneratedDataWithId, InventoryChangeTracker, QuestWithId,
@@ -158,9 +159,10 @@ fn split_quest_rows(
 fn assemble_generated_data_list(
     mut from_rows: Vec<DungeonGeneratedDataWithId>,
     game_data: &blades_lib::game_data::GameData,
+    static_data: &StaticData,
     jobs: &[Value],
 ) -> Vec<DungeonGeneratedDataWithId> {
-    from_rows.extend(jobs_gen::job_generated_data_list(game_data, jobs));
+    from_rows.extend(jobs_gen::job_generated_data_list(game_data, static_data, jobs));
     from_rows
 }
 
@@ -261,7 +263,7 @@ pub async fn get_quests(
                 // Upsert the current window's job rows (idempotent within the window).
                 for job in &jobs {
                     if let Some(entry) =
-                        jobs_gen::job_quest_db_entry(job, character_id_var, &globals.game_data)
+                        jobs_gen::job_quest_db_entry(job, character_id_var, &globals.game_data, &globals.static_data)
                     {
                         use crate::schema::quests;
                         insert_into(quests::table)
@@ -371,7 +373,7 @@ pub async fn get_quests(
                 &open_event_instances,
             );
             let result_generated_data =
-                assemble_generated_data_list(row_generated_data, &globals.game_data, &jobs);
+                assemble_generated_data_list(row_generated_data, &globals.game_data, &globals.static_data, &jobs);
 
             // Events opening within the next 24h, announced but not yet playable.
             let game_event_quests_in_warning = event_quests::upcoming(
@@ -454,7 +456,7 @@ async fn accept_quest(
             j.get("questId").and_then(|v| v.as_str()) == Some(&quest_id.to_string())
         }) {
             if let Some(entry) =
-                jobs_gen::job_quest_db_entry(job, character_id, &app_state.game_data)
+                jobs_gen::job_quest_db_entry(job, character_id, &app_state.game_data, &app_state.static_data)
             {
                 use crate::schema::quests;
                 insert_into(quests::table)
@@ -496,6 +498,7 @@ async fn accept_quest(
     // dungeon data instead of erroring).
     let (quest, dungeon_generated_data) = generate_quest_data(
         &app_state.game_data,
+        &app_state.static_data,
         quest_id,
         player_level,
         &app_state.static_data.quests_daily.level_scaling,
@@ -1371,12 +1374,14 @@ mod jobs_gen {
     /// caller treats as "no entry" rather than an error — same policy as the quest path.
     pub fn generated_data_for_job(
         game_data: &GameData,
+        static_data: &StaticData,
         job: &Value,
     ) -> Option<DungeonGeneratedData> {
         let enemy_level = get_i64(job, "difficultyLevel", 1).max(1);
         let given_xp = QuestLevelScaling::default().given_xp(enemy_level);
         let mut data = blades_lib::util::dungeon::generate_for_dungeon(
             game_data,
+            static_data,
             &JOB_SPAWN_GROUPS_REFERENCE,
             enemy_level,
             given_xp,
@@ -1407,6 +1412,7 @@ mod jobs_gen {
     /// and the same `difficultyLevel`, the two agree by construction.
     pub fn job_generated_data_list(
         game_data: &GameData,
+        static_data: &StaticData,
         jobs: &[Value],
     ) -> Vec<DungeonGeneratedDataWithId> {
         jobs.iter()
@@ -1414,7 +1420,7 @@ mod jobs_gen {
                 let quest_id = Uuid::parse_str(get_str(job, "questId")?).ok()?;
                 Some(DungeonGeneratedDataWithId {
                     quest_id,
-                    inner: generated_data_for_job(game_data, job)?,
+                    inner: generated_data_for_job(game_data, static_data, job)?,
                 })
             })
             .collect()
@@ -1432,6 +1438,7 @@ mod jobs_gen {
         job: &Value,
         character_id: Uuid,
         game_data: &GameData,
+        static_data: &StaticData,
     ) -> Option<QuestDbEntry> {
         let quest_id = Uuid::parse_str(get_str(job, "questId")?).ok()?;
         let mut objective_statuses = HashMap::new();
@@ -1461,7 +1468,7 @@ mod jobs_gen {
             id: quest_id,
             character_id,
             info: JsonDbWrapper(quest),
-            generated_data: JsonDbWrapper(generated_data_for_job(game_data, job)),
+            generated_data: JsonDbWrapper(generated_data_for_job(game_data, static_data, job)),
             dungeon_state: None,
         })
     }
@@ -1799,6 +1806,7 @@ mod event_quests {
         // Resolve the body through the TEMPLATE id — `def.quest_id` is the gldQuestId.
         let (mut quest, dungeon) = generate_quest_data(
             game_data,
+            static_data,
             def.quest_id,
             player_level,
             &static_data.quests_daily.level_scaling,
