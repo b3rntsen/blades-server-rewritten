@@ -90,6 +90,24 @@ pub struct GameData {
     pub interactables: HashMap<Uuid, GameDataInteractable>,
     pub quests: HashMap<Uuid, GameDataQuest>,
     pub dungeons: HashMap<Uuid, GameDataDungeon>,
+    #[serde(default)]
+    pub events: HashMap<Uuid, GameDataEvent>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct GameDataEvent {
+    pub name: String,
+    pub dungeons: HashMap<Uuid, GameDataEventDungeon>,
+    pub duration_seconds: Option<i64>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct GameDataEventDungeon {
+    pub dungeon_uuid: Uuid,
+    pub quest_id: Option<Uuid>,
+    pub enemy_level: Option<i32>,
+    pub xp_reward: Option<f64>,
+    pub max_entries: Option<i32>,
 }
 
 #[cfg(test)]
