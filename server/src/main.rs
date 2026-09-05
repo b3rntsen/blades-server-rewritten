@@ -600,6 +600,9 @@ async fn main() -> Result<()> {
                     .service(admin::arena_season_rollover)
                     .service(admin::set_arena_credential)
                     .service(admin::get_arena_credential)
+                    .service(admin::list_arena_seasons)
+                    .service(admin::create_arena_season)
+                    .service(admin::end_arena_season)
                     // Guild support console (dev-token gated; the web /guilds
                     // page is its only intended caller).
                     .service(guild_admin::list_guilds)
