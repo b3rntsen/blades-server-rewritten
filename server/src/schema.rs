@@ -130,3 +130,56 @@ diesel::table! {
         updated_at -> Int8,
     }
 }
+
+diesel::table! {
+    arena_seasons (id) {
+        id -> Uuid,
+        number -> Int4,
+        name -> Text,
+        starts_at -> Int8,
+        ends_at -> Int8,
+        status -> Text,
+        scoring -> Text,
+        reset_rule -> Text,
+        created_at -> Int8,
+        ended_at -> Nullable<Int8>,
+    }
+}
+
+diesel::table! {
+    arena_season_standings (season_id, character_id) {
+        season_id -> Uuid,
+        character_id -> Uuid,
+        rank -> Int4,
+        trophies -> Int8,
+        matches -> Int4,
+        wins -> Int4,
+        guild_id -> Nullable<Text>,
+        recorded_at -> Int8,
+    }
+}
+
+diesel::table! {
+    arena_season_guild_standings (season_id, guild_id) {
+        season_id -> Uuid,
+        guild_id -> Text,
+        rank -> Int4,
+        trophies -> Int8,
+        members -> Int4,
+        recorded_at -> Int8,
+    }
+}
+
+diesel::table! {
+    arena_season_awards (id) {
+        id -> Uuid,
+        season_id -> Uuid,
+        character_id -> Uuid,
+        kind -> Text,
+        rank -> Int4,
+        tier -> Text,
+        payload -> Jsonb,
+        granted_at -> Nullable<Int8>,
+        created_at -> Int8,
+    }
+}

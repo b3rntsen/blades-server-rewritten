@@ -41,6 +41,7 @@ use uuid::Uuid;
 use crate::{
     BladeApiError, ServerGlobal,
     arena::arena_season::{self, SeasonConfig},
+    arena::season_store,
     credentials,
     arena::matchmaker::{RecentTicketView, query_recent_matches},
     json_db::JsonDbWrapper,
@@ -773,6 +774,310 @@ pub async fn get_arena_credential(
             BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 45)
         })?;
     Ok(Json(CredentialLookupResponse { username }))
+}
+
+// ------------------------------------------------- seasons as data (web UI)
+
+/// `POST /…/api/dev/v1/arena-seasons` — open a season.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSeasonRequest {
+    pub name: String,
+    /// Unix seconds. Absent = now.
+    #[serde(default)]
+    pub starts_at: Option<i64>,
+    /// Unix seconds. Absent = 30 days after the start, retail's calendar-monthly
+    /// cadence rounded to something a UI can default to.
+    #[serde(default)]
+    pub ends_at: Option<i64>,
+    /// Make it the live season immediately. Defaults to false: creating and
+    /// STARTING are separate so a season can be prepared and announced before
+    /// anyone's counters are affected.
+    #[serde(default)]
+    pub activate: bool,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SeasonListResponse {
+    pub seasons: Vec<season_store::SeasonRow>,
+    /// The live one, if any. There can only be one — the database enforces it.
+    pub active_id: Option<Uuid>,
+}
+
+/// `GET /…/api/dev/v1/arena-seasons` — every season, newest first.
+#[get("/blades.bgs.services/api/dev/v1/arena-seasons")]
+pub async fn list_arena_seasons(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+) -> Result<Json<SeasonListResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    use crate::schema::arena_seasons::dsl as s;
+    let seasons: Vec<season_store::SeasonRow> = s::arena_seasons
+        .select(season_store::SeasonRow::as_select())
+        .order(s::number.desc())
+        .load(&mut conn)
+        .await
+        .map_err(|e| {
+            warn!("season list failed: {e}");
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 20)
+        })?;
+    let active_id = seasons.iter().find(|x| x.status == "active").map(|x| x.id);
+    Ok(Json(SeasonListResponse { seasons, active_id }))
+}
+
+/// `POST /…/api/dev/v1/arena-seasons` — create (and optionally start) a season.
+///
+/// The season id is minted here rather than taken from the caller. It becomes
+/// the key in every character's `pvpSeasonHistory` forever, so letting a UI
+/// choose it invites a collision with one of the 61 retail season ids that
+/// transferred characters already carry.
+#[post("/blades.bgs.services/api/dev/v1/arena-seasons")]
+pub async fn create_arena_season(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    body: web::Json<CreateSeasonRequest>,
+) -> Result<Json<season_store::SeasonRow>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let body = body.into_inner();
+    let name = body.name.trim().to_string();
+    if name.is_empty() {
+        return Err(BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 21));
+    }
+    let starts_at = body.starts_at.unwrap_or_else(arena_season::now_unix);
+    let ends_at = body.ends_at.unwrap_or(starts_at + 30 * 86_400);
+    if ends_at <= starts_at {
+        return Err(BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 22));
+    }
+
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    use crate::schema::arena_seasons::dsl as s;
+
+    // Numbering is ours, not retail's — it is only ever shown as
+    // "Season {0}" — so derive it rather than making a UI invent one.
+    let highest: Option<i32> = s::arena_seasons
+        .select(diesel::dsl::max(s::number))
+        .first(&mut conn)
+        .await
+        .unwrap_or(None);
+
+    let row = season_store::NewSeason {
+        id: Uuid::new_v4(),
+        number: highest.unwrap_or(0) + 1,
+        name,
+        starts_at,
+        ends_at,
+        status: if body.activate { "active" } else { "scheduled" }.into(),
+        scoring: "shipped".into(),
+        reset_rule: "hard_reset".into(),
+    };
+
+    let created: season_store::SeasonRow = diesel::insert_into(s::arena_seasons)
+        .values(&row)
+        .returning(season_store::SeasonRow::as_returning())
+        .get_result(&mut conn)
+        .await
+        .map_err(|e| {
+            // The partial unique index on status='active' is what rejects a
+            // second live season, so this is the expected failure for
+            // "activate while one is already running" — not a server fault.
+            warn!("season create failed: {e}");
+            BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 23)
+        })?;
+    Ok(Json(created))
+}
+
+/// `POST /…/api/dev/v1/arena-seasons/{id}/end` request. **Dry run by default.**
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EndSeasonRequest {
+    /// Write. Absent or false = report what would happen and change nothing.
+    #[serde(default)]
+    pub apply: bool,
+    /// Open this season immediately afterwards, so the ladder is never closed
+    /// with nothing to play for. Absent = leave no season active.
+    #[serde(default)]
+    pub next_season_id: Option<Uuid>,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct EndSeasonResponse {
+    pub applied: bool,
+    pub season_id: Uuid,
+    pub season_name: String,
+    /// Characters that scored at all — the size of the frozen ladder.
+    pub ranked_characters: usize,
+    pub ranked_guilds: usize,
+    pub awards: usize,
+    pub top_trophies: i64,
+    /// Only set when a next season was opened.
+    pub next_season_id: Option<Uuid>,
+    pub characters_rolled: usize,
+}
+
+/// `POST /…/api/dev/v1/arena-seasons/{id}/end` — close a season.
+///
+/// Freezes the ladder, records awards, then rolls every character into the next
+/// season (which zeroes their cups and therefore the top-100). That order is
+/// load-bearing: the live standings live on the character and the roll zeroes
+/// them, so a snapshot taken afterwards would record all zeros.
+///
+/// Idempotent in the way that matters: the roll itself skips anyone already in
+/// the target season, and the awards index is unique per (season, character,
+/// kind), so a re-run after a partial failure resumes instead of double-paying.
+#[post("/blades.bgs.services/api/dev/v1/arena-seasons/{season_id}/end")]
+pub async fn end_arena_season(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<Uuid>,
+    body: Option<web::Json<EndSeasonRequest>>,
+) -> Result<Json<EndSeasonResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let body = body.map(|b| b.into_inner()).unwrap_or_default();
+    let season_id = path.into_inner();
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    use crate::schema::arena_seasons::dsl as s;
+
+    let season: season_store::SeasonRow = s::arena_seasons
+        .filter(s::id.eq(season_id))
+        .select(season_store::SeasonRow::as_select())
+        .first(&mut conn)
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 24))?;
+
+    let standings = season_store::freeze_standings(&mut conn, season_id)
+        .await
+        .map_err(|e| {
+            warn!("season end: could not freeze standings: {e}");
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 25)
+        })?;
+    let guilds = season_store::guild_standings_from(season_id, &standings);
+    let awards = season_store::awards_from(season_id, &standings, &guilds);
+
+    let mut resp = EndSeasonResponse {
+        applied: body.apply,
+        season_id,
+        season_name: season.name.clone(),
+        ranked_characters: standings.len(),
+        ranked_guilds: guilds.len(),
+        awards: awards.len(),
+        // `.first()` here would resolve to diesel's FirstDsl, not Vec::first,
+        // because the diesel prelude is in scope. `.get(0)` is unambiguous.
+        top_trophies: standings.get(0).map(|x| x.trophies).unwrap_or(0),
+        next_season_id: None,
+        characters_rolled: 0,
+    };
+
+    if !body.apply {
+        return Ok(Json(resp));
+    }
+
+    // 1. freeze, 2. award — both additive, both safe to re-run.
+    for chunk in standings.chunks(500) {
+        diesel::insert_into(crate::schema::arena_season_standings::table)
+            .values(chunk)
+            .on_conflict_do_nothing()
+            .execute(&mut conn)
+            .await
+            .map_err(|e| {
+                warn!("season end: standings insert failed: {e}");
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 26)
+            })?;
+    }
+    if !guilds.is_empty() {
+        diesel::insert_into(crate::schema::arena_season_guild_standings::table)
+            .values(&guilds)
+            .on_conflict_do_nothing()
+            .execute(&mut conn)
+            .await
+            .map_err(|e| {
+                warn!("season end: guild standings insert failed: {e}");
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 27)
+            })?;
+    }
+    for chunk in awards.chunks(500) {
+        diesel::insert_into(crate::schema::arena_season_awards::table)
+            .values(chunk)
+            .on_conflict_do_nothing()
+            .execute(&mut conn)
+            .await
+            .map_err(|e| {
+                warn!("season end: awards insert failed: {e}");
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 28)
+            })?;
+    }
+
+    diesel::update(s::arena_seasons.filter(s::id.eq(season_id)))
+        .set((s::status.eq("ended"), s::ended_at.eq(Some(arena_season::now_unix()))))
+        .execute(&mut conn)
+        .await
+        .map_err(|e| {
+            warn!("season end: could not mark ended: {e}");
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 29)
+        })?;
+
+    // 3. roll everyone into the next season, which is what actually zeroes the
+    // cups and the top-100. Without a next season there is nothing to roll INTO
+    // and the standings simply stay as they are — deliberately, so "end the
+    // season" and "open the next one" can be two decisions.
+    if let Some(next_id) = body.next_season_id {
+        let next: season_store::SeasonRow = s::arena_seasons
+            .filter(s::id.eq(next_id))
+            .select(season_store::SeasonRow::as_select())
+            .first(&mut conn)
+            .await
+            .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 30))?;
+        let cfg = next.config();
+
+        let rows: Vec<SeasonRolloverRow> =
+            diesel::sql_query("SELECT id, character FROM characters ORDER BY id")
+                .get_results(&mut conn)
+                .await
+                .map_err(|e| {
+                    warn!("season end: could not read characters: {e}");
+                    BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 31)
+                })?;
+        for row in rows {
+            let Ok(mut ch) = serde_json::from_value::<CompleteCharacter>(row.character.clone())
+            else {
+                // Same tolerance as the rollover endpoint: one unreadable row
+                // must not abort everyone else's season change.
+                warn!("season end: character {} does not deserialize; skipped", row.id);
+                continue;
+            };
+            if !arena_season::roll_character_into(&mut ch, &cfg).reset {
+                continue;
+            }
+            let Ok(updated) = serde_json::to_value(&ch) else {
+                warn!("season end: character {} does not serialize; skipped", row.id);
+                continue;
+            };
+            diesel::sql_query("UPDATE characters SET character = $1 WHERE id = $2")
+                .bind::<diesel::sql_types::Jsonb, _>(updated)
+                .bind::<diesel::sql_types::Uuid, _>(row.id)
+                .execute(&mut conn)
+                .await
+                .map_err(|e| {
+                    warn!("season end: write failed for character {}: {e}", row.id);
+                    BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 32)
+                })?;
+            resp.characters_rolled += 1;
+        }
+
+        diesel::update(s::arena_seasons.filter(s::id.eq(next_id)))
+            .set(s::status.eq("active"))
+            .execute(&mut conn)
+            .await
+            .map_err(|e| {
+                warn!("season end: could not activate {next_id}: {e}");
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 33)
+            })?;
+        resp.next_season_id = Some(next_id);
+    }
+
+    Ok(Json(resp))
 }
 
 // ------------------------------------------------------------ arena season
