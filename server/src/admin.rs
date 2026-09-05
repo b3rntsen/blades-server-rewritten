@@ -734,6 +734,47 @@ pub async fn set_arena_credential(
     }))
 }
 
+/// `GET /…/api/dev/v1/arena-credentials?user_id=…` — does this account have a
+/// login, and under what name?
+///
+/// Read-only and deliberately thin: it answers the username, never anything
+/// derived from the password. The profile page needs it so it can say "change
+/// your login" instead of "set one" — and so a player who forgot which name
+/// they picked can look it up instead of quietly creating a second account.
+#[derive(Deserialize, Debug)]
+pub struct CredentialQuery {
+    pub user_id: Uuid,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialLookupResponse {
+    /// `None` when this account has no login yet.
+    pub username: Option<String>,
+}
+
+#[get("/blades.bgs.services/api/dev/v1/arena-credentials")]
+pub async fn get_arena_credential(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    query: web::Query<CredentialQuery>,
+) -> Result<Json<CredentialLookupResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    use crate::schema::arena_credentials::dsl as c;
+    let username: Option<String> = c::arena_credentials
+        .filter(c::user_id.eq(query.into_inner().user_id))
+        .select(c::username)
+        .first(&mut conn)
+        .await
+        .optional()
+        .map_err(|e| {
+            warn!("credential lookup failed: {e}");
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 45)
+        })?;
+    Ok(Json(CredentialLookupResponse { username }))
+}
+
 // ------------------------------------------------------------ arena season
 
 /// `POST /…/api/dev/v1/arena-season-rollover` request.
