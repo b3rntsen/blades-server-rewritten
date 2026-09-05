@@ -1,0 +1,363 @@
+{
+  "_meta": {
+    "authoritative": "every value here appeared verbatim in a retail response",
+    "derivation": "Observed in 2149 distinct job entries across 1725 captured /quests responses. The location is NOT determined by dungeonTemplateId (0 of 12 templates map to a single name), so the observed SET is kept and rolled within, constrained to the template's kit -- which is what retail's own roll does.",
+    "description": "Localization keys retail used in job questName/questDescription dynamicElements, keyed by the jobSetup id that selects them."
+  },
+  "dungeons": {
+    "18e81559-3561-47ef-b73e-9f3bc34ba0b8": {
+      "kitName": "Kit_Cave_Name",
+      "locations": [
+        "UI.Jobs.Location.Name.Cave.001",
+        "UI.Jobs.Location.Name.Cave.002",
+        "UI.Jobs.Location.Name.Cave.003",
+        "UI.Jobs.Location.Name.Cave.004",
+        "UI.Jobs.Location.Name.Cave.005",
+        "UI.Jobs.Location.Name.Cave.006",
+        "UI.Jobs.Location.Name.Cave.007",
+        "UI.Jobs.Location.Name.Cave.008",
+        "UI.Jobs.Location.Name.Cave.009",
+        "UI.Jobs.Location.Name.Cave.010",
+        "UI.Jobs.Location.Name.Cave.011",
+        "UI.Jobs.Location.Name.Cave.012"
+      ]
+    },
+    "19a3b1b0-c18b-4f2f-b73f-780f3759fe48": {
+      "kitName": null,
+      "locations": [
+        "UI.Arena.Arena5.Title"
+      ]
+    },
+    "3bcfeff9-5b22-4f7c-b1b8-ef4b277f7bc2": {
+      "kitName": null,
+      "locations": [
+        "UI.Arena.Arena6.Title"
+      ]
+    },
+    "4d3153a0-cfc5-405c-b065-92547ee9fbbc": {
+      "kitName": "Kit_StoneDungeon_Name",
+      "locations": [
+        "UI.Jobs.Location.Name.Dungeon.001",
+        "UI.Jobs.Location.Name.Dungeon.002",
+        "UI.Jobs.Location.Name.Dungeon.003",
+        "UI.Jobs.Location.Name.Dungeon.004",
+        "UI.Jobs.Location.Name.Dungeon.005",
+        "UI.Jobs.Location.Name.Dungeon.006",
+        "UI.Jobs.Location.Name.Dungeon.007",
+        "UI.Jobs.Location.Name.Dungeon.008",
+        "UI.Jobs.Location.Name.Dungeon.009",
+        "UI.Jobs.Location.Name.Dungeon.010",
+        "UI.Jobs.Location.Name.Dungeon.011",
+        "UI.Jobs.Location.Name.Dungeon.012"
+      ]
+    },
+    "57d639c2-ec4c-4e6b-9995-ff6a7ef3e712": {
+      "kitName": "Kit_Forest_Name",
+      "locations": [
+        "UI.Jobs.Location.Name.Forest.001",
+        "UI.Jobs.Location.Name.Forest.002",
+        "UI.Jobs.Location.Name.Forest.003",
+        "UI.Jobs.Location.Name.Forest.004",
+        "UI.Jobs.Location.Name.Forest.005",
+        "UI.Jobs.Location.Name.Forest.006",
+        "UI.Jobs.Location.Name.Forest.007",
+        "UI.Jobs.Location.Name.Forest.008",
+        "UI.Jobs.Location.Name.Forest.009",
+        "UI.Jobs.Location.Name.Forest.010",
+        "UI.Jobs.Location.Name.Forest.011",
+        "UI.Jobs.Location.Name.Forest.012"
+      ]
+    },
+    "5af68bb1-e478-4a2d-916c-651b8d793749": {
+      "kitName": "Kit_Cave_Name",
+      "locations": [
+        "UI.Jobs.Location.Name.Cave.001",
+        "UI.Jobs.Location.Name.Cave.002",
+        "UI.Jobs.Location.Name.Cave.003",
+        "UI.Jobs.Location.Name.Cave.004",
+        "UI.Jobs.Location.Name.Cave.005",
+        "UI.Jobs.Location.Name.Cave.006",
+        "UI.Jobs.Location.Name.Cave.007",
+        "UI.Jobs.Location.Name.Cave.008",
+        "UI.Jobs.Location.Name.Cave.009",
+        "UI.Jobs.Location.Name.Cave.010",
+        "UI.Jobs.Location.Name.Cave.011",
+        "UI.Jobs.Location.Name.Cave.012"
+      ]
+    },
+    "62598ab9-82ac-4321-8534-a048edd26ccb": {
+      "kitName": "Kit_Cave_Name",
+      "locations": [
+        "UI.Jobs.Location.Name.Cave.001",
+        "UI.Jobs.Location.Name.Cave.002",
+        "UI.Jobs.Location.Name.Cave.003",
+        "UI.Jobs.Location.Name.Cave.004",
+        "UI.Jobs.Location.Name.Cave.005",
+        "UI.Jobs.Location.Name.Cave.006",
+        "UI.Jobs.Location.Name.Cave.007",
+        "UI.Jobs.Location.Name.Cave.008",
+        "UI.Jobs.Location.Name.Cave.009",
+        "UI.Jobs.Location.Name.Cave.010",
+        "UI.Jobs.Location.Name.Cave.011",
+        "UI.Jobs.Location.Name.Cave.012"
+      ]
+    },
+    "6c9fe3b7-2557-408a-b52a-1842680fed3f": {
+      "kitName": "Kit_StoneDungeon_Name",
+      "locations": [
+        "UI.Jobs.Location.Name.Dungeon.001",
+        "UI.Jobs.Location.Name.Dungeon.002",
+        "UI.Jobs.Location.Name.Dungeon.003",
+        "UI.Jobs.Location.Name.Dungeon.004",
+        "UI.Jobs.Location.Name.Dungeon.005",
+        "UI.Jobs.Location.Name.Dungeon.006",
+        "UI.Jobs.Location.Name.Dungeon.007",
+        "UI.Jobs.Location.Name.Dungeon.008",
+        "UI.Jobs.Location.Name.Dungeon.009",
+        "UI.Jobs.Location.Name.Dungeon.010",
+        "UI.Jobs.Location.Name.Dungeon.011",
+        "UI.Jobs.Location.Name.Dungeon.012"
+      ]
+    },
+    "79757d9d-8a26-4a19-bd2e-49ba8577a007": {
+      "kitName": "Kit_Forest_Name",
+      "locations": [
+        "UI.Jobs.Location.Name.Forest.001",
+        "UI.Jobs.Location.Name.Forest.002",
+        "UI.Jobs.Location.Name.Forest.003",
+        "UI.Jobs.Location.Name.Forest.004",
+        "UI.Jobs.Location.Name.Forest.005",
+        "UI.Jobs.Location.Name.Forest.006",
+        "UI.Jobs.Location.Name.Forest.007",
+        "UI.Jobs.Location.Name.Forest.008",
+        "UI.Jobs.Location.Name.Forest.009",
+        "UI.Jobs.Location.Name.Forest.010",
+        "UI.Jobs.Location.Name.Forest.011",
+        "UI.Jobs.Location.Name.Forest.012"
+      ]
+    },
+    "86e6a720-caa4-4b13-b8b8-73f3dcf049a2": {
+      "kitName": "Kit_Ayleid_Name",
+      "locations": [
+        "UI.Jobs.Location.Name.Ayleid.001",
+        "UI.Jobs.Location.Name.Ayleid.002",
+        "UI.Jobs.Location.Name.Ayleid.003",
+        "UI.Jobs.Location.Name.Ayleid.004",
+        "UI.Jobs.Location.Name.Ayleid.005",
+        "UI.Jobs.Location.Name.Ayleid.006",
+        "UI.Jobs.Location.Name.Ayleid.007",
+        "UI.Jobs.Location.Name.Ayleid.008",
+        "UI.Jobs.Location.Name.Ayleid.009",
+        "UI.Jobs.Location.Name.Ayleid.010",
+        "UI.Jobs.Location.Name.Ayleid.011",
+        "UI.Jobs.Location.Name.Ayleid.012"
+      ]
+    },
+    "a9386df1-5b26-462b-9c56-de9cb371c790": {
+      "kitName": null,
+      "locations": [
+        "UI.Arena.Arena3.Title"
+      ]
+    },
+    "b13c209c-3f41-48ac-998c-e15482e3a1a0": {
+      "kitName": "Kit_Ayleid_Name",
+      "locations": [
+        "UI.Jobs.Location.Name.Ayleid.001",
+        "UI.Jobs.Location.Name.Ayleid.002",
+        "UI.Jobs.Location.Name.Ayleid.003",
+        "UI.Jobs.Location.Name.Ayleid.004",
+        "UI.Jobs.Location.Name.Ayleid.005",
+        "UI.Jobs.Location.Name.Ayleid.006",
+        "UI.Jobs.Location.Name.Ayleid.007",
+        "UI.Jobs.Location.Name.Ayleid.008",
+        "UI.Jobs.Location.Name.Ayleid.009",
+        "UI.Jobs.Location.Name.Ayleid.010",
+        "UI.Jobs.Location.Name.Ayleid.011",
+        "UI.Jobs.Location.Name.Ayleid.012"
+      ]
+    },
+    "c232c91f-37cb-4254-b8be-31f9c9d5dc54": {
+      "kitName": "Kit_StoneDungeon_Name",
+      "locations": [
+        "UI.Jobs.Location.Name.Dungeon.001",
+        "UI.Jobs.Location.Name.Dungeon.002",
+        "UI.Jobs.Location.Name.Dungeon.003",
+        "UI.Jobs.Location.Name.Dungeon.004",
+        "UI.Jobs.Location.Name.Dungeon.005",
+        "UI.Jobs.Location.Name.Dungeon.006",
+        "UI.Jobs.Location.Name.Dungeon.007",
+        "UI.Jobs.Location.Name.Dungeon.008",
+        "UI.Jobs.Location.Name.Dungeon.009",
+        "UI.Jobs.Location.Name.Dungeon.010",
+        "UI.Jobs.Location.Name.Dungeon.011",
+        "UI.Jobs.Location.Name.Dungeon.012"
+      ]
+    },
+    "c45ba434-a2a7-4fff-99e2-8aa703f13893": {
+      "kitName": "Kit_Ayleid_Name",
+      "locations": [
+        "UI.Jobs.Location.Name.Ayleid.001",
+        "UI.Jobs.Location.Name.Ayleid.002",
+        "UI.Jobs.Location.Name.Ayleid.003",
+        "UI.Jobs.Location.Name.Ayleid.004",
+        "UI.Jobs.Location.Name.Ayleid.005",
+        "UI.Jobs.Location.Name.Ayleid.006",
+        "UI.Jobs.Location.Name.Ayleid.007",
+        "UI.Jobs.Location.Name.Ayleid.008",
+        "UI.Jobs.Location.Name.Ayleid.009",
+        "UI.Jobs.Location.Name.Ayleid.010",
+        "UI.Jobs.Location.Name.Ayleid.011",
+        "UI.Jobs.Location.Name.Ayleid.012"
+      ]
+    },
+    "c5da36d7-5e28-454c-b1f5-ba57c2f5c0c4": {
+      "kitName": "Kit_Forest_Name",
+      "locations": [
+        "UI.Jobs.Location.Name.Forest.001",
+        "UI.Jobs.Location.Name.Forest.002",
+        "UI.Jobs.Location.Name.Forest.003",
+        "UI.Jobs.Location.Name.Forest.004",
+        "UI.Jobs.Location.Name.Forest.005",
+        "UI.Jobs.Location.Name.Forest.006",
+        "UI.Jobs.Location.Name.Forest.007",
+        "UI.Jobs.Location.Name.Forest.008",
+        "UI.Jobs.Location.Name.Forest.009",
+        "UI.Jobs.Location.Name.Forest.010",
+        "UI.Jobs.Location.Name.Forest.011",
+        "UI.Jobs.Location.Name.Forest.012"
+      ]
+    },
+    "dbfd45fe-8c8c-4c8d-83c6-9b4566afc788": {
+      "kitName": null,
+      "locations": [
+        "UI.Arena.Arena4.Title"
+      ]
+    },
+    "e7418cc7-01de-4c84-ba00-e221f8783d51": {
+      "kitName": null,
+      "locations": [
+        "UI.Arena.Arena1.Title"
+      ]
+    }
+  },
+  "enemyFamilies": {
+    "008cf5b0-2590-433b-832e-f2e6f0e0226f": {
+      "group": "EnemyGroup.Name.Bears",
+      "name": "Enemy.Name.Bear",
+      "plural": "Enemy.Name.Bear.Plural"
+    },
+    "06591d48-8c3a-4f81-a2c6-dba2e7163788": {
+      "group": "EnemyGroup.Name.Spriggans",
+      "name": "Enemy.Name.Spriggan",
+      "plural": "Enemy.Name.Spriggan.Plural"
+    },
+    "1696d9c0-900f-4829-ae3f-f0441d92a37c": {
+      "group": null,
+      "name": "Enemy.Name.Thalmor",
+      "plural": "Enemy.Name.Thalmor.Plural"
+    },
+    "1b2a30db-2871-43a2-bca0-eaa4bd804698": {
+      "group": "EnemyGroup.Name.Trolls",
+      "name": "Enemy.Name.Troll",
+      "plural": "Enemy.Name.Troll.Plural"
+    },
+    "33de9f64-8eb6-41d2-b62d-8b7fb3632729": {
+      "group": null,
+      "name": "Enemy.Name.Warlord",
+      "plural": "Enemy.Name.Warlord.Plural"
+    },
+    "340cd608-31ec-447f-9f72-2162639bff3c": {
+      "group": null,
+      "name": "Enemy.Name.DremoraRaider",
+      "plural": "Enemy.Name.DremoraRaider.Plural"
+    },
+    "3fa0aa97-7a45-4c96-8b62-53e08691f746": {
+      "group": "EnemyGroup.Name.Undead",
+      "name": "Enemy.Name.Lich",
+      "plural": "Enemy.Name.Lich.Plural"
+    },
+    "4c60bb97-3918-485a-822e-1017d2401dd2": {
+      "group": null,
+      "name": "Enemy.Name.Mercenary",
+      "plural": "Enemy.Name.Mercenary.Plural"
+    },
+    "50994925-f050-48b2-8cab-259b0f1a3531": {
+      "group": null,
+      "name": "Enemy.Name.Necromancer",
+      "plural": "Enemy.Name.Necromancer.Plural"
+    },
+    "521bb612-587d-4a90-adee-904a48d89c33": {
+      "group": "EnemyGroup.Name.Undead",
+      "name": "Enemy.Name.Wight",
+      "plural": "Enemy.Name.Wight.Plural"
+    },
+    "6ee657a9-5cc3-45b7-ad14-db8828f7ae2c": {
+      "group": "EnemyGroup.Name.Spiders",
+      "name": "Enemy.Name.Spider",
+      "plural": "Enemy.Name.Spider.Plural"
+    },
+    "8c75bd1f-95a3-47d4-a28c-fdb1fc0de228": {
+      "group": "EnemyGroup.Name.Goblins",
+      "name": "Enemy.Name.Goblin",
+      "plural": "Enemy.Name.Goblin.Plural"
+    },
+    "9137d218-6f05-4e8f-a5e5-1c63c61c95ca": {
+      "group": "EnemyGroup.Name.Goblins",
+      "name": "Enemy.Name.Goblin.Wizard",
+      "plural": "Enemy.Name.Goblin.Wizard.Plural"
+    },
+    "be99402d-c518-4e81-be00-9e2e20e690b0": {
+      "group": "EnemyGroup.Name.Wisps",
+      "name": "Enemy.Name.Wispmother",
+      "plural": "Enemy.Name.Wispmother.Plural"
+    },
+    "d14a0ec0-39a5-417f-a21c-8c4840d60a56": {
+      "group": null,
+      "name": "Enemy.Name.Atronach",
+      "plural": "Enemy.Name.Atronach.Plural"
+    },
+    "de4686d9-f748-40f7-a8d3-7baadb46a695": {
+      "group": "EnemyGroup.Name.Undead",
+      "name": "Enemy.Name.Skeleton",
+      "plural": "Enemy.Name.Skeleton.Plural"
+    },
+    "de8e06be-5403-4fc1-b912-1a5cd9d608a6": {
+      "group": null,
+      "name": "Enemy.Name.Bandit",
+      "plural": "Enemy.Name.Bandit.Plural"
+    },
+    "ea8096f9-6c1b-4b42-af71-9ceabd7de33d": {
+      "group": null,
+      "name": "Enemy.Name.DremoraWarlock",
+      "plural": "Enemy.Name.DremoraWarlock.Plural"
+    }
+  },
+  "items": {
+    "0fab3016-8306-48ee-8268-d3f7bea7d9d2": "Items.Name.ImpStool",
+    "144a3de0-bc3b-45b4-858e-0c7864ffce52": "Item.DecorationResource.Seed",
+    "49a5aed9-3fc2-423a-875c-1e4f3c10f4d8": "Items.Name.GlowDust",
+    "5fd5015c-43f9-4e25-90cb-e960753842a9": "Item.DecorationResource.Fabric",
+    "7ea91e7d-3c00-47d8-bf31-6da3aaa008ee": "Items.Name.Honeycomb",
+    "8e7d18af-a9bd-4a3f-964e-ab9f301cdc35": "Items.Name.Deathbell",
+    "9972b682-4c8d-43ba-90f1-b22f5800b0e9": "Item.TownResource.Limestone",
+    "a885cc70-b2b3-4a28-9e19-2d946e2255e3": "Item.DecorationResource.Marble",
+    "b010281a-df63-436c-9396-41eba43665df": "Items.Name.VoidSalts",
+    "d145895e-e222-4cb0-be8a-e297b628173c": "Item.DecorationResource.Dye",
+    "d7b5faad-fffe-4717-a75d-bb80ba61b6f5": "Item.DecorationResource.Crystal",
+    "da767378-8c00-43c1-a5eb-705d7d2f7306": "Item.TownResource.Lumber",
+    "e2a06efd-e77e-4f7b-9138-7dcc64844b62": "Items.Name.FireSalts",
+    "fa22d326-f218-4c4b-8524-e9481e6066d6": "Items.Name.FrostSalts"
+  },
+  "npcs": [
+    "NPC.Duelist1.Name",
+    "NPC.Duelist10.Name",
+    "NPC.Duelist2.Name",
+    "NPC.Duelist3.Name",
+    "NPC.Duelist4.Name",
+    "NPC.Duelist5.Name",
+    "NPC.Duelist6.Name",
+    "NPC.Duelist7.Name",
+    "NPC.Duelist8.Name",
+    "NPC.Duelist9.Name"
+  ]
+}

@@ -1271,6 +1271,155 @@ pub(crate) mod jobs_gen {
             _ => 1,
         }
     }
+    // -- job localization: dynamicElements ---------------------------------
+    //
+    // Retail fills `questName`/`questDescription` with a `dynamicElements` list
+    // whose SHAPE is fixed per jobType and whose values name the enemy, item,
+    // location or dungeon kit the job refers to. The rule below was mined from
+    // 2,149 distinct job entries in 1,725 captured `/quests` responses:
+    //
+    //   0 Defeat  name [enemy, enemyGroup, location]  desc [primaryEnemyCount, enemyPlural]
+    //   1 Explore name [location]                     desc [dungeon kit name]
+    //   3 Rescue  name [location]                     desc [rescueNpcCount]
+    //   4 Gather  name [item, count, location]        desc [item, count, location]
+    //   5 Duel    name [npc, location]                desc [npc]
+    //
+    // The integers are exact: Defeat's is `primaryEnemyCount` (413/418 observed),
+    // Rescue's `rescueNpcCount` (496/496), Gather's `gatherItemCount`.
+    //
+    // The LOCATION is not a function of the dungeon template -- 0 of 12 templates
+    // map to a single name, each shows twelve -- so it is rolled from that
+    // template's observed set, which is what retail's own roll does.
+    //
+    // Where an id is not in the table we emit an EMPTY list. That is not a
+    // degraded guess: retail shipped empty `dynamicElements` on 552 of those
+    // 2,149 jobs (26%), on live board entries indistinguishable from the rest,
+    // so an empty list is a shape retail itself produces.
+    static JOB_LOCALIZATION_RAW: &str = include_str!("job_localization.json");
+
+    fn job_localization() -> &'static Value {
+        static TABLE: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+        TABLE.get_or_init(|| {
+            serde_json::from_str(JOB_LOCALIZATION_RAW).unwrap_or_else(|e| {
+                log::error!("[jobs] job_localization.json is malformed: {e}");
+                json!({})
+            })
+        })
+    }
+
+    fn loc_elem(key: &str) -> Value {
+        json!({ "type": "LOCALIZATION_ID", "localizationValue": key })
+    }
+    fn int_elem(n: i64) -> Value {
+        json!({ "type": "INTEGER", "intValue": n })
+    }
+
+    /// One `UI.Jobs.Location.Name.*` for this dungeon template, rolled from the
+    /// set retail used for it. `None` when the template is not in the table.
+    fn pick_location(rng: &mut Rng, dungeon_template_id: &str) -> Option<String> {
+        let list = job_localization()
+            .get("dungeons")?
+            .get(dungeon_template_id)?
+            .get("locations")?
+            .as_array()?;
+        let v = rng.pick(list)?;
+        v.as_str().map(|s| s.to_string())
+    }
+
+    fn kit_name(dungeon_template_id: &str) -> Option<String> {
+        job_localization()
+            .get("dungeons")?
+            .get(dungeon_template_id)?
+            .get("kitName")?
+            .as_str()
+            .map(|s| s.to_string())
+    }
+
+    fn enemy_str(family_id: &str, field: &str) -> Option<String> {
+        job_localization()
+            .get("enemyFamilies")?
+            .get(family_id)?
+            .get(field)?
+            .as_str()
+            .map(|s| s.to_string())
+    }
+
+    fn item_key(item_id: &str) -> Option<String> {
+        job_localization()
+            .get("items")?
+            .get(item_id)?
+            .as_str()
+            .map(|s| s.to_string())
+    }
+
+    fn pick_npc(rng: &mut Rng) -> Option<String> {
+        let list = job_localization().get("npcs")?.as_array()?;
+        rng.pick(list)?.as_str().map(|s| s.to_string())
+    }
+
+    /// `(nameElements, descriptionElements)` for one rolled job.
+    ///
+    /// Returns empty lists rather than partial ones: retail never sent a
+    /// half-filled list, and a name whose placeholders outnumber its elements is
+    /// worse than one the client renders unsubstituted.
+    fn dynamic_elements(rng: &mut Rng, job_type: i64, setup: &serde_json::Map<String, Value>)
+        -> (Vec<Value>, Vec<Value>)
+    {
+        let s = |k: &str| setup.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let n = |k: &str| setup.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
+        let dungeon = s("dungeonTemplateId");
+        let empty = (Vec::new(), Vec::new());
+
+        match job_type {
+            0 => {
+                let fam = s("primaryEnemyFamilyId");
+                let (Some(name), Some(plural), Some(loc)) = (
+                    enemy_str(&fam, "name"),
+                    enemy_str(&fam, "plural"),
+                    pick_location(rng, &dungeon),
+                ) else {
+                    return empty;
+                };
+                // Retail uses the GROUP name in the second slot where the family has
+                // one and repeats the enemy name where it does not (216 vs 202).
+                let group = enemy_str(&fam, "group").unwrap_or_else(|| name.clone());
+                (
+                    vec![loc_elem(&name), loc_elem(&group), loc_elem(&loc)],
+                    vec![int_elem(n("primaryEnemyCount")), loc_elem(&plural)],
+                )
+            }
+            1 => {
+                let (Some(loc), Some(kit)) = (pick_location(rng, &dungeon), kit_name(&dungeon))
+                else {
+                    return empty;
+                };
+                (vec![loc_elem(&loc)], vec![loc_elem(&kit)])
+            }
+            3 => {
+                let Some(loc) = pick_location(rng, &dungeon) else { return empty };
+                (vec![loc_elem(&loc)], vec![int_elem(n("rescueNpcCount"))])
+            }
+            4 => {
+                let (Some(item), Some(loc)) =
+                    (item_key(&s("gatherItemId")), pick_location(rng, &dungeon))
+                else {
+                    return empty;
+                };
+                let count = int_elem(n("gatherItemCount"));
+                let els = vec![loc_elem(&item), count, loc_elem(&loc)];
+                (els.clone(), els)
+            }
+            5 => {
+                let (Some(npc), Some(loc)) = (pick_npc(rng), pick_location(rng, &dungeon))
+                else {
+                    return empty;
+                };
+                (vec![loc_elem(&npc), loc_elem(&loc)], vec![loc_elem(&npc)])
+            }
+            _ => empty,
+        }
+    }
+
     fn name_prefix(job_type: i64) -> &'static str {
         match job_type {
             0 => "Defeat",
@@ -1658,8 +1807,17 @@ pub(crate) mod jobs_gen {
             _ => {}
         }
         job_setup.insert("initialEPL".into(), json!(initial_epl));
-        job_setup.insert("questName".into(), json!({ "key": name_key, "dynamicElements": [] }));
-        job_setup.insert("questDescription".into(), json!({ "key": desc_key, "dynamicElements": [] }));
+        // Drawn LAST so the rolls above keep the values they had before elements
+        // existed — an extra rng draw earlier would silently reshuffle every job.
+        let (name_elems, desc_elems) = dynamic_elements(&mut rng, job_type, &job_setup);
+        job_setup.insert(
+            "questName".into(),
+            json!({ "key": name_key, "dynamicElements": name_elems }),
+        );
+        job_setup.insert(
+            "questDescription".into(),
+            json!({ "key": desc_key, "dynamicElements": desc_elems }),
+        );
 
         json!({
             "questId": quest_id.to_string(),
@@ -3157,5 +3315,175 @@ mod assert_reachability {
                 "{body} must be a 400 from serde, not a body the handler sees"
             );
         }
+    }
+}
+
+
+/// The dynamicElements retail put on job names and descriptions.
+///
+/// Mined from 2,149 distinct job entries in 1,725 captured `/quests` responses;
+/// the shapes below are what retail actually sent, per jobType. Before this the
+/// server sent empty lists for every job (tracker #96, #99).
+#[cfg(test)]
+mod job_dynamic_elements {
+    use super::jobs_gen;
+    use serde_json::Value;
+
+    fn board() -> Vec<Value> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let pools: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("job_pools.json")).unwrap())
+                .unwrap();
+        let now = 1_777_800_000u64;
+        let boundary = jobs_gen::current_reset_boundary(&pools, now);
+        // Several characters, so every jobType is exercised rather than whichever
+        // one character happened to roll.
+        let mut all = Vec::new();
+        for seed in 1..=24u128 {
+            let (jobs, _) = jobs_gen::generate(
+                &pools, uuid::Uuid::from_u128(seed), 50, 0, boundary, now,
+            );
+            all.extend(jobs);
+        }
+        all
+    }
+
+    fn elems<'a>(job: &'a Value, field: &str) -> &'a Vec<Value> {
+        job["jobSetup"][field]["dynamicElements"].as_array().unwrap()
+    }
+    fn types(job: &Value, field: &str) -> Vec<String> {
+        elems(job, field)
+            .iter()
+            .map(|e| e["type"].as_str().unwrap_or("?").to_string())
+            .collect()
+    }
+
+    /// The shape per jobType, exactly as retail sent it.
+    ///
+    /// An EMPTY list is a legitimate outcome, not a failure: retail itself sent
+    /// empty `dynamicElements` on 552 of the 2,149 captured jobs, and we emit
+    /// empty when the table has no value for a combination (an Explore job on an
+    /// Arena template has no observed `Kit_*_Name`; inventing one would render as
+    /// blank text in game). What must never happen is a HALF-filled list, where
+    /// the name has more placeholders than substitutions.
+    #[test]
+    fn element_shapes_match_retail_per_job_type() {
+        let jobs = board();
+        assert!(!jobs.is_empty(), "no jobs generated — the test would prove nothing");
+        let mut seen: std::collections::BTreeSet<i64> = Default::default();
+        let mut populated = 0usize;
+
+        for j in &jobs {
+            let jt = j["jobSetup"]["jobType"].as_i64().unwrap();
+            let (want_name, want_desc): (Vec<&str>, Vec<&str>) = match jt {
+                0 => (vec!["LOCALIZATION_ID"; 3], vec!["INTEGER", "LOCALIZATION_ID"]),
+                1 => (vec!["LOCALIZATION_ID"], vec!["LOCALIZATION_ID"]),
+                3 => (vec!["LOCALIZATION_ID"], vec!["INTEGER"]),
+                4 => (
+                    vec!["LOCALIZATION_ID", "INTEGER", "LOCALIZATION_ID"],
+                    vec!["LOCALIZATION_ID", "INTEGER", "LOCALIZATION_ID"],
+                ),
+                5 => (vec!["LOCALIZATION_ID"; 2], vec!["LOCALIZATION_ID"]),
+                other => panic!("jobType {other} is not one retail ever sent (0,1,3,4,5)"),
+            };
+            seen.insert(jt);
+
+            let (gn, gd) = (types(j, "questName"), types(j, "questDescription"));
+            if gn.is_empty() && gd.is_empty() {
+                continue; // the faithful fallback
+            }
+            populated += 1;
+            assert_eq!(gn, want_name, "jobType {jt} questName shape");
+            assert_eq!(gd, want_desc, "jobType {jt} questDescription shape");
+        }
+
+        // Controls. Without these the test passes on a build that populates
+        // nothing at all — which is exactly the bug it exists to catch.
+        assert_eq!(
+            seen.iter().copied().collect::<Vec<_>>(),
+            vec![0, 1, 3, 4, 5],
+            "every retail jobType must be covered by the sample"
+        );
+        let ratio = populated as f64 / jobs.len() as f64;
+        assert!(
+            ratio > 0.80,
+            "only {populated}/{} jobs carried elements ({:.0}%) — retail populated ~74%, \
+             so this build is dropping them",
+            jobs.len(),
+            ratio * 100.0
+        );
+    }
+
+    /// The integers are not decorative — retail's value equals a field of the
+    /// same jobSetup, and a plausible-looking wrong number is the failure mode
+    /// this guards.
+    #[test]
+    fn integers_equal_the_setup_field_retail_used() {
+        for j in board() {
+            let s = &j["jobSetup"];
+            let jt = s["jobType"].as_i64().unwrap();
+            let from = |f: &str| s[f].as_i64().unwrap_or(-1);
+            // Jobs that fell back to empty carry no integer to check.
+            if elems(&j, "questName").is_empty() && elems(&j, "questDescription").is_empty() {
+                continue;
+            }
+            match jt {
+                0 => assert_eq!(
+                    elems(&j, "questDescription")[0]["intValue"].as_i64().unwrap(),
+                    from("primaryEnemyCount"),
+                    "Defeat description counts primaryEnemyCount"
+                ),
+                3 => assert_eq!(
+                    elems(&j, "questDescription")[0]["intValue"].as_i64().unwrap(),
+                    from("rescueNpcCount"),
+                    "Rescue description counts rescueNpcCount"
+                ),
+                4 => assert_eq!(
+                    elems(&j, "questName")[1]["intValue"].as_i64().unwrap(),
+                    from("gatherItemCount"),
+                    "Gather name counts gatherItemCount"
+                ),
+                _ => {}
+            }
+        }
+    }
+
+    /// Every localization key we emit must be one retail actually used. A
+    /// well-shaped list of invented keys renders as blank text in game.
+    #[test]
+    fn every_localization_key_was_used_by_retail() {
+        let raw: Value =
+            serde_json::from_str(include_str!("job_localization.json")).expect("table parses");
+        let mut known: std::collections::HashSet<String> = Default::default();
+        for (_, d) in raw["dungeons"].as_object().unwrap() {
+            if let Some(k) = d["kitName"].as_str() { known.insert(k.into()); }
+            for l in d["locations"].as_array().unwrap() {
+                known.insert(l.as_str().unwrap().into());
+            }
+        }
+        for (_, f) in raw["enemyFamilies"].as_object().unwrap() {
+            for k in ["name", "plural", "group"] {
+                if let Some(v) = f[k].as_str() { known.insert(v.into()); }
+            }
+        }
+        for (_, v) in raw["items"].as_object().unwrap() {
+            known.insert(v.as_str().unwrap().into());
+        }
+        for v in raw["npcs"].as_array().unwrap() {
+            known.insert(v.as_str().unwrap().into());
+        }
+
+        let mut checked = 0;
+        for j in board() {
+            for field in ["questName", "questDescription"] {
+                for e in elems(&j, field) {
+                    if let Some(v) = e["localizationValue"].as_str() {
+                        assert!(known.contains(v), "we emit {v}, which retail never sent");
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 0, "no localization values emitted — the test proved nothing");
     }
 }
