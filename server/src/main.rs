@@ -1,6 +1,7 @@
 use std::{
     fs::File,
     path::PathBuf,
+    collections::HashMap,
     sync::{Arc, atomic::Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -45,6 +46,7 @@ mod daily_reward;
 mod dungeon;
 mod dungeon_update;
 mod error;
+mod event_quests;
 mod gameevent;
 mod global_gift;
 mod global_shop;
@@ -71,6 +73,7 @@ pub use error::BladeApiError;
 use uuid::Uuid;
 
 use crate::session::{SessionLookedUpMaybe, SessionStore};
+use crate::event_quests::EventQuestData;
 
 #[derive(Parser)]
 #[command(name = "blade")]
@@ -180,6 +183,8 @@ pub struct ServerGlobal {
     /// those routes fall back to `arena_import_token`; with neither set they 503
     /// (disabled). For our own debugging only — never a game session.
     pub arena_debug_token: Option<String>,
+
+    pub event_quests: event_quests::EventQuestData,
 
     /// Dev override: when set (env `ARENA_DEV_LOGIN_USER_ID` = a `users.id` UUID),
     /// EVERY anonymous login resolves to this user, so a freshly-installed client
@@ -342,6 +347,20 @@ async fn main() -> Result<()> {
             };
 
             let level_up_data = LevelUpData::from_json(&load_static_json("level_rewards.json"));
+            let events_json = load_static_json("event_quests.json");
+            let events_data = EventQuestData::from_json(&events_json);
+
+            // Build the event dungeon lookup from game_data and event_quests
+            let mut event_dungeon_lookup = HashMap::new();
+            for (event_id, event) in &game_data.events {
+                for (dungeon_id, _) in &event.dungeons {
+                    event_dungeon_lookup.insert(*dungeon_id, *event_id);
+                }
+            }
+
+            for (quest_id, _template) in &events_data.templates {
+                event_dungeon_lookup.insert(*quest_id, *quest_id);
+            }
 
             // Capture-derived static definitions (gifts, announcements, …). Missing
             // files degrade gracefully (empty → endpoint returns an empty list).
@@ -382,6 +401,7 @@ async fn main() -> Result<()> {
                 shop_stock,
                 sell_prices,
                 level_up_data,
+                event_quests: events_data,
                 arena,
                 arena_import_token,
                 arena_debug_token,
@@ -532,7 +552,6 @@ async fn main() -> Result<()> {
                     .service(challenge::update_challenge)
                     .service(challenge::complete_challenge)
                     .service(challenge::abandon_challenge)
-                    .service(character_ops::levelup)
                     .service(character_ops::learn_abilities)
                     .service(character_ops::respec)
                     .service(character_ops::upgrade_inventory)
