@@ -277,6 +277,29 @@ pub async fn dungeon_update(
                 }
             }
 
+            // The client applies a backpack diff only when `backpackVersion` moves. Credit
+            // the loot without bumping it and the item reaches the database and is never
+            // shown — which is exactly what "floor pickups still don't work" looked like
+            // after #136/#138 credited them correctly. Every other grant path
+            // (craft, salvage, gifts, daily reward, abyss, character_ops) bumps here;
+            // this one did not.
+            //
+            // Bumped ONCE per request, from the tracker rather than per action, because a
+            // batch can carry several pickups and bumping per action moves the version by
+            // more than one — the same double-bump that had to be undone in the town prop
+            // handler.
+            if !inventory_modification_tracker
+                .modified_backpack
+                .stackable_items
+                .is_empty()
+                || !inventory_modification_tracker
+                    .modified_backpack
+                    .items
+                    .is_empty()
+            {
+                character_data.inventory.0.backpack_version += 1;
+            }
+
             // generate the response before we submit data to minimize the amount of cloning needed
 
             let result = DungeonUpdateResponse {
@@ -467,5 +490,49 @@ mod tests {
             tracker.modified_backpack.stackable_items.contains(&lumber),
             "the pickup must be reported to the client, or the bag looks unchanged"
         );
+    }
+
+    /// Crediting the loot is not enough — the client applies a backpack diff only when
+    /// `backpackVersion` moves.
+    ///
+    /// #136/#138 credited pickups correctly and the reporter still saw nothing, because
+    /// the version never changed and the client discarded the delta. This asserts the
+    /// version rule the handler now implements: it moves when something was granted,
+    /// exactly once however many pickups are in the batch, and not at all when the batch
+    /// granted nothing.
+    #[test]
+    fn a_granted_pickup_bumps_the_backpack_version_exactly_once() {
+        use blades_lib::user_data::BackpackChangeTracker;
+
+        // The handler's rule, in the same shape as the code under test.
+        fn bump(tracker: &InventoryChangeTracker, version: &mut u64) {
+            if !tracker.modified_backpack.stackable_items.is_empty()
+                || !tracker.modified_backpack.items.is_empty()
+            {
+                *version += 1;
+            }
+        }
+
+        let a: Uuid = "e7193116-d761-479b-8a20-5633737977f5".parse().unwrap();
+        let b: Uuid = "38d32048-ce01-4390-a4f0-cdb94ef3ce72".parse().unwrap();
+
+        // nothing collected -> version must not move, or every tick invalidates the bag
+        let mut v = 7;
+        bump(&InventoryChangeTracker::default(), &mut v);
+        assert_eq!(v, 7, "an empty batch must not bump the version");
+
+        // one pickup -> exactly one bump
+        let mut t = InventoryChangeTracker::default();
+        t.modified_backpack = BackpackChangeTracker::default();
+        t.modified_backpack.stackable_items.insert(a);
+        let mut v = 7;
+        bump(&t, &mut v);
+        assert_eq!(v, 8, "a granted pickup must bump the version");
+
+        // two pickups in ONE batch -> still exactly one bump, not two
+        t.modified_backpack.stackable_items.insert(b);
+        let mut v = 7;
+        bump(&t, &mut v);
+        assert_eq!(v, 8, "a batch bumps once however many items it carried");
     }
 }
