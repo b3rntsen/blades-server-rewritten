@@ -27,6 +27,7 @@ use log::debug;
 /// under it.
 const DB_POOL_MAX: u32 = 10;
 
+mod credentials;
 mod abyss;
 mod admin;
 mod analytics;
@@ -488,6 +489,7 @@ async fn main() -> Result<()> {
                     .service(status::check_status)
                     .service(session::sync)
                     .service(authentification::anon_log_in)
+                    .service(authentification::bnet_log_in)
                     .service(character::list_characters)
                     .service(character::create_characters)
                     .service(character::get_character)
@@ -596,6 +598,7 @@ async fn main() -> Result<()> {
                     .service(admin::bind_device)
                     .service(admin::recent_devices)
                     .service(admin::arena_season_rollover)
+                    .service(admin::set_arena_credential)
                     // Guild support console (dev-token gated; the web /guilds
                     // page is its only intended caller).
                     .service(guild_admin::list_guilds)
