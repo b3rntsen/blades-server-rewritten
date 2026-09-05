@@ -17,6 +17,7 @@ use anyhow::{Context, Result};
 use bb8::Pool;
 use blades_lib::game_data::GameData;
 use blades_lib::static_data::StaticData;
+use blades_lib::features::level_up::LevelUpData;
 use clap::{Parser, Subcommand};
 use diesel_async::{AsyncPgConnection, pooled_connection::AsyncDieselConnectionManager};
 use log::debug;
@@ -104,13 +105,18 @@ pub type DbPool = Pool<AsyncDieselConnectionManager<AsyncPgConnection>>;
 
 pub struct ServerGlobal {
     pub db_pool: DbPool,
+
     pub session_store: SessionStore,
+
     pub static_data_path: PathBuf,
+
     pub game_data: GameData,
+
     /// Capture-derived static definitions (gifts, announcements, …) loaded at
     /// startup from JSON files in the `--static-data` directory. Empty parts
     /// degrade gracefully (see [`static_loader`]).
     pub static_data: StaticData,
+
     /// Full ("max") durability per `(itemTemplateId, temperingLevel)` plus the
     /// gold price of a repair — `item_durability.json` + `repair_costs.json`, both
     /// generated from the APK by `script/extract_item_repair_data.py`.
@@ -121,6 +127,7 @@ pub struct ServerGlobal {
     /// to [`blades_lib::features::repair::DEFAULT_DURABILITY`] rather than leaving
     /// gear damaged.
     pub repair_data: blades_lib::features::repair::RepairData,
+
     /// Faithful town game-data extracted from the APK bundles (server/data/static/):
     /// building upgrade cost/time/material tables, town job-pool definitions, and the
     /// appearance-change currency cost. Raw JSON parsed by the town/quest/character
@@ -137,14 +144,18 @@ pub struct ServerGlobal {
     /// `deploy/arena.sh static`. Handlers then charge nothing rather than guessing a
     /// price: a few free speed-ups are recoverable, a wrong gem debit is not.
     pub skip_time_costs: Option<blades_lib::economy::skip_time::SkipTimeCostTable>,
+
     pub job_pools: serde_json::Value,
+
     pub appearance_change_cost: serde_json::Value,
+
     /// Authored, admin-editable per-level town-shop STOCK generation config
     /// (`shop_stock.json`). Drives [`shop_gen::generate_catalog`] so a vendor
     /// stocks level-appropriate items. A missing/invalid file loads as an empty
     /// config; the shop endpoint then falls back to the capture-derived templates
     /// (never empty). Pure data — a future admin route can hot-reload it.
     pub shop_stock: shop_gen::ShopStockConfig,
+
     /// What a town merchant pays for the player's items — APK `ItemTemplate.
     /// _sellValue` scaled by the temper multiplier, plus enchantment tier values
     /// (`item_sell_values.json` + `enchant_values.json`, both built by
@@ -152,16 +163,23 @@ pub struct ServerGlobal {
     /// placeholder that was ~75x below the retail median (tracker #30). Missing
     /// files load empty and the merchant offers 0, logged at startup.
     pub sell_prices: blades_lib::features::merchant::SellPrices,
+
+    /// Data array containing item and currency arrays for levelup.
+    pub level_up_data: blades_lib::features::level_up::LevelUpData,
+
     pub arena: Arc<arena::matchmaker::ArenaGlobal>,
+
     /// Static dev token for the `/api/dev/v1/import-character` endpoint, read
     /// from `ARENA_IMPORT_TOKEN` at startup. `None` (unset) disables the
     /// endpoint entirely. Never a game session — this is for our own tooling.
     pub arena_import_token: Option<String>,
+
     /// **DEBUG.** Token gating the experimental arena packet-injection routes
     /// (`/arena/debug/{peers,inject}`), read from `ARENA_DEBUG_TOKEN`. When unset,
     /// those routes fall back to `arena_import_token`; with neither set they 503
     /// (disabled). For our own debugging only — never a game session.
     pub arena_debug_token: Option<String>,
+
     /// Dev override: when set (env `ARENA_DEV_LOGIN_USER_ID` = a `users.id` UUID),
     /// EVERY anonymous login resolves to this user, so a freshly-installed client
     /// lands on a Transfer'd character instead of a new empty account (there is no
@@ -322,6 +340,8 @@ async fn main() -> Result<()> {
                 data
             };
 
+            let level_up_data = LevelUpData::from_json(&load_static_json("level_rewards.json"));
+
             // Capture-derived static definitions (gifts, announcements, …). Missing
             // files degrade gracefully (empty → endpoint returns an empty list).
             let static_data_defs = static_loader::load(&static_data);
@@ -360,6 +380,7 @@ async fn main() -> Result<()> {
                 appearance_change_cost,
                 shop_stock,
                 sell_prices,
+                level_up_data,
                 arena,
                 arena_import_token,
                 arena_debug_token,

@@ -1,0 +1,1130 @@
+{
+  "1": {
+    "xp_to_reach": 0,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 1,
+    "items": []
+  },
+  "2": {
+    "xp_to_reach": 50,
+    "skill_points": 1,
+    "gold_reward": 500,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 4,
+    "items": []
+  },
+  "3": {
+    "xp_to_reach": 200,
+    "skill_points": 1,
+    "gold_reward": 0,
+    "gems_reward": 30,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 8,
+    "items": []
+  },
+  "4": {
+    "xp_to_reach": 500,
+    "skill_points": 1,
+    "gold_reward": 800,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 12,
+    "items": []
+  },
+  "5": {
+    "xp_to_reach": 578,
+    "skill_points": 2,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 18,
+    "items": [
+      {"template_id": "92b77b2f-bd33-469f-8aad-8a228b9537eb", "quantity": 5}
+    ]
+  },
+  "6": {
+    "xp_to_reach": 682,
+    "skill_points": 1,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 22,
+    "items": [
+      {"template_id": "d5ccf370-0795-4554-9dab-68ccbb97473d", "quantity": 5}
+    ]
+  },
+  "7": {
+    "xp_to_reach": 820,
+    "skill_points": 1,
+    "gold_reward": 0,
+    "gems_reward": 30,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 26,
+    "items": []
+  },
+  "8": {
+    "xp_to_reach": 1000,
+    "skill_points": 1,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 30,
+    "items": [
+      {"template_id": "fbf96b07-e9aa-4157-8761-10179fa05138", "quantity": 40}
+    ]
+  },
+  "9": {
+    "xp_to_reach": 1227,
+    "skill_points": 1,
+    "gold_reward": 900,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 34,
+    "items": []
+  },
+  "10": {
+    "xp_to_reach": 1506,
+    "skill_points": 2,
+    "gold_reward": 0,
+    "gems_reward": 35,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 40,
+    "items": []
+  },
+  "11": {
+    "xp_to_reach": 1842,
+    "skill_points": 2,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 46,
+    "items": [
+      {"template_id": "19ce1a65-057f-4f34-a0ed-27de7c085662", "quantity": 10}
+    ]
+  },
+  "12": {
+    "xp_to_reach": 2240,
+    "skill_points": 2,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 52,
+    "items": [
+      {"template_id": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1", "quantity": 15}
+    ]
+  },
+  "13": {
+    "xp_to_reach": 2705,
+    "skill_points": 2,
+    "gold_reward": 0,
+    "gems_reward": 40,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 58,
+    "items": []
+  },
+  "14": {
+    "xp_to_reach": 3242,
+    "skill_points": 2,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 64,
+    "items": [
+      {"template_id": "05a7d501-f096-41e9-8443-fd6a090d8425", "quantity": 2}
+    ]
+  },
+  "15": {
+    "xp_to_reach": 3856,
+    "skill_points": 4,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 74,
+    "items": [
+      {"template_id": "9df9233f-e7b9-47e8-bc75-f37707917759", "quantity": 5}
+    ]
+  },
+  "16": {
+    "xp_to_reach": 4552,
+    "skill_points": 2,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 80,
+    "items": [
+      {"template_id": "74f091b5-fd88-464b-a98a-f60a5e8a0f25", "quantity": 25}
+    ]
+  },
+  "17": {
+    "xp_to_reach": 5335,
+    "skill_points": 2,
+    "gold_reward": 5000,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 86,
+    "items": []
+  },
+  "18": {
+    "xp_to_reach": 6210,
+    "skill_points": 2,
+    "gold_reward": 0,
+    "gems_reward": 45,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 92,
+    "items": []
+  },
+  "19": {
+    "xp_to_reach": 7182,
+    "skill_points": 2,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 98,
+    "items": [
+      {"template_id": "200d62f5-7de2-4a6c-979a-43df30d6fd86", "quantity": 40}
+    ]
+  },
+  "20": {
+    "xp_to_reach": 8228,
+    "skill_points": 4,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 108,
+    "items": [
+      {"template_id": "3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5", "quantity": 3}
+    ]
+  },
+  "21": {
+    "xp_to_reach": 9325,
+    "skill_points": 3,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 116,
+    "items": [
+      {"template_id": "790a188b-3fa0-4f38-99d9-bc8d3675bc46", "quantity": 10}
+    ]
+  },
+  "22": {
+    "xp_to_reach": 10450,
+    "skill_points": 3,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 124,
+    "items": [
+      {"template_id": "d826ea12-e583-47c1-a50f-4de608281735", "quantity": 5}
+    ]
+  },
+  "23": {
+    "xp_to_reach": 11580,
+    "skill_points": 3,
+    "gold_reward": 0,
+    "gems_reward": 50,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 132,
+    "items": []
+  },
+  "24": {
+    "xp_to_reach": 12692,
+    "skill_points": 3,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 140,
+    "items": [
+      {"template_id": "f11fb90b-b441-4d72-a33f-50d14d3d6778", "quantity": 25}
+    ]
+  },
+  "25": {
+    "xp_to_reach": 13763,
+    "skill_points": 6,
+    "gold_reward": 10000,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 154,
+    "items": []
+  },
+  "26": {
+    "xp_to_reach": 14770,
+    "skill_points": 3,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 162,
+    "items": [
+      {"template_id": "05a7d501-f096-41e9-8443-fd6a090d8425", "quantity": 3}
+    ]
+  },
+  "27": {
+    "xp_to_reach": 15690,
+    "skill_points": 3,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 170,
+    "items": [
+      {"template_id": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029", "quantity": 10}
+    ]
+  },
+  "28": {
+    "xp_to_reach": 16500,
+    "skill_points": 3,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 178,
+    "items": [
+      {"template_id": "3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5", "quantity": 4}
+    ]
+  },
+  "29": {
+    "xp_to_reach": 17177,
+    "skill_points": 3,
+    "gold_reward": 0,
+    "gems_reward": 60,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 186,
+    "items": []
+  },
+  "30": {
+    "xp_to_reach": 17698,
+    "skill_points": 6,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 200,
+    "items": [
+      {"template_id": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1", "quantity": 25}
+    ]
+  },
+  "31": {
+    "xp_to_reach": 18040,
+    "skill_points": 4,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 210,
+    "items": [
+      {"template_id": "4d1231be-d3fa-4282-81b2-0f7bed4aabff", "quantity": 3}
+    ]
+  },
+  "32": {
+    "xp_to_reach": 18328,
+    "skill_points": 4,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 220,
+    "items": [
+      {"template_id": "819094ad-e749-4c02-9210-38c3bb1ec535", "quantity": 5}
+    ]
+  },
+  "33": {
+    "xp_to_reach": 18687,
+    "skill_points": 4,
+    "gold_reward": 20000,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 230,
+    "items": []
+  },
+  "34": {
+    "xp_to_reach": 19242,
+    "skill_points": 4,
+    "gold_reward": 0,
+    "gems_reward": 65,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 240,
+    "items": []
+  },
+  "35": {
+    "xp_to_reach": 20118,
+    "skill_points": 8,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 258,
+    "items": [
+      {"template_id": "ba9fe442-2cf8-48a8-9416-6d91c2a00cab", "quantity": 25}
+    ]
+  },
+  "36": {
+    "xp_to_reach": 21440,
+    "skill_points": 4,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 268,
+    "items": [
+      {"template_id": "4d7420db-8042-4946-a43f-e0b3bd9bec81", "quantity": 40}
+    ]
+  },
+  "37": {
+    "xp_to_reach": 23333,
+    "skill_points": 4,
+    "gold_reward": 0,
+    "gems_reward": 70,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 278,
+    "items": []
+  },
+  "38": {
+    "xp_to_reach": 25922,
+    "skill_points": 4,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 288,
+    "items": [
+      {"template_id": "05a7d501-f096-41e9-8443-fd6a090d8425", "quantity": 2}
+    ]
+  },
+  "39": {
+    "xp_to_reach": 29332,
+    "skill_points": 4,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 298,
+    "items": [
+      {"template_id": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8", "quantity": 10}
+    ]
+  },
+  "40": {
+    "xp_to_reach": 33688,
+    "skill_points": 8,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 316,
+    "items": [
+      {"template_id": "4d1231be-d3fa-4282-81b2-0f7bed4aabff", "quantity": 4}
+    ]
+  },
+  "41": {
+    "xp_to_reach": 39115,
+    "skill_points": 5,
+    "gold_reward": 40000,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 328,
+    "items": []
+  },
+  "42": {
+    "xp_to_reach": 45738,
+    "skill_points": 5,
+    "gold_reward": 0,
+    "gems_reward": 80,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 340,
+    "items": []
+  },
+  "43": {
+    "xp_to_reach": 53682,
+    "skill_points": 5,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 352,
+    "items": [
+      {"template_id": "f9181a67-b094-4c37-a145-ced9dfe610d6", "quantity": 35}
+    ]
+  },
+  "44": {
+    "xp_to_reach": 63097,
+    "skill_points": 5,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 364,
+    "items": [
+      {"template_id": "aa52a6a4-6500-44b5-ad74-9eb1d58e38c7", "quantity": 5}
+    ]
+  },
+  "45": {
+    "xp_to_reach": 74133,
+    "skill_points": 10,
+    "gold_reward": 0,
+    "gems_reward": 100,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 386,
+    "items": []
+  },
+  "46": {
+    "xp_to_reach": 86940,
+    "skill_points": 5,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 398,
+    "items": [
+      {"template_id": "3932e499-441e-4c6d-b671-9a03131ebe6f", "quantity": 3}
+    ]
+  },
+  "47": {
+    "xp_to_reach": 101668,
+    "skill_points": 5,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 410,
+    "items": [
+      {"template_id": "16e102fb-b1c0-42de-8106-0aa27e77f7f0", "quantity": 3}
+    ]
+  },
+  "48": {
+    "xp_to_reach": 118467,
+    "skill_points": 5,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 422,
+    "items": [
+      {"template_id": "05a7d501-f096-41e9-8443-fd6a090d8425", "quantity": 3}
+    ]
+  },
+  "49": {
+    "xp_to_reach": 137487,
+    "skill_points": 5,
+    "gold_reward": 80000,
+    "gems_reward": 0,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 434,
+    "items": []
+  },
+  "50": {
+    "xp_to_reach": 158878,
+    "skill_points": 10,
+    "gold_reward": 0,
+    "gems_reward": 200,
+    "attribute_points": 1,
+    "health_bonus": 10,
+    "reset_cost": 456,
+    "items": []
+  },
+  "51": {
+    "xp_to_reach": 182565,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "3932e499-441e-4c6d-b671-9a03131ebe6f", "quantity": 5}
+    ]
+  },
+  "52": {
+    "xp_to_reach": 208473,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "16e102fb-b1c0-42de-8106-0aa27e77f7f0", "quantity": 5}
+    ]
+  },
+  "53": {
+    "xp_to_reach": 236527,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 125,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": []
+  },
+  "54": {
+    "xp_to_reach": 266652,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "05a7d501-f096-41e9-8443-fd6a090d8425", "quantity": 2}
+    ]
+  },
+  "55": {
+    "xp_to_reach": 298773,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e", "quantity": 5}
+    ]
+  },
+  "56": {
+    "xp_to_reach": 332815,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "f9d2869a-a517-4080-abac-be6af47e5556", "quantity": 8}
+    ]
+  },
+  "57": {
+    "xp_to_reach": 368703,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95", "quantity": 3}
+    ]
+  },
+  "58": {
+    "xp_to_reach": 406362,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "34ddfe0e-5119-4e52-8eef-a77b6bc810a7", "quantity": 10}
+    ]
+  },
+  "59": {
+    "xp_to_reach": 445717,
+    "skill_points": 0,
+    "gold_reward": 90000,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": []
+  },
+  "60": {
+    "xp_to_reach": 486693,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "05a7d501-f096-41e9-8443-fd6a090d8425", "quantity": 2}
+    ]
+  },
+  "61": {
+    "xp_to_reach": 529215,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 150,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": []
+  },
+  "62": {
+    "xp_to_reach": 573208,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "a3351353-f613-4368-bac7-05783f857b07", "quantity": 2}
+    ]
+  },
+  "63": {
+    "xp_to_reach": 618597,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "f9d2869a-a517-4080-abac-be6af47e5556", "quantity": 8}
+    ]
+  },
+  "64": {
+    "xp_to_reach": 665307,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95", "quantity": 5}
+    ]
+  },
+  "65": {
+    "xp_to_reach": 713263,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "68d7941e-8c8d-47bf-9f66-becb058f1817", "quantity": 2}
+    ]
+  },
+  "66": {
+    "xp_to_reach": 762390,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 125,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": []
+  },
+  "67": {
+    "xp_to_reach": 812613,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "70f2c013-813e-4f63-8b29-7a54a13b5e58", "quantity": 1}
+    ]
+  },
+  "68": {
+    "xp_to_reach": 863857,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "21e6557f-17ca-4bd3-9379-00184efe0edc", "quantity": 8}
+    ]
+  },
+  "69": {
+    "xp_to_reach": 916047,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 175,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": []
+  },
+  "70": {
+    "xp_to_reach": 969108,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "05a7d501-f096-41e9-8443-fd6a090d8425", "quantity": 2}
+    ]
+  },
+  "71": {
+    "xp_to_reach": 1022965,
+    "skill_points": 0,
+    "gold_reward": 100000,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": []
+  },
+  "72": {
+    "xp_to_reach": 1077543,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "70f2c013-813e-4f63-8b29-7a54a13b5e58", "quantity": 2}
+    ]
+  },
+  "73": {
+    "xp_to_reach": 1132767,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "34ddfe0e-5119-4e52-8eef-a77b6bc810a7", "quantity": 15}
+    ]
+  },
+  "74": {
+    "xp_to_reach": 1188562,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 180,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": []
+  },
+  "75": {
+    "xp_to_reach": 1244853,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "70f2c013-813e-4f63-8b29-7a54a13b5e58", "quantity": 3}
+    ]
+  },
+  "76": {
+    "xp_to_reach": 1301565,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "68d7941e-8c8d-47bf-9f66-becb058f1817", "quantity": 3}
+    ]
+  },
+  "77": {
+    "xp_to_reach": 1358623,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 150,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": []
+  },
+  "78": {
+    "xp_to_reach": 1415952,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "68d7941e-8c8d-47bf-9f66-becb058f1817", "quantity": 3}
+    ]
+  },
+  "79": {
+    "xp_to_reach": 1473477,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "32ef7be4-88aa-4a0b-a198-fa88d484a41d", "quantity": 2}
+    ]
+  },
+  "80": {
+    "xp_to_reach": 1531123,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "21e6557f-17ca-4bd3-9379-00184efe0edc", "quantity": 8}
+    ]
+  },
+  "81": {
+    "xp_to_reach": 1588815,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 200,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": []
+  },
+  "82": {
+    "xp_to_reach": 1646478,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "05a7d501-f096-41e9-8443-fd6a090d8425", "quantity": 2}
+    ]
+  },
+  "83": {
+    "xp_to_reach": 1704037,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "d523932f-8c7f-4192-9112-5dbd60883c2b", "quantity": 10}
+    ]
+  },
+  "84": {
+    "xp_to_reach": 1761417,
+    "skill_points": 0,
+    "gold_reward": 125000,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": []
+  },
+  "85": {
+    "xp_to_reach": 1818543,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "32ef7be4-88aa-4a0b-a198-fa88d484a41d", "quantity": 3}
+    ]
+  },
+  "86": {
+    "xp_to_reach": 1875340,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 225,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": []
+  },
+  "87": {
+    "xp_to_reach": 1931733,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "68d7941e-8c8d-47bf-9f66-becb058f1817", "quantity": 4}
+    ]
+  },
+  "88": {
+    "xp_to_reach": 1987647,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "d523932f-8c7f-4192-9112-5dbd60883c2b", "quantity": 10}
+    ]
+  },
+  "89": {
+    "xp_to_reach": 2043007,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "c1abc963-c03c-4cd9-84d7-433ed8ab3877", "quantity": 2}
+    ]
+  },
+  "90": {
+    "xp_to_reach": 2097738,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "68d7941e-8c8d-47bf-9f66-becb058f1817", "quantity": 4}
+    ]
+  },
+  "91": {
+    "xp_to_reach": 2151765,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "d523932f-8c7f-4192-9112-5dbd60883c2b", "quantity": 15}
+    ]
+  },
+  "92": {
+    "xp_to_reach": 2205013,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "05a7d501-f096-41e9-8443-fd6a090d8425", "quantity": 2}
+    ]
+  },
+  "93": {
+    "xp_to_reach": 2257407,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 250,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": []
+  },
+  "94": {
+    "xp_to_reach": 2308872,
+    "skill_points": 0,
+    "gold_reward": 150000,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": []
+  },
+  "95": {
+    "xp_to_reach": 2359333,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "68d7941e-8c8d-47bf-9f66-becb058f1817", "quantity": 5}
+    ]
+  },
+  "96": {
+    "xp_to_reach": 2408715,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "21e6557f-17ca-4bd3-9379-00184efe0edc", "quantity": 8}
+    ]
+  },
+  "97": {
+    "xp_to_reach": 2456943,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 275,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": []
+  },
+  "98": {
+    "xp_to_reach": 2503942,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "68d7941e-8c8d-47bf-9f66-becb058f1817", "quantity": 5}
+    ]
+  },
+  "99": {
+    "xp_to_reach": 2549637,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 0,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": [
+      {"template_id": "91c40a5d-36b8-4ed9-9c07-209b52ebc732", "quantity": 2}
+    ]
+  },
+  "100": {
+    "xp_to_reach": 2593953,
+    "skill_points": 0,
+    "gold_reward": 0,
+    "gems_reward": 300,
+    "attribute_points": 0,
+    "health_bonus": 0,
+    "reset_cost": 456,
+    "items": []
+  }
+}
