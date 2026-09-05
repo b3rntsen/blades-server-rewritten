@@ -84,6 +84,86 @@ struct DeniedFeatureResponse {
     deny_reason_code: u64,
 }
 
+/// `POST /…/auth/bnet/login` — sign in with the username and password the
+/// player set on their profile.
+///
+/// This is what makes ONE generic APK work for everybody. Identity is currently
+/// the WireGuard IP the mitm stamps into `X-Newblades-Device-Ip` (the client
+/// sends `deviceId: null`), so a VPN-free build would otherwise hand every
+/// player a brand-new anonymous character.
+///
+/// The body shape is retail's own, read off a capture rather than invented:
+/// `{username, password, deviceId, platform}`, answered with the same
+/// `SessionResponse` as `auth/anon`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BnetLoginRequest {
+    username: String,
+    password: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    device_id: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    platform: Option<String>,
+}
+
+#[post("/blades.bgs.services/api/authentication/v1/public/auth/bnet/login")]
+async fn bnet_log_in(
+    app_state: web::Data<Arc<ServerGlobal>>,
+    body: web::Json<BnetLoginRequest>,
+) -> Result<web::Json<SessionResponse>, BladeApiError> {
+    let body = body.into_inner();
+    let username = crate::credentials::normalise_username(&body.username);
+    let mut conn = app_state.db_pool.get().await.unwrap();
+
+    let found = crate::credentials::find_by_username(&mut conn, &username)
+        .await
+        .unwrap_or(None);
+
+    // One 401 for "no such user" AND "wrong password", and the password is
+    // verified even when the row is missing. Answering faster for an unknown
+    // username turns this endpoint into a way to enumerate who plays here.
+    let (user_id, hash) = match found {
+        Some(row) => (Some(row.user_id), row.password_hash),
+        None => (
+            None,
+            // A well-formed hash of a value nobody can supply, so the failure
+            // path does the same PBKDF2 work as the success path.
+            "pbkdf2$200000$00000000000000000000000000000000$             0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+        ),
+    };
+    let ok = crate::credentials::verify_password(&body.password, &hash);
+    let Some(user_id) = user_id.filter(|_| ok) else {
+        // Service id 3 is what the rest of this module reports auth failures
+        // under (see the NOT_FOUND below); 110 is this endpoint's code.
+        return Err(BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 110));
+    };
+
+    let user: UserDBEntry = {
+        use crate::schema::users::dsl as u;
+        u::users
+            .filter(u::id.eq(user_id))
+            .select(UserDBEntry::as_select())
+            .first(&mut conn)
+            .await
+            .map_err(|_| BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 111))?
+    };
+
+    let session = Arc::new(Session::new(
+        user.id,
+        user.secret_id,
+        app_state.session_store.ttl,
+    ));
+    let session_id = app_state.session_store.store_new_session(session.clone());
+    crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
+    log::info!("account login: {username} -> user {}", user.id);
+    Ok(web::Json(SessionResponse {
+        session: SessionResponseInner::from_session(session_id, session.as_ref()),
+    }))
+}
+
 #[post("/blades.bgs.services/api/authentication/v1/public/auth/anon")]
 async fn anon_log_in(
     req: HttpRequest,

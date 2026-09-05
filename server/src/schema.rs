@@ -120,3 +120,13 @@ diesel::allow_tables_to_appear_in_same_query!(
     guild_applications,
     guild_removals,
 );
+
+diesel::table! {
+    arena_credentials (username) {
+        username -> Text,
+        user_id -> Uuid,
+        password_hash -> Text,
+        created_at -> Int8,
+        updated_at -> Int8,
+    }
+}

@@ -19,6 +19,12 @@ uuid = { version = "1.23.0", features = ["serde", "v4", "v7", "v8"] }
 diesel = { version = "2.2.0", features = ["uuid", "serde_json"] }
 diesel-async = { version = "0.7.0", features = ["postgres", "bb8", "async-connection-wrapper"] }
 rand = "0.10.0"
+# Promoted from transitive to direct. These are already compiled into the binary
+# (they arrive via the existing crypto/diesel tree), so naming them here adds no
+# new code to the build — only the ability to call them. Pinned, RustCrypto.
+sha2 = "0.10"
+hmac = "0.12"
+subtle = "2"
 actix-files = "0.6.10"
 futures-util = "0.3.32"
 bb8 = "0.9.1"

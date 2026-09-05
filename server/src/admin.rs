@@ -31,7 +31,7 @@ use blades_lib::user_data::{
     CompleteCharacter, CompleteCharacterData, CompleteInventory, CompleteWallet,
     DungeonGeneratedData, DungeonGeneratedDataWithId, QuestWithId, UserAccount,
 };
-use diesel::{ExpressionMethods, QueryDsl, SelectableHelper, insert_into};
+use diesel::{OptionalExtension, ExpressionMethods, QueryDsl, SelectableHelper, insert_into};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use log::warn;
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,7 @@ use uuid::Uuid;
 use crate::{
     BladeApiError, ServerGlobal,
     arena::arena_season::{self, SeasonConfig},
+    credentials,
     arena::matchmaker::{RecentTicketView, query_recent_matches},
     json_db::JsonDbWrapper,
     models::{CharacterDbAlone, CharacterDbEntry, QuestDbEntry, UserDBEntry},
@@ -637,6 +638,101 @@ pub async fn recent_devices(
     Ok(Json(rows))
 }
 
+
+// ------------------------------------------------------ account credentials
+
+/// `POST /…/api/dev/v1/arena-credentials` — set (or replace) a player's login.
+///
+/// Called by the web app when a player sets a username and password on their
+/// profile. The web app is the only thing that knows WHO is asking; this route
+/// only turns "this arena user" into a credential row.
+///
+/// Replacing is deliberate. A player who forgets their password changes it from
+/// the profile they are already signed into, so there is no reset flow to build
+/// and no way for this endpoint to take over an account whose user id the
+/// caller was not already given.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCredentialRequest {
+    pub user_id: Uuid,
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCredentialResponse {
+    pub username: String,
+    pub user_id: Uuid,
+    /// True when this replaced an existing login rather than creating one.
+    pub replaced: bool,
+}
+
+#[post("/blades.bgs.services/api/dev/v1/arena-credentials")]
+pub async fn set_arena_credential(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    body: web::Json<SetCredentialRequest>,
+) -> Result<Json<SetCredentialResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let body = body.into_inner();
+
+    if !credentials::username_is_valid(&body.username) {
+        return Err(BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 40));
+    }
+    if body.password.chars().count() < credentials::MIN_PASSWORD_LEN {
+        return Err(BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 41));
+    }
+    let username = credentials::normalise_username(&body.username);
+    let hash = credentials::hash_password(&body.password);
+
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    use crate::schema::arena_credentials::dsl as c;
+
+    // Is this username already someone ELSE's? Checked explicitly so the answer
+    // is "that name is taken" rather than a bare 500 out of the primary key.
+    let existing_owner: Option<Uuid> = c::arena_credentials
+        .filter(c::username.eq(&username))
+        .select(c::user_id)
+        .first(&mut conn)
+        .await
+        .optional()
+        .unwrap_or(None);
+    if matches!(existing_owner, Some(owner) if owner != body.user_id) {
+        return Err(BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 42));
+    }
+
+    // One login per account: drop whatever this user had, then insert. That
+    // order means changing your username does not leave the old one squatting.
+    let replaced = diesel::delete(c::arena_credentials.filter(c::user_id.eq(body.user_id)))
+        .execute(&mut conn)
+        .await
+        .map_err(|e| {
+            warn!("credential replace failed: {e}");
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 43)
+        })?
+        > 0;
+
+    diesel::insert_into(c::arena_credentials)
+        .values((
+            c::username.eq(&username),
+            c::user_id.eq(body.user_id),
+            c::password_hash.eq(&hash),
+        ))
+        .execute(&mut conn)
+        .await
+        .map_err(|e| {
+            // Never log the password or the hash.
+            warn!("credential insert failed for user {}: {e}", body.user_id);
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 44)
+        })?;
+
+    Ok(Json(SetCredentialResponse {
+        username,
+        user_id: body.user_id,
+        replaced,
+    }))
+}
 
 // ------------------------------------------------------------ arena season
 
