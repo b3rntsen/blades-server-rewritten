@@ -34,13 +34,16 @@ use blades_lib::user_data::{
     CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
     InventoryChangeTracker, Item, ItemPropertiesAll,
 };
-use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
+use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::{BladeApiError, ServerGlobal, models::CharacterDbEntryEconomy, session::SessionLookedUpMaybe};
+use crate::{
+    BladeApiError, ServerGlobal, json_db::JsonDbWrapper,
+    models::CharacterDbEntryEconomy, session::SessionLookedUpMaybe,
+};
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -223,6 +226,42 @@ struct GetCraftsResponse {
     crafts: Vec<Value>,
 }
 
+/// Building ids in this character's own town, if it has one.
+///
+/// `get_crafts` needs this to answer one question: does this job's `buildingId`
+/// point at a building the client will actually find when it builds the town?
+fn town_building_ids(town: &Value) -> std::collections::HashSet<Uuid> {
+    let mut out = std::collections::HashSet::new();
+    let Some(districts) = town.get("districts").and_then(|d| d.as_array()) else {
+        return out;
+    };
+    for d in districts {
+        let Some(segments) = d.get("segments").and_then(|s| s.as_object()) else {
+            continue;
+        };
+        for seg in segments.values() {
+            let Some(buildings) = seg.get("buildings").and_then(|b| b.as_object()) else {
+                continue;
+            };
+            for key in buildings.keys() {
+                if let Ok(id) = Uuid::parse_str(key) {
+                    out.insert(id);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A stable stand-in id that cannot name a real building.
+///
+/// Same trick `arena_season` uses for its archive key: flip high bits of the
+/// real id, so the result is deterministic across reads (the client sees a
+/// stable job) yet cannot collide with anything in the town.
+fn detached_building_id(real: Uuid) -> Uuid {
+    Uuid::from_u128(real.as_u128() ^ (0xC << 124))
+}
+
 /// `GET /crafts` — returns the character's active craft jobs.
 /// The repair gate reads this list; an empty list unblocks repair.
 #[get("blades.bgs.services/api/game/v1/public/characters/{character_id}/crafts")]
@@ -240,16 +279,68 @@ pub async fn get_crafts(
     conn.transaction(move |mut conn| {
         async move {
             let entry = load_owned(&mut conn, character_id, user_id).await?;
-            let crafts = craft_wires(
+            let mut wires = craft_wires(
                 &entry.server_state.0.craft_jobs,
                 user_id,
                 character_id,
                 &globals.static_data,
                 &globals.repair_data,
-            )
-            .into_iter()
-            .map(|w| serde_json::to_value(w).unwrap_or(Value::Null))
-            .collect();
+            );
+
+            // A craft job whose `buildingId` RESOLVES to a building in the
+            // player's own town hangs the client on the very next load. Not the
+            // craft screen — the town-build coroutine never finishes, so the
+            // player never leaves the loading screen again.
+            //
+            // Measured, not guessed. On a clean rig, the identical job:
+            //   buildingId -> a real building in the town : STALLS
+            //   buildingId -> anything unresolvable       : LOADS
+            // Completion state is irrelevant (an in-progress craft stalls too),
+            // as are the recipe, the crafting type (Alchemy, valid for that
+            // AlchemistShop) and the building's `state`. Three players were
+            // bricked this way; one of them crafted once on 2026-08-26 and never
+            // got back in.
+            //
+            // So until the client-side mechanism is understood, DETACH rather
+            // than drop: the job, its results and its timer stay in the database
+            // untouched, and the player keeps whatever they crafted. What they
+            // lose is the craft showing on that building — which is strictly
+            // better than losing the account.
+            //
+            // This is a containment, NOT the fix, and it should be deleted the
+            // moment the real cause is found. See docs/craft-town-hang.md.
+            let owned_buildings: std::collections::HashSet<Uuid> = {
+                use crate::schema::characters::dsl as ch;
+                let town: Option<Option<JsonDbWrapper<Value>>> = ch::characters
+                    .filter(ch::id.eq(character_id))
+                    .select(ch::town)
+                    .first(&mut conn)
+                    .await
+                    .optional()?;
+                town.flatten()
+                    .map(|JsonDbWrapper(v)| town_building_ids(&v))
+                    .unwrap_or_default()
+            };
+            if !owned_buildings.is_empty() {
+                let mut detached = 0usize;
+                for w in wires.iter_mut() {
+                    if owned_buildings.contains(&w.building_id) {
+                        w.building_id = detached_building_id(w.building_id);
+                        detached += 1;
+                    }
+                }
+                if detached > 0 {
+                    log::warn!(
+                        "character {character_id}: detached {detached} craft job(s) from real \
+                         town buildings to avoid the town-build hang"
+                    );
+                }
+            }
+
+            let crafts = wires
+                .into_iter()
+                .map(|w| serde_json::to_value(w).unwrap_or(Value::Null))
+                .collect();
             Ok::<_, BladeApiError>(Json(GetCraftsResponse { crafts }))
         }
         .scope_boxed()
@@ -2791,5 +2882,69 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(w.balance(GEMS), 1_000);
+    }
+}
+
+
+#[cfg(test)]
+mod town_hang_containment_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn town_with(building: &str) -> Value {
+        json!({"districts":[{"id":"d","segments":{
+            "seg-1":{"id":"seg-1","buildings":{ building: {"id":building,"level":9}}}
+        }}]})
+    }
+
+    #[test]
+    fn town_building_ids_finds_buildings_across_segments() {
+        let b1 = Uuid::new_v4();
+        let t = town_with(&b1.to_string());
+        let ids = town_building_ids(&t);
+        assert!(ids.contains(&b1), "must find a building the client will find");
+        assert_eq!(ids.len(), 1);
+    }
+
+    #[test]
+    fn town_building_ids_tolerates_every_shape_of_missing() {
+        // A character with no town, an empty town, a district with no segments
+        // and a segment with no buildings must all yield nothing rather than
+        // panic — this runs on every /crafts read for every player.
+        for t in [
+            json!({}),
+            json!({"districts":[]}),
+            json!({"districts":[{"id":"d"}]}),
+            json!({"districts":[{"id":"d","segments":{"s":{"id":"s"}}}]}),
+            json!({"districts":"not-an-array"}),
+        ] {
+            assert!(town_building_ids(&t).is_empty(), "unexpected ids from {t}");
+        }
+    }
+
+    #[test]
+    fn town_building_ids_skips_keys_that_are_not_uuids() {
+        let t = json!({"districts":[{"id":"d","segments":{
+            "s":{"id":"s","buildings":{"not-a-uuid":{"level":1}}}}}]});
+        assert!(town_building_ids(&t).is_empty());
+    }
+
+    /// The stand-in must be stable (the client would otherwise see the job jump
+    /// between reads) and must never name the building it replaces.
+    #[test]
+    fn detached_building_id_is_stable_and_never_the_original() {
+        let real = Uuid::new_v4();
+        let a = detached_building_id(real);
+        assert_eq!(a, detached_building_id(real), "must be deterministic");
+        assert_ne!(a, real, "must not name the building it is hiding");
+    }
+
+    /// Different buildings must not collapse onto one stand-in, or two jobs
+    /// would appear to share a station.
+    #[test]
+    fn detached_building_ids_stay_distinct() {
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        assert_ne!(detached_building_id(a), detached_building_id(b));
     }
 }
