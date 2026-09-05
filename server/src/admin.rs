@@ -690,6 +690,23 @@ pub async fn set_arena_credential(
     let mut conn = app_state.db_pool.get().await.unwrap();
     use crate::schema::arena_credentials::dsl as c;
 
+    // The credential's user_id is a foreign key into `users`. Check it here so
+    // an unknown id is a 404 that says so, instead of the 500 the constraint
+    // violation used to produce — which told the caller nothing and read as
+    // "the arena server is broken" rather than "that account does not exist".
+    {
+        use crate::schema::users::dsl as u;
+        let exists: i64 = u::users
+            .filter(u::id.eq(body.user_id))
+            .count()
+            .get_result(&mut conn)
+            .await
+            .unwrap_or(0);
+        if exists == 0 {
+            return Err(BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 46));
+        }
+    }
+
     // Is this username already someone ELSE's? Checked explicitly so the answer
     // is "that name is taken" rather than a bare 500 out of the primary key.
     let existing_owner: Option<Uuid> = c::arena_credentials
