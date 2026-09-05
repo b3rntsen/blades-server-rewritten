@@ -82,6 +82,9 @@ struct EnemyLootCollectedUpdate {
     pub spawn_group_id: Uuid,
     pub spawner_index: usize,
     pub enemy_index: usize,
+    /// Only read when the stored loot is empty — see the handler.
+    #[serde(default)]
+    pub loot: RewardGrant,
 }
 
 #[derive(Deserialize, Debug)]
@@ -92,9 +95,8 @@ enum DungeonUpdateAction {
     /// previously an unknown variant made serde reject the whole POST (→400), which is
     /// PaganBlueNose's "network error … with a quest".
     CombatCompleted(CombatCompletedUpdate),
-    /// Loot off a corpse. The `loot` the client sends here is IGNORED — the authoritative
-    /// contents were generated server-side when the enemy died and are stored on
-    /// `EnemyStatus.loot`, so the client only identifies WHICH corpse.
+    /// Loot off a corpse. The stored `EnemyStatus.loot` wins whenever it has contents;
+    /// the request's `loot` is the fallback for as long as we generate none.
     EnemyLootCollected(EnemyLootCollectedUpdate),
     /// Loot off the dungeon floor — loose items and harvested plants. This is the one
     /// tracker #95 is about.
@@ -255,10 +257,25 @@ pub async fn dungeon_update(
                         // Looting the same corpse twice must not pay twice; taking the
                         // stored loot empties it.
                         let loot = std::mem::take(&mut status.loot);
-                        let grant = RewardGrant {
-                            currencies: loot.currencies,
-                            stackable_items: loot.stackable_items,
-                            ..Default::default()
+                        let stored_is_empty =
+                            loot.currencies.is_empty() && loot.stackable_items.is_empty();
+                        // We do not generate enemy loot yet: generate_for_dungeon sets
+                        // spawn_group_loot and loot_table_loot to HashMap::default() and
+                        // nothing fills them, so merged_loot_table() is always empty. #138
+                        // switched this arm to the stored value on the assumption it was
+                        // authoritative, which silently reduced every corpse to nothing.
+                        //
+                        // So: stored wins when it HAS contents — the moment we generate
+                        // real loot the client stops being trusted, with no further change
+                        // here — and until then the request is the only source there is.
+                        let grant = if stored_is_empty {
+                            looted.loot.clone()
+                        } else {
+                            RewardGrant {
+                                currencies: loot.currencies,
+                                stackable_items: loot.stackable_items,
+                                ..Default::default()
+                            }
                         };
                         blades_lib::economy::apply_reward(
                             &grant,
@@ -406,13 +423,14 @@ mod tests {
         }
         match &req.actions[1] {
             DungeonUpdateAction::EnemyLootCollected(c) => {
-                // Only the identity is read; the payout comes from stored state.
                 assert_eq!(c.spawner_index, 0);
                 assert_eq!(c.enemy_index, 0);
+                // The request's loot is parsed, because it is the fallback used while
+                // the server generates no enemy loot of its own.
+                assert_eq!(c.loot.currencies.get(&gold), Some(&4));
             }
             other => panic!("corpse loot must not be dropped, got {other:?}"),
         }
-        let _ = gold;
     }
 
     /// A loot action with no `loot` block at all must still parse — the client omits it
@@ -490,6 +508,51 @@ mod tests {
             tracker.modified_backpack.stackable_items.contains(&lumber),
             "the pickup must be reported to the client, or the bag looks unchanged"
         );
+    }
+
+    /// Corpse loot must not silently become nothing when the server has none.
+    ///
+    /// `generate_for_dungeon` sets `spawn_group_loot` and `loot_table_loot` to
+    /// `HashMap::default()` and nothing fills them, so `merged_loot_table()` is always
+    /// empty today. #138 made this arm read only the stored value, which reduced every
+    /// looted corpse to a no-op. This pins the precedence: stored wins when it has
+    /// contents, the request is used when it does not.
+    #[test]
+    fn corpse_loot_prefers_stored_and_falls_back_to_the_request() {
+        use blades_lib::user_data::LootTableResult;
+
+        let gold: Uuid = "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2".parse().unwrap();
+        let lumber: Uuid = "e7193116-d761-479b-8a20-5633737977f5".parse().unwrap();
+
+        // the handler's precedence rule, in the same shape as the code under test
+        fn pick(stored: LootTableResult, from_request: RewardGrant) -> RewardGrant {
+            let empty = stored.currencies.is_empty() && stored.stackable_items.is_empty();
+            if empty {
+                from_request
+            } else {
+                RewardGrant {
+                    currencies: stored.currencies,
+                    stackable_items: stored.stackable_items,
+                    ..Default::default()
+                }
+            }
+        }
+
+        let mut req = RewardGrant::default();
+        req.currencies.insert(gold, 4);
+
+        // today's reality: nothing generated -> the request is honoured
+        let got = pick(LootTableResult::default(), req.clone());
+        assert_eq!(got.currencies.get(&gold), Some(&4),
+                   "an empty stored table must not silently pay nothing");
+
+        // once we DO generate loot, the request stops mattering
+        let mut stored = LootTableResult::default();
+        stored.stackable_items.insert(lumber, 7);
+        let got = pick(stored, req.clone());
+        assert_eq!(got.stackable_items.get(&lumber), Some(&7));
+        assert!(got.currencies.is_empty(),
+                "stored loot must win outright, not merge with the request");
     }
 
     /// Crediting the loot is not enough — the client applies a backpack diff only when
