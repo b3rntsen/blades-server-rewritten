@@ -106,6 +106,22 @@ pub enum MatchmakerCommand {
 /// A queued matchmaking ticket handed to the matchmaker actor. Carries an [`RmsHandle`]
 /// so the matchmaker re-fetches the requesting client's CURRENT rms sender at send time
 /// (surviving rms-WS reconnects), rather than a stale sender captured at enqueue.
+/// Which address to hand a client for the match's UDP endpoint.
+///
+/// `public_advertise_host` unset ⇒ everyone gets the tunnel address, i.e. the
+/// behaviour from before the VPN-free build existed. Deliberate: a deployment
+/// that forgets to configure the public path should keep working for tunnel
+/// players rather than start publishing an address it does not serve.
+pub fn advertise_host_for(config: &crate::arena::config::ArenaConfig, via_vpn: bool) -> String {
+    if via_vpn {
+        return config.advertise_host.clone();
+    }
+    config
+        .public_advertise_host
+        .clone()
+        .unwrap_or_else(|| config.advertise_host.clone())
+}
+
 pub struct TicketRequest {
     pub ticket_id: Uuid,
     pub user_id: Uuid,
@@ -126,6 +142,17 @@ pub struct TicketRequest {
     /// [`load_skill`].
     pub character_id: Option<Uuid>,
     pub rms: RmsHandle,
+    /// Did this player reach us through the WireGuard tunnel?
+    ///
+    /// Decides which address we tell them to dial for the match. A tunnel client
+    /// must get the tunnel address (10.99.0.1): it is what they can route to,
+    /// and it is what keeps their arena traffic inside the capture path. A
+    /// client on the open internet cannot reach an RFC1918 address at all.
+    ///
+    /// Per TICKET, not per server, because the two players in one match can
+    /// arrive by different roads. `Succeeded` is already sent per ticket, so
+    /// each gets the address that works for them.
+    pub via_vpn: bool,
     /// What we know about this player's strength, for the pairing bracket.
     /// `None` when the lookup failed or the player has no character yet — an
     /// unknown player is never blocked from matching, only from being used as a
@@ -868,6 +895,7 @@ mod human_priority_tests {
 
     fn cfg() -> ArenaConfig {
         ArenaConfig {
+            public_advertise_host: None,
             advertise_host: "127.0.0.1".into(),
             udp_port: 7777,
             max_concurrent_matches: 4,
@@ -1457,6 +1485,7 @@ mod bot_pick_tests {
     #[test]
     fn load_bot_loadout_marks_even_the_no_database_path() {
         let config = ArenaConfig {
+            public_advertise_host: None,
             advertise_host: "127.0.0.1".into(),
             udp_port: 7777,
             max_concurrent_matches: 4,
@@ -2953,7 +2982,7 @@ async fn resolve(
             ticket_id: t.ticket_id,
             player_session_id: psid.clone(),
             game_session_id,
-            address: config.advertise_host.clone(),
+            address: advertise_host_for(config, t.via_vpn),
             port: config.udp_port,
         };
         // Send to the client's CURRENT live rms sender (re-fetched here, not the sender
@@ -3048,6 +3077,7 @@ async fn load_skill(
 
 #[post("/blades.bgs.services/api/matchmaking/v1/public/matches/create")]
 pub async fn create_match(
+    req: actix_web::HttpRequest,
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
     body: web::Json<CreateMatchRequest>,
@@ -3093,6 +3123,16 @@ pub async fn create_match(
             character_id,
             rms: RmsHandle::Session(session.session.clone()),
             skill,
+            // The mitm addon stamps X-Newblades-Device-Ip from the client's
+            // WireGuard peer IP; edge-nginx ERASES it on the public path
+            // precisely so it cannot be spoofed from the internet. Its presence
+            // is therefore a trustworthy "came through the tunnel" signal — the
+            // same erasure identity already depends on.
+            //
+            // Absent ⇒ public. The safe direction: a tunnel client wrongly told
+            // the public address can still reach it (full tunnel routes out),
+            // whereas a public client told 10.99.0.1 can reach nothing.
+            via_vpn: req.headers().get("X-Newblades-Device-Ip").is_some(),
         }))
         .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, 4, 2))?;
 
@@ -3135,6 +3175,61 @@ pub async fn cancel_match(
 
 #[cfg(test)]
 mod tests {
+
+    fn advertise_test_config() -> ArenaConfig {
+        ArenaConfig {
+            public_advertise_host: None,
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 4,
+            max_queued_players: 64,
+            solo_fallback_secs: 15,
+            debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
+            busy_fallback_secs: 230,
+            recent_fallback_secs: 30,
+            recent_window_secs: 300,
+        }
+    }
+
+    /// Which address a player is told to dial IS the VPN-free arena fix, and
+    /// getting it backwards fails silently: the client simply never connects,
+    /// with nothing logged on our side because nothing ever reaches us.
+    #[test]
+    fn tunnel_and_public_clients_get_different_addresses() {
+        let mut cfg = advertise_test_config();
+        cfg.advertise_host = "10.99.0.1".into();
+        cfg.public_advertise_host = Some("203.0.113.7".into());
+
+        // A tunnel client keeps the tunnel address: it is what they can route
+        // to, AND what keeps their arena traffic inside the capture path.
+        assert_eq!(advertise_host_for(&cfg, true), "10.99.0.1");
+        // A public client cannot reach an RFC1918 address at all.
+        assert_eq!(advertise_host_for(&cfg, false), "203.0.113.7");
+    }
+
+    /// A deployment that has not configured a public path must behave exactly as
+    /// it did before the VPN-free build existed — not publish an address it does
+    /// not serve.
+    #[test]
+    fn without_a_public_host_nothing_changes_for_anyone() {
+        let mut cfg = advertise_test_config();
+        cfg.advertise_host = "10.99.0.1".into();
+        cfg.public_advertise_host = None;
+        assert_eq!(advertise_host_for(&cfg, true), "10.99.0.1");
+        assert_eq!(advertise_host_for(&cfg, false), "10.99.0.1");
+    }
+
+    /// An empty ARENA_ADVERTISE_HOST_PUBLIC is a configuration slip, not a
+    /// hostname. `from_env` filters it to None; without that every public client
+    /// would be told to dial "".
+    #[test]
+    fn an_empty_public_host_is_filtered_to_none() {
+        unsafe { std::env::set_var("ARENA_ADVERTISE_HOST_PUBLIC", "   ") };
+        let cfg = ArenaConfig::from_env();
+        unsafe { std::env::remove_var("ARENA_ADVERTISE_HOST_PUBLIC") };
+        assert_eq!(cfg.public_advertise_host, None, "blank must read as unset");
+    }
     use super::*;
     use crate::arena::config::ArenaConfig;
     use tokio::sync::mpsc::unbounded_channel;
@@ -3192,6 +3287,7 @@ mod tests {
     async fn pairs_two_tickets_refused_when_uuids_collapse() {
         let registry = MatchRegistry::new(4);
         let config = ArenaConfig {
+            public_advertise_host: None,
             advertise_host: "127.0.0.1".into(),
             udp_port: 7777,
             max_concurrent_matches: 4,
@@ -3209,6 +3305,7 @@ mod tests {
         let (rms_a, mut recv_a) = unbounded_channel();
         let (rms_b, mut recv_b) = unbounded_channel();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3217,6 +3314,7 @@ mod tests {
         }))
         .unwrap();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3270,6 +3368,7 @@ mod tests {
     async fn same_char_pair_gets_failed_not_hung() {
         let registry = MatchRegistry::new(4);
         let config = ArenaConfig {
+            public_advertise_host: None,
             advertise_host: "127.0.0.1".into(),
             udp_port: 7777,
             max_concurrent_matches: 4,
@@ -3289,6 +3388,7 @@ mod tests {
         let (rms_a, mut recv_a) = unbounded_channel();
         let (rms_b, mut recv_b) = unbounded_channel();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
             ticket_id: tid_a,
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3297,6 +3397,7 @@ mod tests {
         }))
         .unwrap();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
             ticket_id: tid_b,
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3359,6 +3460,7 @@ mod tests {
     async fn stale_waiting_ticket_is_dropped_not_bot_matched() {
         let registry = MatchRegistry::new(4);
         let config = ArenaConfig {
+            public_advertise_host: None,
             advertise_host: "127.0.0.1".into(),
             udp_port: 7777,
             max_concurrent_matches: 4,
@@ -3377,6 +3479,7 @@ mod tests {
         let (rms_a, recv_a) = unbounded_channel();
         drop(recv_a);
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3415,6 +3518,7 @@ mod tests {
     async fn two_humans_queueing_together_get_each_other_not_two_bots() {
         let registry = MatchRegistry::new(4);
         let config = ArenaConfig {
+            public_advertise_host: None,
             advertise_host: "127.0.0.1".into(),
             udp_port: 7777,
             max_concurrent_matches: 4,
@@ -3433,6 +3537,7 @@ mod tests {
         let (rms_b, mut recv_b) = unbounded_channel();
 
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3447,6 +3552,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(300)).await;
 
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3501,6 +3607,7 @@ mod tests {
     async fn a_recently_seen_player_makes_the_next_queuer_hold_the_door() {
         let registry = MatchRegistry::new(4);
         let config = ArenaConfig {
+            public_advertise_host: None,
             advertise_host: "127.0.0.1".into(),
             udp_port: 7777,
             max_concurrent_matches: 4,
@@ -3517,6 +3624,7 @@ mod tests {
 
         let (rms_a, _keep_a) = unbounded_channel();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3534,6 +3642,7 @@ mod tests {
 
         let (rms_b, mut recv_b) = unbounded_channel();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3571,6 +3680,7 @@ mod tests {
     async fn cancel_dequeues_waiting_ticket() {
         let registry = MatchRegistry::new(4);
         let config = ArenaConfig {
+            public_advertise_host: None,
             advertise_host: "127.0.0.1".into(),
             udp_port: 7777,
             max_concurrent_matches: 4,
@@ -3589,6 +3699,7 @@ mod tests {
         let uid = Uuid::new_v4();
         let (rms, mut recv) = unbounded_channel();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
             ticket_id: tid,
             user_id: uid,
             character_id: None,
@@ -3630,6 +3741,7 @@ mod tests {
     async fn cancel_does_not_drop_a_different_users_ticket() {
         let registry = MatchRegistry::new(4);
         let config = ArenaConfig {
+            public_advertise_host: None,
             advertise_host: "127.0.0.1".into(),
             udp_port: 7777,
             max_concurrent_matches: 4,
@@ -3648,6 +3760,7 @@ mod tests {
         let uid = Uuid::new_v4();
         let (rms, _recv) = unbounded_channel();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
             ticket_id: tid,
             user_id: uid,
             character_id: None,
