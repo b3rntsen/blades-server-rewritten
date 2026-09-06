@@ -1218,4 +1218,15 @@ mod tests {
         let members: [(u32, GuildRank, i64); 0] = [];
         assert_eq!(successor(&members), None);
     }
+
+    /// The four nameless guilds on prod exist because an empty name was once
+    /// storable. `guild_text_ok` is what stops that recurring, so pin it —
+    /// including the whitespace case, since a rename now trims before checking
+    /// and " " must not become a legal name.
+    #[test]
+    fn a_guild_cannot_be_named_nothing() {
+        assert!(!guild_text_ok("", "a short one", ""), "empty name accepted");
+        assert!(!guild_text_ok("   ".trim(), "a short one", ""), "blank name accepted");
+        assert!(guild_text_ok("Bladeworks", "a short one", ""), "a real name was rejected");
+    }
 }
