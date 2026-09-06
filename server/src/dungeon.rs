@@ -380,29 +380,50 @@ async fn handle_event_dungeon_exit(
 
     let mut completion = EventCompletion::get_or_create(conn, char_id, quest_id).await?;
     let completion_index = completion.completion_count as usize;
+    let tier_count = event_template.rewards.len();
 
-    // Get rewards for this completion
-    let rewards = if completion_index < event_template.rewards.len() {
-        &event_template.rewards[completion_index]
-    } else {
-        event_template.final_reward.as_ref()
-            .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2))?
-    };
+    // The reward model, verbatim from the data's own _meta (capture-derived and
+    // checked against 93 retail instances / 300+ completions):
+    //
+    //   "The Nth completion of an event-quest instance pays rewards[N];
+    //    the last one pays rewards[last] + finalReward."
+    //
+    // So finalReward is a BONUS ON the final tier, not a tier of its own, and
+    // there is nothing to pay once the tiers are exhausted. Paying finalReward
+    // by itself on every later exit made the event farmable without limit
+    // (tracker #98: "I can do it over and over").
+    let payout = event_template.payout_for_completion(completion_index);
+    if payout.is_none() {
+        // Event finished. Deliberately NOT an error: the player still has to be
+        // able to walk out of the dungeon. They just leave with nothing.
+        log::info!(
+            "event exit: character {} has completed all {} tiers of event quest {} - no reward",
+            char_id,
+            tier_count,
+            quest_id
+        );
+    }
 
-    // Apply the rewards
     let mut wallet = std::mem::take(&mut character_data.wallet.0);
     let mut inventory_modification_tracker = InventoryChangeTracker::default();
-    
-    apply_event_rewards(
-        rewards,
-        &mut character_data,
-        &mut wallet,
-        &mut inventory_modification_tracker,
-    )?;
+
+    if let Some(rewards) = payout.as_ref() {
+        apply_event_rewards(
+            rewards,
+            &mut character_data,
+            &mut wallet,
+            &mut inventory_modification_tracker,
+        )?;
+    }
 
     character_data.wallet.0 = wallet;
 
-    completion.increment_completion(conn).await?;
+    // Advance only when a tier was actually consumed. Incrementing on a finished
+    // event would run the counter up forever and desync the completedQuests
+    // mirror written just below from the number of tiers that exist.
+    if payout.is_some() {
+        completion.increment_completion(conn).await?;
+    }
 
     // Mirror complete_quest's write into the character's completedQuests JSON
     // (`{ "<gldQuestId>": <completion_count> }`) — this is what the client's
