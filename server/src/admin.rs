@@ -944,6 +944,147 @@ pub struct EndSeasonResponse {
 /// Idempotent in the way that matters: the roll itself skips anyone already in
 /// the target season, and the awards index is unique per (season, character,
 /// kind), so a re-run after a partial failure resumes instead of double-paying.
+/// `POST /…/api/dev/v1/arena-seasons/{id}/start` — make a scheduled season live
+/// and put every player back to zero cups.
+///
+/// WHY THIS EXISTS: a season created from the console was `scheduled` and had NO
+/// WAY TO BECOME ACTIVE. Creating deliberately does not activate (a season gets
+/// announced before anyone's counters move), but I never built the other half,
+/// so the first season anyone made sat scheduled for ever and nobody's cups
+/// reset. The owner's report was exactly that: "I started a season, but people
+/// still have cups."
+///
+/// Starting resets, and that is the point rather than a side effect — a season
+/// beginning IS everyone starting level. Ending a season freezes the ladder and
+/// records awards; for the FIRST season there is no previous one to end, so
+/// without a reset here cups could never be zeroed at all.
+///
+/// Dry run by default, like `end`: this rewrites every character on the server.
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct StartSeasonRequest {
+    #[serde(default)]
+    pub apply: bool,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StartSeasonResponse {
+    pub applied: bool,
+    pub season_name: String,
+    pub season_number: i32,
+    /// Characters whose cups this reset (or would reset).
+    pub characters_reset: usize,
+    /// Characters already on this season — untouched.
+    pub characters_already_current: usize,
+    /// Characters whose stored JSON would not parse. Never silently zero: a
+    /// character we cannot read is one we must not rewrite.
+    pub characters_unreadable: usize,
+}
+
+#[post("/blades.bgs.services/api/dev/v1/arena-seasons/{season_id}/start")]
+pub async fn start_arena_season(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<Uuid>,
+    body: Option<web::Json<StartSeasonRequest>>,
+) -> Result<Json<StartSeasonResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let body = body.map(|b| b.into_inner()).unwrap_or_default();
+    let season_id = path.into_inner();
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    use crate::schema::arena_seasons::dsl as s;
+
+    let season: season_store::SeasonRow = s::arena_seasons
+        .filter(s::id.eq(season_id))
+        .select(season_store::SeasonRow::as_select())
+        .first(&mut conn)
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 50))?;
+
+    if season.status == "ended" {
+        return Err(BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 51));
+    }
+
+    // One live season at a time. The partial unique index enforces it in the
+    // database too, but a 409 that says so beats a constraint violation.
+    let already: Option<Uuid> = s::arena_seasons
+        .filter(s::status.eq("active"))
+        .filter(s::id.ne(season_id))
+        .select(s::id)
+        .first(&mut conn)
+        .await
+        .optional()
+        .unwrap_or(None);
+    if already.is_some() {
+        return Err(BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 52));
+    }
+
+    let cfg = season.config();
+    let mut resp = StartSeasonResponse {
+        applied: body.apply,
+        season_name: season.name.clone(),
+        season_number: season.number,
+        characters_reset: 0,
+        characters_already_current: 0,
+        characters_unreadable: 0,
+    };
+
+    // Same query shape the end/rollover path uses, so both walk the character
+    // table identically.
+    let rows: Vec<SeasonRolloverRow> =
+        diesel::sql_query("SELECT id, character FROM characters ORDER BY id")
+            .get_results(&mut conn)
+            .await
+            .map_err(|e| {
+                warn!("season start: could not read characters: {e}");
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 53)
+            })?;
+
+    for row in rows {
+        let mut ch: CompleteCharacter = match serde_json::from_value(row.character.clone()) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("season start: character {} does not deserialize: {e}", row.id);
+                resp.characters_unreadable += 1;
+                continue;
+            }
+        };
+        if !arena_season::roll_character_into(&mut ch, &cfg).reset {
+            resp.characters_already_current += 1;
+            continue;
+        }
+        resp.characters_reset += 1;
+        if !body.apply {
+            continue;
+        }
+        let updated = serde_json::to_value(&ch).map_err(|e| {
+            warn!("season start: character {} does not serialize: {e}", row.id);
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 54)
+        })?;
+        diesel::sql_query("UPDATE characters SET character = $1 WHERE id = $2")
+            .bind::<diesel::sql_types::Jsonb, _>(updated)
+            .bind::<diesel::sql_types::Uuid, _>(row.id)
+            .execute(&mut conn)
+            .await
+            .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 55))?;
+    }
+
+    if body.apply {
+        diesel::update(s::arena_seasons.filter(s::id.eq(season_id)))
+            .set(s::status.eq("active"))
+            .execute(&mut conn)
+            .await
+            .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 56))?;
+        log::info!(
+            "season start: '{}' (#{}) is live — {} character(s) reset to zero cups",
+            resp.season_name, resp.season_number, resp.characters_reset
+        );
+    }
+
+    Ok(Json(resp))
+}
+
 #[post("/blades.bgs.services/api/dev/v1/arena-seasons/{season_id}/end")]
 pub async fn end_arena_season(
     req: HttpRequest,
