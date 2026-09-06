@@ -1035,6 +1035,21 @@ pub async fn create_guild(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateGuildRequest {
+    /// Rename the guild.
+    ///
+    /// WHY THIS EXISTS: four guilds on prod carry an EMPTY name. They were
+    /// created 4-11 July, before the create handler was corrected on 25 August
+    /// to read retail's actual parameter (`CreateGuildRequest.PARAMETER_GUILD_NAME
+    /// = "name"`, dump.cs:462268); until then the name silently defaulted to "".
+    /// Creation is safe now — `guild_text_ok` enforces a minimum length — but
+    /// there was no way to REPAIR the four, because nothing could set a name
+    /// after creation. Their owners were stuck with a nameless guild for good.
+    ///
+    /// Not repaired by hand in the database: we do not know what those guilds
+    /// were meant to be called, and guessing on someone's behalf is worse than
+    /// letting them type it.
+    #[serde(default)]
+    name: Option<String>,
     #[serde(default, rename = "type")]
     guild_type: Option<String>,
     #[serde(default)]
@@ -1119,6 +1134,13 @@ async fn update_guild_impl(
             changed.insert("regionIndex".into(), json!(i));
         }
     }
+    if let Some(n) = body.name.as_deref() {
+        let n = n.trim();
+        if n != guild.name {
+            guild.name = n.to_string();
+            changed.insert("name".into(), json!(n));
+        }
+    }
 
     if !guild_text_ok(
         &guild.name,
@@ -1134,6 +1156,7 @@ async fn update_guild_impl(
             use crate::schema::guilds::dsl as g;
             diesel::update(g::guilds.filter(g::id.eq(&guild.id)))
                 .set((
+                    g::name.eq(&guild.name),
                     g::guild_type.eq(&guild.guild_type),
                     g::short_description.eq(&guild.short_description),
                     g::long_description.eq(&guild.long_description),
