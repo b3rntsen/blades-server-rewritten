@@ -510,6 +510,8 @@ async fn main() -> Result<()> {
                     .service(session::sync)
                     .service(authentification::anon_log_in)
                     .service(authentification::bnet_log_in)
+                    .service(authentification::bnet_link)
+                    .service(authentification::bnet_link_force)
                     .service(character::list_characters)
                     .service(character::create_characters)
                     .service(character::get_character)
