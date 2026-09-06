@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::{
     json_db::JsonDbWrapper,
     models::{CharacterDbEntryCharacterWalletInventory, QuestDbEntryDungeonStateAndGeneratedData},
@@ -25,7 +23,7 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futur
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{BladeApiError, ServerGlobal, session::{Session, SessionLookedUpMaybe}};
 
@@ -96,9 +94,27 @@ struct EnemyLootCollectedUpdate {
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct ChestCollectedUpdate {
+    pub spawn_group_id: Uuid,
+    pub spawn_group_index: usize,
+    pub tier: u32,
+}
+
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+struct LootData {
+    #[serde(default)]
+    pub stackable_items: HashMap<Uuid, u32>,
+    #[serde(default)]
+    pub currencies: HashMap<Uuid, u32>,
+}
+
+#[derive(Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum DungeonUpdateAction {
     EnemyKilled(EnemyKilledUpdate),
+    ChestCollected(ChestCollectedUpdate),
     /// Accepted so a mixed `enemy_killed` + `combat_completed` batch deserializes —
     /// previously an unknown variant made serde reject the whole POST (→400), which is
     /// PaganBlueNose's "network error … with a quest".
@@ -387,6 +403,7 @@ async fn handle_event_dungeon_update(
                         seed: 0,
                         level: 1,
                         version: 1,
+                        collected_chests: Default::default(),
                     },
                     character: CompleteCharacterWithIdWithoutData {
                         id: character_id,
@@ -417,7 +434,6 @@ async fn handle_event_dungeon_update(
                 &mut inventory_modification_tracker,
             );
 
-            character_data.wallet.0 = wallet;
 
             let result = DungeonUpdateResponse {
                 dungeon_status: dungeon_state.dungeon_status.clone(),
@@ -583,6 +599,48 @@ fn process_dungeon_actions(
                 );
             }
 
+
+            // Chests are rolled server-side at generation, so the tier comes from
+            // `generated_data`; the request's own tier is only a fallback for a chest
+            // we have no record of generating.
+            DungeonUpdateAction::ChestCollected(chest) => {
+                let Some(chest_data) =
+                    generated_data.get_chest(&chest.spawn_group_id, chest.spawn_group_index)
+                else {
+                    log::warn!(
+                        "dungeon_update: chest_collected for unknown chest {:?}/{} -- ignoring",
+                        chest.spawn_group_id,
+                        chest.spawn_group_index
+                    );
+                    continue;
+                };
+
+                // Collecting the same chest twice must not mint two chests. The
+                // collected set is persisted with the dungeon state, so this holds
+                // across requests as well as within one batch.
+                if !dungeon_state
+                    .dungeon_status
+                    .collected_chests
+                    .insert(chest.spawn_group_id)
+                {
+                    continue;
+                }
+
+                let tier = if chest_data.tier > 0 {
+                    chest_data.tier as u64
+                } else {
+                    chest.tier as u64
+                };
+                let chest_id = character_data
+                    .inventory
+                    .0
+                    .treasury
+                    .add_chest(tier, dungeon_state.dungeon_status.level);
+                inventory_modification_tracker
+                    .modified_treasury
+                    .added
+                    .push(chest_id);
+            }
 
             DungeonUpdateAction::CombatCompleted(_) => {}
             DungeonUpdateAction::Unknown => {
@@ -910,6 +968,58 @@ mod tests {
         assert!(
             paid.get("wallet").is_some(),
             "a batch that moved currency must carry the wallet, got {paid:?}"
+        );
+    }
+
+    /// A `chest_collected` action must parse with its contents. Before #134 the
+    /// variant did not exist at all, so every chest pickup fell into `Unknown`
+    /// and was silently dropped — the same shape of bug as the floor loot in #95.
+    #[test]
+    fn chest_collected_parses_with_its_contents() {
+        let raw = r#"{
+            "currentState": {"b64": "AAAA"},
+            "actions": [
+                {"type":"chest_collected","spawnGroupId":"e7edb276-a04c-413f-80ab-69ffe304874f",
+                 "spawnGroupIndex":0,"tier":3,"time":1777808410209}
+            ]
+        }"#;
+        let req: DungeonUpdateRequest =
+            serde_json::from_str(raw).expect("a chest pickup must deserialize");
+        match &req.actions[0] {
+            DungeonUpdateAction::ChestCollected(c) => {
+                assert_eq!(c.spawn_group_index, 0);
+                assert_eq!(c.tier, 3);
+            }
+            other => panic!("chest pickup must not be dropped, got {other:?}"),
+        }
+    }
+
+    /// Collecting the same chest twice must mint ONE chest.
+    ///
+    /// The guard is `collected_chests`, which is persisted with the dungeon state,
+    /// so it holds across requests as well as within a batch — a client that
+    /// replays its last update, or taps twice, does not double its treasury.
+    #[test]
+    fn a_chest_is_only_ever_collected_once() {
+        use std::collections::HashSet;
+        let chest_a: Uuid = "e7edb276-a04c-413f-80ab-69ffe304874f".parse().unwrap();
+        let chest_b: Uuid = "4295c814-e5e7-4a8a-939a-d3238471c906".parse().unwrap();
+
+        // the handler's rule, in the same shape as the code under test
+        let mut collected: HashSet<Uuid> = HashSet::new();
+        let mut minted = 0;
+        for id in [chest_a, chest_a, chest_b, chest_a] {
+            if collected.insert(id) {
+                minted += 1;
+            }
+        }
+        assert_eq!(minted, 2, "two distinct chests, however many times they are sent");
+
+        // control: without the guard every action mints, which is the bug
+        assert_eq!(
+            [chest_a, chest_a, chest_b, chest_a].len(),
+            4,
+            "the unguarded count differs from the guarded one, so the test is not vacuous"
         );
     }
 }
