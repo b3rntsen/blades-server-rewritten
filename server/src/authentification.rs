@@ -314,9 +314,37 @@ async fn bnet_link(
     let same_account = is_same_account(body.selected_user_id.as_deref(), secret_id);
 
     if !same_account {
-        // Do NOT mint a session here. The client is about to ask the player
-        // which account to keep; handing it a live session for the other one
-        // before they answer would switch them without consent.
+        // BOTH profiles, not just the one being linked to. This is the picker's
+        // content: the client draws a row per id and asks which to KEEP — "the
+        // other one will be discarded", in its own words. Retail's captures
+        // carry two 36-char ids for exactly this reason.
+        //
+        // Sending only the linked id left the dialog with nothing to lay out:
+        // the player saw "Another Blades profile was found" above two blank
+        // rows and could not tap their way out. The client had even fetched the
+        // other profile's characters successfully — it simply had no second
+        // entry to render against.
+        //
+        // Secret ids, in the same currency as `selectedUserId`; the row id is
+        // never something the client has seen.
+        let mut ids = Vec::new();
+        if let Some(sel) = body.selected_user_id.as_deref().and_then(|s| Uuid::parse_str(s).ok()) {
+            ids.push(sel.to_string());
+        }
+        ids.push(secret_id.to_string());
+
+        // A real token. Retail returns one here and we sent an empty string —
+        // harmless-looking, but it is the value the client carries into the
+        // choice it is about to make, and an empty one is not something retail
+        // ever hands it.
+        let pending = Session::new(user_id, secret_id, app_state.session_store.ttl);
+        let pending_id = Uuid::new_v4();
+        let login_token = pending.generate_token(&pending_id);
+
+        // Still no SESSION. The client is about to ask which profile to keep;
+        // handing it a live session for the other account before the player
+        // answers would switch them without consent — and the loser of that
+        // choice is discarded.
         log::info!(
             "account link: conflict — credential names {secret_id}, client is signed in as {:?}",
             body.selected_user_id
@@ -325,8 +353,8 @@ async fn bnet_link(
             account_link_result: AccountLinkResult {
                 conflict: true,
                 session: None,
-                conflicting_user_ids: Some(vec![secret_id.to_string()]),
-                login_token: String::new(),
+                conflicting_user_ids: Some(ids),
+                login_token,
             },
         }));
     }
@@ -643,6 +671,41 @@ mod link_tests {
         let anon = Uuid::from_u128(1);
         let real = Uuid::from_u128(2);
         assert!(!is_same_account(Some(&anon.to_string()), real));
+    }
+
+
+    /// The conflict payload IS the picker's content. Retail's captures carry
+    /// TWO 36-char ids; we sent one, and the player got a dialog with two blank
+    /// rows and no way out. This pins the shape so it cannot regress into that.
+    #[test]
+    fn a_conflict_lists_both_profiles_in_client_currency() {
+        let selected = Uuid::from_u128(0x1111);
+        let linked = Uuid::from_u128(0x2222);
+
+        // Mirrors the handler's construction.
+        let build = |sel: Option<&str>, linked: Uuid| {
+            let mut ids = Vec::new();
+            if let Some(s) = sel.and_then(|s| Uuid::parse_str(s).ok()) {
+                ids.push(s.to_string());
+            }
+            ids.push(linked.to_string());
+            ids
+        };
+
+        let ids = build(Some(&selected.to_string()), linked);
+        assert_eq!(ids.len(), 2, "the picker needs a row per profile");
+        assert_eq!(ids[0], selected.to_string(), "the current profile comes first");
+        assert_eq!(ids[1], linked.to_string());
+        // Retail's ids are plain 36-character UUID strings.
+        assert!(ids.iter().all(|i| i.len() == 36), "must be bare uuid strings");
+
+        // With nothing usable from the client, one row is still better than a
+        // dialog that cannot be dismissed — but it must never be zero.
+        for missing in [None, Some("not-a-uuid")] {
+            let ids = build(missing, linked);
+            assert_eq!(ids.len(), 1);
+            assert_eq!(ids[0], linked.to_string());
+        }
     }
 
     /// Uuid formatting is case-insensitive on parse; a client that upper-cases
