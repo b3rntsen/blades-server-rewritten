@@ -39,6 +39,10 @@ struct SessionResponseInner {
     user_id: String,
     token: String,
     schema: String,
+    /// Retail returns this on anon, login AND link; the client keeps it to
+    /// re-establish a session without asking for the password again. Ours is
+    /// the session token, which is what the client already treats as opaque.
+    login_token: String,
     feature_status: u64,
     linked_accounts_status: u64,
     token_expiration_seconds: u64,
@@ -61,6 +65,7 @@ impl SessionResponseInner {
             user_id: session.secret_user_id.to_string(),
             token: session.generate_token(&session_id),
             schema: "blades_v1".to_string(),
+            login_token: session.generate_token(&session_id),
             feature_status: 7,
             // Session.LinkedAccountsStatus bitmask (client dump.cs:484710). The client's
             // "Do you want to sign in?" AnonymousWarning nag (shown at spend/commit points
@@ -159,6 +164,203 @@ async fn bnet_log_in(
     let session_id = app_state.session_store.store_new_session(session.clone());
     crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
     log::info!("account login: {username} -> user {}", user.id);
+    Ok(web::Json(SessionResponse {
+        session: SessionResponseInner::from_session(session_id, session.as_ref()),
+    }))
+}
+
+/// `POST /…/auth/bnet/link` and `/auth/bnet/link/force` — Settings → "Link with
+/// a Bethesda.net account", pointed at the login the player set on our website.
+///
+/// WHY THIS IS THE RIGHT DOOR
+///
+/// The obvious way to reach a login screen is to un-rig `Flow.StartAuthentication`
+/// so the client shows its own sign-in. That does not work: a cold start fires
+/// `AuthenticateNoUi` -> PreFtue -> Google Play Games, and when GPGS cannot sign
+/// in the client falls straight back to `auth/anon` without ever offering a
+/// username field. Measured on a real Pixel — `silentSignIn.onFailure`, then a
+/// POST to `auth/anon`.
+///
+/// The link flow has no such gate. The player boots anonymously (which already
+/// works with no VPN and no certificate), opens Settings, and types the username
+/// and password from their profile. `CreateLinkAccountToPlatformRequest` takes
+/// `bnetUserName` and `bnetPassword` directly (dump.cs:459421).
+///
+/// THE WIRE FORMAT IS RETAIL'S, read off 19 successful captures:
+///
+///   request  {username, password, selectedUserId, language}
+///   link     {accountLinkResult: {conflict, session?, conflictingUserIds?, loginToken}}
+///   force    {session}
+///
+/// `conflict` is the normal case for us, not an error: the player is signed in
+/// as a throwaway anonymous account and their credential names a DIFFERENT one
+/// — the account with their real character. The client then shows its own
+/// "which account do you want?" prompt and calls `/force`. Answering `conflict:
+/// false` and silently switching would be a lie the client cannot undo.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BnetLinkRequest {
+    username: String,
+    password: String,
+    /// The account the client is currently signed in as — the anonymous one it
+    /// would abandon by linking. Absent or unparseable is treated as "none",
+    /// which reports a conflict; that is the safe direction, because it asks
+    /// rather than assumes.
+    #[serde(default)]
+    selected_user_id: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    language: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountLinkResult {
+    conflict: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session: Option<SessionResponseInner>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conflicting_user_ids: Option<Vec<String>>,
+    login_token: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BnetLinkResponse {
+    account_link_result: AccountLinkResult,
+}
+
+/// Verify the credential and mint a session for the account it names.
+///
+/// Shared by link and link/force so the two cannot drift: the only difference
+/// between them is what the caller does with the result, never who is
+/// authenticated or how.
+async fn resolve_link(
+    app_state: &Arc<ServerGlobal>,
+    username_raw: &str,
+    password: &str,
+) -> Result<(Uuid, Uuid, Arc<Session>), BladeApiError> {
+    let username = crate::credentials::normalise_username(username_raw);
+    let mut conn = app_state.db_pool.get().await.unwrap();
+
+    let found = crate::credentials::find_by_username(&mut conn, &username)
+        .await
+        .unwrap_or(None);
+
+    // Same constant-work failure path as bnet_log_in: an unknown username must
+    // not be faster than a wrong password, or this endpoint enumerates players.
+    let (user_id, hash) = match found {
+        Some(row) => (Some(row.user_id), row.password_hash),
+        None => (
+            None,
+            "pbkdf2$200000$00000000000000000000000000000000$             0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+        ),
+    };
+    let ok = crate::credentials::verify_password(password, &hash);
+    let Some(user_id) = user_id.filter(|_| ok) else {
+        return Err(BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 112));
+    };
+
+    let user: UserDBEntry = {
+        use crate::schema::users::dsl as u;
+        u::users
+            .filter(u::id.eq(user_id))
+            .select(UserDBEntry::as_select())
+            .first(&mut conn)
+            .await
+            .map_err(|_| BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 113))?
+    };
+
+    let session = Arc::new(Session::new(
+        user.id,
+        user.secret_id,
+        app_state.session_store.ttl,
+    ));
+    Ok((user.id, user.secret_id, session))
+}
+
+/// Is the account the client is already signed in as the same one the
+/// credential names?
+///
+/// The comparison is against the SECRET id, not the row id. The secret id is
+/// the only user id the client is ever told (`SessionResponseInner` reports
+/// `secret_user_id`), so comparing `selectedUserId` against the row id would
+/// report a conflict every single time — including when the player is already
+/// signed in as exactly the account they are linking.
+///
+/// Anything unparseable, or absent, counts as "not the same". That direction is
+/// deliberate: it makes the client ASK which account to keep instead of
+/// silently switching the player to another one.
+fn is_same_account(selected: Option<&str>, secret_id: Uuid) -> bool {
+    selected
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .is_some_and(|s| s == secret_id)
+}
+
+#[post("/blades.bgs.services/api/authentication/v1/public/auth/bnet/link")]
+async fn bnet_link(
+    app_state: web::Data<Arc<ServerGlobal>>,
+    body: web::Json<BnetLinkRequest>,
+) -> Result<web::Json<BnetLinkResponse>, BladeApiError> {
+    let body = body.into_inner();
+    let (user_id, secret_id, session) =
+        resolve_link(&app_state, &body.username, &body.password).await?;
+
+    // The client names the account it is currently signed in as by its SECRET
+    // id — that is the only user id it is ever told (see `SessionResponseInner`,
+    // which reports `secret_user_id`). Comparing it against the row id would
+    // report a conflict every single time.
+    let same_account = is_same_account(body.selected_user_id.as_deref(), secret_id);
+
+    if !same_account {
+        // Do NOT mint a session here. The client is about to ask the player
+        // which account to keep; handing it a live session for the other one
+        // before they answer would switch them without consent.
+        log::info!(
+            "account link: conflict — credential names {secret_id}, client is signed in as {:?}",
+            body.selected_user_id
+        );
+        return Ok(web::Json(BnetLinkResponse {
+            account_link_result: AccountLinkResult {
+                conflict: true,
+                session: None,
+                conflicting_user_ids: Some(vec![secret_id.to_string()]),
+                login_token: String::new(),
+            },
+        }));
+    }
+
+    let session_id = app_state.session_store.store_new_session(session.clone());
+    crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
+    let inner = SessionResponseInner::from_session(session_id, session.as_ref());
+    let login_token = inner.login_token.clone();
+    log::info!("account link: user {user_id} linked (no conflict)");
+    Ok(web::Json(BnetLinkResponse {
+        account_link_result: AccountLinkResult {
+            conflict: false,
+            session: Some(inner),
+            conflicting_user_ids: None,
+            login_token,
+        },
+    }))
+}
+
+/// `POST /…/auth/bnet/link/force` — the player answered the conflict prompt and
+/// chose the linked account. Same credential check; the anonymous account they
+/// were using is simply left behind (never deleted — it may hold a character
+/// they later want, and deleting on a menu tap is not recoverable).
+#[post("/blades.bgs.services/api/authentication/v1/public/auth/bnet/link/force")]
+async fn bnet_link_force(
+    app_state: web::Data<Arc<ServerGlobal>>,
+    body: web::Json<BnetLinkRequest>,
+) -> Result<web::Json<SessionResponse>, BladeApiError> {
+    let body = body.into_inner();
+    let (user_id, _secret_id, session) =
+        resolve_link(&app_state, &body.username, &body.password).await?;
+    let session_id = app_state.session_store.store_new_session(session.clone());
+    crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
+    log::info!("account link (forced): now signed in as user {user_id}");
     Ok(web::Json(SessionResponse {
         session: SessionResponseInner::from_session(session_id, session.as_ref()),
     }))
@@ -400,5 +602,54 @@ async fn anon_log_in(
         return Ok(web::Json(SessionResponse {
             session: SessionResponseInner::from_session(session_id, session.as_ref()),
         }));
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    /// The conflict decision is the whole of the link flow's judgement, and it
+    /// hinges on comparing the right id. Getting this wrong is invisible in a
+    /// build: every link would simply report a conflict, the client would show
+    /// its "which account?" prompt every time, and it would look like the
+    /// player's own doing rather than a bug.
+    #[test]
+    fn compares_against_the_secret_id_the_client_was_given() {
+        let secret = Uuid::from_u128(0xAAAA);
+        let row_id = Uuid::from_u128(0xBBBB);
+        assert!(is_same_account(Some(&secret.to_string()), secret));
+        assert!(
+            !is_same_account(Some(&row_id.to_string()), secret),
+            "the row id is never what the client holds"
+        );
+    }
+
+    #[test]
+    fn anything_unknown_reports_a_conflict_rather_than_assuming() {
+        let secret = Uuid::from_u128(0xAAAA);
+        for selected in [None, Some(""), Some("not-a-uuid"), Some("0")] {
+            assert!(
+                !is_same_account(selected, secret),
+                "{selected:?} must not be treated as a match"
+            );
+        }
+    }
+
+    #[test]
+    fn a_different_account_is_a_conflict() {
+        // The normal case for us: signed in anonymously, linking to the account
+        // that actually holds their character.
+        let anon = Uuid::from_u128(1);
+        let real = Uuid::from_u128(2);
+        assert!(!is_same_account(Some(&anon.to_string()), real));
+    }
+
+    /// Uuid formatting is case-insensitive on parse; a client that upper-cases
+    /// its own id must not be told it is a different account.
+    #[test]
+    fn case_does_not_change_the_answer() {
+        let secret = Uuid::from_u128(0xABCDEF);
+        assert!(is_same_account(Some(&secret.to_string().to_uppercase()), secret));
     }
 }
