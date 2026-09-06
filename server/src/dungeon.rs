@@ -582,6 +582,8 @@ pub async fn enter_quest_dungeon(
                 if quest.dungeon_state.is_some() {
                     return Err(BladeApiError::new(StatusCode::CONFLICT, 20003, 1));
                 }
+
+
                 let status = DungeonStatus {
                     dungeon_settings_ids: vec![dungeon_settings_id],
                     revive_count: 0,
@@ -591,6 +593,7 @@ pub async fn enter_quest_dungeon(
                     seed: 54321,
                     level: 1,
                     version: 1, //TODO: figure out where this version come from.
+                    collected_chests: HashSet::default(),
                 };
 
                 {
@@ -1041,6 +1044,7 @@ async fn handle_event_dungeon_entry(
                 revive_count: 0,
                 algorithm_version: 1,
                 current_state: body.current_state,
+                collected_chests: HashSet::default(),
                 enemy_status: HashMap::default(),
                 seed: rand::random::<u32>() as i64,
                 level: enemy_level_i64 as u64,

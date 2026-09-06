@@ -1,7 +1,6 @@
-use std::{collections::HashMap, fmt};
-
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
+use std::{collections::{HashMap, HashSet}, fmt};
 
 use crate::user_data::{B64EncodedData, Items};
 
@@ -113,6 +112,12 @@ impl DungeonGeneratedData {
             .and_then(|spawner_data| spawner_data.get(index.spawner_index))
             .and_then(|enemy_data| enemy_data.get(index.enemy_index))
     }
+
+    pub fn get_chest(&self, spawn_group_id: &Uuid, spawn_group_index: usize) -> Option<&ChestGeneratedData> {
+        self.chest_generated_data
+            .get(spawn_group_id)
+            .and_then(|chests| chests.get(spawn_group_index))
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -145,6 +150,19 @@ pub struct DungeonStatus {
     pub version: i64,
     #[serde(default)]
     pub enemy_status: HashMap<EnemyIndex, EnemyStatus>,
+    /// Chests already looted in this run, so a replayed or double-tapped
+    /// `chest_collected` cannot mint twice.
+    ///
+    /// `default` is load-bearing: retail NEVER sends this key -- 0 of 30,771
+    /// captured dungeon responses carry it, against 30,158 that carry
+    /// `dungeonStatus` -- and every `dungeon_state` row already on the server was
+    /// written without it. Without a default, the first read of an existing row
+    /// fails to deserialize and the player cannot resume their dungeon.
+    ///
+    /// Skipped when empty for the same reason: sending a key retail never sent is
+    /// how we have broken the client before.
+    #[serde(default, skip_serializing_if = "HashSet::is_empty")]
+    pub collected_chests: HashSet<Uuid>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -312,5 +330,41 @@ mod report61_tests {
         let back = serde_json::to_value(&r).unwrap();
         assert!(back.get("lootTableLoot").is_some(), "real loot must survive");
         assert_eq!(r.merged_loot_table().stackable_items.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod collected_chests_compat {
+    use super::*;
+
+    /// A DungeonStatus written before `collected_chests` existed must still load.
+    ///
+    /// Retail never sends the key (0 of 30,771 captured dungeon responses, against
+    /// 30,158 carrying `dungeonStatus`), and every `dungeon_state` row already
+    /// stored was written without it. A non-defaulted field here means the first
+    /// read of an existing row fails and the player cannot resume their dungeon.
+    #[test]
+    fn a_status_without_collected_chests_still_deserializes() {
+        let raw = r#"{"dungeonSettingsIds":[],"reviveCount":0,"algorithmVersion":1,
+            "currentState":{"b64":"AAAA"},"enemyStatus":{},"seed":0,"level":1,"version":1}"#;
+        let s: DungeonStatus =
+            serde_json::from_str(raw).expect("a pre-existing dungeon status must load");
+        assert!(s.collected_chests.is_empty());
+    }
+
+    /// And we do not hand the client a key retail never sent.
+    #[test]
+    fn an_empty_collected_set_is_not_serialized() {
+        let raw = r#"{"dungeonSettingsIds":[],"reviveCount":0,"algorithmVersion":1,
+            "currentState":{"b64":"AAAA"},"enemyStatus":{},"seed":0,"level":1,"version":1}"#;
+        let mut s: DungeonStatus = serde_json::from_str(raw).unwrap();
+        let out = serde_json::to_value(&s).unwrap();
+        assert!(out.get("collectedChests").is_none(), "empty set must be omitted: {out:?}");
+
+        // control: once something IS collected the field appears, so the assertion
+        // above is about emptiness and not about the field never existing.
+        s.collected_chests.insert(Uuid::nil());
+        let out = serde_json::to_value(&s).unwrap();
+        assert!(out.get("collectedChests").is_some(), "a non-empty set must be sent");
     }
 }
