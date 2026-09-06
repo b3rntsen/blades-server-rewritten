@@ -12,6 +12,18 @@ pub struct ArenaConfig {
     /// Host advertised to the client in `MatchmakingSucceeded.address` — the
     /// arena UDP endpoint the client will dial.
     pub advertise_host: String,
+    /// Host advertised to clients that did NOT arrive through the WireGuard
+    /// tunnel — the VPN-free build, reaching us over the public internet.
+    ///
+    /// `None` means "there is no public path", and everyone is told the tunnel
+    /// address exactly as before. That is the safe default: a deployment that
+    /// forgets to set this keeps working for VPN players instead of quietly
+    /// publishing an address it does not serve.
+    ///
+    /// Kept SEPARATE rather than replacing `advertise_host`, because pointing
+    /// tunnel clients at a public address would route their arena traffic
+    /// outside the tunnel — and that traffic is the capture.
+    pub public_advertise_host: Option<String>,
     /// UDP port advertised to the client.
     pub udp_port: u16,
     /// Cap on simultaneous live matches (low-end hardware bound).
@@ -112,6 +124,10 @@ impl ArenaConfig {
         ArenaConfig {
             advertise_host: env::var("ARENA_ADVERTISE_HOST")
                 .unwrap_or_else(|_| "127.0.0.1".to_string()),
+            public_advertise_host: env::var("ARENA_ADVERTISE_HOST_PUBLIC")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty()),
             udp_port: parse("ARENA_UDP_PORT", 7777),
             max_concurrent_matches: parse("ARENA_MAX_MATCHES", 16),
             max_queued_players: parse("ARENA_MAX_QUEUED", 64),
