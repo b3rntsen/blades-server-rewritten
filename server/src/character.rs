@@ -210,6 +210,41 @@ pub async fn ensure_starter_character(
     Ok(true)
 }
 
+use blades_lib::user_data::WalletEntry;
+
+/// Gems a brand-new character starts with.
+///
+/// Exactly the cost of one appearance change (`appearance_change_cost.json`,
+/// `characterCustomizationCost.amount`, taken from the APK's `UpdateCostData`).
+///
+/// Retail never needed this: the player built their character during creation,
+/// for free. We hand out a preset instead, so a new player who wants a different
+/// face has to pay the town NPC's 50 gems and starts with none. This buys back
+/// the one change retail gave away, and nothing more.
+///
+/// NOT derived from retail's own starting wallet -- the capture corpus contains
+/// wallet DELTAS rather than a creation snapshot, so there is no observation of
+/// what a brand-new retail character held. This is the customization cost, which
+/// is authoritative, applied for a stated reason.
+const STARTER_GEMS: u64 = 50;
+
+/// The gem currency, as used by `appearance_change_cost.json` and the shop.
+const GEM_CURRENCY_ID: &str = "470c8f58-a8dd-4c07-8c92-843b785e1139";
+
+/// The wallet a new character is created with.
+fn starter_wallet() -> CompleteWallet {
+    let mut wallet = CompleteWallet::default();
+    match Uuid::from_str(GEM_CURRENCY_ID) {
+        Ok(gem) => {
+            wallet.0.insert(gem, WalletEntry { balance: STARTER_GEMS });
+        }
+        // A malformed constant must not stop a player being created; they simply
+        // start with an empty wallet, which is where they were before.
+        Err(e) => log::error!("[character] GEM_CURRENCY_ID is not a uuid: {e}"),
+    }
+    wallet
+}
+
 fn build_new_character(
     owner: Uuid,
     name: String,
@@ -318,7 +353,7 @@ fn build_new_character(
         user_id: owner,
         character: JsonDbWrapper(new_character),
         data: JsonDbWrapper(new_data),
-        wallet: JsonDbWrapper(CompleteWallet::default()),
+        wallet: JsonDbWrapper(starter_wallet()),
         inventory: JsonDbWrapper(inventory.clone()),
         // Fresh character → no captured town; get_town serves default_town.json.
         town: None,
@@ -422,5 +457,56 @@ mod starter_tests {
             "a starter character with no equipped items cannot fight in the arena"
         );
         assert!(entry.town.is_none(), "fresh character serves the default town");
+    }
+}
+
+
+#[cfg(test)]
+mod starter_gems {
+    use super::*;
+
+    /// The grant must equal the ACTUAL appearance-change cost, read from the
+    /// shipped data rather than repeated as a literal.
+    ///
+    /// The whole justification for the grant is "exactly one customization". If
+    /// someone retunes `appearance_change_cost.json` and this stays at 50, the
+    /// grant silently stops meaning that -- either stranding new players again or
+    /// handing out more than intended. This is the test that notices.
+    #[test]
+    fn the_grant_is_exactly_one_appearance_change() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/appearance_change_cost.json");
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        let doc: serde_json::Value = serde_json::from_str(&raw).expect("valid cost file");
+
+        let cost = doc["characterCustomizationCost"]["amount"]
+            .as_u64()
+            .expect("the cost file must state an amount");
+        let currency = doc["characterCustomizationCost"]["currencyId"]
+            .as_str()
+            .expect("the cost file must state a currency");
+
+        assert_eq!(
+            STARTER_GEMS, cost,
+            "a new character is given {STARTER_GEMS} but one appearance change costs {cost}"
+        );
+        assert_eq!(
+            GEM_CURRENCY_ID, currency,
+            "we grant a different currency than the one the change is priced in"
+        );
+    }
+
+    /// And the wallet actually carries it.
+    #[test]
+    fn a_new_character_can_afford_one_change() {
+        let wallet = starter_wallet();
+        let gem = Uuid::from_str(GEM_CURRENCY_ID).unwrap();
+        let balance = wallet.0.get(&gem).map(|e| e.balance).unwrap_or(0);
+        assert_eq!(balance, STARTER_GEMS, "the starter wallet must hold the gems");
+
+        // Control: nothing else is handed out. A starter wallet quietly seeded
+        // with gold would be a much bigger change than the one asked for.
+        assert_eq!(wallet.0.len(), 1, "only gems, got {:?}", wallet.0.keys().collect::<Vec<_>>());
     }
 }
