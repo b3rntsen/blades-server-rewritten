@@ -1041,6 +1041,23 @@ pub async fn start_arena_season(
                 BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 53)
             })?;
 
+    // ONE TRANSACTION for the whole apply: every character's reset plus the
+    // status flip. Without it, a failure on character 4,000 of 9,000 left the
+    // first 4,000 at zero cups, the rest untouched, and the season still
+    // 'scheduled' — half a reset ladder with nothing live. A re-run does resume
+    // (roll_character_into reports reset:false for already-current characters),
+    // but the intermediate state is an inconsistency players can see.
+    //
+    // Rows are updated one at a time INSIDE the transaction rather than
+    // buffered and applied after: the character column averages ~96 kB, so
+    // holding 9,000 of them would be most of a gigabyte.
+    //
+    // The dry run is wrapped too. It writes nothing, so a read-only transaction
+    // costs nothing, and it keeps ONE code path instead of two copies of this
+    // loop — which is how the two would drift apart.
+    let resp = conn
+        .transaction(|mut conn| {
+            async move {
     for row in rows {
         let mut ch: CompleteCharacter = match serde_json::from_value(row.character.clone()) {
             Ok(c) => c,
@@ -1082,6 +1099,12 @@ pub async fn start_arena_season(
         );
     }
 
+                Ok::<_, BladeApiError>(resp)
+            }
+            .scope_boxed()
+        })
+        .await?;
+
     Ok(Json(resp))
 }
 
@@ -1104,6 +1127,29 @@ pub async fn end_arena_season(
         .first(&mut conn)
         .await
         .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 24))?;
+
+    // ONLY AN ACTIVE SEASON CAN BE ENDED. `start_arena_season` guards its own
+    // status; this had no guard at all, so a SCHEDULED season could be ended:
+    // with season 1 live and season 2 merely scheduled, ending season 2 froze
+    // standings against it, recorded its awards, rolled every character and
+    // zeroed everyone's cups IN THE MIDDLE of season 1 — and burned the
+    // scheduled season permanently. Ending an already-ended one would re-freeze
+    // and re-award over a closed ladder.
+    //
+    // The console gates its buttons too, but a gate that lives only in a web
+    // route is one refactor away from being bypassed, and this operation cannot
+    // be undone.
+    if season.status != "active" {
+        warn!(
+            "season end refused: {season_id} is '{}', not 'active'",
+            season.status
+        );
+        return Err(BladeApiError::new(
+            StatusCode::CONFLICT,
+            IMPORT_SERVICE_ID,
+            24,
+        ));
+    }
 
     let standings = season_store::freeze_standings(&mut conn, season_id)
         .await

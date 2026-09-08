@@ -486,8 +486,22 @@ pub fn message_length_ok(text: &str) -> bool {
 
 /// Are a guild's text fields within `GuildData`'s validation bounds?
 pub fn guild_text_ok(name: &str, short_description: &str, long_description: &str) -> bool {
-    let name_len = name.chars().count();
-    let short_len = short_description.chars().count();
+    // MEASURE THE TRIMMED TEXT for the fields that have a MINIMUM.
+    //
+    // This used to count raw characters, so "   " passed: three chars, and
+    // NAME_MIN_LEN is 3. The rename handler happened to trim before calling,
+    // but guild CREATION (guild.rs) passed `body.name` straight through — so a
+    // guild could be created named entirely of spaces, in a file whose own
+    // docblock records four prod guilds already carrying an EMPTY name.
+    //
+    // A validator must not depend on every caller remembering to trim. The test
+    // that claimed to pin this asserted on `"   ".trim()`, which is `""`, so it
+    // duplicated the empty case and never exercised whitespace at all.
+    //
+    // long_description has only a MAXIMUM, so it is measured raw — the stricter
+    // reading, and trimming there could only ever admit more.
+    let name_len = name.trim().chars().count();
+    let short_len = short_description.trim().chars().count();
     let long_len = long_description.chars().count();
     (NAME_MIN_LEN..=NAME_MAX_LEN).contains(&name_len)
         && (SHORT_DESCRIPTION_MIN_LEN..=SHORT_DESCRIPTION_MAX_LEN).contains(&short_len)
@@ -1226,7 +1240,26 @@ mod tests {
     #[test]
     fn a_guild_cannot_be_named_nothing() {
         assert!(!guild_text_ok("", "a short one", ""), "empty name accepted");
-        assert!(!guild_text_ok("   ".trim(), "a short one", ""), "blank name accepted");
+        // NOT `"   ".trim()`. That is `""`, so the assertion duplicated the line
+        // above and tested nothing — while the docblock claimed it pinned the
+        // whitespace case. Pass the spaces through as the handler receives them.
+        assert!(
+            !guild_text_ok("   ", "a short one", ""),
+            "all-whitespace name accepted"
+        );
+        assert!(
+            !guild_text_ok("\t \n", "a short one", ""),
+            "tabs/newlines name accepted"
+        );
+        // And pin the sequence the handler actually performs (guild.rs: trim,
+        // then validate), so a rename cannot smuggle a blank name past either
+        // half on its own.
+        for raw in ["   ", "\t", " \n ", ""] {
+            assert!(
+                !guild_text_ok(raw.trim(), "a short one", ""),
+                "trim-then-validate accepted {raw:?}"
+            );
+        }
         assert!(guild_text_ok("Bladeworks", "a short one", ""), "a real name was rejected");
     }
 }

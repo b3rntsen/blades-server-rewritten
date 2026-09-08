@@ -434,6 +434,21 @@ async fn handle_event_dungeon_update(
                 &mut inventory_modification_tracker,
             );
 
+            // PUT THE WALLET BACK. `std::mem::take` above emptied
+            // `character_data.wallet.0` so it could be handed over as
+            // `&mut wallet`, and `CharacterDbEntryCharacterWalletInventory`
+            // derives `AsChangeset` INCLUDING the wallet column — so the
+            // `diesel::update(...).set(character_data)` at the end of this
+            // handler persists whatever is left in it. Without this line every
+            // event-dungeon update wrote an EMPTY wallet: one enemy killed in
+            // an event dungeon and the player's gold, gems and everything else
+            // were gone, and the response reported the empty wallet too.
+            //
+            // The quest path has always had this (the identical line after its
+            // own process_dungeon_actions). This one lost it in b9d76e2
+            // ("collect chests, rebased onto main"), and nothing caught it
+            // because no test drives the event path through to the DB write.
+            character_data.wallet.0 = wallet;
 
             let result = DungeonUpdateResponse {
                 dungeon_status: dungeon_state.dungeon_status.clone(),
@@ -600,9 +615,27 @@ fn process_dungeon_actions(
             }
 
 
-            // Chests are rolled server-side at generation, so the tier comes from
-            // `generated_data`; the request's own tier is only a fallback for a chest
-            // we have no record of generating.
+            // EVERY CHEST IS TIER 1, and the request's tier is never consulted.
+            //
+            // The comment here used to say the request's tier was "a fallback for
+            // a chest we have no record of generating". It was not, in two ways.
+            // `generate_for_dungeon` hardcodes `vec![ChestGeneratedData { tier: 1 }]`
+            // (blades_lib/src/util/dungeon.rs) and nothing else ever writes the
+            // field, so the fallback was unreachable — and a chest we have no
+            // record of `continue`s below before the tier is read anyway, so it
+            // was doubly unreachable. The handler's own test fixture posts
+            // `"tier":3`, which is why this looked like it worked.
+            //
+            // It must STAY unreachable: taking the tier from the request would be
+            // client-authoritative loot — anyone could post `"tier":5`. The real
+            // tier is not knowable here either: `game_data`'s spawn info is
+            // `chest: HashMap<Uuid, EmptyStruct>` and carries no tier, so it has
+            // not been mined yet.
+            //
+            // So a player who sees a tier-3 chest in the world still receives a
+            // tier-1 one. That is a reward-fidelity gap, not an exploit, and it is
+            // fixed by mining the per-chest tier into game_data and generating it
+            // server-side — not by trusting this request.
             DungeonUpdateAction::ChestCollected(chest) => {
                 let Some(chest_data) =
                     generated_data.get_chest(&chest.spawn_group_id, chest.spawn_group_index)
@@ -618,6 +651,27 @@ fn process_dungeon_actions(
                 // Collecting the same chest twice must not mint two chests. The
                 // collected set is persisted with the dungeon state, so this holds
                 // across requests as well as within one batch.
+                //
+                // The key is the spawn GROUP, not (group, index) — so one
+                // collection marks the whole group spent. That is correct only
+                // because `generate_for_dungeon` emits exactly one
+                // `ChestGeneratedData` per group today, and `game_data`'s
+                // `chest: HashMap<Uuid, EmptyStruct>` carries no quantity. If a
+                // group ever holds two chests, this would silently cap it at one.
+                //
+                // The key is deliberately NOT widened to a tuple: `collected_chests`
+                // is persisted inside the dungeon state as a set of UUIDs, so
+                // changing its element type would fail to deserialize every
+                // in-flight dungeon. Instead, make the assumption LOUD — if an
+                // index other than 0 ever arrives, the constraint above has been
+                // broken and this needs the wider key plus a migration.
+                if chest.spawn_group_index != 0 {
+                    log::warn!(
+                        "dungeon_update: chest spawn_group_index {} != 0 for group {:?} —                          collected_chests keys on the group alone, so this group is now                          spent after one pickup. Widen the key (and migrate the                          persisted set) before shipping multi-chest groups.",
+                        chest.spawn_group_index,
+                        chest.spawn_group_id
+                    );
+                }
                 if !dungeon_state
                     .dungeon_status
                     .collected_chests
@@ -626,11 +680,7 @@ fn process_dungeon_actions(
                     continue;
                 }
 
-                let tier = if chest_data.tier > 0 {
-                    chest_data.tier as u64
-                } else {
-                    chest.tier as u64
-                };
+                let tier = chest_data.tier;
                 let chest_id = character_data
                     .inventory
                     .0
@@ -686,6 +736,61 @@ fn process_dungeon_actions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every `mem::take` of the wallet must be paired with a write-back before
+    /// the handler's DB update.
+    ///
+    /// This is a source-level guard on purpose. The bug it exists to stop was a
+    /// DELETED line: the event path took the wallet into a local, credited the
+    /// local, and then let `diesel::update(...).set(character_data)` persist the
+    /// emptied original — one enemy killed in an event dungeon wiped the
+    /// player's gold and gems. Nothing caught it, because driving either path to
+    /// its DB write needs a live Postgres, so both paths' `process_dungeon_actions`
+    /// unit tests passed happily while the persisted wallet was empty.
+    ///
+    /// A behavioural test cannot see this: the mistake is in the CALLER, not in
+    /// `process_dungeon_actions`, which behaves identically either way. So pin
+    /// the pairing in the text, the same way `BIND_DEVICE_SQL`'s ownership guard
+    /// is pinned in admin.rs. Rewriting the handler to return the wallet instead
+    /// of mutating it in place would make this test unnecessary — that is the
+    /// better fix and this guard should be deleted along with the pattern.
+    #[test]
+    fn every_wallet_take_is_written_back_before_the_db_update() {
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/dungeon_update.rs"),
+        )
+        .expect("read own source");
+
+        const TAKE: &str = "std::mem::take(&mut character_data.wallet.0)";
+        const BACK: &str = "character_data.wallet.0 = wallet;";
+        const WRITE: &str = "diesel::update(characters::table)";
+
+        let takes: Vec<usize> = src.match_indices(TAKE).map(|(i, _)| i).collect();
+        assert!(
+            !takes.is_empty(),
+            "the take/write-back pattern is gone — if the handler now returns the \
+             wallet instead of mutating it in place, delete this test with it"
+        );
+
+        for start in takes {
+            let line = src[..start].lines().count();
+            let rest = &src[start + TAKE.len()..];
+            let back = rest.find(BACK);
+            let write = rest.find(WRITE);
+            match (back, write) {
+                (Some(b), Some(w)) => assert!(
+                    b < w,
+                    "wallet taken at line {line} but written back only AFTER the \
+                     DB update — the update persists the emptied wallet"
+                ),
+                (Some(_), None) => {}
+                (None, _) => panic!(
+                    "wallet taken at line {line} and never written back to \
+                     character_data — AsChangeset will persist an EMPTY wallet"
+                ),
+            }
+        }
+    }
 
     #[test]
     fn mixed_batch_with_combat_completed_deserializes() {

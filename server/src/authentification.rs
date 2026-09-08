@@ -135,8 +135,7 @@ async fn bnet_log_in(
             None,
             // A well-formed hash of a value nobody can supply, so the failure
             // path does the same PBKDF2 work as the success path.
-            "pbkdf2$200000$00000000000000000000000000000000$             0000000000000000000000000000000000000000000000000000000000000000"
-                .to_string(),
+            crate::credentials::ENUMERATION_DUMMY_HASH.to_string(),
         ),
     };
     let ok = crate::credentials::verify_password(&body.password, &hash);
@@ -253,8 +252,7 @@ async fn resolve_link(
         Some(row) => (Some(row.user_id), row.password_hash),
         None => (
             None,
-            "pbkdf2$200000$00000000000000000000000000000000$             0000000000000000000000000000000000000000000000000000000000000000"
-                .to_string(),
+            crate::credentials::ENUMERATION_DUMMY_HASH.to_string(),
         ),
     };
     let ok = crate::credentials::verify_password(password, &hash);
@@ -337,6 +335,19 @@ async fn bnet_link(
         // harmless-looking, but it is the value the client carries into the
         // choice it is about to make, and an empty one is not something retail
         // ever hands it.
+        // This token is DELIBERATELY NOT RESOLVABLE, and that needs saying
+        // because `SessionResponseInner::login_token` is documented as something
+        // "the client keeps to re-establish a session without asking for the
+        // password again". `pending_id` is a fresh uuid that is never handed to
+        // `store_new_session` or `persist_session`, so the store has never heard
+        // of it: a client that presents this instead of calling `/force` will be
+        // rejected, and the player ends up exactly where the earlier
+        // empty-string version left them.
+        //
+        // It is filled in only because the field is non-optional in retail's
+        // response shape. The ONLY valid continuation from a conflict is
+        // `/auth/bnet/link/force` with the chosen user id — which is the whole
+        // point of answering `conflict: true` with `session: None`.
         let pending = Session::new(user_id, secret_id, app_state.session_store.ttl);
         let pending_id = Uuid::new_v4();
         let login_token = pending.generate_token(&pending_id);
@@ -594,9 +605,31 @@ async fn anon_log_in(
         if info.0.platform != "gp" {
             return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 3, 3)); //INVALID_REQUEST_DEVICE_ID
         }
-        let Some(this_device) = info.0.device_id.clone() else {
-            return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 3, 3)); //INVALID_REQUEST_DEVICE_ID
-        };
+        // A MISSING device id must NOT be fatal. This was
+        //   let Some(this_device) = info.0.device_id.clone() else { return 400 };
+        // and it locked every NEW player out of the standard VPN build, which
+        // sends `deviceId: null` on purpose (identity comes from the WireGuard
+        // peer IP the mitm stamps into X-Newblades-Device-Ip — see the note at
+        // the top of this function). On a FIRST login every earlier path falls
+        // through: `device_bindings` has a row but `user_id` is NULL until
+        // somebody claims it, and `info.user_id` is None because the client has
+        // no secret yet. So control reached here and answered
+        // INVALID_REQUEST_DEVICE_ID — the player could never get an account.
+        // Creating the user and merely skipping `gp_deviceids` is what this
+        // replaced, and it was right.
+        //
+        // NOTE, because the obvious "improvement" is worse: the recognition
+        // query below deliberately uses the REAL device id, not
+        // `effective_device_id` (device id OR WG peer IP). Keying `gp_deviceids`
+        // on a tunnel address would let a REASSIGNED peer IP hand a new player
+        // somebody else's account — the same class of mistake as the claim-link
+        // breach documented in web/lib/arena-claim.ts, where 10 of 70 bindings
+        // ended up cross-user. The VPN build's identity already has a home in
+        // `device_bindings`. So a VPN first login mints a fresh user here and the
+        // player binds it once via the claim link; the duplicate-account problem
+        // (#105) therefore remains for UNCLAIMED VPN devices, which is a real
+        // gap, but the answer to it is claiming, not widening this lookup.
+        let this_device = info.0.device_id.clone();
 
         // BEFORE minting anything: has this device been here before?
         //
@@ -614,7 +647,8 @@ async fn anon_log_in(
         // the same trust already placed in `device_bindings` above; this adds no
         // new authority, it just uses the record we were already keeping. A
         // signed-in account is unaffected — that path returns earlier.
-        {
+        // Only meaningful when the client gave us a real device id; see above.
+        if let Some(ref this_device) = this_device {
             let mut conn = app_state.db_pool.get().await.unwrap();
             let existing: Vec<UserDBEntry> = users
                 .select(UserDBEntry::as_select())
@@ -671,7 +705,12 @@ async fn anon_log_in(
 
         // create a new user
         let mut new_user = UserAccount::new_random();
-        new_user.gp_deviceids.insert(this_device);
+        // Nothing to record for a client that sends `deviceId: null` — recording
+        // the WG peer IP here would make a reassigned address recognise the
+        // wrong account on a later login.
+        if let Some(dev) = this_device {
+            new_user.gp_deviceids.insert(dev);
+        }
         let new_user_id = Uuid::new_v4();
         let new_user_secret_id = Uuid::new_v4();
         let mut conn = app_state.db_pool.get().await.unwrap();

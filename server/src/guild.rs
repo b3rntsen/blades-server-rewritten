@@ -985,12 +985,16 @@ pub async fn create_guild(
     if !guild_text_ok(&body.name, &body.short_description, &body.long_description) {
         return Err(invalid_text());
     }
+    // Store the trimmed name, as the rename path does — otherwise
+    // "  Bladeworks  " validates and is then persisted with its padding, and the
+    // two paths disagree about what a guild is called.
+    let body_name = body.name.trim().to_string();
 
     let gid = guild_id_from_uuid(Uuid::new_v4());
     let ts = now_secs();
     let row = GuildRow {
         id: gid.clone(),
-        name: body.name,
+        name: body_name,
         // A 4-digit tag, as retail (e.g. "7988"). Derived from a fresh uuid rather
         // than from the clock: the previous `ts % 10000` handed the same tag to
         // every guild created in the same second.
