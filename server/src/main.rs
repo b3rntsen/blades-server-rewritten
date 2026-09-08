@@ -61,6 +61,7 @@ mod repair;
 mod salvage;
 pub mod schema;
 mod shop;
+mod social;
 mod shop_gen;
 mod session;
 mod static_loader;
@@ -599,6 +600,7 @@ async fn main() -> Result<()> {
                     .service(guild::donate_exchange)
                     .service(guild::redeem_exchange)
                     .service(guild::create_exchange)
+                    .service(social::get_social_characters)
                     .service(guild::create_guild)
                     // `{id}/join` and `{id}/apply` before the bare `{id}` GET.
                     .service(guild::join_guild)
