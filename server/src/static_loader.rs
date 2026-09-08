@@ -91,6 +91,12 @@ pub fn load(dir: &Path) -> StaticData {
     // A missing file leaves the list empty, i.e. nothing is free — the safe
     // direction. Only offers retail itself gave away belong here.
     let global_shop_free: FreeProductIds = read_json(&dir.join("global_shop_free.json"));
+    // A missing file leaves the map empty, i.e. no fallback — purchases keep
+    // 404ing exactly as they did before this existed. The safe direction.
+    let global_shop_offer_contents = read_json::<blades_lib::static_data::OfferContentsFile>(
+        &dir.join("global_shop_offer_contents.json"),
+    )
+    .offers;
     let challenge_templates: Vec<ChallengeTemplate> = read_json(&dir.join("challenges.json"));
     let daily_rewards: Vec<DailyRewardDef> = read_json(&dir.join("daily_rewards.json"));
     let chest_loots: Vec<RewardGrant> = read_json(&dir.join("chest_loots.json"));
@@ -132,6 +138,7 @@ pub fn load(dir: &Path) -> StaticData {
         iap,
         global_shop_grants,
         global_shop_free,
+        global_shop_offer_contents,
         challenge_templates,
         daily_rewards,
         chest_loots,

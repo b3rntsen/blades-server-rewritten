@@ -1034,6 +1034,23 @@ pub struct StaticData {
     /// `expectedPrices` (the base price list lives in the client bundles), so an
     /// unknown product can be priced but not fulfilled.
     pub global_shop_grants: HashMap<Uuid, RewardGrant>,
+    /// APK-derived contents for offers the purchase captures never covered.
+    ///
+    /// `global_shop_grants` above knows 159 of the storefront's 547 offers,
+    /// because an offer's contents only ever appeared in a purchase RESPONSE —
+    /// so we know exactly the offers somebody happened to buy while we were
+    /// capturing. The other 388 `404`d on purchase.
+    ///
+    /// This is the fallback, joined from the APK
+    /// (`GlobalShopProductsCatalog._itemBundleGenerationDataId` ->
+    /// `ItemBundleGenerationDataList`) and identity-checked against the captures
+    /// on the 146 offers where both exist: contents and `townXP` agreed 146/146.
+    ///
+    /// It carries TEMPLATE + QUANTITY only, because retail rolled per-purchase
+    /// stats (`durability`, `grade`, `arcaneTier`, `properties`) at purchase
+    /// time. That is why each offer carries a [`OfferContentsKind`]: only
+    /// `Literal` can be granted from this file without inventing item stats.
+    pub global_shop_offer_contents: HashMap<Uuid, OfferContents>,
     /// The global-shop offers retail gave away for nothing — the store's free
     /// daily item. Mined from captured purchases retail answered 200 to with an
     /// all-zero `expectedPrices` (`scripts/build-shop-static.py`).
@@ -1083,4 +1100,59 @@ pub struct StaticData {
     /// objective ids, wire version, and the five milestone rewards each instance
     /// pays. Without this an event quest can be advertised but not paid.
     pub event_quests: EventQuestsData,
+}
+
+/// How an offer's APK-derived contents may be granted.
+///
+/// The distinction is the whole reason this file is usable at all: 398 of the
+/// offers contain gear whose stats retail rolled at purchase time, and writing
+/// those down would ship invented stats that look authoritative.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OfferContentsKind {
+    /// Currencies and stackables only — nothing to roll, so it can be granted
+    /// verbatim. 92 of the 547 storefront offers.
+    Literal,
+    /// Contains gear or jewellery. The template is known; the instance is not.
+    NeedsRoll,
+    /// Contents come from a chest, which the server rolls (`chest_loots.json`).
+    ChestRoll,
+    /// Contains a template the extractor could not place in a bucket.
+    Unclassified,
+    /// A `kind` this build does not know. Deserialized rather than rejected so a
+    /// newer data file cannot stop the server booting — and treated as
+    /// ungrantable, which is the safe direction.
+    #[serde(other)]
+    Unknown,
+}
+
+/// One entry of an offer's contents.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfferContentEntry {
+    pub item_template_id: Uuid,
+    pub quantity: u64,
+    /// Which wire bucket this template lands in — `currencies`,
+    /// `stackableItems`, `items`, or `unknown`. Determined by the extractor from
+    /// the captured purchase responses (the bucket a template actually landed
+    /// in IS its type) plus `item_durability.json` for gear never seen sold.
+    pub bucket: String,
+}
+
+/// An offer's APK-derived contents.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfferContents {
+    pub kind: OfferContentsKind,
+    #[serde(default)]
+    pub contents: Vec<OfferContentEntry>,
+    #[serde(default)]
+    pub town_xp: u64,
+}
+
+/// The shape of `global_shop_offer_contents.json`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OfferContentsFile {
+    #[serde(default)]
+    pub offers: HashMap<Uuid, OfferContents>,
 }

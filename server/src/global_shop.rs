@@ -17,6 +17,7 @@ use actix_web::{
 };
 use blades_lib::economy::{Price, RewardGrant, apply_reward};
 use blades_lib::features::global_shop::{self, PurchaseEntry, PurchaseError};
+use blades_lib::static_data::{OfferContents, OfferContentsKind};
 use blades_lib::user_data::{CompleteInventoryUpdate, CompleteWallet, InventoryChangeTracker};
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
@@ -257,6 +258,57 @@ struct PurchaseResponse {
     reward: RewardGrant,
 }
 
+/// Build a grantable reward from an offer's APK-derived contents, or `None` when
+/// it cannot be granted without inventing data.
+///
+/// Only [`OfferContentsKind::Literal`] qualifies. The other kinds are refused on
+/// purpose, and refusing is not a gap being left open — it is the alternative to
+/// making item stats up:
+///
+/// * `NeedsRoll` (398 offers) contains gear or jewellery. Retail rolled
+///   `durability`, `grade`, `arcaneTier` and `properties` at purchase time, so
+///   granting one from this file would hand the player a fabricated item that
+///   looks as authoritative as a real one. Rolling them properly needs the
+///   rarity -> loot-table model, which is a separate piece of work.
+/// * `ChestRoll` grants a chest rather than items. None of the 547 storefront
+///   offers is one (all ten are IAP level offers), so wiring it here would be
+///   untested code for a case that cannot arrive.
+/// * `Unclassified` contains a template the extractor could not place in a
+///   bucket, and `Unknown` is a `kind` from a newer data file. Guessing the
+///   bucket would put gold in the backpack or a sword in the wallet.
+///
+/// The `bucket` field is the extractor's, derived from which wire key each
+/// template actually landed in across the captured purchases — not inferred
+/// here. An entry whose bucket is not one this function handles makes the whole
+/// offer ungrantable rather than being dropped: a partial grant is a silent
+/// short-change, and the player paid.
+fn grant_from_offer_contents(contents: Option<&OfferContents>) -> Option<RewardGrant> {
+    let c = contents?;
+    if c.kind != OfferContentsKind::Literal {
+        return None;
+    }
+    let mut reward = RewardGrant {
+        town_xp: c.town_xp,
+        ..RewardGrant::default()
+    };
+    for entry in &c.contents {
+        let slot = match entry.bucket.as_str() {
+            "currencies" => &mut reward.currencies,
+            "stackableItems" => &mut reward.stackable_items,
+            // `items` needs a rolled instance, and anything else is a bucket
+            // this build does not know. Either way the offer is not grantable.
+            _ => return None,
+        };
+        *slot.entry(entry.item_template_id).or_insert(0) += entry.quantity;
+    }
+    // An offer that resolves to nothing must not read as a successful purchase:
+    // the player would be charged and handed an empty reward.
+    if reward.is_empty() {
+        return None;
+    }
+    Some(reward)
+}
+
 /// `POST /…/globalshops/current/purchase` — buy a global-shop product: validate the
 /// client price, debit it, grant the product, bump the purchase count.
 #[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/globalshops/current/purchase")]
@@ -271,13 +323,28 @@ pub async fn purchase_global_shop(
     let character_id = path.into_inner();
     let body = body.into_inner();
 
-    // What this product grants (capture-derived). Unknown product → can't fulfill.
-    let reward = app_state
+    // What this product grants. The captures cover 159 of the storefront's 547
+    // offers, because an offer's contents only ever appeared in a purchase
+    // RESPONSE — so the other 388 used to 404 here, and the client answered that
+    // by prompting the player to reconnect to Bethesda.
+    //
+    // A capture-derived grant always WINS: it is a recording of what retail
+    // actually handed over, instance stats and all, where the fallback below
+    // knows only templates and quantities.
+    let reward = match app_state
         .static_data
         .global_shop_grants
         .get(&body.global_shop_product_id)
-        .cloned()
-        .ok_or_else(|| map_purchase_err(PurchaseError::NoSuchProduct))?;
+    {
+        Some(r) => r.clone(),
+        None => grant_from_offer_contents(
+            app_state
+                .static_data
+                .global_shop_offer_contents
+                .get(&body.global_shop_product_id),
+        )
+        .ok_or_else(|| map_purchase_err(PurchaseError::NoSuchProduct))?,
+    };
     // The store has free offers — retail's daily giveaway — and the client sends
     // `quantity: 0` for them. `sanitize_prices` rejects a zero quantity, so every
     // attempt to claim one 400'd (report #58's reporter hit it; the corpus shows
@@ -626,5 +693,104 @@ mod replay_tests {
                 "authored offer {id} has no global_shop_grants entry — buying it would 404",
             );
         }
+    }
+}
+
+/// The APK-derived offer-contents fallback (tracker #93).
+#[cfg(test)]
+mod offer_contents_fallback {
+    use super::*;
+    use blades_lib::static_data::OfferContentEntry;
+
+    const GOLD: Uuid = Uuid::from_u128(0xf8d27767_a85e_4fd6_a5bb_bf8a13d0daa2);
+    const CLAY: Uuid = Uuid::from_u128(0x42d91529_c88b_4c5b_815b_b55508b4e7ef);
+    const SWORD: Uuid = Uuid::from_u128(0x0000_0001);
+
+    fn entry(id: Uuid, qty: u64, bucket: &str) -> OfferContentEntry {
+        OfferContentEntry { item_template_id: id, quantity: qty, bucket: bucket.into() }
+    }
+
+    fn offer(kind: OfferContentsKind, contents: Vec<OfferContentEntry>) -> OfferContents {
+        OfferContents { kind, contents, town_xp: 0 }
+    }
+
+    /// The case this exists for: currencies and stackables, granted verbatim.
+    /// Modelled on a real captured offer — gold plus three town resources.
+    #[test]
+    fn a_literal_offer_becomes_a_grantable_reward() {
+        let o = offer(
+            OfferContentsKind::Literal,
+            vec![entry(GOLD, 10_000, "currencies"), entry(CLAY, 85, "stackableItems")],
+        );
+        let r = grant_from_offer_contents(Some(&o)).expect("literal must be grantable");
+        assert_eq!(r.currencies.get(&GOLD), Some(&10_000));
+        assert_eq!(r.stackable_items.get(&CLAY), Some(&85));
+        assert!(r.items.is_empty(), "nothing may be invented into `items`");
+    }
+
+    /// The refusals. Each is a shape that would otherwise hand the player
+    /// fabricated stats or a mis-bucketed item.
+    #[test]
+    fn every_other_kind_is_refused() {
+        for kind in [
+            OfferContentsKind::NeedsRoll,
+            OfferContentsKind::ChestRoll,
+            OfferContentsKind::Unclassified,
+            OfferContentsKind::Unknown,
+        ] {
+            let o = offer(kind, vec![entry(GOLD, 1, "currencies")]);
+            assert!(
+                grant_from_offer_contents(Some(&o)).is_none(),
+                "{kind:?} must not be grantable from template data"
+            );
+        }
+        // control: the identical contents under `Literal` ARE grantable, so the
+        // refusals above are about the kind and not about the contents.
+        let o = offer(OfferContentsKind::Literal, vec![entry(GOLD, 1, "currencies")]);
+        assert!(grant_from_offer_contents(Some(&o)).is_some());
+    }
+
+    /// A gear entry inside an otherwise-literal offer must sink the whole offer,
+    /// not be quietly dropped — the player paid for all of it.
+    #[test]
+    fn an_unhandled_bucket_sinks_the_whole_offer() {
+        let o = offer(
+            OfferContentsKind::Literal,
+            vec![entry(GOLD, 500, "currencies"), entry(SWORD, 1, "items")],
+        );
+        assert!(
+            grant_from_offer_contents(Some(&o)).is_none(),
+            "a partial grant is a silent short-change"
+        );
+    }
+
+    /// No entry, or an unknown offer, must not read as a successful purchase:
+    /// the price is charged before the reward is applied.
+    #[test]
+    fn an_empty_or_absent_offer_is_not_a_purchase() {
+        assert!(grant_from_offer_contents(None).is_none(), "unknown product");
+        let o = offer(OfferContentsKind::Literal, vec![]);
+        assert!(grant_from_offer_contents(Some(&o)).is_none(), "empty reward");
+    }
+
+    /// townXp rides through, and on its own is enough to be a real reward —
+    /// 16 of the captured grants carry a non-zero one.
+    #[test]
+    fn town_xp_rides_through() {
+        let mut o = offer(OfferContentsKind::Literal, vec![entry(GOLD, 5, "currencies")]);
+        o.town_xp = 40;
+        let r = grant_from_offer_contents(Some(&o)).expect("grantable");
+        assert_eq!(r.town_xp, 40);
+    }
+
+    /// A template listed twice sums rather than overwriting.
+    #[test]
+    fn a_repeated_template_sums() {
+        let o = offer(
+            OfferContentsKind::Literal,
+            vec![entry(GOLD, 100, "currencies"), entry(GOLD, 25, "currencies")],
+        );
+        let r = grant_from_offer_contents(Some(&o)).expect("grantable");
+        assert_eq!(r.currencies.get(&GOLD), Some(&125));
     }
 }
