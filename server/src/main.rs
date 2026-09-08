@@ -619,6 +619,7 @@ async fn main() -> Result<()> {
                     .service(admin::import_character)
                     .service(admin::recent_matches)
                     .service(admin::bind_device)
+                    .service(admin::reassign_device)
                     .service(admin::recent_devices)
                     .service(admin::arena_season_rollover)
                     .service(admin::set_arena_credential)

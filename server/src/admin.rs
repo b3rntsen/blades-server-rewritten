@@ -65,6 +65,10 @@ const BIND_DEVICE_DB_FAILED: u64 = 10;
 const BIND_DEVICE_REFUSED: u64 = 12;
 const BIND_DEVICE_NO_CONNECTION: u64 = 17;
 const BIND_DEVICE_NO_SUCH_USER: u64 = 18;
+/// `reassign-device` refused because the device id is not an IPv4 address. The
+/// capture platform's authority here comes from having ALLOCATED the address,
+/// so it extends to address-keyed rows and to nothing else.
+const REASSIGN_NOT_AN_ADDRESS: u64 = 19;
 
 /// Deserialize `quests[]` entry by entry, DROPPING any the schema cannot read
 /// instead of failing the whole body.
@@ -548,6 +552,129 @@ pub async fn bind_device(
             BIND_DEVICE_REFUSED,
         ));
     }
+
+    Ok(Json(BindDeviceResponse {
+        device_id: body.device_id,
+        user_id: body.user_id,
+    }))
+}
+
+/// Re-point an ADDRESS-KEYED binding at the address's new holder.
+///
+/// This is the one write that may do what `BIND_DEVICE_SQL` exists to refuse,
+/// and it needs to, for a reason that guard cannot see.
+///
+/// THE BUG (report #89)
+///
+/// `device_id` for a WireGuard device IS the peer address, and the capture
+/// platform recycles addresses: when a peer is removed, its 10.99.0.x goes back
+/// in the pool and is later handed to somebody else. The platform already tells
+/// us about the new owner — `autoBindNewbladesDevice` calls `bind-device` the
+/// moment it allocates — but that call goes through the guard, which sees a row
+/// held by a DIFFERENT user and correctly refuses. The web app logged a warning
+/// and carried on. So the row kept pointing at the PREVIOUS holder, and
+/// `anon_log_in` resolved the new player's device to the old player's account:
+/// they launched the game and were someone else. Twenty-three of the bindings in
+/// production are in that state.
+///
+/// WHY THIS IS NOT A HOLE IN THE GUARD
+///
+/// The guard protects against a PLAYER taking a device that is not theirs. This
+/// route is not reachable by a player: it is `check_import_token`-gated, so only
+/// the capture platform can call it, and the platform is the authority on who
+/// holds an address — it is the thing that allocated it. `bind-device` had to
+/// ask "is this IP in the claimant's list?" precisely because it could not know;
+/// here the caller is the allocator, and the answer is by definition yes.
+///
+/// The authority is therefore SCOPED TO WHAT THE PLATFORM ALLOCATES. Addresses
+/// are allocated; install hashes are not — a hash-keyed row identifies a
+/// physical install the platform never handed out and has no standing to
+/// reassign. So a non-address `device_id` is refused, and that refusal is the
+/// containment: even with the token, this route cannot take a hash-keyed device
+/// from anyone. Do not relax it into "any device id" for convenience.
+///
+/// `source_wg_ip` is deliberately left as it is. For an address-keyed row it
+/// equals the device id, and that address now belongs to the new holder, so the
+/// existing value is already correct — clearing it would make the row read as
+/// "seen on no tunnel", which `BIND_DEVICE_SQL` treats as PERMISSIVE and would
+/// hand the row to the next claimant who asks.
+pub(crate) const REASSIGN_DEVICE_SQL: &str =
+    "INSERT INTO device_bindings (device_id, user_id, bound_at, last_seen) \
+     VALUES ($1, $2, now(), now()) \
+     ON CONFLICT (device_id) DO UPDATE SET user_id = EXCLUDED.user_id, bound_at = now()";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReassignDeviceRequest {
+    /// Must be an IPv4 address. See `REASSIGN_DEVICE_SQL`.
+    pub device_id: String,
+    pub user_id: Uuid,
+}
+
+/// `POST /…/api/dev/v1/reassign-device` — the capture platform asserting that a
+/// recycled peer address now belongs to a different player. See
+/// `REASSIGN_DEVICE_SQL` for why this may override a binding and why it is
+/// restricted to address-keyed rows.
+#[post("/blades.bgs.services/api/dev/v1/reassign-device")]
+pub async fn reassign_device(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    body: web::Json<ReassignDeviceRequest>,
+) -> Result<Json<BindDeviceResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let body = body.into_inner();
+
+    // The containment check, before any database work: an install hash is not
+    // something the platform allocated, so it is not something this route may
+    // move. Parsed, not pattern-matched — "10.99.0.250" is an address and
+    // "10.99.0.250.evil" is not, and a regex would have to be right about that.
+    if body.device_id.parse::<std::net::Ipv4Addr>().is_err() {
+        warn!(
+            "reassign-device: refusing {:?} — not an IPv4 address, so not an address this platform allocated",
+            body.device_id
+        );
+        return Err(BladeApiError::new(
+            StatusCode::FORBIDDEN,
+            IMPORT_SERVICE_ID,
+            REASSIGN_NOT_AN_ADDRESS,
+        ));
+    }
+
+    let mut conn = app_state.db_pool.get().await.map_err(|e| {
+        log::error!("reassign-device: could not acquire a database connection: {e}");
+        BladeApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            IMPORT_SERVICE_ID,
+            BIND_DEVICE_NO_CONNECTION,
+        )
+    })?;
+
+    let affected = diesel::sql_query(REASSIGN_DEVICE_SQL)
+        .bind::<diesel::sql_types::Text, _>(body.device_id.clone())
+        .bind::<diesel::sql_types::Uuid, _>(body.user_id)
+        .execute(&mut conn)
+        .await
+        .map_err(|e| map_bind_device_error(&e))?;
+
+    // Logged at INFO on the success path too. A reassignment moves an account
+    // binding, and the only reason nobody noticed the original bug for weeks is
+    // that nothing said out loud which device pointed where.
+    if affected == 0 {
+        warn!(
+            "reassign-device: wrote nothing for {:?} -> {} (unexpected: this statement has no WHERE)",
+            body.device_id, body.user_id
+        );
+        return Err(BladeApiError::new(
+            StatusCode::CONFLICT,
+            IMPORT_SERVICE_ID,
+            BIND_DEVICE_REFUSED,
+        ));
+    }
+    log::info!(
+        "reassign-device: {} now resolves to {}",
+        body.device_id,
+        body.user_id
+    );
 
     Ok(Json(BindDeviceResponse {
         device_id: body.device_id,
@@ -1446,6 +1573,65 @@ pub async fn arena_season_rollover(
 
 #[cfg(test)]
 mod tests {
+    // --- reassign-device: the containment, and what it must not touch -----
+    //
+    // This route may override a binding that `bind-device` refuses, so the two
+    // properties that keep it safe are worth holding to account. Both are
+    // asserted against the SOURCE, because the interesting failure is somebody
+    // widening them later for convenience — exactly how the original guard grew
+    // its hole.
+    mod reassign_device_containment {
+        const SRC: &str = include_str!("admin.rs");
+
+        #[test]
+        fn the_authority_is_scoped_to_addresses() {
+            // An install hash is not something the capture platform allocated,
+            // so it is not something this route may move — even with the token.
+            let route = SRC
+                .split("pub async fn reassign_device")
+                .nth(1)
+                .expect("reassign_device must exist");
+            let body = &route[..route.find("\n}\n").unwrap_or(route.len())];
+            assert!(
+                body.contains("parse::<std::net::Ipv4Addr>()"),
+                "reassign_device must refuse a device id that is not an IPv4 \
+                 address; the platform's authority comes from having allocated \
+                 the address and extends no further"
+            );
+            assert!(
+                body.contains("REASSIGN_NOT_AN_ADDRESS"),
+                "the non-address refusal must be its own error code, so a \
+                 caller can tell it from a database failure"
+            );
+        }
+
+        #[test]
+        fn source_wg_ip_is_left_alone() {
+            // Clearing it would make the row read as "seen on no tunnel", which
+            // BIND_DEVICE_SQL treats as PERMISSIVE — handing the row to the next
+            // claimant who asks. That is a worse bug than the one being fixed.
+            assert!(
+                !super::super::REASSIGN_DEVICE_SQL.contains("source_wg_ip"),
+                "REASSIGN_DEVICE_SQL must not write source_wg_ip"
+            );
+        }
+
+        #[test]
+        fn it_reassigns_unconditionally_once_past_the_address_check() {
+            // The whole point: no WHERE. If someone adds the bind-device guard
+            // here, the statement silently stops fixing recycled addresses and
+            // report #89 comes back with no error to show for it.
+            let sql = super::super::REASSIGN_DEVICE_SQL;
+            assert!(sql.contains("ON CONFLICT (device_id) DO UPDATE"), "must upsert");
+            assert!(
+                !sql.to_ascii_uppercase().contains("WHERE"),
+                "REASSIGN_DEVICE_SQL must have no WHERE — the address check in \
+                 the handler is the guard, and a WHERE here would re-create the \
+                 refusal this route exists to bypass"
+            );
+        }
+    }
+
     // --- season rollover: the dry-run default ------------------------------
     //
     // `arena_season_rollover` zeroes every player's trophies. Its only
