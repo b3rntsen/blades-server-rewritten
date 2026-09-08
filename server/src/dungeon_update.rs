@@ -670,6 +670,16 @@ fn process_dungeon_actions(
         character_data.inventory.0.backpack_version += 1;
     }
 
+    // The same rule for the treasury, and the same bug: #155 added the chest to
+    // `treasury` and reported it in `modified_treasury`, but the client applies a
+    // treasury diff only when `treasuryVersion` moves. Without this the chest
+    // reaches the database and the client never learns it owns one -- then hangs
+    // when it opens the chest it believes it just picked up (#104). Exactly the
+    // failure #142 fixed for the backpack.
+    if !inventory_modification_tracker.modified_treasury.added.is_empty() {
+        character_data.inventory.0.treasury_version += 1;
+    }
+
     currency_moved
 }
 
@@ -992,6 +1002,41 @@ mod tests {
             }
             other => panic!("chest pickup must not be dropped, got {other:?}"),
         }
+    }
+
+    /// A collected chest must move `treasuryVersion`, or the client never sees it.
+    ///
+    /// #155 added the chest and reported it in `modified_treasury`, but the client
+    /// applies a treasury diff only when the version moves — so the chest reached
+    /// the database and the client hung opening a chest it did not believe it had
+    /// (#104). The backpack had exactly this bug in #142.
+    #[test]
+    fn a_collected_chest_moves_the_treasury_version() {
+        use blades_lib::user_data::InventoryChangeTracker;
+
+        // the handler's rule, in the same shape as the code under test
+        fn bump(tracker: &InventoryChangeTracker, version: &mut u64) {
+            if !tracker.modified_treasury.added.is_empty() {
+                *version += 1;
+            }
+        }
+
+        let mut t = InventoryChangeTracker::default();
+        let mut v = 3;
+        bump(&t, &mut v);
+        assert_eq!(v, 3, "no chest collected, no version change");
+
+        t.modified_treasury.added.push("chest-1".to_string());
+        let mut v = 3;
+        bump(&t, &mut v);
+        assert_eq!(v, 4, "a collected chest must move the version");
+
+        // two chests in ONE batch still move it once, not twice — the same
+        // double-bump that had to be undone in the town prop handler.
+        t.modified_treasury.added.push("chest-2".to_string());
+        let mut v = 3;
+        bump(&t, &mut v);
+        assert_eq!(v, 4, "a batch bumps once however many chests it carried");
     }
 
     /// Collecting the same chest twice must mint ONE chest.

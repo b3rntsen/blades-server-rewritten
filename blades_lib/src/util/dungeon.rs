@@ -80,46 +80,58 @@ fn loot_seed(dungeon_uuid: &Uuid, spawn_id: &Uuid, table_id: &Uuid) -> u64 {
 
 /// One roll of a loot table, weighted by how often retail produced each outcome.
 ///
-/// The empty outcome is a real one: across the corpus these tables rolled empty
-/// 18,583 times for a single table alone. Dropping it would make every barrel
-/// pay, which is not what retail did.
+/// A whole RESULT is drawn, not a single item. Retail's results routinely carry
+/// several stacks at once -- across the corpus, 68,000 results held one item,
+/// 9,659 held two, 5,096 held three and 1,379 held four -- so drawing item by
+/// item could never reproduce a breakable that "spews five things" (#104). It
+/// also keeps which items appeared TOGETHER, instead of inventing a
+/// distribution over combinations.
+///
+/// The empty result is one of the drawn outcomes (68,081 of them), so a barrel
+/// that gives nothing stays as common as retail made it.
 fn roll_loot_table(dungeon_uuid: &Uuid, spawn_id: &Uuid, table_id: &Uuid) -> LootTableResult {
     let mut out = LootTableResult::default();
-    let Some(entry) = interactable_loot()
+    let Some(results) = interactable_loot()
         .get("tables")
         .and_then(|t| t.get(table_id.to_string()))
+        .and_then(|e| e.get("results"))
+        .and_then(|r| r.as_array())
     else {
         // A table we never observed stays empty, exactly as before.
         return out;
     };
 
-    let empty_n = entry.get("emptyObservations").and_then(|v| v.as_u64()).unwrap_or(0);
-    let rolls = entry.get("rolls").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    let total: u64 = empty_n
-        + rolls.iter().filter_map(|r| r.get("n").and_then(|v| v.as_u64())).sum::<u64>();
+    let total: u64 = results
+        .iter()
+        .filter_map(|r| r.get("n").and_then(|v| v.as_u64()))
+        .sum();
     if total == 0 {
         return out;
     }
 
     let mut pick = loot_seed(dungeon_uuid, spawn_id, table_id) % total;
-    if pick < empty_n {
-        return out;
-    }
-    pick -= empty_n;
-
-    for r in &rolls {
+    for r in results {
         let n = r.get("n").and_then(|v| v.as_u64()).unwrap_or(0);
-        if pick < n {
-            let (Some(item), Some(qty)) = (
-                r.get("itemId").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok()),
-                r.get("quantity").and_then(|v| v.as_u64()),
-            ) else {
-                return out;
-            };
-            out.stackable_items.insert(item, qty);
-            return out;
+        if pick >= n {
+            pick -= n;
+            continue;
         }
-        pick -= n;
+        let loot = r.get("loot");
+        if let Some(items) = loot.and_then(|l| l.get("stackableItems")).and_then(|v| v.as_object()) {
+            for (id, qty) in items {
+                if let (Ok(uuid), Some(q)) = (Uuid::parse_str(id), qty.as_u64()) {
+                    out.stackable_items.insert(uuid, q);
+                }
+            }
+        }
+        if let Some(curs) = loot.and_then(|l| l.get("currencies")).and_then(|v| v.as_object()) {
+            for (id, amt) in curs {
+                if let (Ok(uuid), Some(a)) = (Uuid::parse_str(id), amt.as_u64()) {
+                    out.currencies.insert(uuid, a);
+                }
+            }
+        }
+        return out;
     }
     out
 }
@@ -198,10 +210,10 @@ mod interactable_loot_tests {
         assert!(tables.len() >= 20, "expected the mined tables, got {}", tables.len());
         let observations: u64 = tables
             .values()
-            .flat_map(|t| t["rolls"].as_array().cloned().unwrap_or_default())
+            .flat_map(|t| t["results"].as_array().cloned().unwrap_or_default())
             .filter_map(|r| r["n"].as_u64())
             .sum();
-        assert!(observations > 50_000, "only {observations} observations");
+        assert!(observations > 100_000, "only {observations} observations");
     }
 
     /// A breakable must be able to produce something. This is the bug: every loot
@@ -289,12 +301,17 @@ mod interactable_loot_tests {
         let mut checked = 0;
         for (tid, entry) in tables {
             let table_id: Uuid = tid.parse().unwrap();
-            let allowed: std::collections::HashSet<String> = entry["rolls"]
+            let allowed: std::collections::HashSet<String> = entry["results"]
                 .as_array()
                 .cloned()
                 .unwrap_or_default()
                 .iter()
-                .filter_map(|r| r["itemId"].as_str().map(|s| s.to_string()))
+                .flat_map(|r| {
+                    r["loot"]["stackableItems"]
+                        .as_object()
+                        .map(|o| o.keys().cloned().collect::<Vec<_>>())
+                        .unwrap_or_default()
+                })
                 .collect();
             for s in 0..25u128 {
                 let got = roll_loot_table(&dungeon, &Uuid::from_u128(s), &table_id);
@@ -308,5 +325,43 @@ mod interactable_loot_tests {
             }
         }
         assert!(checked > 0, "no items emitted — the test proved nothing");
+    }
+
+    /// A breakable must be able to spew SEVERAL stacks at once.
+    ///
+    /// My first pass mined (itemId, quantity) pairs independently and drew one,
+    /// so a barrel could never yield more than a single stack — reported as
+    /// "breakables are only spewing 1 item but they usually spew 5" (#104).
+    /// Retail's results carry 2, 3 and 4 items together (9,659 / 5,096 / 1,379
+    /// observations), so a multi-item roll has to be reachable.
+    #[test]
+    fn a_roll_can_yield_several_items_at_once() {
+        let tables = table()["tables"].as_object().unwrap();
+        let dungeon = Uuid::from_u128(0xD3);
+        let mut multi = 0;
+        let mut single = 0;
+        let mut biggest = 0;
+
+        for tid in tables.keys() {
+            let table_id: Uuid = tid.parse().unwrap();
+            for s in 0..200u128 {
+                let got = roll_loot_table(&dungeon, &Uuid::from_u128(s), &table_id);
+                let n = got.stackable_items.len();
+                biggest = biggest.max(n);
+                if n > 1 {
+                    multi += 1;
+                } else if n == 1 {
+                    single += 1;
+                }
+            }
+        }
+        assert!(
+            multi > 0,
+            "not one roll produced more than a single stack (biggest was {biggest}) — \
+             breakables can still only spew one thing"
+        );
+        // Control: single-item results must still dominate, or we have swung too
+        // far and made every barrel a jackpot.
+        assert!(single > multi, "multi-item rolls ({multi}) outnumber single ({single})");
     }
 }
