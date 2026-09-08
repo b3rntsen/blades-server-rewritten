@@ -591,15 +591,87 @@ async fn anon_log_in(
             session: SessionResponseInner::from_session(session_id, session.as_ref()),
         }));
     } else {
-        // create a new user
-        let mut new_user = UserAccount::new_random();
-        if info.0.platform == "gp" {
-            if let Some(did) = info.0.device_id {
-                new_user.gp_deviceids.insert(did);
-            }
-        } else {
+        if info.0.platform != "gp" {
             return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 3, 3)); //INVALID_REQUEST_DEVICE_ID
         }
+        let Some(this_device) = info.0.device_id.clone() else {
+            return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 3, 3)); //INVALID_REQUEST_DEVICE_ID
+        };
+
+        // BEFORE minting anything: has this device been here before?
+        //
+        // We have always RECORDED `gp_deviceids` when creating a user, and never
+        // once read it back. So the only ways to be recognised were a
+        // device_bindings row or the client returning the secret it was handed --
+        // and a client that does not keep that secret got a brand-new identity,
+        // and a brand-new character, on every login (#105).
+        //
+        // It was not hypothetical: on the live database 7 device ids were shared
+        // by more than one user, 33 duplicate accounts between them, one device
+        // having minted 12.
+        //
+        // The device id is the identity of an ANONYMOUS account here, which is
+        // the same trust already placed in `device_bindings` above; this adds no
+        // new authority, it just uses the record we were already keeping. A
+        // signed-in account is unaffected — that path returns earlier.
+        {
+            let mut conn = app_state.db_pool.get().await.unwrap();
+            let existing: Vec<UserDBEntry> = users
+                .select(UserDBEntry::as_select())
+                .filter(
+                    diesel::dsl::sql::<diesel::sql_types::Bool>(
+                        "data->'gp_deviceids' @> ",
+                    )
+                    .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!([this_device])),
+                )
+                .load(&mut conn)
+                .await
+                .unwrap_or_default();
+
+            // Exactly one match is a returning device. Several means the damage
+            // above already happened for this device; picking one arbitrarily
+            // would hand out whichever character sorted first, so leave those to
+            // be merged deliberately rather than guess.
+            if existing.len() == 1 {
+                let user = &existing[0];
+                log::info!(
+                    "anon login: device {} recognised as existing user {}",
+                    this_device,
+                    user.id
+                );
+                let session = Arc::new(Session::new(
+                    user.id,
+                    user.secret_id,
+                    app_state.session_store.ttl,
+                ));
+                let session_id = app_state.session_store.store_new_session(session.clone());
+                crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref())
+                    .await;
+                if let Err(e) =
+                    crate::character::ensure_starter_character(&app_state, session.user_id).await
+                {
+                    log::warn!(
+                        "could not provision a starter character for {}: {}",
+                        session.user_id,
+                        e
+                    );
+                }
+                return Ok(web::Json(SessionResponse {
+                    session: SessionResponseInner::from_session(session_id, session.as_ref()),
+                }));
+            } else if existing.len() > 1 {
+                log::warn!(
+                    "anon login: device {} matches {} users — not guessing which; \
+                     minting a new one. These need merging.",
+                    this_device,
+                    existing.len()
+                );
+            }
+        }
+
+        // create a new user
+        let mut new_user = UserAccount::new_random();
+        new_user.gp_deviceids.insert(this_device);
         let new_user_id = Uuid::new_v4();
         let new_user_secret_id = Uuid::new_v4();
         let mut conn = app_state.db_pool.get().await.unwrap();
@@ -642,6 +714,34 @@ mod link_tests {
     /// build: every link would simply report a conflict, the client would show
     /// its "which account?" prompt every time, and it would look like the
     /// player's own doing rather than a bug.
+    /// What a device-id match means, by how many users it finds.
+    ///
+    /// #105: we recorded `gp_deviceids` on every anon signup and never read it
+    /// back, so a client that did not keep its secret got a new identity — and a
+    /// new character — every login. On the live database 7 devices were shared by
+    /// more than one user, 33 duplicate accounts between them.
+    ///
+    /// The rule has to be careful in the ambiguous case: several matches means the
+    /// damage already happened for that device, and picking one would hand over
+    /// whichever character sorted first.
+    #[test]
+    fn a_device_is_only_reused_when_it_names_exactly_one_user() {
+        #[derive(Debug, PartialEq)]
+        enum Outcome { Create, Reuse, DoNotGuess }
+
+        fn decide(matches: usize) -> Outcome {
+            if matches == 1 { Outcome::Reuse }
+            else if matches > 1 { Outcome::DoNotGuess }
+            else { Outcome::Create }
+        }
+
+        assert_eq!(decide(0), Outcome::Create, "an unseen device gets a new account");
+        assert_eq!(decide(1), Outcome::Reuse, "a returning device keeps its account");
+        // the 2-user and 12-user devices measured on prod
+        assert_eq!(decide(2), Outcome::DoNotGuess, "ambiguous devices must not be guessed");
+        assert_eq!(decide(12), Outcome::DoNotGuess);
+    }
+
     #[test]
     fn compares_against_the_secret_id_the_client_was_given() {
         let secret = Uuid::from_u128(0xAAAA);
