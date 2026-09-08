@@ -112,6 +112,26 @@ pub fn hash_password(password: &str) -> String {
 /// Constant-time verify. Returns false for any malformed stored value rather
 /// than erroring: a corrupt row must read as "wrong password", never as "let
 /// them in".
+/// A well-formed hash of a value nobody can supply, for the "no such user"
+/// branch of the login and link endpoints.
+///
+/// IT MUST PARSE. The point is that an unknown username costs the SAME 200k
+/// PBKDF2 iterations as a known one, so the response time does not reveal who
+/// plays here. The previous literal padded its final field with 13 spaces —
+/// 77 characters, non-hex — so `unhex` rejected it and `verify_password`
+/// returned false at the parse step, BEFORE `pbkdf2_sha256`. Unknown usernames
+/// answered in microseconds and known-username-wrong-password after tens of
+/// milliseconds: exactly the enumeration oracle the branch was written to
+/// close, on an unauthenticated endpoint.
+///
+/// So: four fields, non-zero iterations, salt and digest both even-length hex,
+/// digest exactly DK_LEN bytes. `dummy_hash_reaches_pbkdf2` pins that.
+pub const ENUMERATION_DUMMY_HASH: &str = concat!(
+    "pbkdf2$200000$",
+    "00000000000000000000000000000000$",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+);
+
 pub fn verify_password(password: &str, stored: &str) -> bool {
     let mut parts = stored.split('$');
     if parts.next() != Some("pbkdf2") {
@@ -259,5 +279,40 @@ mod tests {
         assert!(!username_is_valid(&"x".repeat(25)), "too long");
         assert!(!username_is_valid("has space"));
         assert!(!username_is_valid("émoji"));
+    }
+}
+
+#[cfg(test)]
+mod dummy_hash_tests {
+    use super::*;
+
+    /// The dummy must be REJECTED as a password match but ACCEPTED by the
+    /// parser, so the failing branch still pays for PBKDF2.
+    ///
+    /// Timing cannot be asserted reliably in a unit test, so this pins the
+    /// structural property whose violation caused the leak: every field the
+    /// parser requires is well-formed. A malformed control shows the assertion
+    /// has teeth — it is the shape the old literal had.
+    #[test]
+    fn dummy_hash_reaches_pbkdf2() {
+        let parts: Vec<&str> = ENUMERATION_DUMMY_HASH.split('$').collect();
+        assert_eq!(parts.len(), 4, "expected pbkdf2$iters$salt$digest");
+        assert_eq!(parts[0], "pbkdf2");
+        assert!(parts[1].parse::<u32>().is_ok_and(|n| n > 0), "iterations");
+        assert!(unhex(parts[2]).is_some(), "salt must be even-length hex");
+        let digest = unhex(parts[3]).expect("digest must be even-length hex");
+        assert_eq!(digest.len(), DK_LEN, "digest must be DK_LEN bytes");
+
+        // And it must not match anything.
+        assert!(!verify_password("", ENUMERATION_DUMMY_HASH));
+        assert!(!verify_password("hunter2", ENUMERATION_DUMMY_HASH));
+
+        // Control: the shape the old literal had — space-padded, odd length —
+        // fails to parse, which is what made the fast path possible.
+        let old_shape = "pbkdf2$200000$00000000000000000000000000000000$             0000000000000000000000000000000000000000000000000000000000000000";
+        assert!(
+            unhex(old_shape.split('$').nth(3).unwrap()).is_none(),
+            "the control must be unparseable, or this test proves nothing"
+        );
     }
 }
