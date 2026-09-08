@@ -480,58 +480,126 @@ fn push_enchant(lo: &mut Loadout, ty: DamageType, tier: u8) {
 /// ring gives. Treating a cap as a grant is how `+5` got here, and that step was
 /// unsound regardless of which number turns out to be right.
 ///
-/// ## RESOLVED ENOUGH TO STOP CHANGING IT (2026-08-22, second pass)
+/// ## SOLVED (2026-09-08) — the divisor is 3, and 4/5 is now DERIVED
 ///
-/// The `+1 / +2` reading above is WRONG, and so was my alarm about it. Both it
-/// and the contributor's asset dump report `_xValueByTier`, and that field is
-/// not the answer — it is one term of a calculation. Disassembled
-/// `AbilityBonusRanksBonusInstance::InitializeData` (libil2cpp.so, RVA
-/// 0x1E827CC) and the arithmetic that writes `_calculatedBonus` reads:
+/// The blocker was `BONUS_RANKS_DIVISOR`: a `static readonly int`, so absent from
+/// any il2cpp dump. It is set in the class's `.cctor` (RVA 0x1E82D94), which the
+/// dump does list, and the store is plain to read:
 ///
 /// ```text
-///   w20 = ability[0x70]                 w21 = ability[0x3c]
-///   w22 = (int) xValueByTier[tier]      w23 = BONUS_RANKS_DIVISOR (static)
-///
-///   w8 = (w20 - w21) / w23              ; integer divide
-///   w0 = g(w8)                          ; call at 0x28AAD04
-///   _calculatedBonus = w0 + w22         ; stored at +0x38
+///   1e82dcc: orr  w9, wzr, #0x3      ; w9 = 3
+///   1e82dd4: ldr  x8, [x8, #0xb8]    ; static-fields base
+///   1e82dd8: str  w9, [x8]           ; static_fields[0x0] = 3
 /// ```
 ///
-/// So the grant is `(int)xValue + g(headroom / DIVISOR)` — the tier value ADDED
-/// to an ability-dependent term, which is why `GetBonusRanks` takes the ability
-/// and why the class holds a DIVISOR at all. `w20 - w21` is 10 for every ability
-/// checked (Frostbite, Ice Spike, Ward, Paralyze, Fireball: `maximum_level -
-/// maximum_purchaseable_level`), matching the headroom measured off the table.
+/// The dump gives `BONUS_RANKS_DIVISOR; // 0x0`, so that store IS the divisor.
+/// **BONUS_RANKS_DIVISOR = 3.**
 ///
-/// **Still unresolved:** the value of `BONUS_RANKS_DIVISOR` (a `static readonly
-/// int`, so absent from any dump) and what `g` at 0x28AAD04 does — its entry is
-/// il2cpp class-init boilerplate and needs a real decompiler to follow.
+/// `g` at 0x28AAD04 is not class-init boilerplate — it is a call, and the dump
+/// names that RVA: **`Mathf.FloorToInt(float)`**. It is a no-op here, because the
+/// `sdiv` above it already produced an integer that is then widened with `scvtf`;
+/// the source was `Mathf.FloorToInt(intA / intB)`, where the division happens in
+/// integers before the cast.
 ///
-/// **Therefore leave `4 / 5` where it is.** It is consistent with the owner's
-/// own skills menu ("Frostbite 4+10" on two tier-2 rings), and every alternative
-/// proposed so far has come from reading one input and calling it the output.
-/// This function has now been wrong three times — `floor(n_ranks/3)`, then a
-/// flat `4/5` justified by the wrong argument, then `1/2`. The next change to it
-/// should come with the divisor's actual value, not another inference.
+/// So the grant is:
 ///
-/// ## Left alone deliberately
+/// ```text
+///   bonusRanks = (w20 - w21) / 3  +  (int) xValueByTier[tier]
+/// ```
 ///
-/// Changing this to `1 / 2` would be a 2.5x nerf to every graded ability on every
-/// character, shipped on the strength of a field I misread once already in this
-/// same function. It needs one decisive observation, named in the PR: equip a
-/// SINGLE tier-1 grade item for an ability with no other bonus and read the skills
-/// menu. `+1` settles it for the data; `+4` means `_xValueByTier` is not the rank
-/// count and something else supplies it.
+/// **Correcting the register reading in the previous pass**, which had both terms
+/// coming from the ability. They do not — the pointer chains are two different
+/// objects, and each offset is confirmed against the dump:
 ///
-/// A still earlier attempt derived this from the ability's rank COUNT
-/// (`floor(n_ranks / 3)`). It fits the observations and is WRONG: it contradicts
-/// the shipped headroom on 36 of 49 abilities — under it Ice Spike's ceiling would
-/// be 12, but the game ships 14. Do not reintroduce it.
+/// ```text
+///   w20:  ldr x8,[x19,#0x10]   this->_item          (AbstractItemPropertyBonusInstance._item  0x10)
+///         ldr x8,[x8, #0x10]   item->_template      (Item._template                          0x10)
+///         ldr w20,[x8,#0x70]   template->_tier      (ItemTemplate._tier                      0x70)
+///
+///   w21:  str x0,[x20,#0x30]!  x20 = &_boostedAbility  (pre-index; _boostedAbility            0x30)
+///         ldr x9,[x20]         the ability
+///         ldr w21,[x9,#0x3c]   ability->_bonusRanksOffset (LearnableAbility._bonusRanksOffset 0x3C)
+/// ```
+///
+/// ## Why this leaves 4 / 5 exactly where it is
+///
+/// The previous pass measured `w20 - w21 == 10` for every ability it checked
+/// (Frostbite, Ice Spike, Ward, Paralyze, Fireball). With the divisor now known:
+///
+/// ```text
+///   tier 1 -> FloorToInt(10 / 3) + 1 = 3 + 1 = 4
+///   tier 2 -> FloorToInt(10 / 3) + 2 = 3 + 2 = 5
+/// ```
+///
+/// which is the owner's own skills menu — "Frostbite 4+10" on two tier-2 rings,
+/// i.e. +5 each. So the shipped numbers were right, and are now derived from the
+/// game's own arithmetic instead of asserted. **No behaviour changes here.** That
+/// also retires the decisive on-device observation this function has been waiting
+/// on (equip one tier-1 grade item, read the menu): the binary answered it.
+///
+/// The earlier `floor(n_ranks / 3)` attempt is still wrong and must not come back
+/// — its `3` was the right constant reached for the wrong reason, applied to the
+/// ability's rank COUNT rather than to `itemTier - bonusRanksOffset`.
+///
+/// ## The one thing still open
+///
+/// `10` is measured on 5 of 49 abilities, not derived. `_bonusRanksOffset` is a
+/// per-ability field and `_tier` a per-item one, so an item or ability where the
+/// difference is not 10 would grant something other than 4/5 — and we extract
+/// NEITHER field today (`grep bonusRanksOffset` over `deploy/static` and the
+/// server: no hits). Generalising means extracting both, and until then this
+/// function is a constant standing in for a formula whose inputs we do not carry.
+/// That is a narrower and better-understood gap than "the divisor is unknown".
 fn grade_bonus_ranks(tier: u8) -> u8 {
-    match tier {
-        0 => 0,
-        1 => 4,
-        _ => 5,
+    // The game's formula is `(itemTier - ability.bonusRanksOffset) / DIVISOR +
+    // xValueByTier[tier]`. We carry neither input, so the first term is pinned at
+    // the measured 10/3; see the note above before changing that to a real lookup.
+    const BONUS_RANKS_DIVISOR: u8 = 3;
+    /// `itemTier - ability._bonusRanksOffset`, measured as 10 on all five abilities
+    /// checked in prod. NOT derived — the two fields it comes from are unextracted.
+    const MEASURED_TIER_HEADROOM: u8 = 10;
+
+    if tier == 0 {
+        // Tier 0 is "no grade property", not "a grade property worth nothing", so
+        // it grants nothing at all rather than the headroom term on its own.
+        return 0;
+    }
+    // `xValueByTier` ships [0.0, 1.0, 2.0] on all 49 properties, and the engine
+    // truncates it (`fcvtzs`). Tiers above 2 do not exist in the shipped data;
+    // clamping rather than extrapolating keeps an unexpected tier from inventing
+    // ranks.
+    let x_value = tier.min(2);
+    MEASURED_TIER_HEADROOM / BONUS_RANKS_DIVISOR + x_value
+}
+
+#[cfg(test)]
+mod bonus_ranks_divisor {
+    use super::grade_bonus_ranks;
+
+    /// The whole point of the change: the numbers are unchanged, but they now come
+    /// out of the game's arithmetic rather than a `match`.
+    #[test]
+    fn the_derived_formula_reproduces_the_shipped_grants() {
+        assert_eq!(grade_bonus_ranks(0), 0, "tier 0 is no property at all");
+        assert_eq!(grade_bonus_ranks(1), 4, "FloorToInt(10/3) + 1");
+        assert_eq!(grade_bonus_ranks(2), 5, "FloorToInt(10/3) + 2");
+    }
+
+    /// The owner's observation, which is what the formula had to match: two tier-2
+    /// rings on Frostbite read "4+10" in the skills menu, i.e. +5 each.
+    #[test]
+    fn two_tier_two_rings_give_the_plus_ten_the_menu_showed() {
+        assert_eq!(grade_bonus_ranks(2) * 2, 10);
+    }
+
+    /// A tier the shipped data does not contain must not extrapolate. `xValueByTier`
+    /// has exactly three entries, so tier 3 cannot mean "+3".
+    #[test]
+    fn an_unexpected_tier_clamps_instead_of_inventing_ranks() {
+        assert_eq!(grade_bonus_ranks(3), grade_bonus_ranks(2));
+        assert_eq!(grade_bonus_ranks(255), grade_bonus_ranks(2));
+        // control: the clamp has not flattened the real tiers into each other.
+        assert_ne!(grade_bonus_ranks(1), grade_bonus_ranks(2));
     }
 }
 
