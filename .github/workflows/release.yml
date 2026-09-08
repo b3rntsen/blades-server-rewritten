@@ -30,6 +30,31 @@ name: Build and publish arena-server
 on:
   push:
     branches: [main]
+    # A push that cannot change the image must not publish one.
+    #
+    # This is not tidiness. cla.yml runs on `pull_request_target` with
+    # `contents: write` and appends the acceptance row by committing
+    # CLA-ACCEPTANCES.md straight to `pr.base.ref` — main. So an OUTSIDE
+    # contributor, by opening a pull request and accepting the CLA, pushed to
+    # main, which triggered this workflow, which published a new
+    # ghcr.io/.../blades-arena-server image, whose new digest the box's
+    # blades-arena-image-watch timer treats as a release and hands to
+    # `newblades-deploy-apply arena-pull-up` — restarting the LIVE game server.
+    #
+    # No third-party code ever ran (this job checks out main, and the CLA commit
+    # touches one Markdown file), so the image was byte-identical in substance.
+    # The problem is that a stranger could bounce production, unreviewed and
+    # unannounced, by doing exactly what the CLA asks them to do.
+    #
+    # Ignoring the ledger and the docs closes it at the trigger, which is the
+    # only place that holds for every future writer to main. `workflow_dispatch`
+    # is still there for the rare case of wanting to republish anyway.
+    paths-ignore:
+      - 'CLA-ACCEPTANCES.md'
+      - 'CLA.md'
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
   workflow_dispatch:
 
 permissions:
