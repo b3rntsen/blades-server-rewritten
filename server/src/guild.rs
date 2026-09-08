@@ -220,6 +220,10 @@ struct GuildWire {
     guild_exchange_donation_count: i64,
     /// Retail's name for the guild's trophy total (`GuildInfo.GuildTrophies`).
     pvp_trophies: i64,
+    /// The CURRENT pvp season, not a property of the guild: both captured
+    /// creations carry the same value. Present on 437 of 446 captured guild
+    /// objects -- we were sending twelve of retail's thirteen fields.
+    pvp_season_id: Uuid,
     grandmaster_since_secs: i64,
 }
 
@@ -237,6 +241,11 @@ impl GuildWire {
             member_count,
             guild_exchange_donation_count: row.exchange_donation_count,
             pvp_trophies: row.trophies,
+            pvp_season_id: crate::arena::arena_season::season_at(
+                crate::arena::arena_season::now_unix(),
+            )
+            .map(|s| s.id)
+            .unwrap_or_default(),
             grandmaster_since_secs: row.grandmaster_since,
         }
     }
@@ -598,6 +607,15 @@ struct CurrentGuildResponse {
     guild: Option<GuildWire>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     members: Vec<MemberWire>,
+    /// Returned by CREATE and by nothing else.
+    ///
+    /// Creating a guild costs currency, and retail hands back the authoritative
+    /// balance with it (both captured creations). `GET /guilds/current` never
+    /// does -- 0 of 410 captured responses -- so this is skipped when absent
+    /// rather than always sent: a key retail never sent on a route is its own
+    /// bug, which is how the stub-character load stall happened.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wallet: Option<CompleteWallet>,
 }
 
 #[get("/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current")]
@@ -625,7 +643,7 @@ pub async fn get_current_guild(
         },
         None => (None, Vec::new()),
     };
-    Ok(Json(CurrentGuildResponse { guild, members }))
+    Ok(Json(CurrentGuildResponse { guild, members, wallet: None }))
 }
 
 /// `GET /guilds/{id}` -> `{"applicationStatus": ..., "guild": ..., "members": [...]}`.
@@ -1030,9 +1048,26 @@ pub async fn create_guild(
             .execute(&mut conn)
             .await?;
     }
+    // Retail returns the founder's wallet WITH the create -- both captured
+    // creations carry it, and the client waits for it because founding a guild
+    // is a spend. Without it the request succeeds (200 in 41ms on prod) and the
+    // client simply never proceeds: no follow-up call to
+    // /guilds/current/exchanges or /messages, just a spinner.
+    let founder_wallet = {
+        use crate::schema::characters;
+        characters::table
+            .filter(characters::id.eq(character_id))
+            .select(characters::wallet)
+            .first::<JsonDbWrapper<CompleteWallet>>(&mut conn)
+            .await
+            .ok()
+            .map(|w| w.0)
+    };
+
     Ok(Json(CurrentGuildResponse {
         guild: Some(GuildWire::from_row(&row, 1)),
         members: vec![MemberWire::from_row(&member)],
+        wallet: founder_wallet,
     }))
 }
 
@@ -1185,6 +1220,7 @@ async fn update_guild_impl(
     Ok(Json(CurrentGuildResponse {
         guild: Some(GuildWire::from_row(&guild, members.len() as i64)),
         members: members.iter().map(MemberWire::from_row).collect(),
+        wallet: None,
     }))
 }
 
@@ -2436,5 +2472,79 @@ mod tests {
         let id = guild_id_from_uuid(Uuid::from_u128(0x1234_5678_9abc_def0_1122_3344_5566_7788));
         assert_eq!(id.len(), 24);
         assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+}
+
+
+/// The create-guild wire, against the two captured retail creations.
+#[cfg(test)]
+mod create_wire {
+    use super::*;
+
+    fn guild_row() -> GuildRow {
+        GuildRow {
+            id: "6a2c81172c9371def2ab495f".into(),
+            name: "New Blades".into(),
+            tag_id: "1395".into(),
+            guild_type: "OPEN".into(),
+            short_description: "look at newblades.dethele.com".into(),
+            long_description: String::new(),
+            badge_icon_index: 14,
+            region_index: 4,
+            trophies: 17,
+            created_at: 1781301527,
+            exchange_donation_count: 0,
+            grandmaster_since: 1781301527,
+        }
+    }
+
+    /// Retail's guild object carries thirteen fields; we were sending twelve.
+    /// `pvpSeasonId` appears on 437 of 446 captured guild objects.
+    #[test]
+    fn the_guild_object_has_every_field_retail_sent() {
+        let v = serde_json::to_value(GuildWire::from_row(&guild_row(), 1)).unwrap();
+        let obj = v.as_object().expect("guild object");
+        for key in [
+            "id", "name", "tagId", "type", "shortDescription", "longDescription",
+            "badgeIconIndex", "memberCount", "regionIndex", "guildExchangeDonationCount",
+            "pvpTrophies", "pvpSeasonId", "grandmasterSinceSecs",
+        ] {
+            assert!(
+                obj.contains_key(key),
+                "guild object is missing {key}; got {:?}",
+                obj.keys().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// CREATE carries a wallet; GET current must not.
+    ///
+    /// Both captured creations return one, and the client waits for it because
+    /// founding a guild is a spend -- without it the create succeeds and the UI
+    /// just spins. But `GET /guilds/current` carried it in 0 of 410 captured
+    /// responses, so it must not leak onto that route.
+    #[test]
+    fn wallet_is_on_create_and_nowhere_else() {
+        let created = CurrentGuildResponse {
+            guild: Some(GuildWire::from_row(&guild_row(), 1)),
+            members: vec![],
+            wallet: Some(CompleteWallet::default()),
+        };
+        let v = serde_json::to_value(&created).unwrap();
+        assert!(v.get("wallet").is_some(), "create must return the wallet");
+
+        let current = CurrentGuildResponse {
+            guild: Some(GuildWire::from_row(&guild_row(), 1)),
+            members: vec![],
+            wallet: None,
+        };
+        let v = serde_json::to_value(&current).unwrap();
+        assert!(
+            v.get("wallet").is_none(),
+            "GET current must not carry a wallet: retail sent it 0 of 410 times, got {v:?}"
+        );
+        // control: the rest of the response is still there, so the assertion
+        // above is about the wallet key and not an empty object.
+        assert!(v.get("guild").is_some());
     }
 }
