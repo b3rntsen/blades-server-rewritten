@@ -1158,8 +1158,54 @@ pub struct OfferContents {
 }
 
 /// The shape of `global_shop_offer_contents.json`.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct OfferContentsFile {
-    #[serde(default)]
+    /// Keyed by product id.
     pub offers: HashMap<Uuid, OfferContents>,
+    /// Ids in the file that are **not** UUIDs, kept verbatim so the loader can say
+    /// which ones it dropped. Empty in the normal case.
+    pub unparseable_ids: Vec<String>,
+}
+
+/// Deserialized leniently on purpose (report #93).
+///
+/// The shipped file carries one product id that is not a UUID —
+/// `53c6f124-3603-4100-ba9a-e2fe23969f7p`, 36 characters with a `p` where the last
+/// hex digit belongs. It arrives that way from the game data itself
+/// (`global_shop_overrides.json` holds the identical string), so a regeneration will
+/// not clean it up.
+///
+/// With `HashMap<Uuid, _>` that single key failed the whole map, serde aborted the
+/// file, and `static_loader` fell back to `default()` — so **all 541 offers were
+/// discarded** and every purchase was back to having no contents to grant. The
+/// server did say so, once, in a startup WARN nobody was reading:
+///
+/// ```text
+/// [static] invalid "/data/static/global_shop_offer_contents.json":
+///   UUID parsing failed: invalid character: found `p` at 36 ...; using default
+/// ```
+///
+/// One unusable key now costs us that key rather than the file: it lands in
+/// [`Self::unparseable_ids`] and the other 540 load.
+impl<'de> Deserialize<'de> for OfferContentsFile {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            #[serde(default)]
+            offers: HashMap<String, OfferContents>,
+        }
+        let raw = Raw::deserialize(d)?;
+        let mut offers = HashMap::with_capacity(raw.offers.len());
+        let mut unparseable_ids = Vec::new();
+        for (k, v) in raw.offers {
+            match Uuid::parse_str(&k) {
+                Ok(id) => {
+                    offers.insert(id, v);
+                }
+                Err(_) => unparseable_ids.push(k),
+            }
+        }
+        unparseable_ids.sort();
+        Ok(OfferContentsFile { offers, unparseable_ids })
+    }
 }
