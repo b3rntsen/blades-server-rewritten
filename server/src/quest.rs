@@ -633,6 +633,29 @@ fn resolve_completion_reward(
         return reward;
     }
 
+    // A town job pays what its own jobSetup declared. Its sentinel gldQuestId is in
+    // neither reward table, so before this branch existed every job completion fell
+    // through to "paying nothing" below — a full retail reward silently dropped on
+    // every job any player has ever finished here.
+    if quest.gld_quest_id == jobs_gen::JOB_SENTINEL_GLD {
+        if let Some(reward) = quest.job_reward.as_ref() {
+            return reward.clone();
+        }
+        // Rows rolled before `job_reward` existed carry None. The board is re-rolled
+        // at every daily reset, so this heals itself within a day; until it does,
+        // pay the XP the difficulty implies rather than nothing. No gold: the count
+        // was a per-job roll and is not recoverable from the row.
+        let xp = blades_lib::static_data::QuestLevelScaling::default()
+            .given_xp(quest.difficulty_level.max(1));
+        log::info!(
+            "[quest] job {quest_id} predates jobSetup reward capture — paying {xp} xp, no gold"
+        );
+        return RewardGrant {
+            character_xp: xp,
+            ..Default::default()
+        };
+    }
+
     // Template first: `quest_rewards.json` is keyed by gldQuestId.
     if let Some(r) = static_data.quest_rewards.get(&quest.gld_quest_id) {
         return r.clone();
@@ -1598,6 +1621,36 @@ pub(crate) mod jobs_gen {
             .collect()
     }
 
+    /// What a job pays on completion, read off the job's own `jobSetup`.
+    ///
+    /// `rewardXp` becomes `characterXp` and `rewardItemCount` of `rewardItemId`
+    /// becomes a **currency** credit. Both halves are measured, not assumed: in the
+    /// retail corpus job `1385706b-…` declared `rewardXp: 1526` / `rewardItemCount:
+    /// 1000` and its `/complete` paid exactly `characterXp: 1526` and
+    /// `currencies: {gold: 1000}`; `9ba20667-…` declared 1586/1000 and paid
+    /// 1586/1000. `rewardItemId` was gold on 802 of 802 sampled jobs, and gold
+    /// arrives under `currencies` (never `stackableItems`) in every job completion
+    /// in the sample.
+    ///
+    /// A zero count is a real retail value — 0 gold appears at many difficulties —
+    /// so it is skipped rather than credited, which keeps the wire's
+    /// `skip_serializing_if` shape (`currencies` omitted, not `{gold: 0}`).
+    pub fn job_completion_reward(job: &Value) -> RewardGrant {
+        let setup = job.get("jobSetup").cloned().unwrap_or(Value::Null);
+        let mut reward = RewardGrant {
+            character_xp: get_u64(&setup, "rewardXp", 0),
+            ..Default::default()
+        };
+        let count = get_u64(&setup, "rewardItemCount", 0);
+        if count > 0 {
+            if let Some(id) = get_str(&setup, "rewardItemId").and_then(|s| Uuid::parse_str(s).ok())
+            {
+                reward.currencies.insert(id, count);
+            }
+        }
+        reward
+    }
+
     /// Build the storable `QuestDbEntry` for a generated job Value. The row is a
     /// plain `Quest` (type Normal, sentinel gldQuestId) carrying the job's
     /// objective statuses + difficulty + seed, so /objectives + /complete resolve
@@ -1633,6 +1686,7 @@ pub(crate) mod jobs_gen {
             game_event_quest_data: None,
             rewards: None,
             final_reward: None,
+            job_reward: Some(job_completion_reward(job)),
             completed: false,
         };
         Some(QuestDbEntry {
@@ -2819,6 +2873,218 @@ mod event_quest_tests {
     }
 }
 
+
+/// Report #92/#98: a completed town job paid nothing.
+///
+/// A job's `gldQuestId` is our sentinel. It is a key in neither `quest_rewards.json`
+/// nor `event_quests.json`, so `resolve_completion_reward` fell through every branch
+/// to its "no captured reward — paying nothing" default. Every job finished on this
+/// server since jobs existed paid zero XP and zero gold, while its own board entry
+/// advertised a reward.
+///
+/// Ground truth is retail's own corpus, matched job-for-job rather than by shape:
+/// board capture 242402 rolled job `1385706b-…` with `rewardXp: 1526`,
+/// `rewardItemCount: 1000`, `rewardItemId: f8d27767-…`, and that job's `/complete`
+/// (capture 242652) answered
+/// `{"currencies":{"f8d27767-…":1000},"characterXp":1526,"townXp":0}`. Job
+/// `9ba20667-…` from the same board declared 1586/1000 and paid 1586/1000. Gold
+/// arrives under `currencies`, never `stackableItems`.
+#[cfg(test)]
+mod report92_job_completion_reward_tests {
+    use super::*;
+    use blades_lib::static_data::{QuestLevelScaling, StaticData};
+    use blades_lib::user_data::Quest;
+
+    const GOLD: &str = "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2";
+    const CHAR: Uuid = Uuid::from_u128(0x1234_5678_9abc_def0_1234_5678_9abc_def0);
+    /// 2026-05-13 Wed 06:00 UTC — the weekday whose board prod capture id=1105 shows.
+    const NOW_WED: u64 = 1_778_648_400 + 3600;
+
+    fn static_data() -> StaticData {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        crate::static_loader::load(&dir)
+    }
+
+    fn game_data() -> blades_lib::game_data::GameData {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/parsed.json");
+        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        serde_json::from_str(&raw).expect("valid parsed.json")
+    }
+
+    fn job_pools() -> Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/job_pools.json");
+        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        serde_json::from_str(&raw).expect("valid job_pools.json")
+    }
+
+    /// The real board, rolled from the committed job pools.
+    fn board() -> Vec<Value> {
+        let pools = job_pools();
+        let boundary = jobs_gen::current_reset_boundary(&pools, NOW_WED);
+        let (jobs, _t) = jobs_gen::generate(&pools, CHAR, 48, 0, boundary, NOW_WED);
+        assert!(!jobs.is_empty(), "the committed pools must roll a board at all");
+        jobs
+    }
+
+    /// One retail job, reduced to the three `jobSetup` fields the reward is built
+    /// from plus the two the row needs.
+    fn retail_job(quest_id: &str, xp: u64, gold: u64) -> Value {
+        json!({
+            "questId": quest_id,
+            "version": 0,
+            "difficultyLevel": 75,
+            "seed": 0,
+            "objectiveStatuses": {},
+            "jobSetup": {
+                "rewardXp": xp,
+                "rewardItemId": GOLD,
+                "rewardItemCount": gold,
+            },
+        })
+    }
+
+    /// THE identity test: our reward for a retail job must equal, key for key, the
+    /// `reward` block retail's own `/complete` returned for that same job.
+    #[test]
+    fn a_job_pays_exactly_what_its_jobsetup_declared() {
+        // capture 242402 (board) -> capture 242652 (/complete)
+        let reward =
+            jobs_gen::job_completion_reward(&retail_job("1385706b-d464-4e30-838b-55558644e8ba", 1526, 1000));
+        assert_eq!(
+            serde_json::to_value(&reward).unwrap(),
+            json!({ "currencies": { GOLD: 1000 }, "characterXp": 1526 }),
+            "must match retail's /complete reward block for job 1385706b"
+        );
+
+        // capture 242402 (board) -> capture 243017 (/complete)
+        let reward =
+            jobs_gen::job_completion_reward(&retail_job("9ba20667-fd89-4bda-a8f3-708013b70710", 1586, 1000));
+        assert_eq!(
+            serde_json::to_value(&reward).unwrap(),
+            json!({ "currencies": { GOLD: 1000 }, "characterXp": 1586 }),
+            "must match retail's /complete reward block for job 9ba20667"
+        );
+    }
+
+    /// A zero `rewardItemCount` is a real retail value (it appears at many
+    /// difficulties in the sampled boards), and retail omits `currencies` entirely
+    /// rather than sending `{gold: 0}`.
+    #[test]
+    fn a_job_that_declares_no_gold_omits_currencies() {
+        let reward = jobs_gen::job_completion_reward(&retail_job(
+            "00000000-0000-4000-8000-000000000000",
+            400,
+            0,
+        ));
+        assert_eq!(
+            serde_json::to_value(&reward).unwrap(),
+            json!({ "characterXp": 400 }),
+            "no gold means no currencies key, not a zero one"
+        );
+    }
+
+    /// The end-to-end bug: roll the real board, store each job the way `/quests`
+    /// does, and complete it. Before the fix every one of these paid `RewardGrant`'s
+    /// default — empty — because the sentinel matched no reward table.
+    #[test]
+    fn every_job_on_the_board_pays_on_completion() {
+        let sd = static_data();
+        let gd = game_data();
+        let mut state = blades_lib::server_state::ServerState::default();
+        let jobs = board();
+        for job in &jobs {
+            let row = jobs_gen::job_quest_db_entry(job, CHAR, &gd).expect("job row");
+            let paid = resolve_completion_reward(&sd, row.id, &row.info.0, &mut state);
+            let declared = jobs_gen::job_completion_reward(job);
+            assert!(
+                !paid.is_empty(),
+                "job {} completed and paid nothing",
+                job["questId"]
+            );
+            assert_eq!(
+                serde_json::to_value(&paid).unwrap(),
+                serde_json::to_value(&declared).unwrap(),
+                "job {} paid something other than its own jobSetup",
+                job["questId"]
+            );
+        }
+
+        // The control that makes the above discriminating: a story quest the reward
+        // table DOES cover must still resolve through `gldQuestId`, so the new job
+        // branch cannot be swallowing the ordinary path.
+        let covered = gd
+            .quests
+            .keys()
+            .find(|gld| sd.quest_rewards.contains_key(gld))
+            .copied()
+            .expect("the committed table covers at least one quest");
+        let mut story: Quest = serde_json::from_value(json!({
+            "version": 0, "type": "NORMAL", "objectiveStatuses": {},
+            "difficultyLevel": 0, "seed": 0, "gldQuestId": covered, "completed": false,
+        }))
+        .expect("fixture quest");
+        story.job_reward = None;
+        let reward = resolve_completion_reward(&sd, Uuid::from_u128(0xF00D), &story, &mut state);
+        assert!(!reward.is_empty(), "the story-quest control must still pay");
+    }
+
+    /// Rows stored before `job_reward` existed carry `None`. They must still pay
+    /// something rather than fall back into the "paying nothing" default — the board
+    /// re-rolls daily, so this path is temporary, but "temporary" here meant a
+    /// player's finished job.
+    #[test]
+    fn a_job_row_from_before_this_field_still_pays_xp() {
+        let sd = static_data();
+        let mut state = blades_lib::server_state::ServerState::default();
+        let legacy: Quest = serde_json::from_value(json!({
+            "version": 0, "type": "NORMAL", "objectiveStatuses": {},
+            "difficultyLevel": 75, "seed": 0,
+            "gldQuestId": jobs_gen::JOB_SENTINEL_GLD, "completed": false,
+        }))
+        .expect("a pre-field row must still deserialize");
+        assert!(legacy.job_reward.is_none(), "the fixture is the legacy shape");
+
+        let reward = resolve_completion_reward(&sd, Uuid::from_u128(1), &legacy, &mut state);
+        assert_eq!(
+            reward.character_xp,
+            QuestLevelScaling::default().given_xp(75),
+            "the legacy path pays the difficulty's xp"
+        );
+        assert!(reward.currencies.is_empty(), "and no gold, which is unrecoverable");
+    }
+
+    /// `job_reward` is ours, not retail's: no captured quest carries the key, and
+    /// job rows are kept out of `quests[]` anyway. It must never appear on the wire
+    /// for a quest that does reach the client.
+    #[test]
+    fn job_reward_is_absent_from_a_non_job_quests_wire() {
+        let story: Quest = serde_json::from_value(json!({
+            "version": 0, "type": "NORMAL", "objectiveStatuses": {},
+            "difficultyLevel": 0, "seed": 0,
+            "gldQuestId": Uuid::from_u128(0xABC), "completed": false,
+        }))
+        .expect("fixture quest");
+        let wire = serde_json::to_value(&story).unwrap();
+        assert!(
+            wire.get("jobReward").is_none(),
+            "jobReward leaked onto a story quest's wire: {wire}"
+        );
+
+        // Control: the field really does serialize when it is set, so the assertion
+        // above is about `skip_serializing_if` and not about a field that never works.
+        let mut job = story;
+        job.job_reward = Some(blades_lib::economy::RewardGrant {
+            character_xp: 7,
+            ..Default::default()
+        });
+        assert_eq!(
+            serde_json::to_value(&job).unwrap()["jobReward"]["characterXp"],
+            json!(7)
+        );
+    }
+}
 
 #[cfg(test)]
 mod deleted_quest_ids_tests {

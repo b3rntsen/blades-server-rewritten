@@ -109,6 +109,29 @@ pub struct Quest {
     /// The one-off bonus paid alongside the last milestone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_reward: Option<RewardGrant>,
+    /// What a town JOB pays when it is completed, captured off the job's own
+    /// `jobSetup` at the moment the board was rolled.
+    ///
+    /// A job needs its own slot because a job's `gldQuestId` is our sentinel: it is
+    /// in neither `quest_rewards.json` (keyed by real template ids) nor
+    /// `event_quests.json`, so `resolve_completion_reward` fell through every branch
+    /// and paid **nothing** for every job ever completed on this server.
+    ///
+    /// Retail's own numbers, matched job-for-job in the corpus: job
+    /// `1385706b-...`'s `jobSetup` declared `rewardXp: 1526` and
+    /// `rewardItemCount: 1000` of `rewardItemId: f8d27767-...` (gold), and its
+    /// `/complete` response paid exactly
+    /// `{"currencies":{"f8d27767-...":1000},"characterXp":1526}`; job `9ba20667-...`
+    /// declared 1586/1000 and paid 1586/1000. `rewardItemId` is gold on 802 of 802
+    /// sampled jobs, and it arrives as a **currency**, not a stackable -- 5 of 60
+    /// sampled non-template completions have that gold-plus-XP-only shape and 0 of
+    /// 20 story-quest completions do, which is what tells the two apart.
+    ///
+    /// `None` on every non-job quest (and on job rows written before this field
+    /// existed, which fall back to XP alone), so it never appears on the wire for
+    /// anything retail sends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_reward: Option<RewardGrant>,
     pub completed: bool,
 }
 
