@@ -97,10 +97,30 @@ pub fn load(dir: &Path) -> StaticData {
     let global_shop_free: FreeProductIds = read_json(&dir.join("global_shop_free.json"));
     // A missing file leaves the map empty, i.e. no fallback — purchases keep
     // 404ing exactly as they did before this existed. The safe direction.
-    let global_shop_offer_contents = read_json::<blades_lib::static_data::OfferContentsFile>(
-        &dir.join("global_shop_offer_contents.json"),
-    )
-    .offers;
+    let global_shop_offer_contents = {
+        let file = read_json::<blades_lib::static_data::OfferContentsFile>(
+            &dir.join("global_shop_offer_contents.json"),
+        );
+        // Report #93: one non-UUID product id used to fail the whole map, so all 541
+        // offers were dropped and only a startup WARN said so. It is tolerated now —
+        // but say which ids were dropped, at WARN, every boot, so a silent hole in
+        // the shop is visible rather than inferred from a purchase that 404s.
+        if !file.unparseable_ids.is_empty() {
+            log::warn!(
+                "[static] global_shop_offer_contents.json: {} offer(s) loaded, {} skipped \
+                 for an unparseable product id: {:?}",
+                file.offers.len(),
+                file.unparseable_ids.len(),
+                file.unparseable_ids,
+            );
+        } else {
+            log::info!(
+                "[static] global_shop_offer_contents.json: {} offers loaded",
+                file.offers.len()
+            );
+        }
+        file.offers
+    };
     let challenge_templates: Vec<ChallengeTemplate> = read_json(&dir.join("challenges.json"));
     let daily_rewards: Vec<DailyRewardDef> = read_json(&dir.join("daily_rewards.json"));
     let chest_loots: Vec<RewardGrant> = read_json(&dir.join("chest_loots.json"));

@@ -878,6 +878,76 @@ mod authoritative_price_tests {
 
 /// The APK-derived offer-contents fallback (tracker #93).
 #[cfg(test)]
+/// Report #93 ("make it read then"): the file shipped, and the server threw it away.
+///
+/// `global_shop_offer_contents.json` holds 541 offers and ONE product id that is not
+/// a UUID — `53c6f124-3603-4100-ba9a-e2fe23969f7p`, 36 characters with a `p` where
+/// the last hex digit belongs. It comes that way from the game data itself
+/// (`global_shop_overrides.json` carries the identical string), so regenerating the
+/// file does not fix it.
+///
+/// `HashMap<Uuid, OfferContents>` failed the entire map on that key, serde aborted,
+/// and `static_loader` fell back to `default()`. Prod said it out loud at 16:54 on
+/// 2026-09-10 and nothing was watching:
+///
+/// ```text
+/// [static] invalid "/data/static/global_shop_offer_contents.json":
+///   UUID parsing failed: invalid character: found `p` at 36 at line 2794 column 41;
+///   using default
+/// ```
+///
+/// So every purchase was back to no contents to grant, which is exactly what the
+/// reporter kept seeing after being told the data was shipped.
+mod report93_bad_product_id {
+    use blades_lib::static_data::OfferContentsFile;
+
+    /// The real committed file: 540 good ids load and the one bad id is reported.
+    #[test]
+    fn the_shipped_file_loads_despite_its_one_bad_id() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/global_shop_offer_contents.json");
+        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        let file: OfferContentsFile = serde_json::from_str(&raw).expect("must parse at all");
+
+        assert_eq!(
+            file.unparseable_ids,
+            vec!["53c6f124-3603-4100-ba9a-e2fe23969f7p".to_string()],
+            "the one known-bad id must be reported, not silently dropped"
+        );
+        // THE regression. Before the fix this whole parse errored and the caller got
+        // an empty map.
+        assert_eq!(
+            file.offers.len(),
+            540,
+            "541 entries minus the one unusable id — all the rest must load"
+        );
+    }
+
+    /// The same shape in miniature, so a future data change cannot make the test
+    /// above pass for the wrong reason.
+    #[test]
+    fn one_bad_key_costs_only_that_key() {
+        let json = r#"{"offers":{
+            "53c6f124-3603-4100-ba9a-e2fe23969f7p": {"kind":"literal"},
+            "d07a8d30-9a1c-49b0-866d-97a8aa1534cf": {"kind":"literal"}
+        }}"#;
+        let file: OfferContentsFile = serde_json::from_str(json).expect("parses");
+        assert_eq!(file.offers.len(), 1, "the good key survives");
+        assert_eq!(file.unparseable_ids.len(), 1, "the bad key is reported");
+    }
+
+    /// The control: a file with no bad ids reports none, so `unparseable_ids` is a
+    /// real signal rather than something always populated.
+    #[test]
+    fn a_clean_file_reports_nothing_skipped() {
+        let json = r#"{"offers":{"d07a8d30-9a1c-49b0-866d-97a8aa1534cf": {"kind":"literal"}}}"#;
+        let file: OfferContentsFile = serde_json::from_str(json).expect("parses");
+        assert_eq!(file.offers.len(), 1);
+        assert!(file.unparseable_ids.is_empty());
+    }
+}
+
+#[cfg(test)]
 mod offer_contents_fallback {
     use super::*;
     use blades_lib::static_data::OfferContentEntry;
