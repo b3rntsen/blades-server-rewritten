@@ -611,6 +611,7 @@ async fn main() -> Result<()> {
                     .service(guild::redeem_exchange)
                     .service(guild::create_exchange)
                     .service(social::get_social_characters)
+                    .service(social::get_social_town)
                     .service(guild::create_guild)
                     // `{id}/join` and `{id}/apply` before the bare `{id}` GET.
                     .service(guild::join_guild)
