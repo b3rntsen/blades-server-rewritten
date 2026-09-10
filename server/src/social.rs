@@ -1,5 +1,8 @@
-//! `GET /social/characters` — resolve a set of user ids to their public character
-//! cards.
+//! Public social-card reads:
+//!
+//! - `GET /social/characters` resolves user ids to public character cards.
+//! - `GET /social/users/{user}/characters/{character}/towns/current` returns the
+//!   small town summary shown on another player's profile.
 //!
 //! Every screen that shows *other* players goes through here: the guild roster,
 //! the guild message log, friends, arena opponent cards. The client holds only
@@ -163,6 +166,32 @@ pub struct SocialResponse {
     social: SocialCharacters,
 }
 
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct SocialTownLevelInfo {
+    level: u64,
+    experience_points: u64,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct SocialTownWire {
+    level_info: SocialTownLevelInfo,
+    name: String,
+}
+
+#[derive(Serialize)]
+struct SocialTownInner {
+    town: SocialTownWire,
+}
+
+/// Retail wraps the projection as `{"social":{"town":...}}`; it does not
+/// return the full town graph on this route.
+#[derive(Serialize)]
+struct SocialTownResponse {
+    social: SocialTownInner,
+}
+
 /// Split a comma-separated query value, dropping empties so a trailing comma or
 /// a doubled separator is not read as a blank entry.
 fn split_csv(raw: &str) -> impl Iterator<Item = &str> {
@@ -256,6 +285,72 @@ pub async fn get_social_characters(
     Ok(Json(SocialResponse {
         social: SocialCharacters { characters },
     }))
+}
+
+/// The profile/guild flow calls this immediately after `/social/characters`.
+/// Seven consecutive 404s from one production client exposed that only the
+/// first half of the social read surface had been implemented.
+///
+/// Captured retail response (two independent towns):
+///
+/// ```json
+/// {"social":{"town":{"levelInfo":{"level":10,"experiencePoints":137641},
+///                    "name":"Valhalla"}}}
+/// ```
+#[get(
+    "/blades.bgs.services/api/game/v1/public/social/users/{user_id}/characters/{character_id}/towns/current"
+)]
+pub async fn get_social_town(
+    session: SessionLookedUpMaybe,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<(Uuid, Uuid)>,
+) -> Result<Json<SocialTownResponse>, BladeApiError> {
+    session.get_session_or_error()?;
+    let (wanted_user_id, wanted_character_id) = path.into_inner();
+
+    let mut conn = app_state.db_pool.get().await?;
+    let rows: Vec<crate::models::CharacterDbEntryTown> = {
+        use schema::characters::dsl::*;
+        characters
+            .filter(id.eq(wanted_character_id))
+            .filter(user_id.eq(wanted_user_id))
+            .select(crate::models::CharacterDbEntryTown::as_select())
+            .load(&mut conn)
+            .await?
+    };
+    let row = rows
+        .get(0)
+        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, SOCIAL_SERVICE_ID, 11))?;
+    let town = social_town_projection(row.town.as_ref().map(|v| &v.0));
+
+    Ok(Json(SocialTownResponse {
+        social: SocialTownInner { town },
+    }))
+}
+
+/// Project the stored town down to the three scalar fields retail returned.
+/// Characters without imported town data use the same level-0 fallback as our
+/// own `/towns/current` default instead of sending nulls that the profile UI
+/// never saw from retail.
+fn social_town_projection(town: Option<&Value>) -> SocialTownWire {
+    let level_info = town.and_then(|v| v.get("levelInfo"));
+    SocialTownWire {
+        level_info: SocialTownLevelInfo {
+            level: level_info
+                .and_then(|v| v.get("level"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            experience_points: level_info
+                .and_then(|v| v.get("experiencePoints"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        },
+        name: town
+            .and_then(|v| v.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned(),
+    }
 }
 
 /// Project a character's `data` down to the requested `characterDataKeys`.
@@ -470,6 +565,49 @@ mod wire {
         assert!(
             v.get("social").and_then(|s| s.get("characters")).is_some(),
             "expected social.characters, got {v:?}"
+        );
+    }
+
+    #[test]
+    fn social_town_is_the_captured_short_projection() {
+        let town = json!({
+            "levelInfo": {"level": 10, "experiencePoints": 137641},
+            "name": "Valhalla",
+            "districts": [{"mustNotLeak": true}]
+        });
+        let projected = social_town_projection(Some(&town));
+        assert_eq!(projected.level_info.level, 10);
+        assert_eq!(projected.level_info.experience_points, 137641);
+        assert_eq!(projected.name, "Valhalla");
+
+        let response = serde_json::to_value(SocialTownResponse {
+            social: SocialTownInner { town: projected },
+        })
+        .unwrap();
+        assert_eq!(
+            response,
+            json!({
+                "social": {
+                    "town": {
+                        "levelInfo": {"level": 10, "experiencePoints": 137641},
+                        "name": "Valhalla"
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn social_town_missing_data_matches_the_level_zero_default() {
+        assert_eq!(
+            social_town_projection(None),
+            SocialTownWire {
+                level_info: SocialTownLevelInfo {
+                    level: 0,
+                    experience_points: 0,
+                },
+                name: String::new(),
+            }
         );
     }
 
