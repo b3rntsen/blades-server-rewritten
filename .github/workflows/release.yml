@@ -108,7 +108,7 @@ jobs:
           set -euo pipefail
           SHA_TAG="sha-$(git rev-parse --short HEAD)"
           echo "SHA_TAG=$SHA_TAG" >> "$GITHUB_ENV"
-          docker build -t "$IMAGE:$SHA_TAG" -t "$IMAGE:main" .
+          docker build --build-arg VCS_REF="$GITHUB_SHA" -t "$IMAGE:$SHA_TAG" -t "$IMAGE:main" .
 
       - name: push
         run: |

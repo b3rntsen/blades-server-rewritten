@@ -25,8 +25,10 @@ RUN PROFILE_FLAG=""; [ "$CARGO_PROFILE" = "release" ] && PROFILE_FLAG="--release
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.revision=$VCS_REF
 COPY --from=build /tmp/blades-server /usr/local/bin/blades-server
 # HTTP REST (blades.bgs.services API) + the arena UDP/ENet host.
 EXPOSE 8080

@@ -211,7 +211,7 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
         // so a stuck or zero-connect host is obvious from the logs alone.
         if now.saturating_duration_since(last_housekeep) >= Duration::from_secs(5) {
             registry.sweep_expired(now);
-            info!(
+            debug!(
                 "arena-enet: alive — peers {}, matches {}, permits {}/{} free",
                 peer_at.len(),
                 registry.active_count(),

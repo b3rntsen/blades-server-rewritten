@@ -11,7 +11,7 @@ use blades_lib::{
         CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
         DungeonGeneratedDataWithId, InventoryChangeTracker, QuestWithId,
     },
-    util::quest::generate_quest_data,
+    util::quest::{GenerateQuestDataError, generate_quest_data},
 };
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper, associations::HasTable, insert_into};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
@@ -407,6 +407,21 @@ struct AcceptQuestResponse {
     dungeon_generated_data: Option<DungeonGeneratedDataWithId>,
 }
 
+fn map_quest_generation_error(error: GenerateQuestDataError) -> BladeApiError {
+    match error {
+        // A stale client can ask to accept a quest that is no longer in the
+        // server's current catalog. That is a normal resource miss, not a
+        // server fault; mapping it explicitly also keeps it out of the ERROR
+        // log used for real 500s.
+        GenerateQuestDataError::QuestNotFound(_) => {
+            BladeApiError::new(StatusCode::NOT_FOUND, 20001, 1)
+        }
+        // A known quest pointing at a missing dungeon is inconsistent server
+        // data. Preserve the generic 500 and diagnostic log for that case.
+        other => BladeApiError::generic_internal_error(other),
+    }
+}
+
 #[post(
     "/blades.bgs.services/api/game/v1/public/characters/{character_id}/quests/{quest_id}/accept"
 )]
@@ -497,7 +512,8 @@ async fn accept_quest(
         quest_id,
         player_level,
         &app_state.static_data.quests_daily.level_scaling,
-    )?;
+    )
+    .map_err(map_quest_generation_error)?;
     //TODO: specifically handle the case the quest already exist (primary key is character id + quest id)
 
     let to_insert = QuestDbEntry {
@@ -544,6 +560,21 @@ async fn accept_quest(
             .0
             .map(|inner| DungeonGeneratedDataWithId { quest_id, inner }),
     }))
+}
+
+#[cfg(test)]
+mod accept_error_mapping_tests {
+    use super::*;
+    use actix_web::ResponseError;
+
+    #[test]
+    fn an_unknown_quest_is_a_404_not_a_generic_500() {
+        let err = map_quest_generation_error(GenerateQuestDataError::QuestNotFound(
+            Uuid::nil(),
+        ));
+        assert_eq!(err.status_code(), StatusCode::NOT_FOUND);
+        assert_eq!(err.error_code(), 1);
+    }
 }
 
 /// What completing `quest_id` pays, and the bookkeeping that goes with it.

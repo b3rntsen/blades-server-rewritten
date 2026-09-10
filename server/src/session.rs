@@ -396,6 +396,15 @@ pub async fn persist_session(db: &DbPool, session_id: Uuid, session: &Session) {
             return;
         }
     };
+    // The table is a restart-survival cache, not history. Production had 1,274
+    // expired rows out of 1,296 because lookups filtered them but nothing ever
+    // removed them. New-session creation is the natural bounded cleanup point.
+    if let Err(e) = diesel::sql_query("DELETE FROM sessions WHERE expires_at <= now()")
+        .execute(&mut conn)
+        .await
+    {
+        error!("sessions: expired-row cleanup failed: {e}");
+    }
     if let Err(e) = diesel::sql_query(
         "INSERT INTO sessions (session_id, user_id, secret_user_id, extra_secret, expires_at) \
          VALUES ($1, $2, $3, $4, to_timestamp($5)) ON CONFLICT (session_id) DO NOTHING",
