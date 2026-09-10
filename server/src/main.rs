@@ -62,6 +62,7 @@ mod salvage;
 pub mod schema;
 mod shop;
 mod social;
+mod route_registration;
 mod shop_gen;
 mod session;
 mod static_loader;
@@ -555,6 +556,14 @@ async fn main() -> Result<()> {
                     .service(challenge::update_challenge)
                     .service(challenge::complete_challenge)
                     .service(challenge::abandon_challenge)
+                    // `levelup` was the ONE attributed handler in the whole
+                    // server that was never registered (tracker #108): the
+                    // module's other six were, so spending a level into
+                    // STAMINA or MAGICKA 404'd while every neighbouring
+                    // operation worked. The dead-code warning for its unused
+                    // `LevelupRequest` was the only visible symptom, sitting
+                    // among warnings for genuinely-unimplemented features.
+                    .service(character_ops::levelup)
                     .service(character_ops::learn_abilities)
                     .service(character_ops::respec)
                     .service(character_ops::upgrade_inventory)
