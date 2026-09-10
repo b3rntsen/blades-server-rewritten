@@ -2,10 +2,11 @@
 //! `GET /…/globalshops/current`, `POST /…/globalshops/current/purchase`.
 //!
 //! The Sigil/Gem sink. The override catalogue and IAP catalogue are served verbatim
-//! from capture-derived JSON; a purchase debits the client-supplied (and
-//! sanity-checked) price for real, grants the capture-derived product reward, and
-//! bumps the per-character purchase count. IAP (real money) is a priced placeholder
-//! only — there is no fulfillment route. See [`blades_lib::features::global_shop`].
+//! from capture-derived JSON; a purchase verifies the client's expected price
+//! against the active server-served promotion or APK base catalogue, debits it,
+//! grants the capture-derived product reward, and bumps the per-character purchase
+//! count. IAP (real money) is a priced placeholder only — there is no fulfillment
+//! route. See [`blades_lib::features::global_shop`].
 
 use std::sync::Arc;
 
@@ -172,6 +173,68 @@ fn apply_authored(catalog: Value, authored: &Value) -> Value {
         map.insert(id.clone(), entry.clone());
     }
     out
+}
+
+/// Price the product from the same effective catalogue the client sees.
+///
+/// A live replayed/authored override wins over the APK base price. This keeps
+/// Bethesda's captured promotions legitimate without turning their price into
+/// a permanent discount for an always-available product. If neither source can
+/// name a price, the purchase fails closed.
+fn authoritative_prices(
+    static_data: &blades_lib::static_data::StaticData,
+    product_id: Uuid,
+    now: i64,
+) -> Option<Vec<Price>> {
+    let current = apply_authored(
+        shift_to_now(&static_data.global_shop_overrides, now),
+        &static_data.global_shop_authored,
+    );
+    let override_entry = current
+        .get("globalShopOverrides")
+        .and_then(Value::as_object)
+        .and_then(|m| m.get(&product_id.to_string()));
+    if let Some(entry) = override_entry {
+        let active = entry
+            .get("isActive")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let starts = entry
+            .get("activeStartDate")
+            .and_then(Value::as_i64)
+            .unwrap_or(i64::MAX);
+        let ends = entry
+            .get("activeEndDate")
+            .and_then(Value::as_i64)
+            .unwrap_or(i64::MIN);
+        if active && starts <= now && now <= ends {
+            let parsed = entry
+                .get("prices")
+                .cloned()
+                .and_then(|v| serde_json::from_value::<Vec<Price>>(v).ok())
+                .filter(|p| !p.is_empty());
+            if parsed.is_some() {
+                return parsed;
+            }
+        }
+    }
+    static_data.global_shop_prices.get(&product_id).cloned()
+}
+
+fn validate_purchase_prices(
+    static_data: &blades_lib::static_data::StaticData,
+    product_id: Uuid,
+    requested: &[Price],
+    now: i64,
+) -> Result<(), PurchaseError> {
+    if static_data.global_shop_free.contains(&product_id) {
+        return global_shop::sanitize_free_prices(requested);
+    }
+    global_shop::sanitize_prices(requested)?;
+    match authoritative_prices(static_data, product_id, now) {
+        Some(expected) if expected == requested => Ok(()),
+        _ => Err(PurchaseError::InvalidPrice),
+    }
 }
 
 /// `GET /catalogoverrides/globalshop` — the override catalogue, shifted so retail's
@@ -354,11 +417,16 @@ pub async fn purchase_global_shop(
     // Zero is allowed ONLY for an offer on the capture-derived free list. The
     // price is client-supplied, so a blanket "allow zero" would give away every
     // paid offer.
-    if app_state.static_data.global_shop_free.contains(&body.global_shop_product_id) {
-        global_shop::sanitize_free_prices(&body.expected_prices)
-    } else {
-        global_shop::sanitize_prices(&body.expected_prices)
-    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    validate_purchase_prices(
+        &app_state.static_data,
+        body.global_shop_product_id,
+        &body.expected_prices,
+        now,
+    )
     .map_err(map_purchase_err)?;
 
     let product_id = body.global_shop_product_id;
@@ -693,6 +761,118 @@ mod replay_tests {
                 "authored offer {id} has no global_shop_grants entry — buying it would 404",
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod authoritative_price_tests {
+    use super::*;
+    use blades_lib::{
+        economy::{GEMS, SIGIL},
+        static_data::{FreeProductIds, StaticData},
+    };
+
+    const PRODUCT: Uuid = Uuid::from_u128(0x1275d959_bbe5_460d_8f6a_1c31106a8eb2);
+    const FREE_PRODUCT: Uuid = Uuid::from_u128(0x6135f729_1402_424c_b6c6_efcbc4e59955);
+    const NOW: i64 = 1_780_000_000;
+
+    fn base_data() -> StaticData {
+        StaticData {
+            global_shop_prices: [(PRODUCT, vec![Price::new(GEMS, 2500)])]
+                .into_iter()
+                .collect(),
+            global_shop_overrides: serde_json::json!({"globalShopOverrides": {}}),
+            global_shop_authored: serde_json::json!({"globalShopOverrides": {}}),
+            ..StaticData::default()
+        }
+    }
+
+    #[test]
+    fn a_client_cannot_name_its_own_discount() {
+        let data = base_data();
+        assert_eq!(
+            validate_purchase_prices(&data, PRODUCT, &[Price::new(GEMS, 1)], NOW),
+            Err(PurchaseError::InvalidPrice)
+        );
+        assert_eq!(
+            validate_purchase_prices(&data, PRODUCT, &[Price::new(GEMS, 2500)], NOW),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_live_server_served_promotion_overrides_the_base_price() {
+        let mut data = base_data();
+        data.global_shop_overrides = serde_json::json!({
+            "globalShopOverrides": {
+                PRODUCT.to_string(): {
+                    "activeStartDate": NOW - 100,
+                    "activeEndDate": NOW + 100,
+                    "isActive": true,
+                    "prices": [{"currencyId": GEMS, "quantity": 1}]
+                }
+            }
+        });
+        assert_eq!(
+            validate_purchase_prices(&data, PRODUCT, &[Price::new(GEMS, 1)], NOW),
+            Ok(())
+        );
+        assert_eq!(
+            validate_purchase_prices(&data, PRODUCT, &[Price::new(GEMS, 2500)], NOW),
+            Err(PurchaseError::InvalidPrice)
+        );
+    }
+
+    #[test]
+    fn an_inactive_override_does_not_become_a_permanent_discount() {
+        let mut data = base_data();
+        data.global_shop_overrides = serde_json::json!({
+            "globalShopOverrides": {
+                PRODUCT.to_string(): {
+                    "activeStartDate": NOW - 100,
+                    "activeEndDate": NOW + 100,
+                    "isActive": false,
+                    "prices": [{"currencyId": GEMS, "quantity": 1}]
+                }
+            }
+        });
+        assert_eq!(
+            validate_purchase_prices(&data, PRODUCT, &[Price::new(GEMS, 1)], NOW),
+            Err(PurchaseError::InvalidPrice)
+        );
+        assert_eq!(
+            validate_purchase_prices(&data, PRODUCT, &[Price::new(GEMS, 2500)], NOW),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn the_capture_proven_free_offer_is_still_free() {
+        let mut data = base_data();
+        data.global_shop_free = FreeProductIds {
+            free_product_ids: vec![FREE_PRODUCT],
+        };
+        assert_eq!(
+            validate_purchase_prices(&data, FREE_PRODUCT, &[Price::new(SIGIL, 0)], NOW),
+            Ok(())
+        );
+        assert_eq!(
+            validate_purchase_prices(&data, FREE_PRODUCT, &[Price::new(SIGIL, 1)], NOW),
+            Err(PurchaseError::InvalidPrice)
+        );
+    }
+
+    #[test]
+    fn an_unknown_product_has_no_client_chosen_price() {
+        assert_eq!(
+            validate_purchase_prices(
+                &base_data(),
+                Uuid::from_u128(0xdead),
+                &[Price::new(GEMS, 1)],
+                NOW,
+            ),
+            Err(PurchaseError::InvalidPrice)
+        );
     }
 }
 
