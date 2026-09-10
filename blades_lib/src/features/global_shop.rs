@@ -4,10 +4,10 @@
 //! The store is the Sigil/Gem sink. The base catalogue (price list + contents) lives
 //! in the client's asset bundles, so two things are capture-derived instead: the
 //! *override* catalogue (special/limited offers, served verbatim) and a
-//! `productId -> reward` map (what each bought product grants). The price comes from
-//! the client's `expectedPrices` — which we sanity-check and then debit for real
-//! (failing on insufficient funds). Per-character purchase counts live in
-//! `server_state.global_shop_purchases`.
+//! `productId -> reward` map (what each bought product grants). The request's
+//! `expectedPrices` is sanity-checked here; the server handler additionally compares
+//! it with the active override or APK-derived base price before debiting it. Per-
+//! character purchase counts live in `server_state.global_shop_purchases`.
 //!
 //! Captured purchase:
 //! ```jsonc
@@ -43,9 +43,9 @@ pub enum PurchaseError {
 /// usually single/double digits). Anything larger is a malformed/abusive request.
 const MAX_PRICE_QUANTITY: u64 = 1_000_000;
 
-/// Validate the client-supplied `expectedPrices`: non-empty, each line a known game
-/// currency with a plausible quantity. (The base price list lives in the client
-/// bundles, so we trust the client's price but bound it.)
+/// Shape-check the client-supplied `expectedPrices`: non-empty, each line a known
+/// game currency with a plausible quantity. The server handler must still compare
+/// the result with its authoritative product price.
 pub fn sanitize_prices(prices: &[Price]) -> Result<(), PurchaseError> {
     if prices.is_empty() {
         return Err(PurchaseError::InvalidPrice);

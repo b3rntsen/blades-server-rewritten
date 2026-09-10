@@ -1,0 +1,6416 @@
+{
+ "0022ec40-b7cd-47a6-9522-210ac04b3e2b": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "003ed442-f6d1-4a78-94e7-1f82cb92b547": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "005036e6-2f69-46ab-8eea-5b72379f2aa4": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 600
+  }
+ ],
+ "006dc512-0a0c-4f53-90bc-aeca4c110236": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1310
+  }
+ ],
+ "0096b533-7ac0-46be-ba47-e17dafe2a5cc": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 76
+  }
+ ],
+ "00a7ea9f-d096-414e-a904-49db79bb9eb6": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 899
+  }
+ ],
+ "00af571f-d8d0-45c7-bc63-86f58585d2c8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 175
+  }
+ ],
+ "0127f73e-e611-4e05-a24b-fd921bd617b1": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "012d329b-0f5f-4401-8a44-6df8ad4560f1": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 2200
+  }
+ ],
+ "019cbe82-c0b2-402a-b854-ffa42d10e101": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 525
+  }
+ ],
+ "01b0466e-f11d-4f41-91be-93b5e904b0dd": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 5
+  }
+ ],
+ "01fb3fd9-49aa-42d5-9aaa-ec68748103ff": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "021df5b4-a198-4b01-a268-3f42c2dd3f36": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 830
+  }
+ ],
+ "024e3b3a-31dc-46b5-bce1-e5bd79081eed": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "02733806-2a68-49e1-905f-a42e0bb478b9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 27
+  }
+ ],
+ "027abcce-5c25-4791-b650-38d9b6db5e3c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "02d67a59-d4de-42ac-94a3-cc01488ad6d8": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 87
+  }
+ ],
+ "0344282e-134e-4b17-a396-72d2c86a542d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 36
+  }
+ ],
+ "03c18b66-fce3-4351-8e58-134061f0e83e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 29
+  }
+ ],
+ "03eee296-d862-4936-9ff3-e3525ba5e68e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 36
+  }
+ ],
+ "041378b9-2f81-4718-a036-332bea4bebfc": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 600
+  }
+ ],
+ "0443305b-1a09-4cfa-b0b7-05ce5d068573": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 21
+  }
+ ],
+ "045f6c28-2298-46bd-9b89-4b4bd88ef99b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 31
+  }
+ ],
+ "04a832d3-088d-4e78-a8ec-810ee1dd13e2": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1875
+  }
+ ],
+ "0516f0d4-7b2e-45ea-8739-9b614ced447c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "0585e81b-95be-4d8d-be9d-0e866b1f84a9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "061e71e1-c9a3-41a2-9a98-6ea0f392cdc3": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "06214ad1-4c62-4b89-bf8e-b92c946defc6": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 57
+  }
+ ],
+ "064e9725-248f-448d-a8f0-60fa28099e68": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "065266b0-c0ef-4291-8048-e69a588866e4": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "06715994-caae-4c86-9e89-d5e95f9a2c9a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 750
+  }
+ ],
+ "06992f6a-1a42-4f77-a035-9a0589785b34": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "06c0d19c-38ce-472b-8ab0-145ec16eacb1": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 900
+  }
+ ],
+ "07071610-126d-4516-a844-c173778d3f91": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 26
+  }
+ ],
+ "070f96c8-4818-4421-bf12-6c8171b923bb": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 75
+  }
+ ],
+ "07eb2282-33d2-425f-ac53-100512634695": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 3000
+  }
+ ],
+ "086b359d-f6a3-4e04-9baf-cd22e6f112ec": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "0878b33c-f3c9-4587-be4e-8d69729f0b60": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "08bcf933-c798-4f04-8e5f-6367dafddfed": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 16
+  }
+ ],
+ "08f22ade-079d-449a-bd00-a456428dc051": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 31
+  }
+ ],
+ "0955f420-a190-4f34-a2a5-f0c8e1d13dc1": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "096020c8-2a95-4bcd-ab19-839985c5910b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "0976aa48-84d3-43f9-ad33-fe9508a7a6e5": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1880
+  }
+ ],
+ "09afb09a-bf5a-4be7-8f63-4bf84c2777c8": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "09bf4e66-42d7-4258-a563-9412f5f9a304": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 27
+  }
+ ],
+ "09eb252f-a2e3-4020-aa8e-828298428eea": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 38
+  }
+ ],
+ "09fb8cd9-4dac-4b4d-802e-3ceac55097d3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "09ff5a0f-18a1-4ae6-bce1-05906aa95cd3": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "0a17b317-0a78-4711-9166-7850c1f472ef": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 325
+  }
+ ],
+ "0a2a58e0-e26f-47e3-8170-c0806a577414": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 320
+  }
+ ],
+ "0a2f4c8d-2bd2-4078-aeff-3148a85dd289": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "0a3209f0-15a7-4f41-803b-7acfe6c66e1b": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "0a483ead-7f07-49a9-8063-13ca864acc67": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 899
+  }
+ ],
+ "0a5578a6-67ba-448d-aa02-0eececb3ddd0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 73
+  }
+ ],
+ "0a6dba62-644d-485a-b133-ea860dafdea3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "0ac2182d-5d5c-4699-bcbb-9da19e40feff": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 750
+  }
+ ],
+ "0b07afb3-3e61-49c5-ab02-a33cbf9445d6": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 13
+  }
+ ],
+ "0b685d94-3bd2-45a5-ab5b-3c0fd6bfd9c1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 110
+  }
+ ],
+ "0b8ed872-2aca-4869-b691-fa2c5a130d71": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 29
+  }
+ ],
+ "0baeafe8-185c-41ca-b31e-c109e1f298a6": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "0bda770b-ea4b-47b6-8181-bf2a9bd2315b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "0be1de9b-19a8-4793-bf89-d060c9b7528e": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 450
+  }
+ ],
+ "0beccb4b-4052-49e2-86e6-7713ebfb9b04": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1350
+  }
+ ],
+ "0c146beb-df90-4023-b5f7-596c4e2da29e": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "0c4ac6db-9c0c-435c-aebf-420042835fbf": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 30
+  }
+ ],
+ "0ca5c2bf-b968-4ec7-8322-c995a9c2b542": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 125
+  }
+ ],
+ "0cb40ff5-ddb2-4eaa-bb5a-9f43e56e93d9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 17
+  }
+ ],
+ "0ccaf37b-a829-404f-8b8d-e0de711b4f2c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 5
+  }
+ ],
+ "0d23db55-2247-45b7-80c2-580157c1038d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "0d4188d6-7184-4d60-86bc-f6e15621a8b3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 36
+  }
+ ],
+ "0d451253-0bda-4fe5-9e67-85643d22ad59": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 2400
+  }
+ ],
+ "0d63100b-d17c-41d7-b91a-794e64ff7272": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1800
+  }
+ ],
+ "0db1411b-f1b6-4422-9dfc-1d1c4decdb99": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1800
+  }
+ ],
+ "0dbc88a3-bd06-4bf2-847a-6e5deb79df28": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 100
+  }
+ ],
+ "0dbf81e2-09ed-46cb-8b38-f67be7fd91f0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "0e120d6f-94cc-4889-9421-fc94fe4a75ab": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 120
+  }
+ ],
+ "0e15462b-ec51-430b-8c13-a0c86e0d1570": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 600
+  }
+ ],
+ "0e224ca0-1506-490f-884a-8871ffe6399b": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "0e273d66-d745-4845-a4d7-007f74785733": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 2000
+  }
+ ],
+ "0e67cbb2-090f-4880-937a-d348314d33cb": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 24
+  }
+ ],
+ "0e8e6b60-0a65-431b-9723-cf1f09ed7339": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "0e9a3ba7-8523-4dcb-8917-cd631fa0de65": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "0ec90748-3038-4eed-a38f-82e6979ada22": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 100
+  }
+ ],
+ "0ef7fcb4-174e-43c8-a2ae-96b6dd729aae": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 750
+  }
+ ],
+ "0fb021e6-72fa-4427-bf41-b689a51ce687": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 131
+  }
+ ],
+ "0ff1d152-6dd0-4091-93bd-2fcbc0c7b238": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 80
+  }
+ ],
+ "10f746b4-f726-4999-b36a-93d66125a693": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "10f94b58-b1e7-4014-9b3f-fd83aa6b21e8": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 42
+  }
+ ],
+ "1185efd6-bb85-44d3-ae0d-e14272b2f8eb": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1500
+  }
+ ],
+ "1193de20-ff4f-4d31-ac1c-97ada006fd7c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 6
+  }
+ ],
+ "119bab2e-9b73-4193-a599-d43500e17530": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 7
+  }
+ ],
+ "11a7809b-6fef-4ddf-b14f-be80322dd5d2": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 16
+  }
+ ],
+ "11ab91e9-d38a-4fca-850f-a1d807a0894a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "123e0a45-c949-491d-b720-997fb53cdfdb": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 850
+  }
+ ],
+ "12518f77-fa72-4b7f-9ea8-9eacd47c482a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1400
+  }
+ ],
+ "1275d959-bbe5-460d-8f6a-1c31106a8eb2": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 2500
+  }
+ ],
+ "1332219e-2521-4432-aa0a-4cc0b0f62898": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 26
+  }
+ ],
+ "133edf20-c827-49fa-b4a3-cecafd63248e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 76
+  }
+ ],
+ "1345f742-849d-4044-9115-4abbc75ab371": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 100
+  }
+ ],
+ "1357b560-832d-422c-a083-04e30ad42eb2": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "138dfc7a-57ce-4b43-a28d-0cf5de35369b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 133
+  }
+ ],
+ "13a78344-6702-447e-bb19-d1d56e5ca7d0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 32
+  }
+ ],
+ "13c1bda8-ae2c-4ace-bfa7-88e8c666a452": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "13da6fd3-b50c-4425-be92-2d6a78d6a1fa": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 850
+  }
+ ],
+ "14d13edb-a013-45eb-998b-4a24d0a731ec": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 39
+  }
+ ],
+ "14e50c0b-51ba-42d0-9260-6fa217b1cdea": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "150e67b4-664d-4ce0-b42a-6e6f5d38536c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "15486ea8-553f-4df7-8762-72d81e68c046": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 50
+  }
+ ],
+ "15bc8cf6-563c-4b6b-aec0-741b64df2333": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 29
+  }
+ ],
+ "161a8d21-0214-47fe-8aa6-23ed8a03de43": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "161f82c8-f3b2-4b56-9335-69305967ce73": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "16d100ba-e553-496f-b938-9e75e2a39a7c": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 375
+  }
+ ],
+ "16da4554-e7ce-4118-9f35-c8cbd2b0b9cb": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "1788a175-ff20-482a-b0b0-c5c4d96bae8b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 33
+  }
+ ],
+ "179353db-1b7d-4c35-884c-155d4cd76755": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "179e5c5e-2497-4245-814f-584747cae76c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 33
+  }
+ ],
+ "17d77d2e-6421-42c5-9204-bd84dab9824a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 37
+  }
+ ],
+ "17f6e2b1-439a-41c1-add0-b700a165a93c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 41
+  }
+ ],
+ "1846ccc9-7ef4-449d-92fb-d7c943c6f091": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "1857677a-77ad-4e7e-9777-185ceca50835": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 333
+  }
+ ],
+ "186bc27a-0699-4fe0-9ae6-571f8b24a8b2": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "192e579e-8091-4358-819c-5f37a37f6685": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 23
+  }
+ ],
+ "196264ef-e204-4973-80f2-1e79dd9bad98": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "19c01680-6c88-409f-b9b6-e3a5ca025699": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "19c9c142-461b-410f-9c32-f894a4feea11": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 30
+  }
+ ],
+ "19cf4bfe-685f-4582-b0a8-d692c6f35ca4": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "19f22d6a-9dc8-4098-94fa-580c698c4166": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "19f44920-e5bd-4cc5-b1d0-e476ab62af04": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 89
+  }
+ ],
+ "1a061742-da9c-4b28-9c95-a874091d5a0b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 16
+  }
+ ],
+ "1a0ef699-a192-483b-b01a-18313c16b79f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "1a1d81fb-e491-433c-9453-a81cc8b1c561": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "1abe4563-d0c0-4093-a869-d6307bf90d04": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 22
+  }
+ ],
+ "1b283fa9-0f33-42c4-b682-5a48692d79e5": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "1b802dda-3c10-41c6-91e1-c75147c205bf": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 74
+  }
+ ],
+ "1bd66cdf-f9bc-41f9-a7a2-0281cdb0e2ef": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "1bfef92a-8a95-4ce5-847d-d4a1f614eb56": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1100
+  }
+ ],
+ "1c2739ef-2b9c-4de3-a110-ae4bf4a648e8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1100
+  }
+ ],
+ "1c66660d-13bb-4455-ad44-36162b084132": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 27
+  }
+ ],
+ "1c8c47b6-0d96-4fd9-8295-b0be2afcc122": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 100
+  }
+ ],
+ "1cba4bd7-31bd-4be2-ad4a-8105f9c95465": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 18
+  }
+ ],
+ "1cc4fe2f-3965-4dd2-a5e3-a81f2f5c0d1a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "1cd89393-1ed6-42be-a21d-e673b1b854e3": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1900
+  }
+ ],
+ "1ce8fc58-38b2-47a7-9652-548127cd2b7a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "1e170253-4c26-4c22-8d9f-10622a2b1e4a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "1e851099-f231-47bb-acdc-af47ee81b520": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 650
+  }
+ ],
+ "1e989d81-5673-4e3b-aa48-391b1f910ca6": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 350
+  }
+ ],
+ "1f01436e-9c63-4955-a347-6b15e4be966e": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "1f14876c-b7d7-4db9-a9c2-91cd9ea607fc": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "203a27b3-a816-4a61-b0a8-158b29173546": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "203fb1cc-7b27-4165-82d4-02dfd495442c": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 95
+  }
+ ],
+ "20557ef7-3403-4628-83db-b1f40e378173": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 23
+  }
+ ],
+ "20b1715c-7d89-499e-b128-96cd79c96322": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 32
+  }
+ ],
+ "20b48dd2-775e-4d54-bb22-1a51bbfcc845": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 100
+  }
+ ],
+ "20f2be5e-f9d8-44fa-9ec2-c104a5020816": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 13
+  }
+ ],
+ "215ad9bb-e277-4aac-a61f-8bd8ffceec54": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "21c4b532-0d42-4875-9229-2127c1f5d6a5": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 400
+  }
+ ],
+ "21d03d38-5839-4ffa-81c0-d1529cebb0d3": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "221f2c4b-ec2a-4973-9231-6e1ed0bff9a8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "222d3acf-2e7c-4f87-a7fc-b2c2ff6d5270": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 720
+  }
+ ],
+ "224df607-b5aa-4c7d-aeaf-7536b12b322c": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "225d8f0d-ef17-43bd-975d-18d8577aff7b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 38
+  }
+ ],
+ "22afa283-b524-491f-9ef1-37cfab2b083d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "22ec6379-b309-47bc-a2f1-db1ab1ac2984": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 850
+  }
+ ],
+ "22fc3846-6688-45ac-975d-67593f081632": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 156
+  }
+ ],
+ "230072f4-bcb5-4dde-91a1-cbdeb76a8b82": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 444
+  }
+ ],
+ "2316e5c3-1596-4d37-8cb2-47b1687415a9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "2320f21a-6ea2-4ee3-9568-74006c1d974a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 156
+  }
+ ],
+ "23931dab-b680-4eb4-900e-1e0e5180bc55": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 400
+  }
+ ],
+ "23f97b02-8d83-4d8e-a91d-825deaa10f33": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 80
+  }
+ ],
+ "240e3b6e-639d-4264-8716-cf793c98f07d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "243a42ad-fbf9-4cfd-934a-9b325a41d14c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "248f7e62-971c-4e5a-a522-961e4a3f2a2e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 37
+  }
+ ],
+ "24cc5ddd-8e86-4ab0-9973-167ba5a1c53e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 53
+  }
+ ],
+ "24f192b3-91c8-404b-94c5-4a650bfa5e6f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "24f8421e-5fa4-4ef8-b29c-a5db807dda78": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 33
+  }
+ ],
+ "25b71c79-c28b-4353-86c0-de0af3dcc088": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "26c80a7c-929a-4640-966c-f5d27e90ba2e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 16
+  }
+ ],
+ "26d38c52-5c2b-40ee-b8be-cd09aae0011d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "270790b7-74ac-470e-9f5f-fb49128bbea6": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 160
+  }
+ ],
+ "2728ce5e-1d8d-430e-a711-2ec903e513f9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "2744c3fd-69b9-49ee-8ead-344a05ca0eb5": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "2784c96f-4138-4dec-ab66-bd51cd3e5b0d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "27f4380e-7fdb-4e4b-b648-dcf3857f3064": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 100
+  }
+ ],
+ "27fe41d8-d482-4b60-b644-5b41adde0cc7": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 635
+  }
+ ],
+ "28376591-ed59-455c-91e8-43ffe560cb01": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 150
+  }
+ ],
+ "28768608-dafd-404d-9684-1824335b11bc": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 61
+  }
+ ],
+ "287d2960-212b-4d6f-9ace-137df68cb2f9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 18
+  }
+ ],
+ "28884ea8-85fc-46d2-a31c-e409e5b091a8": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "28b73aea-fd34-4a92-b83b-62cf840a6720": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "2900c56e-7212-4954-9658-0803a2f72a45": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 80
+  }
+ ],
+ "29747457-bd61-4b08-a985-14511ea1df49": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "298cd391-f853-4a9e-ab52-9f2e19679e2b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "29e8fbcd-1dba-4b36-a866-527961f51b20": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "2a1db5c1-7e6c-443a-8b9a-4568cd66b4b0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "2a9974c5-2600-4ed1-8103-3251d977d13f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 19
+  }
+ ],
+ "2adfbb46-2a10-41cb-97a9-96119ef9abb7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 134
+  }
+ ],
+ "2ba0d105-c87a-4549-a284-2a3004a3f0d6": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 13
+  }
+ ],
+ "2beb340f-6a38-4fda-a4e3-2732d893c981": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 37
+  }
+ ],
+ "2c2fc333-5180-4dca-abe7-2e02e588ec89": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 70
+  }
+ ],
+ "2c84d98f-7c47-4fa4-b39c-4d8f26c8e018": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "2d0f9450-81f3-46a2-a6e2-b240f4a86fd1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 50
+  }
+ ],
+ "2d5f8bea-2143-4416-942a-44de6494db7c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 30
+  }
+ ],
+ "2d6c4bf9-91fe-45ca-a536-0cd1400ccfcc": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "2df5f11b-86e5-41b2-a4b8-9eadbbe0af42": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "2e404653-99d2-4802-9f8f-fa315e5236d1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "2e469ca2-89f2-420e-9a47-f3767dcfb5a9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "2e7c35c6-6e24-4720-b15a-456e719f2d3b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "2e8f809b-d5a0-4f26-b989-512add381075": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 18
+  }
+ ],
+ "30c14a61-cc5d-4004-bf91-6c873cb8e652": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "30f17c5e-8119-4b3a-a5d0-a7e76bd89f09": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1200
+  }
+ ],
+ "30fbc9fb-6a39-4c65-a7c1-ce43702de1de": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "312cfafa-657b-41d0-9fff-c70b47e5908d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 29
+  }
+ ],
+ "3144bc87-815b-42af-8148-05650ab0d69e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 38
+  }
+ ],
+ "31ba95d6-cff4-4895-b82e-83c89bfdd2a0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "31fdbd40-89f7-4aac-a9de-1949717a5fe8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "3258eebb-62f6-4f49-b39c-00a80d6d9d74": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 122
+  }
+ ],
+ "3319ca3b-a486-4ecd-b059-864ea24e3bc3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "33ba4101-addb-4e4e-8db6-d4bd3d52e0b0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "33c85b34-c3ed-4e79-a5b3-f83fe91872a3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "33e6493e-2f1f-44cd-8092-f245657520be": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "354689f2-7fc2-486c-8294-789f5202e476": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 34
+  }
+ ],
+ "36155bce-895b-4010-be40-4945467a1ef0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 56
+  }
+ ],
+ "362a3264-e31b-4043-b0f6-91f7103e2392": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 16
+  }
+ ],
+ "362df611-75dc-444a-a0d6-11abb59045d0": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 750
+  }
+ ],
+ "36826b15-8f1a-4428-b5d5-e37c660d86b6": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "36d1592d-ffda-48f3-a34b-c753e4d03941": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 41
+  }
+ ],
+ "3714979d-20ec-4478-919b-ab7eddf60a17": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 3
+  }
+ ],
+ "371b8e75-8d06-4b23-8e6c-ef3c47dcf8a5": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 22
+  }
+ ],
+ "374048ae-304f-4d87-9ed3-5c4b60272aef": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 24
+  }
+ ],
+ "37899980-7814-46f1-8bc8-87847cb04ef8": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 18
+  }
+ ],
+ "3799a536-b4f4-4315-b529-28483b089955": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "37c44bdb-90d4-4363-a0c0-4009bd222425": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 38
+  }
+ ],
+ "38024bfd-c524-46bf-baee-512128660e1f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 24
+  }
+ ],
+ "3846da68-35ee-439b-b74f-f107faf5a51e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 30
+  }
+ ],
+ "385994ee-d0cd-44d9-840e-8726f01c5751": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "38679c86-0b98-4180-a736-95a86b4238bf": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 26
+  }
+ ],
+ "38a6be8b-745e-4b4f-b22a-bf6ec815717b": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 100
+  }
+ ],
+ "3935dacc-c458-4c21-bdde-9bdda3b64e0f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 37
+  }
+ ],
+ "393a3347-0de4-44ef-a21b-70bf8f821f45": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "396bc276-508f-4c01-a2d5-69b29519c6ce": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "39a341b6-2f79-4206-a6d5-36a122bf17e7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 16
+  }
+ ],
+ "39d8e67e-c517-4400-81ad-c77a496081b1": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "3a5439a8-32a8-43ee-b065-852517962b87": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 62
+  }
+ ],
+ "3be06240-5d96-4efa-bcd6-d71babbd6715": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "3be5a324-6ca7-4b57-8469-47d13b8071c0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 32
+  }
+ ],
+ "3c23a70f-40ec-4d84-a05b-d9e02e683d5a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 110
+  }
+ ],
+ "3c30e387-0b42-421b-a547-84e93c10edc6": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1200
+  }
+ ],
+ "3cb3c2ee-35e4-43b7-bf1d-03c45d65d9c1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 5
+  }
+ ],
+ "3d02f5ad-b145-4c36-8fec-70ea55fe9d2a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 35
+  }
+ ],
+ "3d2c7436-2815-4bb3-af6c-ae2e7fd44a35": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "3d5c84e4-8258-4dbc-bd9a-15199336f0b7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 24
+  }
+ ],
+ "3daa1e31-9f79-447a-83c0-0d7c03acb788": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 325
+  }
+ ],
+ "3dbefdb6-46c7-4325-82fc-6851cdc77561": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 61
+  }
+ ],
+ "3dc3bced-e583-4fc6-b79c-17ec3cd9ae5b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 899
+  }
+ ],
+ "3e200b1c-8dd2-42ff-87f2-59686e363384": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "3f5ddd5b-2aab-4e52-80e2-25b1d58e722e": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1875
+  }
+ ],
+ "3f928cb3-eacf-4178-a149-98acbf2e0947": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "3f9b4624-5c74-4a35-a53d-7c1fa482db44": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "3fb70c9a-1582-414a-87f4-b37cbe2d3f36": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 740
+  }
+ ],
+ "400b0585-0e3f-4878-8366-cbbae3d2e134": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 109
+  }
+ ],
+ "4054b67c-4ea5-4157-a644-f99f529e1e57": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 399
+  }
+ ],
+ "407129e7-66c1-4716-a1c3-5191d4b3b33f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 115
+  }
+ ],
+ "40ba610e-b926-4793-8593-af35ed87d9cd": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 24
+  }
+ ],
+ "40e137fa-79d2-41bf-b366-bd19ee69f5a9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "40e23e8b-637f-4d85-9816-bd0a5f95f2f7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 265
+  }
+ ],
+ "4124f829-68b3-4918-889d-128e37c113f6": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "41d17356-68fc-483c-a850-9ec3d27e2b5c": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "4292c0ab-dbe8-456c-9254-f4ed9f7bdfdb": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 30
+  }
+ ],
+ "42f89e83-2771-4503-bcbf-b78be6def4ba": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 27
+  }
+ ],
+ "4301506b-d23d-4c51-90fe-e9ec71f9337c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "441d15a4-ff49-46c9-8c35-5499869c7596": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "44433b7d-d4bf-47fb-ad30-1897471b2310": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "44899606-da43-4fbe-b8a7-a604ec5dcdd8": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 36
+  }
+ ],
+ "44901ea7-d331-4b42-8b97-85fe9097f381": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 600
+  }
+ ],
+ "44dbe20a-4848-4f79-90f8-1cc670bc3642": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "451e834d-1869-44e9-bf53-00ef8af97741": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "459f2bb8-dd55-43a7-b07d-1b38a6285fca": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "46022eb3-156b-4b89-8336-19b0d1660b14": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "463b1ebf-bb69-4350-a4dd-73107b583db7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 899
+  }
+ ],
+ "46834f86-1db8-479b-96f0-446525f966c9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "4695c897-35f8-4262-94c6-cdc99689a5b0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "469d1c29-8051-4966-a326-e35893e7ecc6": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1130
+  }
+ ],
+ "4758b07b-9bdf-4ace-8fa1-d014173ed669": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 444
+  }
+ ],
+ "4761c366-b6ba-4e47-bdc8-eac098f7fa63": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "479f94d6-bd3f-4208-aa47-0f36fafaf515": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 27
+  }
+ ],
+ "47ab54ba-0924-46e8-9f4e-e58279f59198": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "47b84132-7e80-44b6-8b04-e88bd223c16b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 899
+  }
+ ],
+ "47c7512e-75d4-4dbc-9289-ebe1518855fa": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "47da93ba-99e8-4e3b-9f8f-3595c24e479f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "47f89147-694c-47b8-ba87-3b5e9e272762": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "485f25d7-5505-4b3e-8e5a-ba5d21d4e1a4": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1100
+  }
+ ],
+ "48896ee4-3f13-4225-b2b9-23e3a49f8963": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 735
+  }
+ ],
+ "489a4832-3a94-4718-ab45-d9883a4fdda7": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "48aba164-76c2-443a-8cd5-b37beb88c979": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 21
+  }
+ ],
+ "48f13818-d8a9-4769-b297-1c4cef457cbb": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 400
+  }
+ ],
+ "497437eb-71c1-40eb-adbc-293a8dfabbf7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 21
+  }
+ ],
+ "49851469-ac9c-42fe-9784-b2486fa5eb91": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 44
+  }
+ ],
+ "49941411-5350-4e2e-836e-4b4d81f5fbb5": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 9
+  }
+ ],
+ "49ebc41c-cd04-4f0c-abfa-3eab670a57cf": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 26
+  }
+ ],
+ "4a03be57-3f3c-4a1a-b6bc-07c57180c602": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 28
+  }
+ ],
+ "4a3070fc-539c-4d97-98c5-374beea87ccd": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "4ac913f7-d43e-4bff-8aa9-ce1db8b0a6e9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 27
+  }
+ ],
+ "4ad5cdf0-b585-405b-9b89-45d89c346d2c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "4ba7308c-796e-4771-a88a-b6a13a192e1a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "4be4bb6c-46a6-438c-9f71-b848108c9c15": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "4cc7fa9d-83e4-4a00-bc8c-742ca37d6d48": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 850
+  }
+ ],
+ "4ccb75d0-89b8-421b-85c8-4259d7bcf517": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "4ccebdc4-668d-4b2f-8a4b-3e28e69904de": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 600
+  }
+ ],
+ "4ce049ed-2274-4836-aed6-8185e53b3a5b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 899
+  }
+ ],
+ "4cffb0c3-e76d-421d-9258-9e06174d1253": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 435
+  }
+ ],
+ "4dbaddc5-2d18-43ad-a224-c4160b4afb05": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "4dc44e4e-cd4f-4c81-aaf0-87a0300f72b1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "4dd48763-db3e-43bc-851b-8374719f66a9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "4de7b916-77b2-44bb-ac11-6a0082ca69af": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "4de8824c-e921-4107-9a41-70be9d08f1ad": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "4e2659ae-3212-4052-be9a-6a09db1a823a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1
+  }
+ ],
+ "4e6911fa-a662-4c3d-8800-e2a6ebfd580b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 26
+  }
+ ],
+ "4ec29628-1b5b-4ead-82bd-a6c6104e76df": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 66
+  }
+ ],
+ "4eca9b3e-37ac-4f86-ace9-2aaef5e41802": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "4f68fb73-c2fc-43f2-95c2-0ebb4ce091f4": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "4f7b557a-375d-4751-aa19-16812db690a9": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "4f967fcd-37c8-433b-83dd-d34e17d6ce70": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 550
+  }
+ ],
+ "4fc8a3e0-1adb-46bd-a41f-a31169c1bb27": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 450
+  }
+ ],
+ "4ff00a51-010e-4429-bbe4-45ed5919c892": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 34
+  }
+ ],
+ "50485c9c-f4fe-4197-8e20-a1a0cc4837cc": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "509e149c-0443-4092-ac41-e6df332aacd0": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "51284db5-29b9-44c8-b0e3-352b8b82ba9f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "51a6fd30-d3ac-4b56-ae6d-321ba8937804": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "51dd7e59-4aa4-47d2-8058-a497956cb22b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 32
+  }
+ ],
+ "522a71be-6f47-4d5c-9608-518cb0c6dab5": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 2000
+  }
+ ],
+ "522a9e2b-8449-4afa-9510-110641d2f4d4": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "53f03844-70c9-4145-b004-7d0c680cc018": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 650
+  }
+ ],
+ "553008d8-4365-489d-9afd-5f7f544c0792": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 200
+  }
+ ],
+ "557cff04-8683-4358-8267-bb53fbbce115": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "564a4faf-c2ea-47bb-a346-0a53d03647e1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 28
+  }
+ ],
+ "5687eeff-1e10-4776-858e-3d80dab355d1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "5699647f-2bc7-4a72-8e57-b5a545c443c3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "57108a6b-7b10-4828-a783-d52f5dcd62cd": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "5744643d-1b6f-44ee-90ca-814703dcedaf": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 160
+  }
+ ],
+ "579141c5-4960-4280-9b29-98b8a88f9dfe": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 83
+  }
+ ],
+ "581cbf3c-0d18-48b4-964f-de4239aec329": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "58ea5487-a8e4-4ee6-a51f-e3184f6241ee": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 180
+  }
+ ],
+ "58ec4017-04b0-41af-bb68-4441eebad971": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1750
+  }
+ ],
+ "58fb0bc7-6eb5-4f5c-b495-90ad1019d9fc": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 22
+  }
+ ],
+ "5919c561-e2bb-46c1-ad94-bd0e46ebdd28": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 127
+  }
+ ],
+ "59675eed-3514-42c1-a161-6869b158b9c3": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "59ab5828-2eea-4b7b-bd67-e2beee64e098": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 29
+  }
+ ],
+ "59b31d50-34e8-4b3e-8084-f54d3c8c6c4d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 6
+  }
+ ],
+ "59bb8164-daa2-4b69-90ab-2d3ec094f843": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 485
+  }
+ ],
+ "59cb0624-f8ea-421b-8b39-ec440985196e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "59d19949-1a7a-4e06-bd78-6197829e45a5": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 23
+  }
+ ],
+ "59df4b8c-e418-451e-8eab-a9c3e2dbb74c": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "5a5e9fc1-429e-4b15-b4fb-433e1bae5e1b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 83
+  }
+ ],
+ "5a64724b-60cf-4b7d-98de-751e298e98cd": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "5a7f4221-7492-4e51-8b5a-96558694e556": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1200
+  }
+ ],
+ "5b1fc014-5c07-4cf3-83f6-1ceed5cd0086": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "5b417350-8e3d-4e06-a0e2-4cb4931346c5": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 27
+  }
+ ],
+ "5b7a02fe-20b5-4a51-b6bb-9410a105df9d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "5bae2c86-99b5-4021-ab5d-b8dd70e1ac10": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 650
+  }
+ ],
+ "5be33ce0-48c7-454f-8551-4329f99f55ca": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 4
+  }
+ ],
+ "5be5762a-2c7c-4a4a-b1a5-4af8a93dbf71": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 165
+  }
+ ],
+ "5bf64569-dca5-45d3-86d5-35238351156e": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "5c167492-14ce-4578-8ec3-79e258f4bc5e": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 450
+  }
+ ],
+ "5c29e759-6768-4a68-a125-12341d14ce49": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 57
+  }
+ ],
+ "5c9b5ab4-30e9-42c5-815e-0c7cbe284f8c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 39
+  }
+ ],
+ "5c9d1ddb-b6fa-4d77-8537-a0b07c5414d1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 9
+  }
+ ],
+ "5caf2574-c68b-409b-a33a-841664998396": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 375
+  }
+ ],
+ "5cb83711-f4ad-4734-bf39-6caffe8ad6f9": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 185
+  }
+ ],
+ "5d4a230c-43c8-498f-9534-659fe9389476": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 5
+  }
+ ],
+ "5dff1d25-ae5f-4b21-bb2a-6a733d2b5f26": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "5e35d31c-8ef1-482b-a704-1cfb903a04ac": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "5e3d267a-bfb3-4534-80ec-5a1615b78086": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 31
+  }
+ ],
+ "5e40760a-4d88-44fb-b0b5-2f07b2dd8443": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 66
+  }
+ ],
+ "5e6003b0-5c8d-4198-8271-4746d0d322b6": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "5e6c4733-f5d8-40d6-96d1-09c3338f3cbe": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1370
+  }
+ ],
+ "5e77bc66-a80b-4f9b-b272-e738635cf2fd": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 399
+  }
+ ],
+ "5e899b93-5ec3-43d6-bee7-4ec9e6e452fe": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "5e9f79e2-4798-4346-839a-11877690884d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 670
+  }
+ ],
+ "5f21f87f-f186-4640-8bc9-04e97299cd19": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "5f3a03b7-a3f0-4978-b888-6cc1b86c8376": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 35
+  }
+ ],
+ "5f757564-92a8-475f-939e-9736b6a503e7": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "5f8f1ab0-232a-4528-94f4-33c8e22872dd": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "5fcef81c-b91d-4e93-a033-593bdda81d12": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 16
+  }
+ ],
+ "6046f6ef-ca9d-4618-a1f9-fd3662a7b74c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "607f3a93-7898-4da2-9583-f1119db0080c": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "60d9ae18-2a16-4f73-9335-397f5cf5d5d1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "60e3cd33-136f-42d6-9add-a50663ad6e02": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "6135f729-1402-424c-b6c6-efcbc4e59955": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 0
+  }
+ ],
+ "614b4d74-b76a-4352-8b64-752c44594121": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 350
+  }
+ ],
+ "6153e5c9-2782-4794-801b-1be67f93089f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "61aeed1a-fc9c-41d2-a884-37f67ade4b02": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "61d667c1-c246-437d-8297-c5a0b3da64ca": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 28
+  }
+ ],
+ "62708549-939e-41ba-a78a-76322de2c7e2": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 59
+  }
+ ],
+ "62dd9600-1d5a-4491-90b6-8622b1dcc306": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 23
+  }
+ ],
+ "630d740a-666a-4da9-843d-27dc6ec66017": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 750
+  }
+ ],
+ "6324182a-c722-4059-89d0-040ba500b4f8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 675
+  }
+ ],
+ "63858755-3df3-4acd-ac3d-a76bc43c1a38": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 29
+  }
+ ],
+ "638be504-99a8-4f86-ac28-5fbc12fc4614": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "638f65fb-0c19-4271-90c7-dba06cf47e1a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "63d5db64-8efd-4fe1-ab08-814efd86d052": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 22
+  }
+ ],
+ "64060ef4-1648-41c9-90bc-34781080797d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "642fd337-db71-4fcb-9834-36bda66dace9": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "643d35e8-5d17-402c-b32b-2e53deca8269": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "6466695d-93d1-4ed0-9dc3-cb18a3087eca": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 37
+  }
+ ],
+ "6598f187-75d6-4832-963e-a02c0a03ab55": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "65c60d67-a5fb-45e3-9ab1-50112c903c31": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "6603ca56-9ef9-474c-b5cc-ae13a8d8add8": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 21
+  }
+ ],
+ "66086f40-cfa2-4a1d-bef7-b752a5b57bbf": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 28
+  }
+ ],
+ "66624125-a3e8-44b7-8544-513f8993ba04": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 28
+  }
+ ],
+ "66749582-05be-4366-b35a-f083282c8ba1": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 150
+  }
+ ],
+ "6736d2de-92ee-4ca9-b97f-9a4393fcd151": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 64
+  }
+ ],
+ "6761c667-5b52-4265-aba8-92412ac5a3c6": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 36
+  }
+ ],
+ "679e3213-74a9-407b-bee5-c4fbdc6dfaac": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 32
+  }
+ ],
+ "67b7a1eb-05fb-417d-b013-1e5fc037acc0": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 400
+  }
+ ],
+ "681d1f42-4b25-47df-b3e9-0e30ab7fec73": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 600
+  }
+ ],
+ "6869fb70-dddb-42b6-a433-2cc1597db5e2": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 62
+  }
+ ],
+ "68c616fb-5d19-4aaa-9757-132d76534db3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "68d782da-fd54-4db6-b3a9-9472f0b7a7ec": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "68e780ac-229c-411f-9d2f-18732fdc704a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 150
+  }
+ ],
+ "68ed9887-23fe-4892-8835-d9aa471c3ca7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "693b8d04-9ce9-4541-935d-ac6a39355cdc": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 42
+  }
+ ],
+ "693f4205-5c27-4f96-b149-590ea31a60d5": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 230
+  }
+ ],
+ "69a0d8c9-8948-44f6-a922-099581c22949": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 225
+  }
+ ],
+ "69ab6e05-8968-41a2-b45e-997c8534e166": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1200
+  }
+ ],
+ "69d798ca-ae45-440f-9f87-b1daad041838": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 375
+  }
+ ],
+ "69f38e76-b995-4941-83f8-6ea925cf90b6": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 499
+  }
+ ],
+ "6a028797-476e-4d25-8524-5d07e1d67286": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 600
+  }
+ ],
+ "6a2a7a53-18c7-44d2-b1fe-57cbe4a5027e": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "6a4367ac-f4c8-4d1a-8754-8e44db495365": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "6afb75b4-b08b-4699-9a34-7d380fe13b5c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 16
+  }
+ ],
+ "6b321e4b-5b74-44f0-b7b2-6982d08be2b2": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 9
+  }
+ ],
+ "6c625e94-8660-4f68-be54-464094e778a2": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 320
+  }
+ ],
+ "6c7bcf8c-ab89-486c-982f-b90c6cc55a8b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 12
+  }
+ ],
+ "6c92b325-fd92-4f33-9978-e91148ca6cd8": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 400
+  }
+ ],
+ "6d196e55-f282-4111-bb10-cdca84dec67b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "6d47da01-cd56-4ac7-a388-d42f89fa7d46": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 165
+  }
+ ],
+ "6d707af9-781f-4dde-8bea-46d13ca1c92e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "6d8a9e59-c577-497d-9232-b5f7bf5deddc": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 78
+  }
+ ],
+ "6dac1b5c-33a0-46d2-95a4-b3f8c24a843c": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1100
+  }
+ ],
+ "6df838c5-87d8-4f64-8802-bd5e3e88c61b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 71
+  }
+ ],
+ "6e594f46-79a7-4860-8c9b-5bf20ca4a153": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "6eb9d4f0-aa9d-4a7b-891b-2d7cca8cbbfc": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 37
+  }
+ ],
+ "6ec8f67f-2cef-41aa-a7fc-f46237ae809c": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 2000
+  }
+ ],
+ "6f160591-af5c-4a85-8daf-4b2dd56fdfba": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "6fa6031b-f78b-41be-b8b4-c4b53977fa5e": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "6fa62f36-1eb2-40c1-bfd5-d16ad9e5f4fb": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "6facace0-6389-40ce-a191-2af5a25304db": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 175
+  }
+ ],
+ "6ff2e3b9-7d64-4097-9ec3-0d8c70dc4bf5": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "6ffc71a2-c11e-49e2-99b2-577c9aabbf18": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 225
+  }
+ ],
+ "7072209f-7571-4891-b7c0-9fca95f9375d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "70b0052f-00a9-41ef-a788-4df52368b247": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 750
+  }
+ ],
+ "70b9c571-94b0-4b28-88aa-1642212b9f79": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "70fdfb88-9ca1-4890-9934-b7891a3fd26b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 21
+  }
+ ],
+ "710a6cef-5c2f-43d4-9882-0340eb94e72d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 64
+  }
+ ],
+ "716fadfc-808c-4e63-b322-0b452c3753db": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 150
+  }
+ ],
+ "717b9869-9690-4763-9ef2-1b0d03258ea8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 750
+  }
+ ],
+ "7220da6d-d03a-4e2d-94c9-25fda3f69e01": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 34
+  }
+ ],
+ "723c6b1c-e029-461d-8531-0637875c8c49": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 600
+  }
+ ],
+ "7289a879-1a5f-43db-af70-946ddf5f53fa": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 42
+  }
+ ],
+ "7296a3d5-0395-4c55-95dc-0904c937cfb2": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 28
+  }
+ ],
+ "72a4f08c-5075-4e86-a992-9a194445a778": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 200
+  }
+ ],
+ "73b1b726-4651-4474-be43-92fa25edbe44": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 17
+  }
+ ],
+ "73cf9144-9d0d-481b-9c9b-6cd3d20e4adb": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "73f07803-f68f-4a83-abf1-679baf367964": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 32
+  }
+ ],
+ "74381b84-bbd8-4aaa-88ff-0da34f658e4d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 100
+  }
+ ],
+ "747daeae-129f-4a2c-95b8-0df476a07573": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 6
+  }
+ ],
+ "7485b924-2210-44b2-b358-a0967dcc015e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "74ccbfef-a956-498a-ad8c-1ec4a581f144": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "74f84fff-d2c1-44ec-b04c-e51118ed8757": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "75102a90-80d6-4fee-8c51-7ddb4b43370d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "7550f5f9-851a-4042-82f5-0f54c0d8b671": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 125
+  }
+ ],
+ "7556cf90-bd1f-4e74-8114-59cfd6e2182a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "757d3098-4e05-4c07-b49d-e69d8b22e640": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 400
+  }
+ ],
+ "75abfa7e-2fa6-4c1c-a61d-de8c5f14fba8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "75d40600-cf49-4d0a-b1ac-4a56a13e16f7": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "766cc1f7-e68a-4110-ab66-fbd1707e8e80": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 700
+  }
+ ],
+ "767c7266-f6f4-4a38-a57b-24b06f914dd0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "76ceb32c-770d-40b9-b763-6f78966e5a43": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 555
+  }
+ ],
+ "76e8550b-d441-4014-8b47-c7397531c30b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 88
+  }
+ ],
+ "7760614b-8f31-4638-bca4-9170e0ee4e95": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "77a79241-64c7-4de9-80e1-9c87d83ce02a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 335
+  }
+ ],
+ "77ac7cd6-3d15-45a6-84f4-507b6bf155e3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 29
+  }
+ ],
+ "77adebb0-5a64-4ec0-a976-7a5778254629": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 36
+  }
+ ],
+ "77bb656a-a271-4131-8708-c76e510663a5": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 850
+  }
+ ],
+ "781b0b7b-2a15-4bb5-9929-628157e26513": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1800
+  }
+ ],
+ "78584cd4-9eec-49a0-8cde-296288037ad7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 23
+  }
+ ],
+ "78833ce5-b3e0-44a4-9940-b942629a88db": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "7892e5ec-71e1-4fa7-b5af-c1ead4b595dc": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "78cf0641-ee7b-420d-b95d-35058b977ac6": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 161
+  }
+ ],
+ "79313eb2-5e5b-4032-bbb5-c163857a16b4": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 450
+  }
+ ],
+ "7969c5b0-a699-4a6a-b3fb-83773a5eb5de": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 100
+  }
+ ],
+ "79995d29-eac2-49a3-bfec-ce9e547b98de": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 57
+  }
+ ],
+ "79dadcf6-6b73-4643-8ebb-c4e18e5fe01b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "79f59df1-e7a5-4c16-a127-e2a71dfe9f21": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 770
+  }
+ ],
+ "7a4a92f9-6ace-4cc6-a10c-056f0c108fc3": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 100
+  }
+ ],
+ "7a4ba3a2-6d71-49a5-9ddd-6720a7cea1fb": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 555
+  }
+ ],
+ "7a8a2e3b-5ee1-4acb-babc-6fd5be5fad15": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "7ab0ad68-1e80-4287-aeb4-ddb72a701afe": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "7b7727c9-216f-4a73-9e98-eb1f9d9ac62d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 200
+  }
+ ],
+ "7bdf504a-6489-4a51-8736-bd20b8b5edb1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "7bf00a9c-6a08-4b55-a60d-53915baa38a3": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 750
+  }
+ ],
+ "7bfbb4d3-a6cb-4b26-a53c-09869facff3d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 350
+  }
+ ],
+ "7c346487-6419-484f-bbc7-68e39bc834e5": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 195
+  }
+ ],
+ "7c3e4e60-6c72-49fc-aadf-cc6ad8819268": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "7c486d26-130e-4ca9-8f8f-2fcac22cba3f": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 175
+  }
+ ],
+ "7c4e536c-49ff-4daa-9499-22a38678d6df": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 85
+  }
+ ],
+ "7cd1d51d-77e9-406d-b7b8-8e20ff50c588": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 50
+  }
+ ],
+ "7cf6fac2-a654-4c6f-bf12-6dfb4305f1fb": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 720
+  }
+ ],
+ "7d103d6e-cfff-4f9c-af51-d4885e9a3aa8": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 13
+  }
+ ],
+ "7d40761c-d5d5-4792-a43d-c8b7f00ace40": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 200
+  }
+ ],
+ "7d5c957e-0721-4db1-b804-a4e87b2569dd": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "7d7badf6-e8ad-4a96-8ec1-c7e52da3507e": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "7d80272f-c92c-4fa4-a2e2-5c9b6cd42efc": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "7dc38110-588a-46bb-af20-4f5eadf83461": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 27
+  }
+ ],
+ "7e96a3f8-971c-4dca-a5d7-825d90246796": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 19
+  }
+ ],
+ "7e9a8fa6-707d-4496-b393-7787ede2ee48": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "7ed82a12-ba09-4b99-a3ce-8f7c3707ebf4": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "7ef80048-528b-4a2c-a2f8-c9dde919109a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "7f09689d-56fd-4db3-9c44-4558fe06aa8e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "7f0a1904-ecdc-42f1-bf1b-e434b0791e0b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 71
+  }
+ ],
+ "7f67b458-28ac-494d-b78e-79e213a6b820": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 23
+  }
+ ],
+ "7fa8f2a8-3457-426e-aaa4-1a62f7658de0": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 850
+  }
+ ],
+ "7fb2d1d3-3165-4e9a-af68-185bad427858": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 200
+  }
+ ],
+ "7fce9e51-4639-47e7-a124-58e9b40eba73": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 750
+  }
+ ],
+ "802477ea-532a-4d1c-a6ca-0571a17c3b76": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 31
+  }
+ ],
+ "80875587-2995-497a-98fa-0e3a54cd164b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 125
+  }
+ ],
+ "8096da5f-a7a7-4374-b6d2-f40213754593": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "80b9fc58-0e8c-4801-87d8-ea9287e9c845": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "812ea9ef-c2af-406b-9b93-1897db4a6879": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 58
+  }
+ ],
+ "8195d9ea-e813-4455-90bd-9846149ed7f8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "81ad183d-0d0f-43e5-bae4-1db71221a2e9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "81d8f2b0-227a-4d91-9836-c6556f2948df": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 33
+  }
+ ],
+ "81f7927b-48e4-47ee-a1b2-214f1e9ffdee": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 7
+  }
+ ],
+ "82645195-0480-48d8-beed-e054cbbde17f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 35
+  }
+ ],
+ "827d230c-26a3-4764-9ce7-461c4ce5f77d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "82abea9d-8dd9-4cd2-90c2-69a7868c8686": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "83656a25-8eeb-460e-b54b-5a347b8521f6": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "83657df3-f090-4847-b869-eb8fdf386443": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "83b82f4c-fc8a-4076-841a-46a345587e0f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 27
+  }
+ ],
+ "83f3bf57-11b7-4aa1-b317-85b5529fe3af": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 38
+  }
+ ],
+ "84164daa-cb22-45f4-a3d1-5bcff31c948b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 13
+  }
+ ],
+ "8424476c-5b3a-496a-93f8-ade2f70443fb": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "843aa3eb-cf93-4d66-b616-97cb3f3dd92b": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 260
+  }
+ ],
+ "845cf4ca-c5d1-41a9-b367-d7f90aff27e6": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "851a4a89-d901-4c32-a659-49cb7de41a50": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 16
+  }
+ ],
+ "851ca0fb-5d1a-4154-aaeb-852f22cd5ed9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "8520e75a-b8d9-4d9e-a3d9-f4762589161e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 30
+  }
+ ],
+ "853f7413-5ab0-419d-bf18-e5e488ce5d1e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "85880356-aa31-473b-941d-c8c777053692": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 444
+  }
+ ],
+ "85c415ce-737f-4d61-89c6-3f4d3901524a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 335
+  }
+ ],
+ "85c4df4a-c6f9-41ee-a4df-5e90413a2ef8": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 30
+  }
+ ],
+ "85e71f6f-c1f3-4da3-bd78-6024f11e88bd": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "864e1916-847d-4389-9e0b-60776a293657": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "86ae03fa-f15e-4091-a2cc-2d8e102557a3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 102
+  }
+ ],
+ "86b9e1fa-d803-4f32-9725-2f094178dd9c": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "86becadb-91ca-42ed-be1f-5d5a9aa7e5d0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "86f59b26-bf4e-4257-9be9-637005750658": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "87054b67-53f9-417a-9d41-9c1c2df044dc": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 35
+  }
+ ],
+ "872d2416-8604-4459-9e97-dca0eee68f3d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "876f2448-ae22-432a-862f-be898ba48c26": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "87736d41-72ce-4021-be5f-2512a12fe808": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 160
+  }
+ ],
+ "87893ce0-3440-4d5a-9030-0285d0a86dd9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "87e2166c-ec32-4a5c-aae3-70067020c488": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 100
+  }
+ ],
+ "87e6552c-305f-4c3e-bb47-b58a52cdebf1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "880bcd5d-8d6f-4567-953a-60b35c2e79bd": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 450
+  }
+ ],
+ "880e7305-3ed6-4be2-9551-4e77b9862385": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 46
+  }
+ ],
+ "89245f4f-b8b8-42c2-97e8-95aed7c7d54d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1800
+  }
+ ],
+ "893bec22-7975-4478-99fa-d79db61580f1": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "894b6eb8-9115-4008-ae9a-1fc6f12cdff8": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 9
+  }
+ ],
+ "8964a9f0-10e3-4df6-bc70-67a3664972f3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 32
+  }
+ ],
+ "897686a3-9c03-4dd7-8cc1-7d499a561693": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "898d2c56-47ed-4e10-ad0b-fe69e3826472": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 36
+  }
+ ],
+ "8995d73c-e4cb-48ff-9ab4-ada062dc0c64": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "8997b1f6-2497-450b-bb77-104ffeba190e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "89bb614f-df03-45db-97cd-478a605387f7": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 750
+  }
+ ],
+ "89e836b5-c368-4757-8534-3d5d39df36e7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "89f6eb3e-d858-4ccd-b36e-f88a7542ae63": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 30
+  }
+ ],
+ "8ab0997a-22eb-47cd-a42f-f88fa957d284": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 36
+  }
+ ],
+ "8ad881eb-82f5-470c-8be5-280bc204eb0c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 45
+  }
+ ],
+ "8b2efb2f-5b72-43ee-9c17-bddf7515640a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "8c19f5d4-079e-42a7-ac6a-5e710fe98305": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 31
+  }
+ ],
+ "8c884849-1888-43af-884a-a2f62684e0ea": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "8cd72dab-a237-4716-a418-9328fba1bff1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 7
+  }
+ ],
+ "8d0f597d-ac6e-4164-8288-cd284b4ed0b8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1200
+  }
+ ],
+ "8d10e536-13bc-407e-9097-c47da9efc2ce": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "8d378b93-d738-42b5-8eef-14bd36e1f7b4": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 24
+  }
+ ],
+ "8d69d2c2-11b9-4bbe-b046-1225655fc623": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 110
+  }
+ ],
+ "8ded5c4c-89d0-4b4f-8cc8-d6cac5cffcac": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "8e10e13d-9273-4b64-a65e-c3f347b7e913": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "8e2ebf29-ef95-4d93-b49f-4bc483ee46d8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 450
+  }
+ ],
+ "8e35aa43-0e1c-4abd-9db2-3a908f851669": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 2000
+  }
+ ],
+ "8e78f74e-0985-40f8-a03b-6cb3b084669a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 850
+  }
+ ],
+ "8e816cd0-e5c8-4b2f-bbff-6fa2f10ed06b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 16
+  }
+ ],
+ "8eaeeb93-1bd0-4544-88c8-d074095fbe55": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 825
+  }
+ ],
+ "8ee4fbb4-435b-4271-bc93-bc036efb2a72": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 2
+  }
+ ],
+ "8ee521f8-db1e-4314-a254-54c4bd8a8a08": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 57
+  }
+ ],
+ "8ee67a1d-ee9b-4374-b6f4-8eb9bcce699d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "8fa1cc21-4b85-40fc-9642-199886b36375": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 185
+  }
+ ],
+ "8fa5f969-643c-41cd-b376-5066cfe0f4cc": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1875
+  }
+ ],
+ "8fbf3b8a-6516-42a5-8d8d-6451f28e8d27": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 13
+  }
+ ],
+ "8fc556fb-cd90-4c5a-a37e-9fbadba4d908": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 945
+  }
+ ],
+ "907cb671-76f6-4337-b027-3a8dd5966985": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 95
+  }
+ ],
+ "90d3f41e-3144-4add-b42c-8d1d6ce62871": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 850
+  }
+ ],
+ "90ee9e91-75ff-4636-9ab4-4f9e556b3cae": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 34
+  }
+ ],
+ "91093622-4fed-49c2-be78-2bd8a07c8337": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "911bd32a-7806-44ed-a051-1a62c487b0a0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "9140814f-312c-46d8-b16f-3aaeeded0aaf": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "915f8476-f191-4486-81e8-f9d9fb8ae9c0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 62
+  }
+ ],
+ "91c24932-2829-4b91-923b-1f92ba1faa70": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 450
+  }
+ ],
+ "92405a05-ac97-4547-90f1-3c963efca6df": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 24
+  }
+ ],
+ "92eba3d9-10b3-40b0-9145-3189c971073e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 60
+  }
+ ],
+ "930cfea3-6493-40ab-8a2c-313d16e2a2a3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "936dc14d-cc03-476a-a2c6-405116467bf1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "9388e5af-2d02-4807-9cc8-c0de549c210b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "942cdfd1-ac90-4f8d-b08d-0bb1239067e0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 28
+  }
+ ],
+ "951d4718-3507-43db-8e87-7c0f5551f72d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 33
+  }
+ ],
+ "957e1b14-90c4-440e-bb5b-8475edca034c": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 850
+  }
+ ],
+ "95ad60a2-e74c-4c53-8155-cf8958faeafd": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 850
+  }
+ ],
+ "95d63a46-ed55-469a-8662-1861c896f0be": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1310
+  }
+ ],
+ "95e94f52-9bb6-40d4-805e-be8e1cdbadb3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "95f175b1-6a21-43ae-8cb7-e55616f113c7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "96854665-ea01-4022-8f9e-0d39ca2f2c5d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 23
+  }
+ ],
+ "96a9ce7b-df1f-4f82-98f9-e7b67245d204": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 200
+  }
+ ],
+ "96e898b8-89c5-42cb-bafd-ead7d3fc0a0d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 0
+  }
+ ],
+ "973dac5a-0896-4b6c-97eb-777c3c765a48": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "97670a52-851d-4818-97ae-39ac63fac590": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 333
+  }
+ ],
+ "9776d676-9c5a-4af2-9c10-ae14a07b2fa4": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 28
+  }
+ ],
+ "9808467a-85bb-426c-bf95-0fc0203d979b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 88
+  }
+ ],
+ "9843ee75-b608-4a0b-a3d7-20b43b3d99a8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "9899f6bf-6a2b-4708-b26b-0ee5e841dd34": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 600
+  }
+ ],
+ "99271706-1c09-4adf-8d52-b69945afd8af": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "99302e95-4f32-4396-90c0-4501bc7d03ed": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 29
+  }
+ ],
+ "99cb7dcc-317b-4c00-9ba4-9a04420a1170": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 777
+  }
+ ],
+ "99d36b6c-ddc1-458e-88b8-8417e03f3ec3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 8
+  }
+ ],
+ "9a145799-d8df-464a-80ec-a2408e4e0d3b": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "9a8b7017-699d-42ef-bac5-1eaf197fd70a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 78
+  }
+ ],
+ "9a91bb8d-643c-45a3-b42c-7c9137f848a4": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 42
+  }
+ ],
+ "9aa5f781-3182-4a38-97a1-ef671f821acd": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 720
+  }
+ ],
+ "9ace5fbf-60e5-44cf-bba1-43ff2d17bf1c": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "9ad6b288-67d6-4370-8ec8-2bea75d72f91": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "9b03691e-a6c9-445a-86fb-51a97bb3650a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 33
+  }
+ ],
+ "9b7143cd-6f90-487c-9941-118d1e79c136": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 530
+  }
+ ],
+ "9bf01e17-4a8c-45f7-bfb5-611424517e51": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 450
+  }
+ ],
+ "9bf9bc37-04a5-4aae-89b4-a8cbfbfe1de1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 29
+  }
+ ],
+ "9c34d018-e46b-4d2e-b575-5a3e7c77b0a8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "9c9ce2da-7bf1-4e49-b0af-cc10f9db2c2e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 18
+  }
+ ],
+ "9cb4a7cd-ad60-4378-83ac-beed0eaeee9a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 62
+  }
+ ],
+ "9cdb9da8-79b2-4a3f-bddf-953e5d4bfdce": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "9cf1fbd7-3994-41bf-b6db-390d80955957": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1100
+  }
+ ],
+ "9d0fa2b7-b0c8-4438-958c-c030f3de0684": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 400
+  }
+ ],
+ "9d1af91f-1e09-4bbd-8fff-c1f63b70ba72": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 150
+  }
+ ],
+ "9d30fb6d-435d-442f-92cf-f1ecb8bde773": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 260
+  }
+ ],
+ "9d7e5f0c-31f5-4f23-82ca-15e29c9847e0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "9df39f8a-9a50-48e4-9135-c0c8892db27b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 720
+  }
+ ],
+ "9e1f5ec9-da30-499d-97ee-9a7a70d649a3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 27
+  }
+ ],
+ "9e30f0ae-d250-4cab-bf65-eac38f87b2cf": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "9e35d31c-8ef1-482b-a704-1cfb903a04a7": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "9e59995b-4f1e-4d0b-86fd-d3a2383ceb62": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 100
+  }
+ ],
+ "9e670728-fe42-4918-a5a2-056295fd2663": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 150
+  }
+ ],
+ "9e9667ff-1f5a-4030-8394-12702081c8e2": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 35
+  }
+ ],
+ "9f5f6be0-0071-4ba6-a91e-973b300ec87f": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 750
+  }
+ ],
+ "9f790811-d82f-4a42-8798-e22339c2bff0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 50
+  }
+ ],
+ "9fab0c07-53a4-48fb-a2c4-c6268932c111": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1205
+  }
+ ],
+ "9fb362c4-898b-42c6-9452-f4cf6aa907b1": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "9fe91c76-2cb4-4b83-9306-d7d29cd16b75": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 5
+  }
+ ],
+ "9ffdf15b-0135-4c21-9327-0a04d68d97f3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 33
+  }
+ ],
+ "a08332ec-bbae-4c02-9a68-f07ffe488321": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "a08ecd27-5837-4481-853f-70aa88f02f47": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 4
+  }
+ ],
+ "a0da8907-378e-4c15-8f22-79dc48032af5": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "a0e0207b-5738-423d-95bb-7da33b256d65": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 60
+  }
+ ],
+ "a0ecfefb-5a4d-4d48-b517-db2eea07ff39": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "a0ff201e-ca14-4602-8fe4-193dbcd57c29": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "a1072615-f012-45fe-8bfb-23fca6d1b12b": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "a10fee74-6b71-48db-96db-2a4eeb24b47b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 18
+  }
+ ],
+ "a142048e-18b0-4f31-9457-fb772bf79075": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "a14d6da8-4cc1-4eb6-98bf-dd4f9a92614d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 39
+  }
+ ],
+ "a16004f1-ab7b-4cca-b2eb-26f5e3710839": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "a1e27e51-3eb1-48a7-8523-3bf4f1d6ed68": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 350
+  }
+ ],
+ "a201cf69-112b-4e2f-bc23-99e274a14298": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 41
+  }
+ ],
+ "a26596e0-07ae-4a73-8796-799aa29cce54": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "a2a42fc9-0312-456e-88fe-a7851064e489": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "a2e2c512-426e-4ee7-9143-bf6f30fdcc57": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 150
+  }
+ ],
+ "a2fe4c81-6b8c-42a2-9b63-671710cd6b54": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 46
+  }
+ ],
+ "a307ac57-612d-426b-a2f7-0de77dfffdbd": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 550
+  }
+ ],
+ "a3cc94ba-fbb3-488a-8b08-f6c4eaff95ac": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 750
+  }
+ ],
+ "a4b06d95-c1b6-43cb-8e99-e25d68d39a0a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 37
+  }
+ ],
+ "a4b595ef-efc7-44c4-9f19-53fe12a51ca8": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "a4be466a-ac6c-45d0-b7eb-7dd6eaa17165": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 399
+  }
+ ],
+ "a4d2adbd-3fd2-4782-9c60-54b33e1672d3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 27
+  }
+ ],
+ "a4ef9442-defa-4926-b739-ae34decc4ac2": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 150
+  }
+ ],
+ "a51b4736-d602-4c40-9914-4c8c76083a19": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 27
+  }
+ ],
+ "a59e5ba0-9b98-46ef-b61e-d380f19368f0": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "a6393c57-b9be-43c8-a6ee-7a9d2bd471fb": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 24
+  }
+ ],
+ "a64495fd-9d61-4965-88a0-6d5b397caf3a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 450
+  }
+ ],
+ "a645a886-26e2-44cf-8535-777909bfa909": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "a66c27d2-6fc1-47f9-9c9c-419d1fa98855": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 320
+  }
+ ],
+ "a6ef15ac-7fb1-4aa4-be2d-3f5c0583d59a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "a77ad38c-9a77-43c8-b139-7db044f7b8d7": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "a7d0660a-45ec-45bf-ab5d-602f8ab64014": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 35
+  }
+ ],
+ "a80560c7-ad2f-463c-aa00-05c8e3526fa3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "a83bf730-2681-4218-a6f5-63076a709817": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 24
+  }
+ ],
+ "a869a5e6-0b6d-43dc-aa17-e5645ddcd038": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 230
+  }
+ ],
+ "a8786302-1e03-4051-ae7c-45a4992d0452": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1875
+  }
+ ],
+ "a8a10792-78bd-4d05-ab53-2870ad070ce9": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 650
+  }
+ ],
+ "a9408b50-3d30-4254-ae0e-f81b5e873fcc": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 24
+  }
+ ],
+ "a9e33c4d-6b61-42d1-8c10-ef8249a53a5c": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1800
+  }
+ ],
+ "aa6370e6-c8a6-4ac2-8a22-219cc441fe24": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 150
+  }
+ ],
+ "aa804f09-6a84-4573-860b-5876098c8b86": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 75
+  }
+ ],
+ "aacef7d8-42b4-49c3-9f43-34335a73c5b5": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 150
+  }
+ ],
+ "aafd82cc-787e-4a5d-a849-e4f107c4c527": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 29
+  }
+ ],
+ "ab450954-29f1-47bf-b5e2-16365376d5d3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 40
+  }
+ ],
+ "ab5aae2a-57f7-4001-bbe4-dcb9dfd4d793": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "ab6d83fb-3e5f-4ed8-9d37-a725bb208a82": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 8
+  }
+ ],
+ "ab94a2e0-9770-4fee-9f7f-8d9a34946750": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 880
+  }
+ ],
+ "aba39588-778e-4752-bb82-d3f734b8afb7": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "ac0d2fe4-bce7-497a-9eaf-73aa13617371": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "ac5fd3c2-574d-4d6b-9add-42190fd213a4": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 4
+  }
+ ],
+ "acdf9e79-20e6-4784-a1c8-c394e8a20de0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "ace561d4-be10-4604-a0d1-a15dd5b9f258": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 450
+  }
+ ],
+ "acf5ab2a-4868-43f8-8682-8b877003d57c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 92
+  }
+ ],
+ "ad51e47d-b22d-42b3-83c2-774144c3dd07": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 450
+  }
+ ],
+ "ad8c23c1-f4fd-4a35-bd7b-4902ab1c3bb1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 28
+  }
+ ],
+ "add4a728-2ba8-42f9-bf3b-a1cdf63e9ff2": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 50
+  }
+ ],
+ "ae3d091f-a1d3-44cd-94f7-09af4d5de5ee": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "ae74d419-ab6f-436c-8123-8863d16b460e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 38
+  }
+ ],
+ "ae9343df-51f8-4404-b6fd-453a51b3cc3a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "aeabefda-7e34-4a22-b614-1f62c1861f0e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 425
+  }
+ ],
+ "af1c0389-cf07-4b6c-b304-00be673c652a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 100
+  }
+ ],
+ "af75b409-0e20-4ea7-ba64-feaa78ca1de0": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "afc71167-0544-4112-ad28-7cd1b2ea95d1": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1100
+  }
+ ],
+ "afea8be7-c3c5-440d-bdf4-38bba030a327": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1200
+  }
+ ],
+ "b0742d50-c803-4476-b152-2f434ddff994": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 9
+  }
+ ],
+ "b077c186-5593-4be4-9115-e91b104517ba": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "b0b7ab6f-5da1-4d76-a010-b80dcd07afa3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 7
+  }
+ ],
+ "b0f21b19-2172-4943-a4d4-edc1d51f1ccb": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 65
+  }
+ ],
+ "b0fcde56-ebbb-4dfa-9adb-a21f650ad37b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 33
+  }
+ ],
+ "b1327f7c-8c9c-4ef7-9fad-334768430406": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "b177f8ad-eb7a-41d7-acd2-577d62751ec7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "b182331c-03b0-46af-aadd-75b60708daba": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "b186af0b-685a-4ef4-a507-435d5cb78a54": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 200
+  }
+ ],
+ "b1a1d7f8-662f-4600-b0a4-036aae910c32": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 150
+  }
+ ],
+ "b1aedc4e-0e45-461d-82d0-38281cc12dea": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "b1d32e4f-f45e-4da4-9dba-3288c1500711": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 21
+  }
+ ],
+ "b1fa097f-e2a6-445d-9aa3-694752833513": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 400
+  }
+ ],
+ "b214d868-edf0-4835-a966-9df5dd942cc6": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "b227b320-a287-47ff-81fd-faaf469f289b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "b22f1245-956e-4358-99c8-1ec711745996": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 200
+  }
+ ],
+ "b23c5564-c82e-4ae7-b832-09a970e9729a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 590
+  }
+ ],
+ "b2417fe0-fe48-4c4f-b981-ad77d5dcea49": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "b2a9a606-3c19-4aa3-b258-be3ffbcfd522": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "b2c9c695-f875-4128-b9a0-6cb69b22f84f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 39
+  }
+ ],
+ "b2e38c18-f14f-435f-9f2b-30995f6a786b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 21
+  }
+ ],
+ "b332c13d-402f-41cc-acbd-1dc1e409e416": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 899
+  }
+ ],
+ "b35db6c8-e37f-4dd5-b339-703996553066": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 450
+  }
+ ],
+ "b4007a7e-1375-4250-90a1-0247abff6794": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 60
+  }
+ ],
+ "b4f44310-a777-4647-9494-fa431051c581": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 650
+  }
+ ],
+ "b53b508b-689b-4c18-84ab-8e35e3d4d32c": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "b5748a1d-e0f5-4b73-b213-80c5f85d0854": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "b579ca24-28be-41c0-a205-35f8d08d1bfa": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 399
+  }
+ ],
+ "b5bbf6ad-6d70-416f-bc22-006e003aa5b1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 777
+  }
+ ],
+ "b5c14380-e364-40bb-87db-ac8153dd7042": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "b5e340bb-6774-4932-ad4b-18e265c655c3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 98
+  }
+ ],
+ "b657125e-08ab-4510-8d34-6a8f8b17ae4d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "b6a13f99-da06-45e5-ab95-5bfcbe125d38": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1000
+  }
+ ],
+ "b6b96877-ef29-4276-8e7c-ba4012d60a6a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 87
+  }
+ ],
+ "b6f7adb6-e373-4684-9564-a5722fb99eee": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 450
+  }
+ ],
+ "b6f87783-a863-441e-bf2c-1ae647e2ae7f": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1010
+  }
+ ],
+ "b70a4c3c-4a31-4658-9fd7-d24b846dc030": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 37
+  }
+ ],
+ "b7179c14-3c8b-462e-a7ce-f11904adfa0f": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 800
+  }
+ ],
+ "b77ed0a4-b347-4d20-82d1-75ad32b90dfb": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 5
+  }
+ ],
+ "b790518d-9614-4dcf-ab54-6d8d749bff2b": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 400
+  }
+ ],
+ "b8bc5f3c-864e-436f-baa7-80ae006ab155": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 100
+  }
+ ],
+ "b8d93c30-93eb-47fa-b6df-23359f97d5d0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "b91d92e6-3b83-482f-9c6d-858607ae45c3": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 900
+  }
+ ],
+ "b93e4161-9bff-4e25-aad5-0da075abfdd3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 9
+  }
+ ],
+ "ba7afdeb-1727-4f6c-89e9-6ac4c22582d7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "bb5631a5-e68d-4455-a01e-bc3080bcf054": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 2600
+  }
+ ],
+ "bbba9d7e-4eb7-4323-af41-c2f331d13a55": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 53
+  }
+ ],
+ "bbd9a563-34a1-4d5d-8673-deaa73c97aed": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 375
+  }
+ ],
+ "bc30bab2-6872-4851-a6ac-dce1688796f1": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 41
+  }
+ ],
+ "bc4af25c-e8bc-4517-b4ec-8a65fba09814": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 750
+  }
+ ],
+ "bc4ba54d-53a9-4bec-9f14-7bb329d4d3b8": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 30
+  }
+ ],
+ "bc4d3b94-e1c6-4207-9308-9b19dd10ab32": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 225
+  }
+ ],
+ "bc94a6d9-e0cd-4496-81f0-34ace67a4351": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 83
+  }
+ ],
+ "bca0548b-7f59-4d48-8bc2-486236362bba": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 600
+  }
+ ],
+ "bca6f900-321a-44e4-b0bb-f0d8ca7e8fcb": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "bcbbdeab-e9ba-43b5-b714-e236bf8295ac": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1875
+  }
+ ],
+ "bcc83fac-5a47-4ba9-8627-3b10d4eece9c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 620
+  }
+ ],
+ "bd25d08d-a752-44ea-b3f4-7681c4d8806e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "bd421834-6cce-4449-b7cc-bbe498cf241b": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 900
+  }
+ ],
+ "bd510ca7-dd05-48ea-8d41-f713541d59df": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 35
+  }
+ ],
+ "bdcff539-c415-4e66-b65a-748b86591c1e": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 165
+  }
+ ],
+ "bdeebc9f-5174-48cd-804c-6545274d26f2": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 86
+  }
+ ],
+ "be085c79-a3be-4955-99bd-90575ec06499": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 68
+  }
+ ],
+ "be1b23bd-1f30-4e35-8cc9-264f6548218d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 37
+  }
+ ],
+ "be6a03a0-9b92-445d-9842-724334a89476": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 166
+  }
+ ],
+ "be930d83-9a35-4d88-8560-65bbb4c3e38e": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "bf389986-faf9-4bdf-a7fe-c2a311f0d8fd": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 0
+  }
+ ],
+ "bf528cf7-3499-48b9-84de-d3fcad55cdaa": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 16
+  }
+ ],
+ "bf58c3b2-a413-4348-8804-0783818667e6": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "bf77c0cd-723e-4167-8557-6255eee966e7": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1200
+  }
+ ],
+ "bf8cb4f4-cb09-423a-96c5-05a92bef3f76": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 43
+  }
+ ],
+ "c0083cb3-a633-4a67-9f68-545a0b82e510": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 444
+  }
+ ],
+ "c03ea4c6-ed36-4170-9b88-ec24c6519985": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 16
+  }
+ ],
+ "c05dfce1-b221-4906-a67d-84c4e13b0172": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 899
+  }
+ ],
+ "c0801e9f-f834-402a-80e3-801d84270b16": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "c08777c6-0028-4233-b31c-ea4b1567760d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1100
+  }
+ ],
+ "c08ae2cc-079d-4ba1-ba97-ffd4826632e9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "c0bf397b-5e15-4084-a0f7-b81a6a90c1de": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 88
+  }
+ ],
+ "c0c6dee7-5740-4a23-8c10-75734a08a9af": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 12
+  }
+ ],
+ "c12c5917-0cc2-4a41-8e4c-092eeb14cd65": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 160
+  }
+ ],
+ "c1372a4e-06b2-468a-b0b7-fda2a9fb68cb": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "c18127a3-57f0-4b5f-aa7d-54b3095e97ff": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1500
+  }
+ ],
+ "c22eee6a-2cd9-4bd8-a4ad-1519a9ca43dc": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 24
+  }
+ ],
+ "c271e47f-579d-42e0-ab53-c19c68e19a37": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "c2e43209-b093-43c4-a141-9c286ae8c745": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "c30e66a9-8d99-4236-84d1-fc2f2c7571df": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "c398f784-ea22-42eb-a5f5-de04c5c6b8a7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "c3bfc108-ce0c-47b8-93e4-3cdc03f91691": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1875
+  }
+ ],
+ "c3e6017f-d0ad-453d-bdea-61000ede2978": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "c3fe6807-54a3-435e-9dda-3f678e02dc7a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "c41477c2-157b-470d-99c0-17dd9ab50194": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 21
+  }
+ ],
+ "c4196412-86b2-476b-be65-63eeb29fc4bb": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "c4313479-53b0-42d4-935d-f34bb0a18a25": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 899
+  }
+ ],
+ "c432eb86-85d5-4589-b24c-bc6c5daa89e7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "c43b9106-9c78-4b34-87c8-f357ee6d2e7f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 899
+  }
+ ],
+ "c4514960-e116-4f21-b4fd-a470d8c1c441": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 975
+  }
+ ],
+ "c4f433b9-8083-4bee-84b6-0d69ffa92842": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 107
+  }
+ ],
+ "c54f6e79-d856-4ee3-8244-884986c0f327": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "c553baee-4930-4adf-bbac-c32021758f12": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 35
+  }
+ ],
+ "c59e149b-dec5-45f0-8625-e92dcb17e848": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 900
+  }
+ ],
+ "c5ed32de-fac7-4d42-bded-898b55ba3d41": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "c611d017-813c-4926-a724-6b0c3e3eede7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "c64bd806-75f9-450a-a25d-cb87c7c15e34": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 36
+  }
+ ],
+ "c65b3f39-2307-4c22-877b-b6bb8d4147be": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "c6846b71-5c8d-4378-92cf-9f11e5d56bbf": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 650
+  }
+ ],
+ "c693e2c2-7c90-4423-94ed-47308a4970be": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "c6db7ca7-fcf5-4d64-86d6-0cd28a4011ba": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "c758f8f7-bc01-4168-ba1a-ef898b89e2cc": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "c7800a1a-5b05-474c-8f8a-837745328a2c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "c7ec11bf-4e1c-4094-9771-c027d60faaf0": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "c7fba3ea-6f3d-40cd-a1e8-ee5399ae38db": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 39
+  }
+ ],
+ "c820b311-5b84-4bd6-be6c-a76cf0a5c57b": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1160
+  }
+ ],
+ "c89e9c8e-2d1c-4f63-a99b-c116550b71e5": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "c8a56b86-b12e-4170-a5b0-f4bfc51c383d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "c8fd00fd-e87c-44f3-bc4e-ce8bbaa5295f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 17
+  }
+ ],
+ "c9c1bd81-ce3d-4d43-b54a-0db3f5882376": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "ca15eb22-f2f4-494a-989e-8138bc0436d5": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 30
+  }
+ ],
+ "ca193c3b-ac65-4bce-ab44-38026a41dfb0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "cac4d68c-7e27-4d45-98f2-4cdd28d1b5a7": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "cb07ed73-c4c2-418f-a0be-b7d82a09f1cf": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 750
+  }
+ ],
+ "cb52d197-8b88-4b43-b37d-cd9171a68a31": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "cb5f7868-9130-49ec-bfc9-627f4b0c855e": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 700
+  }
+ ],
+ "cba68825-b1bb-4549-a24c-eb754b88eb0f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 23
+  }
+ ],
+ "cc2e4a7a-f65f-45f6-ae8b-9031f6e40a85": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "ccd9e02c-6270-413a-9577-b41be791f56a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 66
+  }
+ ],
+ "cd584365-19b3-470d-a83c-d16d13978d3c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "cd939cb7-a555-428e-ac94-a291b256c410": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "ce18d426-c002-4f51-83ee-4cda20c73c02": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 16
+  }
+ ],
+ "ce1cb5a5-0df3-4e40-94c5-287d9ce2c017": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "ce941c19-179d-4b50-a3b2-6950fbf1181c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 899
+  }
+ ],
+ "ce984c9c-51cc-4008-b63e-7e9b4b3c2825": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "cee3e128-340b-4c9a-bbad-62492884d663": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "cf1152fc-06de-4255-b91c-da6c82524c0d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 15
+  }
+ ],
+ "cf56bf0a-c95d-4698-9b43-f49d9550cce8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 400
+  }
+ ],
+ "cf7b53b6-93ac-47bb-a87c-ba45a141d804": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 2
+  }
+ ],
+ "cfc8ee3e-0c55-4ed4-8d5b-547e3a0bc7de": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 565
+  }
+ ],
+ "cfcdaa60-3f1f-443f-bb9b-ee61df8cafe6": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "cfdd2197-9401-4444-8754-973cd8d0d4eb": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "cfecd565-9704-465a-bb42-29bfcbf37922": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 30
+  }
+ ],
+ "d014bf3a-b71c-481d-9b2c-0d6b1a272528": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 12
+  }
+ ],
+ "d02875da-c506-4006-aeb8-68b017f0a193": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 5
+  }
+ ],
+ "d0414c5f-b76c-457c-ba81-9ec3a74b77cf": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 5
+  }
+ ],
+ "d0460dba-3678-4ead-99f2-26aa43a83de7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 720
+  }
+ ],
+ "d04c941f-af9f-41e5-9ca0-047d2a4a5369": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 42
+  }
+ ],
+ "d0a7e3f8-8973-474b-81fc-7ca017fd7253": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "d0ca8af1-f7b3-4c21-8257-9332ccb5b038": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 26
+  }
+ ],
+ "d1156e76-3875-4fc3-8ba2-45644aae16c9": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 100
+  }
+ ],
+ "d226eb23-b0c8-4332-8f99-1e6253467c74": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 22
+  }
+ ],
+ "d2312e9c-51f1-4207-a9ff-67fbdbbf0dad": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "d2726583-6d1d-48d6-9f18-c5a59e765a48": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "d2939952-a691-4327-9c28-8bf1a5ca64dc": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 100
+  }
+ ],
+ "d30121a2-a5b3-4185-bb6e-5cafa0f3e355": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "d33f3d5e-d453-4852-8e8b-d0708f3421cf": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 44
+  }
+ ],
+ "d36b9c32-58a6-4c5e-9480-f2421f349efe": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "d396f160-016f-4f73-ba29-fa562ce71786": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "d456cd8b-de55-4d4b-908c-12f9168a43cf": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 57
+  }
+ ],
+ "d468a864-58fa-4d6c-ab18-1627831cc977": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 30
+  }
+ ],
+ "d48e8358-29e3-41b7-a0e7-79b0b1da54c7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "d4f84d8d-e6c0-45ad-9899-a6eae501b008": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "d5069283-972f-456d-ba4e-5684f33429c0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "d56cc96a-007a-4367-a027-f15141f24e71": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 27
+  }
+ ],
+ "d5b853c9-5520-402c-b174-ee791d775366": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "d61a84ab-74fa-4fcb-b881-5b3a7266bdf2": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 490
+  }
+ ],
+ "d61c3ded-584e-4885-bc21-36bdb79952b2": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 36
+  }
+ ],
+ "d653824e-22d6-409c-8acf-a0338234847f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 48
+  }
+ ],
+ "d655a347-83ee-4985-9e59-77be51b7921f": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 150
+  }
+ ],
+ "d67fce0f-9ab7-4e07-8f1f-3890117d3610": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 35
+  }
+ ],
+ "d687485e-8227-4488-8c06-dc9f0fda5ef9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "d6dda15b-948a-4f9a-93ee-cddd8357936d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 185
+  }
+ ],
+ "d6ee1439-1c79-4a20-a93d-09483458cf50": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 275
+  }
+ ],
+ "d6ff55f5-5403-42c1-ad6d-c163a6cd8e0f": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 150
+  }
+ ],
+ "d70058d3-9c13-4fbf-a0c2-bc4b3e631ebd": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 555
+  }
+ ],
+ "d7011414-e0a9-4673-a6e0-cfc453f9b2e5": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 35
+  }
+ ],
+ "d709c92f-7d29-48b3-a995-8b0179521758": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 71
+  }
+ ],
+ "d7136b6b-5cd2-451d-a849-23da1f69dbb5": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "d759ef08-4e49-4f02-9c1b-41c5e2cbc3af": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "d76516f1-4c71-4575-b18e-585a0fb29733": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "d77644b0-7c30-4a9b-a6fc-fc1c85de2a2a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 720
+  }
+ ],
+ "d7c13199-61f7-4eb4-9091-d91118c3fddf": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 16
+  }
+ ],
+ "d7f39196-133d-4cd1-8489-cfadf9363ad3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 58
+  }
+ ],
+ "d82c2e37-c7b4-4cfa-81d5-6040c069caaf": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "d874cc89-9b15-4db7-8300-77c5c0ee9040": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 150
+  }
+ ],
+ "d87c8ca7-b837-47a2-8c54-bdfc1bb5fbab": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 125
+  }
+ ],
+ "d8f58e69-880c-419d-beee-6ae8fadcd353": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "d91b808c-3b73-4f78-b663-785ad0d5f721": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 25
+  }
+ ],
+ "d91f3c57-50c5-42b2-83fc-142804519afa": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "d9712d67-605a-4c69-bbdf-83cbbb60c140": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "da24adae-b4e9-4223-80dc-ed1704ce80f0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 899
+  }
+ ],
+ "dac59a1a-7f22-4306-9117-fa90d44aee3d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 41
+  }
+ ],
+ "dacb15f2-dc8c-4aad-b96e-721e9532a5f1": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "dad0d6f8-60b0-441c-b4ef-6ab6757afdb8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "dad81891-b5bf-41b7-863c-0a3beee83484": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 93
+  }
+ ],
+ "dae48287-d814-4d91-9f81-58dc3d7f04b5": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 350
+  }
+ ],
+ "db988a52-b664-4189-8c3f-bee13fed6849": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 200
+  }
+ ],
+ "dbcb7683-0b59-4c05-95bf-81f50a63f214": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "dbe89281-cb11-4f8b-8a38-1e5be5215e68": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "dc31b5dc-744a-4bb7-94aa-23c26998d930": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "dc9b84b7-783e-4dc8-9fa0-03a6e1b4a6af": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 50
+  }
+ ],
+ "dca1b441-67dc-404f-b09f-5bb1aa4598b4": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 150
+  }
+ ],
+ "ddbad1d9-bbd9-4a85-87c7-17b683af030b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 12
+  }
+ ],
+ "dde8b44a-49f6-4179-9d3f-98838ccb78c2": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "ddfde62d-3d6e-4f1b-9102-aa3476637c84": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 15
+  }
+ ],
+ "de238dc2-980e-4e6c-b3ab-cfb90c076ae9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "de84f4c7-59c7-4553-b7f9-584f450a7963": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 41
+  }
+ ],
+ "dead2d7e-83ba-4b3a-b2e8-3eb154fe7c81": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 84
+  }
+ ],
+ "deef41aa-1875-43ea-b0a3-8318acd6207a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 450
+  }
+ ],
+ "df146d2e-fc1f-4498-b499-e6903e84ae06": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 41
+  }
+ ],
+ "e00b28b2-6c1a-4f41-bad0-c7bd94cc188e": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 425
+  }
+ ],
+ "e09dccef-9e29-438d-b9c3-268d3ef1c7b5": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 350
+  }
+ ],
+ "e13cb542-3e0e-4146-b0c3-01ad606b4a37": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "e2092118-d940-4c41-ba16-1e7d583157b4": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 800
+  }
+ ],
+ "e2877399-8910-4b74-977a-b12c952ccf8f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 12
+  }
+ ],
+ "e28ab3f1-32df-4577-9274-188da9a19107": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 360
+  }
+ ],
+ "e29703dd-2b85-44b8-9eb4-e681a4a4636b": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 700
+  }
+ ],
+ "e2adab5b-6c80-482b-a61a-11fc7653a7f4": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "e3638472-0eda-4d6e-a29a-64043c85fa7c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 29
+  }
+ ],
+ "e37b200a-dd0b-451e-933e-a0c8614bc0c7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 40
+  }
+ ],
+ "e37e55d7-476b-4190-8db7-897debd69c1c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 17
+  }
+ ],
+ "e383a8d1-330e-4b5e-9e4d-7b8d6b5e352d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "e3c65977-1d35-4b80-ae69-e16109ecce72": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 32
+  }
+ ],
+ "e450f900-9406-4a96-ab49-4097b0fc39fb": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 39
+  }
+ ],
+ "e4ada615-fc8a-44d3-954a-3f67bc717697": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 47
+  }
+ ],
+ "e4c1c546-a908-4f60-b31b-eb4743251b3e": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 150
+  }
+ ],
+ "e4c98d4a-c376-4514-a215-fa6b2ad6729b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 36
+  }
+ ],
+ "e4ea78fa-f49a-44de-8ad0-d0965f5ce487": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 399
+  }
+ ],
+ "e550e51f-cd55-440b-aa39-526f7bbf10ec": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 27
+  }
+ ],
+ "e5f96da6-8e5e-4854-ab68-6dbd6da9bd49": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 39
+  }
+ ],
+ "e64cf8bd-cdd1-4b93-8dd5-f6fc4ad07792": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 200
+  }
+ ],
+ "e6a4db93-c393-4537-b743-f6c98c1f6b1c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 30
+  }
+ ],
+ "e6fcd4dc-e8fc-4c55-a112-5631cc0dc7d6": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "e6fde53c-68af-4e24-b413-5002bfabb20f": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "e70bc8b6-d4b3-49e6-8fb7-73a4fa284c02": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 10
+  }
+ ],
+ "e74fc4ec-f2f8-430a-ac35-550f97ef3501": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 160
+  }
+ ],
+ "e7510dad-ae81-4912-89bc-079a0c416565": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 24
+  }
+ ],
+ "e777068a-7cb2-4b7e-b7dc-02ef97ab1ee4": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "e7c09315-d6dd-4f47-8842-9ced54e99eb3": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 400
+  }
+ ],
+ "e7ec053a-eba0-4937-9ad4-f99c2ed68022": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 53
+  }
+ ],
+ "e82f0264-cb7f-4eca-846a-9adbe0771944": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 138
+  }
+ ],
+ "e87130d1-ee58-4b51-99da-01e599a08c11": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 64
+  }
+ ],
+ "e87d0348-84ee-48be-a19e-6201b38e4b74": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 28
+  }
+ ],
+ "e91e4dd6-d283-44b5-a9ae-a3c22bc390ae": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 27
+  }
+ ],
+ "e93fcd23-71db-47f4-9a9d-a4a8cc41550b": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1250
+  }
+ ],
+ "e9693d25-68a7-4c58-8525-d26cd801b1d6": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 600
+  }
+ ],
+ "e97050d1-71ca-41b9-946c-1b5e328b5ba5": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "e9b2eb88-9794-4ec8-a134-22c3eba60e1f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "e9c6fb65-3089-4408-b133-2b9f4cea9917": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "e9deb065-4996-48c1-a391-94eba9e8cb19": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1400
+  }
+ ],
+ "ea2cc56f-986f-4c06-a58c-e9a77b4c416c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 42
+  }
+ ],
+ "eb1c9c6f-643e-4dec-a6ca-2965f1c73802": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "eb379ede-a13e-41bc-ba55-81fd6cbb8f4a": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 2
+  }
+ ],
+ "eb54222b-1485-404e-bd15-944ae5cb1e0e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "ebb7d9a5-13a8-406e-af45-695a92c14e76": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 23
+  }
+ ],
+ "ebfb633f-97fc-40bc-a492-0ebafff7e211": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 27
+  }
+ ],
+ "ec2a1477-1c7a-4a9f-8817-fe1e4d391e76": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "ec2ce863-c74d-4783-80b3-f0e931e538aa": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "ec2e19bb-5f45-4a13-8691-cb2b70565c79": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 35
+  }
+ ],
+ "ec5fa669-3e38-432c-9b44-19e543fcb39b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 5
+  }
+ ],
+ "eca28f9a-11a4-4ab8-a722-57f2b26b19dd": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 16
+  }
+ ],
+ "ecea0fe1-ba64-4749-ba43-9815a981944d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 150
+  }
+ ],
+ "ed302b2f-ff7d-4a94-b585-ae6e791e7ff7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "ed5f1e6d-0581-4878-8048-76b98afceb5b": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 335
+  }
+ ],
+ "ed7c6d4b-e7f4-45d0-95ed-daf828828ffa": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "eda15f84-8c48-46df-a1e4-89d1a972c219": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 650
+  }
+ ],
+ "edc02ca1-25f9-4246-b37a-ec37523c7bad": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "edd47a39-32ae-4ea6-b6a8-7bb71c20c795": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "edfd8ded-cc83-4e25-9004-5c46cb25256a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "ee33f3f4-0738-4627-bade-0dfbac2e4865": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 53
+  }
+ ],
+ "ee60c264-b352-4d94-9c1d-be09ffc4f40e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "eee1c789-f0b4-4bfb-a9e1-33bfadc89bb4": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 160
+  }
+ ],
+ "eefb8902-2c35-41c8-9816-13723773e1c2": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "ef234f68-8ee2-4fdd-8fbe-a8f9bf70fc21": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 700
+  }
+ ],
+ "ef6ca2a0-b68e-4dfe-8b62-ff73892e465b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 13
+  }
+ ],
+ "efadd0dd-e2bc-4f68-a980-da6775dc31b7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 45
+  }
+ ],
+ "efb49333-b3ba-4a06-802c-b4cfdb42d16c": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 14
+  }
+ ],
+ "f00845dc-310e-4a9a-aa43-ded4e3c61cd9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 36
+  }
+ ],
+ "f03a364c-7249-4c28-8343-30459c9613a8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 100
+  }
+ ],
+ "f0756358-03c5-4963-8555-ab9c6e0c659a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "f174a539-afac-42ab-9b12-58447b8ce153": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 200
+  }
+ ],
+ "f1983736-1eef-456b-84c4-9bedacaa1304": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 82
+  }
+ ],
+ "f208bac7-e664-45d6-9f93-0516b0841a1f": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "f234c8be-4354-407c-be64-2bc0cf26dff8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 920
+  }
+ ],
+ "f27c4ab7-53cc-4b7b-9a91-169cdf034c0b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 43
+  }
+ ],
+ "f29a0a07-c241-425b-893d-97aa045a7872": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 300
+  }
+ ],
+ "f2e87166-3d86-4e2c-92ba-74866259b40f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "f2fc4148-9e10-43d9-a1ae-f11c7073bae9": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 77
+  }
+ ],
+ "f30947e8-369f-4b83-8a2e-398102df55a3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 20
+  }
+ ],
+ "f3267fd9-81b4-4ca9-957e-1d2abac59dfb": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 33
+  }
+ ],
+ "f38425cd-82eb-4f31-a7cf-c71abdec5d7d": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "f38f8e2b-447b-480f-98de-b24daff32f52": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 86
+  }
+ ],
+ "f3f5a1c7-0f37-4a3c-a2db-977c35349dad": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1200
+  }
+ ],
+ "f3f65d3f-32bf-47c7-b4c2-90df83906010": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 70
+  }
+ ],
+ "f40c16b5-13cf-4e95-b80d-367052f22104": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 88
+  }
+ ],
+ "f410e424-2b40-452f-9da3-f4a82e663cd9": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1600
+  }
+ ],
+ "f49c4b50-aa31-4195-85f2-5c04c0469c09": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 30
+  }
+ ],
+ "f4cd9bad-7704-4c7a-a2bb-6225fa029a90": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 48
+  }
+ ],
+ "f5a5a6e0-0984-4f19-a02d-ec97e7f2d4f8": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "f5d84d2b-1e7b-49be-9202-947aea06b083": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 25
+  }
+ ],
+ "f62fab9a-f8d0-4232-88b1-793f71357469": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 110
+  }
+ ],
+ "f730d806-b522-43c4-a467-19ce331d2d17": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 35
+  }
+ ],
+ "f735aa76-57f8-43a6-ab18-af17798c4ca2": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 107
+  }
+ ],
+ "f7457009-e03a-4652-b494-d382c9b20b77": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 33
+  }
+ ],
+ "f76b3dc9-d8e8-46a9-91d8-2bc438b457ae": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "f76d9088-5367-4a32-b0dc-3f3403cf02f8": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "f76e9824-5263-4f3b-a858-7f4adfd5d818": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "f7807aca-96fe-4418-8000-372d01410eff": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 5
+  }
+ ],
+ "f7857db5-8bdc-4aaf-9fae-3345bccdb18c": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "f7a59539-f9d0-4469-8fbf-f5f563e03ad1": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "f7ad0d53-5f4a-485b-9c3a-b998b379d47e": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 23
+  }
+ ],
+ "f7dc5524-3ac6-4d6f-9189-89625b4d879f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 155
+  }
+ ],
+ "f807c2a6-ae4b-4300-bbd1-7dd843c8834d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 560
+  }
+ ],
+ "f80a3b10-7346-4f4a-b8bf-53a576621eb7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "f8986fa2-bcd7-427e-ae88-09998fdebb2d": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 250
+  }
+ ],
+ "f94258f4-6a66-46b2-b992-be69a6bad15b": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 23
+  }
+ ],
+ "f9a0fc50-4b23-4084-be00-8b8af92c1a8a": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 750
+  }
+ ],
+ "fa09d977-6203-463e-be4c-50d40a0c4093": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 450
+  }
+ ],
+ "fa112821-5472-4cdc-81e6-dcc95ec4f220": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1625
+  }
+ ],
+ "fa4bfb39-6f7e-4043-b38b-5e007b366959": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 600
+  }
+ ],
+ "fa57423b-c095-4c84-9335-56e6a3dede68": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 700
+  }
+ ],
+ "fa5b6d8b-3da2-43d6-96f1-78ddc4ec48bb": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 600
+  }
+ ],
+ "faa09742-5b9e-4c4d-8125-35ee98c9bdf6": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "fab24ea4-dd00-4746-89fe-db2ba2be8e3f": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 1630
+  }
+ ],
+ "fab35b22-b0b1-420b-8604-32761cf1794c": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "fae0c2d3-fed4-4175-b03d-412fc0c256f0": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 11
+  }
+ ],
+ "fb49fc8a-279b-4cba-8b67-6364003eef65": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 40
+  }
+ ],
+ "fbd06bea-34f2-4ca0-b6af-b983e56084dd": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 325
+  }
+ ],
+ "fc0d56da-3b93-407e-aeff-e1997e03d0a0": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 350
+  }
+ ],
+ "fc3d2e8d-ad00-4d4f-a5e9-1a90c1a48a31": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 51
+  }
+ ],
+ "fc523b1f-2855-49cc-b6ff-52d09b2e343c": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 80
+  }
+ ],
+ "fc8f44dd-d4cf-48b8-b8b2-77eaaa0643b8": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 123
+  }
+ ],
+ "fcd42a1c-2c05-48fb-bf7f-f7775f2a79b5": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 850
+  }
+ ],
+ "fd022c2e-a06c-4271-aa66-4424b1a8a7ab": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 550
+  }
+ ],
+ "fd7fd4ae-c121-485b-9d57-04029d6a0bb3": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "fe1007de-19a1-44f7-b30c-f3f9f5d122f3": [
+  {
+   "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139",
+   "quantity": 500
+  }
+ ],
+ "fe252199-573e-4dcd-8de9-7f0f3e049907": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ],
+ "fe6e58d0-ad60-4b6a-8f54-f85bf4b53759": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 190
+  }
+ ],
+ "ff38d8f7-b327-45d3-b0ee-4dee29931ba4": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 22
+  }
+ ],
+ "ff4e4fc6-cb1c-4b0b-93af-f062a6bcbb3f": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 54
+  }
+ ],
+ "ffbf07e1-45bd-4702-922a-ff0349a3d9b7": [
+  {
+   "currencyId": "c64bcb53-41f4-41ba-892a-fe2cca423caa",
+   "quantity": 49
+  }
+ ]
+}

@@ -1030,10 +1030,17 @@ pub struct StaticData {
     /// only (all `isActive:false` in captures); we never run a purchase flow.
     pub iap: Value,
     /// What each global-shop product grants when bought (`globalShopProductId` ->
-    /// reward), derived from purchase captures. The price comes from the client's
-    /// `expectedPrices` (the base price list lives in the client bundles), so an
+    /// reward), derived from purchase captures. Price validation is independent:
+    /// it uses [`Self::global_shop_prices`] or a currently active override, so an
     /// unknown product can be priced but not fulfilled.
     pub global_shop_grants: HashMap<Uuid, RewardGrant>,
+    /// Authoritative base prices from the APK's `GlobalShopProductsCatalog`.
+    ///
+    /// The captured override catalogue records Bethesda's shutdown promotion,
+    /// where every price was reduced to one. It is authoritative only while a
+    /// replayed/authored override is active; always-available products use this
+    /// table instead of trusting the client's `expectedPrices` request field.
+    pub global_shop_prices: HashMap<Uuid, Vec<crate::economy::Price>>,
     /// APK-derived contents for offers the purchase captures never covered.
     ///
     /// `global_shop_grants` above knows 159 of the storefront's 547 offers,

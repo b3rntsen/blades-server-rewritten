@@ -9,7 +9,7 @@
 
 use std::{collections::HashMap, fs::File, io::BufReader, path::Path};
 
-use blades_lib::economy::RewardGrant;
+use blades_lib::economy::{Price, RewardGrant};
 use blades_lib::features::challenges::ChallengeTemplate;
 use blades_lib::features::daily_reward::DailyRewardDef;
 use blades_lib::features::game_events::EventDef;
@@ -88,6 +88,10 @@ pub fn load(dir: &Path) -> StaticData {
     }
     let global_shop_grants: HashMap<Uuid, RewardGrant> =
         read_json(&dir.join("global_shop_grants.json"));
+    // Missing is fail-closed: without an authoritative price table, paid
+    // purchases are rejected instead of falling back to the request's price.
+    let global_shop_prices: HashMap<Uuid, Vec<Price>> =
+        read_json(&dir.join("global_shop_prices.json"));
     // A missing file leaves the list empty, i.e. nothing is free — the safe
     // direction. Only offers retail itself gave away belong here.
     let global_shop_free: FreeProductIds = read_json(&dir.join("global_shop_free.json"));
@@ -137,6 +141,7 @@ pub fn load(dir: &Path) -> StaticData {
         global_shop_authored,
         iap,
         global_shop_grants,
+        global_shop_prices,
         global_shop_free,
         global_shop_offer_contents,
         challenge_templates,
@@ -172,6 +177,16 @@ mod tests {
         assert!(!sd.gifts.is_empty(), "gifts.json");
         assert!(!sd.announcements.is_empty(), "announcements.json");
         assert!(!sd.global_shop_grants.is_empty(), "global_shop_grants.json");
+        assert!(!sd.global_shop_prices.is_empty(), "global_shop_prices.json");
+        let gems: Uuid = "470c8f58-a8dd-4c07-8c92-843b785e1139".parse().unwrap();
+        for (id, quantity) in [
+            ("0e224ca0-1506-490f-884a-8871ffe6399b", 250),
+            ("7bf00a9c-6a08-4b55-a60d-53915baa38a3", 750),
+            ("1275d959-bbe5-460d-8f6a-1c31106a8eb2", 2500),
+        ] {
+            let prices = &sd.global_shop_prices[&id.parse().unwrap()];
+            assert_eq!(prices, &[Price::new(gems, quantity)], "APK price for {id}");
+        }
         assert!(!sd.challenge_templates.is_empty(), "challenges.json");
         assert!(!sd.daily_rewards.is_empty(), "daily_rewards.json");
         // Retail's daily reward is weekday-keyed (Tuesday is always Clay), so the
