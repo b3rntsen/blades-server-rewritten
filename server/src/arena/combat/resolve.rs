@@ -1392,10 +1392,32 @@ fn apply_ability_impact(
             // Middle is not part of a Left/Right chain, so it resets the combo — the
             // same rule `resolve_swing_with_side` applies to a Middle swing.
             combat.fighters[sender].reset_combo();
+            // Report #107: the SOURCE, not the damage. A maneuver deals weapon
+            // damage, so this arm reasonably reached for `DamageSource::Attack` — but
+            // that is a pair retail never puts on the wire.
+            //
+            // Measured over 168 decoded retail op50 `ReceiveDamage` messages in the
+            // stored captures, `(propId 6 = source, propId 10 = activeSide)`:
+            //
+            //   source 1 Attack          side 2 Left (15) / 3 Right (21) — NEVER Middle
+            //   source 3 WeaponManeuver  side 1 Middle (13) — only ever Middle
+            //   source 2 Spell           side 1 Middle (13) / 0 None (2)
+            //   source 4 StatusEffect    side 0 (73)
+            //
+            // We were sending `(1, Middle)`, which occurs **0 times in 168**. The
+            // client picks its hit and death reaction off this byte, which is why the
+            // reporter saw an opponent "simply collapse to the ground as if he
+            // fainted" for some kills and ragdoll properly for others: a maneuver kill
+            // was arriving labelled as a plain swing with a side a swing cannot have.
+            //
+            // Shield bashes route through this same arm (there is no shield-specific
+            // `AbilityTag`), and `ShieldManeuver (11)` almost certainly belongs to
+            // them — but 11 appears in **none** of the 168, so there is no measurement
+            // behind it and it is deliberately not guessed here.
             let resolved = RetailDamageModel.resolve_attack(
                 &attacker_loadout,
                 &combat.fighters[target_slot],
-                DamageSource::Attack,
+                DamageSource::WeaponManeuver,
                 ActiveSide::Middle,
                 1.0,
                 0,
@@ -4808,6 +4830,99 @@ mod tests {
             out.extend(super::on_tick(combat, t, false));
         }
         out
+    }
+
+    /// Report #107 (Taheen): "on the ragdoll finish … in the case of a hit or bash
+    /// or even some spells, the opponent should ragdoll, but in other cases the
+    /// opponent simply collapses to the ground as if he fainted".
+    ///
+    /// He asked whether the death reaction is two functions or one function reading
+    /// the damage. It is one, and it reads `ReceiveDamage` propId 6 (`DamageSource`)
+    /// and propId 10 (`ActiveSide`) off the killing frame — so a wrong source byte
+    /// gives the wrong death.
+    ///
+    /// Measured over 168 decoded retail op50 messages in the stored captures:
+    ///
+    /// ```text
+    /// source 1 Attack          side 2 Left (15) / 3 Right (21)   — NEVER Middle
+    /// source 3 WeaponManeuver  side 1 Middle (13)                — only ever Middle
+    /// source 2 Spell           side 1 Middle (13) / 0 None (2)
+    /// source 4 StatusEffect    side 0 (73)
+    /// source 7 AreaEffect      side 1 (14) / 0 (2)
+    /// source 8 ContinuousSpell side 1 (6)
+    /// source 6 Revenge         side 0 (4)
+    /// ```
+    ///
+    /// The maneuver arm sent `(1 Attack, 1 Middle)` — a pair that occurs **0 times
+    /// in 168**, because Attack is the only source that carries a side at all and it
+    /// is always Left or Right.
+    ///
+    /// The whole existing suite passed with the wrong byte, which is why this test
+    /// exists rather than a wider one.
+    #[test]
+    fn a_maneuver_hit_is_labelled_weapon_maneuver_not_attack() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        // Quick Strikes — a maneuver that ships no `_damage`, so it takes the weapon
+        // path this arm exists for.
+        let quick_strikes = "eb0cb7e6-47cf-48e7-8cc9-dbf80fc77f13";
+        combat.fighters[0].loadout.abilities.push(EquippedAbility {
+            instance_uuid: quick_strikes.to_string(),
+            level: 1,
+            tag: AbilityTag::Maneuver,
+        });
+        let frame = make_ability_frame(combat.fighters[0].net_object_id, quick_strikes);
+
+        let mut out = on_c2s_input(&mut combat, 0, &frame, now);
+        out.extend(land(&mut combat, now));
+
+        let hits = damage_frames(&out);
+        assert!(!hits.is_empty(), "the maneuver must land a damage frame at all");
+        for (source, total, _) in &hits {
+            assert_eq!(
+                *source,
+                super::super::state::DamageSource::WeaponManeuver as u8,
+                "a maneuver must ride WeaponManeuver (3), not Attack (1)"
+            );
+            assert!(*total > 0.0, "and still deal its weapon damage");
+        }
+
+        // The side half of the pair, read straight off the frame.
+        for (_, f) in out.iter().filter(|(_, f)| messages::user_message_gmid(f) == Some(50)) {
+            let nd = arena_proto::parse_netdata(&f[2..]);
+            assert_eq!(
+                nd.int(10).unwrap_or(-1),
+                super::super::state::ActiveSide::Middle as i64,
+                "a maneuver is a Middle hit — the pair must be (3, Middle)"
+            );
+        }
+    }
+
+    /// The control that makes the test above about the maneuver arm rather than about
+    /// every damage frame: a plain swing must STILL be `Attack`, and on a real side.
+    #[test]
+    fn a_plain_swing_is_still_attack_on_a_left_or_right_side() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let out = swing_and_land(&mut combat, 0, 1, 1.0, now);
+        let hits = damage_frames(&out);
+        assert!(!hits.is_empty(), "the swing must land");
+        for (source, _, _) in &hits {
+            assert_eq!(
+                *source,
+                super::super::state::DamageSource::Attack as u8,
+                "an ordinary swing is Attack (1) — unchanged"
+            );
+        }
+        for (_, f) in out.iter().filter(|(_, f)| messages::user_message_gmid(f) == Some(50)) {
+            let nd = arena_proto::parse_netdata(&f[2..]);
+            let side = nd.int(10).unwrap_or(-1);
+            assert!(
+                side == super::super::state::ActiveSide::Left as i64
+                    || side == super::super::state::ActiveSide::Right as i64,
+                "Attack carries Left or Right, never Middle — got {side}"
+            );
+        }
     }
 
     /// Decode every `ReceiveDamage` (50) frame in `out` into
