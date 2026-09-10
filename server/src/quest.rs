@@ -2058,12 +2058,20 @@ pub(crate) mod event_quests {
 }
 
 #[cfg(test)]
+pub(crate) mod jobs_tests_support {
+    use serde_json::Value;
+    pub fn sample_pools_for_diff() -> Value {
+        super::jobs_tests::sample_pools()
+    }
+}
+
+#[cfg(test)]
 mod jobs_tests {
     use super::jobs_gen;
     use serde_json::{Value, json};
     use uuid::Uuid;
 
-    fn sample_pools() -> Value {
+    pub(crate) fn sample_pools() -> Value {
         // A trimmed but shape-faithful job_pools.json: one standard/daily pool
         // (maxActive 4), one boss/special weekly, and one featured weekly on Sun.
         json!({
@@ -3517,4 +3525,113 @@ mod job_dynamic_elements {
         }
         assert!(checked > 0, "no localization values emitted — the test proved nothing");
     }
+}
+
+/// Our generated jobs board against the one committed retail board (tracker #92/#98).
+///
+/// The reporter says jobs still hang the map and asked me to compare our
+/// `/quests` traffic with retail's. The API capture that would show live traffic
+/// has been off since 28 August, so this diffs against
+/// `blades-capture reference/capture-599.jsonl` instead — the one full retail
+/// `/quests` body in the repo, 6 jobs.
+#[cfg(test)]
+mod jobs_wire_diff {
+    use super::jobs_gen;
+    use super::jobs_tests_support::sample_pools_for_diff as sample_pools;
+    use std::collections::BTreeSet;
+    use uuid::Uuid;
+
+    /// Keys on a JOB entry, from the committed board (all 6 jobs carry exactly
+    /// these 9).
+    const RETAIL_JOB_KEYS: &[&str] = &[
+        "completed", "difficultyLevel", "jobPoolId", "jobSetup", "objectiveStatuses",
+        "questId", "seed", "type", "version",
+    ];
+
+    /// `jobSetup` keys present on ALL SIX retail jobs — the universal set.
+    ///
+    /// Derived from the capture, not assumed. My first version of this test took
+    /// one Rescue job's 22 keys as universal and reported our Duel job as missing
+    /// `primaryEnemyFamilyId`. Retail's own Duel job does not carry it either: it
+    /// has 20 keys, no primary/secondary enemy family, and a `duelBossId` instead
+    /// — which is exactly what we emit. The test was wrong, not the generator.
+    const RETAIL_UNIVERSAL_JOBSETUP_KEYS: &[&str] = &[
+        "algorithmVersion", "bossEnemyFamilyId", "bossLevelDelta", "dungeonTemplateId",
+        "enemyBaseLevelOffset", "initialEPL", "jobCreatorVersion", "jobType",
+        "primaryEnemyCount", "questDescription", "questName", "rewardGemCount",
+        "rewardItemCount", "rewardItemId", "rewardXp", "secondaryEnemyCount",
+        "secondaryEnemyCountPerSpawnerMax", "secondaryEnemyCountPerSpawnerMin",
+        "secretRoom",
+    ];
+
+    /// The per-type and optional keys retail also used, on top of the universal
+    /// set. Union across the six jobs; the two sets together are every key retail
+    /// is known to send, so anything outside them is a key we invented.
+    const RETAIL_OPTIONAL_JOBSETUP_KEYS: &[&str] = &[
+        "duelBossId", "gatherItemCount", "gatherItemId", "primaryEnemyFamilyId",
+        "rescueNpcCount", "secondaryEnemyFamilyId", "secretBossEnemyFamilyId",
+        "secretBossLevelDelta",
+    ];
+
+    /// Keys we emit that the committed board CANNOT confirm, because it contains
+    /// no job of the type that carries them.
+    ///
+    /// `defeatEnemyCount` is emitted on jobType 0 (Defeat), and the six retail
+    /// jobs in the capture are types 3, 1, 5, 4, 4, 1 — no Defeat job at all. So
+    /// this is neither confirmed nor refuted here, and allowing it silently would
+    /// hide that. Settling it needs a Defeat job from the wider capture archive,
+    /// which is on the box.
+    const UNVERIFIED_BY_THE_SAMPLE: &[&str] = &["defeatEnemyCount"];
+
+    #[test]
+    fn our_job_entries_carry_every_key_retail_sent() {
+        let pools = sample_pools();
+        let char_id = Uuid::from_u128(7);
+        let (jobs, _timers) = jobs_gen::generate(&pools, char_id, 30, 0, 0, 1_756_000_000);
+
+        // Control: the generator must actually produce a board, or the assertions
+        // below pass over an empty list and prove nothing.
+        assert!(!jobs.is_empty(), "the generator produced no jobs at all");
+
+        for job in &jobs {
+            let obj = job.as_object().expect("a job must be an object");
+            let ours: BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+            for k in RETAIL_JOB_KEYS {
+                assert!(
+                    ours.contains(k),
+                    "job entry is missing retail's `{k}`; we send {ours:?}"
+                );
+            }
+            let setup = obj
+                .get("jobSetup")
+                .and_then(|v| v.as_object())
+                .expect("every retail job carries a jobSetup");
+            let sk: BTreeSet<&str> = setup.keys().map(String::as_str).collect();
+            for k in RETAIL_UNIVERSAL_JOBSETUP_KEYS {
+                assert!(
+                    sk.contains(k),
+                    "jobSetup is missing retail's universal `{k}` (jobType {:?}); we send {sk:?}",
+                    setup.get("jobType")
+                );
+            }
+            // The other direction, which matters just as much: a key retail never
+            // sent is a shape it never produced, and inventing one is what the
+            // stub-character load stall was.
+            let known: BTreeSet<&str> = RETAIL_UNIVERSAL_JOBSETUP_KEYS
+                .iter()
+                .chain(RETAIL_OPTIONAL_JOBSETUP_KEYS.iter())
+                .copied()
+                .collect();
+            let invented: Vec<&&str> = sk
+                .iter()
+                .filter(|k| !known.contains(**k) && !UNVERIFIED_BY_THE_SAMPLE.contains(*k))
+                .collect();
+            assert!(
+                invented.is_empty(),
+                "jobSetup carries keys retail never sent (jobType {:?}): {invented:?}",
+                setup.get("jobType")
+            );
+        }
+    }
+
 }
