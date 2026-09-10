@@ -126,6 +126,12 @@ services:
       dockerfile: Dockerfile
     container_name: arena-server
     restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 15s
     depends_on:
       arena-migrate:
         condition: service_completed_successfully

@@ -139,10 +139,9 @@ case "$cmd" in
   logs)         dc logs -f --tail=100 "$@" ;;
   migrate)      dc up -d arena-db && dc run --rm arena-migrate ;;
   verify)
-    printf 'REST :8087 '
-    curl -sS -m 5 -o /dev/null -w '→ HTTP %{http_code}\n' \
-      http://127.0.0.1:8087/blades.bgs.services/api/status 2>/dev/null \
-      || echo '→ unreachable'
+    printf 'REST + PostgreSQL :8087 '
+    curl -fsS -m 5 -o /dev/null -w '→ HTTP %{http_code}\n' \
+      http://127.0.0.1:8087/healthz
     dc ps ;;
   ""|-h|--help|help) usage ;;
   *) echo "unknown: $cmd" >&2; usage; exit 1 ;;

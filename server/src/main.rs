@@ -433,7 +433,7 @@ async fn main() -> Result<()> {
                     // the game polls hard (one player's session was 624
                     // manifest fetches).
                     .wrap(actix_web::middleware::Logger::new(
-                        "%s %r %Dms",
+                        "arena-http remote=%a status=%s duration_ms=%D request=\"%r\"",
                     ))
                     .app_data(Data::new(server_global.clone()))
                     // A character transfer POSTs the whole CompleteCharacter, and
@@ -508,6 +508,7 @@ async fn main() -> Result<()> {
                     .service(analytics::swrve_submit_device_info)
                     .service(analytics::appcenter_log)
                     .service(analytics::swrve_identity_identify)
+                    .service(status::healthz)
                     .service(status::check_status)
                     .service(session::sync)
                     .service(authentification::anon_log_in)
