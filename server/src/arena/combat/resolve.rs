@@ -1101,19 +1101,39 @@ pub(super) fn resolve_ability_cast(
     // return (0,0) — no gate applies (backward-compatible: unrecognised spells still
     // fire). The rank (1-based, from the equipped level) drives the linear cost ramp.
     let (stam_cost, mag_cost) = tables::ability_cost(&ea.ability_uuid, level);
-    if stam_cost > 0 && combat.fighters[sender].stamina < stam_cost {
-        debug!(
-            "combat: slot {sender} ability {} REJECTED — insufficient stamina ({} < {} required)",
-            ea.ability_uuid, combat.fighters[sender].stamina, stam_cost,
-        );
-        return Vec::new(); // no cooldown set; client retries when stamina is up
-    }
-    if mag_cost > 0 && combat.fighters[sender].magicka < mag_cost {
-        debug!(
-            "combat: slot {sender} ability {} REJECTED — insufficient magicka ({} < {} required)",
-            ea.ability_uuid, combat.fighters[sender].magicka, mag_cost,
-        );
-        return Vec::new();
+    let short_of_stamina = stam_cost > 0 && combat.fighters[sender].stamina < stam_cost;
+    let short_of_magicka = mag_cost > 0 && combat.fighters[sender].magicka < mag_cost;
+    if short_of_stamina || short_of_magicka {
+        if short_of_stamina {
+            debug!(
+                "combat: slot {sender} ability {} REJECTED — insufficient stamina ({} < {} required)",
+                ea.ability_uuid, combat.fighters[sender].stamina, stam_cost,
+            );
+        } else {
+            debug!(
+                "combat: slot {sender} ability {} REJECTED — insufficient magicka ({} < {} required)",
+                ea.ability_uuid, combat.fighters[sender].magicka, mag_cost,
+            );
+        }
+        // Report #109: a rejection used to `return Vec::new()` — the server sent
+        // NOTHING back. No op65, so the caster's HUD bars never moved, and no
+        // cooldown, so the icon never greyed out. From the player's seat that reads
+        // as "the cost is displayed but nothing is deducted and I can cast forever",
+        // which is exactly how it was reported. The client is running its own
+        // prediction; if the authority stays silent there is nothing to correct it.
+        //
+        // So a rejection now re-states the caster's CURRENT pools to both players.
+        // It is the same frame the commit path sends, carrying the unchanged values:
+        // the cast is still refused, still costs nothing and still sets no cooldown,
+        // but the client is told what it actually has instead of being left with its
+        // own guess. `stats_seq` is bumped so the client treats it as a fresh update
+        // rather than a duplicate of the last one.
+        combat.fighters[sender].stats_seq = combat.fighters[sender].stats_seq.wrapping_add(1);
+        let packed = combat.fighters[sender].packed_stats();
+        let obj_id = combat.fighters[sender].net_object_id;
+        let other_packed = combat.fighters[target_slot].packed_stats();
+        let frame = messages::player_stats_update(obj_id, packed, other_packed);
+        return (0..combat.fighters.len()).map(|s| (s, frame.clone())).collect();
     }
 
     // Resource gate passed → commit: set cooldown and deduct the cost.
@@ -3689,8 +3709,14 @@ mod tests {
     // Bug 2: Under-funded ability cast is rejected
     // -----------------------------------------------------------------------
 
-    /// An ability cast when the caster has LESS stamina than required must be silently
+    /// An ability cast when the caster has LESS stamina than required must be
     /// rejected — no cooldown set, no damage emitted. [spec bug 2 / §1 cost gate]
+    ///
+    /// It is no longer *silent*: report #109 showed that emitting nothing leaves the
+    /// client's own prediction uncorrected, so the player sees a free cast. The
+    /// rejection now answers with the caster's unchanged pools (op65) and nothing
+    /// else — which is what this test asserts, and it is the only thing about the
+    /// rejection that changed.
     #[test]
     fn underfunded_cast_is_rejected_no_damage_no_cooldown() {
         let now = Instant::now();
@@ -3710,9 +3736,19 @@ mod tests {
         let mut out = on_c2s_input(&mut combat, 0, &ability_frame, now);
         out.extend(land(&mut combat, now));
 
-        assert!(
-            out.is_empty(),
-            "underfunded cast must emit zero frames (rejected), got {} frame(s)",
+        // No cast echo (38), no damage (50) — the ONLY thing a rejection emits is
+        // the op65 pool correction, one per player.
+        for (_, f) in &out {
+            assert_eq!(
+                messages::user_message_gmid(f),
+                Some(65),
+                "underfunded cast must emit nothing but the op65 pool correction"
+            );
+        }
+        assert_eq!(
+            out.len(),
+            combat.fighters.len(),
+            "one op65 per player and no other frame, got {} frame(s)",
             out.len()
         );
         // Cooldown must NOT be set — the cast was rejected before the commit point.
@@ -4587,6 +4623,119 @@ mod tests {
         let after = now + cd + Duration::from_millis(1);
         let out3 = on_c2s_input(&mut combat, 0, &frame, after);
         assert!(!out3.is_empty(), "the ability fires again once its cooldown elapses");
+    }
+
+    /// Report #109 (WolfWalker): "the Magic/Stamina cost is displayed, but the
+    /// resources are not actually deducted … spells and abilities can be cast
+    /// repeatedly without consuming resources", and "abilities have no initial
+    /// cooldown".
+    ///
+    /// Both readings come from ONE server behaviour: a cast the resource gate
+    /// refused used to `return Vec::new()`. Nothing went back to the client — no
+    /// op65, so the caster's own bars never moved, and no cooldown, so the icon
+    /// never greyed out. The client runs its own prediction; with the authority
+    /// silent there is nothing to correct it, so the fight looks free.
+    ///
+    /// His own numbers make this reachable rather than theoretical: at level 89
+    /// `pool_for_level` gives 640 stamina and 640 magicka, while his equipped
+    /// Reckless Fury costs 425 stamina at rank 1 and Ward 205 magicka — two casts
+    /// and the gate starts firing on every one.
+    ///
+    /// The gate itself is unchanged: the cast is still refused, still free, still
+    /// sets no cooldown. It just says so now.
+    #[test]
+    fn a_cast_refused_for_want_of_magicka_still_reports_the_real_pools() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let fireball = "d07a8d30-9a1c-49b0-866d-97a8aa1534cf";
+        // Shipped FireballRank1._magickaCost = 90.
+        let (_stam, mag_cost) = tables::ability_cost(fireball, 1);
+        assert!(mag_cost > 0, "the fixture ability must actually cost magicka");
+
+        combat.fighters[0].magicka = mag_cost - 1;
+        let before = combat.fighters[0].magicka;
+        let frame = make_ability_frame(combat.fighters[0].net_object_id, fireball);
+
+        let out = on_c2s_input(&mut combat, 0, &frame, now);
+
+        // THE regression. Before the fix this was empty.
+        assert!(!out.is_empty(), "a refused cast must still answer the client");
+        let stats: Vec<_> = out
+            .iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(65))
+            .collect();
+        assert_eq!(
+            stats.len(),
+            combat.fighters.len(),
+            "the pools go to every player, as on the commit path"
+        );
+        // Still refused: no cast echo, no damage, nothing but the correction.
+        assert_eq!(out.len(), stats.len(), "a refused cast emits ONLY the stats frame");
+        assert_eq!(
+            combat.fighters[0].magicka, before,
+            "the refusal must not spend the magicka it refused over"
+        );
+
+        // And no cooldown was set, so the ability is castable the moment the pool
+        // is back — the refusal is not a silent lockout.
+        combat.fighters[0].magicka = combat.fighters[0].max_magicka;
+        let out2 = on_c2s_input(&mut combat, 0, &frame, now);
+        assert!(
+            out2.iter().any(|(_, f)| messages::user_message_gmid(f) == Some(38)),
+            "with the pool restored the same cast fires immediately (no cooldown was set)"
+        );
+        assert!(
+            combat.fighters[0].magicka < combat.fighters[0].max_magicka,
+            "and NOW the cost is deducted — the control that makes the assertions above \
+             about the refusal path rather than about a gate that never charges"
+        );
+    }
+
+    /// The same for the stamina half of the gate, because the two branches are
+    /// separate `if`s and only one of them was covered by the magicka test.
+    #[test]
+    fn a_cast_refused_for_want_of_stamina_still_reports_the_real_pools() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        // Reckless Fury — one of WolfWalker's own equipped maneuvers, 425 stamina
+        // at rank 1.
+        let reckless_fury = "0cfe29cd-89d9-42ad-9227-8308e2f87c7f";
+        let (stam_cost, _mag) = tables::ability_cost(reckless_fury, 1);
+        assert_eq!(stam_cost, 425, "his rank-1 cost, from the shipped RecklessFuryRank1");
+
+        combat.fighters[0].stamina = stam_cost - 1;
+        let before = combat.fighters[0].stamina;
+        let frame = make_ability_frame(combat.fighters[0].net_object_id, reckless_fury);
+
+        let out = on_c2s_input(&mut combat, 0, &frame, now);
+        assert!(
+            out.iter().any(|(_, f)| messages::user_message_gmid(f) == Some(65)),
+            "a stamina refusal must report the pools too"
+        );
+        assert_eq!(combat.fighters[0].stamina, before, "and spend nothing");
+    }
+
+    /// A level-89 fighter — WolfWalker's level — gets 640 of each pool from
+    /// `pool_for_level`, and that is a PLACEHOLDER curve, not the retail one: it
+    /// ignores the attribute split entirely. He has spent 46 points on stamina and
+    /// 3 on magicka, and our formula hands him the same 640 of both.
+    ///
+    /// This test does not assert the right answer, because the right answer is in
+    /// `ActorInnateStats` / `LevelUpData` in the APK and is not extracted yet. It
+    /// pins the CURRENT number so that wiring the real curve is a deliberate change
+    /// with a failing test attached, rather than something that drifts silently
+    /// underneath the resource gate.
+    #[test]
+    fn the_level_89_pool_is_still_the_placeholder_curve() {
+        use super::super::state::pool_for_level;
+        assert_eq!(pool_for_level(89), 640, "200 + 5 * (level - 1)");
+        // Reckless Fury rank 1 alone is two thirds of it.
+        let (stam_cost, _) = tables::ability_cost("0cfe29cd-89d9-42ad-9227-8308e2f87c7f", 1);
+        assert!(
+            stam_cost * 2 > pool_for_level(89),
+            "one rank-1 maneuver costs more than half the whole pool ({stam_cost} of {})",
+            pool_for_level(89)
+        );
     }
 
     // -----------------------------------------------------------------------
