@@ -594,19 +594,33 @@ fn process_dungeon_actions(
             }
 
             DungeonUpdateAction::ItemLootCollected(item_loot) => {
-                let mut reward = RewardGrant::default();
-
-                for (item_id, quantity) in &item_loot.loot.stackable_items {
-                    reward.stackable_items.insert(*item_id, (*quantity).into());
-                }
-
-                for (currency_id, amount) in &item_loot.loot.currencies {
-                    reward.currencies.insert(*currency_id, (*amount).into());
-                }
-
+                // Apply the reward WHOLE rather than copying it field by field.
+                //
+                // This used to rebuild a `RewardGrant` from `stackable_items` and
+                // `currencies` only, and `loot` is a full `RewardGrant` — so an
+                // `items` entry, which is how a non-stackable pickup arrives, was
+                // dropped on the floor. A weapon or a piece of armour lying in a
+                // dungeon was collected by the client, reported to us, and never
+                // reached the backpack (tracker #104: "floor loot is not getting
+                // added to the player inventory"). `apply_reward` has handled
+                // `items` all along; the hand-copy simply never passed them.
+                //
+                // Passing the grant through also means the next field added to
+                // `RewardGrant` cannot be silently missed here, which is the bug
+                // this was.
+                //
+                // NOTE on trust, so it is not mistaken for a new hole: this action
+                // is client-authoritative BY DESIGN — the comment on
+                // `LootCollectedUpdate` says the contents "genuinely exist nowhere
+                // but the request", because we do not generate loose-item spawns.
+                // Currencies from this same field were already trusted, so nothing
+                // is being widened in kind. That the whole action is client-supplied
+                // is a separate, known gap (see also the interactable loot tables,
+                // which are absent from the APK).
+                let reward = &item_loot.loot;
                 currency_moved |= !reward.currencies.is_empty();
                 apply_reward(
-                    &reward,
+                    reward,
                     wallet,
                     &mut character_data.inventory.0,
                     &mut character_data.character.0,
@@ -1020,6 +1034,114 @@ mod tests {
         let mut v = 7;
         bump(&t, &mut v);
         assert_eq!(v, 8, "a batch bumps once however many items it carried");
+    }
+
+    /// PRECONDITION for tracker #104: `apply_reward` does credit a non-stackable
+    /// pickup, so passing the grant whole is sufficient.
+    ///
+    /// Honest about what this proves: it exercises `apply_reward`, which handled
+    /// `items` all along — so it would have passed BEFORE the fix too. It is not
+    /// the regression test. It establishes that the reward path is capable of
+    /// crediting gear, which is what makes "pass the grant whole" a fix rather
+    /// than a no-op. The test that discriminates is the source-level one below.
+    #[test]
+    fn a_gear_pickup_off_the_floor_reaches_the_backpack() {
+        use blades_lib::economy::{RewardItem, apply_reward};
+        use blades_lib::user_data::{
+            Backpack, CompleteCharacter, CompleteInventory, CompleteWallet, Item, Loadout,
+            Treasury,
+        };
+
+        let lumber: Uuid = "e7193116-d761-479b-8a20-5633737977f5".parse().unwrap();
+        let gold: Uuid = "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2".parse().unwrap();
+        let sword_instance = Uuid::from_u128(0xABCD);
+        let sword_template = Uuid::from_u128(0x1234);
+
+        // The shape the client actually posts for a mixed floor pickup: a stackable,
+        // some coin, and a piece of gear.
+        let loot = RewardGrant {
+            stackable_items: std::collections::HashMap::from([(lumber, 3)]),
+            currencies: std::collections::HashMap::from([(gold, 25)]),
+            items: vec![RewardItem {
+                id: sword_instance,
+                item: Item {
+                    item_template_id: sword_template,
+                    grade: None,
+                    tempering_level: 0,
+                    durability: 100.0,
+                    properties: Default::default(),
+                    arcane_tier: None,
+                },
+            }],
+            ..RewardGrant::default()
+        };
+
+        let mut wallet = CompleteWallet::default();
+        let mut inventory = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: Loadout::default(),
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        let mut character = CompleteCharacter::default();
+        let mut tracker = InventoryChangeTracker::default();
+        apply_reward(&loot, &mut wallet, &mut inventory, &mut character, &mut tracker);
+
+        // The defect: this is the assertion that failed before.
+        assert!(
+            inventory.backpack.items.0.contains_key(&sword_instance),
+            "a gear pickup must land in the backpack, not be dropped"
+        );
+        // Controls: the two kinds that ALREADY worked must still work, so the test
+        // is about `items` specifically and not about the reward path being broken.
+        assert_eq!(inventory.backpack.stackable_items.count(lumber), 3);
+        assert_eq!(wallet.balance(gold), 25);
+        // And the tracker must name the item, or the client is never told to redraw.
+        assert!(
+            tracker.modified_backpack.items.contains(&sword_instance),
+            "the pickup must be in the backpack diff, or the client discards it"
+        );
+    }
+
+    /// THE REGRESSION TEST for tracker #104 — this one fails on the pre-fix source.
+    ///
+    /// The bug was not in `apply_reward`: the handler rebuilt the grant by hand
+    /// from two of its fields, so `items` (a weapon or armour lying on the dungeon
+    /// floor) was parsed and then dropped. Catching that behaviourally would need a
+    /// database and a whole request, so this checks the property at the source: the
+    /// branch must pass the grant WHOLE and must not pick fields out of it.
+    ///
+    /// Source-level deliberately. The same approach caught the unregistered
+    /// `/levelup` route, for the same reason — the defect is an omission, and an
+    /// omission has no runtime signature to assert on.
+    #[test]
+    fn the_floor_pickup_branch_does_not_hand_copy_the_grant() {
+        let src = include_str!("dungeon_update.rs");
+        let start = src
+            .find("DungeonUpdateAction::ItemLootCollected(item_loot) => {")
+            .expect("the floor-pickup branch must exist");
+        let end = src[start..]
+            .find("DungeonUpdateAction::ChestCollected(chest)")
+            .map(|i| start + i)
+            .expect("the chest branch must follow it");
+        let branch = &src[start..end];
+
+        // Controls: the slice really is the branch, not an empty or runaway cut.
+        assert!(branch.contains("apply_reward"), "slice missed the branch body");
+        assert!(branch.len() < 4000, "slice ran past the branch: {} bytes", branch.len());
+
+        assert!(
+            !branch.contains("reward.stackable_items.insert")
+                && !branch.contains("reward.currencies.insert"),
+            "the floor-pickup branch is hand-copying the grant again — that is how \
+             `items` got dropped in #104. Pass the whole grant instead."
+        );
+        assert!(
+            branch.contains("&item_loot.loot"),
+            "the branch must pass the whole grant to apply_reward"
+        );
     }
 
     /// Retail sends `wallet` in the dungeon-update response only when the batch
