@@ -123,9 +123,23 @@ pub fn record(outcome: MatchEconomyOutcome) {
     }
 }
 
+/// Add the fixed portion of crossed promotion loot to the same `RewardGrant`
+/// that is applied transactionally with match gold and XP.
+fn add_promotion_stackables(
+    reward: &mut RewardGrant,
+    promo: &arena_ladder::PromotionRewards,
+) -> u64 {
+    for (template, quantity) in &promo.stackable_items {
+        let template = Uuid::parse_str(template)
+            .expect("generated arena-promotion item id is a valid UUID");
+        *reward.stackable_items.entry(template).or_insert(0) += quantity;
+    }
+    promo.stackable_items.iter().map(|(_, n)| n).sum()
+}
+
 /// Apply one match outcome durably: PvP counters + wallet + XP + any promotion
-/// chests. One transaction, row-locked, so two matches ending at the same instant
-/// for the same character cannot interleave.
+/// chests and fixed stackables. One transaction, row-locked, so two matches ending
+/// at the same instant for the same character cannot interleave.
 ///
 /// # Why the audit row is written AFTER the transaction
 ///
@@ -218,6 +232,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                     .insert(ARENA_GOLD_CURRENCY_UUID_PARSED.clone(), o.gold as u64);
             }
             reward.character_xp = o.character_xp.max(0) as u64;
+            let promotion_stackables = add_promotion_stackables(&mut reward, &promo);
 
             let mut tracker = InventoryChangeTracker::default();
             apply_reward(
@@ -227,6 +242,14 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                 &mut entry.character.0,
                 &mut tracker,
             );
+            if !promo.stackable_items.is_empty() {
+                entry.inventory.0.backpack_version += 1;
+                entry
+                    .server_state
+                    .0
+                    .arena_promotion_loot_grants
+                    .extend(promo.loot_thresholds.iter().copied());
+            }
 
             // Ladder promotion chests (`rewards_once_reached`) plus any chest the
             // meter completed this match. Both land in the treasury exactly like a
@@ -274,6 +297,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                 arena_level: tier.level as i32,
                 meter,
                 granted,
+                promotion_stackables,
             }))
         }
         .scope_boxed()
@@ -285,7 +309,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
 
     info!(
         "arena economy: persisted {} for L{} character {} — gold {:+}, xp {:+}, \
-         trophies {} -> {} ({:+}), high-water {}, arena {}/{}, meter {}{}",
+         trophies {} -> {} ({:+}), high-water {}, arena {}/{}, meter {}{}{}",
         if outcome.win { "WIN" } else { "LOSS" },
         outcome.level,
         a.character_id,
@@ -299,6 +323,11 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
         a.arena_level,
         a.meter,
         if a.granted > 0 { format!(", {} chest(s)", a.granted) } else { String::new() },
+        if a.promotion_stackables > 0 {
+            format!(", {} promotion stackable(s)", a.promotion_stackables)
+        } else {
+            String::new()
+        },
     );
 
     // Phase 2 — the audit row, OUTSIDE the transaction above (see the doc comment:
@@ -349,6 +378,7 @@ struct AppliedOutcome {
     arena_level: i32,
     meter: i64,
     granted: usize,
+    promotion_stackables: u64,
 }
 
 /// The arena gold currency uuid, parsed once. Same constant the op49 card uses, so
@@ -385,6 +415,19 @@ mod tests {
             ARENA_GOLD_CURRENCY_UUID_PARSED.to_string(),
             "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
             "the currency id every retail op49 wallet/reward block uses"
+        );
+    }
+
+    #[test]
+    fn crossing_200_stages_transcendent_gems_for_durable_application() {
+        let promo = arena_ladder::promotion_rewards(180, 206, 86);
+        let mut reward = RewardGrant::default();
+        assert_eq!(add_promotion_stackables(&mut reward, &promo), 3);
+        assert_eq!(
+            reward.stackable_items.get(
+                &Uuid::parse_str("d94bab85-53d5-4c9c-a637-acd94fc66c98").unwrap()
+            ),
+            Some(&3)
         );
     }
 }

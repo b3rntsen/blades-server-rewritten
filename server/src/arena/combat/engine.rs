@@ -197,6 +197,45 @@ impl PrePvpState {
     }
 }
 
+/// Build the capture-derived `rewardNewLevelArena` object independently of the
+/// match state machine so its exact wire shape can be regression-tested.
+fn promotion_reward_json(
+    promo: &crate::arena::arena_ladder::PromotionRewards,
+) -> serde_json::Value {
+    if promo.is_empty() {
+        return serde_json::json!({});
+    }
+
+    let mut value = serde_json::Map::new();
+    if !promo.chests.is_empty() {
+        value.insert(
+            "chests".into(),
+            serde_json::json!(promo
+                .chests
+                .iter()
+                .enumerate()
+                .map(|(i, (rarity, lvl))| serde_json::json!({
+                    "id": (i + 1).to_string(),
+                    "tier": rarity,
+                    "level": lvl,
+                }))
+                .collect::<Vec<_>>()),
+        );
+    }
+    if !promo.stackable_items.is_empty() {
+        value.insert(
+            "stackableItems".into(),
+            serde_json::json!(promo
+                .stackable_items
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeMap<_, _>>()),
+        );
+    }
+    value.insert("characterXp".into(), serde_json::json!(0));
+    serde_json::Value::Object(value)
+}
+
 /// The retail BETWEEN-ROUNDS `MatchState` walk — the path from a NON-final round end
 /// back into the next live round (best-of-3). Same `(state, hold_before, timeout)`
 /// shape as the round-0 / match-end tables. `PostRound`(14) is emitted by `resolve`
@@ -1351,28 +1390,13 @@ impl MatchInstance {
             let tier = arena_ladder::tier_for_trophies(post_high_water);
             let promo = arena_ladder::promotion_rewards(p.high_water, post_high_water, level);
 
-            // `rewardNewLevelArena` stays `{}` unless a ladder rung was crossed. The
+            // `rewardNewLevelArena` stays `{}` unless a rung paid a reward. The
             // populated shape is capture-derived (prod s168 / s460 / s607), not
             // authored: each chest carries the rung's `chest_rarity` as `tier` and the
             // CHARACTER level as `level`, and `characterXp` is always 0 there (the
-            // match XP rides the separate `reward` block).
-            let reward_new_level_arena = if promo.chests.is_empty() {
-                serde_json::json!({})
-            } else {
-                serde_json::json!({
-                    "chests": promo
-                        .chests
-                        .iter()
-                        .enumerate()
-                        .map(|(i, (rarity, lvl))| serde_json::json!({
-                            "id": (i + 1).to_string(),
-                            "tier": rarity,
-                            "level": lvl,
-                        }))
-                        .collect::<Vec<_>>(),
-                    "characterXp": 0,
-                })
-            };
+            // match XP rides the separate `reward` block). s460 proves fixed loot-
+            // table items ride as `stackableItems` in this same object.
+            let reward_new_level_arena = promotion_reward_json(&promo);
 
             let reward = messages::MatchEndReward {
                 gold: payout.gold,
@@ -1420,10 +1444,14 @@ impl MatchInstance {
                 post_meter,
                 tier.arena,
                 tier.level,
-                if promo.chests.is_empty() {
+                if promo.is_empty() {
                     String::new()
                 } else {
-                    format!(", PROMOTED +{} chest(s)", promo.chests.len())
+                    format!(
+                        ", PROMOTED +{} chest(s), {} stackable(s)",
+                        promo.chests.len(),
+                        promo.stackable_items.iter().map(|(_, n)| n).sum::<u64>()
+                    )
                 },
             );
             out.push((slot, frame));
@@ -1598,6 +1626,19 @@ impl MatchInstance {
 
 #[cfg(test)]
 pub(in crate::arena::combat) mod tests {
+
+    #[test]
+    fn crossing_200_puts_transcendent_soul_gems_on_the_match_end_card() {
+        let promo = crate::arena::arena_ladder::promotion_rewards(180, 206, 86);
+        let value = super::promotion_reward_json(&promo);
+        assert_eq!(
+            value["stackableItems"]["d94bab85-53d5-4c9c-a637-acd94fc66c98"],
+            serde_json::json!(3)
+        );
+        assert_eq!(value["chests"][0]["tier"], serde_json::json!(2));
+        assert_eq!(value["chests"][0]["level"], serde_json::json!(86));
+        assert_eq!(value["characterXp"], serde_json::json!(0));
+    }
 
     /// The op51 REMOVE must reach the wire, not just the state layer.
     ///

@@ -8,7 +8,7 @@
 //! reward can't be re-collected for infinite gold). Every field is `#[serde(default)]`
 //! so an empty `{}` (or a row that predates a new field) deserializes cleanly.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -112,4 +112,35 @@ pub struct ServerState {
     /// `#[serde(default)]` so rows written before this field deserialize cleanly.
     #[serde(default)]
     pub event_quest_completions: HashMap<Uuid, u32>,
+    /// Arena trophy thresholds whose fixed promotion-loot entries have been
+    /// granted. This is server-only idempotency state: the client-visible high-
+    /// water mark says a rung was crossed, but cannot prove its loot persisted.
+    /// Existing rows deserialize to an empty set.
+    #[serde(default)]
+    pub arena_promotion_loot_grants: BTreeSet<i64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_server_state_defaults_the_promotion_ledger() {
+        let state: ServerState = serde_json::from_str("{}").unwrap();
+        assert!(state.arena_promotion_loot_grants.is_empty());
+    }
+
+    #[test]
+    fn promotion_ledger_round_trips_as_server_only_json() {
+        let mut state = ServerState::default();
+        state.arena_promotion_loot_grants.extend([100, 200]);
+        let value = serde_json::to_value(&state).unwrap();
+        assert_eq!(value["arenaPromotionLootGrants"], serde_json::json!([100, 200]));
+        assert_eq!(
+            serde_json::from_value::<ServerState>(value)
+                .unwrap()
+                .arena_promotion_loot_grants,
+            state.arena_promotion_loot_grants
+        );
+    }
 }

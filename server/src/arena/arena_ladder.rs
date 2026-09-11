@@ -208,13 +208,19 @@ pub struct MatchReward {
 pub struct PromotionRewards {
     /// `(chest_rarity, character_level)` for each rung crossed, in ladder order.
     pub chests: Vec<(u8, u16)>,
+    /// Fixed, guaranteed stackables from each crossed rung's shipped loot table,
+    /// aggregated by item template UUID.
+    pub stackable_items: Vec<(&'static str, u64)>,
+    /// Trophy thresholds with fixed loot in `stackable_items`, retained for the
+    /// server-only idempotency ledger.
+    pub loot_thresholds: Vec<i64>,
     /// The tier the player ends up on, if it changed.
     pub new_tier: Option<ArenaTier>,
 }
 
 impl PromotionRewards {
     pub fn is_empty(&self) -> bool {
-        self.chests.is_empty() && self.new_tier.is_none()
+        self.chests.is_empty() && self.stackable_items.is_empty()
     }
 }
 
@@ -242,16 +248,31 @@ pub fn tiers_crossed(old_high_water: i64, new_high_water: i64) -> Vec<&'static A
         .collect()
 }
 
-/// The `rewardNewLevelArena` content for a high-water move — the chests from every
-/// rung crossed, at the player's current character level.
+/// The `rewardNewLevelArena` content for a high-water move — the chests and fixed
+/// stackables from every rung crossed, at the player's current character level.
 pub fn promotion_rewards(old_high_water: i64, new_high_water: i64, character_level: u16) -> PromotionRewards {
+    use std::collections::BTreeMap;
+
     let crossed = tiers_crossed(old_high_water, new_high_water);
     let chests = crossed
         .iter()
         .flat_map(|t| t.chests_once_reached.iter().map(move |&r| (r, character_level)))
         .collect::<Vec<_>>();
+    let mut stackable_items = BTreeMap::new();
+    let mut loot_thresholds = Vec::new();
+    for tier in &crossed {
+        let fixed = super::arena_promotion_loot::stackables_for(tier.loot_table, character_level);
+        if !fixed.is_empty() {
+            loot_thresholds.push(tier.required_trophies);
+        }
+        for item in fixed {
+            *stackable_items.entry(item.template_uuid).or_insert(0) += item.quantity;
+        }
+    }
     PromotionRewards {
         chests,
+        stackable_items: stackable_items.into_iter().collect(),
+        loot_thresholds,
         new_tier: crossed.last().copied().copied(),
     }
 }
@@ -468,12 +489,22 @@ mod tests {
         // s168: flapdroid L5 crossed 50 -> arena 1 level 2, chest_rarity 3.
         let p = promotion_rewards(0, 51, 5);
         assert_eq!(p.chests, vec![(3, 5)]);
+        assert!(p.stackable_items.is_empty());
+        assert!(p.loot_thresholds.is_empty());
         assert_eq!(p.new_tier.map(|t| (t.arena, t.level)), Some((1, 2)));
 
         // s460: flapdroid L8 crossed 100 AND 150 in one payout -> two rarity-2
         // chests, exactly the two the retail card carried.
         let p = promotion_rewards(51, 181, 8);
         assert_eq!(p.chests, vec![(2, 8), (2, 8)]);
+        assert_eq!(
+            p.stackable_items,
+            vec![
+                ("b81952e0-c3c8-4a5c-92c0-8215d3eb71af", 10),
+                ("d826ea12-e583-47c1-a50f-4de608281735", 3),
+            ]
+        );
+        assert_eq!(p.loot_thresholds, vec![100]);
         assert_eq!(p.new_tier.map(|t| (t.arena, t.level)), Some((1, 4)));
 
         // s607: simi L56 crossed 250 -> arena 1 level 6, chest_rarity 3.
@@ -483,6 +514,18 @@ mod tests {
         // No crossing -> empty (the card ships `rewardNewLevelArena: {}`).
         assert!(promotion_rewards(817, 847, 86).is_empty());
         assert!(promotion_rewards(847, 800, 86).is_empty());
+    }
+
+    #[test]
+    fn crossing_200_at_level_86_awards_three_transcendent_soul_gems() {
+        let p = promotion_rewards(180, 206, 86);
+        assert_eq!(p.chests, vec![(2, 86)]);
+        assert_eq!(
+            p.stackable_items,
+            vec![("d94bab85-53d5-4c9c-a637-acd94fc66c98", 3)]
+        );
+        assert_eq!(p.loot_thresholds, vec![200]);
+        assert_eq!(p.new_tier.map(|t| (t.arena, t.level)), Some((1, 5)));
     }
 
     /// **Every** distinct gold value observed on a reassembled retail op49 card,
