@@ -28,8 +28,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 
 use arena_proto::{
-    CryptoCtx, chacha20_legacy_xor, first_opcode_in_plaintext, reconstruct_plaintext,
-    x25519_public, x25519_shared,
+    CryptoCtx, STREAM_PLAINTEXT_LEADS, chacha20_legacy_xor, first_opcode_in_plaintext,
+    is_game_message_id, reconstruct_plaintext, x25519_public, x25519_shared,
 };
 
 use crate::arena::combat::{Loadout, MatchInstance};
@@ -774,6 +774,67 @@ impl MatchRegistry {
         self.addr_index.lock().unwrap().contains_key(peer)
     }
 
+    /// Recover an admitted connection after a mobile NAT/source-port rebind.
+    ///
+    /// The Blades client can establish a new ENet peer while it is already in the
+    /// encrypted match handshake, so the replacement peer's first app payload is
+    /// ciphertext rather than a second plaintext op-0x38 exchange. Treating that
+    /// peer as wholly unknown strands the client on the arena loading spinner.
+    ///
+    /// A rebind is accepted only when exactly one existing peer from the same IP
+    /// decrypts the payload to a valid Blades marker + GameMessageId under its
+    /// per-connection key. This cryptographic proof avoids guessing by IP (several
+    /// players may legitimately share a carrier NAT).
+    pub fn rebind_encrypted_peer(
+        &self,
+        peer: SocketAddr,
+        user_data: &[u8],
+    ) -> Option<SocketAddr> {
+        let mut addr_index = self.addr_index.lock().unwrap();
+        if addr_index.contains_key(&peer) {
+            return None;
+        }
+
+        let mut matches = self.matches.lock().unwrap();
+        let mut candidate: Option<(Uuid, usize, SocketAddr)> = None;
+        for (gsid, m) in matches.iter() {
+            for (player_idx, player) in m.players.iter().enumerate() {
+                if player.addr.ip() != peer.ip() || player.addr == peer {
+                    continue;
+                }
+                let mut plain = user_data.to_vec();
+                chacha20_legacy_xor(&mut plain, &player.crypto.key, &player.crypto.nonce);
+                let valid = plain
+                    .first()
+                    .is_some_and(|b| STREAM_PLAINTEXT_LEADS.contains(b))
+                    && plain.get(1).is_some_and(|b| is_game_message_id(*b));
+                if !valid {
+                    continue;
+                }
+                if candidate.is_some() {
+                    warn!(
+                        "match registry: refusing ambiguous encrypted peer rebind for {peer}"
+                    );
+                    return None;
+                }
+                candidate = Some((*gsid, player_idx, player.addr));
+            }
+        }
+
+        let (gsid, player_idx, old_peer) = candidate?;
+        let m = matches.get_mut(&gsid).expect("rebind candidate match exists");
+        m.players[player_idx].addr = peer;
+        if let Some(slot) = m.peer_to_slot.remove(&old_peer) {
+            m.peer_to_slot.insert(peer, slot);
+        }
+        addr_index.remove(&old_peer);
+        addr_index.insert(peer, gsid);
+        info!(
+            "match registry: encrypted peer rebind {old_peer} → {peer} in match {gsid}"
+        );
+        Some(old_peer)
+    }
+
     /// Drop a peer from its match (disconnect). When the last player leaves, the
     /// match is removed and its capacity permit released.
     pub fn remove(&self, peer: &SocketAddr) {
@@ -1326,6 +1387,60 @@ mod tests {
         // everyone else forever.
         reg.remove(&peer);
         assert_eq!(reg.live_human_count(), 0, "the count must fall when they leave");
+    }
+
+    #[test]
+    fn encrypted_payload_rebinds_mobile_source_port() {
+        let reg = MatchRegistry::new(4);
+        let gsid = Uuid::new_v4();
+        let psid = "aaaaaaaa-0000-0000-0000-000000000000";
+        assert!(reg.allocate_with_bots(
+            &[psid.to_string()],
+            vec![Loadout::default(), Loadout::default()],
+            gsid,
+            1,
+        ));
+
+        let old_peer: SocketAddr = "109.56.118.105:44853".parse().unwrap();
+        let new_peer: SocketAddr = "109.56.118.105:38510".parse().unwrap();
+        let (client_sk, client_pk) = gen_keypair();
+        let (server_pk, nonce) = reg
+            .admit_connection(old_peer, &client_pk)
+            .expect("old peer admitted");
+        let key = x25519_shared(&client_sk, &server_pk);
+        let mut encrypted = vec![0x84, 54, 0, 0, 0, 0];
+        chacha20_legacy_xor(&mut encrypted, &key, &nonce);
+
+        assert_eq!(
+            reg.rebind_encrypted_peer(new_peer, &encrypted),
+            Some(old_peer)
+        );
+        assert!(!reg.is_active(&old_peer));
+        assert!(reg.is_active(&new_peer));
+    }
+
+    #[test]
+    fn invalid_ciphertext_does_not_rebind_peer() {
+        let reg = MatchRegistry::new(4);
+        let gsid = Uuid::new_v4();
+        let psid = "aaaaaaaa-0000-0000-0000-000000000000";
+        assert!(reg.allocate_with_bots(
+            &[psid.to_string()],
+            vec![Loadout::default(), Loadout::default()],
+            gsid,
+            1,
+        ));
+        let old_peer: SocketAddr = "109.56.118.105:44853".parse().unwrap();
+        reg.admit_connection(old_peer, &[7u8; 32])
+            .expect("old peer admitted");
+        let new_peer: SocketAddr = "109.56.118.105:38510".parse().unwrap();
+
+        assert_eq!(
+            reg.rebind_encrypted_peer(new_peer, &[0x6b, 0xde, 0, 0, 0, 0]),
+            None
+        );
+        assert!(reg.is_active(&old_peer));
+        assert!(!reg.is_active(&new_peer));
     }
 
     /// A match that FILLED and then lost one player must not be reclaimed as if
