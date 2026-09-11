@@ -54,6 +54,14 @@ impl Session {
         format!("{}|{}", session_id, self.extra_secret)
     }
 
+    /// Last REST request index accepted for this session. The middleware increments
+    /// before handling a request, matching the `/public/sync` response semantics.
+    pub fn current_request_index(&self) -> u64 {
+        self.request_count
+            .load(Ordering::Relaxed)
+            .saturating_sub(1)
+    }
+
     /// Claim the matchmaking-feed slot for a freshly opened rms WebSocket.
     ///
     /// Last writer wins: the client reconnects this socket constantly, and the
@@ -456,10 +464,6 @@ struct SyncResponse {
 async fn sync(session: SessionLookedUpMaybe) -> Result<web::Json<SyncResponse>, BladeApiError> {
     let session = session.get_session_or_error()?;
     Ok(web::Json(SyncResponse {
-        request_index: session
-            .session
-            .request_count
-            .load(Ordering::Relaxed)
-            .saturating_sub(1), // the counter is incremented before processing the variable. This may cause issue if multiple request from the client are made simulteneously, thought.
+        request_index: session.session.current_request_index(),
     }))
 }

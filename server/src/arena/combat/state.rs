@@ -849,6 +849,21 @@ pub struct Loadout {
     /// from the stored character by the matchmaker; empty for the starter loadout.
     pub profile_equipped_json: String,
     pub profile_character_json: String,
+    /// Pre-match economy snapshot used to build the same inventory/wallet diff the
+    /// asynchronous PostgreSQL writer will persist after op49 is sent.
+    pub wallet_gold: u64,
+    pub character_experience: u64,
+    pub backpack_version: u64,
+    pub treasury_version: u64,
+    pub next_treasury_chest_id: u64,
+    pub stackable_counts: HashMap<uuid::Uuid, u64>,
+    /// Hidden, season-independent position in the shipped 100-chest PvP cycle.
+    pub arena_chests_earned: u64,
+    pub arena_last_elder_one_chest_at_secs: i64,
+    pub arena_last_elder_two_chest_at_secs: i64,
+    pub arena_last_legendary_chest_at_secs: i64,
+    /// The REST sequence echoed by retail's match-end card.
+    pub current_request_index: i64,
     /// The client's own `HideHelmet` avatar toggle, as reported by its c2s op61
     /// `LoadoutClientBackendSynchronized`. Relayed to the OPPONENT in the op54
     /// profile (propId 6) so both players see the same avatar.

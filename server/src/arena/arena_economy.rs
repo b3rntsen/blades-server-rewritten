@@ -68,6 +68,9 @@ pub struct MatchEconomyOutcome {
     pub rounds_lost: u8,
     /// Whether this player won the match.
     pub win: bool,
+    /// One match-end timestamp shared with the synchronous op49 calculation, so a
+    /// cooldown boundary cannot make the card and durable chest tier disagree.
+    pub completed_at_secs: i64,
     /// The opponent's character id, for the audit row.
     pub opponent_character_id: Option<Uuid>,
 }
@@ -260,15 +263,40 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                 granted += 1;
             }
             for _ in 0..filled {
-                // A completed chest meter pays out at the CURRENT ladder rung's
-                // rarity (the tier the player is standing on).
-                let rarity = tier.chests_once_reached.first().copied().unwrap_or(2);
+                let award = arena_ladder::next_pvp_chest(
+                    o.character_id,
+                    entry.server_state.0.arena_chests_earned,
+                    entry.server_state.0.arena_last_elder_one_chest_at_secs,
+                    entry.server_state.0.arena_last_elder_two_chest_at_secs,
+                    entry.server_state.0.arena_last_legendary_chest_at_secs,
+                    o.completed_at_secs,
+                );
                 grant_chest(
                     &mut entry.inventory.0,
-                    rarity as u64,
+                    award.kind.tier() as u64,
                     entry.character.0.level as u64,
                     &mut tracker,
                 );
+                entry.server_state.0.arena_chests_earned = entry
+                    .server_state
+                    .0
+                    .arena_chests_earned
+                    .saturating_add(1);
+                match award.rule {
+                    Some(arena_ladder::PvpChestRule::ElderOne) => {
+                        entry.server_state.0.arena_last_elder_one_chest_at_secs =
+                            o.completed_at_secs;
+                    }
+                    Some(arena_ladder::PvpChestRule::ElderTwo) => {
+                        entry.server_state.0.arena_last_elder_two_chest_at_secs =
+                            o.completed_at_secs;
+                    }
+                    Some(arena_ladder::PvpChestRule::Legendary) => {
+                        entry.server_state.0.arena_last_legendary_chest_at_secs =
+                            o.completed_at_secs;
+                    }
+                    _ => {}
+                }
                 granted += 1;
             }
             if granted > 0 {
@@ -405,6 +433,7 @@ mod tests {
             rounds_won: 2,
             rounds_lost: 0,
             win: true,
+            completed_at_secs: 1_700_000_000,
             opponent_character_id: None,
         });
     }

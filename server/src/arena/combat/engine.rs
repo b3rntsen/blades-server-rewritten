@@ -201,26 +201,15 @@ impl PrePvpState {
 /// match state machine so its exact wire shape can be regression-tested.
 fn promotion_reward_json(
     promo: &crate::arena::arena_ladder::PromotionRewards,
+    chests: &[messages::MatchEndChest],
 ) -> serde_json::Value {
     if promo.is_empty() {
         return serde_json::json!({});
     }
 
     let mut value = serde_json::Map::new();
-    if !promo.chests.is_empty() {
-        value.insert(
-            "chests".into(),
-            serde_json::json!(promo
-                .chests
-                .iter()
-                .enumerate()
-                .map(|(i, (rarity, lvl))| serde_json::json!({
-                    "id": (i + 1).to_string(),
-                    "tier": rarity,
-                    "level": lvl,
-                }))
-                .collect::<Vec<_>>()),
-        );
+    if !chests.is_empty() {
+        value.insert("chests".into(), serde_json::json!(chests));
     }
     if !promo.stackable_items.is_empty() {
         value.insert(
@@ -1336,6 +1325,10 @@ impl MatchInstance {
         let (winner_uuid, loser_uuid) = self.combat.winner_loser_uuids();
         let game_session_id = uuid::Uuid::parse_str(&self.combat.game_session_id).ok();
         let n = self.combat.fighters.len();
+        let completed_at_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().min(i64::MAX as u64) as i64)
+            .unwrap_or(0);
 
         // Pre-match PvP state per slot, read off the loaded character profiles. The
         // opponent's trophies feed the Elo swing, so both sides are resolved up front.
@@ -1379,7 +1372,7 @@ impl MatchInstance {
             // literally the same numbers.
             let post_trophies = (p.trophies + trophy_delta).max(0);
             let post_high_water = p.high_water.max(post_trophies);
-            let (post_meter, _filled) = arena_ladder::advance_chest_meter(p.chest_meter, rounds_won);
+            let (post_meter, filled) = arena_ladder::advance_chest_meter(p.chest_meter, rounds_won);
             let post_streak = if is_winner {
                 if p.winning_streak > 0 { p.winning_streak + 1 } else { 1 }
             } else if p.winning_streak < 0 {
@@ -1390,22 +1383,109 @@ impl MatchInstance {
             let tier = arena_ladder::tier_for_trophies(post_high_water);
             let promo = arena_ladder::promotion_rewards(p.high_water, post_high_water, level);
 
+            // Promotion chests are assigned first, then the meter chest. Retail
+            // s460 carries exactly that order (promotion ids 2/3, meter id 4) in
+            // `inventory.treasury.chests`; the same ids also appear in
+            // `rewardNewLevelArena` for the promotion subset.
+            let mut next_chest_id = f.loadout.next_treasury_chest_id.max(1);
+            let mut promotion_chests = Vec::new();
+            for &(rarity, chest_level) in &promo.chests {
+                promotion_chests.push(messages::MatchEndChest {
+                    id: next_chest_id.to_string(),
+                    tier: rarity,
+                    level: chest_level,
+                });
+                next_chest_id = next_chest_id.saturating_add(1);
+            }
+            let mut inventory_chests = promotion_chests.clone();
+            let character_id = uuid::Uuid::parse_str(&f.loadout.character_uuid)
+                .unwrap_or_else(|_| uuid::Uuid::nil());
+            let mut cycle_count = f.loadout.arena_chests_earned;
+            let mut last_elder_one = f.loadout.arena_last_elder_one_chest_at_secs;
+            let mut last_elder_two = f.loadout.arena_last_elder_two_chest_at_secs;
+            let mut last_legendary = f.loadout.arena_last_legendary_chest_at_secs;
+            for _ in 0..filled {
+                let award = arena_ladder::next_pvp_chest(
+                    character_id,
+                    cycle_count,
+                    last_elder_one,
+                    last_elder_two,
+                    last_legendary,
+                    completed_at_secs,
+                );
+                match award.rule {
+                    Some(arena_ladder::PvpChestRule::ElderOne) => {
+                        last_elder_one = completed_at_secs
+                    }
+                    Some(arena_ladder::PvpChestRule::ElderTwo) => {
+                        last_elder_two = completed_at_secs
+                    }
+                    Some(arena_ladder::PvpChestRule::Legendary) => {
+                        last_legendary = completed_at_secs
+                    }
+                    _ => {}
+                }
+                cycle_count = cycle_count.saturating_add(1);
+                inventory_chests.push(messages::MatchEndChest {
+                    id: next_chest_id.to_string(),
+                    tier: award.kind.tier(),
+                    level,
+                });
+                next_chest_id = next_chest_id.saturating_add(1);
+            }
+            let inventory_stackable_items = promo
+                .stackable_items
+                .iter()
+                .filter_map(|(template, quantity)| {
+                    let id = uuid::Uuid::parse_str(template).ok()?;
+                    Some(messages::MatchEndStackableItem {
+                        item_template_id: (*template).to_string(),
+                        count: f
+                            .loadout
+                            .stackable_counts
+                            .get(&id)
+                            .copied()
+                            .unwrap_or(0)
+                            .saturating_add(*quantity),
+                    })
+                })
+                .collect::<Vec<_>>();
+
             // `rewardNewLevelArena` stays `{}` unless a rung paid a reward. The
             // populated shape is capture-derived (prod s168 / s460 / s607), not
             // authored: each chest carries the rung's `chest_rarity` as `tier` and the
             // CHARACTER level as `level`, and `characterXp` is always 0 there (the
             // match XP rides the separate `reward` block). s460 proves fixed loot-
             // table items ride as `stackableItems` in this same object.
-            let reward_new_level_arena = promotion_reward_json(&promo);
+            let reward_new_level_arena = promotion_reward_json(&promo, &promotion_chests);
+
+            let wallet_gold = f
+                .loadout
+                .wallet_gold
+                .saturating_add(payout.gold.max(0) as u64)
+                .min(i64::MAX as u64) as i64;
+            let character_experience = f
+                .loadout
+                .character_experience
+                .saturating_add(payout.character_xp.max(0) as u64);
+            let backpack_version = f
+                .loadout
+                .backpack_version
+                .saturating_add(u64::from(!inventory_stackable_items.is_empty()));
+            let treasury_version = f
+                .loadout
+                .treasury_version
+                .saturating_add(u64::from(!inventory_chests.is_empty()));
 
             let reward = messages::MatchEndReward {
                 gold: payout.gold,
                 character_xp: payout.character_xp,
-                // The true post-credit balance lives in `characters.wallet`, which the
-                // engine has no handle on (Loadout carries no wallet — see the Phase-5
-                // handoff note). The client re-reads `/wallets/current` on returning to
-                // the menu, by which time `arena_economy` has credited it.
-                wallet_gold: payout.gold,
+                wallet_gold,
+                character_experience,
+                backpack_version,
+                treasury_version,
+                inventory_stackable_items,
+                inventory_chests,
                 pvp_trophies: post_trophies,
                 matchmaking_pvp_trophies: post_high_water,
                 challenge_rank: p.challenge_rank.max(1),
@@ -1422,7 +1502,7 @@ impl MatchInstance {
                 &f.loadout.profile_character_json,
                 &f.loadout.profile_equipped_json,
                 &reward,
-                0,
+                f.loadout.current_request_index,
             );
             let frame = messages::match_end_match(
                 self.combat.match_net_object_id,
@@ -1470,6 +1550,7 @@ impl MatchInstance {
                     rounds_won,
                     rounds_lost,
                     win: is_winner,
+                    completed_at_secs,
                     opponent_character_id: opponent.and_then(|o| {
                         uuid::Uuid::parse_str(&self.combat.fighters[o].loadout.character_uuid).ok()
                     }),
@@ -1630,13 +1711,19 @@ pub(in crate::arena::combat) mod tests {
     #[test]
     fn crossing_200_puts_transcendent_soul_gems_on_the_match_end_card() {
         let promo = crate::arena::arena_ladder::promotion_rewards(180, 206, 86);
-        let value = super::promotion_reward_json(&promo);
+        let chests = vec![super::messages::MatchEndChest {
+            id: "14".into(),
+            tier: 2,
+            level: 86,
+        }];
+        let value = super::promotion_reward_json(&promo, &chests);
         assert_eq!(
             value["stackableItems"]["d94bab85-53d5-4c9c-a637-acd94fc66c98"],
             serde_json::json!(3)
         );
         assert_eq!(value["chests"][0]["tier"], serde_json::json!(2));
         assert_eq!(value["chests"][0]["level"], serde_json::json!(86));
+        assert_eq!(value["chests"][0]["id"], serde_json::json!("14"));
         assert_eq!(value["characterXp"], serde_json::json!(0));
     }
 

@@ -125,6 +125,22 @@ pub struct ServerState {
     /// the first item suppressing the rest.
     #[serde(default)]
     pub arena_promotion_item_repairs: BTreeSet<String>,
+    /// Number of chests already emitted by the Arena's eight-round-win meter.
+    /// This is deliberately season-independent: the shipped PvP chest cycle keeps
+    /// its position when a season rolls over. Existing rows default to the start of
+    /// the cycle and are backfilled from the bounded `arena_match_results` audit.
+    #[serde(default)]
+    pub arena_chests_earned: u64,
+    /// Last time each exact `AdditionalChestRule` from the shipped PvP cycle fired.
+    /// The two Elder rules have distinct UIDs and therefore distinct one-day repeat
+    /// limits; merging them would incorrectly suppress the second Elder in a fast
+    /// cycle. The Legendary rule repeats after one week.
+    #[serde(default)]
+    pub arena_last_elder_one_chest_at_secs: i64,
+    #[serde(default)]
+    pub arena_last_elder_two_chest_at_secs: i64,
+    #[serde(default)]
+    pub arena_last_legendary_chest_at_secs: i64,
 }
 
 #[cfg(test)]
@@ -135,6 +151,10 @@ mod tests {
     fn old_server_state_defaults_the_promotion_ledger() {
         let state: ServerState = serde_json::from_str("{}").unwrap();
         assert!(state.arena_promotion_loot_grants.is_empty());
+        assert_eq!(state.arena_chests_earned, 0);
+        assert_eq!(state.arena_last_elder_one_chest_at_secs, 0);
+        assert_eq!(state.arena_last_elder_two_chest_at_secs, 0);
+        assert_eq!(state.arena_last_legendary_chest_at_secs, 0);
     }
 
     #[test]
@@ -144,6 +164,8 @@ mod tests {
         state
             .arena_promotion_item_repairs
             .insert("season:100:item".into());
+        state.arena_chests_earned = 41;
+        state.arena_last_elder_one_chest_at_secs = 1_725_000_000;
         let value = serde_json::to_value(&state).unwrap();
         assert_eq!(value["arenaPromotionLootGrants"], serde_json::json!([100, 200]));
         assert_eq!(
@@ -151,10 +173,15 @@ mod tests {
             serde_json::json!(["season:100:item"])
         );
         assert_eq!(
-            serde_json::from_value::<ServerState>(value)
+            serde_json::from_value::<ServerState>(value.clone())
                 .unwrap()
                 .arena_promotion_loot_grants,
             state.arena_promotion_loot_grants
+        );
+        assert_eq!(value["arenaChestsEarned"], serde_json::json!(41));
+        assert_eq!(
+            value["arenaLastElderOneChestAtSecs"],
+            serde_json::json!(1_725_000_000i64)
         );
     }
 }

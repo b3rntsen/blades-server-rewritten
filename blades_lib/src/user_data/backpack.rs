@@ -62,6 +62,13 @@ impl StackableItems {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Snapshot the current counts for callers that must construct a compact
+    /// response diff later (notably the Arena match-end card). The private storage
+    /// entry stays encapsulated; callers only receive stable value pairs.
+    pub fn counts(&self) -> impl Iterator<Item = (Uuid, u64)> + '_ {
+        self.0.iter().map(|(template, entry)| (*template, entry.count))
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -288,6 +295,18 @@ impl Treasury {
             .max()
             .unwrap_or(0);
         (max + 1).to_string()
+    }
+
+    /// Numeric id the next granted chest will receive. Arena match-end results are
+    /// sent before their asynchronous PostgreSQL write completes, so the card needs
+    /// this value to advertise the same chest ids that `add_chest` will persist.
+    pub fn next_chest_id(&self) -> u64 {
+        self.chests
+            .iter()
+            .filter_map(|c| c.id.parse::<u64>().ok())
+            .max()
+            .unwrap_or(0)
+            + 1
     }
 
     /// Add a chest of the given tier/level, returning its new id.

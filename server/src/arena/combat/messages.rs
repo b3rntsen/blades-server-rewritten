@@ -1257,6 +1257,21 @@ pub fn match_end_match(
 /// [`results_json`]). The victory card animates `gold` + `character_xp`; the trophy/rank
 /// deltas come from the post-match `pvp_trophies` / `challenge_rank` the client diffs
 /// against its pre-match values. [`docs/arena-match-end-spec.md` §3]
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchEndChest {
+    pub id: String,
+    pub tier: u8,
+    pub level: u16,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchEndStackableItem {
+    pub item_template_id: String,
+    pub count: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct MatchEndReward {
     /// Gold granted this match (`reward.currencies[ARENA_GOLD_CURRENCY_UUID]`).
@@ -1265,6 +1280,16 @@ pub struct MatchEndReward {
     pub character_xp: i64,
     /// The recipient's gold WALLET balance AFTER crediting (`wallet[].balance`).
     pub wallet_gold: i64,
+    /// Total character XP after crediting the match reward.
+    pub character_experience: u64,
+    /// Post-mutation inventory versions. Retail includes both even when only one
+    /// side changed; the client uses them to decide whether a diff is current.
+    pub backpack_version: u64,
+    pub treasury_version: u64,
+    /// Post-count stackables and newly-created chests in the match-end inventory
+    /// change set. These are what trigger the visible promotion/chest arrivals.
+    pub inventory_stackable_items: Vec<MatchEndStackableItem>,
+    pub inventory_chests: Vec<MatchEndChest>,
     /// The recipient's VISIBLE trophy count, post-match (`character.pvpTrophies`).
     pub pvp_trophies: i64,
     /// The matchmaking-internal trophies, post-match (`character.matchmakingPvpTrophies`).
@@ -1302,6 +1327,11 @@ impl Default for MatchEndReward {
             gold: 0,
             character_xp: 0,
             wallet_gold: 0,
+            character_experience: 0,
+            backpack_version: 0,
+            treasury_version: 0,
+            inventory_stackable_items: Vec::new(),
+            inventory_chests: Vec::new(),
             pvp_trophies: 0,
             matchmaking_pvp_trophies: 0,
             challenge_rank: 1,
@@ -1353,6 +1383,7 @@ pub fn results_json(
         obj.insert("pvpChestMeter".into(), json!(reward.pvp_chest_meter));
         obj.insert("pvpWinningStreak".into(), json!(reward.pvp_winning_streak));
         obj.insert("numberPvpMatchPlayed".into(), json!(reward.number_pvp_match_played));
+        obj.insert("experience".into(), json!(reward.character_experience));
         obj.insert("highestArenaReached".into(), json!(reward.highest_arena_reached));
         obj.insert(
             "highestLevelArenaReached".into(),
@@ -1370,9 +1401,24 @@ pub fn results_json(
     }
 
     // The inventory snapshot (the op54 equipped-items blob the menu re-syncs from).
-    let inventory: Value = serde_json::from_str::<Value>(equipped_items_json)
-        .map(|loadout| json!({ "loadout": loadout }))
+    let loadout: Value = serde_json::from_str::<Value>(equipped_items_json)
         .unwrap_or_else(|_| json!({}));
+    let mut inventory = serde_json::Map::new();
+    inventory.insert("backpackVersion".into(), json!(reward.backpack_version));
+    inventory.insert("treasuryVersion".into(), json!(reward.treasury_version));
+    inventory.insert("loadout".into(), loadout);
+    if !reward.inventory_stackable_items.is_empty() {
+        inventory.insert(
+            "backpack".into(),
+            json!({ "stackableItems": reward.inventory_stackable_items }),
+        );
+    }
+    if !reward.inventory_chests.is_empty() {
+        inventory.insert(
+            "treasury".into(),
+            json!({ "chests": reward.inventory_chests }),
+        );
+    }
 
     json!({
         "characterId": recipient_char_uuid,
@@ -1383,7 +1429,7 @@ pub fn results_json(
         },
         "rewardNewLevelArena": reward.reward_new_level_arena,
         "currentRequestIndex": request_index,
-        "inventory": inventory,
+        "inventory": Value::Object(inventory),
         "wallet": [ { "currencyId": ARENA_GOLD_CURRENCY_UUID, "balance": reward.wallet_gold } ],
     })
     .to_string()
@@ -2590,6 +2636,7 @@ mod tests {
             highest_arena_reached: 2,
             highest_level_arena_reached: 7,
             reward_new_level_arena: serde_json::json!({}),
+            ..Default::default()
         };
         let char_json = r#"{"id":"old","name":"Flappety","level":86,"pvpChestMeter":5}"#;
         let out = results_json(
@@ -2630,6 +2677,13 @@ mod tests {
             number_pvp_match_played: 3,
             highest_arena_reached: 1,
             highest_level_arena_reached: 2,
+            backpack_version: 225,
+            treasury_version: 29,
+            inventory_chests: vec![MatchEndChest {
+                id: "1".into(),
+                tier: 3,
+                level: 5,
+            }],
             reward_new_level_arena: serde_json::json!({
                 "chests": [ { "id": "1", "tier": 3, "level": 5 } ],
                 "characterXp": 0,
@@ -2641,7 +2695,62 @@ mod tests {
         assert_eq!(v["rewardNewLevelArena"]["chests"][0]["tier"], 3);
         assert_eq!(v["rewardNewLevelArena"]["chests"][0]["level"], 5);
         assert_eq!(v["rewardNewLevelArena"]["characterXp"], 0);
+        assert_eq!(v["inventory"]["backpackVersion"], 225);
+        assert_eq!(v["inventory"]["treasuryVersion"], 29);
+        assert_eq!(v["inventory"]["treasury"]["chests"][0]["id"], "1");
         assert_eq!(v["character"]["highestLevelArenaReached"], 2);
+    }
+
+    /// Retail s460 crossed the 100- and 150-cup rungs on the same 2-0 win that
+    /// filled its eight-round meter. The promotion object carried ids 2/3, while
+    /// the inventory change set carried those plus the meter chest id 4. Omitting
+    /// that inventory delta suppresses all three arrival animations.
+    #[test]
+    fn promotion_and_meter_chests_share_exact_ids_in_the_inventory_diff() {
+        let promotion_chests = vec![
+            MatchEndChest { id: "2".into(), tier: 2, level: 8 },
+            MatchEndChest { id: "3".into(), tier: 2, level: 8 },
+        ];
+        let mut inventory_chests = promotion_chests.clone();
+        inventory_chests.push(MatchEndChest { id: "4".into(), tier: 3, level: 8 });
+        let reward = MatchEndReward {
+            gold: 1263,
+            character_xp: 58,
+            wallet_gold: 12_345,
+            character_experience: 456,
+            backpack_version: 226,
+            treasury_version: 30,
+            inventory_stackable_items: vec![MatchEndStackableItem {
+                item_template_id: "b81952e0-c3c8-4a5c-92c0-8215d3eb71af".into(),
+                count: 17,
+            }],
+            inventory_chests,
+            reward_new_level_arena: serde_json::json!({
+                "stackableItems": { "b81952e0-c3c8-4a5c-92c0-8215d3eb71af": 10 },
+                "chests": promotion_chests,
+                "characterXp": 0,
+            }),
+            ..Default::default()
+        };
+        let value: serde_json::Value = serde_json::from_str(&results_json(
+            "aaaaaaaa-0000-0000-0000-000000000000",
+            r#"{"experience":398}"#,
+            r#"{"equippedItems":{}}"#,
+            &reward,
+            91,
+        ))
+        .unwrap();
+
+        assert_eq!(value["rewardNewLevelArena"]["chests"][0]["id"], "2");
+        assert_eq!(value["rewardNewLevelArena"]["chests"][1]["id"], "3");
+        assert_eq!(value["inventory"]["treasury"]["chests"][0]["id"], "2");
+        assert_eq!(value["inventory"]["treasury"]["chests"][1]["id"], "3");
+        assert_eq!(value["inventory"]["treasury"]["chests"][2]["id"], "4");
+        assert_eq!(value["inventory"]["backpackVersion"], 226);
+        assert_eq!(value["inventory"]["treasuryVersion"], 30);
+        assert_eq!(value["inventory"]["backpack"]["stackableItems"][0]["count"], 17);
+        assert_eq!(value["character"]["experience"], 456);
+        assert_eq!(value["currentRequestIndex"], 91);
     }
 
     /// op51 `ChangeCombatStatusEffect` byte shape (`docs/arena-status-resistance-spec.md`

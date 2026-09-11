@@ -65,6 +65,9 @@ pub struct CharacterDbEntryCharacterWalletInventory {
     pub data: JsonDbWrapper<CompleteCharacterData>,
     pub wallet: JsonDbWrapper<CompleteWallet>,
     pub inventory: JsonDbWrapper<CompleteInventory>,
+    /// Compact server-only progression needed when an Arena match builds its op49
+    /// reward card before the asynchronous economy writer commits.
+    pub server_state: JsonDbWrapper<ServerState>,
 }
 
 /// Town-lifecycle handlers (build / upgrade / complete / destroy): the `town`
