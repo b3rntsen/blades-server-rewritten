@@ -26,10 +26,172 @@ pub const ROUND_WINS_TO_WIN_MATCH: u8 = 2;
 /// Approximate base max-Health for a level (UESP L50-era curve: 200 + 10/level). Our
 /// build is L100 so this is representative until the real `PlayerStatsData` curve is
 /// wired; validate magnitudes against captures (docs/blades-combat-formulae.md §9).
+///
+/// **Known wrong above level 50, and deliberately left alone here.** The shipped
+/// `PlayerStatsData._perLevelData` awards `_healthPoints: 1` per level and stops at
+/// level 50 — accumulated health points are `min(level - 1, 49)`, so retail's ceiling
+/// is `200 + 10 * 49 = 690`, while this returns 1,080 at level 89 and keeps climbing.
+/// Changing it moves every time-to-kill in the model at once, so it belongs in its own
+/// change with its own capture validation rather than riding along with the pools.
+/// [`the_health_curve_is_still_uncapped`] pins the discrepancy so it cannot be
+/// forgotten.
 pub fn health_for_level(level: u16) -> u32 {
     200 + 10 * level.saturating_sub(1) as u32
 }
-/// Approximate Stamina/Magicka pool for a level (the player splits one per level).
+
+/// Base pool before any attribute point is spent — `PlayerStatsData._playerStats`
+/// `_staminaBase` / `_magickaBase` / `_healthBase`, all 200.0.
+pub const POOL_BASE: u32 = 200;
+/// What one spent attribute point adds — `_staminaIncrement` / `_magickaIncrement`,
+/// both 10.0.
+pub const POOL_PER_POINT: u32 = 10;
+/// Attribute points stop at level 50: `_perLevelData` awards `_attributePoints: 1`
+/// per level and then zero, so the accumulated total is `min(level - 1, 49)`.
+pub const MAX_ATTRIBUTE_POINTS: u16 = 49;
+
+/// A character's max Stamina or Magicka, from the points they actually spent.
+///
+/// EXTRACTED, then identity-checked against live characters. `PlayerStatsData` in the
+/// APK bundle `duplicates_sab` gives `_staminaBase 200.0`, `_staminaIncrement 10.0`,
+/// `_magickaBase 200.0`, `_magickaIncrement 10.0`, and a 99-row `_perLevelData` whose
+/// accumulated `_attributePoints` equals `min(level - 1, 49)` on every one of the 99
+/// rows.
+///
+/// The check that makes it more than a plausible reading: live characters agree
+/// exactly. A level-40 has 24 + 15 = 39 points, a level-48 has 24 + 23 = 47, and the
+/// level-89 from report #109 has 46 + 3 = 49 — `min(level-1, 49)` in all three.
+///
+/// This replaces [`pool_for_level`], which gave BOTH pools `200 + 5 * (level - 1)` and
+/// ignored the split entirely: that level-89 was handed 640 stamina and 640 magicka
+/// where retail gives him **660 and 230**. His Ward costs 205 magicka, so retail lets
+/// him cast it once; we let him cast it three times.
+pub fn pool_for_points(points: u16) -> u32 {
+    POOL_BASE + POOL_PER_POINT * u32::from(points.min(MAX_ATTRIBUTE_POINTS))
+}
+
+#[cfg(test)]
+mod report109_real_pools {
+    use super::*;
+
+    /// The extracted constants, pinned against the APK.
+    ///
+    /// `PlayerStatsData` (APK bundle `duplicates_sab`) `._playerStats`:
+    /// `_staminaBase 200.0`, `_staminaIncrement 10.0`, `_magickaBase 200.0`,
+    /// `_magickaIncrement 10.0`. Its 99-row `_perLevelData` awards
+    /// `_attributePoints: 1` per level and then 0, reaching 49 at level 50.
+    #[test]
+    fn the_shipped_constants() {
+        assert_eq!(POOL_BASE, 200);
+        assert_eq!(POOL_PER_POINT, 10);
+        assert_eq!(MAX_ATTRIBUTE_POINTS, 49);
+        assert_eq!(pool_for_points(0), 200, "unspent is the base");
+        assert_eq!(pool_for_points(49), 690, "the ceiling retail can reach");
+        assert_eq!(pool_for_points(255), 690, "and it is a ceiling, not a ramp");
+    }
+
+    /// THE identity check, and the reason this is not a plausible reading of a
+    /// data file: three live characters agree exactly with `min(level - 1, 49)`.
+    ///
+    ///   level 40 -> 24 stamina + 15 magicka = 39
+    ///   level 48 -> 24 + 23             = 47
+    ///   level 89 -> 46 + 3              = 49   (the report #109 reporter)
+    #[test]
+    fn live_characters_match_the_accumulation_model() {
+        for (level, spent) in [(40u16, 39u16), (48, 47), (89, 49)] {
+            assert_eq!(
+                u32::from(spent.min(MAX_ATTRIBUTE_POINTS)),
+                u32::from(level.saturating_sub(1).min(MAX_ATTRIBUTE_POINTS)),
+                "level {level}: the spend a live character carries must equal min(level-1, 49)"
+            );
+        }
+    }
+
+    /// What report #109 actually costs its reporter.
+    ///
+    /// He is level 89 with 46 stamina and 3 magicka. The old `pool_for_level`
+    /// handed him 640 of BOTH, ignoring the split; retail gives 660 and 230. His
+    /// Ward costs 205 magicka, so retail lets him cast it once before he is dry
+    /// and we let him cast it three times.
+    #[test]
+    fn the_reporters_pools() {
+        assert_eq!(pool_for_points(46), 660, "his stamina");
+        assert_eq!(pool_for_points(3), 230, "his magicka");
+        // The control that makes those numbers mean something: the formula they
+        // replace gave one value for both pools and it matched neither.
+        assert_eq!(pool_for_level(89), 640);
+        assert_ne!(pool_for_level(89), pool_for_points(46));
+        assert_ne!(pool_for_level(89), pool_for_points(3));
+    }
+
+    /// A fighter with no character record — a bot, or the starter loadout — must
+    /// NOT be read as "spent nothing" and handed a 200 pool. It keeps the level
+    /// approximation until bots get real spends of their own.
+    #[test]
+    fn a_bot_keeps_the_level_approximation() {
+        let lo = Loadout { level: 50, ..Default::default() };
+        assert!(!lo.has_character, "the default loadout is not a character");
+        assert_eq!(lo.stamina_points, 0);
+        // If `has_character` were ignored, this bot would get 200 rather than 445.
+        assert_ne!(pool_for_points(lo.stamina_points), pool_for_level(lo.level));
+    }
+
+    /// THE test that matters, and the one I nearly shipped without.
+    ///
+    /// The four above assert `pool_for_points` in isolation — and every one of
+    /// them still passed with `Fighter::new` reverted to the old level formula.
+    /// A helper that is correct while nothing calls it is exactly the state this
+    /// module has been in before. This drives the real constructor.
+    #[test]
+    fn a_character_backed_fighter_gets_its_own_spend() {
+        let now = std::time::Instant::now();
+        // The report #109 reporter: level 89, 46 stamina, 3 magicka.
+        let lo = Loadout {
+            level: 89,
+            stamina_points: 46,
+            magicka_points: 3,
+            has_character: true,
+            ..Default::default()
+        };
+        let f = Fighter::new(0, 1, lo, now);
+        assert_eq!(f.max_stamina, 660, "stamina from his own spend, not his level");
+        assert_eq!(f.max_magicka, 230, "and magicka separately — the pools differ");
+        assert_eq!(f.stamina, f.max_stamina, "a fighter starts full");
+        assert_eq!(f.magicka, f.max_magicka);
+        // The negative control: the formula this replaced gave one number for both.
+        assert_ne!(f.max_stamina, f.max_magicka);
+        assert_ne!(f.max_magicka, pool_for_level(89));
+    }
+
+    /// And the other half of the branch, through the constructor.
+    #[test]
+    fn a_bot_fighter_still_uses_the_level_approximation() {
+        let now = std::time::Instant::now();
+        let f = Fighter::new(0, 1, Loadout { level: 50, ..Default::default() }, now);
+        assert_eq!(f.max_stamina, pool_for_level(50));
+        assert_eq!(f.max_magicka, pool_for_level(50));
+        assert_ne!(f.max_stamina, POOL_BASE, "not read as \"spent nothing\"");
+    }
+
+    /// The health curve is knowingly still wrong, and this records the size of it
+    /// so the next person does not have to re-derive the discrepancy.
+    ///
+    /// `_perLevelData` awards `_healthPoints: 1` per level on the same schedule,
+    /// so retail's max health tops out at `200 + 10 * 49 = 690`. `health_for_level`
+    /// keeps climbing. Changing it moves every time-to-kill in the model at once,
+    /// which is its own change with its own validation — not a rider on this one.
+    #[test]
+    fn the_health_curve_is_still_uncapped() {
+        let retail_ceiling = POOL_BASE + POOL_PER_POINT * u32::from(MAX_ATTRIBUTE_POINTS);
+        assert_eq!(retail_ceiling, 690);
+        assert_eq!(health_for_level(50), 690, "at the cap level the two agree");
+        assert_eq!(health_for_level(89), 1080, "above it ours runs away — 57% high");
+        assert!(health_for_level(89) > retail_ceiling);
+    }
+}
+
+/// Approximate Stamina/Magicka pool for a level, for fighters with no character
+/// record behind them — bots and the starter loadout. A real character uses
+/// [`pool_for_points`] with its own spend.
 pub fn pool_for_level(level: u16) -> u32 {
     200 + 5 * level.saturating_sub(1) as u32
 }
@@ -602,8 +764,19 @@ pub type WeaponTemplate = &'static crate::arena::combat::gamedata::WeaponStats;
 /// A fighter's combat-relevant equipment, derived from the imported character.
 #[derive(Debug, Clone, Default)]
 pub struct Loadout {
-    /// Character level — drives max-Health/Stamina/Magicka (`health_for_level`).
+    /// Character level — drives max-Health (`health_for_level`).
     pub level: u16,
+    /// Attribute points this character spent on Stamina. Max Stamina is
+    /// [`pool_for_points`] of this, NOT a function of level — see that function
+    /// for the extraction and the identity check. 0 for a bot or the starter
+    /// loadout, which fall back to [`pool_for_level`].
+    pub stamina_points: u16,
+    /// Attribute points this character spent on Magicka.
+    pub magicka_points: u16,
+    /// True when this loadout came from a real character record, so the spends
+    /// above are its own. A bot has no record and must not be handed a 200-point
+    /// pool just because it spent nothing.
+    pub has_character: bool,
     pub abilities: Vec<EquippedAbility>,
     pub weapon: WeaponProfile,
     /// The shipped weapon template the equipped item resolved to (Phase 3.1). `None`
@@ -1101,8 +1274,16 @@ impl Fighter {
         // Raw pools from the character's level. Arena triples HEALTH only
         // (`ARENA_HEALTH_MULTIPLIER`); Stamina/Magicka are not multiplied.
         let max_health = health_for_level(loadout.level) * ARENA_HEALTH_MULTIPLIER;
-        let max_stamina = pool_for_level(loadout.level);
-        let max_magicka = pool_for_level(loadout.level);
+        // A real character's pools come from its own attribute spend; a bot or the
+        // starter loadout has no spend to read and keeps the level approximation.
+        let (max_stamina, max_magicka) = if loadout.has_character {
+            (
+                pool_for_points(loadout.stamina_points),
+                pool_for_points(loadout.magicka_points),
+            )
+        } else {
+            (pool_for_level(loadout.level), pool_for_level(loadout.level))
+        };
         Fighter {
             slot,
             net_object_id,
