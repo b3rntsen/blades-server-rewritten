@@ -313,6 +313,12 @@ fn apply_enchant(lo: &mut Loadout, id: &Uuid, tier: u8) {
         "WeaponDamageStaminaPropertyLogic" => push_enchant(lo, DamageType::Stamina, tier),
         "WeaponDamageMagickaPropertyLogic" => push_enchant(lo, DamageType::Magicka, tier),
 
+        // ---- primary maximum Health ---------------------------------------
+        // PvP's ×3 cheat applies after primary Health enchantments. This is a
+        // flat stat, not resistance or regeneration: Flappety's two t10 enchants
+        // contribute 2 × 110.64 before the arena multiplier.
+        "FortifyHealthPropertyLogic" => lo.max_health_bonus += magnitude,
+
         // ---- elemental retaliation (Revenge) -------------------------------
         // Only these FOUR ship values. All nine `SpellRevenge*` /
         // `BlockSpellRevenge*` / Templar variants are zero at every tier in the
@@ -1072,6 +1078,7 @@ mod tests {
     use serde_json::json;
 
     const WEAPON_POISON_DAMAGE: &str = "08ea75d0-5cf1-44a9-9816-d3c6740c4191";
+    const FORTIFY_HEALTH: &str = "b4de8d1b-d8a1-4575-8517-c1e5800a7525";
     const RESIST_FIRE: &str = "464bedb7-a631-43b6-a2df-f65f089d39da";
     const ELEM_PIERCE: &str = "98757a01-33b8-40ea-bb45-6acd89811ae3";
     /// `Powerful Block` — `PowerfulBlockPropertyLogic`. The ONLY one of the nine
@@ -1113,6 +1120,13 @@ mod tests {
         apply_enchant(&mut p, &Uuid::parse_str(ELEM_PIERCE).unwrap(), 10);
         assert!(p.elem_resist_piercing_rating > 0.0);
         assert_eq!(p.elem_resist_piercing, 0.0, "the fractional field is ability-side only");
+    }
+
+    #[test]
+    fn fortify_health_uses_the_shipped_curve() {
+        let mut l = lo();
+        apply_enchant(&mut l, &Uuid::parse_str(FORTIFY_HEALTH).unwrap(), 10);
+        assert!((l.max_health_bonus - 110.64).abs() < 0.01);
     }
 
     /// tracker #24: a block enchant is scaled like every one of its siblings.
@@ -1297,7 +1311,10 @@ mod tests {
         assert!((w.block_base - 49.5).abs() < 1e-3);
         let mut lo = Loadout::default();
         install_weapon(&mut lo, w, 10);
-        assert!((lo.swing_interval().as_secs_f32() - 0.783333).abs() < 1e-4);
+        assert!((lo.swing_interval().as_secs_f32() - 0.333333).abs() < 1e-4);
+        assert!((lo.neutral_interval().as_secs_f32() - 0.633333).abs() < 1e-4);
+        assert!((lo.critical_hold_secs() - 0.116667).abs() < 1e-4);
+        assert!((lo.critical_damage_factor() - 1.325).abs() < 1e-4);
         assert!((lo.block_rating - 49.5).abs() < 1e-3);
         // Untempered = the shipped quality-0 cell exactly.
         assert!((profile_base(&weapon_profile(w, 0)) - 99.0).abs() < 1e-3);

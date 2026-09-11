@@ -793,6 +793,11 @@ pub type WeaponTemplate = &'static crate::arena::combat::gamedata::WeaponStats;
 pub struct Loadout {
     /// Character level — drives max-Health (`health_for_level`).
     pub level: u16,
+    /// Flat maximum-Health granted by equipped `FortifyHealthPropertyLogic`
+    /// enchantments. Arena triples the character's resulting Health pool, including
+    /// this primary enchantment; omitting it left a level-86 fighter with two tier-10
+    /// Health enchants at 2,070 instead of about 2,734.
+    pub max_health_bonus: f32,
     /// Attribute points this character spent on Stamina. Max Stamina is
     /// [`pool_for_points`] of this, NOT a function of level — see that function
     /// for the extraction and the identity check. 0 for a bot or the starter
@@ -907,7 +912,7 @@ pub struct Loadout {
 
 impl Loadout {
     /// Commit-to-commit swing cadence (Phase 3.12): the equipped template's own
-    /// `attackDelay + recoveryTime`, floored at `globalMinimumAttackDelay`; the
+    /// `attackDelay + recoveryToComboTime`, floored at `globalMinimumAttackDelay`; the
     /// weight-class fallback when no template resolved.
     pub fn swing_interval(&self) -> std::time::Duration {
         use crate::arena::combat::tables;
@@ -915,6 +920,39 @@ impl Loadout {
             Some(w) => tables::swing_interval_for_weapon(w),
             None => tables::fallback_swing_interval(self.weapon.weight.unwrap_or(tables::Weight::Light)),
         }
+    }
+
+    /// Commit-to-neutral actor-state timing. A new combo may legally begin before
+    /// this expires; it is therefore not interchangeable with [`Self::swing_interval`].
+    pub fn neutral_interval(&self) -> std::time::Duration {
+        use crate::arena::combat::tables;
+        match self.weapon_template {
+            Some(w) => tables::neutral_interval_for_weapon(w),
+            None => self.swing_interval(),
+        }
+    }
+
+    /// Per-template full-charge point (`WeaponTemplate._backswingTime`).
+    pub fn critical_hold_secs(&self) -> f32 {
+        use crate::arena::combat::tables;
+        self.weapon_template
+            .map(|w| w.backswing_time)
+            .filter(|v| *v > 0.0)
+            .unwrap_or_else(|| match self.weapon.weight {
+                Some(tables::Weight::Heavy) => 0.25,
+                Some(tables::Weight::Versatile) => 0.2,
+                _ => 0.116_667,
+            })
+    }
+
+    /// Full-charge multiplier. The asset stores the increase above base, so a
+    /// Dragonbone Dagger's 0.325 becomes ×1.325.
+    pub fn critical_damage_factor(&self) -> f32 {
+        use crate::arena::combat::tables;
+        self.weapon_template
+            .map(|w| 1.0 + w.max_damage_factor)
+            .filter(|v| *v > 1.0)
+            .unwrap_or_else(|| self.weapon.weight.unwrap_or(tables::Weight::Light).crit_combo().0)
     }
 }
 
@@ -1035,7 +1073,7 @@ pub struct Fighter {
     ///
     /// A swing is not one state — retail walks the actor through
     /// `PlayerAutoAttack → PlayerFollowThrough → PlayerRecovery → Idle` over the
-    /// weapon's own `attackDelay + recoveryTime`. Firing all four the instant the
+    /// weapon's own `attackDelay + recoveryToNeutralTime`. Firing all four the instant the
     /// swing resolves would make the client flash through the animation instead of
     /// playing it. The arena loop ticks every 2 ms, so scheduling is accurate to
     /// far finer than the ~230 ms shortest phase.
@@ -1136,8 +1174,8 @@ pub struct Fighter {
     /// the same value latched into gmid 47 propId 7).
     ///
     /// **TELEMETRY ONLY — never authoritative.** This is client-authored and therefore
-    /// trivially spoofable (a modified client could report a full 1.2 s charge on every
-    /// tap and crit every swing). The crit gate uses the *server*-measured hold
+    /// trivially spoofable (a modified client could report a full charge on every tap
+    /// and crit every swing). The crit gate uses the *server*-measured hold
     /// (`charge_press_at` → release). This field exists so the two can be compared and
     /// a divergence logged.
     pub last_client_charge: Option<f32>,
@@ -1296,9 +1334,12 @@ pub fn paralyze_duration_secs(rank: u8) -> f32 {
 
 impl Fighter {
     pub fn new(slot: usize, net_object_id: i32, loadout: Loadout, now: Instant) -> Self {
-        // Raw pools from the character's level. Arena triples HEALTH only
-        // (`ARENA_HEALTH_MULTIPLIER`); Stamina/Magicka are not multiplied.
-        let max_health = health_for_level(loadout.level) * ARENA_HEALTH_MULTIPLIER;
+        // Arena triples HEALTH only (`ARENA_HEALTH_MULTIPLIER`), including the
+        // primary Fortify Health enchantments. Stamina/Magicka are not multiplied.
+        let max_health = ((health_for_level(loadout.level) as f32 + loadout.max_health_bonus)
+            * ARENA_HEALTH_MULTIPLIER as f32)
+            .round()
+            .max(1.0) as u32;
         // A real character's pools come from its own attribute spend; a bot or the
         // starter loadout has no spend to read and keeps the level approximation.
         let (max_stamina, max_magicka) = if loadout.has_character {
@@ -1423,6 +1464,24 @@ impl Fighter {
         out.extend_from_slice(&first_index.to_le_bytes());
         out.extend(self.state_history.iter().map(|s| *s as u8));
         out
+    }
+
+    /// Record a state carried by a specialised state-change message without changing
+    /// the resolver's logical input-gating state.
+    ///
+    /// Maneuvers are announced by op58 rather than the generic actor-state outbox.
+    /// The client still requires op58's `PvpPlayerStateHistory`, and retail always has
+    /// the announced `Maneuver` state as its newest entry. Recording it here keeps the
+    /// shared history/index stream monotonic while avoiding a second, incorrect gmid39
+    /// for the same transition. It also lets a shield bash remain logically Blocking
+    /// during its first phase while op58 plays the compound block-then-strike clip.
+    pub fn record_presentational_state(&mut self, next: ActorStateType) -> Vec<u8> {
+        if self.state_history.len() == STATE_HISTORY_MAX {
+            self.state_history.pop_front();
+        }
+        self.state_history.push_back(next);
+        self.transitions_total = self.transitions_total.saturating_add(1);
+        self.packed_state_history()
     }
 
     /// Take everything queued since the last drain, leaving the queue empty.
@@ -1806,7 +1865,8 @@ impl Fighter {
     }
 
     /// Max health WITHOUT the arena PvP health cheat — i.e. the character's own
-    /// shipped pool. `max_health` is `health_for_level(level) × ARENA_HEALTH_MULTIPLIER`,
+    /// shipped pool. `max_health` is `(health_for_level(level) + equipped Fortify
+    /// Health) × ARENA_HEALTH_MULTIPLIER`,
     /// and that multiplier is `PvpDefaultSettings.CHEAT_BASE_HEALTH_MULTIPLIER`: a
     /// pacing knob bolted onto the bar, not a change to the character's stats.
     pub fn base_max_health(&self) -> u32 {
@@ -2492,6 +2552,16 @@ mod tests {
         let f0 = Fighter::new(0, 564, Loadout { level: 30, ..Default::default() }, now);
         assert_eq!(f0.max_health, health_for_level(30) * ARENA_HEALTH_MULTIPLIER);
         assert_eq!(f0.max_health, 1470);
+        // Flappety's live level-86 loadout has two tier-10 Fortify Health enchants:
+        // (690 level pool + 2 × 110.64) × 3 = 2733.84 → 2734.
+        let fortified = Fighter::new(
+            0,
+            564,
+            Loadout { level: 86, max_health_bonus: 221.28, ..Default::default() },
+            now,
+        );
+        assert_eq!(fortified.max_health, 2734);
+        assert_eq!(fortified.base_max_health(), 911);
         // Full pool → wire health fraction == STAT_MAX (full bar).
         let (h_full, _, _, _) = PackedStats::unpack(f0.packed_stats());
         assert_eq!(h_full, STAT_MAX);

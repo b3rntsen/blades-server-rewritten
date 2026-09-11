@@ -10,7 +10,7 @@
 //! | weapon base 99.0 | `gamedata::weapon(ids::DRAGONBONE_DAGGER).base_damage` |
 //! | +45 tempering | `tables::tempering_bonus(Light, 10)` — §3 "weapon tempering 10" |
 //! | Slashing / Light / Dagger | the same template's `damage_type` / `weapon_class` |
-//! | cadence 0.7833 s | `attack_delay 0.2333 + recovery_time 0.55` |
+//! | combo cadence 0.3333 s | `attack_delay 0.2333 + recovery_to_combo_time 0.10` |
 //! | poison 137.32 | `Weapon Poison Damage` tier 10 (`value 7591`) × [`tables::ENCHANT_DAMAGE_PER_VALUE`] |
 //! | block base 49.5 | the template's `block_base` |
 //!
@@ -162,6 +162,7 @@ fn s506_fixture_is_derived_from_shipped_item_data() {
     assert_eq!(w.weapon_type, gamedata::WeaponType::Dagger);
     assert!((w.attack_delay - 0.233333).abs() < 1e-5);
     assert!((w.recovery_time - 0.55).abs() < 1e-5);
+    assert!((w.recovery_to_combo_time - 0.10).abs() < 1e-5);
     assert!((w.block_base - 49.5).abs() < 1e-5);
 
     let lo = flappety_dagger();
@@ -171,7 +172,7 @@ fn s506_fixture_is_derived_from_shipped_item_data() {
         "DIVERGENCE: tempered base {base} != 99.0 + tempering_bonus(Light, 10) 45.0",
     );
     assert_eq!(lo.weapon.weight, Some(Weight::Light));
-    assert!((lo.swing_interval().as_secs_f32() - 0.783333).abs() < 1e-4);
+    assert!((lo.swing_interval().as_secs_f32() - 0.333333).abs() < 1e-4);
     // The poison magnitude comes from the family curve, not a literal.
     let poison = super::tables::enchant_damage(WEAPON_POISON_DAMAGE, 10).expect("poison t10");
     assert!(

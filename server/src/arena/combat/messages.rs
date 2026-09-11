@@ -884,10 +884,11 @@ pub fn player_channeling_state_change(
 /// We sent op53 for both and never sent op58 at all, so a bash had no animation
 /// frame on the wire — nothing for the client to play.
 ///
-/// **propId 7** — a variable-length blob (6…23 B, 941 distinct values across the
-/// 2,941 frames), the same unmodelled `stateHistory` as op53's propId 7 and left
-/// out for the same reason: NetData is a sparse property bag, so omitting it lets
-/// the client keep its default rather than read something fabricated.
+/// **propId 7** is the fighter's real `PvpPlayerStateHistory`: a variable-length blob
+/// (6…23 B, 941 distinct values across the 2,941 frames). It is present in every
+/// retail op58 and its newest entry is always `Maneuver` (11). Omitting it left the
+/// client without the state transition that selects the animation, which made a
+/// correctly classified Piercing Strikes cast look like a generic spell cast.
 ///
 /// **propId 8** is `timeInState`, and at state ENTRY — the only moment we emit —
 /// that is 0.0. Retail's spread (0.0 … 8.0 s, with genuine zeros in every ability:
@@ -901,7 +902,7 @@ pub fn player_maneuver_state_change(
     time_in_state_secs: f32,
     ability_uuid: &str,
     animation: ActorAnimation,
-    state_blob: Option<&[u8]>,
+    state_blob: &[u8],
 ) -> Vec<u8> {
     let mut w = NetDataWriter::new();
     w.int(0, caster_avatar_net_object_id)
@@ -910,11 +911,9 @@ pub fn player_maneuver_state_change(
         .byte(3, GameMessageId::PlayerManeuverStateChange as u8)
         .ulong(4, caster_packed_stats)
         .ulong(5, opponent_packed_stats)
-        .byte(6, ActorStateType::Maneuver as u8);
-    if let Some(blob) = state_blob {
-        w.put(7, arena_proto::NetDataValue::ByteArray(blob.to_vec()));
-    }
-    w.float(8, time_in_state_secs)
+        .byte(6, ActorStateType::Maneuver as u8)
+        .put(7, arena_proto::NetDataValue::ByteArray(state_blob.to_vec()))
+        .float(8, time_in_state_secs)
         .string(9, ability_uuid)
         .byte(10, animation as u8);
     frame(MSGTYPE_USERMESSAGE, w.finish())
