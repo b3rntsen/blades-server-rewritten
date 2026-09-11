@@ -49,8 +49,8 @@ use actix_web::{
 use blades_lib::{
     economy::{RewardGrant, apply_reward},
     server_state::{AbyssRun, AbyssSliceEntry},
-    user_data::{CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
-                DungeonGeneratedData, InventoryChangeTracker},
+    user_data::{CompleteCharacterWithIdWithoutData, CompleteInventory, CompleteInventoryUpdate,
+                CompleteWallet, DungeonGeneratedData, InventoryChangeTracker},
 };
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
@@ -302,17 +302,34 @@ struct ReviveAction {
 ///
 /// Only one arm used to exist (`EnemyKilled`); the other five fell into `Unknown` and
 /// were dropped, `abyss_slice_completed` — the floor-advance signal — among them. The
-/// three arms not acted on yet (`combat_completed` gear durability,
-/// `enemy_loot_collected`, `item_consumed`) are named rather than swallowed so the next
-/// change can see them, and so a body carrying them is not silently reduced to "unknown".
+/// The two arms not acted on yet (`enemy_loot_collected`, `item_consumed`) are named
+/// rather than swallowed so the next change can see them, and so a body carrying them
+/// is not silently reduced to "unknown".
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct CombatCompletedAction {
+    #[serde(default)]
+    items: Vec<DurabilityUpdate>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    time: u64,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct DurabilityUpdate {
+    id: Uuid,
+    durability: f64,
+}
+
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AbyssUpdateAction {
     EnemyKilled(EnemyKilledAction),
     AbyssSliceCompleted(SliceCompletedAction),
     Revive(ReviveAction),
-    /// Gear durability after a fight. Not applied yet.
-    CombatCompleted(Value),
+    /// Gear durability after a fight.
+    CombatCompleted(CombatCompletedAction),
     /// Loot the player picked up off a corpse. Not applied yet — the server does not
     /// generate abyss enemy loot at all (see the follow-ups in the PR).
     EnemyLootCollected(Value),
@@ -367,13 +384,14 @@ pub async fn update_abyss(
             let mut entry =
                 load_economy_for_update(&mut conn, &session.session, character_id).await?;
 
-            let tracker = InventoryChangeTracker::default();
+            let mut tracker = InventoryChangeTracker::default();
 
             if let Some(run) = entry.server_state.0.abyss.as_mut() {
                 apply_actions(&app_state.static_data.abyss, run, &body.actions);
 
                 let revive_count = run.revive_count;
                 let future_rewards = build_future_rewards(&app_state);
+                apply_combat_durability(&body.actions, &mut entry.inventory.0, &mut tracker);
 
                 save_economy(&mut conn, character_id, &entry).await?;
 
@@ -840,13 +858,57 @@ fn apply_actions(
             AbyssUpdateAction::Revive(_) => {
                 run.revive_count += 1;
             }
+            // Inventory changes are applied separately from run scoring below.
+            AbyssUpdateAction::CombatCompleted(_) => {}
             // Parsed, named, and deliberately not acted on yet — see the enum's doc.
-            AbyssUpdateAction::CombatCompleted(_)
-            | AbyssUpdateAction::EnemyLootCollected(_)
+            AbyssUpdateAction::EnemyLootCollected(_)
             | AbyssUpdateAction::ItemConsumed(_)
             | AbyssUpdateAction::Unknown => {}
         }
     }
+}
+
+/// Apply the durability reported after abyss combat to gear this character has equipped.
+///
+/// The client reports absolute durability. It is authoritative only in the damaging
+/// direction: accepting a higher value would let a modified client repair for free, while
+/// accepting an unknown id would let it invent inventory. Repeated updates in one request
+/// are safe because every accepted value must be below the value already stored.
+fn apply_combat_durability(
+    actions: &[AbyssUpdateAction],
+    inventory: &mut CompleteInventory,
+    tracker: &mut InventoryChangeTracker,
+) -> usize {
+    let mut changed = 0;
+    for action in actions {
+        let AbyssUpdateAction::CombatCompleted(action) = action else {
+            continue;
+        };
+        for update in &action.items {
+            if !update.durability.is_finite() || update.durability < 0.0 {
+                continue;
+            }
+            let Some(equipped) = inventory
+                .loadout
+                .equipped_items
+                .0
+                .values_mut()
+                .find(|item| item.id == update.id)
+            else {
+                continue;
+            };
+            if update.durability >= equipped.item.durability {
+                continue;
+            }
+            equipped.item.durability = update.durability;
+            tracker
+                .modified_loadout
+                .modified_equipped_items
+                .insert(equipped.slot);
+            changed += 1;
+        }
+    }
+    changed
 }
 
 /// The `killScoreMultiplier` used when the server cannot identify the enemy variant.
@@ -943,6 +1005,7 @@ fn end_run_reward(
 mod tests {
     use super::*;
     use blades_lib::static_data::{AbyssStaticData, AbyssFixedSlice, AbyssFutureRewardDef};
+    use blades_lib::user_data::{Item, ItemPropertiesAll, SingleEquippedItem};
 
     fn test_static_abyss() -> AbyssStaticData {
         let fixed: Vec<AbyssFixedSlice> = (1u32..=24).map(|i| AbyssFixedSlice {
@@ -1586,7 +1649,12 @@ mod tests {
         let req: UpdateAbyssRequest = serde_json::from_value(body).expect("parses");
         assert_eq!(req.actions.len(), 6);
         assert!(matches!(req.actions[0], AbyssUpdateAction::EnemyKilled(_)));
-        assert!(matches!(req.actions[1], AbyssUpdateAction::CombatCompleted(_)));
+        let AbyssUpdateAction::CombatCompleted(combat) = &req.actions[1] else {
+            panic!("combat_completed must have its own arm");
+        };
+        assert_eq!(combat.items.len(), 1);
+        assert_eq!(combat.items[0].id, Uuid::nil());
+        assert_eq!(combat.items[0].durability, 90.0);
         assert!(matches!(req.actions[2], AbyssUpdateAction::EnemyLootCollected(_)));
         assert!(matches!(req.actions[3], AbyssUpdateAction::ItemConsumed(_)));
         assert!(matches!(req.actions[4], AbyssUpdateAction::AbyssSliceCompleted(_)));
@@ -1606,6 +1674,66 @@ mod tests {
         serde_json::from_value::<UpdateAbyssRequest>(serde_json::json!({"actions": v}))
             .expect("parses")
             .actions
+    }
+
+    #[test]
+    fn combat_durability_only_damages_owned_equipped_gear() {
+        let slot = Uuid::new_v4();
+        let item_id = Uuid::new_v4();
+        let unknown_id = Uuid::new_v4();
+        let mut inventory = CompleteInventory {
+            backpack: Default::default(),
+            loadout: Default::default(),
+            treasury: Default::default(),
+            overflow_treasury: Default::default(),
+            backpack_version: 0,
+            treasury_version: 0,
+        };
+        inventory.loadout.equipped_items.0.insert(
+            slot,
+            SingleEquippedItem {
+                id: item_id,
+                slot,
+                item: Item {
+                    item_template_id: Uuid::new_v4(),
+                    grade: None,
+                    tempering_level: 0,
+                    durability: 100.0,
+                    properties: ItemPropertiesAll::default(),
+                    arcane_tier: None,
+                },
+            },
+        );
+
+        let actions = parse_actions(serde_json::json!([
+            {"type": "combat_completed", "items": [
+                {"id": item_id, "durability": 75.0},
+                {"id": item_id, "durability": 95.0},
+                {"id": item_id, "durability": -1.0},
+                {"id": unknown_id, "durability": 0.0}
+            ]}
+        ]));
+        let mut tracker = InventoryChangeTracker::default();
+
+        assert_eq!(
+            apply_combat_durability(&actions, &mut inventory, &mut tracker),
+            1
+        );
+        assert_eq!(
+            inventory.loadout.equipped_items.0[&slot].item.durability,
+            75.0
+        );
+        assert_eq!(
+            tracker.modified_loadout.modified_equipped_items,
+            std::collections::HashSet::from([slot])
+        );
+
+        let update = inventory.generate_client_update(&tracker);
+        assert_eq!(
+            update.loadout.equipped_items.0[&slot].item.durability,
+            75.0,
+            "the client diff must carry the changed durability"
+        );
     }
 
     fn kill(time: u64) -> serde_json::Value {
