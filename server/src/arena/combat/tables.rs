@@ -10,7 +10,7 @@
 //! |---|---|
 //! | `ability_cost()` hand-transcribed UUID table | [`ability_cost`] → `gamedata::ability_rank_clamped().stamina_cost/magicka_cost` |
 //! | `SPELL_BASE_BY_RANK` / `spell_base_for_rank` | `gamedata::AbilityRank::damage()` |
-//! | `Weight::swing_interval()` (guessed per-class) | [`swing_interval`] from the item's `attack_delay + recovery_time` |
+//! | `Weight::swing_interval()` (guessed per-class) | [`swing_interval`] from the item's `attack_delay + recovery_to_combo_time` |
 //! | `weapon_base_for_level` as the *primary* base | `gamedata::weapon().base_damage` (+ [`tempering_bonus`]) |
 //!
 //! What remains is genuinely *derived*:
@@ -86,21 +86,31 @@ impl Weight {
 // Swing cadence — per ITEM, from the shipped weapon template (Phase 3.12)
 // ---------------------------------------------------------------------------
 
-/// Commit-to-commit swing interval for a weapon: `attackDelay + recoveryTime`,
+/// Commit-to-commit swing interval for a weapon: `attackDelay + recoveryToComboTime`,
 /// floored at `PlayerCombatParameters.globalMinimumAttackDelay` (0.1 s).
 ///
-/// This **replaces** the old guessed `Weight::swing_interval()` (a flat
-/// 400/650/900 ms per weight class). The Dragonbone Dagger's shipped numbers
-/// (0.2333 + 0.55 = 0.7833 s) are now used verbatim, and every one of the 370
-/// templates carries its own pair.
-pub fn swing_interval(attack_delay: f32, recovery_time: f32) -> std::time::Duration {
-    let secs = (attack_delay + recovery_time).max(combat_params::GLOBAL_MINIMUM_ATTACK_DELAY);
+/// `recoveryTime` is the whole recovery animation, not the gate for a combo input.
+/// Treating it as the latter made the Dragonbone Dagger wait 0.783 s although retail
+/// releases in the retained pcap are commonly 0.37-0.67 s apart. Its authored combo
+/// gate is 0.2333 + 0.1 = 0.3333 s. Every one of the 370 templates carries both
+/// values, so the model must not collapse them again.
+pub fn swing_interval(attack_delay: f32, recovery_to_combo_time: f32) -> std::time::Duration {
+    let secs = (attack_delay + recovery_to_combo_time).max(combat_params::GLOBAL_MINIMUM_ATTACK_DELAY);
     std::time::Duration::from_secs_f32(secs)
 }
 
 /// The cadence for a resolved weapon template.
 pub fn swing_interval_for_weapon(w: &gamedata::WeaponStats) -> std::time::Duration {
-    swing_interval(w.attack_delay, w.recovery_time)
+    swing_interval(w.attack_delay, w.recovery_to_combo_time)
+}
+
+/// Time from commit until the actor returns to neutral. This is deliberately
+/// separate from [`swing_interval_for_weapon`]: retail permits the next alternating
+/// combo before the recovery animation reaches neutral.
+pub fn neutral_interval_for_weapon(w: &gamedata::WeaponStats) -> std::time::Duration {
+    let secs = (w.attack_delay + w.recovery_to_neutral_time)
+        .max(combat_params::GLOBAL_MINIMUM_ATTACK_DELAY);
+    std::time::Duration::from_secs_f32(secs)
 }
 
 /// The cadence used when a fighter's weapon does not resolve to a real template
@@ -411,8 +421,10 @@ mod tests {
     fn swing_cadence_is_per_item() {
         let dagger = gamedata::weapon(gamedata::ids::DRAGONBONE_DAGGER).unwrap();
         let got = swing_interval_for_weapon(dagger);
-        // 0.233333 + 0.55 = 0.783333 s.
-        assert!((got.as_secs_f32() - 0.783333).abs() < 1e-4, "got {got:?}");
+        // Combo input unlocks before neutral: 0.233333 + 0.10 = 0.333333 s.
+        assert!((got.as_secs_f32() - 0.333333).abs() < 1e-4, "got {got:?}");
+        let neutral = neutral_interval_for_weapon(dagger);
+        assert!((neutral.as_secs_f32() - 0.633333).abs() < 1e-4, "got {neutral:?}");
         // The global floor is respected for a pathologically fast template.
         assert_eq!(
             swing_interval(0.0, 0.0),
@@ -494,8 +506,6 @@ mod tests {
         assert!(fallback::weapon_base_for_level(30, Weight::Light) > 0.0);
     }
 }
-
-
 
 
 
