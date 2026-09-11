@@ -2951,24 +2951,51 @@ fn apply_resist_elements(
 ///   3. op48 `MatchPostRoundInfoMsg` — the round result.
 ///   4. Match net-object `MatchState` → `PostRound`(14).
 fn on_round_ending_death(combat: &mut MatchCombat, winner: usize, now: Instant) -> Vec<(usize, Vec<u8>)> {
+    on_round_ended(combat, winner, now, true)
+}
+
+/// End a live round because its authoritative 120-second clock expired. No fighter
+/// is actually dead, so this emits the same cumulative result + MatchState walk as a
+/// normal round end without fabricating an op29 death frame. The engine chooses the
+/// winner by remaining HP fraction before calling this function.
+pub(super) fn on_round_timeout(
+    combat: &mut MatchCombat,
+    winner: usize,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    on_round_ended(combat, winner, now, false)
+}
+
+fn on_round_ended(
+    combat: &mut MatchCombat,
+    winner: usize,
+    now: Instant,
+    ended_by_death: bool,
+) -> Vec<(usize, Vec<u8>)> {
     let mut out = Vec::new();
     let loser = combat.opponent_of(winner).unwrap_or(winner);
     // **Phase 3.14 — DOUBLE-KO.** Both fighters at 0 HP in the same resolution step:
     // nobody scores, the round is replayed. AUTHORED, not capture-derived — no
     // recorded match ends this way, so this is a designed rule.
-    let double_ko = combat.round_outcome() == super::state::RoundOutcome::DoubleKo;
+    let double_ko = ended_by_death
+        && combat.round_outcome() == super::state::RoundOutcome::DoubleKo;
     if double_ko {
         info!("combat: DOUBLE-KO — both fighters at 0 HP, round is replayed (no score)");
     } else if winner < combat.rounds_won.len() {
         combat.rounds_won[winner] += 1;
     }
     let match_won = combat.match_is_won();
+    let burst = if ended_by_death {
+        "op29 + op79 RoundEnd + op48 + MatchState→PostRound(14)"
+    } else {
+        "op79 RoundEnd + op48 + MatchState→PostRound(14)"
+    };
     let loser_obj = combat.fighters.get(loser).map(|f| f.net_object_id).unwrap_or(0);
     let winner_obj = combat.fighters.get(winner).map(|f| f.net_object_id).unwrap_or(0);
     let loser_stats = combat.fighters.get(loser).map(|f| f.packed_stats()).unwrap_or(0);
     let winner_stats = combat.fighters.get(winner).map(|f| f.packed_stats()).unwrap_or(0);
 
-    // 1) op29 PlayerDead for the loser, props 0-10.
+    // 1) op29 PlayerDead for the loser, props 0-10 — only for an actual death.
     //
     //    Transition the loser to `Dead` FIRST. The state ring at propId 7 is what the
     //    client reads to pick a death animation, and its newest entry must equal the
@@ -2976,16 +3003,25 @@ fn on_round_ending_death(combat: &mut MatchCombat, winner: usize, now: Instant) 
     //    Snapshotting before the transition would ship a ring whose tail is whatever
     //    the fighter was doing a moment ago, and a death that animates out of the
     //    wrong pose.
-    if let Some(f) = combat.fighters.get_mut(loser) {
-        f.set_actor_state(ActorStateType::Dead, now);
-    }
-    let (loser_history, loser_time_in_prev) = combat
-        .fighters
-        .get(loser)
-        .map(|f| (f.packed_state_history(), f.time_in_state(now)))
-        .unwrap_or_default();
-    let dead_frame =
-        messages::player_dead(loser_obj, loser_stats, winner_stats, &loser_history, loser_time_in_prev);
+    let dead_frame = if ended_by_death {
+        if let Some(f) = combat.fighters.get_mut(loser) {
+            f.set_actor_state(ActorStateType::Dead, now);
+        }
+        let (loser_history, loser_time_in_prev) = combat
+            .fighters
+            .get(loser)
+            .map(|f| (f.packed_state_history(), f.time_in_state(now)))
+            .unwrap_or_default();
+        Some(messages::player_dead(
+            loser_obj,
+            loser_stats,
+            winner_stats,
+            &loser_history,
+            loser_time_in_prev,
+        ))
+    } else {
+        None
+    };
     // 3) op48 MatchPostRoundInfoMsg — the result (winner/loser char UUIDs + match id).
     //    matchId = the gameSessionId (the Match net-object's propId9). Carries the ACTUAL
     //    round number (so the client scores THIS round, not a fixed round-3 frame) and
@@ -3029,9 +3065,10 @@ fn on_round_ending_death(combat: &mut MatchCombat, winner: usize, now: Instant) 
         combat.matchend_step = 0;
         combat.phase = FlowState::RoundEnd;
         info!(
-            "combat: MATCH-ending death → winner slot {winner} (obj {winner_obj}) won the match \
-             (score {:?}); emitting op29 + op79 RoundEnd + op48 + MatchState→PostRound(14) to {} player(s); \
+            "combat: MATCH-ending {} → winner slot {winner} (obj {winner_obj}) won the match \
+             (score {:?}); emitting {burst} to {} player(s); \
              engine tick now walks PostRound→BackendMatchEnd→PostMatch→Disconnecting",
+            if ended_by_death { "death" } else { "round timeout" },
             combat.rounds_won,
             combat.fighters.len(),
         );
@@ -3041,20 +3078,25 @@ fn on_round_ending_death(combat: &mut MatchCombat, winner: usize, now: Instant) 
         combat.interround_step = 0;
         combat.phase = FlowState::NextState;
         info!(
-            "combat: round-ending death (round {}) → winner slot {winner} (obj {winner_obj}), loser slot {loser} \
+            "combat: round-ending {} (round {}) → winner slot {winner} (obj {winner_obj}), loser slot {loser} \
              (obj {loser_obj}); score {:?} (no fighter at {} wins yet) — LOOPING to the next round; \
-             emitting op29 + op79 RoundEnd + op48 + MatchState→PostRound(14), then the engine walks \
+             emitting {burst}, then the engine walks \
              ChooseLoadout(8)→…→InRound(13) and resets both fighters to full HP",
+            if ended_by_death { "death" } else { "timeout" },
             combat.round,
             combat.rounds_won,
             super::state::ROUND_WINS_TO_WIN_MATCH,
         );
     }
-    debug!("combat op29 PlayerDead {} bytes: {}", dead_frame.len(), hex(&dead_frame));
+    if let Some(dead_frame) = &dead_frame {
+        debug!("combat op29 PlayerDead {} bytes: {}", dead_frame.len(), hex(dead_frame));
+    }
     debug!("combat op48 result {} bytes: {}", result_frame.len(), hex(&result_frame));
 
     for slot in 0..combat.fighters.len() {
-        out.push((slot, dead_frame.clone()));
+        if let Some(dead_frame) = &dead_frame {
+            out.push((slot, dead_frame.clone()));
+        }
         // 2) op79 flow "RoundEnd" on the Control net-object.
         if let Some(m) = messages::flow_state(combat.flow_controller_id, FlowState::RoundEnd) {
             out.push((slot, m));
