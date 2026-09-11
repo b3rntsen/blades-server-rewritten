@@ -1206,7 +1206,7 @@ pub async fn start_arena_season(
             warn!("season start: character {} does not serialize: {e}", row.id);
             BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 54)
         })?;
-        diesel::sql_query("UPDATE characters SET character = $1 WHERE id = $2")
+        diesel::sql_query(SEASON_CHARACTER_UPDATE_SQL)
             .bind::<diesel::sql_types::Jsonb, _>(updated)
             .bind::<diesel::sql_types::Uuid, _>(row.id)
             .execute(&mut conn)
@@ -1385,7 +1385,7 @@ pub async fn end_arena_season(
                 warn!("season end: character {} does not serialize; skipped", row.id);
                 continue;
             };
-            diesel::sql_query("UPDATE characters SET character = $1 WHERE id = $2")
+            diesel::sql_query(SEASON_CHARACTER_UPDATE_SQL)
                 .bind::<diesel::sql_types::Jsonb, _>(updated)
                 .bind::<diesel::sql_types::Uuid, _>(row.id)
                 .execute(&mut conn)
@@ -1462,6 +1462,14 @@ struct SeasonRolloverRow {
     #[diesel(sql_type = diesel::sql_types::Jsonb)]
     character: Value,
 }
+
+/// A promotion threshold can pay again after the season resets its high-water
+/// mark. Clear the server-only per-threshold grant ledger in the same row update
+/// that installs the new season's character state; otherwise a later repair in a
+/// new season could be mistaken for a duplicate from the old one.
+const SEASON_CHARACTER_UPDATE_SQL: &str =
+    "UPDATE characters SET character = $1, \
+     server_state = server_state - 'arenaPromotionLootGrants' WHERE id = $2";
 
 /// `POST /…/api/dev/v1/arena-season-rollover` — close the season every character
 /// is in and open the current one.
@@ -1545,7 +1553,7 @@ pub async fn arena_season_rollover(
             warn!("season rollover: character {} does not serialize: {e}", row.id);
             BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 15)
         })?;
-        diesel::sql_query("UPDATE characters SET character = $1 WHERE id = $2")
+        diesel::sql_query(SEASON_CHARACTER_UPDATE_SQL)
             .bind::<diesel::sql_types::Jsonb, _>(updated)
             .bind::<diesel::sql_types::Uuid, _>(row.id)
             .execute(&mut conn)
@@ -1645,7 +1653,16 @@ mod tests {
     // Scope: this covers the request half — how `apply` is decoded. The
     // handler's guard itself needs a live DB and is not exercised here.
     mod season_rollover_defaults {
-        use super::super::SeasonRolloverRequest;
+        use super::super::{SEASON_CHARACTER_UPDATE_SQL, SeasonRolloverRequest};
+
+        #[test]
+        fn a_real_rollover_clears_the_previous_seasons_promotion_ledger() {
+            assert!(
+                SEASON_CHARACTER_UPDATE_SQL
+                    .contains("server_state = server_state - 'arenaPromotionLootGrants'"),
+                "the threshold ledger is season-scoped and must reset with cups"
+            );
+        }
 
         #[test]
         fn an_empty_body_is_a_dry_run() {
