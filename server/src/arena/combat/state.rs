@@ -928,11 +928,9 @@ pub struct ActiveEffect {
     pub damage_type: DamageType,
     /// Per-tick magnitude (DoT) or flat magnitude (buff).
     pub value: f32,
-    /// `_percentHealthDamage × maxHP` per tick (DoT); 0.0 for non-DoT effects.
-    /// Game-data-driven — the observed s506 range is 1.25–7.73 damage/tick.
-    /// **CALIBRATION FLAG**: the exact `_percentHealthDamage` requires the game's
-    /// Excel data. Current default: 0.003 of max HP per tick (≈ 3.87/tick at L86
-    /// arena×3 HP ≈ 1290 maxHP — the dominant s506 Poison DoT value).
+    /// One tick's share of `_percentHealthDamage × baseMaxHP` over the effect's
+    /// authored duration; 0.0 for non-DoT effects. Game-data-driven — the observed
+    /// s506 range is 1.25–7.73 damage/tick.
     pub per_tick_damage: f32,
     pub expires_at: Instant,
     pub last_tick: Instant,
@@ -1162,9 +1160,9 @@ pub struct Fighter {
     pub negation_pools: Vec<NegationPool>,
     /// Transient per-type flat resistances from Resist-Elements casts.  These are held
     /// separately from `loadout.resistances` so they expire cleanly without modifying the
-    /// loadout. Drained by `transient_resistance_against` which is called from the damage
-    /// pipeline AFTER block (same insertion point as loadout resistances). Duration = 11.5s
-    /// (`ResistElementsAbility._resistanceDuration` from multi-session op51 analysis).
+    /// loadout. Read by `transient_resistance_against`, which the damage pipeline calls
+    /// AFTER block (the same insertion point as loadout resistances). Duration is read
+    /// per rank from `ResistElementsAbility._resistanceDuration` (10 s at rank 1).
     pub transient_resistances: Vec<(DamageType, f32, Instant)>, // (type, flat_amount, expires_at)
     /// Resistance against EVERY damage type, as (flat_amount, expires_at).
     /// Combat Focus and Willpower grant this for the duration of a cast; unlike
@@ -1567,6 +1565,13 @@ impl Fighter {
             self.announced_statuses.iter().copied().filter(|s| !active.contains(s)).collect();
         self.announced_statuses = active;
         lapsed
+    }
+
+    /// Record that an explicit op51 remove has already been sent for `status`.
+    /// Cures use this so the next timer diff does not announce the same removal a
+    /// second time.
+    pub fn acknowledge_status_removed(&mut self, status: StatusEffectType) {
+        self.announced_statuses.retain(|announced| *announced != status);
     }
 
     /// True when health is below `CombatParameters.criticalHealthThreshold` (35 %).
@@ -2217,6 +2222,13 @@ impl MatchCombat {
             f.announced_statuses.clear();
             f.consumables_used = 0; // consumablesPerRound is PER ROUND [Phase 4.3]
         }
+        // These schedules belong to the MATCH rather than either Fighter, but their
+        // contents are still per-round. Leaving them alive lets an old Frostbite
+        // channel, a committed swing, or a spell impact land against the freshly
+        // rebuilt avatars in the next round.
+        self.channels.clear();
+        self.pending_hits.clear();
+        self.pending_impacts.clear();
         // Anchor the regen timer to now so the next round's first tick fires 1s in.
         self.last_regen_tick = now;
     }
@@ -2670,8 +2682,9 @@ mod tests {
     // Mechanic 3: RESIST ELEMENTS transient resistance [§Mechanic-3]
     // -----------------------------------------------------------------------
 
-    /// Resist-Elements adds a transient flat resistance for all four elemental types;
-    /// it is included in `total_resistance_against` and expires after 11.5s.
+    /// Resist Elements adds a transient flat resistance for all four elemental types;
+    /// it is included in `total_resistance_against` and expires at its rank's shipped
+    /// duration.
     #[test]
     fn resist_elements_flat_subtraction_after_block_via_transient() {
         let now = Instant::now();

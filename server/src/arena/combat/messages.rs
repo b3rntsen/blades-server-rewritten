@@ -998,7 +998,8 @@ pub fn damage_negated(defender_net_object_id: i32) -> Vec<u8> {
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
-/// Build a `RequestExecuteAbility` (gmid 37) c2s frame for `ability_uuid`.
+/// Build a `RequestExecuteAbility` (gmid 37) c2s frame for `ability_uuid` on the
+/// caster's actual Avatar net object.
 ///
 /// Bots have no ENet peer and therefore no client to send this, but the cast path
 /// (`resolve_ability_cast`) echoes the request bytes back as the op38 authoritative
@@ -1006,18 +1007,19 @@ pub fn damage_negated(defender_net_object_id: i32) -> Vec<u8> {
 /// drift from the human one, they synthesise the frame a client would have sent and
 /// go through the identical path.
 ///
-/// Layout is exactly what `input::parse_execute_ability` scans for:
-/// `marker(0x84) ‖ carrier(0x36) ‖ NetObjectInfo prefix ‖ 02 00 00 ‖ [type] ‖
-/// [role=3] ‖ [gmid=37] ‖ [u16-LE len=36] ‖ [36-byte ASCII UUID]`.
-pub fn request_execute_ability(ability_uuid: &str) -> Vec<u8> {
+/// Layout is exactly what `input::parse_execute_ability` scans for. The apparent
+/// `02 00 00` "separator" in captured low-numbered Avatar ids is actually bytes
+/// 1..3 of propId 0's little-endian i32; preserving that distinction is what lets
+/// this builder address any allocated Avatar instead of hard-coding captured id 565.
+pub fn request_execute_ability(caster_avatar_net_object_id: i32, ability_uuid: &str) -> Vec<u8> {
     debug_assert_eq!(ability_uuid.len(), 36, "ability UUID must be 36 chars");
     let mut frame = Vec::with_capacity(2 + 6 + 8 + 36);
     frame.push(0x84); // c2s marker
     frame.push(0x36); // UserMessage carrier
-    frame.extend_from_slice(&[0x04, 0x1F, 0x70, 0x77, 0x0A, 0x35]); // NetObjectInfo prefix
+    frame.extend_from_slice(&[0x04, 0x1F, 0x70, 0x77, 0x0A]); // NetData header
+    frame.extend_from_slice(&caster_avatar_net_object_id.to_le_bytes());
     frame.extend_from_slice(&[
-        0x02, 0x00, 0x00, // separator
-        0x38, // type nibble
+        0x38, // p1 type = Avatar
         0x03, // role = Autonomous
         0x25, // gmid = 37
         0x24, 0x00, // u16-LE length = 36
@@ -1575,16 +1577,16 @@ pub fn state_change_actor_state(user_data: &[u8]) -> Option<i64> {
 /// Byte-identical to the request except the s2c marker (`0xBE`), NetRole=Authority,
 /// and gameMessageId=38 (`arena-combat-reference.md` §op37/38). Built by patching
 /// the client's OWN request bytes, so it faithfully mirrors whatever NetObjectInfo
-/// framing the client sent. `sep_offset` is the `02 00 00` separator offset that
-/// the decoder ([`super::input::parse_execute_ability`]) located.
-pub fn perform_execute_ability(request_user_data: &[u8], sep_offset: usize) -> Vec<u8> {
+/// framing the client sent. `role_offset` is located structurally by
+/// [`super::input::parse_execute_ability`].
+pub fn perform_execute_ability(request_user_data: &[u8], role_offset: usize) -> Vec<u8> {
     let mut echo = request_user_data.to_vec();
     if let Some(b) = echo.first_mut() {
         *b = MARKER_S2C;
     }
-    if sep_offset + 5 < echo.len() {
-        echo[sep_offset + 4] = NetRole::Authority as u8; // role → Authority
-        echo[sep_offset + 5] = GameMessageId::PerformExecuteAbility as u8; // gmid 37 → 38
+    if role_offset + 1 < echo.len() {
+        echo[role_offset] = NetRole::Authority as u8;
+        echo[role_offset + 1] = GameMessageId::PerformExecuteAbility as u8;
     }
     echo
 }
@@ -2481,14 +2483,14 @@ mod tests {
     fn perform_execute_ability_echoes_request() {
         let mut req = vec![
             0xBE, 0x36, 0x04, 0x1F, 0x70, 0x77, 0x0A, 0x35, // marker+carrier + NetObjectInfo
-            0x02, 0x00, 0x00, // separator @ offset 8
+            0x02, 0x00, 0x00, // remaining LE bytes of p0 = 565
             0x38, 0x03, 0x25, 0x24, 0x00, // type, role=3, gmid=37, len=36
         ];
         req.extend_from_slice(b"7fc15804-1637-40a9-8dcc-3ea1eb0f778d");
-        let echo = perform_execute_ability(&req, 8);
+        let echo = perform_execute_ability(&req, 12);
         assert_eq!(echo[0], 0xBE, "s2c marker");
-        assert_eq!(echo[12], NetRole::Authority as u8, "role → Authority (sep+4)");
-        assert_eq!(echo[13], 38, "gameMessageId → PerformExecuteAbility (sep+5)");
+        assert_eq!(echo[12], NetRole::Authority as u8, "role → Authority");
+        assert_eq!(echo[13], 38, "gameMessageId → PerformExecuteAbility");
         assert_eq!(&echo[16..], b"7fc15804-1637-40a9-8dcc-3ea1eb0f778d", "UUID preserved");
         assert_eq!(echo.len(), req.len());
     }

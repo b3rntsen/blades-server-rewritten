@@ -5,36 +5,48 @@
 //! the engine acts on. Layouts: `docs/archive/arena-combat-reference.md`.
 
 /// A decoded `RequestExecuteAbility` (37): the ability *instance* UUID being cast
-/// and the offset of the `02 00 00` NetData separator (so the echo
-/// `PerformExecuteAbility` can patch role+gmid in place).
+/// and the byte offset of its role (so the echo `PerformExecuteAbility` can patch
+/// role+gmid in place without depending on the numeric Avatar id).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecuteAbility {
-    pub sep_offset: usize,
+    pub role_offset: usize,
     pub ability_uuid: String,
 }
 
 /// Detect + decode a `RequestExecuteAbility` (37) in a carrier-54 c2s `user_data`.
-/// The body is separator-anchored (`arena-combat-reference.md` §op37):
-///   `… 02 00 00 [type][role][gmid=37][u16-LE len=0x24][36-byte ASCII UUID]`.
+/// The body is NetData (`arena-combat-reference.md` §op37):
+/// `{0:Int AvatarId, 1:Byte Avatar, 2:Byte Autonomous, 3:Byte 37,
+/// 4:String abilityUuid}`. Captures used ids whose upper little-endian bytes happened
+/// to be `02 00 00`; those bytes are part of propId 0, not a structural separator.
 /// Returns `None` if the frame isn't an ability request (e.g. a swipe input).
 pub fn parse_execute_ability(user_data: &[u8]) -> Option<ExecuteAbility> {
-    // Scan for the `02 00 00` separator whose gmid byte is 37 and is followed by a
-    // 36-char UUID length. (Constrained enough to not false-match a swipe body.)
-    let mut i = 2; // past marker + carrier
-    while i + 8 + 36 <= user_data.len() {
-        if user_data[i] == 0x02
-            && user_data[i + 1] == 0x00
-            && user_data[i + 2] == 0x00
-            && user_data[i + 5] == 37 // gmid = RequestExecuteAbility
-            && user_data[i + 6] == 0x24 // u16-LE length = 36 …
-            && user_data[i + 7] == 0x00
-        {
-            let uuid = String::from_utf8_lossy(&user_data[i + 8..i + 8 + 36]).into_owned();
-            return Some(ExecuteAbility { sep_offset: i, ability_uuid: uuid });
-        }
-        i += 1;
+    if user_data.get(1) != Some(&0x36) {
+        return None;
     }
-    None
+    let nd = arena_proto::parse_netdata(user_data.get(2..)?);
+    if !nd.ok || nd.int(1) != Some(56) || nd.int(2) != Some(3) || nd.int(3) != Some(37) {
+        return None;
+    }
+    let ability_uuid = nd.string(4)?.to_string();
+    if ability_uuid.len() != 36 {
+        return None;
+    }
+
+    // Locate the canonical p1..p4 value tail only to recover the two mutable byte
+    // offsets. The semantic validation above comes from the decoder, so this scan is
+    // independent of propId 0's integer bytes and cannot mistake an Avatar id for a
+    // separator.
+    let role_offset = user_data
+        .windows(5 + 36)
+        .position(|window| {
+            window[..5] == [56, 3, 37, 0x24, 0x00]
+                && window[5..] == ability_uuid.as_bytes()[..]
+        })?
+        + 1;
+    Some(ExecuteAbility {
+        role_offset,
+        ability_uuid,
+    })
 }
 
 /// A decoded `EquipAbilitiesAndConsumables` (56): the client's declaration of the
@@ -97,7 +109,7 @@ mod tests {
     fn op37_frame() -> Vec<u8> {
         let mut v = vec![
             0xBE, 0x36, 0x04, 0x1F, 0x70, 0x77, 0x0A, 0x35, // marker+carrier + NetObjectInfo region
-            0x02, 0x00, 0x00, // separator @ offset 8
+            0x02, 0x00, 0x00, // remaining LE bytes of p0 = 565
             0x38, // type (skip)
             0x03, // role = Autonomous (c2s)
             0x25, // gmid = 37
@@ -110,8 +122,16 @@ mod tests {
     #[test]
     fn decodes_execute_ability() {
         let ea = parse_execute_ability(&op37_frame()).expect("op37 decodes");
-        assert_eq!(ea.sep_offset, 8);
+        assert_eq!(ea.role_offset, 12);
         assert_eq!(ea.ability_uuid, "7fc15804-1637-40a9-8dcc-3ea1eb0f778d");
+    }
+
+    #[test]
+    fn avatar_id_bytes_are_not_part_of_execute_ability_framing() {
+        let mut frame = op37_frame();
+        frame[7..11].copy_from_slice(&777_i32.to_le_bytes());
+        let ea = parse_execute_ability(&frame).expect("an arbitrary Avatar id still parses");
+        assert_eq!(ea.role_offset, 12);
     }
 
     /// Real prod c2s `EquipAbilitiesAndConsumables` (56), session 127 frame 954909.
@@ -167,7 +187,7 @@ mod tests {
 
     #[test]
     fn swipe_input_is_not_an_ability() {
-        // A short carrier-54 body (no separator/gmid) is not an ability request.
+        // A short carrier-54 body (no NetData/gmid) is not an ability request.
         assert!(parse_execute_ability(&[0x84, 0x36]).is_none());
         assert!(parse_execute_ability(&[0xBE, 0x36, 0x03, 0x0F, 0x70, 0x77]).is_none());
     }
