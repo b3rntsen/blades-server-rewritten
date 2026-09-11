@@ -61,6 +61,13 @@ pub enum RmsHandle {
 }
 
 impl RmsHandle {
+    fn current_request_index(&self) -> i64 {
+        match self {
+            RmsHandle::Session(s) => s.current_request_index().min(i64::MAX as u64) as i64,
+            RmsHandle::Direct(_) => 0,
+        }
+    }
+
     /// Snapshot the CURRENT live sender (None if the client has no rms WS open right
     /// now). For `Session` this reads `matchmaking_ws` under its async lock, so a
     /// reconnect since enqueue is picked up.
@@ -437,6 +444,21 @@ fn loadout_from_row(r: &CharacterDbEntryCharacterWalletInventory) -> crate::aren
     lo.profile_equipped_json =
         serde_json::json!({ "equippedItems": &r.inventory.0.loadout.equipped_items }).to_string();
     lo.profile_character_json = build_profile_character_json(&r.data.0, r.id, &r.character.0);
+    let gold = uuid::Uuid::parse_str(crate::arena::combat::messages::ARENA_GOLD_CURRENCY_UUID)
+        .expect("arena gold currency is a valid UUID");
+    lo.wallet_gold = r.wallet.0.balance(gold);
+    lo.character_experience = r.character.0.experience;
+    lo.backpack_version = r.inventory.0.backpack_version;
+    lo.treasury_version = r.inventory.0.treasury_version;
+    lo.next_treasury_chest_id = r.inventory.0.treasury.next_chest_id();
+    lo.stackable_counts = r.inventory.0.backpack.stackable_items.counts().collect();
+    lo.arena_chests_earned = r.server_state.0.arena_chests_earned;
+    lo.arena_last_elder_one_chest_at_secs =
+        r.server_state.0.arena_last_elder_one_chest_at_secs;
+    lo.arena_last_elder_two_chest_at_secs =
+        r.server_state.0.arena_last_elder_two_chest_at_secs;
+    lo.arena_last_legendary_chest_at_secs =
+        r.server_state.0.arena_last_legendary_chest_at_secs;
 
     // DIAGNOSTIC for "no ability buttons in a match", reported 2026-08-01 by two
     // players (Taheen, Swanne) while a third (Flappety) is unaffected.
@@ -1177,6 +1199,7 @@ mod human_priority_tests {
                 backpack_version: 1,
                 treasury_version: 0,
             }),
+            server_state: JsonDbWrapper(Default::default()),
         }
     }
 
@@ -2747,7 +2770,7 @@ async fn resolve(
     // move to a spawned task that injects the loadout before match-start, or a cache.)
     let mut loadouts: Vec<crate::arena::combat::Loadout> = Vec::with_capacity(tickets.len() + bots);
     for t in tickets {
-        let lo = match tokio::time::timeout(
+        let mut lo = match tokio::time::timeout(
             std::time::Duration::from_millis(1500),
             load_loadout(db, t.user_id, t.character_id),
         )
@@ -2762,6 +2785,7 @@ async fn resolve(
                 crate::arena::combat::loadout::starter()
             }
         };
+        lo.current_request_index = t.rms.current_request_index();
         loadouts.push(lo);
     }
 

@@ -152,6 +152,115 @@ pub const ARENA_LADDER: [ArenaTier; 46] = [
 /// Taheen s486 `4 -> 4` over a 2-0 loss, i.e. `+0`). It wraps at capacity.
 pub const CHEST_METER_CAPACITY: i64 = 8;
 
+/// Shipped `ChestCycleData` for `PvP Chest Cycle` (UID
+/// `b4fd5a42-9646-4ec1-855a-bb470de7e2a9`). The 100-entry base list alternates
+/// Gold (tier 3) and Silver (tier 2), beginning with Gold. Three additional rules
+/// replace the base chest at one stable, per-character position in each window.
+///
+/// Retail chooses a random position in each window when it builds a player's cycle.
+/// We derive that choice from `(character UUID, cycle number, rule)` instead: it is
+/// just as evenly distributed, but deterministic across the synchronous op49 card
+/// and the asynchronous PostgreSQL writer.
+pub const PVP_CHEST_CYCLE_LENGTH: u64 = 100;
+pub const PVP_ELDER_REPEAT_SECS: i64 = 86_400;
+pub const PVP_LEGENDARY_REPEAT_SECS: i64 = 604_800;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PvpChestKind {
+    Silver,
+    Gold,
+    Elder,
+    Legendary,
+}
+
+/// Exact shipped `AdditionalChestRule` identity. The repeat timer belongs to the
+/// rule UID, not to the rarity: both Elder rules can legitimately fire in one day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PvpChestRule {
+    /// `dd385131-44d1-49f2-8462-444f286cec0c`, position 5..=15.
+    ElderOne,
+    /// `6395d37b-7a40-456e-ba49-6a84fb5c006b`, position 38..=48.
+    ElderTwo,
+    /// `8df6f814-b8ba-46c6-88c7-8a332dcf4c0c`, position 71..=81.
+    Legendary,
+}
+
+impl PvpChestKind {
+    pub const fn tier(self) -> u8 {
+        match self {
+            Self::Silver => 2,
+            Self::Gold => 3,
+            Self::Elder => 4,
+            Self::Legendary => 5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PvpChestAward {
+    pub chest_number: u64,
+    pub cycle_position: u8,
+    pub kind: PvpChestKind,
+    pub rule: Option<PvpChestRule>,
+}
+
+fn cycle_rule_position(character_id: uuid::Uuid, cycle: u64, salt: u8, lo: u8, hi: u8) -> u8 {
+    // FNV-1a is deliberately spelled out: unlike DefaultHasher its output is stable
+    // across Rust releases, which makes a persisted cycle reproducible forever.
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in character_id
+        .as_bytes()
+        .iter()
+        .copied()
+        .chain(cycle.to_le_bytes())
+        .chain(std::iter::once(salt))
+    {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    lo + (hash % u64::from(hi - lo + 1)) as u8
+}
+
+/// The next eight-round-win chest for a player.
+///
+/// `already_earned` is season-independent and counts meter chests only (promotion
+/// chests do not advance this cycle). `last_*` enforce the two cooldowns shipped in
+/// `AdditionalChestRule`; a blocked special falls back to the alternating base chest.
+pub fn next_pvp_chest(
+    character_id: uuid::Uuid,
+    already_earned: u64,
+    last_elder_one_at_secs: i64,
+    last_elder_two_at_secs: i64,
+    last_legendary_at_secs: i64,
+    now_secs: i64,
+) -> PvpChestAward {
+    let chest_number = already_earned.saturating_add(1);
+    let cycle = already_earned / PVP_CHEST_CYCLE_LENGTH;
+    let cycle_position = (already_earned % PVP_CHEST_CYCLE_LENGTH + 1) as u8;
+    let elder_one = cycle_rule_position(character_id, cycle, 1, 5, 15);
+    let elder_two = cycle_rule_position(character_id, cycle, 2, 38, 48);
+    let legendary = cycle_rule_position(character_id, cycle, 3, 71, 81);
+
+    let elder_one_allowed = last_elder_one_at_secs <= 0
+        || now_secs.saturating_sub(last_elder_one_at_secs) >= PVP_ELDER_REPEAT_SECS;
+    let elder_two_allowed = last_elder_two_at_secs <= 0
+        || now_secs.saturating_sub(last_elder_two_at_secs) >= PVP_ELDER_REPEAT_SECS;
+    let legendary_allowed = last_legendary_at_secs <= 0
+        || now_secs.saturating_sub(last_legendary_at_secs) >= PVP_LEGENDARY_REPEAT_SECS;
+    let (kind, rule) = if cycle_position == elder_one && elder_one_allowed {
+        (PvpChestKind::Elder, Some(PvpChestRule::ElderOne))
+    } else if cycle_position == elder_two && elder_two_allowed {
+        (PvpChestKind::Elder, Some(PvpChestRule::ElderTwo))
+    } else if cycle_position == legendary && legendary_allowed {
+        (PvpChestKind::Legendary, Some(PvpChestRule::Legendary))
+    } else if cycle_position % 2 == 1 {
+        (PvpChestKind::Gold, None)
+    } else {
+        (PvpChestKind::Silver, None)
+    };
+    PvpChestAward { chest_number, cycle_position, kind, rule }
+}
+
 /// `pvp_match_rewards.winner_loot_table` / `.loser_loot_table` — in the shipped
 /// data **both** point at `LootTable_PvpWinner`.
 pub const PVP_MATCH_LOOT_TABLE: &str = "LootTable_PvpWinner";
@@ -653,6 +762,94 @@ mod tests {
         assert_eq!(advance_chest_meter(2, 2), (4, 0));
         // Taheen s486: a 0-2 loss does not move the meter.
         assert_eq!(advance_chest_meter(4, 0), (4, 0));
+    }
+
+    #[test]
+    fn five_hundred_cups_promotes_once_and_the_arena_is_sticky() {
+        assert_eq!((tier_for_trophies(499).arena, tier_for_trophies(499).level), (1, 9));
+        let promoted = tier_for_trophies(500);
+        assert_eq!((promoted.arena, promoted.level), (2, 1));
+        assert_eq!(promotion_rewards(499, 500, 86).chests, vec![(4, 86)]);
+
+        // The engine/persistence store max(live trophies, old high-water). A later
+        // loss can lower the visible cups but must keep the player's own backdrop.
+        let live_after_loss = 472;
+        let high_water_after_loss = 500.max(live_after_loss);
+        let still_promoted = tier_for_trophies(high_water_after_loss);
+        assert_eq!((still_promoted.arena, still_promoted.level), (2, 1));
+    }
+
+    #[test]
+    fn pvp_chest_cycle_matches_the_shipped_asset() {
+        let id = uuid::Uuid::parse_str("38c987fd-c42b-4ea6-b869-c8d4c03055f9").unwrap();
+        let mut last_elder_one = 0;
+        let mut last_elder_two = 0;
+        let mut last_legendary = 0;
+        let mut kinds = Vec::new();
+        // A player can complete the cycle quickly. The distinct rule timestamps
+        // must still allow both Elder windows in this same cycle.
+        let now = 1_700_000_000;
+        for already in 0..100 {
+            let award = next_pvp_chest(
+                id,
+                already,
+                last_elder_one,
+                last_elder_two,
+                last_legendary,
+                now,
+            );
+            match award.rule {
+                Some(PvpChestRule::ElderOne) => last_elder_one = now,
+                Some(PvpChestRule::ElderTwo) => last_elder_two = now,
+                Some(PvpChestRule::Legendary) => last_legendary = now,
+                _ => {}
+            }
+            kinds.push((award.cycle_position, award.kind));
+        }
+        let elders = kinds
+            .iter()
+            .filter_map(|(p, k)| (*k == PvpChestKind::Elder).then_some(*p))
+            .collect::<Vec<_>>();
+        let legendary = kinds
+            .iter()
+            .filter_map(|(p, k)| (*k == PvpChestKind::Legendary).then_some(*p))
+            .collect::<Vec<_>>();
+        assert_eq!(elders.len(), 2);
+        assert!((5..=15).contains(&elders[0]));
+        assert!((38..=48).contains(&elders[1]));
+        assert_eq!(legendary.len(), 1);
+        assert!((71..=81).contains(&legendary[0]));
+        for (position, kind) in kinds {
+            if matches!(kind, PvpChestKind::Elder | PvpChestKind::Legendary) {
+                continue;
+            }
+            assert_eq!(
+                kind,
+                if position % 2 == 1 { PvpChestKind::Gold } else { PvpChestKind::Silver }
+            );
+        }
+    }
+
+    #[test]
+    fn pvp_special_chests_respect_the_shipped_cooldowns() {
+        let id = uuid::Uuid::nil();
+        let elder_one_position = (1..=100)
+            .find(|&n| {
+                next_pvp_chest(id, n - 1, 0, 0, 0, 10).rule
+                    == Some(PvpChestRule::ElderOne)
+            })
+            .unwrap();
+        let blocked = next_pvp_chest(id, elder_one_position - 1, 100, 0, 0, 101);
+        assert!(matches!(blocked.kind, PvpChestKind::Silver | PvpChestKind::Gold));
+
+        let legendary_position = (1..=100)
+            .find(|&n| {
+                next_pvp_chest(id, n - 1, 0, 0, 0, 10).rule
+                    == Some(PvpChestRule::Legendary)
+            })
+            .unwrap();
+        let blocked = next_pvp_chest(id, legendary_position - 1, 0, 0, 100, 101);
+        assert!(matches!(blocked.kind, PvpChestKind::Silver | PvpChestKind::Gold));
     }
 
     // ------------------------------------------------------------------ Elo
