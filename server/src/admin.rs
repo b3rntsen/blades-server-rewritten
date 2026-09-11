@@ -1469,7 +1469,8 @@ struct SeasonRolloverRow {
 /// new season could be mistaken for a duplicate from the old one.
 const SEASON_CHARACTER_UPDATE_SQL: &str =
     "UPDATE characters SET character = $1, \
-     server_state = server_state - 'arenaPromotionLootGrants' WHERE id = $2";
+     server_state = server_state - 'arenaPromotionLootGrants' \
+         - 'arenaPromotionItemRepairs' WHERE id = $2";
 
 /// `POST /…/api/dev/v1/arena-season-rollover` — close the season every character
 /// is in and open the current one.
@@ -1661,6 +1662,10 @@ mod tests {
                 SEASON_CHARACTER_UPDATE_SQL
                     .contains("server_state = server_state - 'arenaPromotionLootGrants'"),
                 "the threshold ledger is season-scoped and must reset with cups"
+            );
+            assert!(
+                SEASON_CHARACTER_UPDATE_SQL.contains("- 'arenaPromotionItemRepairs'"),
+                "per-item repair keys are season-scoped too"
             );
         }
 
