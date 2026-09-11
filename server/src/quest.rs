@@ -1300,6 +1300,31 @@ pub(crate) mod jobs_gen {
     /// The soft-currency reward item ("gold") used by every captured job.
     const REWARD_ITEM_GOLD: &str = "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2";
 
+    // -- reward curve, fitted to 802 retail jobs ---------------------------
+    //
+    // Least-squares over every distinct job in 200 captured `/quests` bodies:
+    //
+    //     rewardXp         ~ 18.92 * difficultyLevel + 47.7   (n = 802)
+    //     rewardItemCount  ~ 19.25 * difficultyLevel + 107.2  (n = 654)
+    //
+    // The previous constants (15 and 30, invented) underpaid XP by about a fifth
+    // and overpaid gold by about half.
+    /// XP per point of `difficultyLevel`.
+    const XP_PER_DIFFICULTY: u64 = 19;
+    /// XP a difficulty-0 job would pay — the fitted intercept.
+    const XP_BASE: u64 = 48;
+    /// Spread around the fitted line. The retail residual is not noise (see
+    /// `report92_reward_curve`), but a spread of this size reproduces its shape.
+    const XP_JITTER: u64 = 90;
+    /// Gold per point of `difficultyLevel`.
+    const GOLD_PER_DIFFICULTY: u64 = 19;
+    /// Gold a difficulty-0 job would pay — the fitted intercept.
+    const GOLD_BASE: u64 = 107;
+    /// Spread around the fitted gold line.
+    const GOLD_JITTER: u64 = 180;
+    /// How often a job pays NO gold: 148 of 802 retail jobs, 18.5%.
+    const ZERO_GOLD_PER_MILLE: u64 = 185;
+
     /// Objective template IDs are fixed per job type in the captures.
     fn objective_ids(job_type: i64) -> &'static [&'static str] {
         match job_type {
@@ -1839,8 +1864,18 @@ pub(crate) mod jobs_gen {
         let secondary_count = if job_type == 5 { 0 } else { rng.range_incl(2, 4) };
         let boss_level_delta = rng.range_incl(4, 8);
         let secret_room = job_type != 5 && rng.below(2) == 1;
-        let reward_xp = (difficulty.max(1) as u64) * 15 + rng.below(60);
-        let reward_item_count = ((difficulty.max(1) as u64) * 30 + rng.below(100)) / 10 * 10;
+        // Reward curve, fitted to 802 distinct retail jobs mined out of 200
+        // captured `/quests` bodies. See `report92_reward_curve` for the fit, the
+        // spread, and the negative result that stopped it being exact.
+        let d = difficulty.max(1) as u64;
+        let reward_xp = d * XP_PER_DIFFICULTY + XP_BASE + rng.below(XP_JITTER);
+        // 148 of the 802 (18.5%) pay NO gold at all — a shape we never produced,
+        // so a zero draw comes first and the curve only applies to the rest.
+        let reward_item_count = if rng.below(1000) < ZERO_GOLD_PER_MILLE {
+            0
+        } else {
+            (d * GOLD_PER_DIFFICULTY + GOLD_BASE + rng.below(GOLD_JITTER)) / 10 * 10
+        };
         let reward_gem = if secret_room && rng.below(3) == 0 { rng.range_incl(6, 15) as u64 } else { 0 };
         let initial_epl = difficulty.max(1) as u64;
 
@@ -2333,6 +2368,118 @@ mod jobs_tests {
                 jobs_gen::job_quest_db_entry(j, CHAR, &gd).is_some(),
                 "job must build a persistable quest row"
             );
+        }
+    }
+}
+
+/// Report #92: our job reward numbers were invented; these are fitted.
+///
+/// The mechanism was fixed first (#180 — pay what the `jobSetup` declares), so what
+/// a player receives has always matched what the board advertised. This is about the
+/// numbers on the board being the right SIZE.
+///
+/// MINED: 802 distinct retail jobs out of 200 captured `/quests` bodies. Least
+/// squares:
+///
+/// ```text
+/// rewardXp        ~ 18.92 * difficultyLevel + 47.7   (n = 802)
+/// rewardItemCount ~ 19.25 * difficultyLevel + 107.2  (n = 654)
+/// 148 of 802 jobs (18.5%) pay NO gold at all
+/// ```
+///
+/// THE NEGATIVE RESULT, recorded so nobody re-derives it. Retail's exact value is
+/// **not** a function of anything observable on the job. For 105 of 157
+/// `(characterLevel, difficultyLevel)` groups the XP is a single exact value — so it
+/// is deterministic, not rolled — but the other 52 carry exactly two values, and none
+/// of `jobType`, `jobPoolId`, `hasSecretRoom`, character level or capture time
+/// separates them. Both populations span nearly the whole corpus by capture id, so it
+/// is not a version change either. There is a hidden input, most likely in the job
+/// pool or dungeon template definitions we do not read.
+///
+/// So this reproduces the right magnitude and spread, not the exact value. That is
+/// stated here rather than implied by a formula that looks exact.
+#[cfg(test)]
+mod report92_reward_curve {
+    use super::jobs_gen::*;
+    use serde_json::Value;
+
+    fn job_pools() -> Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/job_pools.json");
+        serde_json::from_str(&std::fs::read_to_string(path).expect("job_pools.json"))
+            .expect("valid job_pools.json")
+    }
+
+    const CHAR: uuid::Uuid = uuid::Uuid::from_u128(0x1234_5678_9abc_def0_1234_5678_9abc_def0);
+    const NOW_WED: u64 = 1_778_648_400 + 3600;
+
+    /// Roll a lot of boards across many characters and levels, and compare the
+    /// resulting cloud against the retail fit.
+    fn sample() -> Vec<(i64, u64, u64)> {
+        let pools = job_pools();
+        let boundary = current_reset_boundary(&pools, NOW_WED);
+        let mut out = Vec::new();
+        for seed in 0..60u128 {
+            let c = uuid::Uuid::from_u128(CHAR.as_u128().wrapping_add(seed));
+            for level in [10u16, 30, 50, 70, 90] {
+                let (jobs, _t) = generate(&pools, c, level, 0, boundary, NOW_WED);
+                for j in jobs {
+                    let d = j["difficultyLevel"].as_i64().unwrap_or(0);
+                    let xp = j["jobSetup"]["rewardXp"].as_u64().unwrap_or(0);
+                    let gold = j["jobSetup"]["rewardItemCount"].as_u64().unwrap_or(0);
+                    out.push((d, xp, gold));
+                }
+            }
+        }
+        assert!(out.len() > 500, "the committed pools must roll a real sample");
+        out
+    }
+
+    /// Mean XP per point of difficulty must sit near retail's 18.92, not the 15 the
+    /// invented constant produced.
+    #[test]
+    fn xp_per_difficulty_matches_the_retail_fit() {
+        let s = sample();
+        let ratio: f64 = s.iter().filter(|(d, ..)| *d > 0)
+            .map(|(d, xp, _)| *xp as f64 / *d as f64)
+            .sum::<f64>() / s.iter().filter(|(d, ..)| *d > 0).count() as f64;
+        assert!(
+            (17.0..=26.0).contains(&ratio),
+            "xp/difficulty {ratio:.2} is outside the retail band (fit 18.92);              the old constant gave about 15"
+        );
+    }
+
+    /// Gold likewise — and this one moved the other way, from 30 down to 19.
+    #[test]
+    fn gold_per_difficulty_matches_the_retail_fit() {
+        let s = sample();
+        let paying: Vec<_> = s.iter().filter(|(d, _, g)| *d > 0 && *g > 0).collect();
+        let ratio: f64 = paying.iter().map(|(d, _, g)| *g as f64 / *d as f64).sum::<f64>()
+            / paying.len() as f64;
+        assert!(
+            (15.0..=28.0).contains(&ratio),
+            "gold/difficulty {ratio:.2} is outside the retail band (fit 19.25);              the old constant gave about 30"
+        );
+    }
+
+    /// THE shape we never produced: retail pays no gold at all on 18.5% of jobs.
+    #[test]
+    fn some_jobs_pay_no_gold_at_all() {
+        let s = sample();
+        let zero = s.iter().filter(|(_, _, g)| *g == 0).count();
+        let share = zero as f64 / s.len() as f64;
+        assert!(
+            (0.10..=0.28).contains(&share),
+            "{:.1}% of jobs paid no gold; retail is 18.5% and the old roll was 0%",
+            share * 100.0
+        );
+    }
+
+    /// Gold stays a round ten, as every captured value is.
+    #[test]
+    fn gold_is_always_a_multiple_of_ten() {
+        for (_, _, g) in sample() {
+            assert_eq!(g % 10, 0, "captured rewardItemCount is always a round ten, got {g}");
         }
     }
 }
