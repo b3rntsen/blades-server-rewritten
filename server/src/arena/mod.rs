@@ -1,5 +1,6 @@
 pub mod arena_economy;
 pub mod arena_ladder;
+pub mod arena_promotion_loot;
 pub mod arena_season;
 pub mod season_store;
 pub mod avatar;
