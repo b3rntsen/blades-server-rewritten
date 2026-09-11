@@ -1789,6 +1789,7 @@ pub(in crate::arena::combat) mod tests {
         v
     }
     use super::*;
+    use super::super::state::ActorStateType;
 
     fn inst(capacity: usize) -> (MatchInstance, Instant) {
         let now = Instant::now();
@@ -2793,6 +2794,56 @@ pub(in crate::arena::combat) mod tests {
                 );
             }
         }
+    }
+
+    /// **Report #113 — an in-flight cast must not survive the round boundary.**
+    ///
+    /// The server reset `actor_state` to Idle but cleared its pending-state outbox,
+    /// assuming the client rebuilt both actors between rounds. A real match disproved
+    /// that assumption: the opponent's final casting pose remained through the break
+    /// and into round 2. The reset must send the ordinary gmid39 Idle transition to
+    /// both viewers, just like any other authoritative actor-state change.
+    #[test]
+    fn next_round_broadcasts_idle_for_an_inflight_cast() {
+        let (mut m, t0) = live_inst(2);
+        let (_death, t) = swing_until_death(&mut m, 0, t0);
+        let caster = 0;
+        let caster_obj = m.combat.fighters[caster].net_object_id as i64;
+
+        // Model the last state both clients saw before the inter-round walk.
+        m.combat.fighters[caster].set_actor_state(ActorStateType::Channeling, t);
+        let _ = m.combat.fighters[caster].take_state_changes();
+
+        let mut idle_viewers = std::collections::HashSet::new();
+        let step = Duration::from_millis(100);
+        for i in 1..=600u32 {
+            for (viewer, b) in m.on_tick(2, t + step * i) {
+                if b.len() <= 2 || b[1] != 0x36 {
+                    continue;
+                }
+                let nd = arena_proto::parse_netdata(&b[2..]);
+                if nd.int(3) == Some(39)
+                    && nd.int(0) == Some(caster_obj)
+                    && nd.int(6) == Some(ActorStateType::Idle as i64)
+                {
+                    idle_viewers.insert(viewer);
+                }
+            }
+            if m.phase() == FlowState::StateTimeout {
+                break;
+            }
+        }
+
+        assert_eq!(m.phase(), FlowState::StateTimeout, "round 2 must re-open");
+        assert_eq!(
+            idle_viewers,
+            std::collections::HashSet::from([0, 1]),
+            "both clients must be told that the stale cast ended"
+        );
+        assert_eq!(
+            m.combat.fighters[caster].actor_state(),
+            ActorStateType::Idle
+        );
     }
 
     /// **Report #24, cross-PR guard — the inter-round op65 names the opponent's REAL

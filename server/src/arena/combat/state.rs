@@ -2259,17 +2259,22 @@ impl MatchCombat {
             f.stats_seq = f.stats_seq.wrapping_add(1);
             f.cooldowns.clear();
             f.effects.clear();
-            // Between rounds the client tears the combat scene down and rebuilds it,
-            // so a queued transition from the round that just ended would arrive
-            // against a stale avatar. Reset the state silently and drop the outbox.
-            f.actor_state = ActorStateType::Idle;
+            // Drop every old transition, then explicitly tell both clients when an
+            // in-flight animation returns to Idle. The client does not always rebuild
+            // the actor between rounds: report #113 observed the opponent's final cast
+            // pose survive the whole inter-round walk and into round 2. Resetting this
+            // field silently left that client-side state stuck forever.
             f.pending_state_changes.clear();
             f.scheduled_states.clear();
             // The history ring and its index are per-ROUND (retail's firstIndex
             // restarts at 0 each round), so they reset with everything else.
             f.state_history.clear();
             f.transitions_total = 0;
-            f.state_entered = now;
+            if f.actor_state == ActorStateType::Idle {
+                f.state_entered = now;
+            } else {
+                f.set_actor_state(ActorStateType::Idle, now);
+            }
             f.blocking_side = ActiveSide::None;
             f.blocking_until = None;
             f.block_raised_at = None;
