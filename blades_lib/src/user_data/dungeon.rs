@@ -118,6 +118,16 @@ impl DungeonGeneratedData {
             .get(spawn_group_id)
             .and_then(|chests| chests.get(spawn_group_index))
     }
+
+    pub fn get_item(
+        &self,
+        spawn_group_id: &Uuid,
+        spawn_group_index: usize,
+    ) -> Option<&DungeonItemResult> {
+        self.item_generated_data
+            .get(spawn_group_id)
+            .and_then(|items| items.get(spawn_group_index))
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]

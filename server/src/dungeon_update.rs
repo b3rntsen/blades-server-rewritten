@@ -7,11 +7,11 @@ use actix_web::{
     post,
     web::{self, Json},
 };
-use blades_lib::economy::RewardGrant;
+use blades_lib::economy::{RewardGrant, RewardItem};
 use blades_lib::user_data::{
     B64EncodedData, CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, DungeonStatus,
     EnemyIndex, EnemyStatus, InventoryChangeTracker, CompleteWallet, DungeonGeneratedData,
-    DungeonState,
+    DungeonState, LootTableResult,
 };
 use blades_lib::economy::apply_reward;
 use diesel;
@@ -54,26 +54,61 @@ struct CombatCompletedUpdate {
 
 /// A `*_loot_collected` action: the player picked something up inside the dungeon.
 ///
-/// The client reports WHAT it collected — the captured payload carries the contents
-/// inline, e.g.
+/// The client reports the generated item's identity and repeats its contents inline,
+/// e.g.
 ///
 /// ```json
 /// {"type":"item_loot_collected","spawnGroupId":"e7edb276-…","spawnGroupIndex":0,
 ///  "loot":{"stackableItems":{"e7193116-…":1}},"time":1777808410209}
 /// ```
 ///
-/// so `loot` is deserialized straight into [`RewardGrant`], whose camelCase wire form
-/// is already exactly `{currencies, stackableItems, items}`.
-///
-/// This is used ONLY for floor loot and plants, where the contents genuinely exist
-/// nowhere but the request — we do not generate loose-item spawns, so the client is the
-/// only source. Corpse loot is different and must not use this: see
-/// [`EnemyLootCollectedUpdate`].
+/// The server generated the same result into `itemGeneratedData` when the dungeon was
+/// created. That stored result is authoritative when present; `loot` remains a fallback
+/// for imported/legacy dungeon data that has no matching generated item.
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct LootCollectedUpdate {
     #[serde(default)]
+    spawn_group_id: Option<Uuid>,
+    #[serde(default)]
+    spawn_group_index: Option<usize>,
+    #[serde(default)]
     loot: RewardGrant,
+}
+
+fn item_loot_grant(
+    item_loot: &LootCollectedUpdate,
+    generated_data: &DungeonGeneratedData,
+) -> RewardGrant {
+    let Some((spawn_group_id, spawn_group_index)) = item_loot
+        .spawn_group_id
+        .as_ref()
+        .zip(item_loot.spawn_group_index)
+    else {
+        return item_loot.loot.clone();
+    };
+    let Some(item) = generated_data.get_item(spawn_group_id, spawn_group_index) else {
+        // Old imported dungeon rows can lack itemGeneratedData. Preserve their
+        // pre-existing client fallback rather than making an in-progress run lose loot.
+        return item_loot.loot.clone();
+    };
+
+    let mut loot = LootTableResult::default();
+    for result in item.loot_table_loot.values() {
+        loot.merge(result.clone());
+    }
+
+    RewardGrant {
+        currencies: loot.currencies,
+        stackable_items: loot.stackable_items,
+        items: loot
+            .item
+            .0
+            .into_iter()
+            .map(|(id, item)| RewardItem { id, item })
+            .collect(),
+        ..RewardGrant::default()
+    }
 }
 
 /// An `enemy_loot_collected` action — the player looted a corpse.
@@ -594,33 +629,15 @@ fn process_dungeon_actions(
             }
 
             DungeonUpdateAction::ItemLootCollected(item_loot) => {
-                // Apply the reward WHOLE rather than copying it field by field.
-                //
-                // This used to rebuild a `RewardGrant` from `stackable_items` and
-                // `currencies` only, and `loot` is a full `RewardGrant` — so an
-                // `items` entry, which is how a non-stackable pickup arrives, was
-                // dropped on the floor. A weapon or a piece of armour lying in a
-                // dungeon was collected by the client, reported to us, and never
-                // reached the backpack (tracker #104: "floor loot is not getting
-                // added to the player inventory"). `apply_reward` has handled
-                // `items` all along; the hand-copy simply never passed them.
-                //
-                // Passing the grant through also means the next field added to
-                // `RewardGrant` cannot be silently missed here, which is the bug
-                // this was.
-                //
-                // NOTE on trust, so it is not mistaken for a new hole: this action
-                // is client-authoritative BY DESIGN — the comment on
-                // `LootCollectedUpdate` says the contents "genuinely exist nowhere
-                // but the request", because we do not generate loose-item spawns.
-                // Currencies from this same field were already trusted, so nothing
-                // is being widened in kind. That the whole action is client-supplied
-                // is a separate, known gap (see also the interactable loot tables,
-                // which are absent from the APK).
-                let reward = &item_loot.loot;
+                // `generate_for_dungeon` already rolled capture-derived quantities
+                // into itemGeneratedData. Prefer that stored result to the client's
+                // repeated `loot` body, which can report a single lumber even when the
+                // generated pile contains several (#104). Imported/legacy dungeon rows
+                // without matching itemGeneratedData retain the request fallback.
+                let reward = item_loot_grant(item_loot, generated_data);
                 currency_moved |= !reward.currencies.is_empty();
                 apply_reward(
-                    reward,
+                    &reward,
                     wallet,
                     &mut character_data.inventory.0,
                     &mut character_data.character.0,
@@ -854,6 +871,11 @@ mod tests {
 
         match &req.actions[0] {
             DungeonUpdateAction::ItemLootCollected(c) => {
+                assert_eq!(
+                    c.spawn_group_id,
+                    Some("e7edb276-a04c-413f-80ab-69ffe304874f".parse().unwrap())
+                );
+                assert_eq!(c.spawn_group_index, Some(0));
                 assert_eq!(c.loot.stackable_items.get(&lumber), Some(&1));
             }
             other => panic!("floor loot must not be dropped, got {other:?}"),
@@ -868,6 +890,68 @@ mod tests {
             }
             other => panic!("corpse loot must not be dropped, got {other:?}"),
         }
+    }
+
+    /// The collection request can repeat a one-unit stack even though the result that
+    /// was rolled and sent in itemGeneratedData contains several. The generated result
+    /// is the same capture-derived source used to build the dungeon, so it must win.
+    #[test]
+    fn floor_loot_uses_the_generated_quantity() {
+        use blades_lib::user_data::DungeonItemResult;
+
+        let group: Uuid = "e7edb276-a04c-413f-80ab-69ffe304874f".parse().unwrap();
+        let table: Uuid = "cf26d2d8-6aa9-4616-8378-16036b85c1ff".parse().unwrap();
+        let lumber: Uuid = "e7193116-d761-479b-8a20-5633737977f5".parse().unwrap();
+
+        let mut request_loot = RewardGrant::default();
+        request_loot.stackable_items.insert(lumber, 1);
+        let action = LootCollectedUpdate {
+            spawn_group_id: Some(group),
+            spawn_group_index: Some(0),
+            loot: request_loot,
+        };
+
+        let mut generated_loot = LootTableResult::default();
+        generated_loot.stackable_items.insert(lumber, 6);
+        let generated = DungeonGeneratedData {
+            enemy_generated_data: HashMap::new(),
+            item_generated_data: HashMap::from([(
+                group,
+                vec![DungeonItemResult {
+                    loot_table_loot: HashMap::from([(table, generated_loot)]),
+                }],
+            )]),
+            chest_generated_data: HashMap::new(),
+            algorithm_version: 1,
+            version: 0,
+        };
+
+        let grant = item_loot_grant(&action, &generated);
+        assert_eq!(grant.stackable_items.get(&lumber), Some(&6));
+    }
+
+    /// Existing imported runs may predate generated item data. Their inline loot is a
+    /// compatibility fallback; otherwise a player resuming one loses a valid pickup.
+    #[test]
+    fn floor_loot_falls_back_for_legacy_generated_data() {
+        let lumber: Uuid = "e7193116-d761-479b-8a20-5633737977f5".parse().unwrap();
+        let mut request_loot = RewardGrant::default();
+        request_loot.stackable_items.insert(lumber, 2);
+        let action = LootCollectedUpdate {
+            spawn_group_id: None,
+            spawn_group_index: None,
+            loot: request_loot,
+        };
+        let generated = DungeonGeneratedData {
+            enemy_generated_data: HashMap::new(),
+            item_generated_data: HashMap::new(),
+            chest_generated_data: HashMap::new(),
+            algorithm_version: 1,
+            version: 0,
+        };
+
+        let grant = item_loot_grant(&action, &generated);
+        assert_eq!(grant.stackable_items.get(&lumber), Some(&2));
     }
 
     /// A loot action with no `loot` block at all must still parse — the client omits it
@@ -1105,13 +1189,13 @@ mod tests {
         );
     }
 
-    /// THE REGRESSION TEST for tracker #104 — this one fails on the pre-fix source.
+    /// Guard the whole-grant path for tracker #104.
     ///
     /// The bug was not in `apply_reward`: the handler rebuilt the grant by hand
     /// from two of its fields, so `items` (a weapon or armour lying on the dungeon
     /// floor) was parsed and then dropped. Catching that behaviourally would need a
     /// database and a whole request, so this checks the property at the source: the
-    /// branch must pass the grant WHOLE and must not pick fields out of it.
+    /// branch must resolve one complete grant and must not pick fields out of it.
     ///
     /// Source-level deliberately. The same approach caught the unregistered
     /// `/levelup` route, for the same reason — the defect is an omission, and an
@@ -1138,9 +1222,10 @@ mod tests {
             "the floor-pickup branch is hand-copying the grant again — that is how \
              `items` got dropped in #104. Pass the whole grant instead."
         );
+        assert!(branch.contains("item_loot_grant(item_loot, generated_data)"));
         assert!(
-            branch.contains("&item_loot.loot"),
-            "the branch must pass the whole grant to apply_reward"
+            branch.contains("&reward"),
+            "the branch must pass the resolved whole grant to apply_reward"
         );
     }
 
