@@ -135,22 +135,15 @@ differential tests are the proof of that.
 Do this LAST. It touches the one part of the damage model that is pinned against
 recorded retail values, and §1-§4 deliver more player-visible value per unit of risk.
 
-## §6 — `damage_to_cause_blind`: BLOCKED on a wire value
+## §6 — `damage_to_cause_blind`: DONE
 
-Blind ships a damage threshold to cause blindness, exactly parallel to
-`damage_to_cause_paralyze` which is already wired. The server side is therefore easy.
-
-What blocks it: **`StatusEffectType` has no `Blind` member.** The blindness status id is
-not pinned by any capture we hold, and there is no blind-affected fighter state either.
-Emitting a guessed id means `FindStateTypeByID` returns null and the client drops the
-frame silently — the animation the owner asked about would still not play, and nothing
-would report a failure.
-
-Next step is research, not code: grep `reference/il2cpp/dump.cs` for the
-`StatusEffectType` / blind enum and for a `Blind` actor state, the same way
-`ActorStateType.StateId` was recovered. If the dump has it, §6 becomes a small change
-in the §4 mould. If it doesn't, check whether any capture session carries an op51 with
-an unexplained status value.
+Blind ships a damage threshold exactly parallel to `damage_to_cause_paralyze`.
+Capture and enum evidence now pin Blind to status id 8. A qualifying hit emits op51
+on the victim's Avatar, and the server keeps an `ActiveEffect` for the shipped
+duration so normal expiry and Indomitable Smash's `[4,5,6,7,8]` cure both emit the
+matching op51 remove. Resist Elements has the narrower shipped `[4,5,6,7]` list and
+does not cure Blind. Regression tests cover target, source kind, duration and both
+viewers.
 
 ## §7 — `projectile_speed`: deliberately not wiring
 
@@ -172,7 +165,7 @@ Leaving it unread is correct. Recorded here so nobody re-discovers it as a gap.
 4. **§3 `damage_reduction`** — needs the fraction-vs-flat survey before any code.
 5. **§1/§3 retaliation** — the reflect/burn-back hook, once §1 and §3 exist.
 6. **§5 piercing** — last, additive, guarded by the s506 differentials.
-7. **§6 Blind** — unblocked only by a dump.cs finding.
+7. **§6 Blind** — complete; status id and lifecycle are capture-pinned.
 
 ## The rule this list was written under
 

@@ -30,7 +30,7 @@ const BARBARIAN: &str = "64a6a981-0dc8-4fc1-b043-a75d052b00f5";
 const MAXIMUM_POWER: &str = "83784ade-533e-4965-a540-05bfd4f056d8";
 const HEALING_SURGE: &str = "09aa3390-8f42-4cd5-a88c-5c94d5e1dd29";
 const COMBAT_FOCUS: &str = "e0b549c8-a686-49d4-a800-4661fff73e1d";
-// Resist Elements — the ability whose shipped `statuses_to_remove` is [4,5,6,7,8].
+// Resist Elements — its shipped `statuses_to_remove` is [4,5,6,7].
 const RESIST_ELEMENTS: &str = "91078132-ef5c-492a-97f2-ac69be5140a8";
 
 fn perk(uuid: &str, level: u8) -> EquippedAbility {
@@ -331,7 +331,7 @@ fn combat_focus_grants_resistance_for_the_cast_window_then_lapses() {
         1,
         &[],
         &super::input::ExecuteAbility {
-            sep_offset: 0,
+            role_offset: 0,
             ability_uuid: super::gamedata::ids::FIREBALL.to_string(),
         },
         now,
@@ -358,7 +358,7 @@ fn combat_focus_grants_resistance_for_the_cast_window_then_lapses() {
 
 /// RESIST ELEMENTS CURES A CONDITION IN PLACE.
 ///
-/// All 15 RE ranks ship `statuses_to_remove: [4, 5, 6, 7, 8]` and the field was read
+/// All 15 RE ranks ship `statuses_to_remove: [4, 5, 6, 7]` and the field was read
 /// by nothing, so casting RE while burning left the fire burning. Red when
 /// `apply_status_cures` stops being called from `apply_shipped_effects`.
 #[test]
@@ -394,7 +394,7 @@ fn resist_elements_cures_the_conditions_already_burning() {
         1,
         &[],
         &super::input::ExecuteAbility {
-            sep_offset: 0,
+            role_offset: 0,
             ability_uuid: RESIST_ELEMENTS.to_string(),
         },
         now,
@@ -416,12 +416,12 @@ fn resist_elements_cures_the_conditions_already_burning() {
     );
     assert!(
         !c.fighters[0].effects.iter().any(|e| e.effect == StatusEffectType::Frozen),
-        "Resist Elements must clear Frozen too — its shipped list covers 4,5,6,7,8"
+        "Resist Elements must clear Frozen too — its shipped list covers 4,5,6,7"
     );
 }
 
 /// …and it must not announce a cure for something the fighter never had. Emitting
-/// an unconditional remove for all five statuses would put traffic on the wire that
+/// an unconditional remove for all four statuses would put traffic on the wire that
 /// retail never sent, which the whole engine is built to avoid.
 #[test]
 fn resist_elements_announces_no_cure_when_there_is_nothing_to_cure() {
@@ -440,7 +440,7 @@ fn resist_elements_announces_no_cure_when_there_is_nothing_to_cure() {
         1,
         &[],
         &super::input::ExecuteAbility {
-            sep_offset: 0,
+            role_offset: 0,
             ability_uuid: RESIST_ELEMENTS.to_string(),
         },
         now,

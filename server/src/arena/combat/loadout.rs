@@ -823,6 +823,32 @@ mod tests {
         assert_eq!(abilities[0].level, 14, "base 4 + two rings at +5 = 14");
     }
 
+    /// The owner's Paralyze is base rank 2 plus two max-grade rings. Pin that exact
+    /// path: the effective combat rank must be 12, which selects the 3.1 s lock and
+    /// the rank-12 poison damage/threshold rather than silently resolving at rank 2.
+    #[test]
+    fn two_paralyze_rings_raise_the_cast_to_rank_twelve() {
+        use blades_lib::user_data::ItemSingleProperty;
+        let paralyze_affix = || ItemSingleProperty {
+            id: Uuid::parse_str("d1749122-5ada-4017-918d-990fc7717481").unwrap(),
+            tier: 2,
+        };
+        let mut bonus = std::collections::HashMap::new();
+        super::collect_grade_bonus(&[paralyze_affix()], &mut bonus);
+        super::collect_grade_bonus(&[paralyze_affix()], &mut bonus);
+
+        let uuid = "9fdc4d52-ce90-44f8-9b5d-21f31e27dbda";
+        let mut abilities = vec![EquippedAbility {
+            instance_uuid: uuid.into(),
+            level: 2,
+            tag: AbilityTag::Paralyze,
+        }];
+        super::apply_grade_bonuses(&mut abilities, &bonus);
+
+        assert_eq!(abilities[0].level, 12, "base 2 + two rings at +5");
+        assert_eq!(gamedata::ability(uuid).unwrap().maximum_level, 12);
+    }
+
     /// The bonus is clamped to the ability's shipped `maximum_level`.
     #[test]
     fn a_gear_bonus_cannot_exceed_the_abilitys_maximum_level() {

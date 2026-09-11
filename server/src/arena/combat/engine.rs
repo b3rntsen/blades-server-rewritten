@@ -3637,7 +3637,7 @@ pub(in crate::arena::combat) mod tests {
         req.extend_from_slice(b"7fc15804-1637-40a9-8dcc-3ea1eb0f778d");
         let out = m.on_c2s(0, &req, t0);
 
-        // PerformExecuteAbility (38) echoed (gmid byte at sep+5 = index 13).
+        // PerformExecuteAbility (38) echoed (gmid byte at index 13).
         assert!(out.iter().any(|(_, b)| b.get(13) == Some(&38)), "PerformExecuteAbility echoed");
 
         // The CAST echoes immediately; the IMPACT does not. Lightning Bolt ships
