@@ -638,6 +638,7 @@ async fn main() -> Result<()> {
                     .service(admin::list_arena_seasons)
                     .service(admin::create_arena_season)
                     .service(admin::end_arena_season)
+                    .service(admin::grant_arena_season_awards)
                     .service(admin::start_arena_season)
                     // Guild support console (dev-token gated; the web /guilds
                     // page is its only intended caller).
