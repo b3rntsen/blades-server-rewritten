@@ -55,6 +55,14 @@ const CARRIER_CLOCK: u8 = 0x3a; // 58
 /// Cadence of the `StateTimeout` flow heartbeat (server→client keepalive while a
 /// phase runs). Captured cadence is sub-second; tunable.
 const HEARTBEAT: Duration = Duration::from_millis(500);
+/// A live PvP round lasts 120 seconds. This is the same value advertised to the
+/// client in `MatchState::InRound`; unlike the other setup-state timeouts, it is
+/// also an authoritative gameplay deadline. Without enforcing it here, two human
+/// players whose clients desynchronised could remain in `StateTimeout` until the
+/// registry's unrelated 10-minute leak-reclamation sweep dropped the match.
+const ROUND_TIMEOUT_SECS: u64 = 120;
+const ROUND_TIMEOUT: Duration = Duration::from_secs(ROUND_TIMEOUT_SECS);
+const ROUND_TIMEOUT_WIRE: f32 = ROUND_TIMEOUT_SECS as f32;
 /// Hold in the `Spawning` phase between the spawn/profile burst and the
 /// `BackendMatchCreated` flow state. Retail staggers these ~4s (s506: spawns
 /// 05:05:36, BackendMatchCreated 05:05:40); announcing the match in the same tick as
@@ -105,7 +113,7 @@ const MATCH_STATE_ROUND0_PROGRESSION: &[(MatchState, Duration, f32)] = &[
     (MatchState::PreMatch, Duration::from_secs(2), 3.0),
     (MatchState::OpponentShowcase, Duration::from_secs(3), 12.0),
     (MatchState::PreRound, Duration::from_secs(12), 4.0),
-    (MatchState::InRound, Duration::from_secs(5), 120.0),
+    (MatchState::InRound, Duration::from_secs(5), ROUND_TIMEOUT_WIRE),
 ];
 
 /// The retail post-match `MatchState` walk AFTER a round-ending death — the path the
@@ -295,7 +303,7 @@ const MATCH_STATE_INTERROUND_PROGRESSION: &[(MatchState, Duration, f32)] = &[
     (MatchState::SynchronizingLoadout, Duration::from_secs(1), 15.0),
     (MatchState::OpponentShowcase, Duration::from_secs(3), 5.0),
     (MatchState::PreRound, Duration::from_secs(5), 4.0),
-    (MatchState::InRound, Duration::from_secs(4), 120.0),
+    (MatchState::InRound, Duration::from_secs(4), ROUND_TIMEOUT_WIRE),
 ];
 
 pub struct MatchInstance {
@@ -606,58 +614,16 @@ impl MatchInstance {
             return out;
         }
 
-        // ConcedeMatch ends the match for everyone. (Heuristic: the concede
-        // carrier byte == GameMessageId::ConcedeMatch; refine if a capture shows
-        // otherwise.)
+        // ConcedeMatch rides its own carrier byte (28), capture-pinned across
+        // 1,302 retail frames. A voluntary exit must enter the SAME terminal walk
+        // as a death/disconnect. Marking the match Finished here used to make the
+        // registry disconnect both peers before the client received
+        // BackendMatchEnd → Victory → PostMatch → DisconnectingPlayers; the exit
+        // dialog disappeared, but the player remained stranded in the arena.
         if user_data.get(1) == Some(&(GameMessageId::ConcedeMatch as u8))
-            && !matches!(self.combat.phase, FlowState::Finished)
+            && !matches!(self.combat.phase, FlowState::RoundEnd | FlowState::Finished)
         {
-            info!("combat: slot {sender} conceded → match Finished");
-            self.combat.phase = FlowState::Finished;
-
-            // Emit the op48 result card with MatchConceded=true. Retail does send
-            // op48 on a concession — 4 of the 375 captured frames carry
-            // MatchConceded=true — but we previously sent only the flow-state
-            // change, so a conceded match gave the client NO result at all and the
-            // builder could hardcode the flag to false.
-            //
-            // The concession counts as the final round, won by the opponent. op48 is
-            // cumulative, so it carries every completed round plus this one.
-            let conceder = sender;
-            let winner = self.combat.opponent_of(sender).unwrap_or(1 - sender);
-            self.combat.round_winners.push(winner);
-            let uuid_of = |slot: usize| -> String {
-                self.combat
-                    .fighters
-                    .get(slot)
-                    .map(|f| f.loadout.character_uuid.clone())
-                    .unwrap_or_default()
-            };
-            let round_results: Vec<(String, String)> = self
-                .combat
-                .round_winners
-                .iter()
-                .map(|&w| (uuid_of(w), uuid_of(1 - w)))
-                .collect();
-            let result = messages::match_post_round_info(
-                self.combat.match_net_object_id,
-                &round_results,
-                &self.combat.game_session_id,
-                true, // the concession ends the match
-                true, // MatchConceded
-            );
-            debug!(
-                "combat: concede by slot {conceder} → op48 winner slot {winner}, {} round(s)",
-                round_results.len()
-            );
-
-            for slot in 0..self.combat.fighters.len() {
-                out.push((slot, result.clone()));
-                if let Some(m) = messages::flow_state(self.combat.flow_controller_id, FlowState::RoundEnd) {
-                    out.push((slot, m));
-                }
-            }
-            return out;
+            return self.finish_by_concession(sender, now, "voluntary concede");
         }
 
         // Everything else (swipe / ability / block / position) → resolution.
@@ -692,12 +658,25 @@ impl MatchInstance {
         departed_slot: usize,
         now: Instant,
     ) -> Vec<(usize, Vec<u8>)> {
+        self.finish_by_concession(departed_slot, now, "peer departure")
+    }
+
+    /// Finish a match because `loser_slot` conceded, while keeping the match alive
+    /// long enough to deliver the complete terminal state walk to every peer that
+    /// is still connected. Used both by the explicit op28 exit button and by an
+    /// ENet departure.
+    fn finish_by_concession(
+        &mut self,
+        loser_slot: usize,
+        now: Instant,
+        reason: &'static str,
+    ) -> Vec<(usize, Vec<u8>)> {
         // Already ending or over → this disconnect is the DisconnectingPlayers
         // teardown, not a forfeit. Never fire twice.
         if matches!(self.combat.phase, FlowState::RoundEnd | FlowState::Finished) {
             return Vec::new();
         }
-        let Some(winner) = self.combat.opponent_of(departed_slot) else {
+        let Some(winner) = self.combat.opponent_of(loser_slot) else {
             return Vec::new(); // solo / bot — nobody to award the match to
         };
 
@@ -760,7 +739,7 @@ impl MatchInstance {
         self.combat.phase_entered = now;
 
         info!(
-            "combat: slot {departed_slot} departed mid-match → WIN BY CONCESSION to slot {winner} \
+            "combat: slot {loser_slot} {reason} → WIN BY CONCESSION to slot {winner} \
              (score {:?}); emitting op48(conceded) + op79 RoundEnd + PostRound(14), then the engine \
              walks BackendMatchEnd → PostMatch → DisconnectingPlayers",
             self.combat.rounds_won,
@@ -970,6 +949,35 @@ impl MatchInstance {
                 // or →NextState (between-rounds); anchor the new walk to NOW (same as the
                 // on_c2s player-kill path).
                 if matches!(self.combat.phase, FlowState::RoundEnd | FlowState::NextState) {
+                    self.combat.phase_entered = now;
+                }
+                // The 120-second InRound timeout is authoritative. Bots normally
+                // force a death long before this, which masked the missing branch;
+                // two human clients can both remain alive (or desynchronise) and
+                // otherwise sit here forever. Let any impact due on this exact tick
+                // resolve first, then award the round by remaining HP fraction. The
+                // existing authored tiebreak favours the lower-trophy player and is
+                // deterministic for a complete tie.
+                if matches!(self.combat.phase, FlowState::StateTimeout)
+                    && now.duration_since(self.combat.phase_entered) >= ROUND_TIMEOUT
+                {
+                    let trophy = |slot: usize| {
+                        self.combat
+                            .fighters
+                            .get(slot)
+                            .map(|f| {
+                                PrePvpState::from_profile(
+                                    &f.loadout.profile_character_json,
+                                    f.loadout.level,
+                                )
+                                .trophies
+                            })
+                            .unwrap_or(0)
+                    };
+                    let winner = self
+                        .combat
+                        .draw_tiebreak_winner((trophy(0), trophy(1)));
+                    out.extend(resolve::on_round_timeout(&mut self.combat, winner, now));
                     self.combat.phase_entered = now;
                 }
             }
@@ -3168,6 +3176,110 @@ pub(in crate::arena::combat) mod tests {
         assert_eq!(m.combat.rounds_won, [2, 1], "winner reached 2 round-wins");
         assert_eq!(m.phase(), FlowState::RoundEnd, "2 wins → match-end walk (RoundEnd), NOT another loop");
         assert_eq!(m.match_state_for_test(), MatchState::PostRound);
+    }
+
+    /// A live round's advertised 120-second countdown is authoritative, not just
+    /// decorative client UI. At expiry the fighter with the larger remaining HP
+    /// fraction wins the round and the ordinary best-of-three flow continues.
+    #[test]
+    fn live_round_timeout_awards_health_leader_and_advances() {
+        let (mut m, _t0, live) = live_inst_at(2);
+        m.combat.fighters[0].health = m.combat.fighters[0].max_health / 2;
+        m.combat.fighters[1].health = m.combat.fighters[1].max_health / 4;
+
+        let before = m.on_tick(2, live + ROUND_TIMEOUT - Duration::from_millis(1));
+        assert_eq!(m.phase(), FlowState::StateTimeout, "the round remains live before 120s");
+        assert_eq!(m.combat.rounds_won, [0, 0]);
+        assert!(
+            !before.iter().any(|(_, b)| {
+                b.len() > 2
+                    && b[1] == 0x36
+                    && arena_proto::parse_netdata(&b[2..]).int(3) == Some(48)
+            }),
+            "no result is emitted before the deadline"
+        );
+
+        let expired = m.on_tick(2, live + ROUND_TIMEOUT);
+        assert_eq!(m.combat.rounds_won, [1, 0], "higher HP fraction wins the timed round");
+        assert_eq!(m.phase(), FlowState::NextState, "round 1 timeout enters the inter-round walk");
+        assert_eq!(m.match_state_for_test(), MatchState::PostRound);
+        assert!(
+            expired.iter().any(|(_, b)| {
+                b.len() > 2
+                    && b[1] == 0x36
+                    && arena_proto::parse_netdata(&b[2..]).int(3) == Some(48)
+            }),
+            "both clients receive the ordinary op48 round result"
+        );
+        assert!(
+            !expired.iter().any(|(_, b)| {
+                b.len() > 2
+                    && b[1] == 0x36
+                    && arena_proto::parse_netdata(&b[2..]).int(3) == Some(29)
+            }),
+            "a timeout does not fabricate a death frame for a living fighter"
+        );
+
+        let (_states, live2) = drive_interround_to_live(&mut m, live + ROUND_TIMEOUT);
+        m.combat.fighters[0].health = m.combat.fighters[0].max_health / 2;
+        m.combat.fighters[1].health = m.combat.fighters[1].max_health / 4;
+        m.on_tick(2, live2 + ROUND_TIMEOUT);
+        assert_eq!(m.combat.rounds_won, [2, 0]);
+        assert_eq!(
+            m.phase(),
+            FlowState::RoundEnd,
+            "the second timed-round win enters the terminal match walk"
+        );
+    }
+
+    /// Regression for vid1.mp4: pressing YES in the in-round exit dialog emits the
+    /// capture-proven own-carrier op28. It must award the opponent, send an ended
+    /// conceded result, and stay alive for the complete terminal walk instead of
+    /// being reaped immediately in `Finished`.
+    #[test]
+    fn explicit_concede_runs_complete_terminal_walk() {
+        let (mut m, _t0, live) = live_inst_at(2);
+        let concede_at = live + Duration::from_secs(3);
+        let immediate = m.on_c2s(
+            0,
+            &[0xBE, GameMessageId::ConcedeMatch as u8],
+            concede_at,
+        );
+
+        assert_eq!(m.combat.winner, Some(1), "the opponent wins a voluntary concede");
+        assert_eq!(m.combat.rounds_won, [0, 1]);
+        assert_eq!(m.phase(), FlowState::RoundEnd, "do not disconnect before the terminal walk");
+        assert!(!m.is_finished());
+        let duplicate = m.on_c2s(
+            0,
+            &[0xBE, GameMessageId::ConcedeMatch as u8],
+            concede_at + Duration::from_millis(100),
+        );
+        assert!(duplicate.is_empty(), "a repeated exit cannot award the match twice");
+        assert_eq!(m.combat.rounds_won, [0, 1]);
+
+        let op48 = immediate
+            .iter()
+            .find_map(|(_, b)| {
+                (b.len() > 2
+                    && b[1] == 0x36
+                    && arena_proto::parse_netdata(&b[2..]).int(3) == Some(48))
+                .then(|| arena_proto::parse_netdata(&b[2..]))
+            })
+            .expect("conceder and opponent receive op48 immediately");
+        assert_eq!(op48.int(14), Some(1), "MatchConceded=true");
+        assert_eq!(op48.int(15), Some(1), "IsMatchEnded=true");
+
+        let span = Duration::from_secs(4 + 1 + 6 + 5 + 3);
+        let step = Duration::from_millis(250);
+        let n = (span.as_millis() / step.as_millis()) as u32;
+        for i in 1..=n {
+            m.on_tick(2, concede_at + step * i);
+            if m.is_finished() {
+                break;
+            }
+        }
+        assert!(m.is_finished(), "the full walk eventually returns both clients to the lobby");
     }
 
     /// The post-InRound terminal walk (the "error 3" fix): after a round-ending death

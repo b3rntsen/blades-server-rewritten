@@ -1080,9 +1080,10 @@ pub fn player_dead(
         .bytes(7, state_history)
         .float(8, time_in_previous)
         // `ActorDeadState.Parameters` is `{ShouldKneel, HasConceded, SpawnedDead}` in
-        // il2cpp — three fields, two on the wire. The corpus holds zero ConcedeMatch
-        // messages, so which two serialise is unresolved; both are false in every
-        // observed death, which is what we send.
+        // il2cpp — three fields, two on this frame. ConcedeMatch's 1,302 captured
+        // messages ride their own bare carrier and therefore do not reveal which
+        // two ActorDead fields serialise; both are false in every observed death,
+        // which is what we send.
         .bool(9, false)
         .bool(10, false);
     frame(MSGTYPE_USERMESSAGE, w.finish())

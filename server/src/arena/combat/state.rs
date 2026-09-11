@@ -2216,9 +2216,10 @@ impl MatchCombat {
         }
     }
 
-    /// The match winner when the final round ends 1-1 (no fighter reached 2 wins) —
-    /// **Phase 3.14, AUTHORED, not capture-derived.** No recorded match ended in a
-    /// draw, so the tiebreak below is a designed rule, not a reproduction:
+    /// The round winner when the authoritative InRound clock expires with both
+    /// fighters alive — **AUTHORED, not capture-derived.** No recorded timeout round
+    /// was available to pin the retail rule, so the tiebreak below is a designed
+    /// fairness rule:
     ///
     /// 1. higher remaining HP **fraction** wins;
     /// 2. if the fractions tie, the LOWER `pvpTrophies` wins (the underdog);
