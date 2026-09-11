@@ -118,6 +118,13 @@ pub struct ServerState {
     /// Existing rows deserialize to an empty set.
     #[serde(default)]
     pub arena_promotion_loot_grants: BTreeSet<i64>,
+    /// Individually repaired promotion items, keyed by
+    /// `seasonUuid:trophyThreshold:itemTemplateUuid`. Normal match persistence
+    /// grants a whole rung atomically and records the threshold above; this finer
+    /// key lets an operator repair every member of a multi-item bundle without
+    /// the first item suppressing the rest.
+    #[serde(default)]
+    pub arena_promotion_item_repairs: BTreeSet<String>,
 }
 
 #[cfg(test)]
@@ -134,8 +141,15 @@ mod tests {
     fn promotion_ledger_round_trips_as_server_only_json() {
         let mut state = ServerState::default();
         state.arena_promotion_loot_grants.extend([100, 200]);
+        state
+            .arena_promotion_item_repairs
+            .insert("season:100:item".into());
         let value = serde_json::to_value(&state).unwrap();
         assert_eq!(value["arenaPromotionLootGrants"], serde_json::json!([100, 200]));
+        assert_eq!(
+            value["arenaPromotionItemRepairs"],
+            serde_json::json!(["season:100:item"])
+        );
         assert_eq!(
             serde_json::from_value::<ServerState>(value)
                 .unwrap()

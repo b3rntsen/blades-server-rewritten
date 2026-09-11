@@ -16,10 +16,12 @@
 --
 -- This is deliberately a one-row primary-key update, not a backfill. It takes a
 -- row lock, checks the durable high-water mark, writes a server-only idempotency
--- marker, grants the item, and bumps backpackVersion in one transaction. A retry
--- returns no row and cannot grant twice, even if the player has since spent the
--- item. The short timeouts make it fail harmlessly rather than wait behind a busy
--- arena economy writer.
+-- marker keyed by season + threshold + item, grants the item, and bumps
+-- backpackVersion in one transaction. A retry returns no row and cannot grant
+-- twice, even if the player has since spent the item. A threshold marker written
+-- by normal match persistence suppresses every per-item repair for a bundle that
+-- was already granted atomically. The short timeouts make it fail harmlessly
+-- rather than wait behind a busy arena economy writer.
 
 \if :{?character_id}
 \else
@@ -47,27 +49,90 @@ SET LOCAL lock_timeout = '2s';
 SET LOCAL statement_timeout = '5s';
 
 WITH eligible AS MATERIALIZED (
-    SELECT id
+    SELECT
+        id,
+        inventory,
+        server_state,
+        COALESCE("character" ->> 'pvpSeasonId', 'unseasoned')
+            || ':' || :threshold::text || ':' || :'item_uuid' AS repair_key
     FROM characters
     WHERE id = :'character_id'::uuid
       AND COALESCE(("character" ->> 'matchmakingPvpTrophies')::bigint, 0)
           >= :threshold::bigint
       AND :quantity::bigint > 0
+      AND jsonb_typeof(
+              COALESCE(inventory -> 'backpack' -> 'stackableItems', '[]'::jsonb)
+          ) = 'array'
+      AND jsonb_typeof(
+              COALESCE(server_state -> 'arenaPromotionLootGrants', '[]'::jsonb)
+          ) = 'array'
+      AND jsonb_typeof(
+              COALESCE(server_state -> 'arenaPromotionItemRepairs', '[]'::jsonb)
+          ) = 'array'
       AND NOT COALESCE(server_state -> 'arenaPromotionLootGrants', '[]'::jsonb)
               @> jsonb_build_array(:threshold::bigint)
+      AND NOT COALESCE(server_state -> 'arenaPromotionItemRepairs', '[]'::jsonb)
+              @> jsonb_build_array(
+                  COALESCE("character" ->> 'pvpSeasonId', 'unseasoned')
+                      || ':' || :threshold::text || ':' || :'item_uuid'
+              )
     FOR UPDATE
+), prepared AS MATERIALIZED (
+    SELECT
+        eligible.id,
+        eligible.repair_key,
+        CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements(
+                    COALESCE(
+                        eligible.inventory -> 'backpack' -> 'stackableItems',
+                        '[]'::jsonb
+                    )
+                ) AS existing(item)
+                WHERE existing.item ->> 'itemTemplateId' = :'item_uuid'
+            ) THEN (
+                SELECT jsonb_agg(
+                    CASE
+                        WHEN existing.item ->> 'itemTemplateId' = :'item_uuid'
+                        THEN jsonb_set(
+                            existing.item,
+                            '{count}',
+                            to_jsonb(
+                                COALESCE((existing.item ->> 'count')::bigint, 0)
+                                    + :quantity::bigint
+                            ),
+                            true
+                        )
+                        ELSE existing.item
+                    END
+                    ORDER BY existing.ordinal
+                )
+                FROM jsonb_array_elements(
+                    COALESCE(
+                        eligible.inventory -> 'backpack' -> 'stackableItems',
+                        '[]'::jsonb
+                    )
+                ) WITH ORDINALITY AS existing(item, ordinal)
+            )
+            ELSE COALESCE(
+                    eligible.inventory -> 'backpack' -> 'stackableItems',
+                    '[]'::jsonb
+                ) || jsonb_build_array(
+                    jsonb_build_object(
+                        'itemTemplateId', :'item_uuid',
+                        'count', :quantity::bigint
+                    )
+                )
+        END AS stackable_items
+    FROM eligible
 ), repaired AS (
     UPDATE characters AS c
     SET inventory = jsonb_set(
             jsonb_set(
                 c.inventory,
-                ARRAY['backpack', 'stackableItems', :'item_uuid']::text[],
-                to_jsonb(
-                    COALESCE(
-                        (c.inventory -> 'backpack' -> 'stackableItems' ->> :'item_uuid')::bigint,
-                        0
-                    ) + :quantity::bigint
-                ),
+                '{backpack,stackableItems}',
+                prepared.stackable_items,
                 true
             ),
             '{backpackVersion}',
@@ -76,19 +141,28 @@ WITH eligible AS MATERIALIZED (
         ),
         server_state = jsonb_set(
             c.server_state,
-            '{arenaPromotionLootGrants}',
-            COALESCE(c.server_state -> 'arenaPromotionLootGrants', '[]'::jsonb)
-                || jsonb_build_array(:threshold::bigint),
+            '{arenaPromotionItemRepairs}',
+            COALESCE(c.server_state -> 'arenaPromotionItemRepairs', '[]'::jsonb)
+                || jsonb_build_array(prepared.repair_key),
             true
         )
-    FROM eligible
-    WHERE c.id = eligible.id
-    RETURNING
-        c.id,
-        c.inventory ->> 'backpackVersion' AS backpack_version,
-        c.inventory -> 'backpack' -> 'stackableItems' ->> :'item_uuid' AS item_count,
-        c.server_state -> 'arenaPromotionLootGrants' AS recorded_thresholds
+    FROM prepared
+    WHERE c.id = prepared.id
+    RETURNING c.id, c.inventory, c.server_state
 )
-SELECT * FROM repaired;
+SELECT
+    repaired.id,
+    repaired.inventory ->> 'backpackVersion' AS backpack_version,
+    (
+        SELECT item ->> 'count'
+        FROM jsonb_array_elements(
+            repaired.inventory -> 'backpack' -> 'stackableItems'
+        ) AS granted(item)
+        WHERE granted.item ->> 'itemTemplateId' = :'item_uuid'
+        LIMIT 1
+    ) AS item_count,
+    repaired.server_state -> 'arenaPromotionLootGrants' AS granted_thresholds,
+    repaired.server_state -> 'arenaPromotionItemRepairs' AS recorded_item_repairs
+FROM repaired;
 
 COMMIT;
