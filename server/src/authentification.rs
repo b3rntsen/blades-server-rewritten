@@ -40,8 +40,8 @@ struct SessionResponseInner {
     token: String,
     schema: String,
     /// Retail returns this on anon, login AND link; the client keeps it to
-    /// re-establish a session without asking for the password again. Ours is
-    /// the session token, which is what the client already treats as opaque.
+    /// re-establish the account without asking for the password again. It is
+    /// the user's stable secret id, not the short-lived session token.
     login_token: String,
     feature_status: u64,
     linked_accounts_status: u64,
@@ -65,7 +65,14 @@ impl SessionResponseInner {
             user_id: session.secret_user_id.to_string(),
             token: session.generate_token(&session_id),
             schema: "blades_v1".to_string(),
-            login_token: session.generate_token(&session_id),
+            // The client persists this value and sends it alone to bnet/login
+            // on the next cold start. Retail's token is a UUID (capture 145996),
+            // while our old `session_id|extra_secret` value was only understood
+            // by Authorization middleware and expired with that session. The
+            // secret user id is already the persistent bearer used by auth/anon
+            // (`userId`), so this grants no new authority; it makes the BNet
+            // route honour the same existing account secret.
+            login_token: session.secret_user_id.to_string(),
             feature_status: 7,
             // Session.LinkedAccountsStatus bitmask (client dump.cs:484710). The client's
             // "Do you want to sign in?" AnonymousWarning nag (shown at spend/commit points
@@ -97,14 +104,22 @@ struct DeniedFeatureResponse {
 /// sends `deviceId: null`), so a VPN-free build would otherwise hand every
 /// player a brand-new anonymous character.
 ///
-/// The body shape is retail's own, read off a capture rather than invented:
-/// `{username, password, deviceId, platform}`, answered with the same
-/// `SessionResponse` as `auth/anon`.
+/// Both body shapes are retail's own, read off captures rather than invented:
+/// an interactive sign-in sends `{username, password, deviceId, platform}`;
+/// later cold starts send `{loginToken, deviceId, platform}`. Both are answered
+/// with the same `SessionResponse` as `auth/anon`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BnetLoginRequest {
-    username: String,
-    password: String,
+    /// Present for an interactive sign-in. On a later cold start the client
+    /// sends neither field and supplies only `loginToken` instead.
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
+    /// The persistent UUID returned by the preceding login/link response.
+    #[serde(default)]
+    login_token: Option<String>,
     #[serde(default)]
     #[allow(dead_code)]
     device_id: Option<String>,
@@ -119,29 +134,55 @@ async fn bnet_log_in(
     body: web::Json<BnetLoginRequest>,
 ) -> Result<web::Json<SessionResponse>, BladeApiError> {
     let body = body.into_inner();
-    let username = crate::credentials::normalise_username(&body.username);
     let mut conn = app_state.db_pool.get().await.unwrap();
 
-    let found = crate::credentials::find_by_username(&mut conn, &username)
-        .await
-        .unwrap_or(None);
+    let (user_id, log_name) = if let (Some(username_raw), Some(password)) =
+        (body.username.as_deref(), body.password.as_deref())
+    {
+        let username = crate::credentials::normalise_username(username_raw);
+        let found = crate::credentials::find_by_username(&mut conn, &username)
+            .await
+            .unwrap_or(None);
 
-    // One 401 for "no such user" AND "wrong password", and the password is
-    // verified even when the row is missing. Answering faster for an unknown
-    // username turns this endpoint into a way to enumerate who plays here.
-    let (user_id, hash) = match found {
-        Some(row) => (Some(row.user_id), row.password_hash),
-        None => (
-            None,
-            // A well-formed hash of a value nobody can supply, so the failure
-            // path does the same PBKDF2 work as the success path.
-            crate::credentials::ENUMERATION_DUMMY_HASH.to_string(),
-        ),
-    };
-    let ok = crate::credentials::verify_password(&body.password, &hash);
-    let Some(user_id) = user_id.filter(|_| ok) else {
-        // Service id 3 is what the rest of this module reports auth failures
-        // under (see the NOT_FOUND below); 110 is this endpoint's code.
+        // One 401 for "no such user" AND "wrong password", and the password is
+        // verified even when the row is missing. Answering faster for an unknown
+        // username turns this endpoint into a way to enumerate who plays here.
+        let (user_id, hash) = match found {
+            Some(row) => (Some(row.user_id), row.password_hash),
+            None => (
+                None,
+                // A well-formed hash of a value nobody can supply, so the failure
+                // path does the same PBKDF2 work as the success path.
+                crate::credentials::ENUMERATION_DUMMY_HASH.to_string(),
+            ),
+        };
+        let ok = crate::credentials::verify_password(password, &hash);
+        let Some(user_id) = user_id.filter(|_| ok) else {
+            return Err(BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 110));
+        };
+        (user_id, Some(username))
+    } else if let Some(login_token) = body.login_token.as_deref() {
+        // This is the normal cold-start request after a successful BNet link:
+        // capture 145996 is exactly {loginToken, deviceId, platform}. The old
+        // required username/password struct rejected it during deserialization,
+        // so the client fell back to a fresh anonymous account on every launch.
+        let token = Uuid::parse_str(login_token)
+            .map_err(|_| BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 110))?;
+        let found: Option<Uuid> = {
+            use crate::schema::users::dsl as u;
+            u::users
+                .filter(u::secret_id.eq(token))
+                .select(u::id)
+                .first(&mut conn)
+                .await
+                .optional()
+                .unwrap_or(None)
+        };
+        let Some(user_id) = found else {
+            return Err(BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 110));
+        };
+        (user_id, None)
+    } else {
         return Err(BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 110));
     };
 
@@ -162,7 +203,10 @@ async fn bnet_log_in(
     ));
     let session_id = app_state.session_store.store_new_session(session.clone());
     crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
-    log::info!("account login: {username} -> user {}", user.id);
+    match log_name {
+        Some(username) => log::info!("account login: {username} -> user {}", user.id),
+        None => log::info!("account login: persisted token -> user {}", user.id),
+    }
     Ok(web::Json(SessionResponse {
         session: SessionResponseInner::from_session(session_id, session.as_ref()),
     }))
@@ -747,6 +791,42 @@ async fn anon_log_in(
 #[cfg(test)]
 mod link_tests {
     use super::*;
+
+    /// Report #108: after an interactive link the retail client cold-starts
+    /// with only `{loginToken, deviceId, platform}`. Requiring username and
+    /// password made serde reject that request before the handler ran.
+    #[test]
+    fn a_cold_bnet_login_with_only_the_persisted_token_deserializes() {
+        let token = Uuid::from_u128(0xA11CE);
+        let request: BnetLoginRequest = serde_json::from_value(serde_json::json!({
+            "loginToken": token,
+            "deviceId": "install-hash",
+            "platform": "gp"
+        }))
+        .expect("retail's cold-start BNet request must be accepted");
+        assert_eq!(request.login_token, Some(token.to_string()));
+        assert!(request.username.is_none());
+        assert!(request.password.is_none());
+    }
+
+    /// The value the client persists must survive sessions and server restarts.
+    /// `secret_user_id` is already the account bearer accepted by auth/anon;
+    /// the previous session-id token expired and was not accepted by bnet/login.
+    #[test]
+    fn login_token_is_the_stable_account_secret_not_the_session_token() {
+        let account = Uuid::from_u128(0xACCC0A17);
+        let session = Session::new(
+            Uuid::from_u128(1),
+            account,
+            std::time::Duration::from_secs(3600),
+        );
+        let session_id = Uuid::from_u128(2);
+        let response = SessionResponseInner::from_session(session_id, &session);
+
+        assert_eq!(response.login_token, account.to_string());
+        assert_ne!(response.login_token, session.generate_token(&session_id));
+        assert!(Uuid::parse_str(&response.login_token).is_ok(), "retail loginToken is a UUID");
+    }
 
     /// The conflict decision is the whole of the link flow's judgement, and it
     /// hinges on comparing the right id. Getting this wrong is invisible in a

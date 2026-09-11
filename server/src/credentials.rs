@@ -9,11 +9,12 @@
 //! anonymous character.
 //!
 //! The client already has the answer built in. Retail's own login is
-//! `POST /api/authentication/v1/public/auth/bnet/login`, and a capture shows the
-//! exact body:
+//! `POST /api/authentication/v1/public/auth/bnet/login`; an interactive login
+//! supplies the credential, and later cold starts use the returned UUID token:
 //!
 //! ```json
 //! {"username":"…","password":"…","deviceId":"…","platform":"gp"}
+//! {"loginToken":"…","deviceId":"…","platform":"gp"}
 //! ```
 //!
 //! answered with the same `SessionResponse` shape as `auth/anon`. So if a player
