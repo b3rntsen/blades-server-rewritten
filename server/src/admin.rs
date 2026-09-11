@@ -18,7 +18,10 @@
 //!     this handler accepts the four `blades_lib` parts (`character`, `data`,
 //!     `inventory`, `wallet`) directly.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::Arc,
+};
 
 use actix_web::{
     HttpRequest,
@@ -27,9 +30,13 @@ use actix_web::{
     post,
     web::{self, Json},
 };
-use blades_lib::user_data::{
-    CompleteCharacter, CompleteCharacterData, CompleteInventory, CompleteWallet,
-    DungeonGeneratedData, DungeonGeneratedDataWithId, QuestWithId, UserAccount,
+use blades_lib::{
+    economy::{RewardGrant, apply_reward, grant_chest},
+    user_data::{
+        CompleteCharacter, CompleteCharacterData, CompleteInventory, CompleteWallet,
+        DungeonGeneratedData, DungeonGeneratedDataWithId, InventoryChangeTracker, QuestWithId,
+        UserAccount,
+    },
 };
 use diesel::{OptionalExtension, ExpressionMethods, QueryDsl, SelectableHelper, insert_into};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
@@ -45,7 +52,9 @@ use crate::{
     credentials,
     arena::matchmaker::{RecentTicketView, query_recent_matches},
     json_db::JsonDbWrapper,
-    models::{CharacterDbAlone, CharacterDbEntry, QuestDbEntry, UserDBEntry},
+    models::{
+        CharacterDbAlone, CharacterDbEntry, CharacterDbEntryEconomy, QuestDbEntry, UserDBEntry,
+    },
     schema::{characters, quests, users},
 };
 
@@ -1068,9 +1077,10 @@ pub struct EndSeasonResponse {
 /// load-bearing: the live standings live on the character and the roll zeroes
 /// them, so a snapshot taken afterwards would record all zeros.
 ///
-/// Idempotent in the way that matters: the roll itself skips anyone already in
-/// the target season, and the awards index is unique per (season, character,
-/// kind), so a re-run after a partial failure resumes instead of double-paying.
+/// The applied close is one database transaction. A failure at any point leaves
+/// the season active, its ladder/awards absent, and every character untouched;
+/// the operator can safely retry the same request instead of repairing a
+/// half-ended season by hand.
 /// `POST /…/api/dev/v1/arena-seasons/{id}/start` — make a scheduled season live
 /// and put every player back to zero cups.
 ///
@@ -1157,17 +1167,6 @@ pub async fn start_arena_season(
         characters_unreadable: 0,
     };
 
-    // Same query shape the end/rollover path uses, so both walk the character
-    // table identically.
-    let rows: Vec<SeasonRolloverRow> =
-        diesel::sql_query("SELECT id, character FROM characters ORDER BY id")
-            .get_results(&mut conn)
-            .await
-            .map_err(|e| {
-                warn!("season start: could not read characters: {e}");
-                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 53)
-            })?;
-
     // ONE TRANSACTION for the whole apply: every character's reset plus the
     // status flip. Without it, a failure on character 4,000 of 9,000 left the
     // first 4,000 at zero cups, the rest untouched, and the season still
@@ -1185,6 +1184,33 @@ pub async fn start_arena_season(
     let resp = conn
         .transaction(|mut conn| {
             async move {
+    for limit_sql in [
+        "SET LOCAL lock_timeout = '1s'",
+        "SET LOCAL statement_timeout = '10s'",
+        "SET LOCAL work_mem = '1MB'",
+        "SET LOCAL temp_file_limit = '4MB'",
+    ] {
+        diesel::sql_query(limit_sql)
+            .execute(&mut conn)
+            .await
+            .map_err(|e| {
+                warn!("season start: could not set transaction limits: {e}");
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 57)
+            })?;
+    }
+
+    // Same query shape the end/rollover path uses, so both walk the character
+    // table identically. It runs inside the bounded transaction: character
+    // JSON is the largest season-lifecycle read on the box.
+    let rows: Vec<SeasonRolloverRow> =
+        diesel::sql_query("SELECT id, character FROM characters ORDER BY id")
+            .get_results(&mut conn)
+            .await
+            .map_err(|e| {
+                warn!("season start: could not read characters: {e}");
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 53)
+            })?;
+
     for row in rows {
         let mut ch: CompleteCharacter = match serde_json::from_value(row.character.clone()) {
             Ok(c) => c,
@@ -1278,7 +1304,7 @@ pub async fn end_arena_season(
         ));
     }
 
-    let standings = season_store::freeze_standings(&mut conn, season_id)
+    let standings = season_store::freeze_standings(&mut conn, &season)
         .await
         .map_err(|e| {
             warn!("season end: could not freeze standings: {e}");
@@ -1286,6 +1312,26 @@ pub async fn end_arena_season(
         })?;
     let guilds = season_store::guild_standings_from(season_id, &standings);
     let awards = season_store::awards_from(season_id, &standings, &guilds);
+
+    // Validate the hand-off during the dry run as well. Previously the preview
+    // could approve a missing or already-used next season, then the apply click
+    // failed only after the operator had confirmed the numbers.
+    let requested_next = body.next_season_id;
+    if let Some(next_id) = requested_next {
+        let next: season_store::SeasonRow = s::arena_seasons
+            .filter(s::id.eq(next_id))
+            .select(season_store::SeasonRow::as_select())
+            .first(&mut conn)
+            .await
+            .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 30))?;
+        if next.id == season_id || next.status != "scheduled" {
+            return Err(BladeApiError::new(
+                StatusCode::CONFLICT,
+                IMPORT_SERVICE_ID,
+                34,
+            ));
+        }
+    }
 
     let mut resp = EndSeasonResponse {
         applied: body.apply,
@@ -1297,7 +1343,9 @@ pub async fn end_arena_season(
         // `.first()` here would resolve to diesel's FirstDsl, not Vec::first,
         // because the diesel prelude is in scope. `.get(0)` is unambiguous.
         top_trophies: standings.get(0).map(|x| x.trophies).unwrap_or(0),
-        next_season_id: None,
+        // On a dry run this says which hand-off was validated; on apply it is
+        // the season activated atomically with the close.
+        next_season_id: requested_next,
         characters_rolled: 0,
     };
 
@@ -1305,8 +1353,75 @@ pub async fn end_arena_season(
         return Ok(Json(resp));
     }
 
-    // 1. freeze, 2. award — both additive, both safe to re-run.
-    for chunk in standings.chunks(500) {
+    let resp = conn
+        .transaction(move |mut conn| {
+        async move {
+    // Keep an operator click from monopolising the small production database.
+    // Each statement either completes inside these bounds or the entire close
+    // rolls back, leaving the active season and every character untouched.
+    for limit_sql in [
+        "SET LOCAL lock_timeout = '1s'",
+        "SET LOCAL statement_timeout = '10s'",
+        "SET LOCAL work_mem = '1MB'",
+        "SET LOCAL temp_file_limit = '4MB'",
+    ] {
+        diesel::sql_query(limit_sql)
+            .execute(&mut conn)
+            .await
+            .map_err(|e| {
+                warn!("season end: could not set transaction limits: {e}");
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 35)
+            })?;
+    }
+
+    // Serialize competing close requests and re-check status in the transaction.
+    let locked_season: season_store::SeasonRow = s::arena_seasons
+        .filter(s::id.eq(season_id))
+        .select(season_store::SeasonRow::as_select())
+        .for_update()
+        .first(&mut conn)
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 24))?;
+    if locked_season.status != "active" {
+        return Err(BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 24));
+    }
+
+    // Validate the next season BEFORE writing or ending the current one.
+    let next = if let Some(next_id) = requested_next {
+        let row: season_store::SeasonRow = s::arena_seasons
+            .filter(s::id.eq(next_id))
+            .select(season_store::SeasonRow::as_select())
+            .first(&mut conn)
+            .await
+            .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 30))?;
+        if row.id == season_id || row.status != "scheduled" {
+            return Err(BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 34));
+        }
+        Some(row)
+    } else {
+        None
+    };
+
+    // Re-freeze after taking the lifecycle lock. The first snapshot was the
+    // dry-run preview and may be older than the apply click.
+    let standings = season_store::freeze_standings(&mut conn, &locked_season)
+        .await
+        .map_err(|e| {
+            warn!("season end: could not freeze standings in transaction: {e}");
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 25)
+        })?;
+    let guilds = season_store::guild_standings_from(season_id, &standings);
+    let awards = season_store::awards_from(season_id, &standings, &guilds);
+    resp.ranked_characters = standings.len();
+    resp.ranked_guilds = guilds.len();
+    resp.awards = awards.len();
+    resp.top_trophies = standings.get(0).map(|x| x.trophies).unwrap_or(0);
+
+    // 1. freeze, 2. award, 3. optional roll/activation. All writes are in
+    // this transaction, so none survives if a later stage fails.
+    let standing_inserts: Vec<season_store::StandingInsertRow> =
+        standings.iter().map(Into::into).collect();
+    for chunk in standing_inserts.chunks(500) {
         diesel::insert_into(crate::schema::arena_season_standings::table)
             .values(chunk)
             .on_conflict_do_nothing()
@@ -1353,13 +1468,8 @@ pub async fn end_arena_season(
     // cups and the top-100. Without a next season there is nothing to roll INTO
     // and the standings simply stay as they are — deliberately, so "end the
     // season" and "open the next one" can be two decisions.
-    if let Some(next_id) = body.next_season_id {
-        let next: season_store::SeasonRow = s::arena_seasons
-            .filter(s::id.eq(next_id))
-            .select(season_store::SeasonRow::as_select())
-            .first(&mut conn)
-            .await
-            .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 30))?;
+    if let Some(next) = next {
+        let next_id = next.id;
         let cfg = next.config();
 
         let rows: Vec<SeasonRolloverRow> =
@@ -1408,7 +1518,333 @@ pub async fn end_arena_season(
         resp.next_season_id = Some(next_id);
     }
 
+            Ok::<_, BladeApiError>(resp)
+        }
+        .scope_boxed()
+        })
+        .await?;
+
     Ok(Json(resp))
+}
+
+// ----------------------------------------------- arena season award granting
+
+/// Reward catalogue for one bounded grant pass. Keys are emitted by the dry
+/// run as `<kind>:<tier>` (for example `guild_rank:top100` or
+/// `arena_reached:arena2_level4`). The values use the same uniform reward shape
+/// as quests, gifts and chests.
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GrantSeasonAwardsRequest {
+    /// Write. Absent or false = report what the batch would do.
+    #[serde(default)]
+    pub apply: bool,
+    /// A deliberately caller-supplied catalogue: the shipped client contains
+    /// the schema but not the runtime season prize table, and prizes changed
+    /// between retail seasons. Unknown keys stay pending rather than receiving
+    /// an invented fallback.
+    #[serde(default)]
+    pub rewards: HashMap<String, RewardGrant>,
+    /// Small by default for the production box. Clamped to 1..=25.
+    #[serde(default = "default_award_grant_limit")]
+    pub limit: i64,
+}
+
+fn default_award_grant_limit() -> i64 {
+    5
+}
+
+fn award_reward_key(kind: &str, tier: &str) -> String {
+    format!("{kind}:{tier}")
+}
+
+fn award_reward_is_supported(reward: &RewardGrant) -> bool {
+    reward.town_xp == 0
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GrantSeasonAwardsResponse {
+    pub applied: bool,
+    pub season_id: Uuid,
+    pub batch_limit: i64,
+    pub pending_before: i64,
+    pub considered: usize,
+    pub grantable: usize,
+    pub granted: usize,
+    pub pending_after: i64,
+    pub missing_reward_keys: Vec<String>,
+}
+
+/// `POST /…/api/dev/v1/arena-seasons/{id}/grant-awards` — grant a small,
+/// explicitly configured batch of frozen season awards.
+///
+/// Safety properties:
+///
+/// * dry-run by default;
+/// * ended seasons only;
+/// * at most 25 award rows per transaction (default 5);
+/// * `FOR UPDATE SKIP LOCKED`, so two operator requests cannot double-pay;
+/// * `granted_at IS NULL` is rechecked in the update;
+/// * missing catalogue entries remain pending and are reported by key.
+#[post("/blades.bgs.services/api/dev/v1/arena-seasons/{season_id}/grant-awards")]
+pub async fn grant_arena_season_awards(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<Uuid>,
+    body: Option<web::Json<GrantSeasonAwardsRequest>>,
+) -> Result<Json<GrantSeasonAwardsResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let body = body.map(|b| b.into_inner()).unwrap_or_default();
+    let season_id = path.into_inner();
+    let limit = body.limit.clamp(1, 25);
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    use crate::schema::arena_season_awards::dsl as a;
+    use crate::schema::arena_seasons::dsl as s;
+
+    let status: String = s::arena_seasons
+        .filter(s::id.eq(season_id))
+        .select(s::status)
+        .first(&mut conn)
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 60))?;
+    if status != "ended" {
+        return Err(BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 61));
+    }
+    if body.rewards.values().any(|reward| !award_reward_is_supported(reward)) {
+        // Season awards do not load a town row, and the shared apply_reward
+        // helper intentionally does not apply town XP. Reject instead of
+        // acknowledging a catalogue entry that would be only partly granted.
+        return Err(BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 72));
+    }
+
+    let pending_before: i64 = a::arena_season_awards
+        .filter(a::season_id.eq(season_id))
+        .filter(a::granted_at.is_null())
+        .count()
+        .get_result(&mut conn)
+        .await
+        .map_err(|_| {
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 62)
+        })?;
+
+    let pending_tiers: Vec<(String, String)> = a::arena_season_awards
+        .filter(a::season_id.eq(season_id))
+        .filter(a::granted_at.is_null())
+        .select((a::kind, a::tier))
+        .distinct()
+        .load(&mut conn)
+        .await
+        .map_err(|_| {
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 63)
+        })?;
+
+    let apply = body.apply;
+    let rewards = body.rewards;
+    let missing_reward_keys: Vec<String> = pending_tiers
+        .into_iter()
+        .filter_map(|(kind, tier)| {
+            let key = award_reward_key(&kind, &tier);
+            match rewards.get(&key) {
+                Some(reward) if !reward.is_empty() => None,
+                _ => Some(key),
+            }
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let eligible_keys: Vec<String> = rewards
+        .iter()
+        .filter(|(_, reward)| !reward.is_empty())
+        .map(|(key, _)| key.clone())
+        .collect();
+
+    let (considered, granted) = conn
+        .transaction(move |mut conn| {
+        async move {
+            // These are intentionally stricter than season close: a grant pass
+            // touches at most 25 rows and defaults to five. A contended or
+            // unexpectedly expensive batch rolls back without partial payment.
+            for limit_sql in [
+                "SET LOCAL lock_timeout = '500ms'",
+                "SET LOCAL statement_timeout = '3s'",
+                "SET LOCAL work_mem = '1MB'",
+                "SET LOCAL temp_file_limit = '4MB'",
+            ] {
+                diesel::sql_query(limit_sql)
+                    .execute(&mut conn)
+                    .await
+                    .map_err(|e| {
+                        warn!("season grant: could not set transaction limits: {e}");
+                        BladeApiError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            IMPORT_SERVICE_ID,
+                            73,
+                        )
+                    })?;
+            }
+
+            // Filter to catalogue keys before LIMIT. Otherwise unknown rows at
+            // the head of the queue permanently starve later configured awards.
+            let candidates: Vec<season_store::AwardGrantCandidate> = diesel::sql_query(
+                "SELECT id, character_id, kind, tier, payload \
+                 FROM arena_season_awards \
+                 WHERE season_id = $1 AND granted_at IS NULL \
+                   AND (kind || ':' || tier) = ANY($2) \
+                 ORDER BY rank, kind, id LIMIT $3 FOR UPDATE SKIP LOCKED",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(season_id)
+            .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(eligible_keys)
+            .bind::<diesel::sql_types::BigInt, _>(limit)
+            .load(&mut conn)
+            .await
+            .map_err(|_| {
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 64)
+            })?;
+
+            let considered = candidates.len();
+            let mut granted = 0usize;
+
+            for award in candidates {
+                let key = award_reward_key(&award.kind, &award.tier);
+                // The SQL predicate was built from these exact non-empty keys.
+                let mut reward = rewards.get(&key).cloned().ok_or_else(|| {
+                    BladeApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        IMPORT_SERVICE_ID,
+                        65,
+                    )
+                })?;
+                if !apply {
+                    continue;
+                }
+
+                let mut entry = {
+                    use crate::schema::characters;
+                    characters::table
+                        .filter(characters::id.eq(award.character_id))
+                        .select(CharacterDbEntryEconomy::as_select())
+                        .for_no_key_update()
+                        .first(&mut conn)
+                        .await
+                        .map_err(|_| {
+                            BladeApiError::new(
+                                StatusCode::CONFLICT,
+                                IMPORT_SERVICE_ID,
+                                64,
+                            )
+                        })?
+                };
+
+                let mut tracker = InventoryChangeTracker::default();
+                // Catalogue item ids describe the reward template, not a
+                // globally reusable inventory instance. Mint fresh ids per
+                // recipient so two award tiers can never overwrite each other
+                // in one character's backpack.
+                for item in &mut reward.items {
+                    item.id = Uuid::new_v4();
+                }
+                apply_reward(
+                    &reward,
+                    &mut entry.wallet.0,
+                    &mut entry.inventory.0,
+                    &mut entry.character.0,
+                    &mut tracker,
+                );
+                for chest in &reward.chests {
+                    grant_chest(
+                        &mut entry.inventory.0,
+                        chest.tier,
+                        chest.level,
+                        &mut tracker,
+                    );
+                }
+                if !reward.stackable_items.is_empty() || !reward.items.is_empty() {
+                    entry.inventory.0.backpack_version += 1;
+                }
+                if !reward.chests.is_empty() {
+                    entry.inventory.0.treasury_version += 1;
+                }
+
+                {
+                    use crate::schema::characters;
+                    diesel::update(characters::table.filter(characters::id.eq(award.character_id)))
+                        .set(entry)
+                        .execute(&mut conn)
+                        .await
+                        .map_err(|_| {
+                            BladeApiError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                IMPORT_SERVICE_ID,
+                                65,
+                            )
+                        })?;
+                }
+
+                let mut payload = award.payload;
+                payload["granted"] = serde_json::Value::Bool(true);
+                payload["reward"] = serde_json::to_value(&reward).map_err(|_| {
+                    BladeApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        IMPORT_SERVICE_ID,
+                        66,
+                    )
+                })?;
+                let changed = diesel::update(
+                    a::arena_season_awards
+                        .filter(a::id.eq(award.id))
+                        .filter(a::granted_at.is_null()),
+                )
+                .set((
+                    a::payload.eq(payload),
+                    a::granted_at.eq(Some(arena_season::now_unix())),
+                ))
+                .execute(&mut conn)
+                .await
+                .map_err(|_| {
+                    BladeApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        IMPORT_SERVICE_ID,
+                        67,
+                    )
+                })?;
+                if changed != 1 {
+                    return Err(BladeApiError::new(
+                        StatusCode::CONFLICT,
+                        IMPORT_SERVICE_ID,
+                        68,
+                    ));
+                }
+                granted += 1;
+            }
+
+            Ok::<_, BladeApiError>((considered, granted))
+        }
+        .scope_boxed()
+        })
+        .await?;
+
+    let pending_after: i64 = a::arena_season_awards
+        .filter(a::season_id.eq(season_id))
+        .filter(a::granted_at.is_null())
+        .count()
+        .get_result(&mut conn)
+        .await
+        .map_err(|_| {
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 69)
+        })?;
+
+    Ok(Json(GrantSeasonAwardsResponse {
+        applied: apply,
+        season_id,
+        batch_limit: limit,
+        pending_before,
+        considered,
+        grantable: considered,
+        granted,
+        pending_after,
+        missing_reward_keys,
+    }))
 }
 
 // ------------------------------------------------------------ arena season
@@ -1719,6 +2155,41 @@ mod tests {
                     "{loose} must be rejected, never read as true"
                 );
             }
+        }
+    }
+
+    mod season_award_grant_defaults {
+        use super::super::{
+            GrantSeasonAwardsRequest, award_reward_is_supported, award_reward_key,
+            default_award_grant_limit,
+        };
+        use blades_lib::economy::RewardGrant;
+
+        #[test]
+        fn an_empty_or_absent_body_cannot_grant() {
+            let empty: GrantSeasonAwardsRequest = serde_json::from_str("{}").unwrap();
+            assert!(!empty.apply);
+            assert!(!GrantSeasonAwardsRequest::default().apply);
+            assert!(empty.rewards.is_empty());
+        }
+
+        #[test]
+        fn batches_start_small_and_keys_are_unambiguous() {
+            assert_eq!(default_award_grant_limit(), 5);
+            assert_eq!(award_reward_key("guild_rank", "top100"), "guild_rank:top100");
+            assert_eq!(
+                award_reward_key("arena_reached", "arena2_level4"),
+                "arena_reached:arena2_level4"
+            );
+        }
+
+        #[test]
+        fn town_xp_is_rejected_instead_of_partly_granted() {
+            let mut reward = RewardGrant::default();
+            reward.town_xp = 1;
+            assert!(!award_reward_is_supported(&reward));
+            reward.town_xp = 0;
+            assert!(award_reward_is_supported(&reward));
         }
     }
 

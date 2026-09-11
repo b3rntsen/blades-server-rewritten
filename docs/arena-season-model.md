@@ -311,7 +311,63 @@ until the season opens.
 
 ---
 
-## 6. Running the rollover
+## 6. DB-backed season close and reward controls
+
+The owner-facing lifecycle uses the dev-token-gated `arena-seasons` routes:
+
+1. create the next season as `scheduled`;
+2. dry-run `POST /arena-seasons/{current}/end` with its `nextSeasonId`;
+3. repeat with `"apply": true` to freeze the ladder, record awards, archive/reset
+   every character, end the current season, and activate the next one;
+4. dry-run `POST /arena-seasons/{ended}/grant-awards` with an explicit reward
+   catalogue, then apply it in small batches until `pendingAfter` is zero.
+
+The dry run validates that the selected next season exists and is still
+scheduled. The applied close is one Postgres transaction. A missing/ended next
+season, a failed standings insert, or a failed character reset rolls the whole
+close back; the current season remains active and the request can be retried.
+Transaction-local limits cap lock waits at one second, individual statements at
+ten seconds, work memory at 1 MB, and temporary files at 4 MB.
+
+Standings come from `arena_match_results` between the season's `starts_at` and
+`ends_at`, not lifetime totals or mutable current character JSON. The final audit
+row before the cutoff supplies cups and the sticky Arena high-water. This means a
+player who finishes on zero cups still receives their highest-Arena participation
+award. Player leaderboard awards use the 1 / top-3 / top-10 / top-50 / top-100
+tiers; later retail's guild rule is one flat `top100` tier for every member of a
+qualifying guild.
+
+Award granting is deliberately separate. The base APK contains the
+`PvpSeasonRewards` / `PvPResetRewards` schema, but not the downloaded runtime
+prize table, and retail changed prize contents between seasons. The endpoint
+therefore accepts explicit keys such as:
+
+```json
+{
+  "apply": false,
+  "limit": 5,
+  "rewards": {
+    "guild_rank:top100": {
+      "currencies": { "<currency-uuid>": 100 },
+      "stackableItems": { "<item-template-uuid>": 1 }
+    },
+    "arena_reached:arena2_level4": {
+      "chests": [{ "tier": 4, "level": 50 }]
+    }
+  }
+}
+```
+
+That example illustrates the wire shape only; it is not a claimed retail prize
+table. A dry run reports every `missingRewardKey`. Apply is restricted to ended
+seasons, defaults to five awards, clamps at 25, locks with `SKIP LOCKED`, and marks
+each award with `granted_at` in the same transaction as its character economy
+update. Grant transactions use a 500 ms lock timeout and three-second statement
+timeout. Repeating a batch cannot pay an award twice.
+
+---
+
+## 7. Legacy compile-time rollover
 
 `POST /blades.bgs.services/api/dev/v1/arena-season-rollover`, dev-token gated like
 the rest of `admin.rs` (`Authorization: Bearer $ARENA_IMPORT_TOKEN`).
@@ -367,7 +423,7 @@ observed operator action, because it zeroes every player's trophies.
 
 ---
 
-## 7. Things a human should verify
+## 8. Things a human should verify
 
 1. **The logistic scale of 400.** Class 3. Not shipped, not constrained by any
    capture. It only affects how fast the swing decays with the rating gap, never

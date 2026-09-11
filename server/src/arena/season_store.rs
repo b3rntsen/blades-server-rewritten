@@ -19,15 +19,15 @@
 //! 2. **Record awards** from that frozen ladder, ungranted.
 //! 3. **Roll characters** into the next season (zeroing counters).
 //!
-//! Steps 1 and 2 are pure reads plus inserts; only step 3 mutates players. A
-//! failure between 2 and 3 leaves a season with standings and awards recorded
-//! and players untouched, which is re-runnable. The reverse order would not be.
+//! The close handler performs all three steps in one transaction. Any failure
+//! rolls back the standings, awards, season status, and character resets
+//! together, leaving the active season safe to retry.
 
 use std::collections::HashMap;
 
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -88,9 +88,11 @@ impl SeasonRow {
     }
 }
 
-/// One row of the frozen ladder.
-#[derive(Debug, Clone, Insertable, Serialize)]
-#[diesel(table_name = crate::schema::arena_season_standings)]
+/// One row of the frozen ladder, including the last audit row's sticky Arena
+/// high-water. The three high-water fields are used to record the participation
+/// reward but are not columns in `arena_season_standings`; [`StandingInsertRow`]
+/// is the deliberately narrower database shape.
+#[derive(Debug, Clone, Serialize)]
 pub struct StandingRow {
     pub season_id: Uuid,
     pub character_id: Uuid,
@@ -99,6 +101,37 @@ pub struct StandingRow {
     pub matches: i32,
     pub wins: i32,
     pub guild_id: Option<String>,
+    pub high_water: i64,
+    pub arena: i32,
+    pub arena_level: i32,
+}
+
+/// Database projection of [`StandingRow`]. Keeping the season-reward inputs in
+/// memory avoids an `ALTER TABLE` on the production standings table.
+#[derive(Debug, Clone, Insertable)]
+#[diesel(table_name = crate::schema::arena_season_standings)]
+pub struct StandingInsertRow {
+    pub season_id: Uuid,
+    pub character_id: Uuid,
+    pub rank: i32,
+    pub trophies: i64,
+    pub matches: i32,
+    pub wins: i32,
+    pub guild_id: Option<String>,
+}
+
+impl From<&StandingRow> for StandingInsertRow {
+    fn from(row: &StandingRow) -> Self {
+        Self {
+            season_id: row.season_id,
+            character_id: row.character_id,
+            rank: row.rank,
+            trophies: row.trophies,
+            matches: row.matches,
+            wins: row.wins,
+            guild_id: row.guild_id.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Insertable, Serialize)]
@@ -120,6 +153,23 @@ pub struct AwardRow {
     pub kind: String,
     pub rank: i32,
     pub tier: String,
+    pub payload: Value,
+}
+
+/// Ungranted award fields consumed by the bounded admin grant endpoint.
+#[derive(Debug, Clone, Queryable, Selectable, QueryableByName)]
+#[diesel(table_name = crate::schema::arena_season_awards)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct AwardGrantCandidate {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    pub id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    pub character_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub kind: String,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub tier: String,
+    #[diesel(sql_type = diesel::sql_types::Jsonb)]
     pub payload: Value,
 }
 
@@ -145,6 +195,13 @@ pub fn rank_tier(rank: i32) -> Option<&'static str> {
     }
 }
 
+/// Later retail seasons deliberately paid every member of every top-100 guild
+/// the same guild reward. Do not reuse the player ladder's 1/3/10/50 brackets:
+/// that was the server's old, unsupported assumption.
+pub fn guild_rank_tier(rank: i32) -> Option<&'static str> {
+    (1..=100).contains(&rank).then_some("top100")
+}
+
 /// The reward payload recorded for a tier. Descriptive on purpose — see
 /// `rank_tier`. Granting reads this; nothing here grants by itself.
 pub fn award_payload(kind: &str, tier: &str, rank: i32) -> Value {
@@ -161,12 +218,12 @@ pub fn award_payload(kind: &str, tier: &str, rank: i32) -> Value {
 
 /// Live standings for every character that scored, best first.
 ///
-/// Reads `pvpTrophies` off the character JSON — the same number the client's
-/// ladder shows — and joins match counts from `arena_match_results`, which is
-/// already durable per match.
+/// Reads the final in-window cup total, match count, and sticky Arena high-water
+/// from `arena_match_results`, which is already durable per match. Current
+/// character JSON is deliberately not a season boundary.
 pub async fn freeze_standings(
     conn: &mut AsyncPgConnection,
-    season_id: Uuid,
+    season: &SeasonRow,
 ) -> QueryResult<Vec<StandingRow>> {
     #[derive(QueryableByName)]
     struct Row {
@@ -178,29 +235,48 @@ pub async fn freeze_standings(
         matches: i64,
         #[diesel(sql_type = diesel::sql_types::BigInt)]
         wins: i64,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        high_water: i64,
+        #[diesel(sql_type = diesel::sql_types::Integer)]
+        arena: i32,
+        #[diesel(sql_type = diesel::sql_types::Integer)]
+        arena_level: i32,
         #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
         guild_id: Option<String>,
     }
 
-    // COALESCE because a character that never queued has no rows in
-    // arena_match_results, and an INNER JOIN would drop them from the ladder
-    // entirely rather than placing them last.
+    // `arena_match_results` is the season boundary: current character JSON may
+    // already belong to the next season when a delayed/retried close runs, and
+    // lifetime aggregation made every old match appear in every new season.
+    //
+    // The last audit row supplies trophies AND sticky Arena high-water as they
+    // stood at the cutoff. This also admits a participant who finished at zero
+    // cups; retail still paid the highest-Arena participation reward.
+    let cutoff = season.ends_at.min(super::arena_season::now_unix());
     let rows: Vec<Row> = diesel::sql_query(
-        "SELECT c.id AS character_id, \
-                COALESCE((c.character->>'pvpTrophies')::bigint, 0) AS trophies, \
-                COALESCE(m.matches, 0) AS matches, \
-                COALESCE(m.wins, 0) AS wins, \
+        "WITH season_matches AS ( \
+             SELECT character_id, trophies_after AS trophies, \
+                    matchmaking_trophies_after AS high_water, arena, arena_level, \
+                    COUNT(*) OVER (PARTITION BY character_id) AS matches, \
+                    COUNT(*) FILTER (WHERE win) OVER (PARTITION BY character_id) AS wins, \
+                    ROW_NUMBER() OVER ( \
+                        PARTITION BY character_id ORDER BY recorded_at DESC, id DESC \
+                    ) AS latest \
+             FROM arena_match_results \
+             WHERE recorded_at >= to_timestamp($1) \
+               AND recorded_at < to_timestamp($2) \
+         ) \
+         SELECT c.id AS character_id, m.trophies, m.matches, m.wins, \
+                m.high_water, m.arena, m.arena_level, \
                 gm.guild_id AS guild_id \
-         FROM characters c \
-         LEFT JOIN ( \
-             SELECT character_id, COUNT(*) AS matches, \
-                    COUNT(*) FILTER (WHERE win) AS wins \
-             FROM arena_match_results GROUP BY character_id \
-         ) m ON m.character_id = c.id \
+         FROM season_matches m \
+         JOIN characters c ON c.id = m.character_id \
          LEFT JOIN guild_members gm ON gm.character_id = c.id \
-         WHERE COALESCE((c.character->>'pvpTrophies')::bigint, 0) > 0 \
-         ORDER BY trophies DESC, matches DESC, c.id",
+         WHERE m.latest = 1 \
+         ORDER BY m.trophies DESC, m.matches DESC, c.id",
     )
+    .bind::<diesel::sql_types::BigInt, _>(season.starts_at)
+    .bind::<diesel::sql_types::BigInt, _>(cutoff)
     .get_results(conn)
     .await?;
 
@@ -208,13 +284,16 @@ pub async fn freeze_standings(
         .into_iter()
         .enumerate()
         .map(|(i, r)| StandingRow {
-            season_id,
+            season_id: season.id,
             character_id: r.character_id,
             rank: (i as i32) + 1,
             trophies: r.trophies,
             matches: r.matches as i32,
             wins: r.wins as i32,
             guild_id: r.guild_id,
+            high_water: r.high_water,
+            arena: r.arena,
+            arena_level: r.arena_level,
         })
         .collect())
 }
@@ -265,6 +344,21 @@ pub fn awards_from(
     let mut out = Vec::new();
 
     for s in standings {
+        let tier = format!("arena{}_level{}", s.arena, s.arena_level);
+        let mut payload = award_payload("arena_reached", &tier, s.rank);
+        payload["arena"] = json!(s.arena);
+        payload["arenaLevel"] = json!(s.arena_level);
+        payload["highWaterTrophies"] = json!(s.high_water);
+        out.push(AwardRow {
+            id: Uuid::new_v4(),
+            season_id,
+            character_id: s.character_id,
+            kind: "arena_reached".into(),
+            rank: s.rank,
+            tier,
+            payload,
+        });
+
         if let Some(tier) = rank_tier(s.rank) {
             out.push(AwardRow {
                 id: Uuid::new_v4(),
@@ -290,7 +384,7 @@ pub fn awards_from(
         let Some(&rank) = guild_rank.get(g) else {
             continue;
         };
-        if let Some(tier) = rank_tier(rank) {
+        if let Some(tier) = guild_rank_tier(rank) {
             out.push(AwardRow {
                 id: Uuid::new_v4(),
                 season_id,
@@ -318,6 +412,9 @@ mod tests {
             matches: 0,
             wins: 0,
             guild_id: guild.map(|g| g.to_string()),
+            high_water: trophies,
+            arena: 1,
+            arena_level: 1,
         }
     }
 
@@ -332,6 +429,10 @@ mod tests {
         // so it must not silently earn the bottom bracket.
         assert_eq!(rank_tier(101), None);
         assert_eq!(rank_tier(0), None, "rank is 1-based");
+        assert_eq!(guild_rank_tier(1), Some("top100"));
+        assert_eq!(guild_rank_tier(57), Some("top100"));
+        assert_eq!(guild_rank_tier(100), Some("top100"));
+        assert_eq!(guild_rank_tier(101), None);
     }
 
     #[test]
@@ -384,6 +485,7 @@ mod tests {
         // kind would make the insert fail at season end, in production.
         assert_eq!(kinds.iter().filter(|k| **k == "rank").count(), 1);
         assert_eq!(kinds.iter().filter(|k| **k == "guild_rank").count(), 1);
+        assert_eq!(kinds.iter().filter(|k| **k == "arena_reached").count(), 1);
     }
 
     #[test]
@@ -392,14 +494,28 @@ mod tests {
         let g = guild_standings_from(Uuid::nil(), &st);
         assert!(g.is_empty());
         let aw = awards_from(Uuid::nil(), &st, &g);
-        assert_eq!(aw.len(), 1);
-        assert_eq!(aw[0].kind, "rank");
+        assert_eq!(aw.len(), 2);
+        assert!(aw.iter().any(|a| a.kind == "rank"));
+        assert!(aw.iter().any(|a| a.kind == "arena_reached"));
     }
 
     #[test]
     fn nothing_is_granted_at_record_time() {
         let st = vec![standing(Uuid::new_v4(), 1, 5, None)];
         let aw = awards_from(Uuid::nil(), &st, &[]);
-        assert_eq!(aw[0].payload["granted"], json!(false));
+        assert!(aw.iter().all(|a| a.payload["granted"] == json!(false)));
+    }
+
+    #[test]
+    fn arena_participation_award_uses_the_sticky_high_water() {
+        let mut s = standing(Uuid::new_v4(), 101, 0, None);
+        s.high_water = 1_275;
+        s.arena = 3;
+        s.arena_level = 6;
+        let awards = awards_from(Uuid::nil(), &[s], &[]);
+        assert_eq!(awards.len(), 1, "outside top 100 still earns participation");
+        assert_eq!(awards[0].kind, "arena_reached");
+        assert_eq!(awards[0].tier, "arena3_level6");
+        assert_eq!(awards[0].payload["highWaterTrophies"], json!(1_275));
     }
 }
