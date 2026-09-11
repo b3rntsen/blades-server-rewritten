@@ -162,6 +162,11 @@ pub fn map_damage_type(t: gamedata::DamageType) -> DamageType {
 pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInventory) -> Loadout {
     let mut lo = Loadout {
         level: character.level,
+        // The character's own attribute spend. `Fighter::new` turns these into max
+        // Stamina / Magicka; see `state::pool_for_points`.
+        stamina_points: character.stamina_attribute_points as u16,
+        magicka_points: character.magicka_attribute_points as u16,
+        has_character: true,
         display_name: character.name.clone(),
         status_dur_mult: 1.0,
         shield_optimal_block_boost: 1.0,
