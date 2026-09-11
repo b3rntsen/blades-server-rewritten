@@ -1,10 +1,10 @@
 {
  "_meta": {
-  "description": "Daily-rotation model for the story/side/event QUESTS (the /quests board's dungeon quests, distinct from town JOBS which live in job_pools.json). Authoritative quest bodies = deploy/static/parsed.json `quests` (171 quests, objectives + dungeon_uuid) resolved through blades_lib generate_quest_data; names = scripts/quest_names.json; rewards = quest_rewards.json; recurring 'Sigil'/event quests = game_events.json served by /gameevents. This file adds (a) a curated daily-ROTATION pool and (b) a deterministic date-keyed selection + level-scaling model for a back-office editor. See the accompanying spec for how quest.rs should consume it.",
+  "description": "Daily-rotation model for the story/side/event QUESTS (the /quests board's dungeon quests, distinct from town JOBS which live in job_pools.json). Authoritative quest bodies = deploy/static/parsed.json `quests` (172 quests, objectives + dungeon_uuid) resolved through blades_lib generate_quest_data; names = scripts/quest_names.json; rewards = quest_rewards.json; recurring 'Sigil'/event quests = game_events.json served by /gameevents. This file adds (a) a curated daily-ROTATION pool and (b) a deterministic date-keyed selection + level-scaling model for a back-office editor. See the accompanying spec for how quest.rs should consume it.",
   "authoritative": [
    "dailyQuestPool[].questId / dungeonId / objectiveCount \u2014 from parsed.json (only quests whose dungeon_uuid EXISTS, i.e. completable end-to-end).",
    "eventQuestLinks \u2014 from game_events.json (already live via /gameevents).",
-   "nonDungeonQuests \u2014 the 6 nil-dungeon quests that MUST be excluded from any dungeon rotation (they crash generate_quest_data)."
+   "nonDungeonQuests \u2014 the 7 nil-dungeon quests that MUST be excluded from any dungeon rotation."
   ],
   "guessed": [
    "The choice of WHICH categories rotate daily (side/bounty/sigil-event) and the per-day counts in `selection` are a faithful design guess \u2014 retail rotated jobs (in job_pools.json), not these story quests, on a daily board. Treat this file as the emulator's 'daily featured quest' offering, editable in back-office.",
@@ -1694,6 +1694,13 @@
   }
  ],
  "nonDungeonQuests": [
+  {
+   "questId": "3b478dfa-73bb-42df-a420-05cf83d015bc",
+   "name": "Rebuilding the Town Hall",
+   "category": "story",
+   "dungeonUuid": "00000000-0000-0000-0000-000000000000",
+   "objectiveCount": 2
+  },
   {
    "questId": "81ac5a8e-c60e-4ede-9417-fb209d28e47b",
    "name": "Gather {0} {1} times in {2}.",

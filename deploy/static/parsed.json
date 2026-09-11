@@ -4721,6 +4721,24 @@
 		}
 	},
 	"quests": {
+		"3b478dfa-73bb-42df-a420-05cf83d015bc": {
+			"dungeon_info": {
+				"objectives": {
+					"03aa92b9-de0e-4e2b-b98c-a4d05a2c956f": {
+						"description": "MQ04_Objective_1",
+						"quota": 1.0,
+						"rewards": []
+					},
+					"478ac919-7509-4c7d-bb04-012e0ab6d5f0": {
+						"description": "MQ04_Objective_1",
+						"quota": 1.0,
+						"rewards": []
+					}
+				},
+				"version": 0,
+				"dungeon_uuid": "00000000-0000-0000-0000-000000000000"
+			}
+		},
 		"c430453c-d9c8-423a-a098-ae67d224fafa": {
 			"dungeon_info": {
 				"objectives": {

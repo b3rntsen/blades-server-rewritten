@@ -3015,7 +3015,7 @@ mod event_quest_tests {
         }
         assert!(
             paid >= 100,
-            "the committed table must cover a real share of the 171 quests, got {paid}"
+            "the committed table must cover a real share of the 172 quests, got {paid}"
         );
     }
 }
@@ -3572,8 +3572,8 @@ mod playability_sweep {
     /// malformed item spawn used to panic. So this asserts three things, and the
     /// numbers are stated rather than implied so a regression reads as a diff:
     ///
-    ///  * every one of the 171 quests generates a body without erroring;
-    ///  * exactly the 6 nil-dungeon quests come back without dungeon data, and every
+    ///  * every one of the 172 quests generates a body without erroring;
+    ///  * exactly the 7 nil-dungeon quests come back without dungeon data, and every
     ///    other quest comes back WITH it;
     ///  * every quest with a dungeon has at least one objective, because a quest with
     ///    no objective cannot be completed by the client.
@@ -3606,12 +3606,12 @@ mod playability_sweep {
             }
         }
 
-        assert_eq!(total, 171, "the shipped quest corpus is 171 quests");
+        assert_eq!(total, 172, "the shipped quest corpus is 172 quests");
         assert!(errored.is_empty(), "{} quest(s) failed to generate:\n{}", errored.len(), errored.join("\n"));
         assert_eq!(
             no_dungeon.len(),
-            6,
-            "exactly the 6 nil-dungeon dialogue quests have no dungeon; got {}: {:?}",
+            7,
+            "exactly the 7 nil-dungeon quests have no dungeon; got {}: {:?}",
             no_dungeon.len(),
             no_dungeon
         );
@@ -3621,6 +3621,16 @@ mod playability_sweep {
         for id in &no_dungeon {
             assert!(declared.contains(id), "{id} has no dungeon but is not in nonDungeonQuests");
         }
+
+        // Report #117: this real story quest was present in the APK-derived
+        // quest catalogue and the captured completion-reward table, but absent
+        // from parsed.json. A player carrying it therefore hit QuestNotFound.
+        let rebuild_town_hall =
+            Uuid::parse_str("3b478dfa-73bb-42df-a420-05cf83d015bc").unwrap();
+        let (quest, dungeon) = generate_quest_data(&gd, rebuild_town_hall, 1, scaling)
+            .expect("MQ04 Rebuilding the Town Hall must resolve");
+        assert!(dungeon.is_none(), "MQ04 is a town objective, not a dungeon");
+        assert_eq!(quest.objective_statuses.len(), 2, "both retail objectives are present");
         // One known exception, and it is not a real quest: `MultiKitTest`
         // (category "test", `version: 0`) is a developer fixture the client ships. It
         // has a dungeon and zero objectives, so nothing can complete it — but nothing
@@ -3681,9 +3691,9 @@ mod playability_sweep {
             })
             .collect();
 
-        assert_eq!(flat, 115, "flat rewards from quest_rewards.json");
+        assert_eq!(flat, 116, "flat rewards from quest_rewards.json");
         assert_eq!(evented, 39, "milestone ladders from event_quests.json");
-        assert_eq!(covered.len(), 154, "154 of 171 quests pay something");
+        assert_eq!(covered.len(), 155, "155 of 172 quests pay something");
         assert!(
             covered.len() as f64 / gd.quests.len() as f64 > 0.80,
             "coverage must stay above 80%"
