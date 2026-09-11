@@ -325,6 +325,18 @@ fn handle_packet(
         return;
     }
 
+    // Mobile/carrier NAT can change only the UDP source port after the app-level
+    // key exchange. The replacement ENet peer then starts with ciphertext, not a
+    // second op-0x38 handshake. Let the registry prove it owns this session by
+    // decrypting to a valid marker/opcode, migrate the address, and process the
+    // packet normally. The old ENet Disconnect becomes harmless because its
+    // address is no longer indexed.
+    if let Some(old_addr) = registry.rebind_encrypted_peer(addr, data) {
+        info!("arena-enet: recovered mobile peer address {old_addr} → {addr}");
+        handle_packet(host, registry, peer_at, addr, data);
+        return;
+    }
+
     // Unknown peer ⇒ the retail connect handshake (op 0x38, PLAINTEXT; spec §4.1):
     //   BE 38 | conn_id(6) | 00 00 00 00 | 01 20 | client_pubkey(32) [| zero-pad]
     // rusty_enet has reassembled the (fragmented, ~40 KB-padded) message; we read
