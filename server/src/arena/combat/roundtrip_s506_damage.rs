@@ -350,7 +350,10 @@ fn s506_deep_combo_unclamped_and_kill_arithmetic() {
     let m = RetailDamageModel;
     let lo = flappety_dagger();
     let max_hp = health_for_level(S506_LEVEL) * ARENA_HEALTH_MULTIPLIER;
-    assert_eq!(max_hp, 3150, "L86 ×3 = 3150 maxHP");
+    assert_eq!(
+        max_hp, 2070,
+        "retail health caps at L50: L86 is still 690 ×3 = 2070 maxHP"
+    );
 
     let mut amped = blank();
     let now = Instant::now();
@@ -387,10 +390,11 @@ fn s506_paralyse_threshold_is_the_shipped_absolute_value() {
         (super::state::paralyze_duration_secs(1) - 2.0).abs() < 1e-3,
         "Paralyze R1 duration is 2.0 s, not the invented 3.1",
     );
-    // The old model needed 0.45 × 3150 = 1417.5 accumulated poison — 43× more.
+    // Even with retail's L50 health cap, the old model needed
+    // 0.45 × 2070 = 931.5 accumulated poison — 28× more.
     let old_fraction_model = 0.45 * (health_for_level(S506_LEVEL) * ARENA_HEALTH_MULTIPLIER) as f32;
     assert!(
-        old_fraction_model / r1 > 40.0,
+        old_fraction_model / r1 > 28.0,
         "sanity: the deleted fraction model was {old_fraction_model} vs the shipped {r1}",
     );
     // One landed s506 poison hit (137.32) already clears the shipped threshold.

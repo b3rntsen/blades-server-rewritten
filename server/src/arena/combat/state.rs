@@ -23,20 +23,63 @@ pub const ARENA_HEALTH_MULTIPLIER: u32 = 3;
 /// match; before that, a round-ending death loops to the next round.
 pub const ROUND_WINS_TO_WIN_MATCH: u8 = 2;
 
-/// Approximate base max-Health for a level (UESP L50-era curve: 200 + 10/level). Our
-/// build is L100 so this is representative until the real `PlayerStatsData` curve is
-/// wired; validate magnitudes against captures (docs/blades-combat-formulae.md §9).
+/// Base max-Health from the shipped `PlayerStatsData._playerStats._healthBase`.
+pub const HEALTH_BASE: u32 = 200;
+/// Health gained by each `_healthPoints` entry in the shipped per-level table.
+pub const HEALTH_PER_LEVEL: u32 = 10;
+/// `_perLevelData` awards one health point per level through level 50, then zero.
+pub const MAX_HEALTH_LEVEL_INCREASES: u16 = 49;
+
+/// Retail base max-Health for a level, before the arena's ×3 health multiplier.
 ///
-/// **Known wrong above level 50, and deliberately left alone here.** The shipped
-/// `PlayerStatsData._perLevelData` awards `_healthPoints: 1` per level and stops at
-/// level 50 — accumulated health points are `min(level - 1, 49)`, so retail's ceiling
-/// is `200 + 10 * 49 = 690`, while this returns 1,080 at level 89 and keeps climbing.
-/// Changing it moves every time-to-kill in the model at once, so it belongs in its own
-/// change with its own capture validation rather than riding along with the pools.
-/// [`the_health_curve_is_still_uncapped`] pins the discrepancy so it cannot be
-/// forgotten.
+/// `PlayerStatsData._perLevelData` has 99 rows and awards `_healthPoints: 1` on
+/// the first 49 only. Accumulated health points are therefore
+/// `min(level - 1, 49)`: 200 at level 1, 690 at level 50, and still 690 at
+/// levels 89 and 100. The previous approximation kept adding 10 forever and
+/// gave a level-89 fighter 1,080 base HP — 57% above the shipped ceiling.
 pub fn health_for_level(level: u16) -> u32 {
-    200 + 10 * level.saturating_sub(1) as u32
+    HEALTH_BASE
+        + HEALTH_PER_LEVEL
+            * u32::from(level.saturating_sub(1).min(MAX_HEALTH_LEVEL_INCREASES))
+}
+
+#[cfg(test)]
+mod retail_health_curve {
+    use super::*;
+
+    #[test]
+    fn the_shipped_curve_caps_at_level_50() {
+        assert_eq!(
+            health_for_level(0),
+            HEALTH_BASE,
+            "invalid zero saturates safely"
+        );
+        assert_eq!(health_for_level(1), 200, "level 1 is the base");
+        assert_eq!(health_for_level(49), 680, "the last level before the cap");
+        assert_eq!(health_for_level(50), 690, "all 49 health increases applied");
+        for level in [51, 89, 100, u16::MAX] {
+            assert_eq!(
+                health_for_level(level),
+                690,
+                "level {level} stays capped"
+            );
+        }
+    }
+
+    #[test]
+    fn fighter_constructor_uses_the_capped_curve() {
+        let fighter = Fighter::new(
+            0,
+            1,
+            Loadout { level: 89, ..Default::default() },
+            Instant::now(),
+        );
+        assert_eq!(fighter.max_health, 690 * ARENA_HEALTH_MULTIPLIER);
+        assert_eq!(
+            fighter.health, fighter.max_health,
+            "a fighter starts full"
+        );
+    }
 }
 
 /// Base pool before any attribute point is spent — `PlayerStatsData._playerStats`
@@ -170,22 +213,6 @@ mod report109_real_pools {
         assert_eq!(f.max_stamina, pool_for_level(50));
         assert_eq!(f.max_magicka, pool_for_level(50));
         assert_ne!(f.max_stamina, POOL_BASE, "not read as \"spent nothing\"");
-    }
-
-    /// The health curve is knowingly still wrong, and this records the size of it
-    /// so the next person does not have to re-derive the discrepancy.
-    ///
-    /// `_perLevelData` awards `_healthPoints: 1` per level on the same schedule,
-    /// so retail's max health tops out at `200 + 10 * 49 = 690`. `health_for_level`
-    /// keeps climbing. Changing it moves every time-to-kill in the model at once,
-    /// which is its own change with its own validation — not a rider on this one.
-    #[test]
-    fn the_health_curve_is_still_uncapped() {
-        let retail_ceiling = POOL_BASE + POOL_PER_POINT * u32::from(MAX_ATTRIBUTE_POINTS);
-        assert_eq!(retail_ceiling, 690);
-        assert_eq!(health_for_level(50), 690, "at the cap level the two agree");
-        assert_eq!(health_for_level(89), 1080, "above it ours runs away — 57% high");
-        assert!(health_for_level(89) > retail_ceiling);
     }
 }
 
