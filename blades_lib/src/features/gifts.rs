@@ -15,7 +15,7 @@
 
 use thiserror::Error;
 
-use crate::economy::{self, RewardGrant};
+use crate::economy::{self, RewardChest, RewardGrant};
 use crate::static_data::GiftDef;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -42,6 +42,16 @@ pub fn build_gift_reward(def: &GiftDef) -> RewardGrant {
                 .or_insert(0) += item.quantity;
         }
     }
+    reward.chests = def
+        .chests
+        .iter()
+        .map(|chest| RewardChest {
+            id: None,
+            tier: chest.rarity,
+            // Replaced with the claiming character's level by the handler.
+            level: 0,
+        })
+        .collect();
     reward
 }
 
@@ -64,7 +74,7 @@ pub fn can_claim(def: &GiftDef, current_count: u64, now: i64) -> Result<(), Gift
 mod tests {
     use super::*;
     use crate::economy::{GEMS, SIGIL};
-    use crate::static_data::GiftItem;
+    use crate::static_data::{GiftChest, GiftItem};
     use uuid::Uuid;
 
     fn sunset_gift() -> GiftDef {
@@ -81,6 +91,7 @@ mod tests {
                     quantity: 1000,
                 },
             ],
+            chests: vec![],
             start_time: 1774584000,
             end_time: 1782878400,
             claim_count_limit: 1,
@@ -105,6 +116,7 @@ mod tests {
                 item_template_id: material,
                 quantity: 5,
             }],
+            chests: vec![],
             start_time: 0,
             end_time: 0,
             claim_count_limit: 3,
@@ -116,6 +128,16 @@ mod tests {
     }
 
     #[test]
+    fn gift_chest_rarity_becomes_treasury_tier() {
+        let mut def = sunset_gift();
+        def.chests.push(GiftChest { rarity: 4 });
+        let reward = build_gift_reward(&def);
+        assert_eq!(reward.chests.len(), 1);
+        assert_eq!(reward.chests[0].tier, 4);
+        assert_eq!(reward.chests[0].level, 0);
+    }
+
+    #[test]
     fn claim_respects_window_and_limit() {
         let gift = sunset_gift();
         // Before the window opens.
@@ -123,7 +145,10 @@ mod tests {
         // Inside the window, never claimed → ok.
         assert_eq!(can_claim(&gift, 0, 1777000000), Ok(()));
         // Inside the window but already at the limit.
-        assert_eq!(can_claim(&gift, 1, 1777000000), Err(GiftError::LimitReached));
+        assert_eq!(
+            can_claim(&gift, 1, 1777000000),
+            Err(GiftError::LimitReached)
+        );
         // After the window closes.
         assert_eq!(can_claim(&gift, 0, 1782878401), Err(GiftError::NotActive));
     }
@@ -133,6 +158,7 @@ mod tests {
         let def = GiftDef {
             global_gift_id: Uuid::from_u128(2),
             items: vec![],
+            chests: vec![],
             start_time: 0,
             end_time: 0,
             claim_count_limit: 1,

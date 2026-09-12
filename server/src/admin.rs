@@ -48,7 +48,7 @@ use uuid::Uuid;
 use crate::{
     BladeApiError, ServerGlobal,
     arena::arena_season::{self, SeasonConfig},
-    arena::season_store,
+    arena::{season_rewards, season_store},
     credentials,
     arena::matchmaker::{RecentTicketView, query_recent_matches},
     json_db::JsonDbWrapper,
@@ -1529,20 +1529,17 @@ pub async fn end_arena_season(
 
 // ----------------------------------------------- arena season award granting
 
-/// Reward catalogue for one bounded grant pass. Keys are emitted by the dry
-/// run as `<kind>:<tier>` (for example `guild_rank:top100` or
-/// `arena_reached:arena2_level4`). The values use the same uniform reward shape
-/// as quests, gifts and chests.
+/// Optional reward overrides for one bounded grant pass. Normal season awards
+/// use the capture-derived retail table; keys here (`<kind>:<tier>`) exist for
+/// an operator to correct a future exceptional season without a rebuild.
 #[derive(Deserialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GrantSeasonAwardsRequest {
     /// Write. Absent or false = report what the batch would do.
     #[serde(default)]
     pub apply: bool,
-    /// A deliberately caller-supplied catalogue: the shipped client contains
-    /// the schema but not the runtime season prize table, and prizes changed
-    /// between retail seasons. Unknown keys stay pending rather than receiving
-    /// an invented fallback.
+    /// Explicit overrides win over the built-in retail rotation. Unknown award
+    /// kinds stay pending rather than receiving an invented fallback.
     #[serde(default)]
     pub rewards: HashMap<String, RewardGrant>,
     /// Small by default for the production box. Clamped to 1..=25.
@@ -1577,7 +1574,7 @@ pub struct GrantSeasonAwardsResponse {
 }
 
 /// `POST /…/api/dev/v1/arena-seasons/{id}/grant-awards` — grant a small,
-/// explicitly configured batch of frozen season awards.
+/// capture-derived batch of frozen season awards.
 ///
 /// Safety properties:
 ///
@@ -1586,7 +1583,8 @@ pub struct GrantSeasonAwardsResponse {
 /// * at most 25 award rows per transaction (default 5);
 /// * `FOR UPDATE SKIP LOCKED`, so two operator requests cannot double-pay;
 /// * `granted_at IS NULL` is rechecked in the update;
-/// * missing catalogue entries remain pending and are reported by key.
+/// * unknown rows remain pending and are reported by key;
+/// * an explicit caller override wins over the retail default.
 #[post("/blades.bgs.services/api/dev/v1/arena-seasons/{season_id}/grant-awards")]
 pub async fn grant_arena_season_awards(
     req: HttpRequest,
@@ -1602,13 +1600,13 @@ pub async fn grant_arena_season_awards(
     use crate::schema::arena_season_awards::dsl as a;
     use crate::schema::arena_seasons::dsl as s;
 
-    let status: String = s::arena_seasons
+    let season: season_store::SeasonRow = s::arena_seasons
         .filter(s::id.eq(season_id))
-        .select(s::status)
+        .select(season_store::SeasonRow::as_select())
         .first(&mut conn)
         .await
         .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 60))?;
-    if status != "ended" {
+    if season.status != "ended" {
         return Err(BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 61));
     }
     if body.rewards.values().any(|reward| !award_reward_is_supported(reward)) {
@@ -1628,6 +1626,10 @@ pub async fn grant_arena_season_awards(
             BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 62)
         })?;
 
+    // Keep this low-cardinality: payload contains the player's exact rank and
+    // would defeat DISTINCT, while every supported arena number is already in
+    // the tier (`arenaN_levelM`). The partial season index bounds this scan to
+    // ungranted rows for one season.
     let pending_tiers: Vec<(String, String)> = a::arena_season_awards
         .filter(a::season_id.eq(season_id))
         .filter(a::granted_at.is_null())
@@ -1641,22 +1643,30 @@ pub async fn grant_arena_season_awards(
 
     let apply = body.apply;
     let rewards = body.rewards;
+    let season_number = season.number;
+    let repair_data = app_state.repair_data.clone();
     let missing_reward_keys: Vec<String> = pending_tiers
-        .into_iter()
+        .iter()
         .filter_map(|(kind, tier)| {
-            let key = award_reward_key(&kind, &tier);
+            let key = award_reward_key(kind, tier);
             match rewards.get(&key) {
                 Some(reward) if !reward.is_empty() => None,
+                _ if season_rewards::reward_is_known(kind, tier, &Value::Null) => None,
                 _ => Some(key),
             }
         })
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let eligible_keys: Vec<String> = rewards
+    let eligible_keys: Vec<String> = pending_tiers
         .iter()
-        .filter(|(_, reward)| !reward.is_empty())
-        .map(|(key, _)| key.clone())
+        .filter_map(|(kind, tier)| {
+            let key = award_reward_key(kind, tier);
+            let overridden = rewards.get(&key).is_some_and(|reward| !reward.is_empty());
+            (overridden || season_rewards::reward_is_known(kind, tier, &Value::Null)).then_some(key)
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect();
 
     let (considered, granted) = conn
@@ -1708,13 +1718,26 @@ pub async fn grant_arena_season_awards(
             for award in candidates {
                 let key = award_reward_key(&award.kind, &award.tier);
                 // The SQL predicate was built from these exact non-empty keys.
-                let mut reward = rewards.get(&key).cloned().ok_or_else(|| {
-                    BladeApiError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        IMPORT_SERVICE_ID,
-                        65,
-                    )
-                })?;
+                let mut reward = rewards
+                    .get(&key)
+                    .filter(|reward| !reward.is_empty())
+                    .cloned()
+                    .or_else(|| {
+                        season_rewards::reward_for_award(
+                            season_number,
+                            &award.kind,
+                            &award.tier,
+                            &award.payload,
+                            &repair_data,
+                        )
+                    })
+                    .ok_or_else(|| {
+                        BladeApiError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            IMPORT_SERVICE_ID,
+                            65,
+                        )
+                    })?;
                 if !apply {
                     continue;
                 }
@@ -1743,6 +1766,14 @@ pub async fn grant_arena_season_awards(
                 // in one character's backpack.
                 for item in &mut reward.items {
                     item.id = Uuid::new_v4();
+                }
+                // Built-in season gift chests carry a zero level sentinel;
+                // treasury chests are levelled to the recipient like every
+                // other Arena chest.
+                for chest in &mut reward.chests {
+                    if chest.level == 0 {
+                        chest.level = entry.character.0.level as u64;
+                    }
                 }
                 apply_reward(
                     &reward,

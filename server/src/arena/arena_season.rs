@@ -303,15 +303,6 @@ fn announcement_id(season: &SeasonConfig) -> Uuid {
     Uuid::from_u128(season.id.as_u128() ^ (0xF << 124))
 }
 
-/// The news entries this build contributes: one per configured season.
-///
-/// Merged into the captured retail list by `announcements::get_announcements`, so
-/// there is a single source of truth for the season record and no hand-edited
-/// duplicate in `announcements.json`.
-pub fn season_announcements() -> Vec<Announcement> {
-    SEASONS.iter().map(season_announcement).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

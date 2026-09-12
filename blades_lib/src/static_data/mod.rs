@@ -12,10 +12,10 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::economy::RewardGrant;
-use crate::user_data::ItemSingleProperty;
 use crate::features::challenges::ChallengeTemplate;
 use crate::features::daily_reward::DailyRewardDef;
 use crate::features::game_events::EventDef;
+use crate::user_data::ItemSingleProperty;
 
 /// One reward line of a global gift (`{itemTemplateId, quantity}`). The template
 /// may be a currency UUID (Gold/Sigil/Gems), in which case claiming credits the
@@ -27,6 +27,14 @@ pub struct GiftItem {
     pub quantity: u64,
 }
 
+/// A chest in a global-gift override. Retail identifies these by rarity only;
+/// season-gift claims open them immediately instead of putting them in treasury.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GiftChest {
+    pub rarity: u64,
+}
+
 /// A global gift definition (the captured `globalGiftOverride` block). Time-windowed
 /// and claim-count-limited; `startTime`/`endTime` of 0 mean "no bound".
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +43,8 @@ pub struct GiftDef {
     pub global_gift_id: Uuid,
     #[serde(default)]
     pub items: Vec<GiftItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chests: Vec<GiftChest>,
     pub start_time: i64,
     pub end_time: i64,
     pub claim_count_limit: u64,
@@ -1206,6 +1216,9 @@ impl<'de> Deserialize<'de> for OfferContentsFile {
             }
         }
         unparseable_ids.sort();
-        Ok(OfferContentsFile { offers, unparseable_ids })
+        Ok(OfferContentsFile {
+            offers,
+            unparseable_ids,
+        })
     }
 }

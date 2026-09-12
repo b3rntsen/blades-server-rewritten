@@ -3,6 +3,7 @@ pub mod arena_ladder;
 pub mod arena_promotion_loot;
 pub mod arena_season;
 pub mod season_store;
+pub mod season_rewards;
 pub mod avatar;
 pub mod combat;
 pub mod config;

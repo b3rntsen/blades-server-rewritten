@@ -34,7 +34,7 @@ use uuid::Uuid;
 use super::arena_season::{ScoringVariant, SeasonConfig, TrophyResetRule};
 
 /// A row of `arena_seasons`.
-#[derive(Debug, Clone, Queryable, Selectable, Serialize)]
+#[derive(Debug, Clone, Queryable, QueryableByName, Selectable, Serialize)]
 #[diesel(table_name = crate::schema::arena_seasons)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct SeasonRow {
@@ -173,22 +173,30 @@ pub struct AwardGrantCandidate {
     pub payload: Value,
 }
 
+/// Full award state used by the game-facing, one-shot season gift. The unique
+/// `(season_id, character_id, kind)` index makes this at most three rows.
+#[derive(Debug, Clone, Queryable, Selectable)]
+#[diesel(table_name = crate::schema::arena_season_awards)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct AwardClaimRow {
+    pub id: Uuid,
+    pub kind: String,
+    pub tier: String,
+    pub payload: Value,
+    pub granted_at: Option<i64>,
+}
+
 /// Which bracket a placing falls in.
 ///
-/// ASSUMPTION, and it is flagged rather than hidden: the capture set contains
-/// **no** season-reward endpoint — the only `reward` traffic is the daily town
-/// reward — so retail's exact prize table is not recoverable from what we hold.
-/// These brackets are the conventional 1 / 2-3 / 4-10 / 11-50 / 51-100 shape,
-/// and the payload is deliberately a description rather than an item grant, so
-/// changing the prizes later is a data edit and not a migration.
+/// Captured per-character season gifts establish three player brackets: gold
+/// through rank 10, silver through 50, and bronze through 100. There is no
+/// separate champion or top-three prize.
 ///
 /// `None` beyond 100: the ladder the client shows is a top-100, so a placing
 /// outside it is not a placing anyone saw.
 pub fn rank_tier(rank: i32) -> Option<&'static str> {
     match rank {
-        1 => Some("champion"),
-        2..=3 => Some("top3"),
-        4..=10 => Some("top10"),
+        1..=10 => Some("top10"),
         11..=50 => Some("top50"),
         51..=100 => Some("top100"),
         _ => None,
@@ -202,8 +210,8 @@ pub fn guild_rank_tier(rank: i32) -> Option<&'static str> {
     (1..=100).contains(&rank).then_some("top100")
 }
 
-/// The reward payload recorded for a tier. Descriptive on purpose — see
-/// `rank_tier`. Granting reads this; nothing here grants by itself.
+/// The reward payload recorded for a tier. Granting resolves it through the
+/// capture-derived table in `season_rewards`; nothing here grants by itself.
 pub fn award_payload(kind: &str, tier: &str, rank: i32) -> Value {
     json!({
         "kind": kind,
@@ -420,8 +428,8 @@ mod tests {
 
     #[test]
     fn tiers_cover_the_top_hundred_and_stop_there() {
-        assert_eq!(rank_tier(1), Some("champion"));
-        assert_eq!(rank_tier(3), Some("top3"));
+        assert_eq!(rank_tier(1), Some("top10"));
+        assert_eq!(rank_tier(3), Some("top10"));
         assert_eq!(rank_tier(10), Some("top10"));
         assert_eq!(rank_tier(50), Some("top50"));
         assert_eq!(rank_tier(100), Some("top100"));
