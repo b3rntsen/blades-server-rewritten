@@ -235,7 +235,7 @@ fn pump(
     // Extract everything we need, then drop the event so `host` is free to send.
     let action = match host.service() {
         Ok(Some(Event::Connect { peer, .. })) => Act::Connect(peer.id(), peer.address()),
-        Ok(Some(Event::Disconnect { peer, .. })) => Act::Disconnect(peer.address()),
+        Ok(Some(Event::Disconnect { peer, .. })) => Act::Disconnect(peer.id(), peer.address()),
         Ok(Some(Event::Receive { peer, packet, .. })) => {
             Act::Receive(peer.id(), peer.address(), packet.data().to_vec())
         }
@@ -253,9 +253,28 @@ fn pump(
             }
             info!("arena-enet: peer connected ({addr:?})");
         }
-        Act::Disconnect(addr) => {
+        Act::Disconnect(pid, addr) => {
             info!("arena-enet: peer disconnected ({addr:?})");
             if let Some(addr) = addr {
+                // A finished match is retired before its graceful ENet disconnect
+                // completes. The client may re-queue immediately and reuse the same
+                // UDP source address for a NEW PeerID. In that case the delayed
+                // Disconnect event belongs to the old peer, while `addr` already
+                // names the new match in both `peer_at` and the registry. Removing by
+                // address alone tears down the fresh match and leaves the client in
+                // the arena camera waiting forever.
+                //
+                // Only the PeerID currently owning this address may mutate registry
+                // state. A missing owner is also stale: server-initiated post-match
+                // retirement deliberately removes `peer_at` before the eventual
+                // Disconnect event arrives.
+                if !disconnect_still_owns_address(peer_at, &addr, &pid) {
+                    info!(
+                        "arena-enet: ignoring stale disconnect for peer {pid:?} at {addr}; \
+                         address is absent or already owned by a newer peer"
+                    );
+                    return true;
+                }
                 // If the peer left a live match, its opponent wins by concession;
                 // send the immediate victory frames down the same encrypt+send path.
                 // The match-end walk then rides the tick loop as for a normal win.
@@ -279,8 +298,21 @@ fn pump(
 
 enum Act {
     Connect(PeerID, Option<std::net::SocketAddr>),
-    Disconnect(Option<std::net::SocketAddr>),
+    Disconnect(PeerID, Option<std::net::SocketAddr>),
     Receive(PeerID, Option<std::net::SocketAddr>, Vec<u8>),
+}
+
+/// Whether a disconnect event still belongs to the peer currently registered at an
+/// address. Generic over the owner token so the address-reuse race can be tested
+/// without manufacturing a rusty_enet `PeerID`.
+fn disconnect_still_owns_address<T: PartialEq>(
+    peer_at: &HashMap<std::net::SocketAddr, T>,
+    addr: &std::net::SocketAddr,
+    disconnecting: &T,
+) -> bool {
+    peer_at
+        .get(addr)
+        .is_some_and(|current| current == disconnecting)
 }
 
 /// Route a received SEND payload: active peer → decrypt + FSM + relay; unknown
@@ -441,6 +473,40 @@ mod tests {
         // A header with no flag bits is untouched both directions.
         assert_eq!(header_blades_to_vanilla(0x2A), 0x2A);
         assert_eq!(header_vanilla_to_blades(0x2A), 0x2A);
+    }
+
+    /// A phone can finish a match, re-queue, and reuse its UDP source address before
+    /// rusty_enet emits the old peer's graceful Disconnect event. The old event must
+    /// not be allowed to remove the new match that now owns that address.
+    #[test]
+    fn stale_disconnect_cannot_remove_requeued_peer_at_same_address() {
+        let addr: SocketAddr = "127.0.0.1:32001".parse().unwrap();
+        let old_peer = 7_u32;
+        let requeued_peer = 8_u32;
+        let mut peer_at = HashMap::new();
+
+        peer_at.insert(addr, old_peer);
+        assert!(disconnect_still_owns_address(&peer_at, &addr, &old_peer));
+
+        // Re-queue overwrites the address with a fresh ENet peer generation.
+        peer_at.insert(addr, requeued_peer);
+        assert!(
+            !disconnect_still_owns_address(&peer_at, &addr, &old_peer),
+            "the delayed old Disconnect must be ignored"
+        );
+        assert!(
+            disconnect_still_owns_address(&peer_at, &addr, &requeued_peer),
+            "the current peer may still perform a real disconnect"
+        );
+
+        // Post-match retirement removes the mapping before its own graceful
+        // Disconnect arrives; that event is stale too.
+        peer_at.remove(&addr);
+        assert!(!disconnect_still_owns_address(
+            &peer_at,
+            &addr,
+            &requeued_peer
+        ));
     }
 
     /// A rusty_enet test client: connect, then send/recv reliable channel-0 frames.
