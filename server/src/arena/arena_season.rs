@@ -86,6 +86,7 @@ pub enum ScoringVariant {
     /// A single flat K-factor for every trophy band, round score ignored — what
     /// this server did before the shipped tables were recovered, kept switchable
     /// so a season can be run the old way for comparison. `[Class 3 — modelled]`.
+    #[allow(dead_code)] // Deliberate opt-in comparator; no live season selects it yet.
     FlatK(i64),
 }
 

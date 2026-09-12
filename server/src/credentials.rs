@@ -180,7 +180,6 @@ pub const MIN_PASSWORD_LEN: usize = 8;
 #[diesel(table_name = crate::schema::arena_credentials)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct CredentialRow {
-    pub username: String,
     pub user_id: Uuid,
     pub password_hash: String,
 }

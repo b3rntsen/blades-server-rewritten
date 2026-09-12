@@ -41,15 +41,24 @@ struct EnemyKilledUpdate {
 
 /// A `combat_completed` action — the client posts it (alongside `enemy_killed`
 /// actions) when a combat encounter/room resolves. The per-enemy XP + kills arrive as
-/// the `EnemyKilled` actions in the SAME batch, so this is a state-only marker here
-/// (the dungeon's `current_state` blob is persisted regardless). Fields vary by client
-/// version; serde ignores any we don't name, so an evolving payload never 400s.
+/// the `EnemyKilled` actions in the SAME batch; the useful payload here is the
+/// post-fight durability of equipped gear. Fields vary by client version; serde ignores
+/// any we don't name, so an evolving payload never 400s.
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct CombatCompletedUpdate {
     #[serde(default)]
+    items: Vec<CombatDurabilityUpdate>,
+    #[serde(default)]
     #[allow(dead_code)]
     time: Option<u64>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct CombatDurabilityUpdate {
+    id: Uuid,
+    durability: f64,
 }
 
 /// A `*_loot_collected` action: the player picked something up inside the dungeon.
@@ -143,16 +152,9 @@ struct EnemyLootCollectedUpdate {
 struct ChestCollectedUpdate {
     pub spawn_group_id: Uuid,
     pub spawn_group_index: usize,
-    pub tier: u32,
-}
-
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-struct LootData {
-    #[serde(default)]
-    pub stackable_items: HashMap<Uuid, u32>,
-    #[serde(default)]
-    pub currencies: HashMap<Uuid, u32>,
+    /// Parsed for wire compatibility, never trusted over generated chest data.
+    #[serde(rename = "tier")]
+    pub _tier: u32,
 }
 
 #[derive(Deserialize, Debug)]
@@ -698,7 +700,13 @@ fn process_dungeon_actions(
                     .push(chest_id);
             }
 
-            DungeonUpdateAction::CombatCompleted(_) => {}
+            DungeonUpdateAction::CombatCompleted(combat) => {
+                apply_combat_durability(
+                    combat,
+                    &mut character_data.inventory.0,
+                    inventory_modification_tracker,
+                );
+            }
             DungeonUpdateAction::Unknown => {
                 log::warn!("dungeon_update: ignoring unknown action type");
             }
@@ -737,6 +745,41 @@ fn process_dungeon_actions(
     }
 
     currency_moved
+}
+
+/// Apply post-combat durability only in the damaging direction and only to an
+/// equipped item already owned by this character. This is the same trust boundary as
+/// abyss combat: a client cannot repair an item or invent one through this update.
+fn apply_combat_durability(
+    action: &CombatCompletedUpdate,
+    inventory: &mut blades_lib::user_data::CompleteInventory,
+    tracker: &mut InventoryChangeTracker,
+) -> usize {
+    let mut changed = 0;
+    for update in &action.items {
+        if !update.durability.is_finite() || update.durability < 0.0 {
+            continue;
+        }
+        let Some(equipped) = inventory
+            .loadout
+            .equipped_items
+            .0
+            .values_mut()
+            .find(|item| item.id == update.id)
+        else {
+            continue;
+        };
+        if update.durability >= equipped.item.durability {
+            continue;
+        }
+        equipped.item.durability = update.durability;
+        tracker
+            .modified_loadout
+            .modified_equipped_items
+            .insert(equipped.slot);
+        changed += 1;
+    }
+    changed
 }
 
 #[cfg(test)]
@@ -819,6 +862,64 @@ mod tests {
         assert!(matches!(req.actions[1], DungeonUpdateAction::CombatCompleted(_)));
         // Unknown action type tolerated (not a 400).
         assert!(matches!(req.actions[2], DungeonUpdateAction::Unknown));
+    }
+
+    #[test]
+    fn combat_completed_only_damages_owned_equipped_gear() {
+        use blades_lib::user_data::{
+            CompleteInventory, Item, ItemPropertiesAll, SingleEquippedItem,
+        };
+
+        let slot = Uuid::new_v4();
+        let item_id = Uuid::new_v4();
+        let unknown_id = Uuid::new_v4();
+        let mut inventory = CompleteInventory {
+            backpack: Default::default(),
+            loadout: Default::default(),
+            treasury: Default::default(),
+            overflow_treasury: Default::default(),
+            backpack_version: 0,
+            treasury_version: 0,
+        };
+        inventory.loadout.equipped_items.0.insert(
+            slot,
+            SingleEquippedItem {
+                id: item_id,
+                slot,
+                item: Item {
+                    item_template_id: Uuid::new_v4(),
+                    grade: None,
+                    tempering_level: 0,
+                    durability: 100.0,
+                    properties: ItemPropertiesAll::default(),
+                    arcane_tier: None,
+                },
+            },
+        );
+
+        let action: CombatCompletedUpdate = serde_json::from_value(serde_json::json!({
+            "items": [
+                {"id": item_id, "durability": 75.0},
+                {"id": item_id, "durability": 95.0},
+                {"id": item_id, "durability": -1.0},
+                {"id": unknown_id, "durability": 0.0}
+            ]
+        }))
+        .expect("combat payload parses");
+        let mut tracker = InventoryChangeTracker::default();
+
+        assert_eq!(
+            apply_combat_durability(&action, &mut inventory, &mut tracker),
+            1
+        );
+        assert_eq!(
+            inventory.loadout.equipped_items.0[&slot].item.durability,
+            75.0
+        );
+        assert_eq!(
+            tracker.modified_loadout.modified_equipped_items,
+            std::collections::HashSet::from([slot])
+        );
     }
 
     /// Floor loot and harvested plants must parse as their own action and carry their
@@ -1285,7 +1386,7 @@ mod tests {
         match &req.actions[0] {
             DungeonUpdateAction::ChestCollected(c) => {
                 assert_eq!(c.spawn_group_index, 0);
-                assert_eq!(c.tier, 3);
+                assert_eq!(c._tier, 3);
             }
             other => panic!("chest pickup must not be dropped, got {other:?}"),
         }
