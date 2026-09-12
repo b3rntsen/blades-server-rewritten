@@ -59,7 +59,29 @@ struct CombatCompletedUpdate {
 #[serde(rename_all = "camelCase")]
 struct CombatDurabilityUpdate {
     id: Uuid,
+    #[serde(deserialize_with = "deserialize_f64_number_or_string")]
     durability: f64,
+}
+
+/// Unity's JSON layer emits durability as either a JSON number or a decimal string,
+/// depending on which client-side property-bag path produced the combat update.
+/// Accept both wire forms; [`apply_combat_durability`] still rejects non-finite,
+/// negative, invented, and repairing values before touching inventory state.
+fn deserialize_f64_number_or_string<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum NumberOrString {
+        Number(f64),
+        String(String),
+    }
+
+    match NumberOrString::deserialize(deserializer)? {
+        NumberOrString::Number(value) => Ok(value),
+        NumberOrString::String(value) => value.parse().map_err(serde::de::Error::custom),
+    }
 }
 
 /// A `*_loot_collected` action: the player picked something up inside the dungeon.
@@ -938,6 +960,22 @@ mod tests {
             tracker.modified_loadout.modified_equipped_items,
             std::collections::HashSet::from([slot])
         );
+    }
+
+    #[test]
+    fn combat_completed_accepts_decimal_string_durability() {
+        let item_id = Uuid::new_v4();
+        let action: DungeonUpdateAction = serde_json::from_value(serde_json::json!({
+            "type": "combat_completed",
+            "items": [{"id": item_id, "durability": "102.9985"}],
+            "time": 1300
+        }))
+        .expect("Unity's decimal-string durability must deserialize");
+
+        let DungeonUpdateAction::CombatCompleted(combat) = action else {
+            panic!("combat_completed action");
+        };
+        assert_eq!(combat.items[0].durability, 102.9985);
     }
 
     /// Floor loot and harvested plants must parse as their own action and carry their
