@@ -13,6 +13,7 @@
 
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use actix_web::{
@@ -109,6 +110,17 @@ pub enum MatchmakerCommand {
     Enqueue(TicketRequest),
     /// Remove a ticket from the queue (client cancelled) — never zombie-resolves.
     Cancel { ticket_id: Uuid, user_id: Uuid },
+    /// Stop matchmaking for a deployment and fail every ticket that has not yet
+    /// resolved. The acknowledgement is sent only after `waiting` is empty, so the
+    /// deploy watcher cannot race a zero-active sample against an unseen queued user.
+    Drain {
+        ack: tokio::sync::oneshot::Sender<usize>,
+    },
+    /// Re-open the actor after a deployment was deferred or failed. The caller does
+    /// not advertise availability again until this acknowledgement arrives.
+    Resume {
+        ack: tokio::sync::oneshot::Sender<()>,
+    },
 }
 
 /// A queued matchmaking ticket handed to the matchmaker actor. Carries an [`RmsHandle`]
@@ -2338,6 +2350,9 @@ pub struct ArenaGlobal {
     pub config: ArenaConfig,
     pub matchmaker_tx: UnboundedSender<MatchmakerCommand>,
     pub registry: Arc<MatchRegistry>,
+    /// False only while the host deploy watcher is draining the old process. Checked
+    /// before enqueue so no new ticket can slip in after the drain acknowledgement.
+    pub accepting_matches: AtomicBool,
 }
 
 impl ArenaGlobal {
@@ -2365,6 +2380,7 @@ impl ArenaGlobal {
             config,
             matchmaker_tx: tx,
             registry,
+            accepting_matches: AtomicBool::new(true),
         })
     }
 }
@@ -2564,6 +2580,10 @@ async fn matchmaker_loop(
     // never move backwards into the past when the arena empties out. See [`next_floor`].
     let mut floors: std::collections::HashMap<Uuid, (Instant, u8)> =
         std::collections::HashMap::new();
+    // The HTTP admission flag prevents normal arrivals during a deploy, while this
+    // actor-owned flag closes the smaller race where a handler passed that check just
+    // before the drain started and sends Enqueue just after the drain command.
+    let mut draining = false;
     loop {
         // If a ticket is already waiting, race the next command against its fallback
         // deadline; otherwise just block for the next command.
@@ -2688,6 +2708,19 @@ async fn matchmaker_loop(
         let Some(cmd) = next else { break };
 
         let req = match cmd {
+            MatchmakerCommand::Enqueue(req) if draining => {
+                let _ = req
+                    .rms
+                    .send(MatchmakingMessage::Failed {
+                        ticket_id: req.ticket_id,
+                    })
+                    .await;
+                info!(
+                    "matchmaker: rejected ticket {} while deployment drain is active",
+                    req.ticket_id
+                );
+                continue;
+            }
             MatchmakerCommand::Enqueue(req) => req,
             // Cancellation is routed through the actor so the ONLY owner of `waiting`
             // can dequeue the cancelled ticket. Before this, cancel was a no-op and a
@@ -2706,6 +2739,30 @@ async fn matchmaker_loop(
                         "matchmaker: cancel for ticket {ticket_id} — not in the queue (already resolved/gone)"
                     );
                 }
+                continue;
+            }
+            MatchmakerCommand::Drain { ack } => {
+                draining = true;
+                let count = waiting.len();
+                for (ticket, _) in waiting.drain(..) {
+                    let _ = ticket
+                        .rms
+                        .send(MatchmakingMessage::Failed {
+                            ticket_id: ticket.ticket_id,
+                        })
+                        .await;
+                }
+                floors.clear();
+                info!(
+                    "matchmaker: deployment drain acknowledged — failed {count} waiting ticket(s); no unresolved queue remains"
+                );
+                let _ = ack.send(count);
+                continue;
+            }
+            MatchmakerCommand::Resume { ack } => {
+                draining = false;
+                info!("matchmaker: deployment drain cancelled — accepting tickets again");
+                let _ = ack.send(());
                 continue;
             }
         };
@@ -3176,6 +3233,13 @@ pub async fn create_match(
     body: web::Json<CreateMatchRequest>,
 ) -> Result<Json<CreateMatchResponse>, BladeApiError> {
     let session = session.get_session_or_error()?;
+    // A container replacement destroys the in-memory ENet sessions. During a
+    // deployment drain, fail a new queue attempt immediately instead of accepting a
+    // ticket that the old process will lose (or starting a match the deploy then
+    // freezes). The new process starts with `accepting_matches=true`.
+    if !AtomicBool::load(&app_state.arena.accepting_matches, Ordering::Acquire) {
+        return Err(BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, 4, 3));
+    }
     let ticket_id = Uuid::new_v4();
 
     // The RMS WebSocket must already be open — the client holds it from login. We
@@ -3846,6 +3910,107 @@ mod tests {
                 "a cancelled ticket must never receive a Succeeded frame; got {msg:?}"
             );
         }
+    }
+
+    /// A deployment drain is acknowledged only after every unresolved ticket has
+    /// been failed and removed. This is the hand-off guarantee the image watcher
+    /// relies on before it waits for the active-match count to reach zero.
+    #[tokio::test]
+    async fn deployment_drain_fails_and_clears_waiting_tickets_before_ack() {
+        let registry = MatchRegistry::new(4);
+        let config = ArenaConfig {
+            public_advertise_host: None,
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 4,
+            max_queued_players: 64,
+            solo_fallback_secs: 1,
+            debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
+            busy_fallback_secs: 230,
+            recent_fallback_secs: 30,
+            recent_window_secs: 300,
+        };
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
+        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+
+        let ticket_id = Uuid::new_v4();
+        let (rms, mut recv) = unbounded_channel();
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
+            expected_udp_ip: None,
+            ticket_id,
+            user_id: Uuid::new_v4(),
+            character_id: None,
+            rms: RmsHandle::Direct(rms),
+            skill: None,
+        }))
+        .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        tx.send(MatchmakerCommand::Drain { ack: ack_tx }).unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), ack_rx)
+                .await
+                .expect("drain acknowledgement timed out")
+                .expect("matchmaker dropped drain acknowledgement"),
+            1
+        );
+
+        let mut failed = false;
+        while let Ok(Some(msg)) = tokio::time::timeout(Duration::from_millis(50), recv.recv()).await
+        {
+            if matches!(
+                &msg,
+                MatchmakingMessage::Failed {
+                    ticket_id: failed_id
+                } if *failed_id == ticket_id
+            ) {
+                failed = true;
+            }
+            assert!(
+                !matches!(msg, MatchmakingMessage::Succeeded { .. }),
+                "a drained ticket must never receive Succeeded; got {msg:?}"
+            );
+        }
+        assert!(failed, "the drained ticket did not receive Failed");
+
+        // This enqueue models a handler that passed the HTTP admission check just
+        // before drain began but reached the actor just after its acknowledgement.
+        // The actor-level latch must reject it too, otherwise a zero-active deploy
+        // sample could still race a newly accepted ticket.
+        let late_ticket_id = Uuid::new_v4();
+        let (late_rms, mut late_recv) = unbounded_channel();
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
+            expected_udp_ip: None,
+            ticket_id: late_ticket_id,
+            user_id: Uuid::new_v4(),
+            character_id: None,
+            rms: RmsHandle::Direct(late_rms),
+            skill: None,
+        }))
+        .unwrap();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), late_recv.recv()).await,
+            Ok(Some(MatchmakingMessage::Failed { ticket_id })) if ticket_id == late_ticket_id
+        ));
+
+        let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+        tx.send(MatchmakerCommand::Resume { ack: resume_tx })
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), resume_rx)
+            .await
+            .expect("resume acknowledgement timed out")
+            .expect("matchmaker dropped resume acknowledgement");
+
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        assert_eq!(
+            registry.available_permits(),
+            4,
+            "a drained ticket survived until its bot-fallback deadline"
+        );
     }
 
     /// A cancel that does NOT match the waiting ticket's (ticket_id, user_id) must
