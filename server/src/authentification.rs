@@ -49,6 +49,17 @@ struct SessionResponseInner {
     denied_features: HashMap<String, DeniedFeatureResponse>,
 }
 
+/// The durable bearer the client stores as its BNet login token.
+///
+/// It must be the same value in a completed session and in the intermediate
+/// `accountLinkResult`. `LinkAccountResponse.GetNewLoginToken` reads the latter
+/// before the conflict picker continues to `/force`; returning a throwaway
+/// session token there makes the next cold start present a token this server
+/// can never resolve.
+fn persistent_login_token(secret_user_id: Uuid) -> String {
+    secret_user_id.to_string()
+}
+
 impl SessionResponseInner {
     fn from_session(session_id: Uuid, session: &Session) -> Self {
         let mut denied_features = HashMap::new();
@@ -72,7 +83,7 @@ impl SessionResponseInner {
             // secret user id is already the persistent bearer used by auth/anon
             // (`userId`), so this grants no new authority; it makes the BNet
             // route honour the same existing account secret.
-            login_token: session.secret_user_id.to_string(),
+            login_token: persistent_login_token(session.secret_user_id),
             feature_status: 7,
             // Session.LinkedAccountsStatus bitmask (client dump.cs:484710). The client's
             // "Do you want to sign in?" AnonymousWarning nag (shown at spend/commit points
@@ -375,26 +386,12 @@ async fn bnet_link(
         }
         ids.push(secret_id.to_string());
 
-        // A real token. Retail returns one here and we sent an empty string —
-        // harmless-looking, but it is the value the client carries into the
-        // choice it is about to make, and an empty one is not something retail
-        // ever hands it.
-        // This token is DELIBERATELY NOT RESOLVABLE, and that needs saying
-        // because `SessionResponseInner::login_token` is documented as something
-        // "the client keeps to re-establish a session without asking for the
-        // password again". `pending_id` is a fresh uuid that is never handed to
-        // `store_new_session` or `persist_session`, so the store has never heard
-        // of it: a client that presents this instead of calling `/force` will be
-        // rejected, and the player ends up exactly where the earlier
-        // empty-string version left them.
-        //
-        // It is filled in only because the field is non-optional in retail's
-        // response shape. The ONLY valid continuation from a conflict is
-        // `/auth/bnet/link/force` with the chosen user id — which is the whole
-        // point of answering `conflict: true` with `session: None`.
-        let pending = Session::new(user_id, secret_id, app_state.session_store.ttl);
-        let pending_id = Uuid::new_v4();
-        let login_token = pending.generate_token(&pending_id);
+        // The client exposes this field as `NewBnetToken` and persists it before
+        // continuing through the conflict picker. It therefore has to be the
+        // same durable bearer `/auth/bnet/login` accepts on a cold start. The old
+        // value was a token for an unregistered throwaway session, so every
+        // restart rejected it and fell back to anonymous login.
+        let login_token = persistent_login_token(secret_id);
 
         // Still no SESSION. The client is about to ask which profile to keep;
         // handing it a live session for the other account before the player
@@ -826,6 +823,18 @@ mod link_tests {
         assert_eq!(response.login_token, account.to_string());
         assert_ne!(response.login_token, session.generate_token(&session_id));
         assert!(Uuid::parse_str(&response.login_token).is_ok(), "retail loginToken is a UUID");
+    }
+
+    /// Report #125: the normal anonymous-to-real-account link reports a
+    /// conflict before `/force`. The client persists this intermediate field as
+    /// its new BNet token, so it must resolve to the same account after restart.
+    #[test]
+    fn conflict_login_token_is_the_same_durable_bearer_as_the_session() {
+        let linked_account = Uuid::from_u128(0xBEE7_125);
+        let token = persistent_login_token(linked_account);
+
+        assert_eq!(token, linked_account.to_string());
+        assert_eq!(Uuid::parse_str(&token), Ok(linked_account));
     }
 
     /// The conflict decision is the whole of the link flow's judgement, and it
