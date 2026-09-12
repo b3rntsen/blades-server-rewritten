@@ -343,6 +343,15 @@ pub struct MatchInstance {
     /// between-rounds window (session 835, gmid 57 at 17:19:32) and the server did
     /// nothing with it.
     skip_state_requested: bool,
+    /// Round whose between-round profile relays are recorded in
+    /// `interround_profiles_sent`. The client normally sends op36 for both fighters,
+    /// and the SynchronizingLoadout step also has to cover a missing op36. Without
+    /// de-duplication those two paths sent the same large op54 twice while the client
+    /// was rebuilding the opponent actor, which can leave that actor stale in round 2.
+    interround_profile_round: Option<u8>,
+    /// One bit per fighter: its current server-authoritative profile has already been
+    /// relayed to the opponent during this between-round walk.
+    interround_profiles_sent: Vec<bool>,
 }
 
 impl MatchInstance {
@@ -382,6 +391,8 @@ impl MatchInstance {
             debug_hold: super::debug_hold_enabled(),
             setup_step: 0,
             skip_state_requested: false,
+            interround_profile_round: None,
+            interround_profiles_sent: vec![false; capacity],
         }
     }
 
@@ -512,15 +523,22 @@ impl MatchInstance {
             // avatar toggle, and the opponent's client only learns it from the op54
             // profile we build. Record it, and if it changed after that profile was
             // already broadcast, re-broadcast so the opponent's avatar matches.
+            let mut profile_changed = false;
             if let Some(hide) = messages::loadout_backend_hide_helmet(user_data) {
                 if let Some(f) = self.combat.fighters.get_mut(sender) {
                     if f.loadout.hide_helmet != hide {
                         f.loadout.hide_helmet = hide;
-                        debug!(
-                            "combat c2s: slot {sender} op61 HideHelmet={hide} — re-broadcasting profile"
-                        );
-                        self.broadcast_profile_of(&mut out, sender);
+                        profile_changed = true;
                     }
+                }
+            }
+            if profile_changed {
+                debug!(
+                    "combat c2s: slot {sender} op61 HideHelmet changed — re-broadcasting profile"
+                );
+                self.broadcast_profile_of(&mut out, sender);
+                if matches!(self.combat.phase, FlowState::NextState) {
+                    self.mark_interround_profile_sent(sender);
                 }
             }
             debug!("combat c2s: slot {sender} op61 LoadoutClientBackendSynchronized — handshake, no reply");
@@ -578,11 +596,9 @@ impl MatchInstance {
         if messages::is_player_loadout_ready(user_data)
             && matches!(self.combat.phase, FlowState::NextState)
         {
-            let before = out.len();
-            self.broadcast_profile_of(&mut out, sender);
+            let sent = self.broadcast_interround_profile_once(&mut out, sender);
             info!(
-                "combat c2s: slot {sender} op36 PlayerLoadoutReady between rounds → {} op54 PROFILE re-broadcast",
-                out.len() - before,
+                "combat c2s: slot {sender} op36 PlayerLoadoutReady between rounds → {sent} op54 PROFILE re-broadcast(s)",
             );
             return out;
         }
@@ -1091,7 +1107,7 @@ impl MatchInstance {
                         // `broadcast_profiles` had exactly one caller (the `Spawning`
                         // branch), so no profile could ever be refreshed mid-match.
                         if matches!(state, MatchState::SynchronizingLoadout) {
-                            self.broadcast_profiles(&mut out);
+                            self.broadcast_missing_interround_profiles(&mut out);
                         }
                         self.combat.interround_step += 1;
                         self.combat.phase_entered = now;
@@ -1610,6 +1626,53 @@ impl MatchInstance {
     fn broadcast_profiles(&self, out: &mut Vec<(usize, Vec<u8>)>) {
         for actor in 0..self.combat.fighters.len() {
             self.broadcast_profile_of(out, actor);
+        }
+    }
+
+    /// Start a fresh exactly-once profile-relay ledger for this between-round walk.
+    /// `combat.round` still names the round that just ended until InRound is emitted,
+    /// so it is a stable and unique epoch for the whole walk.
+    fn prepare_interround_profile_relay(&mut self) {
+        if self.interround_profile_round == Some(self.combat.round) {
+            return;
+        }
+        self.interround_profile_round = Some(self.combat.round);
+        self.interround_profiles_sent.fill(false);
+    }
+
+    fn mark_interround_profile_sent(&mut self, actor_slot: usize) {
+        self.prepare_interround_profile_relay();
+        if let Some(sent) = self.interround_profiles_sent.get_mut(actor_slot) {
+            *sent = true;
+        }
+    }
+
+    /// Relay one fighter's profile at most once during a between-round walk. The
+    /// automatic SynchronizingLoadout fallback and the client's op36 use this same
+    /// ledger, so a normal two-player transition cannot rebuild each opponent twice.
+    fn broadcast_interround_profile_once(
+        &mut self,
+        out: &mut Vec<(usize, Vec<u8>)>,
+        actor_slot: usize,
+    ) -> usize {
+        self.prepare_interround_profile_relay();
+        if self
+            .interround_profiles_sent
+            .get(actor_slot)
+            .copied()
+            .unwrap_or(true)
+        {
+            return 0;
+        }
+        self.interround_profiles_sent[actor_slot] = true;
+        let before = out.len();
+        self.broadcast_profile_of(out, actor_slot);
+        out.len() - before
+    }
+
+    fn broadcast_missing_interround_profiles(&mut self, out: &mut Vec<(usize, Vec<u8>)>) {
+        for actor_slot in 0..self.combat.fighters.len() {
+            self.broadcast_interround_profile_once(out, actor_slot);
         }
     }
 
@@ -2920,19 +2983,19 @@ pub(in crate::arena::combat) mod tests {
         }
     }
 
-    /// **Report #24, part 5 (propagation half) — a between-rounds `PlayerLoadoutReady`
-    /// re-broadcasts the profile, and `SynchronizingLoadout`(10) refreshes both.**
+    /// **Report #24/#113 — between-round profile relays are complete but not duplicated.**
     ///
     /// `broadcast_profiles` had exactly ONE caller — the round-start `Spawning` branch —
     /// so no op54 PROFILE could ever be refreshed mid-match: whatever the opponent's body
     /// looked like in round 1, it looked like in round 3. op36 was dropped on the floor
     /// alongside op57.
     ///
-    /// This covers the PROPAGATION path only. Making a between-round change alter the
-    /// fighter's combat NUMBERS needs a server-authoritative re-read of the character row
-    /// (see the PR body) — deliberately not attempted from client-declared gear.
+    /// The ordinary client path sends op36 for both fighters before the automatic
+    /// SynchronizingLoadout fallback. Relaying in both places rebuilt each opponent twice
+    /// while round 2 was opening. Keep the fallback for a missing op36, but share an
+    /// exactly-once ledger between both paths.
     #[test]
-    fn between_rounds_loadout_ready_rebroadcasts_the_opponent_profile() {
+    fn between_rounds_rebroadcasts_each_opponent_profile_exactly_once() {
         let (mut m, t) = profiled_live_inst();
         let (_death, t) = swing_until_death(&mut m, 0, t);
         assert_eq!(m.phase(), FlowState::NextState);
@@ -2940,8 +3003,9 @@ pub(in crate::arena::combat) mod tests {
         // op36 from slot 0 → slot 1 is re-sent slot 0's profile, and slot 0 is NOT sent
         // its own (retail's opponent-only rule, the one that used to stall "Setting up…").
         let own_obj = m.combat.fighters[0].player_net_object_id as i64;
-        let out = m.on_c2s(0, &c2s_handshake(m.combat.fighters[0].player_net_object_id, 36), t);
-        let profiles: Vec<(usize, i64)> = out
+        let op36 = c2s_handshake(m.combat.fighters[0].player_net_object_id, 36);
+        let first = m.on_c2s(0, &op36, t);
+        let profiles: Vec<(usize, i64)> = first
             .iter()
             .filter_map(|(v, b)| match classify_interround(b) {
                 Some(InterRoundFrame::Profile(o)) => Some((*v, o)),
@@ -2953,19 +3017,33 @@ pub(in crate::arena::combat) mod tests {
             vec![(1, own_obj)],
             "op36 between rounds → exactly one op54 PROFILE, slot 0's, to slot 1 only"
         );
+        assert!(
+            m.on_c2s(0, &op36, t + Duration::from_millis(1))
+                .is_empty(),
+            "a repeated op36 must not rebuild the same opponent actor again"
+        );
 
-        // …and the walk itself refreshes both profiles at SynchronizingLoadout(10).
+        // SynchronizingLoadout fills only the missing half: slot 1's profile goes to
+        // viewer 0, while viewer 1 does not receive slot 0's profile a second time.
         let log = record_interround(&mut m, t);
         let (sync_at, _) = first_state(&log, MatchState::SynchronizingLoadout);
-        for viewer in 0..2 {
-            let opp_obj = m.combat.fighters[1 - viewer].player_net_object_id as i64;
-            assert!(
-                log.iter().any(|(v, f, at)| *v == viewer
-                    && *at >= sync_at
-                    && matches!(f, InterRoundFrame::Profile(o) if *o == opp_obj)),
-                "viewer {viewer} must be re-sent its opponent's profile at SynchronizingLoadout(10)"
-            );
-        }
+        let sync_profiles: Vec<(usize, i64)> = log
+            .iter()
+            .filter_map(|(viewer, frame, at)| {
+                if *at < sync_at {
+                    return None;
+                }
+                match frame {
+                    InterRoundFrame::Profile(object) => Some((*viewer, *object)),
+                    _ => None,
+                }
+            })
+            .collect();
+        assert_eq!(
+            sync_profiles,
+            vec![(0, m.combat.fighters[1].player_net_object_id as i64)],
+            "the sync fallback sends only the profile not already relayed by op36"
+        );
     }
 
     /// Drive a between-rounds (NextState) walk to completion: tick at 250 ms until the
@@ -3063,6 +3141,43 @@ pub(in crate::arena::combat) mod tests {
         assert_eq!(m.fighter_health(0), m.fighter_max_health(0), "winner reset to full HP");
         assert_eq!(m.fighter_health(1), m.fighter_max_health(1), "loser reset to full HP");
         assert!(!m.is_finished(), "peers NOT disconnected — the match continues");
+    }
+
+    /// A paired human-vs-human match must remain interactive after the first round. This
+    /// is the exact live regression reported first with Mrsiri and then Adventurer vs
+    /// Flappety: round 1 worked, then the opponent froze, ignored damage, and the exit
+    /// button did nothing. Drive damage and concede after the real inter-round walk.
+    #[test]
+    fn paired_round2_accepts_damage_and_concede() {
+        let (mut m, _now, live1) = live_inst_at(2);
+        let (_death, round1_end) = swing_until_death(&mut m, 0, live1);
+        assert_eq!(m.phase(), FlowState::NextState);
+        let (_states, live2) = drive_interround_to_live(&mut m, round1_end);
+        assert_eq!(m.phase(), FlowState::StateTimeout);
+        assert_eq!(m.combat.round, 2);
+
+        // Human damage still resolves in the re-opened round.
+        let bot_health = m.fighter_health(1);
+        let hit_at = live2 + Duration::from_millis(500);
+        let _ = swing(&mut m, 0, hit_at);
+        assert!(
+            m.fighter_health(1) < bot_health,
+            "round-2 human input must damage the human opponent"
+        );
+
+        // The client's in-round exit carrier must work after the round boundary too.
+        let conceded = m.on_c2s(
+            0,
+            &[0xBE, GameMessageId::ConcedeMatch as u8],
+            hit_at + Duration::from_millis(100),
+        );
+        assert_eq!(m.combat.winner, Some(1));
+        assert_eq!(m.phase(), FlowState::RoundEnd);
+        assert!(conceded.iter().any(|(_, b)| {
+            b.len() > 2
+                && b[1] == 0x36
+                && arena_proto::parse_netdata(&b[2..]).int(3) == Some(48)
+        }));
     }
 
     /// Round scoring, end to end. The op48 the CLIENT receives must be CUMULATIVE —
