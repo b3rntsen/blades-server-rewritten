@@ -55,8 +55,18 @@ const CARRIER_OP46: u8 = 0x2e;
 /// 400/650/900 ms). A Dragonbone Dagger commits every 0.333 s: 0.233 s attack delay
 /// plus its 0.100 s combo-recovery gate. The old use of full `recoveryTime` imposed
 /// 0.783 s and rejected retail-paced releases observed at 0.372–0.668 s.
-fn swing_cooldown_for(fighter: &super::state::Fighter) -> Duration {
-    fighter.loadout.swing_interval()
+fn combat_speed_multiplier(fighter: &super::state::Fighter, now: Instant) -> f32 {
+    if fighter.is_frozen(now) {
+        super::gamedata::combat_params::SLOW_STATUS_MULTIPLIER
+    } else {
+        1.0
+    }
+}
+
+fn swing_cooldown_for(fighter: &super::state::Fighter, now: Instant) -> Duration {
+    Duration::from_secs_f32(
+        fighter.loadout.swing_interval().as_secs_f32() / combat_speed_multiplier(fighter, now),
+    )
 }
 
 /// Server-measured hold duration threshold for a FULL charge (Critical state).
@@ -88,6 +98,10 @@ fn swing_cooldown_for(fighter: &super::state::Fighter) -> Duration {
 /// `Loadout` as a fallback for old/unresolved items.
 fn critical_hold_secs(fighter: &super::state::Fighter) -> f32 {
     fighter.loadout.critical_hold_secs()
+}
+
+fn critical_hold_secs_for(fighter: &super::state::Fighter, now: Instant) -> f32 {
+    critical_hold_secs(fighter) / combat_speed_multiplier(fighter, now)
 }
 
 /// Fallback ability cooldown for abilities without authoritative game-data.
@@ -407,6 +421,17 @@ fn charge_crit_factor(fighter: &super::state::Fighter, hold_secs: f32) -> f32 {
     fighter.loadout.critical_damage_factor()
 }
 
+fn charge_crit_factor_at(
+    fighter: &super::state::Fighter,
+    hold_secs: f32,
+    now: Instant,
+) -> f32 {
+    if hold_secs < critical_hold_secs_for(fighter, now) {
+        return 1.0;
+    }
+    fighter.loadout.critical_damage_factor()
+}
+
 /// Resolve one inbound, decrypted c2s combat input from `sender`.
 pub fn on_c2s_input(
     combat: &mut MatchCombat,
@@ -485,7 +510,8 @@ pub fn on_c2s_input(
                     .unwrap_or(0.0);
                 // Reset press timestamp — this charge is consumed.
                 combat.fighters[sender].charge_press_at = None;
-                let swing_factor = charge_crit_factor(&combat.fighters[sender], hold_secs);
+                let swing_factor =
+                    charge_crit_factor_at(&combat.fighters[sender], hold_secs, now);
                 let is_crit = swing_factor > 1.0;
                 if is_crit {
                     info!(
@@ -785,7 +811,7 @@ pub fn on_c2s_input(
         combat.fighters[sender].charge_press_at = None;
         // Server measurement is authoritative; the client's number is only compared.
         charge_cross_check(sender, hold_secs, act.client_charge);
-        let swing_factor = charge_crit_factor(&combat.fighters[sender], hold_secs);
+        let swing_factor = charge_crit_factor_at(&combat.fighters[sender], hold_secs, now);
         if combat.fighters[target_slot].is_dead() {
             return Vec::new();
         }
@@ -834,7 +860,7 @@ fn resolve_swing_with_side(
     decoded_side: Option<ActiveSide>,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
-    let cooldown = swing_cooldown_for(&combat.fighters[sender]);
+    let cooldown = swing_cooldown_for(&combat.fighters[sender], now);
     if let Some(last) = combat.fighters[sender].last_swing {
         let elapsed = now.saturating_duration_since(last);
         if elapsed < cooldown {
@@ -1776,6 +1802,40 @@ fn apply_shipped_effects(
     // below, cannot be cured by the same cast.
     out.extend(apply_status_cures(combat, caster, ability_uuid, level, now));
 
+    // Harrying Bash's `_cooldownIncrease` applies to every active target skill,
+    // whether magicka- or stamina-powered. It extends an existing deadline, or
+    // starts a delay from now when the skill was ready. Perks are passive.
+    if let Some(secs) = r
+        .get(super::gamedata::AbilityField::CooldownIncrease)
+        .filter(|secs| secs.is_finite() && *secs > 0.0)
+    {
+        if target_slot < viewers && !combat.fighters[target_slot].is_dead() {
+            let delay = Duration::from_secs_f32(secs);
+            let abilities: Vec<String> = combat.fighters[target_slot]
+                .loadout
+                .abilities
+                .iter()
+                .filter(|ability| ability.tag != super::state::AbilityTag::Perk)
+                .map(|ability| ability.instance_uuid.clone())
+                .collect();
+            for target_ability in &abilities {
+                let baseline = combat.fighters[target_slot]
+                    .cooldowns
+                    .get(target_ability)
+                    .copied()
+                    .unwrap_or(now)
+                    .max(now);
+                combat.fighters[target_slot]
+                    .cooldowns
+                    .insert(target_ability.clone(), baseline + delay);
+            }
+            info!(
+                "combat: slot {target_slot} skill cooldowns +{secs:.2}s on {} active skill(s) via {ability_uuid}",
+                abilities.len(),
+            );
+        }
+    }
+
     if let Some(cap) = r.maximum_damage_dodged() {
         if cap > 0.0 && caster < viewers {
             combat.fighters[caster].negation_pools.push(NegationPool {
@@ -2421,7 +2481,7 @@ fn apply_status_conditioning(
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
     use super::damage::is_elemental;
-    use super::state::{condition_for_element, DamageType, StatusEffectType};
+    use super::state::{condition_for_element, DamageType};
 
     let mut out = Vec::new();
     let target_obj = combat.fighters[target_slot].net_object_id;
@@ -2483,43 +2543,12 @@ fn apply_status_conditioning(
             }
 
 
-            // FREEZE (frost only): `Frozen` used to be inert. It emitted its op51 and
-            // pushed an `ActiveEffect` whose per-tick is `dot_percent_health(Frost) ×
-            // maxHP` = **0.0** — Frost is a CONTROL status, not a DoT (Phase 3.8) — and
-            // then did nothing else: no actor state, no guard drop, and no gate anywhere
-            // in the bot loop, which only ever checked `is_staggered` / `is_paralyzed`.
-            // So a frozen opponent kept swinging and Frostbite's whole point was
-            // invisible (report #31, "does not freeze the opponent").
-            //
-            // The vehicle is the STAGGER path, for the same reason `apply_stagger_for`
-            // documents for ability stuns, mirrored: `ActorStateType` has **no `Frozen`
-            // member** (`dump.cs` 340171–340200, transcribed verbatim in `state.rs`), so
-            // there is no frozen actor-state id to put on the wire, and inventing one
-            // risks the client's `FindStateTypeByID` returning null and dropping the
-            // frame. `Staggered` (5) is capture-validated and does the same observable
-            // thing — inputs locked, guard dropped, combo broken, and an animation to
-            // play. The FROST identity still reaches the client: the op51 above carries
-            // the real `StatusEffectType::Frozen` (5), which is what drives the frost
-            // VFX. This reuses the existing plumbing wholesale, so the bot gate
-            // (`is_staggered` in `on_tick`) and the human input gate (`is_staggered` in
-            // `on_c2s_input`) both start applying to a freeze for free.
-            //
-            // Duration is SHIPPED: `ELEMENTAL_STATUSES[1]` (Frost) `.duration` = 5.0 s,
-            // the same figure the op51 above already put on the wire — the lock and the
-            // client-side status now expire together instead of disagreeing.
-            if *ty == DamageType::Frost && !already {
-                let secs = super::gamedata::combat_params::elemental_status(
-                    StatusEffectType::Frozen as u16 as u8,
-                )
-                .map(|e| e.duration)
-                .unwrap_or(CONDITION_DURATION_SECS);
-                info!(
-                    "combat status: gsid={} target_slot={target_slot} target={} status=FrozenControl frost_window={recent:.1} threshold={threshold:.1} duration={secs}",
-                    combat.game_session_id,
-                    combat.fighters[target_slot].loadout.display_name,
-                );
-                combat.fighters[target_slot].apply_stagger_for(now, secs);
-            }
+            // Frozen is not a second stagger/paralysis status. Retail's shipped
+            // `slowStatusMultiplier` is 0.75 and its loading tip says Frozen slows the
+            // target and stops stamina regeneration. op51 above drives the client-side
+            // frost VFX/slow; `swing_cooldown_for` and `critical_hold_secs_for` mirror
+            // that slower weapon timing authoritatively. Stamina suppression is in
+            // `apply_regen_tick`. Do not manufacture a Staggered actor state here.
             // PARALYSE (poison only): the absolute poison threshold layered on top —
             // gated by can_be_paralyzed (player) + the defender's poison resist /
             // Fortify-Poisoned / Ward (all already folded into `recent` via mitigation
@@ -2974,6 +3003,18 @@ fn on_round_ended(
 ) -> Vec<(usize, Vec<u8>)> {
     let mut out = Vec::new();
     let loser = combat.opponent_of(winner).unwrap_or(winner);
+    // Make the round boundary immediate and explicit. Old committed work may not
+    // animate or land later, and op53 can leave a surviving caster visually
+    // Channeling even though its logical actor_state is already Idle.
+    combat.channels.clear();
+    combat.pending_hits.clear();
+    combat.pending_impacts.clear();
+    for (slot, fighter) in combat.fighters.iter_mut().enumerate() {
+        fighter.clear_scheduled_states();
+        if !ended_by_death || slot != loser {
+            fighter.force_actor_state(ActorStateType::Idle, now);
+        }
+    }
     // **Phase 3.14 — DOUBLE-KO.** Both fighters at 0 HP in the same resolution step:
     // nobody scores, the round is replayed. AUTHORED, not capture-derived — no
     // recorded match ends this way, so this is a designed rule.
@@ -7174,8 +7215,8 @@ mod report_31_high_block_stun {
     use super::super::damage::flags;
     use super::super::loadout::starter;
     use super::super::state::{
-        ActorStateType, BlockPhase, BASE_STAGGER_DURATION_SECS, BLOCK_OPTIMAL_TIME_SECS, Fighter,
-        FlowState, MatchCombat, StatusEffectType, WeaponProfile,
+        AbilityTag, ActorStateType, BlockPhase, EquippedAbility, BASE_STAGGER_DURATION_SECS,
+        BLOCK_OPTIMAL_TIME_SECS, Fighter, FlowState, MatchCombat, StatusEffectType, WeaponProfile,
     };
 
     /// Two fighters with a plain 113.82 Slashing blade, live round.
@@ -8222,34 +8263,18 @@ mod report_31_high_block_stun {
         assert!(c.pending_impacts.is_empty(), "round 1 spells must not land in round 2");
     }
 
-    // -- Frozen must actually freeze --------------------------------------
-    //
-    // The Frost elemental status emitted its op51 and pushed an `ActiveEffect`,
-    // and that was all it did: its per-tick is `dot_percent_health(Frost) × maxHP`
-    // = 0.0 (Frost is a CONTROL status, not a DoT), it set no actor state, it did
-    // not drop the victim's guard, and nothing in the bot loop gated on it. So a
-    // "frozen" opponent kept swinging and the mechanic was invisible — the same
-    // shape of defect as the missing stagger gate above.
+    // -- Frozen slows; it does not paralyse -------------------------------
 
-    /// A frozen bot must stop swinging and must enter an actor state the client can
-    /// animate, exactly the way a stunned one does.
+    /// The shipped 0.75 slow multiplier lengthens weapon cadence and charge time
+    /// while leaving the fighter able to act. The old implementation layered a
+    /// five-second Staggered state on Frozen and completely rejected input.
     #[test]
-    fn a_frozen_bot_stops_swinging_and_enters_an_actor_state() {
+    fn frozen_slows_weapon_timing_without_locking_input_or_inventing_stagger() {
         let t0 = Instant::now();
-        // The round has been live for a while, so nothing about round START is in play.
         let now = t0 + Duration::from_secs(30);
-
-        // Control: at this same instant an UNFROZEN bot does engage.
-        let mut ctrl = combat(t0, 1);
-        super::on_tick(&mut ctrl, now, false);
-        assert!(
-            ctrl.fighters[1].bot_swing_at.is_some(),
-            "control: an unfrozen bot engages at this instant",
-        );
-
-        // expected_peers = 1 → slot 1 is the bot. Land Frozen on it with an
-        // overwhelming Frost hit (the conditioning threshold is a fraction of maxHP).
         let mut c = combat(t0, 1);
+        let normal_cadence = super::swing_cooldown_for(&c.fighters[1], now);
+        let normal_charge = super::critical_hold_secs_for(&c.fighters[1], now);
         let out = super::apply_status_conditioning(
             &mut c,
             1,
@@ -8264,42 +8289,30 @@ mod report_31_high_block_stun {
             }
         });
         assert!(froze, "precondition: the op51 Frozen(5) apply must land");
+        assert!(c.fighters[1].is_frozen(now));
+        assert!(!c.fighters[1].is_staggered(now));
+        assert_eq!(c.fighters[1].actor_state(), ActorStateType::Idle);
+        assert!(c.fighters[1].take_state_changes().is_empty());
 
-        // (1) The freeze sets an actor state, so the client has something to animate.
-        assert_ne!(
-            c.fighters[1].actor_state(),
-            ActorStateType::Idle,
-            "Frozen must set an actor state — a frozen fighter cannot still be Idle",
-        );
-        let entered = c.fighters[1].actor_state();
-        let transitions = c.fighters[1].take_state_changes();
-        assert!(
-            transitions.iter().any(|t| t.to == entered),
-            "…and the transition must be queued for the wire, so viewers see it",
-        );
+        let slow = super::super::gamedata::combat_params::SLOW_STATUS_MULTIPLIER;
+        let frozen_cadence = super::swing_cooldown_for(&c.fighters[1], now);
+        let frozen_charge = super::critical_hold_secs_for(&c.fighters[1], now);
+        assert!((frozen_cadence.as_secs_f32() - normal_cadence.as_secs_f32() / slow).abs() < 1e-5);
+        assert!((frozen_charge - normal_charge / slow).abs() < 1e-5);
 
-        // (2) The freeze gates the bot exactly the way a stagger does.
+        // expected_peers=1 makes slot 1 a bot. It still begins a wind-up.
         super::on_tick(&mut c, now + Duration::from_millis(10), false);
         assert!(
-            c.fighters[1].bot_swing_at.is_none(),
-            "a frozen bot must not queue a wind-up",
-        );
-        assert_ne!(
-            c.fighters[1].actor_state(),
-            ActorStateType::Charging,
-            "…nor enter Charging",
+            c.fighters[1].bot_swing_at.is_some(),
+            "Frozen is a slow, so a frozen fighter remains able to attack",
         );
 
-        // (3) …and it thaws on the SHIPPED Frost duration, it is not a permanent lock.
         let frost_secs = super::super::gamedata::combat_params::elemental_status(5)
             .expect("Frost (status_type 5) is in the shipped ELEMENTAL_STATUSES table")
             .duration;
         let thawed = now + Duration::from_secs_f32(frost_secs + 0.1);
-        super::on_tick(&mut c, thawed, false);
-        assert!(
-            c.fighters[1].bot_swing_at.is_some(),
-            "the bot swings again once the {frost_secs}s freeze lapses",
-        );
+        assert!(!c.fighters[1].is_frozen(thawed));
+        assert_eq!(super::swing_cooldown_for(&c.fighters[1], thawed), normal_cadence);
     }
 
     // -- (C) the bash's own 0.5 s guard window -------------------------------
@@ -8393,6 +8406,41 @@ mod report_31_high_block_stun {
             assert!(r.damage_to_cause_stagger().is_none(), "rank {lvl}");
             assert!(r.stun_duration().is_none(), "rank {lvl}");
         }
+    }
+
+    #[test]
+    fn harrying_bash_extends_both_spell_and_maneuver_cooldowns() {
+        let now = Instant::now();
+        let mut c = combat(now, 2);
+        let spell = "11111111-1111-4111-8111-111111111111";
+        let maneuver = "22222222-2222-4222-8222-222222222222";
+        let perk = "33333333-3333-4333-8333-333333333333";
+        c.fighters[1].loadout.abilities = vec![
+            EquippedAbility { instance_uuid: spell.into(), level: 1, tag: AbilityTag::Damage },
+            EquippedAbility { instance_uuid: maneuver.into(), level: 1, tag: AbilityTag::Maneuver },
+            EquippedAbility { instance_uuid: perk.into(), level: 1, tag: AbilityTag::Perk },
+        ];
+        c.fighters[1].cooldowns.insert(spell.into(), now + Duration::from_secs(7));
+
+        let harrying = uuid_of("HarryingBash");
+        let added = super::super::gamedata::ability_rank_clamped(harrying, 1)
+            .and_then(|rank| {
+                rank.get(super::super::gamedata::AbilityField::CooldownIncrease)
+            })
+            .expect("Harrying Bash R1 ships _cooldownIncrease");
+        super::apply_shipped_effects(&mut c, 0, 1, harrying, 1, 500.0, 0, now);
+
+        assert_eq!(
+            c.fighters[1].cooldowns.get(spell),
+            Some(&(now + Duration::from_secs_f32(7.0 + added))),
+            "an already-cooling spell is extended",
+        );
+        assert_eq!(
+            c.fighters[1].cooldowns.get(maneuver),
+            Some(&(now + Duration::from_secs_f32(added))),
+            "a ready stamina maneuver starts a cooldown",
+        );
+        assert!(!c.fighters[1].cooldowns.contains_key(perk), "passive perks have no cooldown");
     }
 
     // -- (D) Guardbreaker vs Staggering Bash: opposite block conditions ------

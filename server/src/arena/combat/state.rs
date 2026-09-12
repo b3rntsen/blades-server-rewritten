@@ -1440,6 +1440,13 @@ impl Fighter {
         if self.actor_state == next {
             return;
         }
+        self.force_actor_state(next, now);
+    }
+
+    /// Queue a transition even when the logical state already has this value.
+    /// Specialised packets such as op53 can put the client in a pose without changing
+    /// `actor_state`; round boundaries use this to reassert Idle authoritatively.
+    pub fn force_actor_state(&mut self, next: ActorStateType, now: Instant) {
         let from = self.actor_state;
         let time_in_previous = self.time_in_state(now);
         self.actor_state = next;
@@ -1559,6 +1566,14 @@ impl Fighter {
     /// True iff this fighter is currently staggered. [Phase 3.13]
     pub fn is_staggered(&self, now: Instant) -> bool {
         matches!(self.staggered_until, Some(t) if now < t)
+    }
+
+    /// Frozen is an elemental slow, not a stagger/paralysis input lock. The client
+    /// animates it from op51; the resolver uses this to scale weapon charge/cadence.
+    pub fn is_frozen(&self, now: Instant) -> bool {
+        self.effects
+            .iter()
+            .any(|effect| effect.effect == StatusEffectType::Frozen && now < effect.expires_at)
     }
 
     /// Enter the staggered state for `CombatParameters.baseStaggerDuration`.
@@ -2271,11 +2286,7 @@ impl MatchCombat {
             // restarts at 0 each round), so they reset with everything else.
             f.state_history.clear();
             f.transitions_total = 0;
-            if f.actor_state == ActorStateType::Idle {
-                f.state_entered = now;
-            } else {
-                f.set_actor_state(ActorStateType::Idle, now);
-            }
+            f.force_actor_state(ActorStateType::Idle, now);
             f.blocking_side = ActiveSide::None;
             f.blocking_until = None;
             f.block_raised_at = None;

@@ -30,16 +30,11 @@
 //!
 //! # Ranking source
 //!
-//! `characters.character->>'pvpTrophies'`, descending — the same field the ladder
-//! promotes on, and the one every op49 victory card reports. Characters that have
-//! never scored are left off the board entirely (retail did the same: a player
-//! with 0 cups comes back as `"rank": 0` in `playerEntry` and does not appear in
-//! `entries`).
-//!
-//! `numberOfMatchesWon` comes from the Phase-5.4 `arena_match_results` audit
-//! table. That table is created by a migration that has to be applied by hand on
-//! the box, so a missing table degrades to `0` wins rather than failing the
-//! request.
+//! The active season's bounded slice of `arena_match_results`, not the character's
+//! lifetime/current JSON. The latest result supplies the cup total, while windowed
+//! counts supply current-season wins. This excludes characters carried over from an
+//! old season and admits a participant who played this season but finished on zero
+//! cups. Bot opponents have no result row and therefore cannot enter the board.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -48,7 +43,7 @@ use actix_web::{
     get,
     web::{self, Json},
 };
-use diesel::sql_types::{Array, BigInt, Nullable, Text, Uuid as SqlUuid};
+use diesel::sql_types::{BigInt, Nullable, Text, Uuid as SqlUuid};
 use diesel::{QueryableByName, sql_query};
 use diesel_async::RunQueryDsl;
 use log::warn;
@@ -116,6 +111,8 @@ struct RankedRow {
     streak: i64,
     #[diesel(sql_type = BigInt)]
     rank: i64,
+    #[diesel(sql_type = BigInt)]
+    wins: i64,
 }
 
 #[derive(QueryableByName, Debug)]
@@ -124,37 +121,50 @@ struct CountRow {
     total: i64,
 }
 
-#[derive(QueryableByName, Debug)]
-struct WinRow {
-    #[diesel(sql_type = SqlUuid)]
-    character_id: Uuid,
-    #[diesel(sql_type = BigInt)]
-    wins: i64,
-}
-
 /// The ranked projection every query below selects from. Kept in one place so the
 /// page query, the count and the player's own row can never disagree about who is
 /// on the board or in what order.
 const RANKED_CTE: &str = "
-    WITH ranked AS (
+    WITH active_season AS (
+        SELECT starts_at,
+               LEAST(ends_at, EXTRACT(EPOCH FROM now())::bigint) AS cutoff
+        FROM arena_seasons
+        WHERE status = 'active'
+        ORDER BY starts_at DESC
+        LIMIT 1
+    ),
+    season_matches AS (
+        SELECT r.character_id,
+               r.trophies_after AS score,
+               COUNT(*) FILTER (WHERE r.win) OVER (PARTITION BY r.character_id) AS wins,
+               ROW_NUMBER() OVER (
+                   PARTITION BY r.character_id ORDER BY r.recorded_at DESC, r.id DESC
+               ) AS latest
+        FROM arena_match_results r
+        JOIN active_season s
+          ON r.recorded_at >= to_timestamp(s.starts_at)
+         AND r.recorded_at < to_timestamp(s.cutoff)
+    ),
+    ranked AS (
         SELECT c.id,
                c.user_id,
                COALESCE(c.character ->> 'name', '') AS name,
                g.name AS guild_name,
-               COALESCE((c.character ->> 'pvpTrophies')::bigint, 0) AS score,
+               m.score,
                COALESCE((c.character ->> 'pvpWinningStreak')::bigint, 0) AS streak,
+               m.wins,
                ROW_NUMBER() OVER (
-                   ORDER BY COALESCE((c.character ->> 'pvpTrophies')::bigint, 0) DESC,
-                            COALESCE(c.character ->> 'name', '') ASC
+                   ORDER BY m.score DESC, m.wins DESC, c.id
                ) AS rank
-        FROM characters c
+        FROM season_matches m
+        JOIN characters c ON c.id = m.character_id
         LEFT JOIN guild_members gm ON gm.character_id = c.id
         LEFT JOIN guilds g ON g.id = gm.guild_id
-        WHERE COALESCE((c.character ->> 'pvpTrophies')::bigint, 0) > 0
+        WHERE m.latest = 1
     )
 ";
 
-fn row_to_entry(r: RankedRow, wins: &HashMap<Uuid, i64>) -> LeaderboardEntry {
+fn row_to_entry(r: RankedRow) -> LeaderboardEntry {
     LeaderboardEntry {
         user_id: r.user_id,
         character_id: r.id,
@@ -162,7 +172,7 @@ fn row_to_entry(r: RankedRow, wins: &HashMap<Uuid, i64>) -> LeaderboardEntry {
         guild_name: r.guild_name.unwrap_or_default(),
         rank: r.rank,
         score: r.score,
-        number_of_matches_won: wins.get(&r.id).copied().unwrap_or(0),
+        number_of_matches_won: r.wins,
         streak: r.streak,
     }
 }
@@ -220,7 +230,7 @@ async fn build(
     let total_pages = page_count(total);
 
     let rows: Vec<RankedRow> = sql_query(format!(
-        "{RANKED_CTE} SELECT id, user_id, name, guild_name, score, streak, rank \
+        "{RANKED_CTE} SELECT id, user_id, name, guild_name, score, streak, rank, wins \
          FROM ranked ORDER BY rank LIMIT $1 OFFSET $2"
     ))
     .bind::<BigInt, _>(PAGE_SIZE)
@@ -232,7 +242,7 @@ async fn build(
     // returned alongside page 1), so it is fetched separately.
     let player_row: Option<RankedRow> = if include_player {
         sql_query(format!(
-            "{RANKED_CTE} SELECT id, user_id, name, guild_name, score, streak, rank \
+            "{RANKED_CTE} SELECT id, user_id, name, guild_name, score, streak, rank, wins \
              FROM ranked WHERE id = $1"
         ))
         .bind::<SqlUuid, _>(character_id)
@@ -244,39 +254,10 @@ async fn build(
         None
     };
 
-    // Win counts for exactly the characters we are about to serialize. Best
-    // effort: the audit table is created by a hand-applied migration, so a
-    // missing table means "0 wins", not a 500.
-    let mut ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
-    if let Some(p) = &player_row {
-        ids.push(p.id);
-    }
-    let wins: HashMap<Uuid, i64> = if ids.is_empty() {
-        HashMap::new()
-    } else {
-        match sql_query(
-            "SELECT character_id, COUNT(*) AS wins FROM arena_match_results \
-             WHERE win AND character_id = ANY($1) GROUP BY character_id",
-        )
-        .bind::<Array<SqlUuid>, _>(ids)
-        .get_results::<WinRow>(&mut conn)
-        .await
-        {
-            Ok(rs) => rs.into_iter().map(|r| (r.character_id, r.wins)).collect(),
-            Err(e) => {
-                warn!(
-                    "leaderboard: arena_match_results unavailable ({e}); \
-                     reporting 0 matches won (apply the Phase-5.4 migration)"
-                );
-                HashMap::new()
-            }
-        }
-    };
-
     let player_entry = if include_player {
         Some(match player_row {
-            Some(r) => row_to_entry(r, &wins),
-            // Unranked (never scored a trophy) — retail answers rank 0 / score 0.
+            Some(r) => row_to_entry(r),
+            // No match in the active season — answer rank 0 / score 0.
             None => LeaderboardEntry {
                 character_id,
                 ..Default::default()
@@ -292,7 +273,7 @@ async fn build(
             total_entries: total,
             current_page: page,
             total_pages,
-            entries: rows.into_iter().map(|r| row_to_entry(r, &wins)).collect(),
+            entries: rows.into_iter().map(row_to_entry).collect(),
         },
     })
 }
