@@ -425,11 +425,13 @@ fn acceptance_reward(quest_id: Uuid) -> RewardGrant {
         Uuid::from_u128(0x3b478dfa_73bb_42df_a420_05cf83d015bc);
     const LUMBER: Uuid = Uuid::from_u128(0xe7193116_d761_479b_8a20_5633737977f5);
     const COPPER: Uuid = Uuid::from_u128(0x42d91529_c88b_4c5b_815b_b55508b4e7ef);
+    const LIMESTONE: Uuid = Uuid::from_u128(0xfd67bbc6_20f4_44a3_9614_28265ebb8c67);
 
     let mut reward = RewardGrant::default();
     if quest_id == MQ04_REBUILD_TOWN_HALL {
         reward.stackable_items.insert(LUMBER, 140);
         reward.stackable_items.insert(COPPER, 150);
+        reward.stackable_items.insert(LIMESTONE, 50);
     }
     reward
 }
@@ -686,9 +688,11 @@ mod report99_quest_reward_tests {
         );
         let lumber = Uuid::parse_str("e7193116-d761-479b-8a20-5633737977f5").unwrap();
         let copper = Uuid::parse_str("42d91529-c88b-4c5b-815b-b55508b4e7ef").unwrap();
+        let limestone = Uuid::parse_str("fd67bbc6-20f4-44a3-9614-28265ebb8c67").unwrap();
         assert_eq!(reward.stackable_items.get(&lumber), Some(&140));
         assert_eq!(reward.stackable_items.get(&copper), Some(&150));
-        assert_eq!(reward.stackable_items.len(), 2);
+        assert_eq!(reward.stackable_items.get(&limestone), Some(&50));
+        assert_eq!(reward.stackable_items.len(), 3);
     }
 
     #[test]
