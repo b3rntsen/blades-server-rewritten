@@ -2804,7 +2804,7 @@ pub(in crate::arena::combat) mod tests {
         }
     }
 
-    /// **Report #113 — an in-flight cast must not survive the round boundary.**
+    /// **Report #113 — a client-side cast pose must not survive the round boundary.**
     ///
     /// The server reset `actor_state` to Idle but cleared its pending-state outbox,
     /// assuming the client rebuilt both actors between rounds. A real match disproved
@@ -2812,15 +2812,17 @@ pub(in crate::arena::combat) mod tests {
     /// and into round 2. The reset must send the ordinary gmid39 Idle transition to
     /// both viewers, just like any other authoritative actor-state change.
     #[test]
-    fn next_round_broadcasts_idle_for_an_inflight_cast() {
+    fn next_round_reasserts_idle_even_when_logical_state_was_already_idle() {
         let (mut m, t0) = live_inst(2);
         let (_death, t) = swing_until_death(&mut m, 0, t0);
         let caster = 0;
         let caster_obj = m.combat.fighters[caster].net_object_id as i64;
 
-        // Model the last state both clients saw before the inter-round walk.
-        m.combat.fighters[caster].set_actor_state(ActorStateType::Channeling, t);
+        // op53 can put both clients in Channeling without changing the server's
+        // logical actor state. Model that divergence by leaving the logical state Idle.
+        m.combat.fighters[caster].set_actor_state(ActorStateType::Idle, t);
         let _ = m.combat.fighters[caster].take_state_changes();
+        assert_eq!(m.combat.fighters[caster].actor_state(), ActorStateType::Idle);
 
         let mut idle_viewers = std::collections::HashSet::new();
         let step = Duration::from_millis(100);

@@ -18,7 +18,7 @@
 //! gauge; `try_acquire_owned` gives clean reject-when-full.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -105,6 +105,10 @@ struct Match {
     /// match ticket order — see arena-multiplayer Bug 4 / slot inversion).
     /// Example: psids[0] = Flappety's psid → slot 0, psids[1] = WolfWalker's psid → slot 1.
     psid_to_slot: HashMap<String, usize>,
+    /// Trusted HTTP-ingress source address → ticket/fighter slot. Only unique
+    /// addresses are retained; two clients behind one NAT remain ambiguous and use
+    /// a later identity-bearing frame rather than being guessed here.
+    expected_ip_to_slot: HashMap<IpAddr, usize>,
     /// `peer address → fighter slot` — the **authoritative** addressing table, in both
     /// directions (inbound sender resolution and outbound target resolution). Populated
     /// as early as each path allows:
@@ -467,6 +471,25 @@ impl MatchRegistry {
         game_session_id: Uuid,
         bots: usize,
     ) -> bool {
+        self.allocate_with_bots_and_peer_ips(
+            player_session_ids,
+            loadouts,
+            game_session_id,
+            bots,
+            &[],
+        )
+    }
+
+    /// Allocate while carrying each ticket's trusted HTTP source IP into the live
+    /// UDP admission seam, closing the identity gap before the profile burst.
+    pub fn allocate_with_bots_and_peer_ips(
+        &self,
+        player_session_ids: &[String],
+        loadouts: Vec<Loadout>,
+        game_session_id: Uuid,
+        bots: usize,
+        expected_peer_ips: &[Option<IpAddr>],
+    ) -> bool {
         let permit = match self.semaphore.clone().try_acquire_owned() {
             Ok(p) => p,
             Err(_) => {
@@ -499,6 +522,18 @@ impl MatchRegistry {
             .enumerate()
             .map(|(i, psid)| (psid.clone(), i))
             .collect();
+        let mut expected_ip_candidates: HashMap<IpAddr, (usize, usize)> = HashMap::new();
+        for (slot, ip) in expected_peer_ips.iter().copied().enumerate().take(capacity) {
+            let Some(ip) = ip else { continue };
+            expected_ip_candidates
+                .entry(ip)
+                .and_modify(|(_, count)| *count += 1)
+                .or_insert((slot, 1));
+        }
+        let expected_ip_to_slot: HashMap<IpAddr, usize> = expected_ip_candidates
+            .into_iter()
+            .filter_map(|(ip, (slot, count))| (count == 1).then_some((ip, slot)))
+            .collect();
         self.matches.lock().unwrap().insert(
             game_session_id,
             Match {
@@ -511,6 +546,7 @@ impl MatchRegistry {
             reached_capacity: false,
                 _permit: permit,
                 psid_to_slot,
+                expected_ip_to_slot,
                 peer_to_slot: HashMap::new(),
                 full_at: None,
                 fallback_logged: false,
@@ -593,13 +629,10 @@ impl MatchRegistry {
     /// Live-host (real op-0x38 handshake) path. The retail connect handshake
     /// carries only the client's X25519 pubkey — the `playerSessionId` is NOT on
     /// the wire (it comes later, encrypted; spec §4.1/§9). So bind the connection
-    /// to the **oldest reserved match with a free slot** (FIFO), complete ECDH, and
-    /// return `(server_pubkey, nonce)` for the reply. `None` ⇒ no free slot.
-    ///
-    /// v1 limitation: with several concurrent pending matches this FIFO bind can
-    /// misassign a connection (the disambiguating psid isn't on the wire yet). For
-    /// the low-concurrency first release it's exact; precise binding (from the
-    /// first decrypted PlayerInfo, or a per-match UDP port) is the refinement.
+    /// to the reserved match whose trusted HTTP source IP matches, complete ECDH,
+    /// and return `(server_pubkey, nonce)` for the reply. With no unique IP evidence
+    /// (for example two clients behind one NAT), fall back to the oldest match and
+    /// wait for a later identity-bearing frame. `None` ⇒ no free slot.
     pub fn admit_connection(
         &self,
         peer: SocketAddr,
@@ -609,7 +642,7 @@ impl MatchRegistry {
         let gsid = matches
             .values()
             .filter(|m| m.players.len() < m.capacity)
-            .min_by_key(|m| m.order)
+            .min_by_key(|m| (!m.expected_ip_to_slot.contains_key(&peer.ip()), m.order))
             .map(|m| m.game_session_id)?;
         let m = matches.get_mut(&gsid).expect("just selected");
 
@@ -634,7 +667,9 @@ impl MatchRegistry {
         //   2. if every other peer is already bound, this one is the last free slot.
         // Everything else waits for an identity-bearing c2s frame (or the bounded
         // SLOT_BIND_GRACE fallback); `tick_matches` holds the identity burst until then.
-        if m.capacity <= 1 {
+        if let Some(slot) = m.expected_ip_to_slot.get(&peer.ip()).copied() {
+            m.bind_slot(peer, slot, "trusted matchmaking HTTP source IP");
+        } else if m.capacity <= 1 {
             let slot = m.psid_to_slot.values().copied().min().unwrap_or(0);
             m.bind_slot(peer, slot, "single-peer match — only one possible fighter slot");
         } else {
@@ -1728,6 +1763,36 @@ mod tests {
             "ENet admission order ≠ ticket order must NOT change who is which fighter.\n  {}",
             failures.join("\n  "),
         );
+    }
+
+    /// Regression for the Yaskrava/Flappety match: ticket slot 0 used WireGuard,
+    /// ticket slot 1 used the public endpoint, and the public peer reached ENet first.
+    /// Trusted ticket source addresses must win over FIFO admission order.
+    #[test]
+    fn trusted_ticket_ips_override_reversed_live_enet_admission_order() {
+        let reg = MatchRegistry::new(4);
+        let gsid = Uuid::new_v4();
+        let vpn_ip: IpAddr = "10.99.0.102".parse().unwrap();
+        let public_ip: IpAddr = "93.165.250.244".parse().unwrap();
+        assert!(reg.allocate_with_bots_and_peer_ips(
+            &[PSID_A.to_string(), PSID_B.to_string()],
+            vec![ident_loadout("Yaskrava", UUID_A), ident_loadout("Flappety", UUID_B)],
+            gsid,
+            0,
+            &[Some(vpn_ip), Some(public_ip)],
+        ));
+
+        let public_peer: SocketAddr = "93.165.250.244:33565".parse().unwrap();
+        let vpn_peer: SocketAddr = "10.99.0.102:46358".parse().unwrap();
+        reg.admit_connection(public_peer, &[3u8; 32]).expect("public peer admitted");
+        reg.admit_connection(vpn_peer, &[5u8; 32]).expect("VPN peer admitted");
+
+        let matches = reg.matches.lock().unwrap();
+        let m = matches.get(&gsid).unwrap();
+        assert_eq!(m.peer_to_slot.get(&vpn_peer), Some(&0), "Yaskrava ticket → slot 0");
+        assert_eq!(m.peer_to_slot.get(&public_peer), Some(&1), "Flappety ticket → slot 1");
+        assert!(m.all_slots_bound(), "identity must be known before the profile burst");
+        assert!(!m.fallback_logged, "trusted ingress identity must avoid FIFO entirely");
     }
 
     /// Phase 2 — the LIVE ENet path (`admit_connection`), where op-0x38 carries no

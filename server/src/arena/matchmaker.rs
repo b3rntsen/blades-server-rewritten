@@ -11,6 +11,7 @@
 //! points at our configured arena UDP endpoint. Real pairing + the live UDP
 //! match instance land in milestone (c)/(d).
 
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -160,6 +161,11 @@ pub struct TicketRequest {
     /// arrive by different roads. `Succeeded` is already sent per ticket, so
     /// each gets the address that works for them.
     pub via_vpn: bool,
+    /// UDP source address expected for this ticket, learned from trusted ingress.
+    /// The live ENet key exchange carries no playerSessionId, so this binds identity
+    /// before player-specific profiles or inputs are routed. Public nginx overwrites
+    /// `X-Real-IP`; the VPN path supplies `X-Newblades-Device-Ip`.
+    pub expected_udp_ip: Option<IpAddr>,
     /// What we know about this player's strength, for the pairing bracket.
     /// `None` when the lookup failed or the player has no character yet — an
     /// unknown player is never blocked from matching, only from being used as a
@@ -2984,7 +2990,15 @@ async fn resolve(
         }
     }
 
-    if !registry.allocate_with_bots(&psids, loadouts, game_session_id, bots) {
+    let expected_udp_ips: Vec<Option<IpAddr>> =
+        tickets.iter().map(|ticket| ticket.expected_udp_ip).collect();
+    if !registry.allocate_with_bots_and_peer_ips(
+        &psids,
+        loadouts,
+        game_session_id,
+        bots,
+        &expected_udp_ips,
+    ) {
         for t in tickets {
             warn!(
                 "matchmaker: at capacity — ticket {} left unresolved",
@@ -3138,6 +3152,17 @@ pub async fn create_match(
     let character_id = body.player_id;
     let skill = load_skill(&app_state, session.session.user_id, character_id).await;
 
+    let via_vpn = req.headers().get("X-Newblades-Device-Ip").is_some();
+    let expected_udp_ip = ["X-Newblades-Device-Ip", "X-Real-IP"]
+        .into_iter()
+        .find_map(|name| {
+            req.headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.trim().parse::<IpAddr>().ok())
+        })
+        .or_else(|| req.peer_addr().map(|addr| addr.ip()));
+
     app_state
         .arena
         .matchmaker_tx
@@ -3156,7 +3181,8 @@ pub async fn create_match(
             // Absent ⇒ public. The safe direction: a tunnel client wrongly told
             // the public address can still reach it (full tunnel routes out),
             // whereas a public client told 10.99.0.1 can reach nothing.
-            via_vpn: req.headers().get("X-Newblades-Device-Ip").is_some(),
+            via_vpn,
+            expected_udp_ip,
         }))
         .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, 4, 2))?;
 
@@ -3330,6 +3356,7 @@ mod tests {
         let (rms_b, mut recv_b) = unbounded_channel();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             via_vpn: true,
+            expected_udp_ip: None,
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3339,6 +3366,7 @@ mod tests {
         .unwrap();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             via_vpn: true,
+            expected_udp_ip: None,
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3413,6 +3441,7 @@ mod tests {
         let (rms_b, mut recv_b) = unbounded_channel();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             via_vpn: true,
+            expected_udp_ip: None,
             ticket_id: tid_a,
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3422,6 +3451,7 @@ mod tests {
         .unwrap();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             via_vpn: true,
+            expected_udp_ip: None,
             ticket_id: tid_b,
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3504,6 +3534,7 @@ mod tests {
         drop(recv_a);
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             via_vpn: true,
+            expected_udp_ip: None,
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3562,6 +3593,7 @@ mod tests {
 
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             via_vpn: true,
+            expected_udp_ip: None,
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3577,6 +3609,7 @@ mod tests {
 
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             via_vpn: true,
+            expected_udp_ip: None,
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3649,6 +3682,7 @@ mod tests {
         let (rms_a, _keep_a) = unbounded_channel();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             via_vpn: true,
+            expected_udp_ip: None,
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3667,6 +3701,7 @@ mod tests {
         let (rms_b, mut recv_b) = unbounded_channel();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             via_vpn: true,
+            expected_udp_ip: None,
             ticket_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             character_id: None,
@@ -3724,6 +3759,7 @@ mod tests {
         let (rms, mut recv) = unbounded_channel();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             via_vpn: true,
+            expected_udp_ip: None,
             ticket_id: tid,
             user_id: uid,
             character_id: None,
@@ -3785,6 +3821,7 @@ mod tests {
         let (rms, _recv) = unbounded_channel();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             via_vpn: true,
+            expected_udp_ip: None,
             ticket_id: tid,
             user_id: uid,
             character_id: None,
