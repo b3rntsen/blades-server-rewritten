@@ -41,15 +41,24 @@ struct EnemyKilledUpdate {
 
 /// A `combat_completed` action — the client posts it (alongside `enemy_killed`
 /// actions) when a combat encounter/room resolves. The per-enemy XP + kills arrive as
-/// the `EnemyKilled` actions in the SAME batch, so this is a state-only marker here
-/// (the dungeon's `current_state` blob is persisted regardless). Fields vary by client
-/// version; serde ignores any we don't name, so an evolving payload never 400s.
+/// the `EnemyKilled` actions in the SAME batch; the useful payload here is the
+/// post-fight durability of equipped gear. Fields vary by client version; serde ignores
+/// any we don't name, so an evolving payload never 400s.
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct CombatCompletedUpdate {
     #[serde(default)]
+    items: Vec<CombatDurabilityUpdate>,
+    #[serde(default)]
     #[allow(dead_code)]
     time: Option<u64>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct CombatDurabilityUpdate {
+    id: Uuid,
+    durability: f64,
 }
 
 /// A `*_loot_collected` action: the player picked something up inside the dungeon.
@@ -111,6 +120,16 @@ fn item_loot_grant(
     }
 }
 
+fn collected_chest_key(spawn_group_id: Uuid, spawn_group_index: usize) -> String {
+    if spawn_group_index == 0 {
+        // Backward compatibility: existing dungeon states stored a bare UUID
+        // for the only chest the old generator ever emitted.
+        spawn_group_id.to_string()
+    } else {
+        format!("{spawn_group_id}-{spawn_group_index}")
+    }
+}
+
 /// An `enemy_loot_collected` action — the player looted a corpse.
 ///
 /// Only the enemy's IDENTITY is read. The contents were rolled server-side the moment
@@ -133,16 +152,9 @@ struct EnemyLootCollectedUpdate {
 struct ChestCollectedUpdate {
     pub spawn_group_id: Uuid,
     pub spawn_group_index: usize,
-    pub tier: u32,
-}
-
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-struct LootData {
-    #[serde(default)]
-    pub stackable_items: HashMap<Uuid, u32>,
-    #[serde(default)]
-    pub currencies: HashMap<Uuid, u32>,
+    /// Parsed for wire compatibility, never trusted over generated chest data.
+    #[serde(rename = "tier")]
+    pub _tier: u32,
 }
 
 #[derive(Deserialize, Debug)]
@@ -645,28 +657,10 @@ fn process_dungeon_actions(
                 );
             }
 
-
-            // EVERY CHEST IS TIER 1, and the request's tier is never consulted.
-            //
-            // The comment here used to say the request's tier was "a fallback for
-            // a chest we have no record of generating". It was not, in two ways.
-            // `generate_for_dungeon` hardcodes `vec![ChestGeneratedData { tier: 1 }]`
-            // (blades_lib/src/util/dungeon.rs) and nothing else ever writes the
-            // field, so the fallback was unreachable — and a chest we have no
-            // record of `continue`s below before the tier is read anyway, so it
-            // was doubly unreachable. The handler's own test fixture posts
-            // `"tier":3`, which is why this looked like it worked.
-            //
-            // It must STAY unreachable: taking the tier from the request would be
-            // client-authoritative loot — anyone could post `"tier":5`. The real
-            // tier is not knowable here either: `game_data`'s spawn info is
-            // `chest: HashMap<Uuid, EmptyStruct>` and carries no tier, so it has
-            // not been mined yet.
-            //
-            // So a player who sees a tier-3 chest in the world still receives a
-            // tier-1 one. That is a reward-fidelity gap, not an exploit, and it is
-            // fixed by mining the per-chest tier into game_data and generating it
-            // server-side — not by trusting this request.
+            // The request repeats `tier`, but it is not authoritative. The chest
+            // generated for this spawn group was already assigned its APK-derived
+            // tier and quantity when the dungeon was created; only that stored
+            // result is used here.
             DungeonUpdateAction::ChestCollected(chest) => {
                 let Some(chest_data) =
                     generated_data.get_chest(&chest.spawn_group_id, chest.spawn_group_index)
@@ -683,30 +677,13 @@ fn process_dungeon_actions(
                 // collected set is persisted with the dungeon state, so this holds
                 // across requests as well as within one batch.
                 //
-                // The key is the spawn GROUP, not (group, index) — so one
-                // collection marks the whole group spent. That is correct only
-                // because `generate_for_dungeon` emits exactly one
-                // `ChestGeneratedData` per group today, and `game_data`'s
-                // `chest: HashMap<Uuid, EmptyStruct>` carries no quantity. If a
-                // group ever holds two chests, this would silently cap it at one.
-                //
-                // The key is deliberately NOT widened to a tuple: `collected_chests`
-                // is persisted inside the dungeon state as a set of UUIDs, so
-                // changing its element type would fail to deserialize every
-                // in-flight dungeon. Instead, make the assumption LOUD — if an
-                // index other than 0 ever arrives, the constraint above has been
-                // broken and this needs the wider key plus a migration.
-                if chest.spawn_group_index != 0 {
-                    log::warn!(
-                        "dungeon_update: chest spawn_group_index {} != 0 for group {:?} —                          collected_chests keys on the group alone, so this group is now                          spent after one pickup. Widen the key (and migrate the                          persisted set) before shipping multi-chest groups.",
-                        chest.spawn_group_index,
-                        chest.spawn_group_id
-                    );
-                }
                 if !dungeon_state
                     .dungeon_status
                     .collected_chests
-                    .insert(chest.spawn_group_id)
+                    .insert(collected_chest_key(
+                        chest.spawn_group_id,
+                        chest.spawn_group_index,
+                    ))
                 {
                     continue;
                 }
@@ -723,7 +700,13 @@ fn process_dungeon_actions(
                     .push(chest_id);
             }
 
-            DungeonUpdateAction::CombatCompleted(_) => {}
+            DungeonUpdateAction::CombatCompleted(combat) => {
+                apply_combat_durability(
+                    combat,
+                    &mut character_data.inventory.0,
+                    inventory_modification_tracker,
+                );
+            }
             DungeonUpdateAction::Unknown => {
                 log::warn!("dungeon_update: ignoring unknown action type");
             }
@@ -762,6 +745,41 @@ fn process_dungeon_actions(
     }
 
     currency_moved
+}
+
+/// Apply post-combat durability only in the damaging direction and only to an
+/// equipped item already owned by this character. This is the same trust boundary as
+/// abyss combat: a client cannot repair an item or invent one through this update.
+fn apply_combat_durability(
+    action: &CombatCompletedUpdate,
+    inventory: &mut blades_lib::user_data::CompleteInventory,
+    tracker: &mut InventoryChangeTracker,
+) -> usize {
+    let mut changed = 0;
+    for update in &action.items {
+        if !update.durability.is_finite() || update.durability < 0.0 {
+            continue;
+        }
+        let Some(equipped) = inventory
+            .loadout
+            .equipped_items
+            .0
+            .values_mut()
+            .find(|item| item.id == update.id)
+        else {
+            continue;
+        };
+        if update.durability >= equipped.item.durability {
+            continue;
+        }
+        equipped.item.durability = update.durability;
+        tracker
+            .modified_loadout
+            .modified_equipped_items
+            .insert(equipped.slot);
+        changed += 1;
+    }
+    changed
 }
 
 #[cfg(test)]
@@ -844,6 +862,64 @@ mod tests {
         assert!(matches!(req.actions[1], DungeonUpdateAction::CombatCompleted(_)));
         // Unknown action type tolerated (not a 400).
         assert!(matches!(req.actions[2], DungeonUpdateAction::Unknown));
+    }
+
+    #[test]
+    fn combat_completed_only_damages_owned_equipped_gear() {
+        use blades_lib::user_data::{
+            CompleteInventory, Item, ItemPropertiesAll, SingleEquippedItem,
+        };
+
+        let slot = Uuid::new_v4();
+        let item_id = Uuid::new_v4();
+        let unknown_id = Uuid::new_v4();
+        let mut inventory = CompleteInventory {
+            backpack: Default::default(),
+            loadout: Default::default(),
+            treasury: Default::default(),
+            overflow_treasury: Default::default(),
+            backpack_version: 0,
+            treasury_version: 0,
+        };
+        inventory.loadout.equipped_items.0.insert(
+            slot,
+            SingleEquippedItem {
+                id: item_id,
+                slot,
+                item: Item {
+                    item_template_id: Uuid::new_v4(),
+                    grade: None,
+                    tempering_level: 0,
+                    durability: 100.0,
+                    properties: ItemPropertiesAll::default(),
+                    arcane_tier: None,
+                },
+            },
+        );
+
+        let action: CombatCompletedUpdate = serde_json::from_value(serde_json::json!({
+            "items": [
+                {"id": item_id, "durability": 75.0},
+                {"id": item_id, "durability": 95.0},
+                {"id": item_id, "durability": -1.0},
+                {"id": unknown_id, "durability": 0.0}
+            ]
+        }))
+        .expect("combat payload parses");
+        let mut tracker = InventoryChangeTracker::default();
+
+        assert_eq!(
+            apply_combat_durability(&action, &mut inventory, &mut tracker),
+            1
+        );
+        assert_eq!(
+            inventory.loadout.equipped_items.0[&slot].item.durability,
+            75.0
+        );
+        assert_eq!(
+            tracker.modified_loadout.modified_equipped_items,
+            std::collections::HashSet::from([slot])
+        );
     }
 
     /// Floor loot and harvested plants must parse as their own action and carry their
@@ -1310,7 +1386,7 @@ mod tests {
         match &req.actions[0] {
             DungeonUpdateAction::ChestCollected(c) => {
                 assert_eq!(c.spawn_group_index, 0);
-                assert_eq!(c.tier, 3);
+                assert_eq!(c._tier, 3);
             }
             other => panic!("chest pickup must not be dropped, got {other:?}"),
         }
@@ -1351,30 +1427,33 @@ mod tests {
         assert_eq!(v, 4, "a batch bumps once however many chests it carried");
     }
 
-    /// Collecting the same chest twice must mint ONE chest.
+    /// Collecting the same indexed chest twice must mint it once.
     ///
     /// The guard is `collected_chests`, which is persisted with the dungeon state,
     /// so it holds across requests as well as within a batch — a client that
     /// replays its last update, or taps twice, does not double its treasury.
     #[test]
-    fn a_chest_is_only_ever_collected_once() {
+    fn each_generated_chest_is_only_ever_collected_once() {
         use std::collections::HashSet;
         let chest_a: Uuid = "e7edb276-a04c-413f-80ab-69ffe304874f".parse().unwrap();
         let chest_b: Uuid = "4295c814-e5e7-4a8a-939a-d3238471c906".parse().unwrap();
 
         // the handler's rule, in the same shape as the code under test
-        let mut collected: HashSet<Uuid> = HashSet::new();
+        let mut collected: HashSet<String> = HashSet::new();
         let mut minted = 0;
-        for id in [chest_a, chest_a, chest_b, chest_a] {
-            if collected.insert(id) {
+        for (id, index) in [(chest_a, 0), (chest_a, 0), (chest_a, 1), (chest_b, 0)] {
+            if collected.insert(collected_chest_key(id, index)) {
                 minted += 1;
             }
         }
-        assert_eq!(minted, 2, "two distinct chests, however many times they are sent");
+        assert_eq!(
+            minted, 3,
+            "two indexes in one group and one in another must each mint once"
+        );
 
         // control: without the guard every action mints, which is the bug
         assert_eq!(
-            [chest_a, chest_a, chest_b, chest_a].len(),
+            [(chest_a, 0), (chest_a, 0), (chest_a, 1), (chest_b, 0)].len(),
             4,
             "the unguarded count differs from the guarded one, so the test is not vacuous"
         );

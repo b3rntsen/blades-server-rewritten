@@ -20,6 +20,7 @@
 
 use std::collections::HashMap;
 
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
@@ -50,6 +51,34 @@ use crate::{
 // EMPTY, because retail's breakables frequently give nothing and reproducing the
 // hit rate matters as much as reproducing the contents.
 static INTERACTABLE_LOOT_RAW: &str = include_str!("../interactable_loot.json");
+
+// The APK carries the exact tier and quantity on every dungeon chest spawn,
+// but the old parsed.json extractor discarded both fields and retained only
+// the spawn id. This sidecar was extracted from the same 137 dungeon assets:
+// all 292 ids in parsed.json are present, including seven groups with more
+// than one chest. Keep it compiled into the binary like interactable loot so
+// a missing production bind-mount cannot silently restore the tier-1 stub.
+static CHEST_TIERS_RAW: &str = include_str!("../chest_tiers.json");
+
+#[derive(Deserialize)]
+struct ChestTierCorpus {
+    chests: HashMap<Uuid, ChestSpawnDefinition>,
+}
+
+#[derive(Deserialize)]
+struct ChestSpawnDefinition {
+    tier: Option<u64>,
+    quantity: u64,
+}
+
+fn chest_tiers() -> &'static ChestTierCorpus {
+    static TABLE: std::sync::OnceLock<ChestTierCorpus> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        serde_json::from_str(CHEST_TIERS_RAW).unwrap_or_else(|_| ChestTierCorpus {
+            chests: HashMap::new(),
+        })
+    })
+}
 
 fn interactable_loot() -> &'static serde_json::Value {
     static TABLE: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
@@ -166,7 +195,17 @@ pub fn generate_for_dungeon(
             .spawn_info
             .chest
             .iter()
-            .map(|(chest_spawn_id, _)| (*chest_spawn_id, vec![ChestGeneratedData { tier: 1 }]))
+            .map(|(chest_spawn_id, _)| {
+                let definition = chest_tiers().chests.get(chest_spawn_id);
+                // One APK row has the unset -1 rarity. Tier 1 is the existing safe
+                // fallback for it and for a future dungeon absent from this corpus.
+                let tier = definition.and_then(|d| d.tier).unwrap_or(1);
+                let quantity = definition.map(|d| d.quantity).unwrap_or(1).max(1);
+                (
+                    *chest_spawn_id,
+                    (0..quantity).map(|_| ChestGeneratedData { tier }).collect(),
+                )
+            })
             .collect(),
         item_generated_data: dungeon
             .spawn_info
@@ -194,6 +233,64 @@ pub fn generate_for_dungeon(
     })
 }
 
+#[cfg(test)]
+mod chest_generation_tests {
+    use super::*;
+
+    #[test]
+    fn apk_chest_corpus_is_complete_and_not_the_old_stub() {
+        let corpus = chest_tiers();
+        assert_eq!(corpus.chests.len(), 292, "the APK has 292 chest spawn groups");
+        assert_eq!(
+            corpus.chests.values().filter(|c| c.tier == Some(1)).count(),
+            136
+        );
+        assert_eq!(
+            corpus.chests.values().filter(|c| c.tier == Some(2)).count(),
+            107
+        );
+        assert_eq!(
+            corpus.chests.values().filter(|c| c.tier == Some(3)).count(),
+            48
+        );
+        assert_eq!(corpus.chests.values().filter(|c| c.tier.is_none()).count(), 1);
+        assert_eq!(
+            corpus.chests.values().filter(|c| c.quantity > 1).count(),
+            7,
+            "multi-chest groups must not collapse back to one"
+        );
+    }
+
+    #[test]
+    fn every_parsed_chest_uses_its_apk_tier_and_quantity() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+        let raw = std::fs::read_to_string(path).expect("read parsed.json");
+        let game_data: GameData = serde_json::from_str(&raw).expect("parse game data");
+        let mut checked = 0;
+
+        for (dungeon_id, dungeon) in &game_data.dungeons {
+            let Some(generated) = generate_for_dungeon(&game_data, dungeon_id, 1, 1) else {
+                panic!("known dungeon did not generate");
+            };
+            for chest_id in dungeon.spawn_info.chest.keys() {
+                let expected = chest_tiers()
+                    .chests
+                    .get(chest_id)
+                    .unwrap_or_else(|| panic!("parsed chest {chest_id} missing from APK sidecar"));
+                let actual = generated
+                    .chest_generated_data
+                    .get(chest_id)
+                    .expect("generated chest group");
+                assert_eq!(actual.len(), expected.quantity.max(1) as usize, "{chest_id}");
+                let expected_tier = expected.tier.unwrap_or(1);
+                assert!(actual.iter().all(|c| c.tier == expected_tier), "{chest_id}");
+                checked += 1;
+            }
+        }
+
+        assert_eq!(checked, 292, "the test must cover the complete APK corpus");
+    }
+}
 
 #[cfg(test)]
 mod interactable_loot_tests {

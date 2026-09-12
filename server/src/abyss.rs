@@ -325,15 +325,23 @@ struct DurabilityUpdate {
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AbyssUpdateAction {
+    /// The body is intentionally not trusted; the arm itself is the kill signal.
+    #[allow(dead_code)]
     EnemyKilled(EnemyKilledAction),
+    /// The body is intentionally not trusted; the arm itself advances the floor.
+    #[allow(dead_code)]
     AbyssSliceCompleted(SliceCompletedAction),
+    /// The body is intentionally not trusted; the arm itself counts the revive.
+    #[allow(dead_code)]
     Revive(ReviveAction),
     /// Gear durability after a fight.
     CombatCompleted(CombatCompletedAction),
     /// Loot the player picked up off a corpse. Not applied yet — the server does not
     /// generate abyss enemy loot at all (see the follow-ups in the PR).
+    #[allow(dead_code)]
     EnemyLootCollected(Value),
     /// A potion/food used mid-run. Not applied yet.
+    #[allow(dead_code)]
     ItemConsumed(Value),
     #[serde(other)]
     Unknown,

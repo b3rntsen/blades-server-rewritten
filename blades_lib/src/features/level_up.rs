@@ -31,7 +31,7 @@ impl LevelUpData {
             Ok(rewards) => {
                 LevelUpData { rewards }
             }
-            Err(e) => {
+            Err(_e) => {
                 LevelUpData::default()
             }
         }

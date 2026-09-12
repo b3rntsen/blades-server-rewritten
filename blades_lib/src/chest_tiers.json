@@ -1,0 +1,2062 @@
+{
+ "_meta": {
+  "description": "Per-chest tier, keyed by the chest spawn-group uid the client reports in a chest_collected update.",
+  "rewardLimitation": "pick_loot still indexes the capture-derived flat pool; exact tier-specific contents need ChestData.ChestEntry.LootTableList, which was not present in the APK corpus",
+  "dungeons": 137,
+  "rarityDistribution": {
+   "-1": 1,
+   "1": 136,
+   "2": 107,
+   "3": 48
+  },
+  "serverUse": "generate_for_dungeon emits the exact tier and quantity for every parsed chest spawn group",
+  "source": "APK bundles -> DungeonSettingsScriptableObject._settings._spawnSettings._spawnGroupsChest[]._chestSetting._rarity",
+  "spawnGroups": 292
+ },
+ "chests": {
+  "00705a68-bff8-414f-bb51-a7a9e3e0fb7d": {
+   "chestCycle": null,
+   "dungeon": "MQ22_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "0071ee40-a093-403a-8715-d2127094f06a": {
+   "chestCycle": null,
+   "dungeon": "EQ37_MQ03_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "00887d7f-a96c-4175-9369-676df32d2c9e": {
+   "chestCycle": null,
+   "dungeon": "SQ204_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "020b5002-318c-4267-804a-2aae880cc4be": {
+   "chestCycle": null,
+   "dungeon": "GH04_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "0772defc-8371-4c68-868f-e59f617250b5": {
+   "chestCycle": null,
+   "dungeon": "EQ39_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "079540c1-1691-44bd-8dbc-9c3818bf82dd": {
+   "chestCycle": null,
+   "dungeon": "SQ205_A_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "07c904fe-fabf-4f22-9e9a-9cb6bdfa2c37": {
+   "chestCycle": null,
+   "dungeon": "SQ202_DungeonSettings_C",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "08547d0f-35ec-49b7-9477-cd82621f6305": {
+   "chestCycle": null,
+   "dungeon": "GS05_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "08aabe58-3662-49aa-9f06-f3bfd5ef535f": {
+   "chestCycle": null,
+   "dungeon": "SA01_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "09f2dbd5-1d61-4b75-acaa-0e6039b299c6": {
+   "chestCycle": null,
+   "dungeon": "MQ19_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "0b08353b-4e95-4374-afe3-960e09d43642": {
+   "chestCycle": null,
+   "dungeon": "GS05_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "0b8eb1e5-26c3-4f5e-b415-f40258be1cae": {
+   "chestCycle": null,
+   "dungeon": "DS05_DungeonSettings_C_1",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "0f8651cb-e2c8-413e-897e-b2960e5f7b2e": {
+   "chestCycle": null,
+   "dungeon": "SQ105_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "0ff2fdde-b3c7-4239-8de8-86c4f7821e75": {
+   "chestCycle": null,
+   "dungeon": "GH03a_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "10c2da56-86f7-4e9f-8fb4-ff2e520091e8": {
+   "chestCycle": null,
+   "dungeon": "MQ16_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "10cda3e4-9709-4cb1-809e-eaf0567a4102": {
+   "chestCycle": null,
+   "dungeon": "GS03_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "1364e8c3-84b7-41f0-9d46-c12d48a7bac0": {
+   "chestCycle": null,
+   "dungeon": "MQ23_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "141d13c8-e2f4-4286-b9a7-47e916dc66b6": {
+   "chestCycle": null,
+   "dungeon": "SQ103_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "15132f3b-5e3f-47c4-a6db-bb9c80c30568": {
+   "chestCycle": null,
+   "dungeon": "EQ02_Forest_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "153a15c5-9029-4a50-ad0c-30ec6f8ef3e9": {
+   "chestCycle": null,
+   "dungeon": "DS01_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "15aff9b8-f520-43b0-a081-79bdba71e376": {
+   "chestCycle": null,
+   "dungeon": "DS02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "1609ba10-88dd-4d57-b1e3-370bdce7980a": {
+   "chestCycle": null,
+   "dungeon": "GH04_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "1928b7cf-e300-47cd-ac0a-34fb6fa63eba": {
+   "chestCycle": null,
+   "dungeon": "EQ07_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "1a0fbafe-03f4-4628-86bc-c955f7c9fd65": {
+   "chestCycle": null,
+   "dungeon": "DungeonSettingsTrollHunter",
+   "quantity": 3,
+   "rarity": 1,
+   "tier": 1
+  },
+  "1a1b0222-e6a7-44b5-904b-9eb62b28f6f5": {
+   "chestCycle": null,
+   "dungeon": "MQ14_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "1b4d7912-4d83-4ec0-bef5-f29caba4360a": {
+   "chestCycle": null,
+   "dungeon": "MQ03_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "1bdb0d44-d2b5-401c-9a6c-3d2fc6dd1a09": {
+   "chestCycle": null,
+   "dungeon": "EQ14_Forest_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "1d01585c-ac23-4835-b0b3-a7e47235b464": {
+   "chestCycle": null,
+   "dungeon": "GH03a_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "1d8b6737-114f-4aa6-a7ce-33543dee7082": {
+   "chestCycle": null,
+   "dungeon": "MQ03_DungeonSettings",
+   "quantity": 1,
+   "rarity": -1,
+   "tier": null
+  },
+  "1d9054cb-4fcb-4318-a4c4-1dc5e8a9a142": {
+   "chestCycle": null,
+   "dungeon": "MQ20_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "1dba9d35-e021-4a3f-90c8-a387ca718653": {
+   "chestCycle": null,
+   "dungeon": "GS04_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "1e0a2968-bd6f-47bf-9d89-c7f4aac86fbb": {
+   "chestCycle": null,
+   "dungeon": "MQ12_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "1f0c4dfd-b315-4d25-9a0f-62b015df8bab": {
+   "chestCycle": null,
+   "dungeon": "EQ30_Forest_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "1f3b5a07-ee66-4155-8865-13a5ff339afc": {
+   "chestCycle": null,
+   "dungeon": "MQ08_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "1fcc728e-cb70-4a44-8c8d-efddcf5f79ee": {
+   "chestCycle": null,
+   "dungeon": "GH05_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "20079ca3-0b4c-4996-a53b-94e4aefb2348": {
+   "chestCycle": null,
+   "dungeon": "SQ202_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "20640508-6ef7-466a-98ea-d79221356d97": {
+   "chestCycle": "e814bc37-93eb-4480-817f-115edfb8ef11",
+   "dungeon": "JobSpawnGroupsReference",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "233d7188-7738-4e08-9cf3-b3112e628f49": {
+   "chestCycle": null,
+   "dungeon": "EQ35_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "23b9bce9-3125-4c55-a02b-2b498bb69825": {
+   "chestCycle": null,
+   "dungeon": "GH05_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "275d9b9c-03aa-47b0-a30b-2bb6164d6e51": {
+   "chestCycle": null,
+   "dungeon": "DS07_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "28465918-f1e5-49cc-a7f6-cac7530d547f": {
+   "chestCycle": null,
+   "dungeon": "BQ01_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "2a23e642-3804-400f-8f50-cf634a8f7ae3": {
+   "chestCycle": null,
+   "dungeon": "EQ33_Arena_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "2ac304f9-18d8-4d37-9a0f-83b6b4eda104": {
+   "chestCycle": null,
+   "dungeon": "MQ12_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "2ae228e5-a928-4522-908e-b2418fc630f8": {
+   "chestCycle": null,
+   "dungeon": "BQ206_DungeonSettings_Part3",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "2c29f826-acf1-4d70-820f-953520124e87": {
+   "chestCycle": null,
+   "dungeon": "BQ02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "2ec9a843-17b5-4a70-a54f-7c1ce980eda0": {
+   "chestCycle": null,
+   "dungeon": "GS07_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "2fb0320c-8748-4297-872e-ef25d174ecae": {
+   "chestCycle": null,
+   "dungeon": "EQ42_Ayleid_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "2fbecbe6-9839-4e3d-83c6-a0bf25919a2d": {
+   "chestCycle": null,
+   "dungeon": "SQ201_DungeonSettings_1",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "30db90be-d5b2-4c6b-85b9-4a8c2840d987": {
+   "chestCycle": null,
+   "dungeon": "MQ19_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "31c85741-a593-4326-8231-5ef3906c567b": {
+   "chestCycle": null,
+   "dungeon": "RH01_DungeonSettings",
+   "quantity": 3,
+   "rarity": 1,
+   "tier": 1
+  },
+  "32317176-01fd-4731-a4dd-d3db95756d4f": {
+   "chestCycle": null,
+   "dungeon": "MQ20_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "354ba911-ee88-4882-8f18-906442aa92b4": {
+   "chestCycle": null,
+   "dungeon": "GH02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "357d61c9-5aea-4960-9396-142c28093d75": {
+   "chestCycle": null,
+   "dungeon": "SQ102_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "35e2de07-b7d4-4f20-a92e-7bebf2961d85": {
+   "chestCycle": null,
+   "dungeon": "GH02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "35e95887-2806-4d84-b34e-35471938b12a": {
+   "chestCycle": null,
+   "dungeon": "EQ09_Ayleid_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "36bf9998-2f5b-4c3c-8ad9-489f69ec9c5d": {
+   "chestCycle": null,
+   "dungeon": "EQ23_SQ103_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "377d4687-ce57-47d5-938e-d9d324651974": {
+   "chestCycle": null,
+   "dungeon": "GS02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "381649fe-0393-4bb9-ad7f-c9d6b37423b1": {
+   "chestCycle": null,
+   "dungeon": "EQ21_SA01_DungeonSetting",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "3926519b-579f-432c-b99d-b7326791e770": {
+   "chestCycle": null,
+   "dungeon": "MQ11_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "399a4c50-c59e-4f8e-9568-b350eb4a844f": {
+   "chestCycle": null,
+   "dungeon": "BQ202_DungeonSettings_C",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "3bdfc414-7985-4d1e-980d-750ceda3f5ee": {
+   "chestCycle": null,
+   "dungeon": "RH03__DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "3cbdbd23-6322-434f-9494-20aba73ed2fe": {
+   "chestCycle": null,
+   "dungeon": "BQ203_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "3cf8739e-605b-4664-a4b6-5290f817b0d7": {
+   "chestCycle": null,
+   "dungeon": "MQ03_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "3e0d4057-4c94-447e-9c49-26badd72cfaf": {
+   "chestCycle": null,
+   "dungeon": "BQ03_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "3e66adf9-9d49-4a34-ac3c-b3c4b35e2a8e": {
+   "chestCycle": null,
+   "dungeon": "EQ01_Forest_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "3e76e110-29f3-46aa-a6cb-7e08527b79ae": {
+   "chestCycle": null,
+   "dungeon": "GH02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "3eaf0d2d-5dbe-4bdc-99f5-68518b46dff4": {
+   "chestCycle": null,
+   "dungeon": "DS02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "3ef680ae-cf01-424f-be04-cfa88b8e70f9": {
+   "chestCycle": null,
+   "dungeon": "MQ10_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "45de1d80-78f8-4e0a-b6d4-a99f31792f8e": {
+   "chestCycle": null,
+   "dungeon": "MQ14_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "46cb28e9-fa45-4ebe-bdd7-53f701a31fc0": {
+   "chestCycle": null,
+   "dungeon": "DS03_DungeonSettings_1",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "4919a8e3-3293-4f5c-a647-5cda80c38276": {
+   "chestCycle": null,
+   "dungeon": "SQ105_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "494151c2-72a0-4595-8ca6-d1c68b260db9": {
+   "chestCycle": null,
+   "dungeon": "EQ25_Cave_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "4b821757-f931-4ec8-aabb-e1837be6427a": {
+   "chestCycle": null,
+   "dungeon": "GS04_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "4ba0cb17-70b8-48ff-b518-233c70b3021d": {
+   "chestCycle": null,
+   "dungeon": "MQ10_DungeonSettings",
+   "quantity": 2,
+   "rarity": 1,
+   "tier": 1
+  },
+  "4caecf5b-98f5-43ae-afdd-3b0977474bb6": {
+   "chestCycle": null,
+   "dungeon": "MQ12_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "4d34b529-8c65-449f-9b6d-c91e0231862d": {
+   "chestCycle": null,
+   "dungeon": "EQ45_Ayleid_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "4d611d7a-4c20-4316-9449-f69b90a402d7": {
+   "chestCycle": null,
+   "dungeon": "BQ203_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "4dfacbcb-d550-4b03-94d6-47b60ee26391": {
+   "chestCycle": null,
+   "dungeon": "EQ26_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "50167963-a251-432d-bd63-3ac2a6a0a837": {
+   "chestCycle": null,
+   "dungeon": "EQ17_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "50323467-b0a7-4cfc-b78d-688bfe261d09": {
+   "chestCycle": null,
+   "dungeon": "GS05_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "51ba74cc-88e7-40f2-b7c1-1efb4774c97b": {
+   "chestCycle": null,
+   "dungeon": "BQ202_DungeonSettings_C",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "520048e5-5e52-455e-856f-83bd20774601": {
+   "chestCycle": null,
+   "dungeon": "EQ44_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "532c4e22-0e93-4c54-963b-d33e94866741": {
+   "chestCycle": null,
+   "dungeon": "SQ205_B_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "535e045d-071b-44cc-8da8-a87b66f494d6": {
+   "chestCycle": null,
+   "dungeon": "GH02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "54c78d84-e170-40f0-ac5f-007c73ccd3ca": {
+   "chestCycle": null,
+   "dungeon": "EQ34_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "56760daa-3ec5-4a0e-ace7-09adc77aa657": {
+   "chestCycle": null,
+   "dungeon": "SQ203_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "576dba03-ae84-4088-ba22-1634c6298a0b": {
+   "chestCycle": null,
+   "dungeon": "BQ07_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "599fa5bd-15ea-4ea6-916d-1e6ece89e2eb": {
+   "chestCycle": null,
+   "dungeon": "EQ47_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "5adb41cc-d48e-4505-a62b-ac092e95bcf7": {
+   "chestCycle": "5b20edcb-ed53-44fe-805a-20a02fa3183e",
+   "dungeon": "JobSpawnGroupsReference",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "5b2fee77-ca49-4371-a640-dd5a40e3acdd": {
+   "chestCycle": null,
+   "dungeon": "SQ103_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "5b85e6ab-eb63-4771-ac3b-b556c771ef75": {
+   "chestCycle": null,
+   "dungeon": "SQ104_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "5c56b83d-f534-4219-868d-19f1ae4d4914": {
+   "chestCycle": null,
+   "dungeon": "BQ205_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "5c6611b6-8939-40ed-8d16-16ab853a9eec": {
+   "chestCycle": null,
+   "dungeon": "BQ201_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "5ce66497-8068-4221-a333-a84c4521d491": {
+   "chestCycle": null,
+   "dungeon": "MQ11_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "5cf4d624-6fe1-40b6-bae0-321b9a5e75ad": {
+   "chestCycle": null,
+   "dungeon": "GS04_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "5d11f7c4-b1c7-455d-8794-d921dfb3b739": {
+   "chestCycle": null,
+   "dungeon": "GH06_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "5e3f8458-2d35-401c-87ae-109ce2971263": {
+   "chestCycle": null,
+   "dungeon": "EQ16_Forest_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "5e4c1635-ccf0-4946-bba5-5eb409d817c0": {
+   "chestCycle": null,
+   "dungeon": "SQ202_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "5fb28a1d-7e56-41c7-8610-f081a85044e0": {
+   "chestCycle": null,
+   "dungeon": "BQ04_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "603744d7-99a4-42ef-92f9-54746a8eacb7": {
+   "chestCycle": null,
+   "dungeon": "GS02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "612883c0-2258-4248-8810-3b057f503432": {
+   "chestCycle": null,
+   "dungeon": "MQ17_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "61965eaf-aa74-4526-885b-d02cd62a1a83": {
+   "chestCycle": null,
+   "dungeon": "RH04_DungeonSettings",
+   "quantity": 2,
+   "rarity": 1,
+   "tier": 1
+  },
+  "61d0326b-acae-4d51-b2fd-023938ddaca4": {
+   "chestCycle": null,
+   "dungeon": "MQ12_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "63d9dab7-f4ec-4a14-83ce-c185db48245a": {
+   "chestCycle": null,
+   "dungeon": "GS03_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "654af1e8-2466-47b9-8c7c-faf81c6a6c5a": {
+   "chestCycle": null,
+   "dungeon": "SQ206_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "6640529d-5668-4d2e-a76f-310a85fee272": {
+   "chestCycle": null,
+   "dungeon": "GS03_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "6888b285-7a56-454d-b6a4-3a51378c71c8": {
+   "chestCycle": null,
+   "dungeon": "MQ14_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "696c2752-b90e-40cf-85a6-b477781e7464": {
+   "chestCycle": null,
+   "dungeon": "BQ07_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "69e32299-ed44-4548-96a3-3aef689f1579": {
+   "chestCycle": null,
+   "dungeon": "GH04_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "6ad0236c-5238-45ac-b8d2-ea5c1dd7d393": {
+   "chestCycle": null,
+   "dungeon": "MQ19_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "6b9fd870-5c6c-4cd5-a10a-74cb3f1200e3": {
+   "chestCycle": null,
+   "dungeon": "BQ205_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "6c5f4d21-a4ea-4b96-a2d7-e85a4ff2c4b9": {
+   "chestCycle": null,
+   "dungeon": "BQ02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "6d560f78-e77d-4ba7-87f4-33cece3e358e": {
+   "chestCycle": null,
+   "dungeon": "EQ35_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "6d70db74-bb9e-43e6-b774-464dea346bb7": {
+   "chestCycle": null,
+   "dungeon": "SQ205_B_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "6de4b44d-1c48-4dbb-a06c-bae62c2be814": {
+   "chestCycle": null,
+   "dungeon": "MQ03_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "6e87aafc-e6f6-4ae6-9b24-611ddd7d271a": {
+   "chestCycle": null,
+   "dungeon": "MQ14_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "6ecb00c5-5f96-4681-aa29-0d65dbef1ee0": {
+   "chestCycle": null,
+   "dungeon": "DS06_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "6f00af1f-67b3-4c63-aed9-3174ac5a5919": {
+   "chestCycle": null,
+   "dungeon": "BQ203_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "6fe26c38-7aea-4294-beaf-e59d95577dec": {
+   "chestCycle": null,
+   "dungeon": "GH03a_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "7042e917-dc75-48f0-92ec-c0b862210d3d": {
+   "chestCycle": null,
+   "dungeon": "GS04_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "7069de49-553d-4338-a9f5-98a94e2db718": {
+   "chestCycle": null,
+   "dungeon": "EQ38_Village_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "70ddea41-cd56-4d8f-8fa0-ced68c9dcf2e": {
+   "chestCycle": null,
+   "dungeon": "BQ202_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "72a78099-81db-44fd-b804-e8d3e19d6f5e": {
+   "chestCycle": null,
+   "dungeon": "SQ105_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "72a91509-7a05-44c9-8abe-f81ed263d4df": {
+   "chestCycle": null,
+   "dungeon": "EQ34_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "756f3883-d233-4053-b661-c3896438cef1": {
+   "chestCycle": null,
+   "dungeon": "MQ14_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "7639b266-2ed8-487f-b88d-679e30a48eed": {
+   "chestCycle": null,
+   "dungeon": "EQ05_Cave_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "789e1d65-d0cc-4cd0-8bb7-c0856553668c": {
+   "chestCycle": null,
+   "dungeon": "SQ103_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "78e9a24b-130d-4f03-bbff-583efaf0cdb3": {
+   "chestCycle": null,
+   "dungeon": "RH03__DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "7a07d9e6-a2fb-49fb-9d08-408323dd8cbf": {
+   "chestCycle": null,
+   "dungeon": "MQ09_FixedDungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "7a378c63-f528-4a7d-bfa8-56e75ee8d2f5": {
+   "chestCycle": null,
+   "dungeon": "SQ205_B_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "7a982aa0-a921-4556-b387-08805cf00d36": {
+   "chestCycle": null,
+   "dungeon": "BQ205_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "7bd21d35-a6b4-41da-a9b7-8e4876011b8f": {
+   "chestCycle": null,
+   "dungeon": "SA01_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "7c3a8afc-b406-4875-9a41-416a09a10f9b": {
+   "chestCycle": null,
+   "dungeon": "MQ13_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "7c750b72-9b12-46f5-8518-b2244afdebcb": {
+   "chestCycle": null,
+   "dungeon": "GH06_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "7cbdbad0-6f77-491d-925d-78754ccfb464": {
+   "chestCycle": null,
+   "dungeon": "MQ11_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "7cc7cb26-fa3a-44a6-b40f-893d43a25fef": {
+   "chestCycle": null,
+   "dungeon": "BQ03_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "7d1209bf-ba9f-4254-a354-e58651265203": {
+   "chestCycle": null,
+   "dungeon": "EQ28_Ayleid_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "7d60b6b7-3f98-4344-aaa3-ec33c0730da3": {
+   "chestCycle": null,
+   "dungeon": "BQ204_DungeonSettings_D",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "7ee695fd-8cbb-4ba3-9515-a82dd13974d4": {
+   "chestCycle": null,
+   "dungeon": "DS02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "80e5f945-fbc1-4de2-9aad-ed3a29a44e98": {
+   "chestCycle": null,
+   "dungeon": "MQ23_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "82ddf4d3-1734-4329-897d-7a51d391a841": {
+   "chestCycle": null,
+   "dungeon": "BQ202_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "83238ea6-131e-46a9-8b44-386428ba8651": {
+   "chestCycle": null,
+   "dungeon": "RH03__DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "8355721a-fac5-4e16-b048-d0893a554141": {
+   "chestCycle": null,
+   "dungeon": "MQ05_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "85a809e5-7af9-4b6a-b790-a2615bb5d21b": {
+   "chestCycle": null,
+   "dungeon": "GS06_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "85e2652a-62e9-4a78-9cf1-7365d9eb3138": {
+   "chestCycle": null,
+   "dungeon": "MQ11_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "866cb0a6-fe97-45fc-9f36-64742780e168": {
+   "chestCycle": null,
+   "dungeon": "DS02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "87b95961-29e4-4c00-94d0-fad274c56a3d": {
+   "chestCycle": null,
+   "dungeon": "SQ203_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "87bfde0f-04f0-4d39-bf2b-ec6cfced24ae": {
+   "chestCycle": null,
+   "dungeon": "SA01_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "87da48dc-a17d-4348-81d2-c716fb2ce894": {
+   "chestCycle": null,
+   "dungeon": "DS06_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "8a73d766-b95f-4403-9d3d-ec8cb0459a7f": {
+   "chestCycle": null,
+   "dungeon": "EQ04_Cave_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "8d6d8999-e72e-49ae-9a51-d1a7fc36e451": {
+   "chestCycle": null,
+   "dungeon": "EQ31_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "8d705f96-745f-4028-910b-bda737d6dfc1": {
+   "chestCycle": null,
+   "dungeon": "MQ18_DungeonSettings",
+   "quantity": 2,
+   "rarity": 1,
+   "tier": 1
+  },
+  "8e205a29-a3ac-4d5f-a403-86bf393ed929": {
+   "chestCycle": null,
+   "dungeon": "MQ11_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "8f00a719-902d-435a-ac39-3c17b147298e": {
+   "chestCycle": null,
+   "dungeon": "EQ11_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "90597f56-6c75-4e5d-ad49-f4c599d178aa": {
+   "chestCycle": null,
+   "dungeon": "SQ204_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "914a0f6c-e6d1-422c-aa06-0e39f695cd86": {
+   "chestCycle": null,
+   "dungeon": "BQ06_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "9308134d-8104-4b05-b616-1339fea32b26": {
+   "chestCycle": null,
+   "dungeon": "SQ202_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "94184e16-bced-432d-89f7-44c636ddc239": {
+   "chestCycle": null,
+   "dungeon": "DS05_DungeonSettings_B_1",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "9460d8c4-14aa-4cb4-9a9c-ae81b5dbbb49": {
+   "chestCycle": null,
+   "dungeon": "EQ28_Ayleid_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "96b92a8b-baec-4375-ad21-bcd3f744fee3": {
+   "chestCycle": null,
+   "dungeon": "MQ22_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "9763c59e-3ecd-4cbe-8d20-80313a0ba59c": {
+   "chestCycle": null,
+   "dungeon": "DS06_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "982184dc-5267-4596-a707-5cb944952401": {
+   "chestCycle": null,
+   "dungeon": "BQ02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "9b9bd510-cea6-4e2f-a60c-8e2f66ae869c": {
+   "chestCycle": null,
+   "dungeon": "SQ201_DungeonSettings_1",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "9c111524-2196-45ae-be12-c3a59de39443": {
+   "chestCycle": null,
+   "dungeon": "MQ23_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "9c14a79c-b578-4c5b-b521-a2ef3dac9639": {
+   "chestCycle": null,
+   "dungeon": "SQ202_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "9d3c50f6-5f86-40c1-bd1c-1bc5e06bb83c": {
+   "chestCycle": null,
+   "dungeon": "SQ201_DungeonSettings_1",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "a1568d54-905a-42fc-b892-f272a4cff433": {
+   "chestCycle": null,
+   "dungeon": "MQ08_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "a183b863-dd16-4be2-a74a-b8c8c32f9d21": {
+   "chestCycle": null,
+   "dungeon": "DS05_DungeonSettings_A_1",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "a2951c13-97c7-498d-9115-42926e93627b": {
+   "chestCycle": null,
+   "dungeon": "MQ05_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "a459caff-e1d6-4118-9145-d30511f59dee": {
+   "chestCycle": null,
+   "dungeon": "EQ36_EnchanterTower_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "a4896e25-b12e-44ea-98d9-a9a829394950": {
+   "chestCycle": null,
+   "dungeon": "GH03a_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "a490eb6b-8751-494c-a183-1003a6467a8d": {
+   "chestCycle": null,
+   "dungeon": "SQ102_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "a4fdc3c8-5601-4e94-bea1-3f3f63e2f81d": {
+   "chestCycle": null,
+   "dungeon": "SQ202_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "a6c333f2-9ced-4ce8-bfb7-77ff6bdee437": {
+   "chestCycle": null,
+   "dungeon": "RH03__DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "a72f1625-59c2-4b9c-8965-5fbc7b4f5475": {
+   "chestCycle": null,
+   "dungeon": "GH05_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "a771eb2d-4c95-4dd9-b170-7878bc5671a2": {
+   "chestCycle": null,
+   "dungeon": "DS06_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "a77d6b58-c786-46ac-96c5-f7b2d684118b": {
+   "chestCycle": null,
+   "dungeon": "MQ22_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "a7b81bb4-3dc9-4947-8fd0-165eaee3e3d5": {
+   "chestCycle": null,
+   "dungeon": "BQ202_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "a80b2155-8fe6-4870-bec6-ef63a9896777": {
+   "chestCycle": null,
+   "dungeon": "EQ29_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "a8e11f78-74f7-43e0-9d57-fcc27c6ac13a": {
+   "chestCycle": null,
+   "dungeon": "DS07_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "a9783a11-73fe-4927-bb23-e0ccea8b65fd": {
+   "chestCycle": null,
+   "dungeon": "MQ17_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "a980624a-ac41-4509-85ac-5804475292d7": {
+   "chestCycle": null,
+   "dungeon": "SQ104_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "a9f58fcf-e1ec-4b39-a139-01dd17e335fd": {
+   "chestCycle": null,
+   "dungeon": "MQ09_FixedDungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "aa6f4d28-a50e-4f8f-9509-7ff99a1af774": {
+   "chestCycle": null,
+   "dungeon": "DS01_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "ab872e52-643e-4abc-a707-2b00b17a13c4": {
+   "chestCycle": null,
+   "dungeon": "EQ48_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "ab96fa57-5095-4c98-8dd9-e52ef174e3b7": {
+   "chestCycle": null,
+   "dungeon": "EQ22_SQ102_DungeonSettings_C",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "abcc1b9e-a328-403b-9dd8-05dc28cbde02": {
+   "chestCycle": null,
+   "dungeon": "EQ04_Cave_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "adee842b-8cc1-4fa4-8567-0148e6e80f28": {
+   "chestCycle": null,
+   "dungeon": "DS05_DungeonSettings_B_1",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "ae1eb5b4-6fbe-460b-9578-4e6c4d487283": {
+   "chestCycle": null,
+   "dungeon": "SQ102_DungeonSettings_C",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "ae4409e1-3179-4af1-9133-9946c142af57": {
+   "chestCycle": null,
+   "dungeon": "SQ205_A_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "af083256-c934-458b-8ece-4de6ed28570e": {
+   "chestCycle": null,
+   "dungeon": "BQ04_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "b052526c-e4f3-453f-937e-3e8bddc8fdca": {
+   "chestCycle": null,
+   "dungeon": "EQ21_SA01_DungeonSetting",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "b19d7d13-6b75-441f-9ffc-9d78321a4c81": {
+   "chestCycle": null,
+   "dungeon": "SQ103_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "b1afef8b-82e5-473c-b992-eba2c8d3b41b": {
+   "chestCycle": null,
+   "dungeon": "SQ206_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "b21dda38-a2d9-4b23-8999-83d121739b9a": {
+   "chestCycle": null,
+   "dungeon": "SQ205_A_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "b29da1db-8973-404e-9c96-44740927c191": {
+   "chestCycle": null,
+   "dungeon": "SQ201_DungeonSettings_2",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "b35972fb-59a4-4fa1-b460-0801e0d2d52b": {
+   "chestCycle": null,
+   "dungeon": "EQ06_Cave_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "b3b97683-93f7-4d6c-a6a9-36e51d5ff178": {
+   "chestCycle": null,
+   "dungeon": "GH05_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "b561fd88-1f9a-402f-942e-9e838309c720": {
+   "chestCycle": null,
+   "dungeon": "GH04_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "b7790f98-c160-4d92-ab9e-0986e0ab4637": {
+   "chestCycle": null,
+   "dungeon": "MQ14_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "b7853bad-b318-429d-902a-a412e6ebf72d": {
+   "chestCycle": null,
+   "dungeon": "GS06_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "b8362852-f994-417b-803f-f4c96927af09": {
+   "chestCycle": null,
+   "dungeon": "EQ42_Ayleid_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "b9b2ec3a-3f46-475e-a087-fe809d229736": {
+   "chestCycle": null,
+   "dungeon": "DS05_DungeonSettings_C_1",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "ba0805ad-4382-4fc9-bebb-6ac381d4af15": {
+   "chestCycle": null,
+   "dungeon": "DS07_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "bc225322-9772-47da-be50-da227b9a8e05": {
+   "chestCycle": null,
+   "dungeon": "EQ22_SQ102_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "bc78a8d5-5a40-4cef-8f8f-d7973f746a92": {
+   "chestCycle": null,
+   "dungeon": "DS01_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "becc2538-c50c-4403-aa3f-2cb2801a923a": {
+   "chestCycle": null,
+   "dungeon": "GH06_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "bf47b4f7-ea78-46ad-af62-3213aeae7f37": {
+   "chestCycle": null,
+   "dungeon": "EQ40_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "c047cde6-9ed8-4f26-b5b3-acb99f2f4369": {
+   "chestCycle": null,
+   "dungeon": "GH06_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "c0534dbf-475a-4b8c-8bd5-ddd9af93a55f": {
+   "chestCycle": null,
+   "dungeon": "SQ102_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "c1acdf47-2ce5-4169-ad26-d8e6a88a91c4": {
+   "chestCycle": null,
+   "dungeon": "EQ13_Ayleid_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "c1e2da5f-aee8-4055-9ad1-69b4303ad406": {
+   "chestCycle": null,
+   "dungeon": "EQ28_Ayleid_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "c3ab4c74-a393-4e16-a54d-54edf92750e3": {
+   "chestCycle": null,
+   "dungeon": "SQ205_B_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "c3ffabcd-4910-497e-9653-4815c8c58820": {
+   "chestCycle": null,
+   "dungeon": "DS05_DungeonSettings_A_1",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "c493ddb3-9af4-4301-b6a1-27e73cd51793": {
+   "chestCycle": null,
+   "dungeon": "BQ203_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "c49fab56-e268-46e3-86b0-78c881c25a73": {
+   "chestCycle": null,
+   "dungeon": "DS03_DungeonSettings_1",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "c51e0018-f945-494d-96a9-66fafcf8851a": {
+   "chestCycle": null,
+   "dungeon": "MQ07_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "c8193d8c-9fba-4773-8581-42bd927b2cb0": {
+   "chestCycle": null,
+   "dungeon": "SQ105_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "cac4e0a9-2639-494e-804a-1446b2e420c0": {
+   "chestCycle": null,
+   "dungeon": "BQ203_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "cb32152a-3381-4ec0-9044-ba4770db199e": {
+   "chestCycle": null,
+   "dungeon": "BQ205_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "cb92bb74-3506-43c0-999a-85c996f23f14": {
+   "chestCycle": null,
+   "dungeon": "GS02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "ccd6039f-f353-44ea-aa8a-ca438f2ba82f": {
+   "chestCycle": null,
+   "dungeon": "MQ23_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "cd749239-6307-4e10-a391-1a41c1b47a5e": {
+   "chestCycle": null,
+   "dungeon": "MQ18_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "ce2864f3-3c8a-4fe5-9a7d-0c210bf72ba9": {
+   "chestCycle": null,
+   "dungeon": "MQ19_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "cee9808a-7ba7-411b-b803-bb4ceefe7d40": {
+   "chestCycle": null,
+   "dungeon": "SQ206_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "cfc6c6e3-c968-4a78-8b8b-8a355d0ce9a3": {
+   "chestCycle": null,
+   "dungeon": "EQ08_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "d0463d92-49fa-42db-96f5-74bd00a91741": {
+   "chestCycle": null,
+   "dungeon": "GS06_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "d12be687-9c9f-4096-afd5-9854073d9870": {
+   "chestCycle": null,
+   "dungeon": "EQ15_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "d325e17f-a017-45aa-8c28-07a73e311abf": {
+   "chestCycle": null,
+   "dungeon": "BQ201_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "d3420338-e3b7-4e01-8ad5-62852d34e5be": {
+   "chestCycle": null,
+   "dungeon": "EQ24_SQ104_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "d394a3e8-c275-4ccb-80e2-4bf2a0f9d345": {
+   "chestCycle": null,
+   "dungeon": "RH03__DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "d50476cc-23cf-4fff-9f3a-2729518be336": {
+   "chestCycle": null,
+   "dungeon": "EQ43_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "d649e39a-4e26-47fd-a231-5c7bb660215a": {
+   "chestCycle": null,
+   "dungeon": "EQ41_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "d64ee6aa-6d11-4b36-9e9d-82fdb837d47c": {
+   "chestCycle": null,
+   "dungeon": "MQ23_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "d8392980-e899-451d-8ffb-15ca8ab4c58b": {
+   "chestCycle": null,
+   "dungeon": "MQ13_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "d863a77c-f9dc-4fef-a0bc-a456efc2fa02": {
+   "chestCycle": null,
+   "dungeon": "GS02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "d90fe2dc-7cdc-4d00-b3c3-e4c82e024405": {
+   "chestCycle": null,
+   "dungeon": "MQ13_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "d980cdfa-3881-4d54-99ac-19d325f5ac10": {
+   "chestCycle": null,
+   "dungeon": "EQ40_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "dd092a2b-a091-46dc-b35c-fb821b1cb420": {
+   "chestCycle": null,
+   "dungeon": "GH07_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "ddc41dc7-9d0f-4b2f-8df5-455d49f22f2c": {
+   "chestCycle": null,
+   "dungeon": "SQ205_A_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "dfed507d-9e91-41c3-8ff7-9a0207b2845d": {
+   "chestCycle": null,
+   "dungeon": "MQ13_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "e01c0b45-1b91-47c8-ba2a-e5c3904db0e5": {
+   "chestCycle": null,
+   "dungeon": "DS03_DungeonSettings_1",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "e092d5cd-6ba0-42a8-8007-f67603f06774": {
+   "chestCycle": null,
+   "dungeon": "EQ23_SQ103_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "e0d8ac81-c9fe-4870-8f87-6ece31920cfa": {
+   "chestCycle": null,
+   "dungeon": "MQ07_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "e1ef5723-c729-48e0-bfa5-d0026113bb27": {
+   "chestCycle": null,
+   "dungeon": "EQ05_Cave_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "e31f8c84-d34a-4440-972a-89ae515db126": {
+   "chestCycle": null,
+   "dungeon": "MQ20_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "e3974cbc-bd64-4f5c-8d50-8ac88c06b235": {
+   "chestCycle": null,
+   "dungeon": "EQ03_Forest_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "e39d78cf-3165-4089-9624-9c6c25eefb44": {
+   "chestCycle": null,
+   "dungeon": "EQ32_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "e4e8037a-aea0-48af-826e-c0acdddcb28c": {
+   "chestCycle": null,
+   "dungeon": "SQ205_A_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "e4ea9b31-d036-49a7-8afa-b034c3bdfcf4": {
+   "chestCycle": null,
+   "dungeon": "DS02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "e5083caf-14f6-475e-80fe-c7a5a8de3496": {
+   "chestCycle": null,
+   "dungeon": "EQ24_SQ104_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "e524569b-bb61-4715-84bd-254c12fa656e": {
+   "chestCycle": null,
+   "dungeon": "BQ01_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "e53667fe-4cee-40e4-ac4a-6776c608a1ab": {
+   "chestCycle": null,
+   "dungeon": "DS07_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "e54e7089-ca3e-4f0f-885f-689b456f78de": {
+   "chestCycle": null,
+   "dungeon": "GH04_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "e54f6e56-53c5-4240-ae27-14515d63e679": {
+   "chestCycle": null,
+   "dungeon": "EQ12_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "e56878f9-7e98-4551-b950-676fbf3bab9c": {
+   "chestCycle": null,
+   "dungeon": "BQ206_DungeonSettings_Part3",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "e5b7c3a8-7cf9-4006-ab86-66c45c9da3b8": {
+   "chestCycle": null,
+   "dungeon": "DungeonSettingsGoblinQuest",
+   "quantity": 2,
+   "rarity": 1,
+   "tier": 1
+  },
+  "e76dc076-fcf5-47d4-ad4e-76a6e71bf9bb": {
+   "chestCycle": null,
+   "dungeon": "MQ07_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "e7b9320c-edda-4b29-9123-59b97c9e2f7e": {
+   "chestCycle": null,
+   "dungeon": "GH07_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "e9a17a7d-b20d-46e7-892f-49b240d0b5fc": {
+   "chestCycle": null,
+   "dungeon": "AQ11_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "e9a4598a-5547-4d54-a6ca-d21f0cc5e243": {
+   "chestCycle": null,
+   "dungeon": "MQ22_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "ea375826-a6d1-40b9-98bf-34b11ec785ca": {
+   "chestCycle": null,
+   "dungeon": "BQ202_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "ea517064-9a89-4fae-abf0-291650ad51d5": {
+   "chestCycle": null,
+   "dungeon": "DS02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "ec168db3-f874-40a6-8aa6-a1a904418e01": {
+   "chestCycle": null,
+   "dungeon": "RH02_DungeonSettings",
+   "quantity": 2,
+   "rarity": 1,
+   "tier": 1
+  },
+  "ecad3d0b-3b75-4529-8f16-be5f201ab667": {
+   "chestCycle": null,
+   "dungeon": "SQ103_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "ef14981b-da0c-4061-ac77-65be2079475d": {
+   "chestCycle": null,
+   "dungeon": "GS03_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "ef53c4ba-4eaa-479c-a1a0-ae1a578dbe5e": {
+   "chestCycle": null,
+   "dungeon": "BQ206_DungeonSettings_Part3",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "f37bef98-f37a-44b1-8d59-dabc11b0bc70": {
+   "chestCycle": null,
+   "dungeon": "BQ206_DungeonSettings_Part2",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "f4686cad-d910-4810-8874-fb2632821e9e": {
+   "chestCycle": null,
+   "dungeon": "EQ46_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "f468f832-c692-43e0-91a0-7d3c4c9802e2": {
+   "chestCycle": null,
+   "dungeon": "EQ08_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "f48f971b-0bfd-4d51-919c-0dc9fb96390c": {
+   "chestCycle": null,
+   "dungeon": "EQ27_Ayleid_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "f51985d8-8679-489a-8c5f-f201ddae5653": {
+   "chestCycle": null,
+   "dungeon": "BQ04_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "f5b6823b-4a2f-46be-a261-7622b7cfae04": {
+   "chestCycle": null,
+   "dungeon": "MQ21_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "f63369f6-0de8-4976-8562-6cfdf8f0e66d": {
+   "chestCycle": null,
+   "dungeon": "BQ03_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "f75ecd5c-c1d6-439e-a609-3a2c99c46c0c": {
+   "chestCycle": null,
+   "dungeon": "MQ17_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "f87de8be-a864-43e6-bfee-02acd44d4a42": {
+   "chestCycle": null,
+   "dungeon": "EQ19_Stone_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "f8b0db15-9872-44ac-a0fe-d50707b6e7d2": {
+   "chestCycle": null,
+   "dungeon": "SQ104_DungeonSettings_B",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "f9534ab0-7294-4913-825c-e5f9edcc98e0": {
+   "chestCycle": null,
+   "dungeon": "BQ01_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "f9cc2882-fb22-4132-8875-83eb15a7d6f0": {
+   "chestCycle": null,
+   "dungeon": "BQ07_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "fa13d1fc-717b-44f8-a757-25918dc253de": {
+   "chestCycle": null,
+   "dungeon": "BQ201_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "fa2360cc-ce36-4ec0-81be-902f97bfda5b": {
+   "chestCycle": null,
+   "dungeon": "EQ10_Ayleid_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "fa350a9e-a337-41d2-b5b2-401848005a66": {
+   "chestCycle": null,
+   "dungeon": "GH04_DungeonSettings_A",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "fa5c8553-8869-47a3-b2a6-2004884e4506": {
+   "chestCycle": null,
+   "dungeon": "DS01_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "fa65e502-ec59-4de9-af33-c2339c68a004": {
+   "chestCycle": null,
+   "dungeon": "MQ23_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "fad85e88-47f5-41d6-a70f-eb8f8a3b8eb9": {
+   "chestCycle": null,
+   "dungeon": "BQ205_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "fbd1acdb-f09c-4fbe-b26a-a6cae096d689": {
+   "chestCycle": null,
+   "dungeon": "MQ07_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "fc6bbd75-6796-43b7-9b04-e2f5aa0c7f16": {
+   "chestCycle": null,
+   "dungeon": "GS02_DungeonSettings",
+   "quantity": 1,
+   "rarity": 1,
+   "tier": 1
+  },
+  "fd8689fb-bb4d-412f-b7b9-163b2eab5c17": {
+   "chestCycle": null,
+   "dungeon": "BQ07_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "fd9e4fc9-3ff5-495d-a78c-4b509435681e": {
+   "chestCycle": null,
+   "dungeon": "AQBR01_DungeonSettings",
+   "quantity": 1,
+   "rarity": 3,
+   "tier": 3
+  },
+  "fde634cb-969c-493b-a918-5c764ce3cdad": {
+   "chestCycle": null,
+   "dungeon": "BQ201_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "fe7a5ac2-fcb2-48b4-bdc2-52fab3656eae": {
+   "chestCycle": null,
+   "dungeon": "GH03a_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  },
+  "ffb23533-6612-4867-8fc7-c2acc7b38126": {
+   "chestCycle": null,
+   "dungeon": "GS07_DungeonSettings",
+   "quantity": 1,
+   "rarity": 2,
+   "tier": 2
+  }
+ }
+}

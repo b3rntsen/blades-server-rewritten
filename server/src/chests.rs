@@ -1,7 +1,7 @@
 //! Chests — `POST /chests/{id}/collect`.
 //!
 //! Open a treasury chest for loot. We draw a representative loot bundle from a
-//! capture-derived pool (deterministic per chest id — per-tier loot tables aren't
+//! capture-derived pool (stable per granted chest — per-tier loot tables aren't
 //! captured), re-mint the instanced item ids (capture ids would collide across
 //! players), grant it, and remove the chest. See [`blades_lib::features::chests`].
 
@@ -21,8 +21,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
-    BladeApiError, ServerGlobal, models::CharacterDbEntryEconomy,
-    session::SessionLookedUpMaybe,
+    BladeApiError, ServerGlobal, models::CharacterDbEntryEconomy, session::SessionLookedUpMaybe,
 };
 
 const CHEST_SERVICE_ID: u64 = 9007;
@@ -35,7 +34,9 @@ struct CollectResponse {
     inventory: CompleteInventoryUpdate,
 }
 
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/chests/{chest_id}/collect")]
+#[post(
+    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/chests/{chest_id}/collect"
+)]
 pub async fn collect_chest(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -63,13 +64,27 @@ pub async fn collect_chest(
                     .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
             };
 
-            // The chest must exist in the treasury.
-            if entry.inventory.0.treasury.get_chest(&chest_id).is_none() {
-                return Err(BladeApiError::new(StatusCode::NOT_FOUND, CHEST_SERVICE_ID, 1));
-            }
+            // The chest must exist in the treasury. Copy its small identity tuple
+            // before mutating inventory below.
+            let (chest_tier, chest_level) = entry
+                .inventory
+                .0
+                .treasury
+                .get_chest(&chest_id)
+                .map(|chest| (chest.tier, chest.level))
+                .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, CHEST_SERVICE_ID, 1))?;
 
             // Representative loot for this chest; re-mint instanced item ids.
-            let mut reward = chests::pick_loot(&globals.static_data.chest_loots, &chest_id)
+            // Numeric chest ids are deliberately compact and get reused after the
+            // only chest is opened. Keying solely on `chest_id` therefore made every
+            // such dungeon chest yield exactly the same bundle (#120). Treasury
+            // version is persistent and advances when chests are granted/opened;
+            // character/tier/level keep equal generations from collapsing together.
+            let loot_key = format!(
+                "{character_id}:{chest_id}:{chest_tier}:{chest_level}:{}",
+                entry.inventory.0.treasury_version
+            );
+            let mut reward = chests::pick_loot(&globals.static_data.chest_loots, &loot_key)
                 .cloned()
                 .unwrap_or_default();
             for item in &mut reward.items {
