@@ -612,11 +612,12 @@ struct CompleteRequest {
 
 /// `complete`'s response.
 ///
-/// Retail's shape depends on the flag, measured across 159 captured completions:
+/// Retail's shape depends on the flag. The exact `speedUp:true` transaction from
+/// tracker #128 (`capture-599`, id 146126) is the important discriminator:
 ///
 /// ```text
 /// speedUp=false → { "town" }
-/// speedUp=true  → { "character", "inventory", "town", "wallet" }   // post-deduction
+/// speedUp=true  → { "inventory", "town", "wallet" }   // post-deduction
 /// ```
 ///
 /// The wallet on the speed-up path is REQUIRED: it is how the client learns the gems
@@ -638,13 +639,9 @@ struct CompleteResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     wallet: Option<CompleteWallet>,
     /// Inventory diff. Speed-up only (empty in practice — gems live in the wallet —
-    /// but retail sends the key and the client's parser expects the quartet).
+    /// but retail sends the key and the client's parser expects it).
     #[serde(skip_serializing_if = "Option::is_none")]
     inventory: Option<CompleteInventoryUpdate>,
-    /// Full character JSONB (verbatim) so the client re-reads town xp/level etc.
-    /// Speed-up only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    character: Option<Value>,
 }
 
 #[post(
@@ -698,8 +695,6 @@ pub async fn complete_building(
             let tracker = InventoryChangeTracker::default();
             let inventory = entry.inventory.0.generate_client_update(&tracker);
             let wallet = entry.wallet.0.clone();
-            let character = entry.character.0.clone();
-
             {
                 use crate::schema::characters;
                 let town_col = town.clone();
@@ -711,13 +706,7 @@ pub async fn complete_building(
                     .execute(&mut conn)
                     .await?;
 
-                Ok::<_, BladeApiError>(Json(complete_response(
-                    speed_up,
-                    town_col,
-                    wallet,
-                    inventory,
-                    serde_json::to_value(&character).unwrap_or_else(|_| json!(null)),
-                )))
+                Ok::<_, BladeApiError>(Json(complete_response(speed_up, town_col, wallet, inventory)))
             }
         }
         .scope_boxed()
@@ -753,28 +742,25 @@ fn charge_construction_speed_up(
 }
 
 /// Assemble `/complete`'s response for the retail shape (see [`CompleteResponse`]):
-/// `{town}` on a plain completion, `{character, inventory, town, wallet}` when gems
+/// `{town}` on a plain completion, `{inventory, town, wallet}` when gems
 /// were spent. Split out so the shape is unit-testable without a database.
 fn complete_response(
     speed_up: bool,
     town: Value,
     wallet: CompleteWallet,
     inventory: CompleteInventoryUpdate,
-    character: Value,
 ) -> CompleteResponse {
     if speed_up {
         CompleteResponse {
             town,
             wallet: Some(wallet),
             inventory: Some(inventory),
-            character: Some(character),
         }
     } else {
         CompleteResponse {
             town,
             wallet: None,
             inventory: None,
-            character: None,
         }
     }
 }
@@ -2910,8 +2896,8 @@ mod tests {
     }
 
     /// Retail's `/complete` sends `{town}` alone without the flag, and
-    /// `{character, inventory, town, wallet}` with it — measured over 159
-    /// captures. In particular it NEVER sends `shop`, which we used to send on
+    /// `{inventory, town, wallet}` with it — pinned to the exact #128 retail
+    /// capture. In particular it NEVER sends `shop`, which we used to send on
     /// every completion and which tells the client the finished building's vendor
     /// has nothing to sell.
     #[test]
@@ -2931,7 +2917,6 @@ mod tests {
             json!({"levelInfo": {"level": 6}}),
             wallet_with(848),
             inv.clone(),
-            json!({"name": "Swanne"}),
         ))
         .unwrap();
         let keys: Vec<&str> = plain
@@ -2947,13 +2932,16 @@ mod tests {
             json!({"levelInfo": {"level": 6}}),
             wallet_with(848),
             inv,
-            json!({"name": "Swanne"}),
         ))
         .unwrap();
         let obj = sped.as_object().unwrap();
         let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
         keys.sort_unstable();
-        assert_eq!(keys, vec!["character", "inventory", "town", "wallet"]);
+        assert_eq!(keys, vec!["inventory", "town", "wallet"]);
+        assert!(
+            !obj.contains_key("character"),
+            "retail sends no character here"
+        );
         assert!(!obj.contains_key("shop"), "retail sends no shop here");
         // The post-deduction balance is the point of returning the wallet at all.
         // The wire wallet is an array of `{currencyId, balance}`.
