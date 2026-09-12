@@ -124,7 +124,7 @@ fn b64(input: &[u8]) -> String {
     out
 }
 
-#[post("/api/game/v1/public/characters")]
+#[post("/blades.bgs.services/api/game/v1/public/characters")]
 async fn create_characters(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -257,4 +257,21 @@ async fn create_characters(
         },
         inventory,
     }))
+}
+
+#[cfg(test)]
+mod creation_route_tests {
+    /// PR #212 shortened only the POST route while the adjacent GET routes and
+    /// every retail request retain the virtual-host prefix. Actix registers the
+    /// shorter path successfully, so compilation cannot catch the resulting 404.
+    #[test]
+    fn character_creation_uses_the_retail_virtual_host_path() {
+        let src = include_str!("character.rs");
+        assert!(
+            src.contains(
+                "#[post(\"/blades.bgs.services/api/game/v1/public/characters\")]\nasync fn create_characters",
+            ),
+            "character creation must be registered at the path the retail client calls"
+        );
+    }
 }
