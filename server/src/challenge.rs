@@ -18,7 +18,7 @@ use actix_web::{
     post,
     web::{self, Json},
 };
-use blades_lib::economy::apply_reward;
+use blades_lib::economy::{GEMS, RewardGrant, apply_reward};
 use blades_lib::features::challenges::{
     self, ACTIVE_CHALLENGE_COUNT, ChallengeInstance, ChallengeState, ChallengeStatus,
     ChallengeTemplate,
@@ -38,6 +38,22 @@ use crate::{
 };
 
 const CHALLENGE_SERVICE_ID: u64 = 9005;
+
+// These are content-asset ids, not per-request ids. `ChallengeData` looks them up
+// before it can dismiss the completion panel. Returning a random UUID made the
+// reward commit successfully on the server and then left the client waiting on an
+// asset that can never exist (tracker #127). Captured retail completions 146031–33
+// use the gem category for a gem reward and the currency category for gold.
+const GEM_CATEGORY_ID: Uuid = Uuid::from_u128(0xb6026a23_fd97_4df1_981d_57d68a0b7fdc);
+const CURRENCY_CATEGORY_ID: Uuid = Uuid::from_u128(0x9fbd1d31_1000_4b4a_b7e4_0c29115c1e00);
+
+fn category_id_for_reward(reward: &RewardGrant) -> Uuid {
+    if reward.currencies.contains_key(&GEMS) {
+        GEM_CATEGORY_ID
+    } else {
+        CURRENCY_CATEGORY_ID
+    }
+}
 
 fn now_secs() -> i64 {
     SystemTime::now()
@@ -268,13 +284,14 @@ async fn resolve(
             let character = entry.character.0.clone();
             let inventory = entry.inventory.0.generate_client_update(&tracker);
             let wallet = entry.wallet.0.clone();
+            let category_id = category_id_for_reward(&resolved.reward);
             write_back(&mut conn, entry).await?;
 
             Ok::<_, BladeApiError>(Json(ResolveResponse {
                 character: CompleteCharacterWithIdWithoutData { id: character_id, character },
                 challenge: resolved,
                 next_challenge_categories: vec![NextCategory {
-                    category_id: Uuid::new_v4(),
+                    category_id,
                     generated_time: now_secs(),
                 }],
                 inventory,
@@ -284,6 +301,22 @@ async fn resolve(
         .scope_boxed()
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn completion_categories_are_client_known_asset_ids() {
+        let gems = RewardGrant::currencies(HashMap::from([(GEMS, 1)]));
+        let gold = RewardGrant::currencies(HashMap::from([(blades_lib::economy::GOLD, 300)]));
+
+        assert_eq!(category_id_for_reward(&gems), GEM_CATEGORY_ID);
+        assert_eq!(category_id_for_reward(&gold), CURRENCY_CATEGORY_ID);
+        assert_ne!(GEM_CATEGORY_ID, CURRENCY_CATEGORY_ID);
+    }
 }
 
 async fn load_owned(
