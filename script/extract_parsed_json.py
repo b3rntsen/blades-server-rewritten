@@ -221,7 +221,8 @@ print(f"  interactables: {len(interactables)} entries  (errors: {interactable_er
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 3. quests
-#    Class: DungeonQuestHolderScriptableObject (171 instances)
+#    Classes: DungeonQuestHolderScriptableObject (171 instances),
+#             GenericQuestHolderScriptableObject (14 instances)
 #    Each has _serializedJsonString → JSON with _dungeonQuest
 #    Quest UUID = _dungeonQuest._uid._id
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -239,7 +240,11 @@ for o in objs:
         cn = obj.m_Script.read().m_ClassName
     except Exception:
         continue
-    if cn != "DungeonQuestHolderScriptableObject":
+    holder_key = {
+        "DungeonQuestHolderScriptableObject": "_dungeonQuest",
+        "GenericQuestHolderScriptableObject": "_genericQuest",
+    }.get(cn)
+    if holder_key is None:
         continue
     try:
         tt = o.read_typetree()
@@ -251,7 +256,7 @@ for o in objs:
         quest_data = resolve_refs(json.loads(raw_json))
 
         dungeon_info = None
-        dq = quest_data.get("_dungeonQuest")
+        dq = quest_data.get(holder_key) or quest_data
         if dq:
             # Quest UUID: _dungeonQuest._uid._id
             quest_uuid = dq.get("_uid", {}).get("_id")

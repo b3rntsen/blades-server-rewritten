@@ -52,7 +52,7 @@ representatively or left lenient — never invented silently.
 | **Crafting / temper / enchant** | `GET/POST /crafts`, `/crafts/{id}/finish` | ✅ Done* | Plain craft mints a timed job (`server_state.craft_jobs`); a `POST /crafts` carrying an `itemId` **tempers** (sets `temperingLevel`, keeps enchants) or **enchants** (applies a captured `ENCHANTING` outcome — `item_mod_recipes.json`, 23 recipes) an existing item, pulled into the job + re-added by `/finish`. *Input/gold cost lenient (not captured). |
 | **Guild exchange ("gift")** | `GET/POST /guilds/current/exchanges`(+`/donate`,`/redeem`) | ✅ Done | `guild_exchanges` table; create request, donate (debits donor stackable), redeem (credits requester the donated sum). |
 | **Abyss** | `POST /abysses/current`(+`/start`,`/update`,`/end`) | ⛔ Asset-blocked | Endless-dungeon generation must match the client (seed+defs); needs the **Unity asset export** (dungeon/floor defs) — see "Resources" note. |
-| **Event-quest *playing*** | `gameEventQuests[]` → accept→dungeon→complete | ✅ Done | No longer asset-blocked: `parsed.json` now carries 172 quests / 417 dungeons, and all 39 event templates resolve in it with objective ids and `version` matching the captures exactly. |
+| **Event-quest *playing*** | `gameEventQuests[]` → accept→dungeon→complete | ✅ Done | No longer asset-blocked: `parsed.json` now carries 185 quests / 417 dungeons, and all 39 event templates resolve in it with objective ids and `version` matching the captures exactly. |
 | **Town building** | `POST /towns/current/buildings`(+`/{id}/{upgrade,complete,destroy,styles/{id}}`,`/props`,`/name`) | ⛔ Documented | Capture-derivable but mutates the **opaque nested town JSONB** (`districts[].segments[].buildings[]`, client-validated) → high risk; outside the original stated scope. Shapes below. |
 
 ## Resources & the asset-export blocker
@@ -97,9 +97,9 @@ features become implementable.
 
 ### Event-quest playing (quest definitions) — DONE
 
-`parsed.json` is no longer a 67-byte stub: it carries 172 quests, 417 dungeons, 1113
-item templates and 63 interactables. 165 of the 172 quests resolve to a real dungeon
-(the other 7 are nil-dungeon town/dialogue objectives, handled explicitly);
+`parsed.json` is no longer a 67-byte stub: it carries 185 quests, 417 dungeons, 1113
+item templates and 63 interactables. 166 of the 185 quests resolve to a real dungeon
+(the other 19 are nil-dungeon town/dialogue objectives, handled explicitly);
 all 39 event templates resolve, with objective ids and `version` matching the retail
 captures exactly. Event quests, ordinary quests and their rewards are wired — see
 `docs/quest-and-event-model.md`.
@@ -110,7 +110,7 @@ Still open in the quest area:
   `parsed.json`, so synthesising the dungeon from `jobSetup` is tractable.
 - **Enemy level lacks the per-spawn-group cap**, so quests are harder than retail
   above ~level 40.
-- **17 of 172 quests have no non-zero payout entry** and pay nothing (logged).
+- **18 of 185 quests have no non-zero payout entry** and pay nothing (logged).
   A missing retail value needs evidence, not a guessed constant.
 
 ## Testing (no server/DB)

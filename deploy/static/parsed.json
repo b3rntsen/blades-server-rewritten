@@ -4739,6 +4739,255 @@
 				"dungeon_uuid": "00000000-0000-0000-0000-000000000000"
 			}
 		},
+		"095b8109-0e57-400d-bcf4-70e10df8cdbf": {
+			"dungeon_info": {
+				"objectives": {
+					"2b4ba889-eb4c-4c82-bfb2-717127af52ed": {
+						"description": "GH01_Objective2",
+						"quota": 1.0,
+						"rewards": []
+					},
+					"af3320f1-5331-4e56-91c4-95ead0190929": {
+						"description": "GH01_Objective1",
+						"quota": 1.0,
+						"rewards": []
+					},
+					"c70cb947-b927-40c0-b987-200eedfb14ee": {
+						"description": "GH01_Objective3",
+						"quota": 1.0,
+						"rewards": []
+					}
+				},
+				"version": 0,
+				"dungeon_uuid": "00000000-0000-0000-0000-000000000000"
+			}
+		},
+		"11bbd032-4451-48fd-9c00-ec6438f14f04": {
+			"dungeon_info": {
+				"objectives": {
+					"06ee08f3-ebda-421d-9530-6cb0ed43a330": {
+						"description": "BQ05_Objective_1",
+						"quota": 1.0,
+						"rewards": []
+					},
+					"5cec77df-9fc4-4b22-ab3f-b656a6cd341f": {
+						"description": "BQ05_Objective_2",
+						"quota": 1.0,
+						"rewards": []
+					}
+				},
+				"version": 2,
+				"dungeon_uuid": "00000000-0000-0000-0000-000000000000"
+			}
+		},
+		"1709a8bc-79dd-4a7f-b7f8-3a6022646dda": {
+			"dungeon_info": {
+				"objectives": {
+					"194b304a-fde4-4d48-8d85-a232d0b5ca4f": {
+						"description": "MQ06_Objective_2",
+						"quota": 1.0,
+						"rewards": []
+					},
+					"84cc8fa2-f164-4dd1-b45c-95bf2e7eae48": {
+						"description": "MQ06_Objective_1",
+						"quota": 1.0,
+						"rewards": []
+					},
+					"9fd47464-b93f-4e1b-8f8d-8b5e7dcda0a9": {
+						"description": "MQ06_Objective_3",
+						"quota": 1.0,
+						"rewards": []
+					}
+				},
+				"version": 0,
+				"dungeon_uuid": "00000000-0000-0000-0000-000000000000"
+			}
+		},
+		"3e382c0a-0ccb-4009-9d24-d168f9fe92a1": {
+			"dungeon_info": {
+				"objectives": {
+					"3a952a64-b7db-4a90-b05e-07deb463f0ce": {
+						"description": "MQ02_Objective_1",
+						"quota": 1.0,
+						"rewards": []
+					}
+				},
+				"version": 0,
+				"dungeon_uuid": "00000000-0000-0000-0000-000000000000"
+			}
+		},
+		"49e0b072-ffd7-44e7-8d72-8f001d1a079f": {
+			"dungeon_info": {
+				"objectives": {
+					"510b04a9-c7e0-491c-b887-032e6df5c6ad": {
+						"description": "MQ20a_Objective_1",
+						"quota": 1.0,
+						"rewards": []
+					}
+				},
+				"version": 0,
+				"dungeon_uuid": "9f7f0c2d-ebc2-494c-be2d-3fc9dc5c19fb"
+			}
+		},
+		"51e41844-7c98-44a6-802c-05b7e0bed137": {
+			"dungeon_info": {
+				"objectives": {
+					"29b9f2b7-404f-47db-844a-4adc89cd999b": {
+						"description": "MQ24_Objective_2",
+						"quota": 1.0,
+						"rewards": []
+					},
+					"3b304761-a85c-4f36-8b2f-cb0951b9fe4a": {
+						"description": "MQ24_Objective_7",
+						"quota": 1.0,
+						"rewards": []
+					},
+					"5e2f1a1c-93c6-4800-8840-96fb4c3eef4e": {
+						"description": "MQ24_Objective_8",
+						"quota": 1.0,
+						"rewards": []
+					},
+					"9f068140-d289-40b0-bbb6-da35a7890254": {
+						"description": "MQ02_Objective_1",
+						"quota": 1.0,
+						"rewards": []
+					},
+					"d4f161c0-0825-497a-b795-05333b72af6d": {
+						"description": "MQ24_Objective_3",
+						"quota": 1.0,
+						"rewards": []
+					},
+					"e306700d-93f1-4cdc-8c62-a1bf89f7dfcd": {
+						"description": "MQ24_Objective_1_Hidden",
+						"quota": 1.0,
+						"rewards": []
+					},
+					"f36f04e9-4071-436c-9077-10009377f72e": {
+						"description": "MQ24_Objective_1",
+						"quota": 1.0,
+						"rewards": []
+					}
+				},
+				"version": 3,
+				"dungeon_uuid": "00000000-0000-0000-0000-000000000000"
+			}
+		},
+		"60f1aaae-2ac1-4fa9-ad17-78a24452ffc6": {
+			"dungeon_info": {
+				"objectives": {
+					"43545ba2-15d8-4a57-ac14-7ea9b89efb31": {
+						"description": "BQ200_Objective_02",
+						"quota": 1.0,
+						"rewards": []
+					},
+					"59102951-bfe7-476a-bbdd-9a6b0e7d5026": {
+						"description": "BQ200_Objective_01",
+						"quota": 1.0,
+						"rewards": []
+					}
+				},
+				"version": 0,
+				"dungeon_uuid": "00000000-0000-0000-0000-000000000000"
+			}
+		},
+		"6e9e8b45-20ce-4004-bc49-7ba81de18b0e": {
+			"dungeon_info": {
+				"objectives": {
+					"a559104f-5765-4884-9d20-5d4d14c4dc8d": {
+						"description": "SQ206a_Objective1",
+						"quota": 1.0,
+						"rewards": []
+					}
+				},
+				"version": 0,
+				"dungeon_uuid": "00000000-0000-0000-0000-000000000000"
+			}
+		},
+		"77c752cb-c7cb-4ad9-b8d6-dae7064540d0": {
+			"dungeon_info": {
+				"objectives": {
+					"5cf31b2c-3bc6-4468-a963-4329247b73d7": {
+						"description": "GH03_Objective1",
+						"quota": 1.0,
+						"rewards": []
+					}
+				},
+				"version": 0,
+				"dungeon_uuid": "00000000-0000-0000-0000-000000000000"
+			}
+		},
+		"7db39937-ad5d-49ab-9d43-0379f14848de": {
+			"dungeon_info": {
+				"objectives": {
+					"dd5f51c4-6bbd-4bda-b3e3-2426061cc581": {
+						"description": "MQ20_Objective_1",
+						"quota": 1.0,
+						"rewards": []
+					}
+				},
+				"version": 1,
+				"dungeon_uuid": "00000000-0000-0000-0000-000000000000"
+			}
+		},
+		"b7f4d378-566b-45eb-9bda-206911901821": {
+			"dungeon_info": {
+				"objectives": {
+					"6a939788-1f5c-4749-894d-5fc5f338d7b7": {
+						"description": "MQ15_Objective_3",
+						"quota": 3.0,
+						"rewards": []
+					},
+					"8bad0859-002e-4521-9007-949490dcef40": {
+						"description": "MQ15_Objective_4",
+						"quota": 1.0,
+						"rewards": []
+					},
+					"b42723e3-8621-4c00-b734-c04955fb39f4": {
+						"description": "MQ15_Objective_5",
+						"quota": 1.0,
+						"rewards": []
+					},
+					"cf3e407a-38b1-47e8-bc6b-6403434e20a3": {
+						"description": "MQ15_Objective_1",
+						"quota": 3.0,
+						"rewards": []
+					},
+					"e57df624-032a-42c2-b67a-e3e7d2edef75": {
+						"description": "MQ15_Objective_2",
+						"quota": 3.0,
+						"rewards": []
+					}
+				},
+				"version": 1,
+				"dungeon_uuid": "00000000-0000-0000-0000-000000000000"
+			}
+		},
+		"cca4a80b-96f1-4b5c-82b8-9d4964c7f44a": {
+			"dungeon_info": {
+				"objectives": {
+					"7628457a-4766-4a19-86b4-b6a79972b19e": {
+						"description": "AQ24_Objective_1",
+						"quota": 4.0,
+						"rewards": []
+					}
+				},
+				"version": 1,
+				"dungeon_uuid": "00000000-0000-0000-0000-000000000000"
+			}
+		},
+		"e46ddb4e-6d61-498b-bff7-ed83c4053e71": {
+			"dungeon_info": {
+				"objectives": {
+					"fc976352-6b98-4161-b56e-9d12283b70fd": {
+						"description": "Quest.AbyssUnlockQuest.Objective",
+						"quota": 1.0,
+						"rewards": []
+					}
+				},
+				"version": 0,
+				"dungeon_uuid": "00000000-0000-0000-0000-000000000000"
+			}
+		},
 		"c430453c-d9c8-423a-a098-ae67d224fafa": {
 			"dungeon_info": {
 				"objectives": {

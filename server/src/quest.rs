@@ -6,10 +6,11 @@ use actix_web::{
     web::{self, Json},
 };
 use blades_lib::{
-    economy::{RewardGrant, apply_reward, grant_chest},
+    economy::{RewardGrant, RewardItem, apply_reward, grant_chest, is_currency},
+    features::repair::RepairData,
     user_data::{
         CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
-        DungeonGeneratedDataWithId, InventoryChangeTracker, QuestWithId,
+        DungeonGeneratedDataWithId, InventoryChangeTracker, Item, ItemPropertiesAll, QuestWithId,
     },
     util::quest::{GenerateQuestDataError, generate_quest_data},
 };
@@ -403,8 +404,36 @@ pub async fn get_quests(
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AcceptQuestResponse {
+    #[serde(skip_serializing_if = "RewardGrant::is_empty")]
+    reward: RewardGrant,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inventory: Option<CompleteInventoryUpdate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wallet: Option<CompleteWallet>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    character: Option<CompleteCharacterWithIdWithoutData>,
     quest: QuestWithId,
     dungeon_generated_data: Option<DungeonGeneratedDataWithId>,
+}
+
+/// Resources retail grants when a quest is first accepted rather than when an
+/// objective or the quest completes. These values are absent from the extracted
+/// quest holder, so entries belong here only when a tester supplies an exact retail
+/// observation. The insert result in [`accept_quest`] makes the grant idempotent.
+fn acceptance_reward(quest_id: Uuid) -> RewardGrant {
+    const MQ04_REBUILD_TOWN_HALL: Uuid =
+        Uuid::from_u128(0x3b478dfa_73bb_42df_a420_05cf83d015bc);
+    const LUMBER: Uuid = Uuid::from_u128(0xe7193116_d761_479b_8a20_5633737977f5);
+    const COPPER: Uuid = Uuid::from_u128(0x42d91529_c88b_4c5b_815b_b55508b4e7ef);
+    const LIMESTONE: Uuid = Uuid::from_u128(0xfd67bbc6_20f4_44a3_9614_28265ebb8c67);
+
+    let mut reward = RewardGrant::default();
+    if quest_id == MQ04_REBUILD_TOWN_HALL {
+        reward.stackable_items.insert(LUMBER, 140);
+        reward.stackable_items.insert(COPPER, 150);
+        reward.stackable_items.insert(LIMESTONE, 50);
+    }
+    reward
 }
 
 fn map_quest_generation_error(error: GenerateQuestDataError) -> BladeApiError {
@@ -433,6 +462,7 @@ async fn accept_quest(
 ) -> Result<Json<AcceptQuestResponse>, BladeApiError> {
     assert!(request.is_none());
     let session = session.get_session_or_error()?;
+    let user_id = session.session.user_id;
     let (character_id, quest_id) = path.into_inner();
     let mut conn = app_state.db_pool.get().await.unwrap();
 
@@ -477,6 +507,10 @@ async fn accept_quest(
                     .execute(&mut conn)
                     .await?;
                 return Ok(Json(AcceptQuestResponse {
+                    reward: RewardGrant::default(),
+                    inventory: None,
+                    wallet: None,
+                    character: None,
                     quest: QuestWithId {
                         quest_id,
                         quest: entry.info.0,
@@ -514,8 +548,6 @@ async fn accept_quest(
         &app_state.static_data.quests_daily.level_scaling,
     )
     .map_err(map_quest_generation_error)?;
-    //TODO: specifically handle the case the quest already exist (primary key is character id + quest id)
-
     let to_insert = QuestDbEntry {
         id: quest_id,
         character_id,
@@ -525,32 +557,86 @@ async fn accept_quest(
     };
 
     // Accepting an already-accepted quest returns the STORED row rather than failing
-    // on the (id, character_id) primary key. The client re-sends /accept on a retry
-    // or a reconnect, and a 500 there strands the player on a quest they cannot open;
-    // it must also not reset progress they already made, so the stored row wins.
-    {
-        use crate::schema::quests;
-        insert_into(quests::table)
-            .values(&to_insert)
-            .on_conflict((quests::id, quests::character_id))
-            .do_nothing()
-            .execute(&mut conn)
-            .await?;
-    }
-    let stored = {
-        use crate::schema::quests;
-        quests::table
-            .filter(quests::id.eq(quest_id))
-            .filter(quests::character_id.eq(character_id))
-            .select(QuestDbEntry::as_select())
-            .load(&mut conn)
-            .await?
-            .into_iter()
-            .next()
-            .unwrap_or(to_insert)
-    };
+    // or resetting its progress. The insert and first-accept reward share one
+    // transaction: a retry sees `inserted == 0` and cannot double-credit resources,
+    // while a failed economy write rolls the new quest row back too.
+    let (stored, reward, inventory, wallet, character) = conn
+        .transaction(move |mut conn| {
+            async move {
+                use crate::schema::quests;
+                let inserted = insert_into(quests::table)
+                    .values(&to_insert)
+                    .on_conflict((quests::id, quests::character_id))
+                    .do_nothing()
+                    .execute(&mut conn)
+                    .await?;
+
+                let stored = quests::table
+                    .filter(quests::id.eq(quest_id))
+                    .filter(quests::character_id.eq(character_id))
+                    .select(QuestDbEntry::as_select())
+                    .load(&mut conn)
+                    .await?
+                    .into_iter()
+                    .next()
+                    .unwrap_or(to_insert);
+
+                let reward = if inserted == 1 {
+                    acceptance_reward(quest_id)
+                } else {
+                    RewardGrant::default()
+                };
+                if reward.is_empty() {
+                    return Ok::<_, BladeApiError>((stored, reward, None, None, None));
+                }
+
+                let mut entry = {
+                    use crate::schema::characters;
+                    characters::table
+                        .filter(characters::id.eq(character_id))
+                        .filter(characters::user_id.eq(user_id))
+                        .select(CharacterDbEntryEconomy::as_select())
+                        .for_no_key_update()
+                        .load(&mut conn)
+                        .await?
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
+                };
+                let mut tracker = InventoryChangeTracker::default();
+                apply_reward(
+                    &reward,
+                    &mut entry.wallet.0,
+                    &mut entry.inventory.0,
+                    &mut entry.character.0,
+                    &mut tracker,
+                );
+                entry.inventory.0.backpack_version += 1;
+                let inventory = entry.inventory.0.generate_client_update(&tracker);
+                let wallet = (!reward.currencies.is_empty()).then(|| entry.wallet.0.clone());
+                let character = CompleteCharacterWithIdWithoutData {
+                    id: character_id,
+                    character: entry.character.0.clone(),
+                };
+                {
+                    use crate::schema::characters;
+                    diesel::update(characters::table)
+                        .filter(characters::id.eq(entry.id))
+                        .set(entry)
+                        .execute(&mut conn)
+                        .await?;
+                }
+                Ok((stored, reward, Some(inventory), wallet, Some(character)))
+            }
+            .scope_boxed()
+        })
+        .await?;
 
     Ok(Json(AcceptQuestResponse {
+        reward,
+        inventory,
+        wallet,
+        character,
         quest: QuestWithId {
             quest_id,
             quest: stored.info.0,
@@ -574,6 +660,75 @@ mod accept_error_mapping_tests {
         ));
         assert_eq!(err.status_code(), StatusCode::NOT_FOUND);
         assert_eq!(err.error_code(), 1);
+    }
+}
+
+#[cfg(test)]
+mod report99_quest_reward_tests {
+    use super::*;
+
+    fn game_data() -> blades_lib::game_data::GameData {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static/parsed.json");
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn repair_data() -> RepairData {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let durability: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("item_durability.json")).unwrap())
+                .unwrap();
+        RepairData::from_json(&durability, &json!({}))
+    }
+
+    #[test]
+    fn mq04_acceptance_grants_the_observed_resources() {
+        let reward = acceptance_reward(
+            Uuid::parse_str("3b478dfa-73bb-42df-a420-05cf83d015bc").unwrap(),
+        );
+        let lumber = Uuid::parse_str("e7193116-d761-479b-8a20-5633737977f5").unwrap();
+        let copper = Uuid::parse_str("42d91529-c88b-4c5b-815b-b55508b4e7ef").unwrap();
+        let limestone = Uuid::parse_str("fd67bbc6-20f4-44a3-9614-28265ebb8c67").unwrap();
+        assert_eq!(reward.stackable_items.get(&lumber), Some(&140));
+        assert_eq!(reward.stackable_items.get(&copper), Some(&150));
+        assert_eq!(reward.stackable_items.get(&limestone), Some(&50));
+        assert_eq!(reward.stackable_items.len(), 3);
+    }
+
+    #[test]
+    fn other_acceptances_do_not_invent_rewards() {
+        assert!(acceptance_reward(Uuid::nil()).is_empty());
+    }
+
+    #[test]
+    fn lumber_run_objective_mints_the_apk_iron_war_axe() {
+        let reward = objective_reward(
+            &game_data(),
+            &repair_data(),
+            Uuid::parse_str("e53a430b-35f4-4848-8b4e-c1f0089e098a").unwrap(),
+            &[Uuid::parse_str("3de9d4ab-77ac-48c6-bfac-fb4460aa2346").unwrap()],
+        );
+        assert_eq!(reward.items.len(), 1);
+        assert_eq!(
+            reward.items[0].item.item_template_id,
+            Uuid::parse_str("6fe63664-4252-4269-9f51-8546b5f138da").unwrap()
+        );
+        assert_eq!(reward.items[0].item.tempering_level, 0);
+        assert_eq!(reward.items[0].item.durability, 75.0);
+        assert!(reward.stackable_items.is_empty());
+    }
+
+    #[test]
+    fn restoration_potions_remain_a_stackable_objective_reward() {
+        let reward = objective_reward(
+            &game_data(),
+            &repair_data(),
+            Uuid::parse_str("5ad30483-8994-484e-b6dc-a5e9014cc4d5").unwrap(),
+            &[Uuid::parse_str("76b97069-67e9-4202-aa93-8bc1dc7fbc65").unwrap()],
+        );
+        let potion = Uuid::parse_str("d5ccf370-0795-4554-9dab-68ccbb97473d").unwrap();
+        assert_eq!(reward.stackable_items.get(&potion), Some(&5));
+        assert!(reward.items.is_empty());
     }
 }
 
@@ -925,15 +1080,17 @@ fn objectives_wire_slot(
 /// What newly completing `objective_ids` on `gld_quest_id` is worth.
 ///
 /// Straight from `parsed.json`: each objective carries a `rewards[]` list with
-/// `experience` and `town_points`. 20 of the 301 shipped objectives have one, which
+/// `experience` and `town_points`. 20 of the 332 shipped objectives have one, which
 /// is the population behind retail's 42 reward-bearing `/objectives` responses.
 ///
-/// `items_to_reward` is deliberately NOT granted: 18 of those 20 name an item
-/// template, and turning a template id into an instanced `RewardItem` needs the item
-/// generator that the shop/craft paths own. Granting the XP and skipping the item is
-/// visible and short; inventing an item is not.
+/// `items_to_reward` comes from the same APK objective definitions. A template with
+/// APK repair data is breakable gear and is therefore minted as an instanced item;
+/// currencies credit the wallet, and the remaining materials, potions and quest
+/// objects are stackables. This distinction covers all 18 non-zero item rewards in
+/// the shipped corpus without guessing from localized names or client input.
 fn objective_reward(
     game_data: &blades_lib::game_data::GameData,
+    repair_data: &RepairData,
     gld_quest_id: Uuid,
     objective_ids: &[Uuid],
 ) -> RewardGrant {
@@ -952,6 +1109,32 @@ fn objective_reward(
         for r in &objective.rewards {
             out.character_xp += r.experience.max(0.0) as u64;
             out.town_xp += r.town_points;
+            for item in &r.items_to_reward {
+                if item.count == 0 {
+                    continue;
+                }
+                if is_currency(item.template_uuid) {
+                    *out.currencies.entry(item.template_uuid).or_insert(0) += item.count;
+                } else if let Some(durability) =
+                    repair_data.max_durability(item.template_uuid, 0)
+                {
+                    for _ in 0..item.count {
+                        out.items.push(RewardItem {
+                            id: Uuid::new_v4(),
+                            item: Item {
+                                item_template_id: item.template_uuid,
+                                grade: None,
+                                tempering_level: 0,
+                                durability,
+                                properties: ItemPropertiesAll::default(),
+                                arcane_tier: None,
+                            },
+                        });
+                    }
+                } else {
+                    *out.stackable_items.entry(item.template_uuid).or_insert(0) += item.count;
+                }
+            }
         }
     }
     out
@@ -1041,6 +1224,7 @@ pub async fn update_quest_objectives(
             } else {
                 objective_reward(
                     &globals.game_data,
+                    &globals.repair_data,
                     quest_entry.info.0.gld_quest_id,
                     &newly_completed,
                 )
@@ -3015,7 +3199,7 @@ mod event_quest_tests {
         }
         assert!(
             paid >= 100,
-            "the committed table must cover a real share of the 172 quests, got {paid}"
+            "the committed table must cover a real share of the 185 quests, got {paid}"
         );
     }
 }
@@ -3572,8 +3756,8 @@ mod playability_sweep {
     /// malformed item spawn used to panic. So this asserts three things, and the
     /// numbers are stated rather than implied so a regression reads as a diff:
     ///
-    ///  * every one of the 172 quests generates a body without erroring;
-    ///  * exactly the 7 nil-dungeon quests come back without dungeon data, and every
+    ///  * every one of the 185 quests generates a body without erroring;
+    ///  * exactly the 19 nil-dungeon quests come back without dungeon data, and every
     ///    other quest comes back WITH it;
     ///  * every quest with a dungeon has at least one objective, because a quest with
     ///    no objective cannot be completed by the client.
@@ -3606,12 +3790,12 @@ mod playability_sweep {
             }
         }
 
-        assert_eq!(total, 172, "the shipped quest corpus is 172 quests");
+        assert_eq!(total, 185, "the shipped quest corpus is 185 quests");
         assert!(errored.is_empty(), "{} quest(s) failed to generate:\n{}", errored.len(), errored.join("\n"));
         assert_eq!(
             no_dungeon.len(),
-            7,
-            "exactly the 7 nil-dungeon quests have no dungeon; got {}: {:?}",
+            19,
+            "exactly the 19 nil-dungeon quests have no dungeon; got {}: {:?}",
             no_dungeon.len(),
             no_dungeon
         );
@@ -3622,9 +3806,31 @@ mod playability_sweep {
             assert!(declared.contains(id), "{id} has no dungeon but is not in nonDungeonQuests");
         }
 
-        // Report #117: this real story quest was present in the APK-derived
-        // quest catalogue and the captured completion-reward table, but absent
-        // from parsed.json. A player carrying it therefore hit QuestNotFound.
+        // Report #117: the extractor used to read only DungeonQuestHolder assets,
+        // silently omitting every GenericQuestHolder. Pin the complete APK-derived
+        // set so fixing MQ04 alone cannot leave the other thirteen broken.
+        let generic_quest_ids = [
+            "095b8109-0e57-400d-bcf4-70e10df8cdbf",
+            "11bbd032-4451-48fd-9c00-ec6438f14f04",
+            "1709a8bc-79dd-4a7f-b7f8-3a6022646dda",
+            "3b478dfa-73bb-42df-a420-05cf83d015bc",
+            "3e382c0a-0ccb-4009-9d24-d168f9fe92a1",
+            "49e0b072-ffd7-44e7-8d72-8f001d1a079f",
+            "51e41844-7c98-44a6-802c-05b7e0bed137",
+            "60f1aaae-2ac1-4fa9-ad17-78a24452ffc6",
+            "6e9e8b45-20ce-4004-bc49-7ba81de18b0e",
+            "77c752cb-c7cb-4ad9-b8d6-dae7064540d0",
+            "7db39937-ad5d-49ab-9d43-0379f14848de",
+            "b7f4d378-566b-45eb-9bda-206911901821",
+            "cca4a80b-96f1-4b5c-82b8-9d4964c7f44a",
+            "e46ddb4e-6d61-498b-bff7-ed83c4053e71",
+        ];
+        for raw in generic_quest_ids {
+            let id = Uuid::parse_str(raw).unwrap();
+            assert!(gd.quests.contains_key(&id), "generic quest {id} is missing");
+        }
+
+        // MQ04 is the reporter's direct reproduction and must retain both objectives.
         let rebuild_town_hall =
             Uuid::parse_str("3b478dfa-73bb-42df-a420-05cf83d015bc").unwrap();
         let (quest, dungeon) = generate_quest_data(&gd, rebuild_town_hall, 1, scaling)
@@ -3691,9 +3897,9 @@ mod playability_sweep {
             })
             .collect();
 
-        assert_eq!(flat, 116, "flat rewards from quest_rewards.json");
+        assert_eq!(flat, 128, "flat rewards from quest_rewards.json");
         assert_eq!(evented, 39, "milestone ladders from event_quests.json");
-        assert_eq!(covered.len(), 155, "155 of 172 quests pay something");
+        assert_eq!(covered.len(), 167, "167 of 185 quests pay something");
         assert!(
             covered.len() as f64 / gd.quests.len() as f64 > 0.80,
             "coverage must stay above 80%"
