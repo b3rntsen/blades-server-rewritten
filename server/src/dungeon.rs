@@ -356,6 +356,20 @@ fn resolve_dungeon_settings_id(
     }
 }
 
+/// Resolve an event quest template to the dungeon the client actually loads, then
+/// generate data for that dungeon. Event quest ids and dungeon ids are different
+/// UUIDs in the retail corpus; treating them as interchangeable silently produced
+/// an empty payload and made every real spawn look stale to `dungeon_update`.
+pub(crate) fn event_dungeon_data(
+    game_data: &GameData,
+    quest_id: Uuid,
+) -> Result<(Uuid, DungeonGeneratedData), BladeApiError> {
+    let dungeon_uuid = resolve_dungeon_settings_id(game_data, quest_id, None)?;
+    let generated_data = generate_for_dungeon(game_data, &dungeon_uuid, 1, 100)
+        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
+    Ok((dungeon_uuid, generated_data))
+}
+
 async fn handle_event_dungeon_exit(
     conn: &mut AsyncPgConnection,
     char_id: Uuid,
@@ -733,6 +747,70 @@ mod dungeon_settings_resolution {
         }
     }
 
+    /// Report #135 supplied the real group ids from EQ15. They all belong to the
+    /// dungeon referenced by the event template, not to the event quest UUID.
+    /// Pin both the indirection and the exact groups that production rejected.
+    #[test]
+    fn event_quest_generated_data_uses_its_referenced_dungeon() {
+        let gd = game_data();
+        let quest_id = Uuid::parse_str("e8f3614c-8672-4f77-9dad-4b400676f4b6").unwrap();
+        let expected_dungeon =
+            Uuid::parse_str("924f1147-fd7f-4736-9e2d-f33fa942dbdd").unwrap();
+        let (dungeon_id, generated) = event_dungeon_data(&gd, quest_id)
+            .expect("the EQ15 event quest must generate a real dungeon payload");
+
+        assert_eq!(dungeon_id, expected_dungeon);
+        for id in [
+            "5dd87222-11c4-4152-991b-92703baff18a",
+            "7461fd2c-c417-4b80-b185-6d491982787e",
+            "a91ebfe6-0167-4643-bd6f-ed27d8dfad41",
+            "9365e335-6682-4267-a9fb-cf1ac79c3b1f",
+        ] {
+            let id = Uuid::parse_str(id).unwrap();
+            assert!(
+                generated.enemy_generated_data.contains_key(&id),
+                "reported enemy group {id} must be generated"
+            );
+        }
+        let chest = Uuid::parse_str("d12be687-9c9f-4096-afd5-9854073d9870").unwrap();
+        assert!(
+            generated.chest_generated_data.contains_key(&chest),
+            "reported chest group must be generated"
+        );
+    }
+
+    /// Keep every shipped event template honest: its generated payload must name
+    /// exactly the spawn groups in the dungeon the template references.
+    #[test]
+    fn every_event_quest_generates_the_referenced_dungeons_groups() {
+        let (sd, gd) = (static_data(), game_data());
+        assert!(!sd.event_quests.templates.is_empty());
+
+        for quest_id in sd.event_quests.templates.keys() {
+            let (dungeon_id, generated) = event_dungeon_data(&gd, *quest_id)
+                .unwrap_or_else(|e| panic!("event quest {quest_id} cannot generate: {e}"));
+            let dungeon = gd.dungeons.get(&dungeon_id).expect("resolved dungeon exists");
+
+            let expected_enemies: HashSet<_> =
+                dungeon.spawn_info.enemy_spawn_groups.keys().copied().collect();
+            let actual_enemies: HashSet<_> =
+                generated.enemy_generated_data.keys().copied().collect();
+            assert_eq!(actual_enemies, expected_enemies, "event quest {quest_id}");
+
+            let expected_chests: HashSet<_> =
+                dungeon.spawn_info.chest.keys().copied().collect();
+            let actual_chests: HashSet<_> =
+                generated.chest_generated_data.keys().copied().collect();
+            assert_eq!(actual_chests, expected_chests, "event quest {quest_id}");
+
+            let expected_items: HashSet<_> =
+                dungeon.spawn_info.item.keys().copied().collect();
+            let actual_items: HashSet<_> =
+                generated.item_generated_data.keys().copied().collect();
+            assert_eq!(actual_items, expected_items, "event quest {quest_id}");
+        }
+    }
+
     // ---------------------------------------------------------------- the control
 
     /// Without this the fix could be "never 404", which is worse than the bug: the
@@ -914,10 +992,10 @@ async fn handle_event_dungeon_entry(
             BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2)
         })?;
 
-    // For event quests, we don't need game_data.events - use the quest_id as the dungeon UUID
-    let dungeon_uuid = quest_id;
+    // The event quest template points to the dungeon the client loads. The quest UUID
+    // itself is only the key used by the quest and event-dungeon endpoints.
+    let (dungeon_uuid, dungeon_data) = event_dungeon_data(&app_state.game_data, quest_id)?;
     let enemy_level = 1;
-    let xp_reward = 100.0;
     let max_entries = 1;
 
     log::info!("[event_dungeon] Processing event quest {} with event_id {}", quest_id, actual_event_id);
@@ -941,7 +1019,6 @@ async fn handle_event_dungeon_entry(
 
     let _ = check_permission_for_character_and_get_it(&mut *conn, session, character_id).await?;
 
-    let app_state_clone = app_state;
     let dungeon_id_clone = quest_id;
 
     conn.transaction(|mut conn| {
@@ -990,17 +1067,24 @@ async fn handle_event_dungeon_entry(
                         .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, 20002, 2))?;
 
                     dungeon_state_actual.dungeon_status.current_state = body.current_state;
+                    // Heal attempts created before report #135's fix. Their stored
+                    // status named the event quest UUID instead of the dungeon UUID,
+                    // and their generated data was therefore empty.
+                    dungeon_state_actual.dungeon_status.dungeon_settings_ids = vec![dungeon_uuid];
 
                     {
                         use crate::schema::event_dungeons::dsl::*;
 
                         let dungeon_state_json = serde_json::to_value(&dungeon_state_actual)
                             .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3))?;
+                        let generated_data_json = serde_json::to_value(&dungeon_data)
+                            .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3))?;
 
                         diesel::update(event_dungeons)
                             .filter(id.eq(existing.id))
                             .set((
                                 dungeon_state.eq(Some(dungeon_state_json)),
+                                generated_data.eq(generated_data_json),
                                 // entry_count intentionally left unchanged — this is a resume.
                             ))
                             .execute(&mut conn)
@@ -1025,19 +1109,6 @@ async fn handle_event_dungeon_entry(
                 .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, 20002, 2))?;
 
             let enemy_level_i64 = enemy_level as i64;
-            
-            let dungeon_data = generate_for_dungeon(
-                &app_state_clone.game_data,
-                &dungeon_uuid,
-                enemy_level_i64,
-                xp_reward as u64,
-            ).unwrap_or_else(|| DungeonGeneratedData {
-                enemy_generated_data: HashMap::new(),
-                item_generated_data: HashMap::new(),
-                chest_generated_data: HashMap::new(),
-                algorithm_version: 1,
-                version: 0,
-            });
 
             let status = DungeonStatus {
                 dungeon_settings_ids: vec![dungeon_uuid],
