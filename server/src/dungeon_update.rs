@@ -1,4 +1,5 @@
 use crate::{
+    dungeon::event_dungeon_data,
     json_db::JsonDbWrapper,
     models::{CharacterDbEntryCharacterWalletInventory, QuestDbEntryDungeonStateAndGeneratedData},
 };
@@ -396,10 +397,11 @@ async fn handle_event_dungeon_update(
             let event_id = *event_template.event_ids.get(0)
                 .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
 
-            // No game_data.events lookup here — handle_event_dungeon_entry deliberately
-            // skips it too ("we don't need game_data.events - use the quest_id as the
-            // dungeon UUID"), and checking it against dungeon_id/event_id was liable to
-            // 404 on a key that was never expected to exist there for event quests.
+            let (event_dungeon_settings_id, regenerated_data) =
+                event_dungeon_data(&app_state.game_data, dungeon_id)?;
+
+            // No game_data.events lookup here: the event template identifies the event,
+            // while parsed quest data identifies the dungeon and its spawn groups.
 
             // Get the event dungeon state
             let (event_dungeon_data, mut character_data) = {
@@ -425,8 +427,19 @@ async fn handle_event_dungeon_update(
                     .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
             };
 
-            let generated_data: DungeonGeneratedData = serde_json::from_value(event_dungeon_data.generated_data)
+            let stored_generated_data: DungeonGeneratedData = serde_json::from_value(event_dungeon_data.generated_data)
                 .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2))?;
+            let generated_data = if stored_generated_data.enemy_generated_data.is_empty()
+                && stored_generated_data.item_generated_data.is_empty()
+                && stored_generated_data.chest_generated_data.is_empty()
+            {
+                // Attempts started before report #135's fix were generated using the
+                // event quest UUID, which is not a dungeon UUID, so all three maps
+                // were empty. Repair them in-place on their next update.
+                regenerated_data
+            } else {
+                stored_generated_data
+            };
 
             // `dungeon_state` is cleared to NULL by `handle_event_dungeon_exit`. A kill/loot
             // update can legitimately arrive AFTER that clear (late network delivery, client
@@ -442,7 +455,7 @@ async fn handle_event_dungeon_update(
                 );
                 return Ok(Json(DungeonUpdateResponse {
                     dungeon_status: DungeonStatus {
-                        dungeon_settings_ids: vec![dungeon_id],
+                        dungeon_settings_ids: vec![event_dungeon_settings_id],
                         revive_count: 0,
                         algorithm_version: 1,
                         current_state: body.current_state.clone(),
@@ -469,6 +482,8 @@ async fn handle_event_dungeon_update(
             let mut inventory_modification_tracker = InventoryChangeTracker::default();
 
             dungeon_state.dungeon_status.current_state = body.current_state.clone();
+            dungeon_state.dungeon_status.dungeon_settings_ids =
+                vec![event_dungeon_settings_id];
 
             let mut wallet = std::mem::take(&mut character_data.wallet.0);
 
@@ -513,11 +528,14 @@ async fn handle_event_dungeon_update(
 
                 let dungeon_state_json = serde_json::to_value(&dungeon_state)
                         .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3))?;
+                let generated_data_json = serde_json::to_value(&generated_data)
+                    .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3))?;
 
                 diesel::update(event_dungeons::table)
                     .filter(event_dungeons::id.eq(event_dungeon_data.id))
                     .set((
                         event_dungeons::dungeon_state.eq(Some(dungeon_state_json)),
+                        event_dungeons::generated_data.eq(generated_data_json),
                     ))
                     .execute(&mut conn)
                     .await?;
