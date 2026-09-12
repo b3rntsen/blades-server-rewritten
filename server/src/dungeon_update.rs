@@ -111,6 +111,16 @@ fn item_loot_grant(
     }
 }
 
+fn collected_chest_key(spawn_group_id: Uuid, spawn_group_index: usize) -> String {
+    if spawn_group_index == 0 {
+        // Backward compatibility: existing dungeon states stored a bare UUID
+        // for the only chest the old generator ever emitted.
+        spawn_group_id.to_string()
+    } else {
+        format!("{spawn_group_id}-{spawn_group_index}")
+    }
+}
+
 /// An `enemy_loot_collected` action — the player looted a corpse.
 ///
 /// Only the enemy's IDENTITY is read. The contents were rolled server-side the moment
@@ -645,28 +655,10 @@ fn process_dungeon_actions(
                 );
             }
 
-
-            // EVERY CHEST IS TIER 1, and the request's tier is never consulted.
-            //
-            // The comment here used to say the request's tier was "a fallback for
-            // a chest we have no record of generating". It was not, in two ways.
-            // `generate_for_dungeon` hardcodes `vec![ChestGeneratedData { tier: 1 }]`
-            // (blades_lib/src/util/dungeon.rs) and nothing else ever writes the
-            // field, so the fallback was unreachable — and a chest we have no
-            // record of `continue`s below before the tier is read anyway, so it
-            // was doubly unreachable. The handler's own test fixture posts
-            // `"tier":3`, which is why this looked like it worked.
-            //
-            // It must STAY unreachable: taking the tier from the request would be
-            // client-authoritative loot — anyone could post `"tier":5`. The real
-            // tier is not knowable here either: `game_data`'s spawn info is
-            // `chest: HashMap<Uuid, EmptyStruct>` and carries no tier, so it has
-            // not been mined yet.
-            //
-            // So a player who sees a tier-3 chest in the world still receives a
-            // tier-1 one. That is a reward-fidelity gap, not an exploit, and it is
-            // fixed by mining the per-chest tier into game_data and generating it
-            // server-side — not by trusting this request.
+            // The request repeats `tier`, but it is not authoritative. The chest
+            // generated for this spawn group was already assigned its APK-derived
+            // tier and quantity when the dungeon was created; only that stored
+            // result is used here.
             DungeonUpdateAction::ChestCollected(chest) => {
                 let Some(chest_data) =
                     generated_data.get_chest(&chest.spawn_group_id, chest.spawn_group_index)
@@ -683,30 +675,13 @@ fn process_dungeon_actions(
                 // collected set is persisted with the dungeon state, so this holds
                 // across requests as well as within one batch.
                 //
-                // The key is the spawn GROUP, not (group, index) — so one
-                // collection marks the whole group spent. That is correct only
-                // because `generate_for_dungeon` emits exactly one
-                // `ChestGeneratedData` per group today, and `game_data`'s
-                // `chest: HashMap<Uuid, EmptyStruct>` carries no quantity. If a
-                // group ever holds two chests, this would silently cap it at one.
-                //
-                // The key is deliberately NOT widened to a tuple: `collected_chests`
-                // is persisted inside the dungeon state as a set of UUIDs, so
-                // changing its element type would fail to deserialize every
-                // in-flight dungeon. Instead, make the assumption LOUD — if an
-                // index other than 0 ever arrives, the constraint above has been
-                // broken and this needs the wider key plus a migration.
-                if chest.spawn_group_index != 0 {
-                    log::warn!(
-                        "dungeon_update: chest spawn_group_index {} != 0 for group {:?} —                          collected_chests keys on the group alone, so this group is now                          spent after one pickup. Widen the key (and migrate the                          persisted set) before shipping multi-chest groups.",
-                        chest.spawn_group_index,
-                        chest.spawn_group_id
-                    );
-                }
                 if !dungeon_state
                     .dungeon_status
                     .collected_chests
-                    .insert(chest.spawn_group_id)
+                    .insert(collected_chest_key(
+                        chest.spawn_group_id,
+                        chest.spawn_group_index,
+                    ))
                 {
                     continue;
                 }
@@ -1351,30 +1326,33 @@ mod tests {
         assert_eq!(v, 4, "a batch bumps once however many chests it carried");
     }
 
-    /// Collecting the same chest twice must mint ONE chest.
+    /// Collecting the same indexed chest twice must mint it once.
     ///
     /// The guard is `collected_chests`, which is persisted with the dungeon state,
     /// so it holds across requests as well as within a batch — a client that
     /// replays its last update, or taps twice, does not double its treasury.
     #[test]
-    fn a_chest_is_only_ever_collected_once() {
+    fn each_generated_chest_is_only_ever_collected_once() {
         use std::collections::HashSet;
         let chest_a: Uuid = "e7edb276-a04c-413f-80ab-69ffe304874f".parse().unwrap();
         let chest_b: Uuid = "4295c814-e5e7-4a8a-939a-d3238471c906".parse().unwrap();
 
         // the handler's rule, in the same shape as the code under test
-        let mut collected: HashSet<Uuid> = HashSet::new();
+        let mut collected: HashSet<String> = HashSet::new();
         let mut minted = 0;
-        for id in [chest_a, chest_a, chest_b, chest_a] {
-            if collected.insert(id) {
+        for (id, index) in [(chest_a, 0), (chest_a, 0), (chest_a, 1), (chest_b, 0)] {
+            if collected.insert(collected_chest_key(id, index)) {
                 minted += 1;
             }
         }
-        assert_eq!(minted, 2, "two distinct chests, however many times they are sent");
+        assert_eq!(
+            minted, 3,
+            "two indexes in one group and one in another must each mint once"
+        );
 
         // control: without the guard every action mints, which is the bug
         assert_eq!(
-            [chest_a, chest_a, chest_b, chest_a].len(),
+            [(chest_a, 0), (chest_a, 0), (chest_a, 1), (chest_b, 0)].len(),
             4,
             "the unguarded count differs from the guarded one, so the test is not vacuous"
         );

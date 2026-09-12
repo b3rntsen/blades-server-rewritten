@@ -172,7 +172,11 @@ pub struct DungeonStatus {
     /// Skipped when empty for the same reason: sending a key retail never sent is
     /// how we have broken the client before.
     #[serde(default, skip_serializing_if = "HashSet::is_empty")]
-    pub collected_chests: HashSet<Uuid>,
+    // Stored as strings so a multi-chest spawn group can be keyed by
+    // `uuid-index`. Existing rows used a bare UUID; index zero deliberately
+    // keeps that exact spelling, so old in-flight dungeon states deserialize
+    // and preserve their already-collected chest.
+    pub collected_chests: HashSet<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -362,6 +366,22 @@ mod collected_chests_compat {
         assert!(s.collected_chests.is_empty());
     }
 
+    /// Rows written after chest collection was added used a bare UUID. Index zero
+    /// deliberately keeps that key, so deploying multi-chest support cannot make
+    /// an already-collected chest collectible again.
+    #[test]
+    fn an_old_bare_uuid_collected_set_still_deserializes() {
+        let chest = Uuid::nil().to_string();
+        let raw = format!(
+            r#"{{"dungeonSettingsIds":[],"reviveCount":0,"algorithmVersion":1,
+                "currentState":{{"b64":"AAAA"}},"enemyStatus":{{}},"seed":0,"level":1,
+                "version":1,"collectedChests":["{chest}"]}}"#
+        );
+        let s: DungeonStatus =
+            serde_json::from_str(&raw).expect("an indexed build must load the old UUID set");
+        assert!(s.collected_chests.contains(&chest));
+    }
+
     /// And we do not hand the client a key retail never sent.
     #[test]
     fn an_empty_collected_set_is_not_serialized() {
@@ -373,7 +393,7 @@ mod collected_chests_compat {
 
         // control: once something IS collected the field appears, so the assertion
         // above is about emptiness and not about the field never existing.
-        s.collected_chests.insert(Uuid::nil());
+        s.collected_chests.insert(Uuid::nil().to_string());
         let out = serde_json::to_value(&s).unwrap();
         assert!(out.get("collectedChests").is_some(), "a non-empty set must be sent");
     }
