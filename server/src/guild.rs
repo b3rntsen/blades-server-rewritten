@@ -271,6 +271,32 @@ impl MemberWire {
     }
 }
 
+/// Serialize the current guild without changing identity currencies mid-response.
+///
+/// Membership rows use the private `users.id` foreign key, while the client only
+/// knows the authenticated account as `SessionResponse.userId` — `users.secret_id`.
+/// Retail's captured current-guild response includes that exact session user id
+/// for the current player's member row. If ours exposes the private id instead,
+/// the client cannot find its own membership/rank and leaves the guild menu on
+/// its initial spinner. Other member ids remain in the existing server currency
+/// until the whole social surface is migrated together.
+fn current_guild_members(
+    members: &[GuildMemberRow],
+    current_user_id: Uuid,
+    current_public_user_id: Uuid,
+) -> Vec<MemberWire> {
+    members
+        .iter()
+        .map(|row| {
+            let mut wire = MemberWire::from_row(row);
+            if row.user_id == current_user_id {
+                wire.user_id = current_public_user_id;
+            }
+            wire
+        })
+        .collect()
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MessageWire {
@@ -636,7 +662,11 @@ pub async fn get_current_guild(
                 let wire = GuildWire::from_row(&g, members.len() as i64);
                 (
                     Some(wire),
-                    members.iter().map(MemberWire::from_row).collect(),
+                    current_guild_members(
+                        &members,
+                        session.session.user_id,
+                        session.session.secret_user_id,
+                    ),
                 )
             }
             None => (None, Vec::new()),
@@ -2496,6 +2526,31 @@ mod create_wire {
             exchange_donation_count: 0,
             grandmaster_since: 1781301527,
         }
+    }
+
+    fn member_row(user_id: Uuid) -> GuildMemberRow {
+        GuildMemberRow {
+            guild_id: "6a2c81172c9371def2ab495f".into(),
+            user_id,
+            character_id: Uuid::from_u128(0xC4A2),
+            rank: "MEMBER".into(),
+            join_date: 1_781_234_567,
+        }
+    }
+
+    /// Report #123: retail's own member row uses the same public id as its
+    /// authenticated session. Our database id is deliberately different from
+    /// that public bearer, so the current-guild response must bridge it.
+    #[test]
+    fn current_players_member_uses_the_session_user_id() {
+        let private_id = Uuid::from_u128(0x123);
+        let public_id = Uuid::from_u128(0x456);
+        let another = Uuid::from_u128(0x789);
+        let rows = vec![member_row(private_id), member_row(another)];
+
+        let wire = current_guild_members(&rows, private_id, public_id);
+        assert_eq!(wire[0].user_id, public_id, "the client must find itself");
+        assert_eq!(wire[1].user_id, another, "unrelated members are unchanged");
     }
 
     /// Retail's guild object carries thirteen fields; we were sending twelve.
