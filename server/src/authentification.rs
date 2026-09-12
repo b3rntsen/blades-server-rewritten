@@ -710,6 +710,12 @@ async fn anon_log_in(
                 let session_id = app_state.session_store.store_new_session(session.clone());
                 crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref())
                     .await;
+                // This is a completed login, not merely a lookup hint. Falling
+                // through creates a second user for the same device and returns
+                // that new identity instead of the session we just persisted.
+                return Ok(web::Json(SessionResponse {
+                    session: SessionResponseInner::from_session(session_id, session.as_ref()),
+                }));
             } else if existing.len() > 1 {
                 log::warn!(
                     "anon login: device {} matches {} users — not guessing which; \
@@ -838,6 +844,29 @@ mod link_tests {
         // the 2-user and 12-user devices measured on prod
         assert_eq!(decide(2), Outcome::DoNotGuess, "ambiguous devices must not be guessed");
         assert_eq!(decide(12), Outcome::DoNotGuess);
+    }
+
+    /// PR #212 removed the starter-character call and accidentally removed the
+    /// return beside it. The handler then persisted a session for the recognised
+    /// user, fell through, minted another user, and returned the new account.
+    /// Pin the control-flow boundary because the match-count unit test above
+    /// cannot see what the request handler does after making its decision.
+    #[test]
+    fn a_recognised_device_returns_before_new_user_creation() {
+        let src = include_str!("authentification.rs");
+        let start = src
+            .find("if existing.len() == 1 {")
+            .expect("unique-device branch");
+        let end = src[start..]
+            .find("} else if existing.len() > 1 {")
+            .map(|offset| start + offset)
+            .expect("ambiguous-device branch");
+        let unique_branch = &src[start..end];
+
+        assert!(
+            unique_branch.contains("return Ok(web::Json(SessionResponse"),
+            "recognised-device login must return its persisted session before the new-user path"
+        );
     }
 
     #[test]
