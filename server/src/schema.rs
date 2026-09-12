@@ -1,6 +1,20 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    arena_ai_mimic_control (singleton) {
+        singleton -> Bool,
+        managed -> Bool,
+    }
+}
+
+diesel::table! {
+    arena_ai_mimics (character_id) {
+        character_id -> Uuid,
+        enabled_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     arena_match_results (id) {
         id -> Uuid,
         character_id -> Uuid,
@@ -196,6 +210,7 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(arena_ai_mimics -> characters (character_id));
 diesel::joinable!(arena_match_results -> characters (character_id));
 diesel::joinable!(arena_matches -> users (user_id));
 diesel::joinable!(characters -> users (user_id));
@@ -205,6 +220,8 @@ diesel::joinable!(event_dungeons -> characters (character_id));
 diesel::joinable!(quests -> characters (character_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    arena_ai_mimic_control,
+    arena_ai_mimics,
     arena_match_results,
     arena_matches,
     characters,

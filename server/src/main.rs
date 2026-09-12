@@ -628,6 +628,8 @@ async fn main() -> Result<()> {
                     .service(arena::debug_inject::debug_peers)
                     .service(arena::debug_inject::debug_inject)
                     .service(admin::import_character)
+                    .service(admin::set_ai_mimic)
+                    .service(admin::list_ai_mimics)
                     .service(admin::recent_matches)
                     .service(admin::bind_device)
                     .service(admin::reassign_device)

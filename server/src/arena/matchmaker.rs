@@ -38,7 +38,7 @@ use crate::{
         match_registry::MatchRegistry,
     },
     models::CharacterDbEntryCharacterWalletInventory,
-    schema::characters,
+    schema::{arena_ai_mimic_control, arena_ai_mimics, characters},
     session::{Session, SessionLookedUpMaybe},
 };
 
@@ -690,10 +690,11 @@ fn pick_bot_index(
 
 /// Load a SOLO-match bot opponent: a real, COMPLETE, distinct character so the bot has a
 /// non-empty op54 PROFILE (a visible/bindable/killable opponent + a resolvable match-end
-/// card — the 2026-07-03 solo-bot fix). Pool = the configured `ARENA_BOT_USER_IDS`
-/// roster if set, else any OTHER character in the DB. Filters to complete + non-self,
-/// rotates by gsid. Falls back to the empty `starter()` (logged) only if NOTHING
-/// qualifies (e.g. no other complete character exists yet).
+/// card — the 2026-07-03 solo-bot fix). Pool = the checkbox-managed
+/// `arena_ai_mimics` roster after its first management write; before that, the
+/// configured `ARENA_BOT_USER_IDS` roster is retained for a safe rollout. With
+/// neither configured, any OTHER character in the DB remains the legacy fallback.
+/// Filters to complete + non-self and rotates by gsid.
 /// The suffix a bot opponent's name carries so a player can tell at a glance that
 /// they are not fighting a person.
 ///
@@ -775,16 +776,32 @@ async fn pick_bot_loadout(
         return loadout::starter();
     };
 
-    let use_roster = !config.bot_user_ids.is_empty();
-    let mut rows: Vec<CharacterDbEntryCharacterWalletInventory> = if use_roster {
-        characters::table
+    let managed = arena_ai_mimic_control::table
+        .filter(arena_ai_mimic_control::singleton.eq(true))
+        .select(arena_ai_mimic_control::managed)
+        .first::<bool>(&mut conn)
+        .await
+        .unwrap_or_else(|error| {
+            // Fail closed: once checkbox consent exists, a transient control-table
+            // read error must not widen matchmaking back to arbitrary characters.
+            warn!("matchmaker: AI mimic control read failed; using the managed pool: {error}");
+            true
+        });
+    let source = roster_source(managed, !config.bot_user_ids.is_empty());
+    let mut rows: Vec<CharacterDbEntryCharacterWalletInventory> = match source {
+        BotRosterSource::Managed => characters::table
+            .inner_join(arena_ai_mimics::table)
+            .select(CharacterDbEntryCharacterWalletInventory::as_select())
+            .load(&mut conn)
+            .await
+            .unwrap_or_default(),
+        BotRosterSource::LegacyEnv => characters::table
             .filter(characters::user_id.eq_any(config.bot_user_ids.clone()))
             .select(CharacterDbEntryCharacterWalletInventory::as_select())
             .load(&mut conn)
             .await
-            .unwrap_or_default()
-    } else {
-        load_wide_pool(&mut conn, human_char_uuid).await
+            .unwrap_or_default(),
+        BotRosterSource::WideFallback => load_wide_pool(&mut conn, human_char_uuid).await,
     };
 
     let mut candidates: Vec<BotCandidate> = rows.iter().map(candidate_of_row).collect();
@@ -807,14 +824,14 @@ async fn pick_bot_loadout(
     //
     // Only ever a widening — if the wider pool has nobody bracketed either, the
     // roster draw stands.
-    if should_widen(use_roster, human, draw) {
+    if should_widen(source, human, draw) {
         let wide_rows = load_wide_pool(&mut conn, human_char_uuid).await;
         let wide_candidates: Vec<BotCandidate> = wide_rows.iter().map(candidate_of_row).collect();
         if let Some(d) = pick_bot_index(&wide_candidates, human_char_uuid, human, gsid)
             && d.step.is_some()
         {
             info!(
-                "matchmaker: the {}-character bot roster had nobody inside the bracket for \
+                "matchmaker: the {}-character legacy bot roster had nobody inside the bracket for \
                      this player — widened to the full character pool ({} candidates) and drew a \
                      bracketed opponent instead",
                 candidates.len(),
@@ -866,8 +883,8 @@ async fn pick_bot_loadout(
         None => {
             warn!(
                 "matchmaker: no COMPLETE distinct bot character available (pool {}) — bot falls \
-                 back to the empty starter (INVISIBLE opponent). Seed ARENA_BOT_USER_IDS or \
-                 transfer more characters with appearance.",
+                 back to the empty starter (INVISIBLE opponent). Select a complete character with \
+                 the Mimic as AI checkbox.",
                 candidates.len()
             );
             loadout::starter()
@@ -886,8 +903,34 @@ async fn pick_bot_loadout(
 /// are already looking at the whole pool), the player's strength is known
 /// (otherwise there is no bracket to satisfy), and the draw did not satisfy any
 /// bracket step (including "no draw at all").
-fn should_widen(use_roster: bool, human: Option<Skill>, draw: Option<BotDraw>) -> bool {
-    if !use_roster || human.is_none() {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BotRosterSource {
+    /// Database checkboxes are authoritative. Never escape this consent list.
+    Managed,
+    /// Transitional `ARENA_BOT_USER_IDS`; retains tracker #49's widening rule.
+    LegacyEnv,
+    /// No configured roster yet, so the whole character table is already in use.
+    WideFallback,
+}
+
+fn roster_source(managed: bool, has_legacy_env: bool) -> BotRosterSource {
+    if managed {
+        BotRosterSource::Managed
+    } else if has_legacy_env {
+        BotRosterSource::LegacyEnv
+    } else {
+        BotRosterSource::WideFallback
+    }
+}
+
+fn should_widen(
+    source: BotRosterSource,
+    human: Option<Skill>,
+    draw: Option<BotDraw>,
+) -> bool {
+    // A manually managed roster is a consent boundary, not merely a curation
+    // preference. Never draw an unchecked player's character to improve a match.
+    if source != BotRosterSource::LegacyEnv || human.is_none() {
         return false;
     }
     match draw {
@@ -1739,25 +1782,37 @@ mod bot_pick_tests {
         });
 
         assert!(
-            should_widen(true, nwah(), fallback),
+            should_widen(BotRosterSource::LegacyEnv, nwah(), fallback),
             "roster missed the bracket, so widen"
         );
         assert!(
-            should_widen(true, nwah(), None),
+            should_widen(BotRosterSource::LegacyEnv, nwah(), None),
             "roster had nobody at all, so widen"
         );
         assert!(
-            !should_widen(true, nwah(), bracketed),
+            !should_widen(BotRosterSource::LegacyEnv, nwah(), bracketed),
             "a bracketed roster draw is what we wanted, so no second query"
         );
         assert!(
-            !should_widen(false, nwah(), fallback),
+            !should_widen(BotRosterSource::WideFallback, nwah(), fallback),
             "no roster configured, so the draw already came from the whole pool"
         );
         assert!(
-            !should_widen(true, None, fallback),
+            !should_widen(BotRosterSource::LegacyEnv, None, fallback),
             "unknown player strength, so there is no bracket to satisfy"
         );
+        assert!(
+            !should_widen(BotRosterSource::Managed, nwah(), fallback),
+            "a checkbox-managed roster is a consent boundary and must never widen"
+        );
+    }
+
+    #[test]
+    fn managed_roster_takes_precedence_over_the_legacy_environment() {
+        assert_eq!(roster_source(true, true), BotRosterSource::Managed);
+        assert_eq!(roster_source(true, false), BotRosterSource::Managed);
+        assert_eq!(roster_source(false, true), BotRosterSource::LegacyEnv);
+        assert_eq!(roster_source(false, false), BotRosterSource::WideFallback);
     }
 
     #[test]

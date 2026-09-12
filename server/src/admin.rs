@@ -17,6 +17,10 @@
 //!     flow. The capture -> server transform lives in the capture platform;
 //!     this handler accepts the four `blades_lib` parts (`character`, `data`,
 //!     `inventory`, `wallet`) directly.
+//!   * [`set_ai_mimic`] — `POST /…/api/dev/v1/ai-mimic` — opt one isolated
+//!     character copy into or out of the server-driven Arena opponent pool.
+//!   * [`list_ai_mimics`] — `GET /…/api/dev/v1/ai-mimics` — report the
+//!     effective roster so the capture platform can mark legacy selections.
 
 use std::{
     collections::{BTreeSet, HashMap},
@@ -53,9 +57,10 @@ use crate::{
     arena::matchmaker::{RecentTicketView, query_recent_matches},
     json_db::JsonDbWrapper,
     models::{
-        CharacterDbAlone, CharacterDbEntry, CharacterDbEntryEconomy, QuestDbEntry, UserDBEntry,
+        CharacterDbAlone, CharacterDbEntry, CharacterDbEntryCharacterAlone,
+        CharacterDbEntryEconomy, QuestDbEntry, UserDBEntry,
     },
-    schema::{characters, quests, users},
+    schema::{arena_ai_mimic_control, arena_ai_mimics, characters, quests, users},
 };
 
 // service id used in the BladeApiError envelope for this dev endpoint. Not a
@@ -153,6 +158,42 @@ pub struct ImportCharacterResponse {
     /// true if a brand-new character row was inserted; false if an existing
     /// row for this `userId` was overwritten.
     pub created: bool,
+}
+
+/// Change one arena user's sole character's AI-mimic status.
+///
+/// The capture platform gives every selected archived alt its own deterministic
+/// arena user, so `userId` identifies one character without exposing the arena
+/// server's generated character id to the browser.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetAiMimicRequest {
+    pub user_id: Uuid,
+    pub enabled: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetAiMimicResponse {
+    pub user_id: Uuid,
+    pub character_id: Option<Uuid>,
+    pub enabled: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiMimicEntry {
+    pub user_id: Uuid,
+    pub character_id: Uuid,
+    pub name: String,
+    pub level: u16,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListAiMimicsResponse {
+    pub managed: bool,
+    pub mimics: Vec<AiMimicEntry>,
 }
 
 /// Pull the dev token out of the request, checking `Authorization: Bearer ...`
@@ -328,6 +369,154 @@ pub async fn import_character(
         .await?;
 
     Ok(Json(response))
+}
+
+/// Add or remove one character from the managed Arena AI roster.
+///
+/// The first call also makes the database roster authoritative. Before that,
+/// the matchmaker continues to honour `ARENA_BOT_USER_IDS`, which gives a safe
+/// deployment window in which the web control can be shipped and the existing
+/// opponent can be checked. Once managed, an empty table intentionally means
+/// "no opted-in mimics"; it must not silently expose arbitrary player saves.
+#[post("/blades.bgs.services/api/dev/v1/ai-mimic")]
+pub async fn set_ai_mimic(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    body: web::Json<SetAiMimicRequest>,
+) -> Result<Json<SetAiMimicResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+
+    let body = body.into_inner();
+    let legacy_bot_user_ids = app_state.arena.config.bot_user_ids.clone();
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    let response = conn
+        .transaction::<_, BladeApiError, _>(|mut conn| {
+            async move {
+                let character_id = characters::table
+                    .filter(characters::user_id.eq(body.user_id))
+                    .select(characters::id)
+                    .first::<Uuid>(&mut conn)
+                    .await
+                    .optional()?;
+
+                // Preserve every opponent already selected through the legacy
+                // environment list when the first checkbox turns management on.
+                // Otherwise adding Yaskrava would atomically replace the old roster
+                // with Yaskrava alone, contradicting the UI's additive operation.
+                let was_managed = arena_ai_mimic_control::table
+                    .filter(arena_ai_mimic_control::singleton.eq(true))
+                    .select(arena_ai_mimic_control::managed)
+                    .first::<bool>(&mut conn)
+                    .await?;
+                if !was_managed && !legacy_bot_user_ids.is_empty() {
+                    let legacy_character_ids = characters::table
+                        .filter(characters::user_id.eq_any(&legacy_bot_user_ids))
+                        .select(characters::id)
+                        .load::<Uuid>(&mut conn)
+                        .await?;
+                    for legacy_character_id in legacy_character_ids {
+                        insert_into(arena_ai_mimics::table)
+                            .values(arena_ai_mimics::character_id.eq(legacy_character_id))
+                            .on_conflict(arena_ai_mimics::character_id)
+                            .do_nothing()
+                            .execute(&mut conn)
+                            .await?;
+                    }
+                }
+
+                // `managed` is flipped in the same transaction as the roster
+                // change. A crash cannot leave an apparently accepted checkbox
+                // write still governed by the legacy environment list.
+                diesel::update(
+                    arena_ai_mimic_control::table
+                        .filter(arena_ai_mimic_control::singleton.eq(true)),
+                )
+                .set(arena_ai_mimic_control::managed.eq(true))
+                .execute(&mut conn)
+                .await?;
+
+                match (body.enabled, character_id) {
+                    (true, Some(id)) => {
+                        insert_into(arena_ai_mimics::table)
+                            .values(arena_ai_mimics::character_id.eq(id))
+                            .on_conflict(arena_ai_mimics::character_id)
+                            .do_nothing()
+                            .execute(&mut conn)
+                            .await?;
+                    }
+                    (true, None) => {
+                        return Err(BladeApiError::new(
+                            StatusCode::NOT_FOUND,
+                            IMPORT_SERVICE_ID,
+                            20,
+                        ));
+                    }
+                    (false, Some(id)) => {
+                        diesel::delete(
+                            arena_ai_mimics::table.filter(arena_ai_mimics::character_id.eq(id)),
+                        )
+                        .execute(&mut conn)
+                        .await?;
+                    }
+                    // Disabling a missing mirror is idempotent. This lets the web
+                    // repair a stale checked flag after a database restore.
+                    (false, None) => {}
+                }
+
+                Ok(SetAiMimicResponse {
+                    user_id: body.user_id,
+                    character_id,
+                    enabled: body.enabled,
+                })
+            }
+            .scope_boxed()
+        })
+        .await?;
+
+    Ok(Json(response))
+}
+
+/// Return the effective explicit AI roster, including the legacy environment
+/// selection before the first checkbox write. This is intentionally token-gated:
+/// it exposes character/account associations that are useful to the capture
+/// platform but are not part of the public game API.
+#[get("/blades.bgs.services/api/dev/v1/ai-mimics")]
+pub async fn list_ai_mimics(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+) -> Result<Json<ListAiMimicsResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    let managed = arena_ai_mimic_control::table
+        .filter(arena_ai_mimic_control::singleton.eq(true))
+        .select(arena_ai_mimic_control::managed)
+        .first::<bool>(&mut conn)
+        .await?;
+    let rows: Vec<CharacterDbEntryCharacterAlone> = if managed {
+        characters::table
+            .inner_join(arena_ai_mimics::table)
+            .select(CharacterDbEntryCharacterAlone::as_select())
+            .load(&mut conn)
+            .await?
+    } else {
+        characters::table
+            .filter(characters::user_id.eq_any(&app_state.arena.config.bot_user_ids))
+            .select(CharacterDbEntryCharacterAlone::as_select())
+            .load(&mut conn)
+            .await?
+    };
+
+    let mimics = rows
+        .into_iter()
+        .map(|row| AiMimicEntry {
+            user_id: row.user_id,
+            character_id: row.id,
+            name: row.character.0.name,
+            level: row.character.0.level,
+        })
+        .collect();
+    Ok(Json(ListAiMimicsResponse { managed, mimics }))
 }
 
 #[derive(Deserialize)]
