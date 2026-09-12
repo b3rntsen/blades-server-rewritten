@@ -1176,6 +1176,21 @@ pub(crate) mod jobs_gen {
     pub const JOB_SPAWN_GROUPS_REFERENCE: Uuid =
         Uuid::from_u128(0x93202b6a_f74e_49d4_ab70_bd46cc2f9892_u128);
 
+    /// The three enemy groups retail emits for a Duel job: two fixed one-enemy
+    /// encounter groups plus the configured boss group. In capture-599, Duel
+    /// job `64312841-…` has exactly these three, no primary/secondary/secret
+    /// groups, and no item-generated data. The old generator emitted all six
+    /// reference groups (14 enemies) and all seven item groups for every job,
+    /// which gives the Duel scene data for objects that do not exist there and
+    /// leaves the client waiting at load.
+    pub(super) const DUEL_ENEMY_SPAWN_GROUPS: [Uuid; 3] = [
+        Uuid::from_u128(0x132fc1b2_8480_4f45_a10d_b2c708db85a7_u128),
+        Uuid::from_u128(0xd7b105e7_7a76_4b92_b9ba_21a5bae4133e_u128),
+        Uuid::from_u128(0x690d51c4_46c3_4546_bf82_e267289aca02_u128),
+    ];
+    pub(super) const JOB_BOSS_SPAWN_GROUP: Uuid =
+        Uuid::from_u128(0x690d51c4_46c3_4546_bf82_e267289aca02_u128);
+
     /// Stored JOB `quests` rows are tagged with this sentinel `gldQuestId` so the
     /// /quests handler can (a) keep them out of the `quests[]` array and (b)
     /// recognise a prior-window job row when pruning. It is a fixed, otherwise
@@ -1607,6 +1622,34 @@ pub(crate) mod jobs_gen {
             enemy_level,
             given_xp,
         )?;
+
+        let setup = job.get("jobSetup").cloned().unwrap_or(Value::Null);
+        if get_i64(&setup, "jobType", -1) == 5 {
+            // A Duel has no ordinary primary/secondary packs, secret boss, or
+            // floor-item rolls. The committed retail Duel is discriminating:
+            // normal jobs in the same response do carry those groups.
+            data.enemy_generated_data
+                .retain(|id, _| DUEL_ENEMY_SPAWN_GROUPS.contains(id));
+            data.item_generated_data.clear();
+
+            // Retail levels the two fixed encounters at difficultyLevel and the
+            // boss at difficultyLevel + bossLevelDelta (43 and 51 in the sample).
+            let boss_level = enemy_level + get_i64(&setup, "bossLevelDelta", 0);
+            for (spawn_id, spawners) in &mut data.enemy_generated_data {
+                let level = if *spawn_id == JOB_BOSS_SPAWN_GROUP {
+                    boss_level
+                } else {
+                    enemy_level
+                };
+                let xp = QuestLevelScaling::default().given_xp(level);
+                for enemies in spawners {
+                    for enemy in enemies {
+                        enemy.enemy_level = level;
+                        enemy.given_xp = xp;
+                    }
+                }
+            }
+        }
         // Retail stamps `version: 1` on all ten generated-data entries in the captured
         // body. `generate_for_dungeon` hard-codes 0 because that is what our story quests
         // have always shipped and they work; bumping it there would change their wire
@@ -2630,6 +2673,65 @@ mod report85_job_generated_data_tests {
             from_template.enemy_generated_data.is_empty(),
             "if the template id ever gains spawn info, revisit JOB_SPAWN_GROUPS_REFERENCE"
         );
+    }
+
+    /// Tracker #121's Duel hung before the scene started. The one committed
+    /// retail Duel is an exact discriminator: it carries three one-enemy groups,
+    /// no item groups, and two chest groups, while non-Duel jobs beside it carry
+    /// primary/secondary packs and item rolls. We used to emit the entire shared
+    /// reference (six groups / fourteen enemies / all items) for every type.
+    #[test]
+    fn a_duel_uses_retails_duel_generated_data_shape() {
+        let gd = game_data();
+        let jobs = board();
+        let duel = jobs
+            .iter()
+            .find(|j| j["jobSetup"]["jobType"] == 5)
+            .expect("the weekly boss pool must produce a Duel");
+        let data = jobs_gen::generated_data_for_job(&gd, duel).expect("Duel generates");
+
+        let actual: HashSet<Uuid> = data.enemy_generated_data.keys().copied().collect();
+        let expected: HashSet<Uuid> = jobs_gen::DUEL_ENEMY_SPAWN_GROUPS.into_iter().collect();
+        assert_eq!(actual, expected, "Duel must not receive ordinary job packs");
+        assert_eq!(
+            data.enemy_generated_data
+                .values()
+                .flat_map(|spawners| spawners.iter())
+                .map(Vec::len)
+                .sum::<usize>(),
+            3,
+            "retail generated exactly three Duel enemies"
+        );
+        assert!(data.item_generated_data.is_empty(), "retail Duel has no floor-item data");
+        assert_eq!(data.chest_generated_data.len(), 2, "retail Duel keeps both chest groups");
+
+        let difficulty = duel["difficultyLevel"].as_i64().unwrap();
+        let boss_delta = duel["jobSetup"]["bossLevelDelta"].as_i64().unwrap();
+        for (spawn_id, spawners) in &data.enemy_generated_data {
+            let expected_level = if *spawn_id == jobs_gen::JOB_BOSS_SPAWN_GROUP {
+                difficulty + boss_delta
+            } else {
+                difficulty
+            };
+            assert!(
+                spawners
+                    .iter()
+                    .flatten()
+                    .all(|enemy| enemy.enemy_level == expected_level),
+                "spawn {spawn_id} has the wrong Duel level"
+            );
+        }
+
+        // Discriminating control: the non-Duel path still has ordinary packs and
+        // item data, so the repair was not a blanket truncation of all jobs.
+        let ordinary = jobs
+            .iter()
+            .find(|j| j["jobSetup"]["jobType"] != 5)
+            .expect("the daily pool must produce ordinary jobs");
+        let ordinary_data =
+            jobs_gen::generated_data_for_job(&gd, ordinary).expect("ordinary job generates");
+        assert!(ordinary_data.enemy_generated_data.len() > 3);
+        assert!(!ordinary_data.item_generated_data.is_empty());
     }
 
     /// The measured identity of the reference dungeon, pinned.
