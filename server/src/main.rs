@@ -509,6 +509,8 @@ async fn main() -> Result<()> {
                     .service(analytics::appcenter_log)
                     .service(analytics::swrve_identity_identify)
                     .service(status::healthz)
+                    .service(status::arena_drain)
+                    .service(status::arena_resume)
                     .service(status::check_status)
                     .service(session::sync)
                     .service(authentification::anon_log_in)

@@ -514,6 +514,7 @@ mod tests {
         host: ArenaHost,
         pid: PeerID,
         connected: bool,
+        disconnected: bool,
         inbox: Vec<Vec<u8>>,
         crypto: Option<CryptoCtx>,
     }
@@ -529,7 +530,24 @@ mod tests {
             // Request 7 channels (ch0–6), matching the retail client's CONNECT
             // (channelCount=7 in s506) so the server can send on ch1/ch4/ch6.
             let pid = host.connect(server, 7, 0).unwrap().id();
-            Client { host, pid, connected: false, inbox: Vec::new(), crypto: None }
+            Client {
+                host,
+                pid,
+                connected: false,
+                disconnected: false,
+                inbox: Vec::new(),
+                crypto: None,
+            }
+        }
+        /// Start a fresh ENet generation on the SAME host/socket. This mirrors the
+        /// retail client returning to the arena lobby and immediately queueing again:
+        /// the UDP source address is retained, but rusty_enet assigns a new PeerID.
+        fn reconnect(&mut self, server: SocketAddr) {
+            self.pid = self.host.connect(server, 7, 0).unwrap().id();
+            self.connected = false;
+            self.disconnected = false;
+            self.inbox.clear();
+            self.crypto = None;
         }
         fn addr(&self) -> SocketAddr {
             self.host.socket().local_addr().unwrap()
@@ -546,7 +564,10 @@ mod tests {
                         }
                         self.inbox.push(d);
                     }
-                    Event::Disconnect { .. } => {}
+                    Event::Disconnect { .. } => {
+                        self.connected = false;
+                        self.disconnected = true;
+                    }
                 }
             }
             self.host.flush();
@@ -581,7 +602,7 @@ mod tests {
     /// tick-driven s2c delivery + per-target crypto end-to-end. (Combat-action
     /// relay returns as real swipe→damage in Phase B.)
     #[test]
-    fn two_player_pairing_and_match_start() {
+    fn two_consecutive_two_player_matches_reuse_client_addresses() {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let registry = MatchRegistry::new(4);
@@ -762,5 +783,95 @@ mod tests {
         // NOT the low 10 bits of the high half, which is Magicka. [PackedStats]
         let hp = ((packed >> crate::arena::combat::state::PackedStats::HEALTH_SHIFT) & 0x3ff) as u16;
         assert!(hp > 0 && hp < 1023, "B's wire HP is a fraction below full after the swing (got {hp})");
+
+        // 5. A concedes. Drive the complete retail terminal walk, retire the match,
+        // and gracefully disconnect both ENet peers exactly as `serve` does.
+        a.inbox.clear();
+        b.inbox.clear();
+        a.send_enc(0x1C, arena_proto::GameMessageId::ConcedeMatch as u8);
+        let mut finished = Vec::new();
+        for _ in 0..2000 {
+            while pump(&mut server, &registry, &mut peer_at) {}
+            vnow += Duration::from_millis(250);
+            for (addr, channel, bytes) in registry.tick_matches(vnow) {
+                send_to(&mut server, &peer_at, &addr, channel, &bytes);
+            }
+            finished = registry.take_finished_peers();
+            server.flush();
+            a.drain();
+            b.drain();
+            if !finished.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(finished.len(), 2, "the first match retires both peers");
+        assert_eq!(registry.active_count(), 0, "the first match releases its slot");
+        let first_a_addr = a.addr();
+        let first_b_addr = b.addr();
+        for addr in finished {
+            let pid = peer_at
+                .remove(&addr)
+                .expect("finished peer still has an ENet owner");
+            server.peer_mut(pid).disconnect(0);
+        }
+        server.flush();
+
+        // Let each client observe the graceful disconnect, but deliberately do NOT
+        // service the resulting server-side Disconnect events yet. Reconnect first;
+        // this is the tight lobby→queue timing that used to let an old generation's
+        // delayed Disconnect erase the newly admitted match at the same address.
+        for _ in 0..2000 {
+            a.drain();
+            b.drain();
+            if a.disconnected && b.disconnected {
+                break;
+            }
+            server.flush();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(a.disconnected && b.disconnected, "both clients return to the lobby");
+
+        // 6. Allocate a second H2H match and reconnect both client hosts. Their UDP
+        // source addresses must be byte-for-byte identical to match 1.
+        let second_gsid = Uuid::new_v4();
+        assert!(registry.allocate(
+            &["psess-a2".to_string(), "psess-b2".to_string()],
+            Vec::new(),
+            second_gsid,
+        ));
+        a.reconnect(server_addr);
+        b.reconnect(server_addr);
+        assert_eq!(a.addr(), first_a_addr, "A reuses its UDP source address");
+        assert_eq!(b.addr(), first_b_addr, "B reuses its UDP source address");
+
+        pump_io!(a.connected && b.connected, "both clients reconnect for match 2");
+
+        let (sk_a2, pk_a2) = gen_keypair();
+        let (sk_b2, pk_b2) = gen_keypair();
+        a.send_plain(&hs_c2s(&pk_a2));
+        b.send_plain(&hs_c2s(&pk_b2));
+        pump_io!(
+            !a.inbox.is_empty() && !b.inbox.is_empty(),
+            "both clients get the second handshake reply"
+        );
+        let (spk_a2, n_a2) = parse(&a.inbox[0]);
+        a.crypto = Some(CryptoCtx { key: x25519_shared(&sk_a2, &spk_a2), nonce: n_a2 });
+        let (spk_b2, n_b2) = parse(&b.inbox[0]);
+        b.crypto = Some(CryptoCtx { key: x25519_shared(&sk_b2, &spk_b2), nonce: n_b2 });
+        assert!(registry.is_active(&a.addr()) && registry.is_active(&b.addr()));
+        a.inbox.clear();
+        b.inbox.clear();
+
+        pump_tick!(
+            a.inbox.iter().any(|m| m.ends_with(b"BackendMatchCreated"))
+                && b.inbox.iter().any(|m| m.ends_with(b"BackendMatchCreated")),
+            "both reused addresses receive BackendMatchCreated for match 2"
+        );
+        pump_tick!(
+            a.inbox.iter().any(|m| m.ends_with(b"StateTimeout"))
+                && b.inbox.iter().any(|m| m.ends_with(b"StateTimeout")),
+            "the second H2H match reaches a live, damageable round"
+        );
     }
 }
