@@ -45,8 +45,11 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use crate::{
-    BladeApiError, ServerGlobal, models::CharacterDbEntryCharacterAndData, schema,
+    BladeApiError, ServerGlobal,
+    models::{CharacterDbEntryCharacterAndData, CharacterDbEntryInventory},
+    schema,
     session::SessionLookedUpMaybe,
+    util::check_permission_for_character_and_get_it,
 };
 
 const SOCIAL_SERVICE_ID: u64 = 9006;
@@ -192,6 +195,24 @@ struct SocialTownResponse {
     social: SocialTownInner,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SocialLoadoutWire {
+    equipped_items: blades_lib::user_data::EquippedItems,
+}
+
+#[derive(Serialize)]
+struct SocialLoadoutInner {
+    loadout: SocialLoadoutWire,
+}
+
+/// Retail wraps another player's equipment as
+/// `{"social":{"loadout":{"equippedItems":{...}}}}`.
+#[derive(Serialize)]
+struct SocialLoadoutResponse {
+    social: SocialLoadoutInner,
+}
+
 /// Split a comma-separated query value, dropping empties so a trailing comma or
 /// a doubled separator is not read as a blank entry.
 fn split_csv(raw: &str) -> impl Iterator<Item = &str> {
@@ -325,6 +346,50 @@ pub async fn get_social_town(
 
     Ok(Json(SocialTownResponse {
         social: SocialTownInner { town },
+    }))
+}
+
+/// The guild member-detail flow asks for this after the public character and
+/// town projections. Retail answered 200 in all three committed examples; a
+/// missing route leaves the profile loading until the client gives up.
+#[get(
+    "/blades.bgs.services/api/game/v1/public/characters/{requester_character_id}/social/users/{user_id}/characters/{character_id}/loadouts/current"
+)]
+pub async fn get_social_loadout(
+    session: SessionLookedUpMaybe,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<(Uuid, Uuid, Uuid)>,
+) -> Result<Json<SocialLoadoutResponse>, BladeApiError> {
+    let session = session.get_session_or_error()?;
+    let (requester_character_id, wanted_user_id, wanted_character_id) = path.into_inner();
+
+    let mut conn = app_state.db_pool.get().await?;
+    check_permission_for_character_and_get_it(
+        &mut conn,
+        &session.session,
+        requester_character_id,
+    )
+    .await?;
+
+    let rows: Vec<CharacterDbEntryInventory> = {
+        use schema::characters::dsl::*;
+        characters
+            .filter(id.eq(wanted_character_id))
+            .filter(user_id.eq(wanted_user_id))
+            .select(CharacterDbEntryInventory::as_select())
+            .load(&mut conn)
+            .await?
+    };
+    let row = rows
+        .first()
+        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, SOCIAL_SERVICE_ID, 12))?;
+
+    Ok(Json(SocialLoadoutResponse {
+        social: SocialLoadoutInner {
+            loadout: SocialLoadoutWire {
+                equipped_items: row.inventory.0.loadout.equipped_items.clone(),
+            },
+        },
     }))
 }
 
@@ -609,6 +674,45 @@ mod wire {
                 name: String::new(),
             }
         );
+    }
+
+    #[test]
+    fn social_loadout_is_the_captured_projection() {
+        use blades_lib::user_data::{Item, SingleEquippedItem};
+
+        let slot = Uuid::from_u128(1);
+        let item_id = Uuid::from_u128(2);
+        let template_id = Uuid::from_u128(3);
+        let mut equipped = std::collections::HashMap::new();
+        equipped.insert(
+            slot,
+            SingleEquippedItem {
+                id: item_id,
+                slot,
+                item: Item {
+                    item_template_id: template_id,
+                    grade: None,
+                    tempering_level: 10,
+                    durability: 647.7521,
+                    properties: blades_lib::user_data::ItemPropertiesAll::default(),
+                    arcane_tier: None,
+                },
+            },
+        );
+
+        let response = serde_json::to_value(SocialLoadoutResponse {
+            social: SocialLoadoutInner {
+                loadout: SocialLoadoutWire {
+                    equipped_items: blades_lib::user_data::EquippedItems(equipped),
+                },
+            },
+        })
+        .unwrap();
+        let item = &response["social"]["loadout"]["equippedItems"][slot.to_string()];
+        assert_eq!(item["id"], item_id.to_string());
+        assert_eq!(item["itemTemplateId"], template_id.to_string());
+        assert_eq!(item["slot"], slot.to_string());
+        assert!(response["social"]["loadout"].get("equippedConsumables").is_none());
     }
 
     /// A trailing or doubled comma must not become a blank id, and an
