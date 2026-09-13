@@ -50,12 +50,13 @@ fn map_purchase_err(e: PurchaseError) -> BladeApiError {
 /// How long retail's captured rotation runs before it repeats.
 ///
 /// The corpus spans 2026-05-01 04:00 UTC to 2026-07-06 16:00 UTC — 66.5 days —
-/// once the three ~950-day evergreen offers are set aside. Rounded UP to a whole
-/// number of DAYS, which matters: retail rotated the daily block at 16:00 UTC and
-/// the featured slot at 05:00 UTC, and only a whole-day shift keeps those at the
-/// same clock times. A shift of 66.5 days would move every rotation to the middle
-/// of the night for half the cycle.
-const REPLAY_PERIOD_DAYS: i64 = 67;
+/// once the three ~950-day evergreen offers are set aside. The recurring Sigil
+/// schedule starts at 2026-05-04 16:00 and runs continuously through that same
+/// final timestamp, exactly 63 days. Replaying that complete interval avoids the
+/// three-day Sigil-less hole that a 67-day period exposed at the start of every
+/// cycle. It is also a whole number of weeks, so daily clock times and weekdays
+/// both remain aligned.
+const REPLAY_PERIOD_DAYS: i64 = 63;
 const REPLAY_PERIOD: i64 = REPLAY_PERIOD_DAYS * 86_400;
 
 /// Bring retail's schedule forward so it covers the present.
@@ -70,19 +71,16 @@ const REPLAY_PERIOD: i64 = REPLAY_PERIOD_DAYS * 86_400;
 /// This shifts every window by a whole number of REPLAY_PERIODs — one constant
 /// offset for the entire catalogue, so the *relative* timing retail authored is
 /// preserved exactly. The daily block still turns over together, the Tuesday and
-/// Thursday block still lands on Tuesday and Thursday, the Monday-anchored weekly
-/// windows still start on a Monday (67 is not a multiple of 7, so that last one
-/// drifts — see the caveat below).
+/// Thursday block still lands on Tuesday and Thursday, and the Monday-anchored
+/// weekly windows still start on a Monday.
 ///
 /// The alternative was authoring a fresh schedule. That is Phase 2 and it needs a
 /// product decision; this is the smaller thing that makes the shop work today
 /// without inventing anything.
 ///
-/// CAVEAT, stated because it is the one thing this gets wrong: 67 days is not a
-/// whole number of weeks, so weekday alignment drifts by 4 days each cycle. The
-/// 196 Monday-anchored weekly windows will not stay on Mondays. Fixing that means
-/// choosing 63 or 70 days and accepting a gap or an overlap in the daily block
-/// instead — a trade with no free side, and one for the owner rather than for me.
+/// The first 3.5 days of the wider offer corpus are outside the replay interval.
+/// That is deliberate: those days predate the continuous Sigil schedule, while
+/// the overlapping tail contains both the complete daily shop and the Sigil shop.
 fn shift_to_now(overrides: &Value, now: i64) -> Value {
     let Some(map) = overrides
         .get("globalShopOverrides")
@@ -542,6 +540,25 @@ mod replay_tests {
             .count()
     }
 
+    fn live_sigil_count(v: &Value, now: i64) -> usize {
+        const SIGILS: &str = "c64bcb53-41f4-41ba-892a-fe2cca423caa";
+        v["globalShopOverrides"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter(|e| {
+                e.get("isActive").and_then(|b| b.as_bool()).unwrap_or(false)
+                    && e["activeStartDate"].as_i64().unwrap_or(0) <= now
+                    && now <= e["activeEndDate"].as_i64().unwrap_or(0)
+                    && e["prices"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|p| p["currencyId"].as_str() == Some(SIGILS))
+            })
+            .count()
+    }
+
     /// The bug: 547 offers served, every one of them expired, so the shop is empty
     /// in game. This fails if the shift is removed.
     #[test]
@@ -559,6 +576,34 @@ mod replay_tests {
             live_count(&shifted, now) > 0,
             "after shifting, something must actually be on sale"
         );
+    }
+
+    /// Report #141 arrived in the 67-day replay's three-day prefix: the global
+    /// shop had four live Gem offers, but zero live Sigil offers. The captured
+    /// Sigil schedule itself is continuous, so its replay must be continuous too.
+    #[test]
+    fn the_sigil_shop_is_live_at_the_reported_time() {
+        let now = 1_789_261_815; // 2026-09-12 23:30:15 UTC
+        let shifted = shift_to_now(&catalog(), now);
+        assert!(
+            live_sigil_count(&shifted, now) > 0,
+            "the replay must never land in the corpus prefix before Sigil offers began",
+        );
+    }
+
+    /// The 63-day period begins and ends exactly on the captured Sigil span.
+    /// Sample every hour for several future cycles so a later change cannot
+    /// silently reintroduce an empty Sigil window between replays.
+    #[test]
+    fn every_replayed_hour_has_a_sigil_offer() {
+        let start = 1_783_353_600 + 1;
+        let end = start + 4 * REPLAY_PERIOD;
+        for now in (start..=end).step_by(3_600) {
+            assert!(
+                live_sigil_count(&shift_to_now(&catalog(), now), now) > 0,
+                "no Sigil offer at {now}",
+            );
+        }
     }
 
     /// Every offer moves by the SAME whole number of periods, so retail's relative
