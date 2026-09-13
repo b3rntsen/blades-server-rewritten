@@ -381,7 +381,7 @@ pub async fn get_social_loadout(
             .await?
     };
     let row = rows
-        .first()
+        .get(0)
         .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, SOCIAL_SERVICE_ID, 12))?;
 
     Ok(Json(SocialLoadoutResponse {
