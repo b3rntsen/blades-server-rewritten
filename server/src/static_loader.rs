@@ -95,6 +95,9 @@ pub fn load(dir: &Path) -> StaticData {
     // A missing file leaves the list empty, i.e. nothing is free — the safe
     // direction. Only offers retail itself gave away belong here.
     let global_shop_free: FreeProductIds = read_json(&dir.join("global_shop_free.json"));
+    // Latest APK `PlayerLvlOffer_03` products for levels whose full grant was
+    // also captured. Missing is safe: leveling still works, with no timed offer.
+    let level_up_offers: HashMap<u16, Uuid> = read_json(&dir.join("level_up_offers.json"));
     // A missing file leaves the map empty, i.e. no fallback — purchases keep
     // 404ing exactly as they did before this existed. The safe direction.
     let global_shop_offer_contents = {
@@ -163,6 +166,7 @@ pub fn load(dir: &Path) -> StaticData {
         global_shop_grants,
         global_shop_prices,
         global_shop_free,
+        level_up_offers,
         global_shop_offer_contents,
         challenge_templates,
         daily_rewards,
@@ -198,6 +202,20 @@ mod tests {
         assert!(!sd.announcements.is_empty(), "announcements.json");
         assert!(!sd.global_shop_grants.is_empty(), "global_shop_grants.json");
         assert!(!sd.global_shop_prices.is_empty(), "global_shop_prices.json");
+        assert!(
+            sd.level_up_offers.len() >= 10,
+            "level_up_offers.json latest grantable APK offers"
+        );
+        for (level, product_id) in &sd.level_up_offers {
+            assert!(
+                sd.global_shop_prices.contains_key(product_id),
+                "level {level} offer {product_id} has no authoritative price"
+            );
+            assert!(
+                sd.global_shop_grants.contains_key(product_id),
+                "level {level} offer {product_id} cannot be fulfilled"
+            );
+        }
         let gems: Uuid = "470c8f58-a8dd-4c07-8c92-843b785e1139".parse().unwrap();
         for (id, quantity) in [
             ("0e224ca0-1506-490f-884a-8871ffe6399b", 250),

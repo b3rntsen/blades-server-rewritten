@@ -1076,6 +1076,12 @@ pub struct StaticData {
     /// the price is client-supplied: accepting any zero would hand out every
     /// paid offer for free.
     pub global_shop_free: FreeProductIds,
+    /// Latest shipped per-level offer, keyed by the level just reached.
+    ///
+    /// Only products with both an authoritative APK price and a captured grant
+    /// belong here. Advertising an offer we cannot fulfil would replace a price
+    /// spinner with a charged-but-empty or reconnect failure.
+    pub level_up_offers: HashMap<u16, Uuid>,
     /// Challenge templates (objective + reward) the active set is generated from.
     pub challenge_templates: Vec<ChallengeTemplate>,
     /// Daily login reward rotation pool.

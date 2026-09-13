@@ -13,11 +13,11 @@ use actix_web::{
     post,
     web::{self, Json},
 };
-use blades_lib::features::character_ops::{self, Attribute};
 use blades_lib::economy::RewardGrant;
+use blades_lib::features::character_ops::{self, Attribute};
 use blades_lib::user_data::{
-    CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
-    InventoryChangeTracker,
+    CompleteCharacter, CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate,
+    CompleteWallet, InventoryChangeTracker,
 };
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
@@ -95,6 +95,21 @@ struct LevelupRequest {
     attribute: String,
 }
 
+fn set_level_up_offer(
+    character: &mut CompleteCharacter,
+    offers: &HashMap<u16, Uuid>,
+    now: u64,
+) {
+    character.global_shop_offers = match offers.get(&character.level) {
+        Some(product_id) => serde_json::json!([{
+            "globalShopProductId": product_id,
+            "startTime": now,
+        }]),
+        // Do not carry a previous level's expired offer into the new level.
+        None => serde_json::json!([]),
+    };
+}
+
 /// `POST /levelup` — spend a level into STAMINA or MAGICKA.
 #[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/levelup")]
 pub async fn levelup(
@@ -119,6 +134,23 @@ pub async fn levelup(
 
             // Grant level-up rewards based on the new level
             let new_level = entry.character.0.level;
+
+            // The client renders a level-up offer from `character.globalShopOffers`.
+            // Returning the old/null value still opens the card, but leaves its
+            // price loading forever. Retail stores the product id plus the offer's
+            // start time on the character; stamp the latest captured, grantable
+            // product for this exact level. Levels with no fully-known grant are
+            // deliberately left without an offer rather than advertising something
+            // the purchase endpoint cannot fulfil.
+            let start_time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            set_level_up_offer(
+                &mut entry.character.0,
+                &app_state_clone.static_data.level_up_offers,
+                start_time,
+            );
             if let Some(reward) = app_state_clone.level_up_data.get_reward(new_level.into()) {
                 let mut tracker = InventoryChangeTracker::default();
                 
@@ -494,6 +526,33 @@ pub async fn update_loadout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn level_up_offer_gets_a_current_start_time() {
+        let product = Uuid::from_u128(7);
+        let offers = HashMap::from([(14, product)]);
+        let mut character = CompleteCharacter {
+            level: 14,
+            global_shop_offers: serde_json::json!([{
+                "globalShopProductId": "expired",
+                "startTime": 1,
+            }]),
+            ..CompleteCharacter::default()
+        };
+
+        set_level_up_offer(&mut character, &offers, 1_789_261_777);
+        assert_eq!(
+            character.global_shop_offers,
+            serde_json::json!([{
+                "globalShopProductId": product,
+                "startTime": 1_789_261_777u64,
+            }])
+        );
+
+        character.level = 15;
+        set_level_up_offer(&mut character, &offers, 1_789_261_778);
+        assert_eq!(character.global_shop_offers, serde_json::json!([]));
+    }
 
     /// Swanne's actual request body, tracker #22 (capture 261220). Nine slots:
     /// three real items, four `""` and two `null`. Before the custom
