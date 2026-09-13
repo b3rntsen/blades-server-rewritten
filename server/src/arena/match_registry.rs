@@ -333,11 +333,14 @@ pub struct MatchRegistry {
     debug_inject_queue: Mutex<Vec<DebugInjection>>,
     /// **DEBUG (`ARENA_DEBUG_HOLD`).** When set, `sweep_expired` will NOT reclaim a
     /// match for being under-capacity (a solo peer with no opponent) or for max-age
-    /// — a single connected peer persists indefinitely so we can hold it at the
-    /// round-start and hand-inject s2c frames. A real ENet disconnect still removes
-    /// the peer (`remove`). OFF (false) in all normal operation + tests → the sweep
-    /// is unchanged.
+    /// — a single connected peer persists during the bounded debug window so we can
+    /// hold it at the round-start and hand-inject s2c frames. A real ENet disconnect
+    /// still removes the peer (`remove`), and expiry restores the sweep. OFF (false)
+    /// in normal operation.
     debug_hold: bool,
+    /// Monotonic end of a production hold. `None` is used only by the test-only
+    /// forced hold constructor.
+    debug_hold_expires_at: Option<Instant>,
 }
 
 /// **DEBUG/experimental.** One queued packet injection: raw decrypted s2c
@@ -412,6 +415,24 @@ impl MatchRegistry {
             key_submitter: None,
             debug_inject_queue: Mutex::new(Vec::new()),
             debug_hold: hold,
+            debug_hold_expires_at: None,
+        })
+    }
+
+    /// Test-only: force a hold that expires at a known monotonic instant.
+    #[cfg(test)]
+    pub fn new_with_debug_hold_until(max_matches: usize, expires_at: Instant) -> Arc<Self> {
+        Arc::new(MatchRegistry {
+            semaphore: Arc::new(Semaphore::new(max_matches)),
+            pending: Mutex::new(HashMap::new()),
+            matches: Mutex::new(HashMap::new()),
+            addr_index: Mutex::new(HashMap::new()),
+            next_order: std::sync::atomic::AtomicU64::new(0),
+            max_matches,
+            key_submitter: None,
+            debug_inject_queue: Mutex::new(Vec::new()),
+            debug_hold: true,
+            debug_hold_expires_at: Some(expires_at),
         })
     }
 
@@ -421,6 +442,8 @@ impl MatchRegistry {
         max_matches: usize,
         key_submitter: Option<Arc<KeySubmitter>>,
     ) -> Arc<Self> {
+        let debug_hold_window = crate::arena::combat::debug_hold_window();
+        let now = Instant::now();
         Arc::new(MatchRegistry {
             semaphore: Arc::new(Semaphore::new(max_matches)),
             pending: Mutex::new(HashMap::new()),
@@ -432,7 +455,8 @@ impl MatchRegistry {
             debug_inject_queue: Mutex::new(Vec::new()),
             // Read the DEBUG-HOLD freeze flag once at startup (off when unset → all
             // tests + normal operation). Same parse as the MatchInstance flag.
-            debug_hold: crate::arena::combat::debug_hold_enabled(),
+            debug_hold: debug_hold_window.is_some(),
+            debug_hold_expires_at: debug_hold_window.map(|window| now + window),
         })
     }
 
@@ -971,6 +995,21 @@ impl MatchRegistry {
         self.semaphore.available_permits()
     }
 
+    /// Whether the dangerous round-start freeze is active at this instant. Exposed
+    /// in `/healthz` so a setup outage can be diagnosed without reading process
+    /// environment or secrets from the host.
+    pub fn debug_hold_active(&self) -> bool {
+        self.debug_hold_active_at(Instant::now())
+    }
+
+    fn debug_hold_active_at(&self, now: Instant) -> bool {
+        self.debug_hold
+            && self
+                .debug_hold_expires_at
+                .map(|expires_at| now < expires_at)
+                .unwrap_or(true)
+    }
+
     /// Reclaim leaked/abandoned matches + their capacity permits — called
     /// periodically by the ENet serve loop. The matchmaker acquires a permit in
     /// `allocate`, but it is otherwise only released when the LAST player
@@ -980,12 +1019,10 @@ impl MatchRegistry {
     /// `MATCH_MAX_AGE` (safety net for a stuck full match). Dropping the `Match`
     /// frees its `Semaphore` slot. Collect-then-purge so the locks never nest.
     pub fn sweep_expired(&self, now: Instant) {
-        // DEBUG-HOLD (`ARENA_DEBUG_HOLD`): never reclaim a match for being
-        // under-capacity (a solo peer with no opponent) or for max-age — a single
-        // connected peer must persist indefinitely so we can hold it at the
-        // round-start and hand-inject s2c frames. A real ENet disconnect still
-        // removes the peer via `remove`; only the idle/capacity sweep is disabled.
-        if self.debug_hold {
+        // DEBUG-HOLD: suspend cleanup only during the bounded injection window.
+        // Once it expires, already-held matches become reclaimable on this same
+        // process; no restart or environment edit is required.
+        if self.debug_hold_active_at(now) {
             return;
         }
         let mut reclaimed: Vec<(Uuid, usize, usize, &'static str, Vec<SocketAddr>)> = Vec::new();

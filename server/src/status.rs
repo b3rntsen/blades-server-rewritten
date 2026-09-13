@@ -54,6 +54,7 @@ async fn healthz(state: web::Data<Arc<ServerGlobal>>) -> HttpResponse {
                 "ok": true,
                 "database": "ok",
                 "arenaActiveMatches": active_matches,
+                "arenaDebugHold": state.arena.registry.debug_hold_active(),
                 "arenaAcceptingMatches": std::sync::atomic::AtomicBool::load(
                     &state.arena.accepting_matches,
                     Ordering::Acquire,

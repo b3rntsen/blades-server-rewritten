@@ -173,13 +173,13 @@ services:
       ARENA_SUBMIT_URL: ${ARENA_SUBMIT_URL:-http://newblades-web:3000/api/arena/submit-key}
       ARENA_SUBMIT_GAMELIFT_IP: ${ARENA_SUBMIT_GAMELIFT_IP:-10.99.0.1}
       ARENA_SUBMIT_GAMELIFT_PORT: ${ARENA_SUBMIT_GAMELIFT_PORT:-7777}
-      # DEBUG/experimental freeze: when truthy (1), a connected match sends the full
-      # round-start burst then HOLDS at BackendMatchCreated forever — it never enters
-      # the live combat round, no bot swings, and a solo (under-capacity) peer is NOT
-      # swept/timed-out. Gives an unlimited window to hand-inject s2c frames via
-      # /arena/debug/inject and watch the client. Empty/unset = normal matches.
-      # Recreate the container to apply (no rebuild needed). See engine.rs / resolve.rs.
+      # DEBUG/experimental freeze: both the truthy switch AND a Unix deadline no
+      # more than 30 minutes ahead are required. During that bounded window a
+      # connected match parks at BackendMatchCreated for hand-injection; at expiry
+      # existing matches resume and cleanup is restored. A stale switch by itself is
+      # ignored, so a later container recreation cannot freeze the whole arena.
       ARENA_DEBUG_HOLD: ${ARENA_DEBUG_HOLD:-}
+      ARENA_DEBUG_HOLD_UNTIL_UNIX: ${ARENA_DEBUG_HOLD_UNTIL_UNIX:-}
       # DEBUG ghost opponent: set to an arena `characters.user_id` UUID to give the
       # SOLO-FALLBACK match (one lone human → vs bot) that character's real loadout in
       # the 2nd fighter, so the engine broadcasts the opponent's op54 PROFILE
