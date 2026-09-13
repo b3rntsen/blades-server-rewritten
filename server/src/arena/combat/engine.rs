@@ -313,12 +313,15 @@ pub struct MatchInstance {
     last_heartbeat: Instant,
     /// **DEBUG (`ARENA_DEBUG_HOLD`).** When set, the FSM still drives the FULL
     /// round-start burst (Connecting→Spawning→BackendMatchCreated, byte-identical
-    /// to normal) but then HOLDS at `BackendMatchCreated` forever — it never
-    /// transitions to `StateTimeout`, so no combat phase is entered and no bot
-    /// swings (the live round never starts). Lets us hand-inject s2c frames into a
-    /// solo-connected match and watch the client with an unlimited window. OFF
+    /// to normal) but then HOLDS at `BackendMatchCreated` during the bounded debug
+    /// window — it does not transition to `StateTimeout`, so no combat phase is
+    /// entered and no bot swings. Lets us hand-inject s2c frames into a
+    /// solo-connected match and watch the client. OFF
     /// (false) in all normal operation + tests → existing behavior is unchanged.
     debug_hold: bool,
+    /// Production holds expire even while a match is already parked. `None` is
+    /// reserved for the test-only forced hold set by `set_debug_hold(true)`.
+    debug_hold_expires_at: Option<Instant>,
     /// Cursor into [`MATCH_STATE_ROUND0_PROGRESSION`] while the FSM is in the
     /// `BackendMatchCreated` phase: the index of the NEXT round-0 MatchState to emit
     /// (`6→7→11→12→13`). Starts at 0 (OpponentFoundFeedback) when `BackendMatchCreated`
@@ -382,13 +385,15 @@ impl MatchInstance {
         // drives player binding). Allocated after the fighters so the per-fighter id
         // range is unchanged.
         combat.match_net_object_id = combat.alloc_net_object_id();
+        let debug_hold_window = super::debug_hold_window();
         MatchInstance {
             combat,
             s2c_seq: 0,
             last_heartbeat: now,
             // Read the DEBUG-HOLD flag once at construction. Off (false) when the
             // env var is unset — i.e. in every test and all normal operation.
-            debug_hold: super::debug_hold_enabled(),
+            debug_hold: debug_hold_window.is_some(),
+            debug_hold_expires_at: debug_hold_window.map(|window| now + window),
             setup_step: 0,
             skip_state_requested: false,
             interround_profile_round: None,
@@ -919,11 +924,10 @@ impl MatchInstance {
             // Each step reuses the SAME `broadcast_match_state` mechanism that drove
             // 3→4→5 (op55 property update on obj 123). [MATCH_STATE_ROUND0_PROGRESSION]
             //
-            // DEBUG-HOLD (`ARENA_DEBUG_HOLD`): stay at BackendMatchCreation(5) forever —
-            // the FULL round-start burst has already gone out (Spawning transition),
-            // but we never advance the MatchState past 5, so no combat phase is entered.
-            // This is the freeze window for hand-injecting s2c frames.
-            FlowState::BackendMatchCreated if self.debug_hold => {}
+            // DEBUG-HOLD: stay at BackendMatchCreation(5) during the bounded injection
+            // window. The FULL round-start burst has already gone out (Spawning
+            // transition), but MatchState does not advance past 5 until expiry.
+            FlowState::BackendMatchCreated if self.debug_hold_active(now) => {}
             FlowState::BackendMatchCreated => {
                 // Emit the next round-0 MatchState once its `hold_before` has elapsed
                 // since the previous state was entered (`phase_entered` tracks that).
@@ -959,7 +963,7 @@ impl MatchInstance {
                     self.last_heartbeat = now;
                     self.broadcast_flow(&mut out, FlowState::StateTimeout);
                 }
-                let debug_hold = self.debug_hold;
+                let debug_hold = self.debug_hold_active(now);
                 out.extend(resolve::on_tick(&mut self.combat, now, debug_hold));
                 // A bot's killing blow on the tick flips StateTimeout→RoundEnd (match-end)
                 // or →NextState (between-rounds); anchor the new walk to NOW (same as the
@@ -1754,6 +1758,15 @@ impl MatchInstance {
     #[cfg(test)]
     pub(crate) fn set_debug_hold(&mut self, hold: bool) {
         self.debug_hold = hold;
+        self.debug_hold_expires_at = None;
+    }
+
+    fn debug_hold_active(&self, now: Instant) -> bool {
+        self.debug_hold
+            && self
+                .debug_hold_expires_at
+                .map(|expires_at| now < expires_at)
+                .unwrap_or(true)
     }
 
     #[cfg(test)]
@@ -4233,6 +4246,38 @@ pub(in crate::arena::combat) mod tests {
         assert_eq!(m.phase(), FlowState::BackendMatchCreated, "HOLD never advances to the live round");
         assert!(out.is_empty(), "no s2c is generated while held at BackendMatchCreated");
         assert_eq!(m.combat.round, 0, "round never goes live under HOLD");
+    }
+
+    /// A production hold carries a monotonic deadline. Once it expires, an
+    /// already-parked match must resume the ordinary setup walk without requiring
+    /// a container restart (or a client disconnect, which the hold also suppresses).
+    #[test]
+    fn expiring_debug_hold_releases_an_existing_match() {
+        let now = Instant::now();
+        let mut m = MatchInstance::new(2, 1, vec![], now);
+        m.debug_hold = true;
+        m.debug_hold_expires_at = Some(now + SPAWN_HANDSHAKE_HOLD + Duration::from_secs(1));
+
+        m.on_tick(1, now);
+        m.on_tick(1, now + SPAWN_HANDSHAKE_HOLD);
+        assert_eq!(m.phase(), FlowState::BackendMatchCreated);
+
+        let held = m.on_tick(
+            1,
+            now + SPAWN_HANDSHAKE_HOLD + Duration::from_millis(500),
+        );
+        assert!(held.is_empty(), "the match remains parked before the deadline");
+
+        let resumed = m.on_tick(
+            1,
+            now + SPAWN_HANDSHAKE_HOLD + Duration::from_secs(1),
+        );
+        assert_eq!(m.phase(), FlowState::BackendMatchCreated);
+        assert_eq!(m.setup_step, 1, "ordinary round-0 setup resumed at expiry");
+        assert!(
+            !resumed.is_empty(),
+            "OpponentFoundFeedback is emitted immediately (its retail hold is 0s)"
+        );
     }
 
     /// With HOLD on, the bot does NOT damage the player even if the match is somehow

@@ -217,6 +217,23 @@ mod tests {
         assert_eq!(on.active_count(), 1, "HOLD on: match persists, never swept");
     }
 
+    #[test]
+    fn expiring_debug_hold_restores_idle_sweep() {
+        use std::time::{Duration, Instant};
+        let now = Instant::now();
+        let expires_at = now + Duration::from_secs(30);
+        let reg = MatchRegistry::new_with_debug_hold_until(4, expires_at);
+        assert!(reg.allocate(&["a".into()], Vec::new(), Uuid::new_v4()));
+
+        reg.sweep_expired(now + Duration::from_secs(20));
+        assert_eq!(reg.active_count(), 1, "the hold protects the match before expiry");
+
+        // Also older than CONNECT_DEADLINE, so once the hold expires the ordinary
+        // under-capacity cleanup has an immediately reclaimable match to remove.
+        reg.sweep_expired(now + Duration::from_secs(46));
+        assert_eq!(reg.active_count(), 0, "the stuck match is sweepable after expiry");
+    }
+
     /// Live loopback: real sockets, full allocate→handshake→encrypted frame the
     /// server decodes (observed via the tap).
     #[tokio::test]
