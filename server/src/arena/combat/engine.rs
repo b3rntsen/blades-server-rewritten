@@ -313,10 +313,10 @@ pub struct MatchInstance {
     last_heartbeat: Instant,
     /// **DEBUG (`ARENA_DEBUG_HOLD`).** When set, the FSM still drives the FULL
     /// round-start burst (Connecting→Spawning→BackendMatchCreated, byte-identical
-    /// to normal) but then HOLDS at `BackendMatchCreated` forever — it never
-    /// transitions to `StateTimeout`, so no combat phase is entered and no bot
-    /// swings (the live round never starts). Lets us hand-inject s2c frames into a
-    /// solo-connected match and watch the client during a bounded debug window. OFF
+    /// to normal) but then HOLDS at `BackendMatchCreated` during the bounded debug
+    /// window — it does not transition to `StateTimeout`, so no combat phase is
+    /// entered and no bot swings. Lets us hand-inject s2c frames into a
+    /// solo-connected match and watch the client. OFF
     /// (false) in all normal operation + tests → existing behavior is unchanged.
     debug_hold: bool,
     /// Production holds expire even while a match is already parked. `None` is
@@ -924,10 +924,9 @@ impl MatchInstance {
             // Each step reuses the SAME `broadcast_match_state` mechanism that drove
             // 3→4→5 (op55 property update on obj 123). [MATCH_STATE_ROUND0_PROGRESSION]
             //
-            // DEBUG-HOLD (`ARENA_DEBUG_HOLD`): stay at BackendMatchCreation(5) forever —
-            // the FULL round-start burst has already gone out (Spawning transition),
-            // but we never advance the MatchState past 5, so no combat phase is entered.
-            // This is the freeze window for hand-injecting s2c frames.
+            // DEBUG-HOLD: stay at BackendMatchCreation(5) during the bounded injection
+            // window. The FULL round-start burst has already gone out (Spawning
+            // transition), but MatchState does not advance past 5 until expiry.
             FlowState::BackendMatchCreated if self.debug_hold_active(now) => {}
             FlowState::BackendMatchCreated => {
                 // Emit the next round-0 MatchState once its `hold_before` has elapsed
