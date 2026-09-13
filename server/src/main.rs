@@ -632,6 +632,7 @@ async fn main() -> Result<()> {
                     .service(admin::import_character)
                     .service(admin::set_ai_mimic)
                     .service(admin::list_ai_mimics)
+                    .service(admin::get_current_character)
                     .service(admin::recent_matches)
                     .service(admin::bind_device)
                     .service(admin::reassign_device)
