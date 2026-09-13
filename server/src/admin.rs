@@ -521,6 +521,66 @@ pub async fn list_ai_mimics(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CurrentCharacterQuery {
+    user_id: Uuid,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CurrentCharacterSummary {
+    user_id: Uuid,
+    character_id: Uuid,
+    name: String,
+    level: u16,
+    pvp_trophies: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CurrentCharacterResponse {
+    character: Option<CurrentCharacterSummary>,
+}
+
+fn current_character_summary(
+    row: CharacterDbEntryCharacterAlone,
+) -> CurrentCharacterSummary {
+    CurrentCharacterSummary {
+        user_id: row.user_id,
+        character_id: row.id,
+        name: row.character.0.name,
+        level: row.character.0.level,
+        pvp_trophies: row.character.0.pvp_trophies,
+    }
+}
+
+/// Return the character currently occupying one arena account.
+///
+/// This is token-gated and intentionally projects only the same public fields
+/// used by social cards. The capture-platform profile needs to distinguish the
+/// active arena character from archived captured alts; it does not need the
+/// character's wallet, inventory, town, or save data.
+#[get("/blades.bgs.services/api/dev/v1/current-character")]
+pub async fn get_current_character(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    query: web::Query<CurrentCharacterQuery>,
+) -> Result<Json<CurrentCharacterResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let mut conn = app_state.db_pool.get().await?;
+    let row = characters::table
+        .filter(characters::user_id.eq(query.into_inner().user_id))
+        .select(CharacterDbEntryCharacterAlone::as_select())
+        .first::<CharacterDbEntryCharacterAlone>(&mut conn)
+        .await
+        .optional()?;
+
+    Ok(Json(CurrentCharacterResponse {
+        character: row.map(current_character_summary),
+    }))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RecentMatchesQuery {
     #[serde(default)]
     user_id: Option<Uuid>,
@@ -2238,6 +2298,40 @@ pub async fn arena_season_rollover(
 
 #[cfg(test)]
 mod tests {
+    mod current_character_projection {
+        use super::super::*;
+
+        #[test]
+        fn exposes_only_public_character_fields() {
+            let summary = current_character_summary(CharacterDbEntryCharacterAlone {
+                id: Uuid::from_u128(2),
+                user_id: Uuid::from_u128(1),
+                character: JsonDbWrapper(CompleteCharacter {
+                    name: "Current Hero".into(),
+                    level: 42,
+                    pvp_trophies: 733,
+                    global_shop_offers: serde_json::json!([{"private": "not projected"}]),
+                    ..CompleteCharacter::default()
+                }),
+            });
+            let value = serde_json::to_value(summary).unwrap();
+            let mut keys: Vec<&str> = value
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            keys.sort_unstable();
+            assert_eq!(
+                keys,
+                ["characterId", "level", "name", "pvpTrophies", "userId"]
+            );
+            assert_eq!(value["name"], "Current Hero");
+            assert_eq!(value["level"], 42);
+            assert_eq!(value["pvpTrophies"], 733);
+        }
+    }
+
     // --- reassign-device: the containment, and what it must not touch -----
     //
     // This route may override a binding that `bind-device` refuses, so the two
