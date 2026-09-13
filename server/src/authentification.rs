@@ -11,8 +11,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    BladeApiError, ServerGlobal, json_db::JsonDbWrapper, models::UserDBEntry, schema,
-    session::Session,
+    BladeApiError, ServerGlobal,
+    json_db::JsonDbWrapper,
+    models::UserDBEntry,
+    schema,
+    session::{Session, SessionLookedUpMaybe},
 };
 
 #[derive(Deserialize)]
@@ -351,6 +354,42 @@ fn is_same_account(selected: Option<&str>, secret_id: Uuid) -> bool {
         .is_some_and(|s| s == secret_id)
 }
 
+/// Move this installation's anonymous-login identity to the account the
+/// player kept in the link conflict picker.
+///
+/// A no-VPN client still starts at `auth/anon` on every process launch. The
+/// completed `/link/force` response changes the live session, but that alone
+/// does not teach the next anonymous login which account owns the device. The
+/// source anonymous account already records the client's stable ids in
+/// `gp_deviceids`, and `anon_log_in` consults `device_bindings` first, so bind
+/// those known devices to the chosen account here.
+///
+/// The ownership predicate is the safety rail: link may claim an unowned row or
+/// move one owned by the authenticated source account, but it can never take a
+/// device that is already bound to a third account.
+const LINK_DEVICE_BIND_SQL: &str = "UPDATE device_bindings AS d \
+     SET user_id = $2, bound_at = now(), last_seen = now() \
+     FROM users AS source \
+     WHERE source.id = $1 \
+       AND COALESCE(source.data->'gp_deviceids', '[]'::jsonb) ? d.device_id \
+       AND (d.user_id IS NULL OR d.user_id = $1)";
+
+async fn bind_linked_devices(
+    conn: &mut diesel_async::AsyncPgConnection,
+    source_user_id: Uuid,
+    linked_user_id: Uuid,
+) -> Result<usize, diesel::result::Error> {
+    if source_user_id == linked_user_id {
+        return Ok(0);
+    }
+
+    diesel::sql_query(LINK_DEVICE_BIND_SQL)
+        .bind::<diesel::sql_types::Uuid, _>(source_user_id)
+        .bind::<diesel::sql_types::Uuid, _>(linked_user_id)
+        .execute(conn)
+        .await
+}
+
 #[post("/blades.bgs.services/api/authentication/v1/public/auth/bnet/link")]
 async fn bnet_link(
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -432,15 +471,37 @@ async fn bnet_link(
 /// they later want, and deleting on a menu tap is not recoverable).
 #[post("/blades.bgs.services/api/authentication/v1/public/auth/bnet/link/force")]
 async fn bnet_link_force(
+    current_session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
     body: web::Json<BnetLinkRequest>,
 ) -> Result<web::Json<SessionResponse>, BladeApiError> {
+    // The body names both profiles, but `selectedUserId` is client-controlled
+    // and may be either side of the conflict. The authenticated session is the
+    // authoritative source account whose installation is being linked.
+    let source_user_id = current_session.get_session_or_error()?.session.user_id;
     let body = body.into_inner();
     let (user_id, _secret_id, session) =
         resolve_link(&app_state, &body.username, &body.password).await?;
+
+    let rebound = {
+        let mut conn = app_state.db_pool.get().await.unwrap();
+        bind_linked_devices(&mut conn, source_user_id, user_id)
+            .await
+            .map_err(|error| {
+                log::error!(
+                    "account link (forced): failed to bind devices from user {source_user_id} \
+                     to user {user_id}: {error}"
+                );
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 114)
+            })?
+    };
+
     let session_id = app_state.session_store.store_new_session(session.clone());
     crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
-    log::info!("account link (forced): now signed in as user {user_id}");
+    log::info!(
+        "account link (forced): user {source_user_id} kept user {user_id}; \
+         rebound {rebound} device(s)"
+    );
     Ok(web::Json(SessionResponse {
         session: SessionResponseInner::from_session(session_id, session.as_ref()),
     }))
@@ -900,6 +961,120 @@ mod link_tests {
         assert!(!is_same_account(Some(&anon.to_string()), real));
     }
 
+    /// Backstop for local runs without Postgres: the production statement must
+    /// continue to derive devices from the authenticated source account and
+    /// must retain the third-party ownership guard.
+    #[test]
+    fn forced_link_device_binding_keeps_its_ownership_guard() {
+        assert!(LINK_DEVICE_BIND_SQL.contains("source.id = $1"));
+        assert!(LINK_DEVICE_BIND_SQL.contains("source.data->'gp_deviceids'"));
+        assert!(
+            LINK_DEVICE_BIND_SQL.contains("d.user_id IS NULL OR d.user_id = $1"),
+            "a link must never steal a device already owned by somebody else"
+        );
+    }
+
+    /// Run the exact production UPDATE against Postgres. CI supplies
+    /// TEST_DATABASE_URL; local runs skip visibly when it is absent.
+    #[tokio::test]
+    async fn forced_link_rebinds_only_devices_owned_by_the_source() {
+        use diesel_async::{AsyncConnection, AsyncPgConnection};
+
+        let Some(url) = std::env::var("TEST_DATABASE_URL").ok() else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — forced-link binding not verified");
+            return;
+        };
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction()
+            .await
+            .expect("could not open a test transaction");
+        let test_schema = format!("t{}", Uuid::new_v4().simple());
+        diesel::sql_query(format!("CREATE SCHEMA {test_schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        diesel::sql_query(format!("SET LOCAL search_path TO {test_schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        diesel::sql_query("CREATE TABLE users (id UUID PRIMARY KEY, data JSONB NOT NULL)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        diesel::sql_query(
+            "CREATE TABLE device_bindings ( \
+                 device_id TEXT PRIMARY KEY, \
+                 user_id UUID REFERENCES users(id), \
+                 last_seen TIMESTAMPTZ NOT NULL DEFAULT now(), \
+                 bound_at TIMESTAMPTZ)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+        let source = Uuid::new_v4();
+        let linked = Uuid::new_v4();
+        let third_party = Uuid::new_v4();
+        for (id, data) in [
+            (
+                source,
+                serde_json::json!({"gp_deviceids": ["unclaimed", "source-owned", "third-owned"]}),
+            ),
+            (linked, serde_json::json!({"gp_deviceids": []})),
+            (third_party, serde_json::json!({"gp_deviceids": []})),
+        ] {
+            diesel::sql_query("INSERT INTO users (id, data) VALUES ($1, $2)")
+                .bind::<diesel::sql_types::Uuid, _>(id)
+                .bind::<diesel::sql_types::Jsonb, _>(data)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+        for (device, owner) in [
+            ("unclaimed", None),
+            ("source-owned", Some(source)),
+            ("third-owned", Some(third_party)),
+        ] {
+            diesel::sql_query("INSERT INTO device_bindings (device_id, user_id) VALUES ($1, $2)")
+                .bind::<diesel::sql_types::Text, _>(device.to_string())
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(owner)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            bind_linked_devices(&mut conn, source, linked)
+                .await
+                .unwrap(),
+            2,
+            "unclaimed and source-owned devices should move"
+        );
+
+        #[derive(diesel::QueryableByName)]
+        struct Owner {
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+            user_id: Option<Uuid>,
+        }
+        async fn owner_of(conn: &mut AsyncPgConnection, device: &str) -> Option<Uuid> {
+            diesel::sql_query("SELECT user_id FROM device_bindings WHERE device_id = $1")
+                .bind::<diesel::sql_types::Text, _>(device.to_string())
+                .get_result::<Owner>(conn)
+                .await
+                .unwrap()
+                .user_id
+        }
+
+        assert_eq!(owner_of(&mut conn, "unclaimed").await, Some(linked));
+        assert_eq!(owner_of(&mut conn, "source-owned").await, Some(linked));
+        assert_eq!(
+            owner_of(&mut conn, "third-owned").await,
+            Some(third_party),
+            "a different player's binding must remain untouched"
+        );
+    }
 
     /// The conflict payload IS the picker's content. Retail's captures carry
     /// TWO 36-char ids; we sent one, and the player got a dialog with two blank
