@@ -30,6 +30,10 @@ RUN apt-get update \
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.revision=$VCS_REF
 COPY --from=build /tmp/blades-server /usr/local/bin/blades-server
+# Ship the schema with the binary that requires it. Production extracts this
+# read-only bundle from the pulled image before running `arena-migrate`, so an
+# image release can never depend on an independently-synced, stale source tree.
+COPY --from=build /src/migrations /opt/blades/migrations
 # HTTP REST (blades.bgs.services API) + the arena UDP/ENet host.
 EXPOSE 8080
 EXPOSE 7777/udp

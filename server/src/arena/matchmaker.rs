@@ -894,9 +894,9 @@ async fn pick_bot_loadout(
         }
         None => {
             warn!(
-                "matchmaker: no COMPLETE distinct bot character available (pool {}) — bot falls \
-                 back to the empty starter (INVISIBLE opponent). Select a complete character with \
-                 the Mimic as AI checkbox.",
+                "matchmaker: no COMPLETE distinct bot character available (pool {}) — returning \
+                 the empty sentinel so the allocation guard can reject this match. Select a \
+                 complete character with the Mimic as AI checkbox.",
                 candidates.len()
             );
             loadout::starter()
@@ -2303,6 +2303,40 @@ fn check_paired_profiles_present_and_distinct(
     Ok(())
 }
 
+/// Refuse a solo match whose server-controlled opponent cannot be rendered.
+///
+/// `loadout::starter()` is a useful gameplay fallback, but it is not a valid Arena
+/// opponent: it has neither the character UUID used to bind the opponent avatar nor
+/// the op54 PROFILE used to dress it. Allocating that loadout makes the client enter
+/// the arena with a zoomed-out camera and wait at "Setting Up" forever. This is the
+/// last line of defence when the bot roster is empty, its schema is missing, or its
+/// database read times out.
+fn check_bot_loadouts_renderable(
+    loadouts: &[crate::arena::combat::Loadout],
+    human_count: usize,
+) -> Result<(), String> {
+    let bots = loadouts.get(human_count..).unwrap_or_default();
+    if bots.is_empty() {
+        return Err("no bot loadout was produced".to_string());
+    }
+    for (offset, bot) in bots.iter().enumerate() {
+        let slot = human_count + offset;
+        if bot.character_uuid.is_empty() {
+            return Err(format!(
+                "bot slot {slot} (\"{}\") has an EMPTY character_uuid; the opponent avatar cannot bind",
+                bot.display_name,
+            ));
+        }
+        if bot.profile_character_json.is_empty() {
+            return Err(format!(
+                "bot slot {slot} (\"{}\", char {}) has an EMPTY profile_character_json; op54 PROFILE would not broadcast",
+                bot.display_name, bot.character_uuid,
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Newest-first view of `arena_matches`, capped at `limit`, marking `mine`
 /// against `filter`. Backs the dev `recent-matches` endpoint; durable across
 /// restarts (#NB-3). Returns empty on a DB error (the endpoint stays up).
@@ -3016,7 +3050,9 @@ async fn resolve(
             {
                 Ok(b) => b,
                 Err(_) => {
-                    warn!("matchmaker: bot loadout load timed out — empty starter bot");
+                    warn!(
+                        "matchmaker: bot loadout load timed out — returning the empty sentinel for rejection"
+                    );
                     crate::arena::combat::loadout::starter()
                 }
             };
@@ -3027,7 +3063,7 @@ async fn resolve(
                 bot.character_uuid,
                 bot.profile_character_json.len(),
                 if bot.profile_character_json.is_empty() {
-                    "INVISIBLE (no complete bot available)"
+                    "UNRENDERABLE (allocation will be rejected)"
                 } else {
                     "opponent op54 PROFILE will broadcast"
                 },
@@ -3049,6 +3085,35 @@ async fn resolve(
         loadouts.len(),
         tickets.len(),
     );
+
+    // Never hand the client an empty server-controlled opponent. The engine cannot
+    // turn a starter loadout into a distinct avatar: there is no character UUID to
+    // bind and no op54 PROFILE to render, so the camera zooms out and "Setting Up"
+    // never completes. This exact fallback was reached in production when the
+    // arena_ai_mimics migration was absent. Fail visibly and release capacity instead
+    // of allocating a match that neither the player nor the server can quit cleanly.
+    if bots > 0 {
+        if let Err(reason) = check_bot_loadouts_renderable(&loadouts, tickets.len()) {
+            warn!(
+                "matchmaker: SOLO-BOT SETUP rejected (gsid {game_session_id}) — {reason}. \
+                 Sending MatchmakingFailed; select a complete Mimic as AI character and verify \
+                 the arena_ai_mimics migration before retrying."
+            );
+            for t in tickets {
+                warn!(
+                    "matchmaker: ticket {} → MatchmakingFailed (unrenderable bot guard)",
+                    t.ticket_id
+                );
+                let _ = t
+                    .rms
+                    .send(MatchmakingMessage::Failed {
+                        ticket_id: t.ticket_id,
+                    })
+                    .await;
+            }
+            return;
+        }
+    }
 
     // For a REAL PAIRED (human-vs-human) match, refuse to ship a known-collapsed
     // appearance: two fighters with the same — or an empty — `character_uuid` make
@@ -3680,14 +3745,14 @@ mod tests {
     /// all." So assert on the frames the loop actually PUSHED.
     ///
     /// Two players outside the opening bracket (18 levels / 400 trophies apart) press
-    /// Fight 300 ms apart, and the solo fallback is 1 s — the shape the testers hit,
+    /// Fight 800 ms apart, and the solo fallback is 3 s — the shape the testers hit,
     /// where the bracket has not widened once before the bot deadline arrives.
     ///
     /// With no DB both players resolve to the nil character UUID, so the *paired* path
-    /// is refused by the appearance guard and pushes `Failed`, while the *bot* path
-    /// pushes `Succeeded`. That difference is the probe:
-    ///   - fixed:   last call pairs them -> `Failed` on both, no `Succeeded` anywhere.
-    ///   - pre-fix: a bot each -> `Succeeded` on both and no `Failed` at all.
+    /// is refused by the appearance guard and pushes `Failed`. An empty bot is now also
+    /// refused, so sample BETWEEN the two solo deadlines:
+    ///   - fixed:   A's last call pairs them -> `Failed` on both at A's deadline;
+    ///   - pre-fix: A bots and fails alone; B has no terminal response yet.
     #[tokio::test]
     async fn two_humans_queueing_together_get_each_other_not_two_bots() {
         let registry = MatchRegistry::new(4);
@@ -3697,7 +3762,7 @@ mod tests {
             udp_port: 7777,
             max_concurrent_matches: 4,
             max_queued_players: 64,
-            solo_fallback_secs: 1,
+            solo_fallback_secs: 3,
             debug_ghost_user_id: None,
             bot_user_ids: Vec::new(),
             busy_fallback_secs: 230,
@@ -3724,7 +3789,7 @@ mod tests {
         }))
         .unwrap();
 
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(800)).await;
 
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             via_vpn: true,
@@ -3740,34 +3805,30 @@ mod tests {
         }))
         .unwrap();
 
-        async fn drain(
+        fn drain(
             rx: &mut tokio::sync::mpsc::UnboundedReceiver<MatchmakingMessage>,
         ) -> (bool, bool) {
             let (mut failed, mut succeeded) = (false, false);
-            for _ in 0..6 {
-                match tokio::time::timeout(Duration::from_millis(900), rx.recv()).await {
-                    Ok(Some(MatchmakingMessage::Failed { .. })) => failed = true,
-                    Ok(Some(MatchmakingMessage::Succeeded { .. })) => succeeded = true,
-                    Ok(Some(_)) => continue, // Searching / PotentialMatch
-                    _ => break,              // timeout or channel closed
+            while let Ok(message) = rx.try_recv() {
+                match message {
+                    MatchmakingMessage::Failed { .. } => failed = true,
+                    MatchmakingMessage::Succeeded { .. } => succeeded = true,
+                    _ => {} // Searching / PotentialMatch
                 }
             }
             (failed, succeeded)
         }
 
-        let (failed_a, succeeded_a) = drain(&mut recv_a).await;
-        let (failed_b, succeeded_b) = drain(&mut recv_b).await;
+        // 3.4 s after A queued: comfortably after A's 3 s deadline, still 400 ms
+        // before B's. Only a last-call human pairing can resolve BOTH by now.
+        tokio::time::sleep(Duration::from_millis(2600)).await;
+        let (failed_a, succeeded_a) = drain(&mut recv_a);
+        let (failed_b, succeeded_b) = drain(&mut recv_b);
 
         assert!(
-            !succeeded_a && !succeeded_b,
-            "a bot match was handed out while another HUMAN was waiting in the queue \
-             (Succeeded a={succeeded_a} b={succeeded_b}) — the reported bug"
-        );
-        assert!(
-            failed_a && failed_b,
-            "the loop never attempted to pair them at last call (Failed a={failed_a} \
-             b={failed_b}); without this the no-Succeeded assertion above could pass \
-             simply because nothing happened at all"
+            failed_a && failed_b && !succeeded_a && !succeeded_b,
+            "A's last call did not pair both waiting humans (Failed a={failed_a} b={failed_b}, \
+             Succeeded a={succeeded_a} b={succeeded_b}); B's own bot deadline has not arrived"
         );
     }
 
@@ -4016,7 +4077,9 @@ mod tests {
     /// A cancel that does NOT match the waiting ticket's (ticket_id, user_id) must
     /// leave the waiting ticket in place — a cancel can only drop its OWN ticket. Here
     /// user A queues, a spurious cancel for a different ticket/user arrives, and A still
-    /// bot-matches on the fallback timer (permit consumed).
+    /// reaches the bot fallback. With no DB that fallback is rejected by the
+    /// unrenderable-bot guard, so its `Failed` response proves the ticket survived the
+    /// unrelated cancel without requiring a deliberately broken match to be allocated.
     #[tokio::test]
     async fn cancel_does_not_drop_a_different_users_ticket() {
         let registry = MatchRegistry::new(4);
@@ -4038,7 +4101,7 @@ mod tests {
 
         let tid = Uuid::new_v4();
         let uid = Uuid::new_v4();
-        let (rms, _recv) = unbounded_channel();
+        let (rms, mut recv) = unbounded_channel();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
             via_vpn: true,
             expected_udp_ip: None,
@@ -4058,13 +4121,107 @@ mod tests {
         })
         .unwrap();
 
-        // Past the fallback timer: A still bot-matched (a solo bot needs no DB — the
-        // starter bot fill allocates a permit), so one permit is consumed.
+        // Past the fallback timer: A still reaches resolution. With no DB the bot is
+        // empty, so the safety guard sends Failed. If the unrelated cancel had removed
+        // A, there would be no terminal response at all.
         tokio::time::sleep(Duration::from_millis(1200)).await;
+        let mut failed = false;
+        while let Ok(msg) = recv.try_recv() {
+            if matches!(msg, MatchmakingMessage::Failed { ticket_id } if ticket_id == tid) {
+                failed = true;
+            }
+        }
+        assert!(
+            failed,
+            "a spurious cancel dequeued another user's ticket before bot fallback"
+        );
         assert_eq!(
             registry.available_permits(),
-            3,
-            "a spurious cancel must not dequeue another user's ticket — A still bot-matches"
+            4,
+            "the rejected empty-bot fallback must not consume capacity"
+        );
+    }
+
+    /// A missing/empty bot must fail before registry allocation. This is the
+    /// production "Opponent Found: Setting Up" regression: the client received a
+    /// `starter()` opponent with no UUID/profile, zoomed out, and could neither play
+    /// nor quit. `resolve` must send Failed instead of Succeeded and return capacity.
+    #[tokio::test]
+    async fn empty_bot_gets_failed_instead_of_an_unrenderable_match() {
+        let registry = MatchRegistry::new(4);
+        let config = ArenaConfig {
+            public_advertise_host: None,
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 4,
+            max_queued_players: 64,
+            solo_fallback_secs: 1,
+            debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
+            busy_fallback_secs: 230,
+            recent_fallback_secs: 30,
+            recent_window_secs: 300,
+        };
+        let ticket_id = Uuid::new_v4();
+        let (rms, mut recv) = unbounded_channel();
+        let tickets = vec![TicketRequest {
+            via_vpn: true,
+            expected_udp_ip: None,
+            ticket_id,
+            user_id: Uuid::new_v4(),
+            character_id: None,
+            rms: RmsHandle::Direct(rms),
+            skill: None,
+        }];
+
+        // No DB makes both load calls return starter(); the bot guard is what turns
+        // that degraded data into a visible matchmaking failure.
+        resolve(&registry, &config, &None, &tickets, 1).await;
+
+        let got = tokio::time::timeout(Duration::from_millis(200), recv.recv())
+            .await
+            .expect("resolve sends a result immediately");
+        assert!(
+            matches!(got, Some(MatchmakingMessage::Failed { ticket_id: id }) if id == ticket_id),
+            "an empty bot must produce MatchmakingFailed, got {got:?}"
+        );
+        assert_eq!(
+            registry.available_permits(),
+            4,
+            "an unrenderable bot match must not consume capacity"
+        );
+    }
+
+    /// The bot guard checks both pieces the client needs: UUID for avatar binding and
+    /// op54 PROFILE for appearance. Human loadouts are outside its slice.
+    #[test]
+    fn bot_renderability_guard_requires_uuid_and_profile() {
+        use crate::arena::combat::loadout::starter;
+        let bot = |uuid: &str, profile: &str| {
+            let mut loadout = starter();
+            loadout.display_name = "Yaskrava (AI)".to_string();
+            loadout.character_uuid = uuid.to_string();
+            loadout.profile_character_json = profile.to_string();
+            loadout
+        };
+        let human = starter();
+        let uuid = "1131a037-716c-49cc-b165-32d8ddc14f49";
+
+        assert!(check_bot_loadouts_renderable(
+            &[human.clone(), bot(uuid, r#"{"name":"Yaskrava (AI)"}"#)],
+            1,
+        )
+        .is_ok());
+
+        let err = check_bot_loadouts_renderable(&[human.clone(), bot("", "{}")], 1)
+            .expect_err("an empty bot UUID must be rejected");
+        assert!(err.contains("EMPTY character_uuid"), "wrong reason: {err}");
+
+        let err = check_bot_loadouts_renderable(&[human, bot(uuid, "")], 1)
+            .expect_err("an empty bot profile must be rejected");
+        assert!(
+            err.contains("EMPTY profile_character_json"),
+            "wrong reason: {err}"
         );
     }
 
