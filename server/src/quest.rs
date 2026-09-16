@@ -44,13 +44,15 @@ pub struct GetQuestsResponse {
     /// Per-pool rotation timers (`[{id, endTime, nextStartTime}]`, epoch seconds)
     /// computed relative to *now* by [`jobs_gen`] — no longer frozen constants.
     job_pools: Value,
-    /// Quests the server removed in the course of answering this request.
+    /// Quests the server removed or retired from the active wire list while
+    /// answering this request.
     ///
-    /// The job rotation deletes the previous window's un-entered job rows; without
-    /// this the client is never told and keeps showing board entries that no longer
-    /// exist. Retail sends the field in 17.91% of captured `/quests` responses and
-    /// **never sends it empty** — it is a "there were deletions" signal, not a
-    /// always-present list — so it is skipped when nothing was removed.
+    /// The job rotation deletes the previous window's un-entered job rows, and
+    /// completed ordinary quests are retired so a cached client does not keep
+    /// showing them as playable. Retail sends the field in 17.91% of captured
+    /// `/quests` responses and **never sends it empty** — it is a "there were
+    /// deletions" signal, not an always-present list — so it is skipped when
+    /// nothing was removed or retired.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     deleted_quest_ids: Vec<Uuid>,
     /// The event ("Sigil") quests whose instance window is open right now — one
@@ -75,7 +77,7 @@ pub struct GetQuestsResponse {
 
 /// Split stored quest rows into the client's `quests[]` and `generatedData[]`.
 ///
-/// Two rows are dropped rather than advertised:
+/// Three rows are dropped rather than advertised:
 ///
 /// * **JOB rows**, which are surfaced only in `jobs[]` — matching prod, where the
 ///   two arrays never overlap. Their `generatedData[]` entries are NOT dropped: retail
@@ -96,6 +98,14 @@ pub struct GetQuestsResponse {
 ///
 ///   Skipping is the honest answer: with no dungeon we can neither render it nor let
 ///   anyone play it, and advertising it is what hangs the client.
+/// * **Completed ordinary quests.** Retail keeps their completion count on the
+///   character but does not return the finished quest as active. Keeping our row
+///   in `quests[]` made the client offer a completed story quest again and allowed
+///   `/complete` to count and reward it repeatedly. The caller reports these ids
+///   through `deletedQuestIds`, which clears clients that already cached the bad
+///   active entry. The stored row is retained as completion/audit evidence. Event
+///   quests are deliberately not handled here: their multi-tier lifecycle is
+///   tracked separately.
 ///
 /// A `GAME_EVENT` row is routed to `gameEventQuests[]` instead of `quests[]`, and
 /// only while its instance is still open — `open_event_instances` carries the
@@ -120,15 +130,21 @@ fn split_quest_rows(
     Vec<QuestWithId>,
     Vec<QuestWithId>,
     Vec<DungeonGeneratedDataWithId>,
+    Vec<Uuid>,
 ) {
     let mut quests = Vec::new();
     let mut event_quests = Vec::new();
     let mut generated = Vec::new();
+    let mut completed = Vec::new();
     for (quest_id, info, generated_data) in rows {
         if jobs_gen::is_job_row(&info) {
             continue;
         }
         let is_event = matches!(info.r#type, blades_lib::user_data::QuestType::GameEvent);
+        if matches!(info.r#type, blades_lib::user_data::QuestType::Normal) && info.completed {
+            completed.push(quest_id);
+            continue;
+        }
         if is_event && !open_event_instances.contains(&quest_id) {
             continue;
         }
@@ -143,7 +159,7 @@ fn split_quest_rows(
         }
         generated.push(DungeonGeneratedDataWithId { quest_id, inner });
     }
-    (quests, event_quests, generated)
+    (quests, event_quests, generated, completed)
 }
 
 /// The response's `dungeonGeneratedDataList`: the stored rows' entries (quests + open
@@ -363,12 +379,14 @@ pub async fn get_quests(
                     .await?
             };
 
-            let (result_quests, game_event_quests, row_generated_data) = split_quest_rows(
-                quests
-                    .into_iter()
-                    .map(|q| (q.id, q.info.0, q.generated_data.0)),
-                &open_event_instances,
-            );
+            let (result_quests, game_event_quests, row_generated_data, completed_quest_ids) =
+                split_quest_rows(
+                    quests
+                        .into_iter()
+                        .map(|q| (q.id, q.info.0, q.generated_data.0)),
+                    &open_event_instances,
+                );
+            deleted_quest_ids.extend(completed_quest_ids);
             let result_generated_data =
                 assemble_generated_data_list(row_generated_data, &globals.game_data, &jobs);
 
@@ -858,6 +876,19 @@ struct CompleteQuestResponse {
     character: CompleteCharacterWithIdWithoutData,
 }
 
+/// Mark one stored quest completion exactly once.
+///
+/// `/complete` can be retried after the server committed but before the client saw
+/// the response. A completed row is therefore an idempotency record, not permission
+/// to pay and increment the quest again.
+fn mark_quest_completed_once(info: &mut blades_lib::user_data::Quest) -> bool {
+    if info.completed {
+        return false;
+    }
+    info.completed = true;
+    true
+}
+
 #[post(
     "/blades.bgs.services/api/game/v1/public/characters/{character_id}/quests/{quest_id}/complete"
 )]
@@ -889,7 +920,7 @@ pub async fn complete_quest(
                     .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
             };
 
-            // Load the quest row and mark it completed.
+            // Load the quest row. Its completed flag is also our idempotency record.
             let mut quest_entry = {
                 use crate::schema::quests;
                 quests::table
@@ -904,7 +935,18 @@ pub async fn complete_quest(
                     .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20001, 1))?
             };
 
-            quest_entry.info.0.completed = true;
+            if !mark_quest_completed_once(&mut quest_entry.info.0) {
+                let tracker = InventoryChangeTracker::default();
+                return Ok::<_, BladeApiError>(Json(CompleteQuestResponse {
+                    reward: RewardGrant::default(),
+                    inventory: entry.inventory.0.generate_client_update(&tracker),
+                    wallet: entry.wallet.0.clone(),
+                    character: CompleteCharacterWithIdWithoutData {
+                        id: character_id,
+                        character: entry.character.0.clone(),
+                    },
+                }));
+            }
 
             // Update the character's completedQuests JSON.
             // The client expects: { "<gldQuestId>": <completion_count> }
@@ -3032,7 +3074,7 @@ mod report85_job_generated_data_tests {
         // makes. Going through `assemble_generated_data_list` rather than reaching past it
         // is the point — the route needs a DB, so this function is the closest testable
         // seam to the wire.
-        let (quests_out, _events, from_rows) = split_quest_rows(
+        let (quests_out, _events, from_rows, _completed) = split_quest_rows(
             vec![(story_id, story_quest.clone(), story_data.clone())].into_iter(),
             &Default::default(),
         );
@@ -3205,7 +3247,7 @@ mod event_quest_tests {
         let mut live = std::collections::HashSet::new();
         live.insert(open);
 
-        let (quests, events, generated_data) = split_quest_rows(
+        let (quests, events, generated_data, _completed) = split_quest_rows(
             vec![
                 (open, event.clone(), Some(generated())),
                 (closed, event, Some(generated())),
@@ -3579,6 +3621,54 @@ mod deleted_quest_ids_tests {
 }
 
 #[cfg(test)]
+mod report157_completed_quest_tests {
+    use super::*;
+
+    fn quest(completed: bool) -> blades_lib::user_data::Quest {
+        serde_json::from_value(json!({
+            "version": 0,
+            "type": "NORMAL",
+            "objectiveStatuses": {},
+            "difficultyLevel": 0,
+            "seed": 0,
+            "gldQuestId": "5ad30483-8994-484e-b6dc-a5e9014cc4d5",
+            "completed": completed,
+        }))
+        .expect("fixture quest")
+    }
+
+    fn generated() -> blades_lib::user_data::DungeonGeneratedData {
+        serde_json::from_value(json!({ "algorithmVersion": 0, "version": 0 }))
+            .expect("minimal generated data")
+    }
+
+    #[test]
+    fn a_completed_story_quest_is_retired_from_the_active_wire_lists() {
+        let id = Uuid::parse_str("5ad30483-8994-484e-b6dc-a5e9014cc4d5").unwrap();
+        let (quests, events, data, completed) = split_quest_rows(
+            vec![(id, quest(true), Some(generated()))].into_iter(),
+            &Default::default(),
+        );
+
+        assert!(quests.is_empty(), "a completed story quest is not active");
+        assert!(events.is_empty());
+        assert!(data.is_empty(), "retired quests need no generated data");
+        assert_eq!(completed, vec![id], "the client must be told to clear it");
+    }
+
+    #[test]
+    fn completing_the_same_stored_quest_twice_is_idempotent() {
+        let mut info = quest(false);
+        assert!(mark_quest_completed_once(&mut info), "first completion applies");
+        assert!(info.completed);
+        assert!(
+            !mark_quest_completed_once(&mut info),
+            "a retry must not increment or reward the quest again"
+        );
+    }
+}
+
+#[cfg(test)]
 mod report62_quest_map_tests {
     use super::*;
     use blades_lib::user_data::Quest;
@@ -3612,7 +3702,7 @@ mod report62_quest_map_tests {
         let without_data = Uuid::from_u128(2);
         let normal = Uuid::from_u128(0xAAAA);
 
-        let (quests, _events, data) = split_quest_rows(
+        let (quests, _events, data, _completed) = split_quest_rows(
             vec![
                 (with_data, quest(normal), Some(generated())),
                 // "The Message": a real quest whose template ships no dungeon, so
@@ -3639,7 +3729,7 @@ mod report62_quest_map_tests {
     #[test]
     fn a_quest_with_data_is_still_served() {
         let id = Uuid::from_u128(7);
-        let (quests, _events, data) = split_quest_rows(
+        let (quests, _events, data, _completed) = split_quest_rows(
             vec![(id, quest(Uuid::from_u128(0xBBBB)), Some(generated()))].into_iter(),
             &Default::default(),
         );
@@ -3653,7 +3743,7 @@ mod report62_quest_map_tests {
     /// survive it.
     #[test]
     fn job_rows_are_still_excluded() {
-        let (quests, _events, data) = split_quest_rows(
+        let (quests, _events, data, _completed) = split_quest_rows(
             vec![(
                 Uuid::from_u128(9),
                 quest(jobs_gen::JOB_SENTINEL_GLD),
@@ -3681,7 +3771,8 @@ mod report62_quest_map_tests {
         // "The Message"
         rows.push((Uuid::from_u128(300), quest(Uuid::from_u128(0xCCA4)), None));
 
-        let (quests, _events, data) = split_quest_rows(rows.into_iter(), &Default::default());
+        let (quests, _events, data, _completed) =
+            split_quest_rows(rows.into_iter(), &Default::default());
         assert_eq!(quests.len(), 3, "three playable quests");
         assert_eq!(data.len(), 3, "each with its data");
         let a: Vec<Uuid> = quests.iter().map(|q| q.quest_id).collect();
