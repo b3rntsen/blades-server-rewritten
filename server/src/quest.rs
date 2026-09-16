@@ -10,7 +10,8 @@ use blades_lib::{
     features::repair::RepairData,
     user_data::{
         CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
-        DungeonGeneratedDataWithId, InventoryChangeTracker, Item, ItemPropertiesAll, QuestWithId,
+        DungeonGeneratedData, DungeonGeneratedDataWithId, InventoryChangeTracker, Item,
+        ItemPropertiesAll, QuestWithId,
     },
     util::quest::{GenerateQuestDataError, generate_quest_data},
 };
@@ -163,6 +164,119 @@ fn assemble_generated_data_list(
 ) -> Vec<DungeonGeneratedDataWithId> {
     from_rows.extend(jobs_gen::job_generated_data_list(game_data, jobs));
     from_rows
+}
+
+/// Upgrade only the interactable-loot part of a persisted quest generated before the
+/// capture-derived tables shipped. Those rows have all the right spawn ids but every
+/// `lootTableLoot` result is empty, so keeping the row forever keeps breakables and
+/// floor pickups empty forever too (report #152).
+///
+/// Do not replace the whole generated-data object: an entered quest may already carry
+/// enemy/chest state authored by retail or imported with the character. The fresh item
+/// map is safe because its rolls are deterministic for the dungeon + spawn ids.
+fn refresh_empty_item_loot(
+    stored: &mut DungeonGeneratedData,
+    fresh: DungeonGeneratedData,
+) -> bool {
+    let has_item_loot = |data: &DungeonGeneratedData| {
+        data.item_generated_data.values().flatten().any(|item| {
+            item.loot_table_loot.values().any(|loot| {
+                !loot.stackable_items.is_empty()
+                    || !loot.currencies.is_empty()
+                    || !loot.item.is_empty()
+            })
+        })
+    };
+
+    // Server-generated story rows use version 0. Retail/imported generated data is
+    // version 1 and must remain byte-for-byte the player's captured state.
+    if stored.version != 0
+        || stored.item_generated_data.is_empty()
+        || has_item_loot(stored)
+        || !has_item_loot(&fresh)
+    {
+        return false;
+    }
+
+    stored.item_generated_data = fresh.item_generated_data;
+    true
+}
+
+#[cfg(test)]
+mod report152_stale_story_loot_tests {
+    use super::*;
+    use blades_lib::static_data::QuestLevelScaling;
+
+    #[test]
+    fn haunted_forest_refreshes_old_empty_item_rolls_without_replacing_enemy_data() {
+        let game_data = super::report85_job_generated_data_tests::game_data();
+        let quest_id = Uuid::parse_str("378307c6-0a23-41f8-b721-5282fa0a8a2b").unwrap();
+        let (_, fresh) = generate_quest_data(
+            &game_data,
+            quest_id,
+            48,
+            &QuestLevelScaling::default(),
+        )
+        .expect("Haunted Forest exists");
+        let fresh = fresh.expect("Haunted Forest has a dungeon");
+
+        assert_eq!(fresh.item_generated_data.len(), 8, "all eight item spawns");
+        let paying_spawns = fresh
+            .item_generated_data
+            .values()
+            .flatten()
+            .filter(|item| {
+                item.loot_table_loot.values().any(|loot| {
+                    !loot.stackable_items.is_empty()
+                        || !loot.currencies.is_empty()
+                        || !loot.item.is_empty()
+                })
+            })
+            .count();
+        assert_eq!(paying_spawns, 7, "the capture-derived deterministic rolls");
+
+        // Exact shape of the reporter's durable pre-fix row: spawn/table ids exist,
+        // but every result is empty. Preserve the enemy/chest sections verbatim.
+        let mut stale = fresh.clone();
+        for item in stale.item_generated_data.values_mut().flatten() {
+            for loot in item.loot_table_loot.values_mut() {
+                *loot = Default::default();
+            }
+        }
+        let enemies_before = serde_json::to_value(&stale.enemy_generated_data).unwrap();
+        let chests_before = serde_json::to_value(&stale.chest_generated_data).unwrap();
+
+        assert!(refresh_empty_item_loot(&mut stale, fresh.clone()));
+        assert_eq!(
+            serde_json::to_value(&stale.item_generated_data).unwrap(),
+            serde_json::to_value(&fresh.item_generated_data).unwrap(),
+        );
+        assert_eq!(
+            serde_json::to_value(&stale.enemy_generated_data).unwrap(),
+            enemies_before,
+        );
+        assert_eq!(
+            serde_json::to_value(&stale.chest_generated_data).unwrap(),
+            chests_before,
+        );
+    }
+
+    #[test]
+    fn a_row_that_already_has_loot_is_not_rewritten() {
+        let game_data = super::report85_job_generated_data_tests::game_data();
+        let quest_id = Uuid::parse_str("378307c6-0a23-41f8-b721-5282fa0a8a2b").unwrap();
+        let (_, fresh) = generate_quest_data(
+            &game_data,
+            quest_id,
+            48,
+            &QuestLevelScaling::default(),
+        )
+        .expect("Haunted Forest exists");
+        let fresh = fresh.expect("Haunted Forest has a dungeon");
+        let mut stored = fresh.clone();
+
+        assert!(!refresh_empty_item_loot(&mut stored, fresh));
+    }
 }
 
 #[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/quests")]
@@ -353,7 +467,7 @@ pub async fn get_quests(
             }
 
             // we could have done an inner join to check the get the user id, but the user has already been checked previously.
-            let quests = {
+            let mut quests = {
                 use crate::schema::quests::dsl::*;
                 // take care! that line above import a character_id thing
                 quests::table()
@@ -362,6 +476,40 @@ pub async fn get_quests(
                     .load(&mut conn)
                     .await?
             };
+
+            // Rows accepted before capture-derived interactable loot shipped are
+            // durable, so deploying the generator did not help those players. Repair
+            // the stale item map on the ordinary /quests refresh that precedes play,
+            // and persist it because /dungeons/current/update reads the DB row again.
+            for row in &mut quests {
+                if jobs_gen::is_job_row(&row.info.0)
+                    || matches!(row.info.0.r#type, blades_lib::user_data::QuestType::GameEvent)
+                {
+                    continue;
+                }
+                let Some(stored) = row.generated_data.0.as_mut() else {
+                    continue;
+                };
+                let Ok((_, Some(fresh))) = generate_quest_data(
+                    &globals.game_data,
+                    row.info.0.gld_quest_id,
+                    player_level,
+                    &globals.static_data.quests_daily.level_scaling,
+                ) else {
+                    continue;
+                };
+                if refresh_empty_item_loot(stored, fresh) {
+                    use crate::schema::quests;
+                    diesel::update(
+                        quests::table
+                            .filter(quests::id.eq(row.id))
+                            .filter(quests::character_id.eq(character_id_var)),
+                    )
+                    .set(quests::generated_data.eq(JsonDbWrapper(Some(stored.clone()))))
+                    .execute(&mut conn)
+                    .await?;
+                }
+            }
 
             let (result_quests, game_event_quests, row_generated_data) = split_quest_rows(
                 quests
