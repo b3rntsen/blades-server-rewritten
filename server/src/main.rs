@@ -613,6 +613,11 @@ async fn main() -> Result<()> {
                     .service(shop::buy_back_from_shop)
                     .service(shop::refresh_loot)
                     .service(shop::open_shop)
+                    // The same two verbs inside someone else's town. `/purchase`
+                    // first, for the same reason the owned pair orders that way:
+                    // the bare open would otherwise swallow it.
+                    .service(shop::buy_from_social_shop)
+                    .service(shop::open_social_shop)
                     .service(challenge::get_challenges)
                     .service(challenge::update_challenge)
                     .service(challenge::complete_challenge)

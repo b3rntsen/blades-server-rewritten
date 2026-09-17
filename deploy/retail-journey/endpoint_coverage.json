@@ -1,0 +1,451 @@
+{
+ "_meta": {
+  "description": "Retail observations behind the progression tests. Measured, not modelled: every number is read from a captured Bethesda response. Regenerate with script/extract_journey_fixtures.py.",
+  "source": "blades.db",
+  "user": "164824943366766592",
+  "captures": 34551,
+  "count": 88
+ },
+ "observations": [
+  {
+   "endpoint": "POST /characters/{id}/quests/{id}/dungeons/current/update",
+   "captures": 29565,
+   "players": 28
+  },
+  {
+   "endpoint": "POST /characters/{id}/globalshops/current/purchase",
+   "captures": 6312,
+   "players": 30
+  },
+  {
+   "endpoint": "POST /characters/{id}/loadouts/current",
+   "captures": 5072,
+   "players": 37
+  },
+  {
+   "endpoint": "POST /characters/{id}/data",
+   "captures": 3447,
+   "players": 33
+  },
+  {
+   "endpoint": "GET /characters/{id}/globalgifts/{id}",
+   "captures": 3123,
+   "players": 39
+  },
+  {
+   "endpoint": "GET /catalogoverrides/globalshop",
+   "captures": 3004,
+   "players": 39
+  },
+  {
+   "endpoint": "POST /characters/{id}/salvages",
+   "captures": 2961,
+   "players": 12
+  },
+  {
+   "endpoint": "GET /catalogoverrides/iap",
+   "captures": 2828,
+   "players": 39
+  },
+  {
+   "endpoint": "GET /characters/{id}/announcements",
+   "captures": 1645,
+   "players": 39
+  },
+  {
+   "endpoint": "POST /characters/{id}/shops/{id}/sell",
+   "captures": 1467,
+   "players": 25
+  },
+  {
+   "endpoint": "GET /characters/{id}",
+   "captures": 1297,
+   "players": 38
+  },
+  {
+   "endpoint": "GET /characters/{id}/wallets/current",
+   "captures": 1289,
+   "players": 38
+  },
+  {
+   "endpoint": "POST /characters/{id}/challenges/{id}",
+   "captures": 1288,
+   "players": 23
+  },
+  {
+   "endpoint": "GET /character/{id}/inventories/current",
+   "captures": 1286,
+   "players": 38
+  },
+  {
+   "endpoint": "POST /characters/{id}/quests/{id}/objectives",
+   "captures": 1261,
+   "players": 28
+  },
+  {
+   "endpoint": "POST /characters/{id}/shops/{id}",
+   "captures": 1177,
+   "players": 33
+  },
+  {
+   "endpoint": "POST /characters/{id}/social/users/{id}/characters/{id}/shops/{id}/purchase",
+   "captures": 1129,
+   "players": 9
+  },
+  {
+   "endpoint": "GET /social/characters",
+   "captures": 865,
+   "players": 30
+  },
+  {
+   "endpoint": "POST /characters/{id}/quests",
+   "captures": 774,
+   "players": 39
+  },
+  {
+   "endpoint": "POST /characters/{id}/chests/{n}/collect",
+   "captures": 766,
+   "players": 24
+  },
+  {
+   "endpoint": "GET /characters/{id}/globalshops/current",
+   "captures": 719,
+   "players": 39
+  },
+  {
+   "endpoint": "POST /characters/{id}/inventories/current/destroy",
+   "captures": 719,
+   "players": 15
+  },
+  {
+   "endpoint": "POST /characters/{id}/abysses/current/update",
+   "captures": 711,
+   "players": 11
+  },
+  {
+   "endpoint": "GET /characters/{id}/globalgifts",
+   "captures": 703,
+   "players": 39
+  },
+  {
+   "endpoint": "GET /characters",
+   "captures": 691,
+   "players": 40
+  },
+  {
+   "endpoint": "GET /sync",
+   "captures": 678,
+   "players": 40
+  },
+  {
+   "endpoint": "POST /characters/{id}/gameevents",
+   "captures": 677,
+   "players": 39
+  },
+  {
+   "endpoint": "POST /characters/{id}/challenges",
+   "captures": 654,
+   "players": 39
+  },
+  {
+   "endpoint": "GET /characters/{id}/guilds/current/messages",
+   "captures": 641,
+   "players": 29
+  },
+  {
+   "endpoint": "GET /characters/{id}/guilds/current/exchanges",
+   "captures": 639,
+   "players": 29
+  },
+  {
+   "endpoint": "POST /characters/{id}/quests/{id}/complete",
+   "captures": 597,
+   "players": 26
+  },
+  {
+   "endpoint": "POST /characters/{id}/quests/{id}/dungeons/current/enter",
+   "captures": 593,
+   "players": 28
+  },
+  {
+   "endpoint": "POST /characters/{id}/quests/{id}/dungeons/current/exit",
+   "captures": 592,
+   "players": 27
+  },
+  {
+   "endpoint": "POST /characters/{id}/social/users/{id}/characters/{id}/shops/{id}",
+   "captures": 544,
+   "players": 9
+  },
+  {
+   "endpoint": "POST /characters/{id}/towns/current/rewards/current",
+   "captures": 517,
+   "players": 39
+  },
+  {
+   "endpoint": "GET /characters/{id}/leaderboards/{id}",
+   "captures": 502,
+   "players": 36
+  },
+  {
+   "endpoint": "GET /characters/{id}/towns/current",
+   "captures": 466,
+   "players": 38
+  },
+  {
+   "endpoint": "GET /characters/{id}/dungeons",
+   "captures": 464,
+   "players": 38
+  },
+  {
+   "endpoint": "POST /characters/{id}/abysses/current",
+   "captures": 457,
+   "players": 38
+  },
+  {
+   "endpoint": "GET /characters/{id}/crafts",
+   "captures": 450,
+   "players": 38
+  },
+  {
+   "endpoint": "POST /characters/{id}/repairs",
+   "captures": 426,
+   "players": 30
+  },
+  {
+   "endpoint": "GET /characters/{id}/guilds/current",
+   "captures": 410,
+   "players": 30
+  },
+  {
+   "endpoint": "POST /characters/{id}/shops/{id}/purchase",
+   "captures": 388,
+   "players": 23
+  },
+  {
+   "endpoint": "GET /social/users/{id}/characters/{id}/towns/current",
+   "captures": 336,
+   "players": 18
+  },
+  {
+   "endpoint": "POST /characters/{id}/towns/current/buildings/{id}/complete",
+   "captures": 304,
+   "players": 10
+  },
+  {
+   "endpoint": "POST /characters/{id}/crafts/{id}/finish",
+   "captures": 249,
+   "players": 21
+  },
+  {
+   "endpoint": "POST /characters/{id}/crafts",
+   "captures": 244,
+   "players": 20
+  },
+  {
+   "endpoint": "POST /characters/{id}/quests/{id}/accept",
+   "captures": 198,
+   "players": 10
+  },
+  {
+   "endpoint": "GET /characters/{id}/social/users/{id}/characters/{id}/loadouts/current",
+   "captures": 190,
+   "players": 18
+  },
+  {
+   "endpoint": "POST /characters/{id}/towns/current/buildings/{id}/upgrade",
+   "captures": 169,
+   "players": 7
+  },
+  {
+   "endpoint": "POST /characters/{id}/guilds/current/exchanges/redeem",
+   "captures": 143,
+   "players": 12
+  },
+  {
+   "endpoint": "POST /characters/{id}/towns/current/buildings",
+   "captures": 132,
+   "players": 9
+  },
+  {
+   "endpoint": "POST /characters/{id}/towns/current/buildings/{id}/styles/{id}",
+   "captures": 128,
+   "players": 3
+  },
+  {
+   "endpoint": "POST /characters/{id}/loadouts/profiles/{n}",
+   "captures": 124,
+   "players": 13
+  },
+  {
+   "endpoint": "POST /characters/{id}/challenges/{id}/complete",
+   "captures": 113,
+   "players": 18
+  },
+  {
+   "endpoint": "POST /characters/{id}/towns/current/rewards/current/collect",
+   "captures": 102,
+   "players": 24
+  },
+  {
+   "endpoint": "POST /characters/{id}/towns/current/props",
+   "captures": 89,
+   "players": 9
+  },
+  {
+   "endpoint": "GET /characters/{id}/guilds/search",
+   "captures": 82,
+   "players": 5
+  },
+  {
+   "endpoint": "POST /characters/{id}/towns/current/buildings/{id}/destroy",
+   "captures": 80,
+   "players": 6
+  },
+  {
+   "endpoint": "POST /characters/{id}/levelup",
+   "captures": 71,
+   "players": 9
+  },
+  {
+   "endpoint": "POST /characters/{id}/guilds/current/messages",
+   "captures": 64,
+   "players": 19
+  },
+  {
+   "endpoint": "GET /characters/{id}/guilds/leaderboard",
+   "captures": 61,
+   "players": 16
+  },
+  {
+   "endpoint": "POST /characters/{id}/abilities",
+   "captures": 59,
+   "players": 9
+  },
+  {
+   "endpoint": "POST /characters/{id}/challenges/{id}/abandon",
+   "captures": 58,
+   "players": 10
+  },
+  {
+   "endpoint": "GET /characters/{id}/guilds/current/applications",
+   "captures": 56,
+   "players": 10
+  },
+  {
+   "endpoint": "GET /characters/{id}/guilds/{id}",
+   "captures": 50,
+   "players": 7
+  },
+  {
+   "endpoint": "POST /characters/{id}/guilds/current/exchanges/donate",
+   "captures": 44,
+   "players": 14
+  },
+  {
+   "endpoint": "POST /characters/{id}/towns/current/props/remove",
+   "captures": 42,
+   "players": 5
+  },
+  {
+   "endpoint": "POST /characters/{id}/guilds/current/exchanges",
+   "captures": 38,
+   "players": 8
+  },
+  {
+   "endpoint": "POST /characters/{id}/abysses/current/start",
+   "captures": 24,
+   "players": 11
+  },
+  {
+   "endpoint": "POST /characters/{id}/inventories/current/upgrade",
+   "captures": 20,
+   "players": 4
+  },
+  {
+   "endpoint": "POST /characters/{id}/globalgifts/{id}",
+   "captures": 18,
+   "players": 12
+  },
+  {
+   "endpoint": "POST /characters/{id}/abysses/current/end",
+   "captures": 18,
+   "players": 8
+  },
+  {
+   "endpoint": "POST /characters",
+   "captures": 14,
+   "players": 13
+  },
+  {
+   "endpoint": "POST /characters/{id}/shops/{id}/buybacks/{id}",
+   "captures": 10,
+   "players": 2
+  },
+  {
+   "endpoint": "POST /characters/{id}/guilds/current/approve/{id}",
+   "captures": 7,
+   "players": 4
+  },
+  {
+   "endpoint": "POST /characters/{id}/respec",
+   "captures": 6,
+   "players": 3
+  },
+  {
+   "endpoint": "POST /characters/{id}/towns/current/name",
+   "captures": 5,
+   "players": 5
+  },
+  {
+   "endpoint": "POST /characters/{id}/guilds/{id}/join",
+   "captures": 5,
+   "players": 4
+  },
+  {
+   "endpoint": "POST /characters/{id}/guilds/current/leave",
+   "captures": 5,
+   "players": 3
+  },
+  {
+   "endpoint": "POST /characters/{id}/guilds/current",
+   "captures": 4,
+   "players": 3
+  },
+  {
+   "endpoint": "POST /characters/{id}/avatar",
+   "captures": 3,
+   "players": 3
+  },
+  {
+   "endpoint": "DELETE /characters/{id}/loadouts/profiles/{n}",
+   "captures": 3,
+   "players": 1
+  },
+  {
+   "endpoint": "POST /characters/{id}/guilds/{id}/apply",
+   "captures": 3,
+   "players": 3
+  },
+  {
+   "endpoint": "POST /characters/{id}/guilds",
+   "captures": 2,
+   "players": 2
+  },
+  {
+   "endpoint": "POST /characters/{id}/guilds/current/kick/{id}",
+   "captures": 2,
+   "players": 2
+  },
+  {
+   "endpoint": "POST /characters/{id}/guilds/current/deny/{id}",
+   "captures": 1,
+   "players": 1
+  },
+  {
+   "endpoint": "POST /characters/{id}/guilds/current/ban/{id}",
+   "captures": 1,
+   "players": 1
+  }
+ ]
+}

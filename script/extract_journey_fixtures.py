@@ -427,6 +427,36 @@ def extract_spawn_levels(conn, archive):
     }
 
 
+
+# ── 7. the endpoint inventory ────────────────────────────────────────────────
+
+def extract_endpoint_coverage(conn, archive):
+    """Every game-API endpoint retail ever answered, normalised, with counts.
+
+    This is the list the server is measured against: an endpoint here with no
+    route is a step of the game a player cannot take. It is deliberately built
+    from EVERY captured player — the journey is wider than any one of them
+    played, and two of the gaps it found (visiting another player's town shop,
+    and buying from it) were on nine players' traffic and none of Yumeko's.
+    """
+    sql = ("SELECT method, url, user_id FROM api_captures "
+           "WHERE url LIKE 'https://blades.bgs.services/api/game/v1/public/%'")
+    seen = Counter()
+    players = defaultdict(set)
+    for method, url, user in conn.execute(sql):
+        path = url.split("/api/game/v1/public", 1)[1].split("?")[0]
+        path = UUID_RE.sub("{id}", path)
+        # Numeric path segments (chest slots, loadout profile indices) and the
+        # 24-hex guild ids are identifiers too.
+        path = re.sub(r"/\d+(?=/|$)", "/{n}", path)
+        path = re.sub(r"/[0-9a-f]{24}(?=/|$)", "/{id}", path)
+        key = f"{method} {path}"
+        seen[key] += 1
+        players[key].add(user)
+    return [{"endpoint": k, "captures": n, "players": len(players[k])}
+            for k, n in seen.most_common()]
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -463,6 +493,7 @@ def main():
         ("quest_completions.json", extract_quest_completions(rows)),
         ("objective_rewards.json", extract_objective_rewards(rows)),
         ("spawn_levels.json", extract_spawn_levels(conn, args.archive)),
+        ("endpoint_coverage.json", extract_endpoint_coverage(conn, args.archive)),
     ]:
         if isinstance(data, dict) and "playerEnemyPairs" in data:
             payload = dict(data, _meta=dict(

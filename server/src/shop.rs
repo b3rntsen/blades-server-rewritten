@@ -56,7 +56,10 @@ use blades_lib::features::merchant::{
     self, Buyback, MerchantWindow, SellPrices,
 };
 use blades_lib::static_data::{ShopBundleRef, ShopWalletEntry};
-use blades_lib::user_data::{CompleteInventoryUpdate, CompleteWallet, InventoryChangeTracker};
+use blades_lib::user_data::{
+    CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
+    InventoryChangeTracker,
+};
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use serde::{Deserialize, Serialize};
@@ -65,7 +68,7 @@ use uuid::Uuid;
 
 use crate::{
     BladeApiError, ServerGlobal, models::CharacterDbEntryShop, session::SessionLookedUpMaybe,
-    shop_gen,
+    shop_gen, util::check_permission_for_character_and_get_it,
 };
 
 /// Catalog validity window used when the shop isn't a config-driven crafting
@@ -589,6 +592,256 @@ pub async fn buy_from_shop(
     .await
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Visiting someone else's town — `…/social/users/{u}/characters/{c}/shops/{s}`
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A player can walk into a friend's town and trade with THEIR merchants. Retail
+// served it on 1,673 captured requests from 9 different players — 544 opens and
+// 1,129 purchases — and we had no route at all, so the shop never opened.
+//
+// The shapes are the ordinary vendor's, wrapped in a `social` envelope:
+//
+// ```text
+// POST …/shops/{s}          null      → {"social":{"shop":…,"catalog":…}}
+// POST …/shops/{s}/purchase {bundles} → {"character","inventory","wallet",
+//                                        "social":{"shop":…}}
+// ```
+//
+// The stock, the window and the sales ledger belong to the OWNER — it is their
+// merchant — while the gold and the goods move on the VISITOR. So both character
+// rows are touched, in one transaction, and they are loaded in a fixed order
+// (owner, then visitor) so two players buying from each other at the same moment
+// cannot deadlock on each other's row locks.
+
+/// The `social` envelope retail wraps a visited shop in.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SocialShopEnvelope<T> {
+    social: T,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SocialOpenInner {
+    shop: ShopStateWire,
+    catalog: CatalogWire,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SocialBuyInner {
+    shop: ShopTxnState,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SocialBuyResponse {
+    character: CompleteCharacterWithIdWithoutData,
+    inventory: CompleteInventoryUpdate,
+    wallet: CompleteWallet,
+    social: SocialBuyInner,
+}
+
+/// Load another player's character row for writing. Unlike [`load_owned`] the
+/// caller is NOT the owner, so there is no `user_id` ownership filter — the pair
+/// in the URL is the filter, which is also what stops a visitor naming a
+/// character that is not the user they claim to be visiting.
+async fn load_other(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    user_id: Uuid,
+) -> Result<CharacterDbEntryShop, BladeApiError> {
+    use crate::schema::characters;
+    characters::table
+        .filter(characters::id.eq(character_id))
+        .filter(characters::user_id.eq(user_id))
+        .select(CharacterDbEntryShop::as_select())
+        .for_no_key_update()
+        .load(conn)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))
+}
+
+/// `POST /characters/{visitor}/social/users/{u}/characters/{c}/shops/{s}` — open a
+/// merchant in someone else's town.
+#[post(
+    "/blades.bgs.services/api/game/v1/public/characters/{visitor_character_id}/social/users/{owner_user_id}/characters/{owner_character_id}/shops/{shop_id}"
+)]
+pub async fn open_social_shop(
+    session: SessionLookedUpMaybe,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<(Uuid, Uuid, Uuid, Uuid)>,
+    _body: Json<Option<Value>>,
+) -> Result<Json<SocialShopEnvelope<SocialOpenInner>>, BladeApiError> {
+    let session = session.get_session_or_error()?;
+    let (visitor_character_id, owner_user_id, owner_character_id, shop_id) = path.into_inner();
+    let globals = app_state.get_ref().clone();
+    let now = now_ms();
+    let mut conn = app_state.db_pool.get().await?;
+
+    // The visitor must be who they say they are before we touch anyone's row.
+    check_permission_for_character_and_get_it(&mut conn, &session.session, visitor_character_id)
+        .await?;
+
+    conn.transaction(move |mut conn| {
+        async move {
+            let mut owner = load_other(&mut conn, owner_character_id, owner_user_id).await?;
+            let building = owner
+                .town
+                .as_ref()
+                .and_then(|t| find_building_type_level(&t.0, shop_id));
+            let window = window_for(
+                &globals,
+                shop_id,
+                building,
+                owner.server_state.0.shops.get(&shop_id),
+                now,
+                false,
+            );
+            let wire = window_to_wire(shop_id, &window);
+            owner.server_state.0.shops.insert(shop_id, window);
+            prune_stale_shops(&mut owner.server_state.0.shops, now);
+            write_back(&mut conn, owner).await?;
+
+            Ok::<_, BladeApiError>(Json(SocialShopEnvelope {
+                social: SocialOpenInner {
+                    shop: wire.shop,
+                    catalog: wire.catalog,
+                },
+            }))
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// `POST …/social/users/{u}/characters/{c}/shops/{s}/purchase` — buy from someone
+/// else's merchant.
+///
+/// The gold leaves the visitor and the goods arrive in the visitor's backpack; the
+/// stock drawdown and the revenue land on the owner's merchant, exactly as they
+/// would if the owner had bought it themselves. That is what makes a visited shop
+/// run out — retail's stock is per-merchant, not per-visitor.
+#[post(
+    "/blades.bgs.services/api/game/v1/public/characters/{visitor_character_id}/social/users/{owner_user_id}/characters/{owner_character_id}/shops/{shop_id}/purchase"
+)]
+pub async fn buy_from_social_shop(
+    session: SessionLookedUpMaybe,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<(Uuid, Uuid, Uuid, Uuid)>,
+    body: Json<BuyRequest>,
+) -> Result<Json<SocialBuyResponse>, BladeApiError> {
+    let session = session.get_session_or_error()?;
+    let user_id = session.session.user_id;
+    let (visitor_character_id, owner_user_id, owner_character_id, shop_id) = path.into_inner();
+    let bundles = body.into_inner().bundles;
+    let globals = app_state.get_ref().clone();
+    let now = now_ms();
+    let mut conn = app_state.db_pool.get().await?;
+
+    conn.transaction(move |mut conn| {
+        async move {
+            // Owner first, then visitor — a fixed lock order, so two players buying
+            // from each other at once cannot deadlock. Buying from your own shop
+            // through this route would lock the same row twice, which is why that
+            // case is sent to the ordinary vendor path instead.
+            if owner_character_id == visitor_character_id {
+                return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 20000, 5));
+            }
+            let mut owner = load_other(&mut conn, owner_character_id, owner_user_id).await?;
+            let mut visitor = load_owned(&mut conn, visitor_character_id, user_id).await?;
+
+            let building = owner
+                .town
+                .as_ref()
+                .and_then(|t| find_building_type_level(&t.0, shop_id));
+            let mut window = window_for(
+                &globals,
+                shop_id,
+                building,
+                owner.server_state.0.shops.get(&shop_id),
+                now,
+                false,
+            );
+
+            let mut tracker = InventoryChangeTracker::default();
+            let mut bought_anything = false;
+            for b in &bundles {
+                let want = b.quantity.max(1);
+                let Some(def) = globals.static_data.shop_bundles.get(&b.id) else {
+                    log::warn!("[shop] bundle {} has no price/grant definition", b.id);
+                    continue;
+                };
+                let qty = want.min(window.remaining_stock(b.id));
+                if qty == 0 {
+                    continue;
+                }
+                let currency = def.currency_id.unwrap_or(GOLD);
+                let cost = def.price.saturating_mul(qty);
+                visitor
+                    .wallet
+                    .0
+                    .debit(currency, cost)
+                    .map_err(BladeApiError::from_economy)?;
+
+                let mut reward = def.grant.clone();
+                for v in reward.stackable_items.values_mut() {
+                    *v = v.saturating_mul(qty);
+                }
+                let unit_items = reward.items.clone();
+                reward.items.clear();
+                for _ in 0..qty {
+                    for item in &unit_items {
+                        let mut fresh = item.clone();
+                        fresh.id = Uuid::new_v4();
+                        reward.items.push(fresh);
+                    }
+                }
+                apply_reward(
+                    &reward,
+                    &mut visitor.wallet.0,
+                    &mut visitor.inventory.0,
+                    &mut visitor.character.0,
+                    &mut tracker,
+                );
+
+                *window.sales.entry(b.id).or_insert(0) += qty;
+                if currency == GOLD {
+                    window.revenue_gold += cost as i64;
+                }
+                bought_anything = true;
+            }
+
+            if bought_anything {
+                visitor.inventory.0.backpack_version += 1;
+            }
+
+            let inventory = visitor.inventory.0.generate_client_update(&tracker);
+            let wallet = visitor.wallet.0.clone();
+            let character = CompleteCharacterWithIdWithoutData {
+                id: visitor_character_id,
+                character: visitor.character.0.clone(),
+            };
+            let shop = txn_state(shop_id, &window);
+            owner.server_state.0.shops.insert(shop_id, window);
+            write_back(&mut conn, owner).await?;
+            write_back(&mut conn, visitor).await?;
+
+            Ok::<_, BladeApiError>(Json(SocialBuyResponse {
+                character,
+                inventory,
+                wallet,
+                social: SocialBuyInner { shop },
+            }))
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SellRequest {
@@ -984,6 +1237,77 @@ mod tests {
             shops[&stale_with_buyback].buybacks.len(),
             1,
             "the live buyback survives"
+        );
+    }
+
+    // ── visiting someone else's town ─────────────────────────────────────────
+
+    /// Retail's envelope, verbatim from capture (a visit to another player's
+    /// smith): the vendor's ordinary `shop` + `catalog` under a `social` key.
+    ///
+    /// The envelope is the whole point — the client reads a visited shop from a
+    /// different place than its own, so serving the bare `{shop, catalog}` here
+    /// would parse as nothing.
+    #[test]
+    fn a_visited_shop_is_wrapped_in_the_social_envelope() {
+        let window = MerchantWindow::default();
+        let wire = window_to_wire(Uuid::from_u128(1), &window);
+        let body = serde_json::to_value(SocialShopEnvelope {
+            social: SocialOpenInner {
+                shop: wire.shop,
+                catalog: wire.catalog,
+            },
+        })
+        .unwrap();
+
+        assert!(body.get("shop").is_none(), "not at the top level: {body}");
+        assert!(body["social"]["shop"].is_object(), "{body}");
+        assert!(body["social"]["catalog"].is_object(), "{body}");
+        // The keys the captured catalog carried, so a rename is caught here.
+        for key in ["id", "templateId", "bundles", "wallet", "start", "expiration", "expired"] {
+            assert!(
+                body["social"]["catalog"].get(key).is_some(),
+                "catalog is missing `{key}`: {body}"
+            );
+        }
+    }
+
+    /// A purchase answers with the BUYER's character, inventory and wallet at the
+    /// top level and the OWNER's shop under `social` — the four keys retail sent.
+    #[test]
+    fn buying_in_someone_elses_town_answers_with_the_buyers_side_and_the_owners_shop() {
+        let body = serde_json::to_value(SocialBuyResponse {
+            character: CompleteCharacterWithIdWithoutData {
+                id: Uuid::from_u128(2),
+                character: Default::default(),
+            },
+            inventory: CompleteInventoryUpdate {
+                backpack: Default::default(),
+                loadout: Default::default(),
+                treasury: Default::default(),
+                overflow_treasury: Default::default(),
+                backpack_version: 1,
+                treasury_version: 1,
+            },
+            wallet: CompleteWallet::default(),
+            social: SocialBuyInner {
+                shop: txn_state(Uuid::from_u128(1), &MerchantWindow::default()),
+            },
+        })
+        .unwrap();
+
+        let mut keys: Vec<_> = body.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["character", "inventory", "social", "wallet"],
+            "retail sent exactly these four"
+        );
+        assert!(body["social"]["shop"]["sales"].is_array());
+        assert!(body["social"]["shop"]["revenue"].is_array());
+        assert!(
+            body["social"].get("catalog").is_none(),
+            "the purchase response carries the shop's ledger, not its catalog"
         );
     }
 }
