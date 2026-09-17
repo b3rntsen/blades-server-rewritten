@@ -140,6 +140,9 @@ pub struct ServerGlobal {
     /// handlers; a missing/invalid file loads as `Null` and that feature degrades
     /// gracefully (no panic at startup).
     pub building_upgrades: serde_json::Value,
+    /// Measured town XP per building restyle, keyed `typeId/level/styleId`. See
+    /// `town::prestige_on_style_change`.
+    pub style_prestige: serde_json::Value,
     /// The GLOBAL "pay gems to skip a running timer" curve, parsed once at startup
     /// out of `building_upgrades.json`'s `_meta.skipTimeCostTable` (the same
     /// `SkipTimeCostTable` asset retail used for BOTH town construction and
@@ -286,6 +289,7 @@ async fn main() -> Result<()> {
                 }
             };
             let building_upgrades = load_static_json("building_upgrades.json");
+            let style_prestige = load_static_json("style_prestige.json");
             // One global skip-time curve for town construction AND crafting, parsed
             // once here so the handlers don't re-walk the JSON per request. Logged
             // loudly when absent, because "absent" means every speed-up is free —
@@ -397,6 +401,7 @@ async fn main() -> Result<()> {
                 static_data: static_data_defs,
                 repair_data,
                 building_upgrades,
+                style_prestige,
                 skip_time_costs,
                 job_pools,
                 appearance_change_cost,
@@ -608,6 +613,11 @@ async fn main() -> Result<()> {
                     .service(shop::buy_back_from_shop)
                     .service(shop::refresh_loot)
                     .service(shop::open_shop)
+                    // The same two verbs inside someone else's town. `/purchase`
+                    // first, for the same reason the owned pair orders that way:
+                    // the bare open would otherwise swallow it.
+                    .service(shop::buy_from_social_shop)
+                    .service(shop::open_social_shop)
                     .service(challenge::get_challenges)
                     .service(challenge::update_challenge)
                     .service(challenge::complete_challenge)

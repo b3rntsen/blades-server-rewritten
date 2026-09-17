@@ -592,7 +592,9 @@ pub async fn upgrade_building(
             })?;
             apply_upgrade_transition(building, target_level, cost.construction_time_ms, now_ms());
 
-            finish_town_mutation(&mut conn, entry, town, &tracker, cost.prestige).await
+            // No prestige here: retail pays it when the build FINISHES, not when it
+            // is ordered. See `prestige_on_complete`.
+            finish_town_mutation(&mut conn, entry, town, &tracker).await
         }
         .scope_boxed()
     })
@@ -713,6 +715,16 @@ pub async fn complete_building(
             })?;
             apply_complete_transition(building);
 
+            // The build is finished, so this is where retail pays its prestige and
+            // the town can level.
+            // The town's level lives in `town.levelInfo`, which is the only place
+            // retail's wire carries it — a captured character JSON has no
+            // `townLevel` key at all.
+            let prestige = prestige_on_complete(&globals.building_upgrades, &town, building_id);
+            if prestige > 0 {
+                apply_prestige_and_level_up(&mut town, prestige);
+            }
+
             // No inventory mutation on complete → empty diff, no version bump.
             let tracker = InventoryChangeTracker::default();
             let inventory = entry.inventory.0.generate_client_update(&tracker);
@@ -785,6 +797,90 @@ fn complete_response(
             inventory: None,
         }
     }
+}
+
+/// The town XP finishing this building pays, from the building's own facts.
+///
+/// MEASURED across Yumeko's 354 captured town mutations: **only `complete` moves
+/// `town.levelInfo.experiencePoints`.** 29 places, 67 upgrades and 23 destroys all
+/// moved it by exactly zero; all 67 cleanly-attributable completions moved it by a
+/// positive amount, and 70 of the 103 total match
+/// `building_upgrades[typeId].levels[level].prestigeForLevel` for the completed
+/// building exactly. (The remaining 33 sit inside a build-complete-destroy burst
+/// where the partial town payloads cannot say which building a delta belonged to —
+/// the fixture flags those and the test skips them rather than this pretending to
+/// explain them.)
+///
+/// We paid at `place`/`upgrade` instead. A player who ordered an upgrade and never
+/// finished it still banked its prestige, and could bank it again by destroying and
+/// re-placing — the town level ran ahead of the town.
+///
+/// The level was already bumped when the upgrade was ordered (retail carries the
+/// target level through the UPGRADING state), so the level read here is the one
+/// being finished, which is the one to charge.
+fn prestige_on_complete(building_upgrades: &Value, town: &Value, building_id: Uuid) -> u64 {
+    let Some((type_id, style_id, level)) = read_building_facts(town, building_id) else {
+        return 0;
+    };
+    // `style_id: None` on purpose. `lookup_level_cost` ADDS the chosen style's
+    // `prestigeForLevel` on top of the level's, and retail does not: adding it
+    // turns every one of the 70 matching completions into a 10 % overpayment. The
+    // style is paid for separately, when it is chosen — see
+    // [`prestige_on_style_change`].
+    let _ = style_id;
+    lookup_level_cost(building_upgrades, type_id, level, None, false)
+        .map(|c| c.prestige)
+        .unwrap_or(0)
+}
+
+/// The town XP applying `style_id` to a building grants.
+///
+/// MEASURED: all 124 captured restyles moved `town.levelInfo.experiencePoints`,
+/// and we granted nothing — so a town built the way retail towns were built came
+/// out short, and `requireTownLevel` gates upgrades, so the shortfall compounds
+/// into buildings the player cannot reach.
+///
+/// The amount depends only on `(buildingType, level, newStyle)`. It is **not** a
+/// difference from the style being replaced: aa133662→1d6696b3 pays 82 and the
+/// reverse pays 72, every time, in both directions, and the TownHall's restyles
+/// pay the full table value with nothing subtracted. (Retail therefore pays again
+/// every time a player flips a style back and forth, which is exactly what the
+/// captured player was doing for four minutes straight. We reproduce it: this is
+/// a fidelity target, not a design.)
+///
+/// `deploy/static/style_prestige.json` holds the measured values;
+/// `building_upgrades.json`'s `styleInputs[].prestigeForLevel` is the fallback for
+/// the combinations no capture covers. The two agree exactly on the TownHall and
+/// differ by a fixed 65 on the walls and 115 on the main gate — the table's shape
+/// is right and one of its numbers is not, so measurement wins where we have it.
+fn prestige_on_style_change(
+    building_upgrades: &Value,
+    measured: &Value,
+    town: &Value,
+    building_id: Uuid,
+    style_id: Uuid,
+) -> u64 {
+    let Some((type_id, _, level)) = read_building_facts(town, building_id) else {
+        return 0;
+    };
+    let key = format!("{type_id}/{level}/{style_id}");
+    if let Some(v) = measured
+        .get("grants")
+        .and_then(|g| g.get(&key))
+        .and_then(Value::as_u64)
+    {
+        return v;
+    }
+    building_upgrades
+        .get("buildings")
+        .and_then(|b| b.get(type_id.to_string()))
+        .and_then(|b| b.get("levels"))
+        .and_then(|l| l.get(level.to_string()))
+        .and_then(|l| l.get("styleInputs"))
+        .and_then(|s| s.get(style_id.to_string()))
+        .and_then(|s| s.get("prestigeForLevel"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
 }
 
 /// Finalize a building: clear the timer, back to NORMAL. The `level` was already
@@ -879,7 +975,9 @@ pub async fn place_building(
             )
             .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, TOWN_SERVICE_ID, 6))?;
 
-            finish_town_mutation(&mut conn, entry, town, &tracker, cost.prestige).await
+            // No prestige here: retail pays it when the build FINISHES, not when it
+            // is ordered. See `prestige_on_complete`.
+            finish_town_mutation(&mut conn, entry, town, &tracker).await
         }
         .scope_boxed()
     })
@@ -1048,6 +1146,18 @@ pub async fn set_building_style(
             // carry, and it would snap back on the next load.
             if !apply_building_style(&mut town, building_id, style_id) {
                 return Err(BladeApiError::new(StatusCode::NOT_FOUND, TOWN_SERVICE_ID, 1));
+            }
+
+            // Retail pays for a restyle. See `prestige_on_style_change`.
+            let prestige = prestige_on_style_change(
+                &app_state_clone.building_upgrades,
+                &app_state_clone.style_prestige,
+                &town,
+                building_id,
+                style_id,
+            );
+            if prestige > 0 {
+                apply_prestige_and_level_up(&mut town, prestige);
             }
 
             let tracker = InventoryChangeTracker::default();
@@ -2261,28 +2371,10 @@ fn calculate_town_level(prestige: u64) -> u64 {
 /// materials. Consumes the entry (moved into the diesel changeset).
 async fn finish_town_mutation(
     conn: &mut diesel_async::AsyncPgConnection,
-    mut entry: CharacterDbEntryTownEconomy,  // Make mut
-    mut town: Value,
+    entry: CharacterDbEntryTownEconomy,
+    town: Value,
     tracker: &InventoryChangeTracker,
-    prestige: u64,
 ) -> Result<Json<TownMutationResponse>, BladeApiError> {
-    if prestige > 0 {
-        let new_level = apply_prestige_and_level_up(&mut town, prestige);
-
-        // Update character root townLevel
-        // Convert the character to a Value to modify it
-        let mut character_value = serde_json::to_value(&entry.character.0)
-            .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0))?;
-        
-        if let Some(obj) = character_value.as_object_mut() {
-            obj.insert("townLevel".to_string(), json!(new_level));
-        }
-        
-        // Deserialize back to CompleteCharacter
-        entry.character.0 = serde_json::from_value(character_value)
-            .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0))?;
-    }
-
     let inventory = entry.inventory.0.generate_client_update(tracker);
     let wallet = entry.wallet.0.clone();
     let character_id = entry.id;
@@ -3070,6 +3162,311 @@ mod tests {
             gem_line["balance"],
             json!(848),
             "the client learns the gem debit from this field"
+        );
+    }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// When the town is paid — replayed against Yumeko's captured town mutations.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod when_the_town_is_paid {
+    use super::*;
+    use serde_json::json;
+
+    const BID: &str = "c10d3c81-4de0-4b33-b2e9-05026845570f";
+
+    fn upgrades() -> Value {
+        serde_json::from_str(include_str!("../../deploy/static/building_upgrades.json"))
+            .expect("deploy/static/building_upgrades.json is valid JSON")
+    }
+
+    fn measured_styles() -> Value {
+        serde_json::from_str(include_str!("../../deploy/static/style_prestige.json"))
+            .expect("deploy/static/style_prestige.json is valid JSON")
+    }
+
+    /// Captured town mutations. See `script/extract_journey_fixtures.py`.
+    fn retail_town_ops() -> Vec<Value> {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/retail-journey/town_ops.json");
+        let raw = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
+        let json: Value = serde_json::from_str(&raw).expect("valid town_ops.json");
+        let obs = json["observations"].as_array().cloned().unwrap_or_default();
+        assert!(obs.len() > 300, "only {} town ops in the fixture", obs.len());
+        obs
+    }
+
+    /// An observation whose town-XP delta is attributable to this one call.
+    ///
+    /// Quest rewards also pay town XP, so a delta measured across a window that
+    /// contains a quest completion says nothing — the extractor records how much
+    /// reward XP was banked in between and anything non-zero is dropped here
+    /// rather than averaged into the answer.
+    fn clean(o: &Value) -> Option<i64> {
+        if o["pendingQuestTownXp"].as_u64().unwrap_or(0) != 0 {
+            return None;
+        }
+        o["townXpDelta"].as_i64()
+    }
+
+    fn town_with(type_id: &str, style_id: Option<&str>, level: u64) -> Value {
+        let mut b = json!({ "id": BID, "typeId": type_id, "level": level, "state": "NORMAL" });
+        if let Some(sid) = style_id {
+            b["styleId"] = json!(sid);
+        }
+        json!({
+            "levelInfo": { "level": 10, "experiencePoints": 0 },
+            "districts": [{
+                "id": "9a12c0d3-218c-4ef2-b78c-b6e3bca60719",
+                "segments": { "s": { "id": "s", "buildings": { BID: b } } }
+            }]
+        })
+    }
+
+    /// THE measurement. Ordering a build or an upgrade, and tearing one down, move
+    /// the town's experience by exactly zero; finishing one moves it up.
+    ///
+    /// We used to pay at `place`/`upgrade` instead, so an ordered-but-never-finished
+    /// upgrade still banked its prestige and destroying and re-placing banked it
+    /// again — the town level ran ahead of the town. This is why that cannot come
+    /// back quietly.
+    #[test]
+    fn a_build_pays_the_town_when_it_finishes_and_not_when_it_is_ordered() {
+        let mut paid = 0;
+        let mut free = 0;
+        for o in retail_town_ops() {
+            let Some(delta) = clean(&o) else { continue };
+            match o["op"].as_str().unwrap() {
+                "complete" => {
+                    assert!(delta > 0, "capture {} completed and paid {delta}", o["captureId"]);
+                    paid += 1;
+                }
+                // Restyling pays too — see the restyle tests below.
+                "style" => {}
+                other => {
+                    assert_eq!(
+                        delta, 0,
+                        "capture {} is a `{other}` and moved the town experience by {delta}",
+                        o["captureId"]
+                    );
+                    free += 1;
+                }
+            }
+        }
+        assert!(
+            paid > 50 && free > 100,
+            "the fixture must hold plenty of both to prove a rule rather than an \
+             absence ({paid} paying, {free} free)"
+        );
+    }
+
+    /// …and what a completion pays is the level's own `prestigeForLevel`, with the
+    /// style's NOT added on top.
+    ///
+    /// Only level ≥ 1 is checked. Every captured level-0 completion (32 of them)
+    /// falls inside a four-minute build-complete-destroy burst whose partial town
+    /// payloads cannot say which building a delta belonged to; they are skipped
+    /// rather than explained away. On the rest the agreement is 70 of 71 — the one
+    /// exception is the corpus's very first completion, a TownHall whose table row
+    /// says level 1 pays 0 while retail paid 525 — a gap in `building_upgrades.json`
+    /// (every TownHall level above 0 is authored with `prestigeForLevel: 0`), not a
+    /// disagreement with the rule. The test pins it so it cannot grow.
+    #[test]
+    fn a_completion_pays_the_levels_prestige_and_not_the_styles() {
+        let table = upgrades();
+        let mut agreed = 0;
+        let mut disagreed = Vec::new();
+        for o in retail_town_ops() {
+            if o["op"] != "complete" || !o["buildingKnown"].as_bool().unwrap_or(false) {
+                continue;
+            }
+            let Some(delta) = clean(&o) else { continue };
+            let b = &o["building"];
+            let (Some(type_id), Some(level)) = (b["typeId"].as_str(), b["level"].as_u64()) else {
+                continue;
+            };
+            if level == 0 {
+                continue;
+            }
+            let town = town_with(type_id, b["styleId"].as_str(), level);
+            let ours = prestige_on_complete(&table, &town, Uuid::parse_str(BID).unwrap());
+            if ours as i64 == delta {
+                agreed += 1;
+            } else {
+                disagreed.push((o["captureId"].clone(), type_id.to_string(), level, delta, ours));
+            }
+        }
+        assert!(
+            agreed >= 70 && disagreed.len() == 1,
+            "the measurement was 72 agreements and exactly one disagreement (the \
+             TownHall table gap); now {agreed} and {}: {disagreed:?}",
+            disagreed.len()
+        );
+        assert_eq!(
+            disagreed[0].1, "a6a2de53-d65c-445a-8b55-d2a73c15b635",
+            "the only permitted disagreement is the TownHall's level-1 table row"
+        );
+    }
+
+    /// Retail charges the town for a restyle, on every one of the 124 captures.
+    /// We granted nothing, and town level gates building upgrades, so the
+    /// shortfall compounds into buildings the player can never reach.
+    #[test]
+    fn every_captured_restyle_paid_the_town_something() {
+        let ops: Vec<_> = retail_town_ops()
+            .into_iter()
+            .filter(|o| o["op"] == "style")
+            .collect();
+        assert!(ops.len() >= 120, "only {} restyles captured", ops.len());
+        for o in &ops {
+            let Some(delta) = clean(o) else { continue };
+            assert!(delta > 0, "capture {} restyled and paid {delta}", o["captureId"]);
+        }
+    }
+
+    /// …and we now pay exactly what retail paid, for every captured combination.
+    ///
+    /// The grant depends only on `(type, level, newStyle)`: the fixture holds the
+    /// same change in both directions and the amount does not vary with what the
+    /// building was wearing before.
+    #[test]
+    fn a_restyle_pays_what_retail_paid_for_that_style() {
+        let table = upgrades();
+        let measured = measured_styles();
+        let id = Uuid::parse_str(BID).unwrap();
+        let mut checked = 0;
+        for o in retail_town_ops() {
+            if o["op"] != "style" || !o["buildingKnown"].as_bool().unwrap_or(false) {
+                continue;
+            }
+            let Some(delta) = clean(&o) else { continue };
+            let b = &o["building"];
+            let (Some(type_id), Some(style), Some(level)) = (
+                b["typeId"].as_str(),
+                b["styleId"].as_str(),
+                b["level"].as_u64(),
+            ) else {
+                continue;
+            };
+            let town = town_with(type_id, o["previousStyleId"].as_str(), level);
+            let ours = prestige_on_style_change(
+                &table,
+                &measured,
+                &town,
+                id,
+                Uuid::parse_str(style).unwrap(),
+            );
+            assert_eq!(
+                ours as i64, delta,
+                "capture {}: restyling a {type_id} (level {level}) to {style} paid \
+                 {delta} at retail, {ours} here",
+                o["captureId"]
+            );
+            checked += 1;
+        }
+        assert!(checked >= 120, "only {checked} restyles checked");
+    }
+
+    /// The fallback path, for the style/level combinations no capture covers: the
+    /// `building_upgrades.json` row. Checked on the TownHall, which is where the
+    /// measurement and the table agree exactly, so the fallback is known-good
+    /// there rather than merely unexercised.
+    #[test]
+    fn an_unmeasured_restyle_falls_back_to_the_building_table() {
+        let table = upgrades();
+        let id = Uuid::parse_str(BID).unwrap();
+        let town = town_with("a6a2de53-d65c-445a-8b55-d2a73c15b635", None, 9);
+        let style = Uuid::parse_str("c462a43a-0547-4cd0-a755-5c0aff0f74f8").unwrap();
+
+        // Retail paid 546 for this exact restyle, and the table says 546.
+        assert_eq!(
+            prestige_on_style_change(&table, &json!({}), &town, id, style),
+            546,
+            "the table must carry the TownHall's measured value"
+        );
+        // An unknown style pays nothing rather than defaulting to something.
+        assert_eq!(
+            prestige_on_style_change(&table, &json!({}), &town, id, Uuid::from_u128(7)),
+            0
+        );
+        // …as does a restyle of a building that is not in the town.
+        assert_eq!(
+            prestige_on_style_change(&table, &json!({}), &town, Uuid::from_u128(9), style),
+            0
+        );
+    }
+
+    /// The shape of the completion fix without a database, plus its two failure
+    /// modes: an unknown building type and an absent building both pay zero rather
+    /// than panicking or falling through to whatever is first in the table.
+    #[test]
+    fn completing_an_unknown_building_pays_nothing() {
+        let table = upgrades();
+        let id = Uuid::parse_str(BID).unwrap();
+
+        // Forge level 1 — 180, measured on capture 11405.
+        let forge = town_with(
+            "26fdb92f-a4df-4928-a97b-dee8699af605",
+            Some("aa133662-053d-434e-8779-3f2a41d1271e"),
+            1,
+        );
+        assert_eq!(prestige_on_complete(&table, &forge, id), 180);
+
+        let unknown = town_with("00000000-0000-0000-0000-000000000001", None, 1);
+        assert_eq!(prestige_on_complete(&table, &unknown, id), 0);
+        assert_eq!(prestige_on_complete(&table, &forge, Uuid::from_u128(999)), 0);
+    }
+
+    /// The structural half of the rule: only the two handlers that retail pays
+    /// from may pay.
+    ///
+    /// The fixture tests above prove what retail did; nothing in them re-reads our
+    /// handlers, because those need a database. So the invariant is checked the
+    /// way `route_registration.rs` checks its own — by reading the source. Adding
+    /// `apply_prestige_and_level_up` back into `place` or `upgrade` compiles, ships
+    /// and silently re-inflates every town; this fails instead.
+    #[test]
+    fn only_completing_and_restyling_may_pay_the_town() {
+        // Only the non-test source: this test quotes the name it is looking for,
+        // both in its prose and in `needle`, and would otherwise find itself.
+        let whole = include_str!("town.rs");
+        let src = match whole.find("\n#[cfg(test)]") {
+            Some(i) => &whole[..i],
+            None => whole,
+        };
+
+        // Find each call site and walk backwards to the enclosing `pub async fn`.
+        let mut callers = Vec::new();
+        let needle = "apply_prestige_and_level_up(";
+        let mut from = 0;
+        while let Some(i) = src[from..].find(needle) {
+            let at = from + i;
+            from = at + needle.len();
+            // Skip the definition itself.
+            if src[..at].ends_with("fn ") {
+                continue;
+            }
+            let owner = src[..at]
+                .rmatch_indices("pub async fn ")
+                .next()
+                .map(|(j, _)| {
+                    let rest = &src[j + "pub async fn ".len()..];
+                    rest[..rest.find('(').unwrap_or(0)].to_string()
+                })
+                .unwrap_or_default();
+            if !owner.is_empty() && !callers.contains(&owner) {
+                callers.push(owner);
+            }
+        }
+        callers.sort();
+        assert_eq!(
+            callers,
+            vec!["complete_building".to_string(), "set_building_style".to_string()],
+            "town experience may only be granted where retail granted it — \
+             `complete` and `styles/<id>`, never `place`, `upgrade` or `destroy`"
         );
     }
 }

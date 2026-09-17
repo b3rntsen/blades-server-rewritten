@@ -5,7 +5,7 @@
 //! [`StaticData`]. Everything here is pure data — no IO, no DB — so it round-trips
 //! in tests against captured fixtures.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -849,6 +849,73 @@ pub struct EnemyLevelScaling {
     pub default_skull: u32,
 }
 
+/// The two capture-derived curves under `levelScaling._measured`.
+///
+/// Both files carry a prose `note` (and, for the enemy curve, a
+/// `capsAreNotTheAnswer` note) alongside the numeric rows, so the map is read as
+/// `String -> Value` and the non-numeric keys are dropped. That is deliberate:
+/// the provenance lives next to the numbers where a reader will actually see it.
+#[derive(Debug, Clone, Default)]
+pub struct MeasuredLevelScaling {
+    /// `enemyLevel -> XP per kill`. Retail's own table, levels 1–90.
+    pub given_xp_by_enemy_level: BTreeMap<i64, u64>,
+    /// `playerLevel -> the median enemy level retail served them`.
+    pub enemy_level_by_player_level: BTreeMap<i64, i64>,
+}
+
+fn numeric_rows(value: Option<&HashMap<String, serde_json::Value>>) -> BTreeMap<i64, i64> {
+    value
+        .into_iter()
+        .flatten()
+        .filter_map(|(k, v)| Some((k.parse::<i64>().ok()?, v.as_i64()?)))
+        .collect()
+}
+
+impl<'de> Deserialize<'de> for MeasuredLevelScaling {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Raw {
+            #[serde(default)]
+            given_xp_by_enemy_level: Option<HashMap<String, serde_json::Value>>,
+            #[serde(default)]
+            enemy_level_by_player_level: Option<HashMap<String, serde_json::Value>>,
+        }
+        let raw = Raw::deserialize(d)?;
+        Ok(MeasuredLevelScaling {
+            given_xp_by_enemy_level: numeric_rows(raw.given_xp_by_enemy_level.as_ref())
+                .into_iter()
+                .map(|(k, v)| (k, v.max(0) as u64))
+                .collect(),
+            enemy_level_by_player_level: numeric_rows(raw.enemy_level_by_player_level.as_ref()),
+        })
+    }
+}
+
+impl Serialize for MeasuredLevelScaling {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(Some(2))?;
+        m.serialize_entry(
+            "givenXpByEnemyLevel",
+            &self
+                .given_xp_by_enemy_level
+                .iter()
+                .map(|(k, v)| (k.to_string(), *v))
+                .collect::<BTreeMap<_, _>>(),
+        )?;
+        m.serialize_entry(
+            "enemyLevelByPlayerLevel",
+            &self
+                .enemy_level_by_player_level
+                .iter()
+                .map(|(k, v)| (k.to_string(), *v))
+                .collect::<BTreeMap<_, _>>(),
+        )?;
+        m.end()
+    }
+}
+
 /// The `levelScaling` table: how enemy/difficulty level + XP scale with player level.
 /// Fixes the `generate_quest_data` stub that hard-coded level 1 / 1000 XP.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -856,13 +923,35 @@ pub struct EnemyLevelScaling {
 pub struct QuestLevelScaling {
     #[serde(default)]
     pub enemy_level_from_player_level: EnemyLevelScaling,
+    #[serde(default, rename = "_measured")]
+    pub measured: MeasuredLevelScaling,
 }
 
 impl QuestLevelScaling {
-    /// The enemy/difficulty level for a `player_level` at the default skull:
-    /// `clamp(player_level + offset, 1, 100)`. With no table loaded, degrades to the
-    /// player's own level (never the old hard-coded 1).
+    /// The enemy level retail served a player of `player_level`.
+    ///
+    /// MEASURED, from 66,994 captured spawn entries across every captured player
+    /// (`levelScaling._measured.enemyLevelByPlayerLevel`). Retail's enemies track
+    /// the player to roughly level 45 and then fall behind — a median 22 levels
+    /// below at player level 100.
+    ///
+    /// We served `playerLevel` flat, which reproduces 6.2 % of captured spawns
+    /// exactly and 26.2 % within two levels; this curve gets 21.5 % and 61.4 %,
+    /// against a `playerLevel - 10` control at 4.3 % / 15.4 %. It is a median over
+    /// all spawn groups, so it is closer rather than right — the residual is
+    /// per-group variation one curve cannot carry.
+    ///
+    /// Player levels the corpus never covered fall back to the nearest lower one
+    /// it did, and an empty table degrades to the old skull-offset behaviour, so a
+    /// server started without static data still spawns something sane.
     pub fn enemy_level(&self, player_level: i64) -> i64 {
+        let table = &self.measured.enemy_level_by_player_level;
+        if let Some((_, level)) = table.range(..=player_level.max(1)).next_back() {
+            return (*level).clamp(1, 100);
+        }
+        if let Some((_, level)) = table.iter().next() {
+            return (*level).clamp(1, 100);
+        }
         let sk = &self.enemy_level_from_player_level;
         let offset = sk
             .offset_by_skull
@@ -872,9 +961,26 @@ impl QuestLevelScaling {
         (player_level + offset).clamp(1, 100)
     }
 
-    /// XP granted per enemy for a given enemy level: `base(100) * enemy_level`
-    /// (`givenXpFormula`). Replaces the flat 1000.
+    /// XP per kill for an enemy of `enemy_level`, from retail's own table
+    /// (`levelScaling._measured.givenXpByEnemyLevel`, levels 1–90).
+    ///
+    /// This was `100 * enemy_level`, which pays **5000** at enemy level 50 where
+    /// retail paid **220** — 23×. Quest XP is most of a character's progression, so
+    /// that alone made levelling roughly an order of magnitude too fast, and it is
+    /// the other half of the fix that makes spending experience at `/levelup` mean
+    /// anything.
+    ///
+    /// Levels above the table's top take its last row rather than resuming the old
+    /// formula: falling back to `100 * level` at 91 would pay 9,100 against 284 at
+    /// level 90, a cliff far worse than a flat top.
     pub fn given_xp(&self, enemy_level: i64) -> u64 {
+        let table = &self.measured.given_xp_by_enemy_level;
+        if let Some((_, xp)) = table.range(..=enemy_level.max(1)).next_back() {
+            return *xp;
+        }
+        if let Some((_, xp)) = table.iter().next() {
+            return *xp;
+        }
         (100 * enemy_level.max(1)) as u64
     }
 }

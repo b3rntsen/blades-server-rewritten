@@ -137,3 +137,163 @@ mod tests {
         );
     }
 }
+
+/// Every endpoint retail answered must have a route here.
+///
+/// The registration check above proves we serve what we wrote. This one asks the
+/// other question — whether what we wrote covers the game — by reading the
+/// endpoint inventory mined from the whole capture corpus
+/// (`deploy/retail-journey/endpoint_coverage.json`, 88 endpoints across 40
+/// players) and requiring a route for each.
+///
+/// It is not hypothetical. It is what found that a player could not walk into a
+/// friend's town and buy from their merchants: 1,673 captured requests from nine
+/// different players, on a pair of routes that simply did not exist. None of them
+/// were the player whose captures the rest of this work was built from, which is
+/// the argument for measuring coverage across everyone rather than reading one
+/// journey closely.
+#[cfg(test)]
+mod retail_coverage {
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::Path;
+
+    /// Endpoints we knowingly do not serve, each with the reason. An entry here is
+    /// a decision; anything else failing this test is a gap.
+    const NOT_SERVED: &[(&str, &str)] = &[
+        (
+            "DELETE /characters/{id}/loadouts/profiles/{n}",
+            "Deleting a saved loadout profile. 3 captures from 1 player — the only \
+             route in the corpus we do not answer. Saving over a slot (POST) works, \
+             so nothing is unreachable; clearing one is not.",
+        ),
+    ];
+
+    /// Route paths declared anywhere in `server/src`, normalised to the shape the
+    /// capture inventory uses.
+    fn declared_routes() -> BTreeSet<String> {
+        fn walk(dir: &Path, out: &mut Vec<String>) {
+            for e in fs::read_dir(dir).expect("read src").flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(fs::read_to_string(&p).unwrap_or_default());
+                }
+            }
+        }
+        let mut sources = Vec::new();
+        walk(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut sources,
+        );
+
+        let mut out = BTreeSet::new();
+        for src in sources {
+            for (verb, marker) in [
+                ("GET", "#[get("),
+                ("POST", "#[post("),
+                ("PUT", "#[put("),
+                ("DELETE", "#[delete("),
+            ] {
+                let mut rest = src.as_str();
+                while let Some(i) = rest.find(marker) {
+                    rest = &rest[i + marker.len()..];
+                    let Some(start) = rest.find('"') else { break };
+                    let Some(len) = rest[start + 1..].find('"') else {
+                        break;
+                    };
+                    let raw = &rest[start + 1..start + 1 + len];
+                    rest = &rest[start + 1 + len..];
+                    if let Some(path) = normalise(raw) {
+                        out.insert(format!("{verb} {path}"));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// `"/blades.bgs.services/api/game/v1/public/characters/{character_id}/levelup"`
+    /// → `"/characters/{id}/levelup"`. Returns `None` for a route on another host
+    /// or service, which the inventory does not cover.
+    fn normalise(raw: &str) -> Option<String> {
+        let path = raw.split("/api/game/v1/public").nth(1)?;
+        let mut out = String::new();
+        for seg in path.split('/').skip(1) {
+            out.push('/');
+            if seg.starts_with('{') {
+                // `{index}` is a number on the wire; every other placeholder is a
+                // uuid. The inventory spells them `{n}` and `{id}`.
+                out.push_str(if seg.contains("index") { "{n}" } else { "{id}" });
+            } else {
+                out.push_str(seg);
+            }
+        }
+        Some(out)
+    }
+
+    #[test]
+    fn every_endpoint_retail_answered_has_a_route() {
+        let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/retail-journey/endpoint_coverage.json");
+        let raw = fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
+        let inventory: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+        let rows = inventory["observations"].as_array().expect("observations");
+        assert!(rows.len() >= 80, "only {} endpoints in the inventory", rows.len());
+
+        let ours = declared_routes();
+        assert!(
+            ours.len() > 80,
+            "only {} routes parsed out of the source — the scan is broken, and a \
+             broken scan would report the whole game as missing",
+            ours.len()
+        );
+        let excused: BTreeSet<&str> = NOT_SERVED.iter().map(|(e, _)| *e).collect();
+
+        let mut missing = Vec::new();
+        for row in rows {
+            let endpoint = row["endpoint"].as_str().unwrap();
+            // `{n}` and `{id}` are both identifiers; a chest slot is numeric on the
+            // wire and a uuid in our path, and neither side is wrong.
+            let alt = endpoint.replace("{n}", "{id}");
+            if ours.contains(endpoint) || ours.contains(&alt) || excused.contains(endpoint) {
+                continue;
+            }
+            missing.push(format!(
+                "{endpoint}  ({} captures, {} players)",
+                row["captures"], row["players"]
+            ));
+        }
+        assert!(
+            missing.is_empty(),
+            "retail answered these and we do not — each is a step of the game a \
+             player cannot take. Serve it, or add it to NOT_SERVED with the \
+             reason:\n  {}",
+            missing.join("\n  ")
+        );
+    }
+
+    /// An excuse must name something that is actually in the corpus, or it is
+    /// stale text protecting nothing.
+    #[test]
+    fn every_excuse_names_a_real_endpoint() {
+        let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/retail-journey/endpoint_coverage.json");
+        let raw = fs::read_to_string(&p).unwrap();
+        let inventory: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let known: BTreeSet<&str> = inventory["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["endpoint"].as_str().unwrap())
+            .collect();
+        for (endpoint, why) in NOT_SERVED {
+            assert!(
+                known.contains(endpoint),
+                "NOT_SERVED excuses `{endpoint}`, which retail never answered"
+            );
+            assert!(why.len() > 40, "`{endpoint}` needs a real reason, not a label");
+        }
+    }
+}

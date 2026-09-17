@@ -196,16 +196,21 @@ Ordered by how much it blocks play.
    `dungeonTemplateId`s the job generator draws from **do** exist in `parsed.json`'s
    417 dungeons, so synthesising the dungeon from `jobSetup` is tractable — it just
    was not in scope here.
-2. **Enemy level has no per-spawn-group cap.** `quests_daily.json.levelScaling
-   ._measured` records the real model as `min(playerLevel + offset, perSpawnGroupCap)`
-   and we implement only the first half, so our quests are *harder* than retail above
-   roughly level 40.
-3. **`givenXp` is a modelled `100 x enemyLevel`.** The corpus has the real table
-   (`levelScaling._measured.givenXpByEnemyLevel`, 11 XP at level 1 rising to 92 at
-   25). Wiring it while enemy level is still wrong would change quest XP for every
-   player at once, which is a balance decision, not a bug fix.
+2. ~~**Enemy level has no per-spawn-group cap.**~~ **Done, and the model in this
+   file was wrong.** The per-group cap is real for 188 of 1,562 groups but covers
+   0.3 % of spawns above player level 60, so it is not where the gap was. Retail's
+   enemies soften with player level — a median 22 levels below at player 100 — and
+   `levelScaling._measured.enemyLevelByPlayerLevel` now carries that curve.
+   Measured against controls in `docs/retail-journey.md` §2.
+3. ~~**`givenXp` is a modelled `100 x enemyLevel`.**~~ **Done.** The real table now
+   covers enemy levels 1–90 and is read. It was worth waiting for: the formula paid
+   5,000 at enemy level 50 where retail paid 220. Enemy level (2) was fixed in the
+   same change, which is the condition this entry set for making the balance move.
 4. **`gameEventQuestsFinished`** — see §3.
-5. **Objective item rewards** — see §4.
+5. ~~**Objective item rewards**~~ — granted since `objective_reward` learned to
+   split `items_to_reward` into currencies, instanced gear and stackables. 18 of
+   the 21 reward-bearing `/objectives` responses in the corpus carry item content,
+   so this was most of what the endpoint pays.
 6. **12 `/quests` 500s** were logged against our server on 2026-08-23 (serviceId 1,
    errorCode 100). Cause not identified; they predate this change and are not
    explained by it.
@@ -235,3 +240,8 @@ python3 script/verify_quest_tests_are_red.py
 
 Applies a mutation that undoes each fix, runs the test meant to catch it, and
 requires an assertion failure. A compile error is rejected as weak evidence.
+
+7. **Level-up is priced now.** `/levelup` spends
+   `level_rewards[newLevel].xp_to_reach` and refuses a level that has not been
+   earned — measured over 37 captured level-ups. Quest XP (3) and this are the two
+   halves of the same loop, and neither means anything without the other.
