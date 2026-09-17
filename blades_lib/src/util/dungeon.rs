@@ -86,9 +86,12 @@ struct ChestTierCorpus {
 
 #[derive(Deserialize)]
 struct ChestSpawnDefinition {
-    /// The APK's own value, which is -1 on one spawn. `tier` next to it is the
-    /// same number with the negative filtered out, kept for the corpus tests.
+    /// The APK's own value, which is -1 on one spawn.
     rarity: i64,
+    /// The same number with the negative filtered out. Generation reads `rarity`
+    /// now (see #288 — retail really did send -1), so this is only read by the
+    /// corpus tests that pin the tier histogram.
+    #[cfg_attr(not(test), allow(dead_code))]
     tier: Option<u64>,
     quantity: u64,
 }
