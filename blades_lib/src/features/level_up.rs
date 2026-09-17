@@ -128,6 +128,16 @@ pub fn plan_level_up(
     data: &LevelUpData,
 ) -> Result<(u16, u64, RewardGrant, Vec<Uuid>), LevelUpRefusal> {
     let next = level.saturating_add(1);
+    // No table, no gate. `LevelUpData::from_json` returns an empty table on any
+    // shape drift, and `static_loader` treats every file as optional, so this is
+    // reachable on a server started without static data — where `max_level()` is
+    // 0 and a naive `level >= max` would refuse EVERY level-up, at every level,
+    // permanently. A progression system that fails closed on a missing file turns
+    // one absent table into an unplayable game; the old ungated behaviour is the
+    // right thing to degrade to.
+    if data.rewards.is_empty() {
+        return Ok((next, 0, RewardGrant::default(), Vec::new()));
+    }
     if level >= data.max_level() {
         return Err(LevelUpRefusal::AlreadyMaxLevel { level });
     }
@@ -397,5 +407,32 @@ mod tests {
             ch.stamina_attribute_points, points,
             "no attribute point past level {MAX_ATTRIBUTE_POINT_LEVEL}"
         );
+    }
+
+    /// A server started without static data must still let players level.
+    ///
+    /// `static_loader` treats every file as optional and `LevelUpData::from_json`
+    /// swallows shape drift into an empty table, so this is a real state — and a
+    /// gate that reads `level >= max_level()` against an empty table refuses every
+    /// level-up at every level, forever. One missing file would have made the game
+    /// unplayable rather than merely unpriced.
+    #[test]
+    fn without_the_table_levelling_is_unpriced_rather_than_impossible() {
+        let none = LevelUpData::default();
+        let mut ch = at(7, 0);
+        let outcome = apply_level_up(&mut ch, Attribute::Stamina, &none)
+            .expect("no table must mean no gate, not a permanent refusal");
+        assert_eq!(ch.level, 8, "the level still advances");
+        assert_eq!(ch.experience, 0, "nothing to charge, so nothing is charged");
+        assert!(
+            outcome.credited_currencies.is_empty(),
+            "and nothing is invented to pay out"
+        );
+
+        // …and it keeps working, rather than blocking at some arbitrary ceiling.
+        for _ in 0..50 {
+            apply_level_up(&mut ch, Attribute::Stamina, &none).expect("still ungated");
+        }
+        assert_eq!(ch.level, 58);
     }
 }
