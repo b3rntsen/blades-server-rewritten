@@ -11,10 +11,11 @@ use actix_web::{
 use blades_lib::economy::{RewardGrant, RewardItem};
 use blades_lib::user_data::{
     B64EncodedData, CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, DungeonStatus,
-    EnemyIndex, EnemyStatus, InventoryChangeTracker, CompleteWallet, DungeonGeneratedData,
+    EnemyIndex, EnemyStatus, InventoryChangeTracker, CompleteInventory, CompleteWallet, DungeonGeneratedData,
     DungeonState, LootTableResult,
 };
 use blades_lib::economy::apply_reward;
+use blades_lib::features::revive;
 use diesel;
 use diesel::{
      prelude::*,
@@ -188,6 +189,48 @@ struct ChestCollectedUpdate {
     pub _tier: u32,
 }
 
+/// A `item_consumed` action: the player drank/ate a stackable inside the dungeon.
+///
+/// ```json
+/// {"type":"item_consumed","itemTemplateId":"c2139cd9-…","time":1777964273914}
+/// ```
+///
+/// Retail decrements that template by one per action and reports the result in the
+/// inventory diff: 416 captured actions over 23 distinct templates, and the three
+/// consecutive captures of one potion read 166, 165, 164. A template consumed to
+/// its last unit moves to `removedStackableItems` instead — captured twice, as a
+/// bare id list.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct ItemConsumedUpdate {
+    item_template_id: Uuid,
+}
+
+/// A `revive` action: the player stood back up after dying mid-dungeon.
+///
+/// ```json
+/// {"type":"revive","gemsPayment":false,"time":1778195035975}
+/// ```
+///
+/// Two server-side effects, both measured against the captured corpus (80 actions):
+///
+/// * `dungeonStatus.reviveCount` increments — 42 responses carry 1, 12 carry 2,
+///   4 carry 3.
+/// * The revive is PAID FOR by the server, not by a client-sent `item_consumed`.
+///   Every one of the 80 responses returns exactly one stackable, the Scroll of
+///   Revival `05a7d501-…`, at its new count. The client only ever reports that it
+///   revived.
+///
+/// `gemsPayment` distinguishes the two tenders the client offers (`TrackReviveUsed`
+/// in the APK takes both `amountOfScrolls` and `amountOfGems`). It is `false` in
+/// 80 of 80 captures, so the scroll path is the measured one; see the gems arm.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct ReviveUpdate {
+    #[serde(default)]
+    gems_payment: bool,
+}
+
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum DungeonUpdateAction {
@@ -203,8 +246,19 @@ enum DungeonUpdateAction {
     /// Loot off the dungeon floor — loose items and harvested plants. This is the one
     /// tracker #95 is about.
     ItemLootCollected(LootCollectedUpdate),
+    /// A potion or food used mid-dungeon.
+    ItemConsumed(ItemConsumedUpdate),
+    /// Standing back up after dying. Costs Scrolls of Revival, charged here.
+    Revive(ReviveUpdate),
     /// Forward-compat: any OTHER action type the client emits is accepted and ignored
     /// rather than 400-ing the whole batch.
+    ///
+    /// Retail's client emits exactly seven types across 29,569 captured
+    /// `/dungeons/current/update` bodies -- `enemy_loot_collected` 9,280,
+    /// `item_loot_collected` 8,091, `enemy_killed` 4,938, `combat_completed` 4,873,
+    /// `chest_collected` 671, `item_consumed` 416 and `revive` 80 -- so every type
+    /// the retail client can send is now named above. Anything reaching this arm is
+    /// therefore new, and the log says which one rather than only that there was one.
     #[serde(other)]
     Unknown,
 }
@@ -678,6 +732,30 @@ async fn handle_event_dungeon_update(
     }.scope_boxed()).await
 }
 
+/// [`blades_lib::economy::consume_stackable`], with the shortfall logged instead of
+/// returned.
+///
+/// The client gates both callers on the player having enough, so a shortfall means the
+/// two sides disagree about the inventory. That is worth a line, but not worth failing
+/// the batch: the same POST carries the run's kills and pickups, and 400-ing it would
+/// lose all of them to recover one potion. The shared helper leaves the stack untouched
+/// when it is short, so nothing goes negative.
+fn charge_stackable(
+    inventory: &mut CompleteInventory,
+    template: Uuid,
+    count: u64,
+    tracker: &mut InventoryChangeTracker,
+    reason: &str,
+) {
+    if count == 0 {
+        return;
+    }
+    if let Err(error) = blades_lib::economy::consume_stackable(inventory, template, count, tracker)
+    {
+        log::warn!("dungeon_update: {reason} charged nothing -- {error}");
+    }
+}
+
 fn process_dungeon_actions(
     actions: &[DungeonUpdateAction],
     generated_data: &DungeonGeneratedData,
@@ -877,7 +955,51 @@ fn process_dungeon_actions(
                     inventory_modification_tracker,
                 );
             }
+            // A potion or food used mid-run. Dropped until now, so the client showed it
+            // drunk while the server kept it: an infinite potion for as long as the
+            // player stayed in the dungeon, with the count back at its old value on the
+            // next load.
+            DungeonUpdateAction::ItemConsumed(consumed) => {
+                charge_stackable(
+                    &mut character_data.inventory.0,
+                    consumed.item_template_id,
+                    1,
+                    inventory_modification_tracker,
+                    "item_consumed",
+                );
+            }
+
+            // Standing back up after dying. Dropped until now, so revives were free and
+            // `reviveCount` never moved off 0.
+            DungeonUpdateAction::Revive(revive) => {
+                let cost = revive::scroll_cost(dungeon_state.dungeon_status.revive_count);
+                dungeon_state.dungeon_status.revive_count += 1;
+                if revive.gems_payment {
+                    // Not one of the 94 captured revives paid this way, and
+                    // `_reviveItemCostList` prices a revive purely in scrolls, so there
+                    // is no gem price to charge. Say so if it ever happens rather than
+                    // inventing a number and taking it out of a player's wallet.
+                    log::info!(
+                        "dungeon_update: revive #{} with gemsPayment=true -- charging {} \
+                         scroll(s); no gem price is known for this path",
+                        dungeon_state.dungeon_status.revive_count,
+                        cost,
+                    );
+                }
+                charge_stackable(
+                    &mut character_data.inventory.0,
+                    revive::REVIVE_SCROLL_TEMPLATE,
+                    cost,
+                    inventory_modification_tracker,
+                    "revive",
+                );
+            }
+
             DungeonUpdateAction::Unknown => {
+                // Every action type retail's client is known to send now has a variant
+                // above, so reaching this arm is new behaviour. The type name is already
+                // gone -- `#[serde(other)]` discards it -- which is why the enum records
+                // the measured set instead.
                 log::warn!("dungeon_update: ignoring unknown action type");
             }
         }
@@ -1643,6 +1765,143 @@ mod tests {
             4,
             "the unguarded count differs from the guarded one, so the test is not vacuous"
         );
+    }
+
+    /// A helper for the consumption tests: an otherwise-empty inventory holding
+    /// `count` of `template`.
+    #[cfg(test)]
+    fn inventory_with(template: Uuid, count: u64) -> CompleteInventory {
+        let mut inventory = CompleteInventory {
+            backpack: Default::default(),
+            loadout: Default::default(),
+            treasury: Default::default(),
+            overflow_treasury: Default::default(),
+            backpack_version: 0,
+            treasury_version: 0,
+        };
+        inventory.backpack.stackable_items.add(template, count);
+        inventory
+    }
+
+    /// The bug: `item_consumed` fell into the enum's `Unknown` arm and was dropped, so
+    /// the client showed the potion drunk and the server still had it. 416 captured
+    /// actions say retail takes exactly one.
+    #[test]
+    fn a_consumed_item_leaves_the_backpack() {
+        let potion: Uuid = "c2139cd9-1d9d-4d4e-80b2-133e07440158".parse().unwrap();
+        let mut inventory = inventory_with(potion, 166);
+        let mut tracker = InventoryChangeTracker::default();
+
+        charge_stackable(&mut inventory, potion, 1, &mut tracker, "item_consumed");
+
+        assert_eq!(
+            inventory.backpack.stackable_items.count(potion),
+            165,
+            "retail's three consecutive captures of this potion read 166, 165, 164"
+        );
+
+        // The wire shape matters as much as the count: the client applies a backpack
+        // diff, so a decrement it is not told about is a decrement it never shows.
+        let update = inventory.generate_client_update(&tracker);
+        let wire = serde_json::to_value(&update.backpack).expect("serializes");
+        assert_eq!(
+            wire["stackableItems"],
+            serde_json::json!([{"itemTemplateId": potion.to_string(), "count": 165}]),
+        );
+    }
+
+    /// Finishing a stack is the other captured shape: retail drops the entry and names
+    /// the id under `removedStackableItems` rather than sending `count: 0`. Zero of the
+    /// 108 captured consume responses carry a count of 0.
+    #[test]
+    fn the_last_one_is_reported_as_removed_not_as_zero() {
+        let potion: Uuid = "21e6557f-17ca-4bd3-9379-00184efe0edc".parse().unwrap();
+        let mut inventory = inventory_with(potion, 1);
+        let mut tracker = InventoryChangeTracker::default();
+
+        charge_stackable(&mut inventory, potion, 1, &mut tracker, "item_consumed");
+
+        let update = inventory.generate_client_update(&tracker);
+        let wire = serde_json::to_value(&update.backpack).expect("serializes");
+        assert_eq!(
+            wire["removedStackableItems"],
+            serde_json::json!([potion.to_string()]),
+        );
+        assert_eq!(
+            wire["stackableItems"],
+            serde_json::json!([]),
+            "an exhausted stack must not also be sent as a count"
+        );
+    }
+
+    /// A batch must not be able to spend what the character does not have. The client
+    /// gates on it, so this only fires when the two sides disagree -- but a forged or
+    /// replayed body must not mint a negative stack.
+    #[test]
+    fn a_charge_the_character_cannot_meet_takes_nothing() {
+        let scroll = revive::REVIVE_SCROLL_TEMPLATE;
+        let mut inventory = inventory_with(scroll, 1);
+        let mut tracker = InventoryChangeTracker::default();
+
+        charge_stackable(&mut inventory, scroll, 4, &mut tracker, "revive");
+
+        assert_eq!(
+            inventory.backpack.stackable_items.count(scroll),
+            1,
+            "a short charge must leave the stack untouched"
+        );
+        assert!(
+            tracker.modified_backpack.stackable_items.is_empty(),
+            "nothing changed, so the diff must not claim anything did"
+        );
+    }
+
+    /// The revive ladder end to end, against the numbers a real character's scroll
+    /// count walked through: 468 -> 467 (first revive, 1 scroll) -> 465 (second, 2).
+    /// A third costs 4, which is where the APK's list settles.
+    #[test]
+    fn consecutive_revives_walk_the_captured_scroll_ladder() {
+        let scroll = revive::REVIVE_SCROLL_TEMPLATE;
+        let mut inventory = inventory_with(scroll, 468);
+        let mut revive_count: u64 = 0;
+
+        let mut counts = Vec::new();
+        for _ in 0..3 {
+            let mut tracker = InventoryChangeTracker::default();
+            let cost = revive::scroll_cost(revive_count);
+            revive_count += 1;
+            charge_stackable(&mut inventory, scroll, cost, &mut tracker, "revive");
+            counts.push(inventory.backpack.stackable_items.count(scroll));
+        }
+
+        assert_eq!(counts, vec![467, 465, 461]);
+        assert_eq!(revive_count, 3, "reviveCount must move; retail's responses do");
+    }
+
+    /// Both types used to deserialize into `Unknown` and be logged away. Retail's client
+    /// sends them on the same endpoint as everything else, so parsing must name them.
+    #[test]
+    fn item_consumed_and_revive_no_longer_land_in_unknown() {
+        let raw = r#"{
+            "currentState": {"b64": "AAAA"},
+            "actions": [
+                {"type":"item_consumed","itemTemplateId":"c2139cd9-1d9d-4d4e-80b2-133e07440158","time":1777964273914},
+                {"type":"revive","gemsPayment":false,"time":1778195035975}
+            ]
+        }"#;
+        let req: DungeonUpdateRequest = serde_json::from_str(raw).expect("must deserialize");
+
+        match &req.actions[0] {
+            DungeonUpdateAction::ItemConsumed(consumed) => assert_eq!(
+                consumed.item_template_id.to_string(),
+                "c2139cd9-1d9d-4d4e-80b2-133e07440158"
+            ),
+            other => panic!("item_consumed parsed as {other:?}"),
+        }
+        match &req.actions[1] {
+            DungeonUpdateAction::Revive(revive) => assert!(!revive.gems_payment),
+            other => panic!("revive parsed as {other:?}"),
+        }
     }
 }
 
