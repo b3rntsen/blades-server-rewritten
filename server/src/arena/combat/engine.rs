@@ -612,6 +612,15 @@ impl MatchInstance {
         // responsive round transition and half a minute of staring at a screen you have
         // already finished with.
         //
+        // `RoundEnd` is in that set because the MATCH-END walk runs under it
+        // (`MATCH_STATE_MATCHEND_PROGRESSION`: BackendMatchEnd → Victory → PostMatch →
+        // Disconnecting, each with its own hold). It is as hold-driven as the others,
+        // so a Ready press on the victory screen has something to skip — and retail
+        // accepted it there: prod session 504 carries EIGHT op57s after its op49
+        // MatchEndMatchMsg, i.e. on the results screen itself. Until this, those were
+        // logged as "ignored (no hold-driven walk running)" and tapping through the
+        // ending did nothing but wait out sixteen seconds of timers.
+        //
         // Latch it; the next `on_tick` emits the pending MatchState immediately. Latching
         // rather than acting here keeps ONE emit path per state (the walk branches in
         // `on_tick`), so a skipped state is byte-identical to a timed-out one — the client
@@ -619,7 +628,7 @@ impl MatchInstance {
         if messages::is_skip_current_state(user_data) {
             if matches!(
                 self.combat.phase,
-                FlowState::BackendMatchCreated | FlowState::NextState
+                FlowState::BackendMatchCreated | FlowState::NextState | FlowState::RoundEnd
             ) {
                 info!(
                     "combat c2s: slot {sender} op57 SkipCurrentState (Ready) in {} — advancing the pending MatchState on the next tick",
@@ -1069,7 +1078,13 @@ impl MatchInstance {
                 if let Some(&(state, hold_before, timeout)) =
                     MATCH_STATE_MATCHEND_PROGRESSION.get(self.combat.matchend_step)
                 {
-                    if now.duration_since(self.combat.phase_entered) >= hold_before {
+                    // A Ready press skips the remaining hold here exactly as it does
+                    // between rounds — see the op57 handling in `on_c2s`. Without this
+                    // the press was latched and then never consumed, so the victory
+                    // screen always cost the full sixteen seconds of timers.
+                    if self.take_skip_request(
+                        now.duration_since(self.combat.phase_entered) >= hold_before,
+                    ) {
                         // Mirror the s506 +3s op79 "StateTimeout" flow heartbeat that
                         // rides between PostRound and BackendMatchEnd (only once, at the
                         // first terminal step).
@@ -3028,6 +3043,78 @@ pub(in crate::arena::combat) mod tests {
     /// The control half matters as much as the test half: the same tick, at the same
     /// instant, WITHOUT the op57 must emit nothing. Otherwise this would pass on a server
     /// that ignored op57 and simply had a short hold.
+    /// A Ready press on the VICTORY screen must advance the match-end walk, not be
+    /// ignored.
+    ///
+    /// The match-end walk runs under `FlowState::RoundEnd`, and op57 used to be
+    /// honoured only in `BackendMatchCreated | NextState` — so every press between
+    /// the result card and the lobby was logged "ignored (no hold-driven walk
+    /// running)" and the player waited out all sixteen seconds of timers. Retail took
+    /// it: prod session 504 carries eight op57s after its op49 MatchEndMatchMsg.
+    #[test]
+    fn op57_skips_the_match_end_walk_too() {
+        let (mut m, t0) = live_inst(2);
+
+        // Round 1 to slot 0, then round 2 to slot 0 → 2 wins → the terminal walk.
+        let (_d1, t1) = swing_until_death(&mut m, 0, t0);
+        let (_s1, live2) = drive_interround_to_live(&mut m, t1);
+        let (_d2, t2) = swing_until_death(&mut m, 0, live2);
+        assert_eq!(m.combat.rounds_won, [2, 0], "slot 0 took the match");
+        assert_eq!(m.phase(), FlowState::RoundEnd, "the match-end walk is running");
+        assert_eq!(m.match_state_for_test(), MatchState::PostRound);
+
+        // Advance into the walk and stop partway through a dwell.
+        let mut now = t2;
+        for _ in 0..80 {
+            now += Duration::from_millis(100);
+            m.on_tick(2, now);
+            if m.match_state_for_test() == MatchState::BackendMatchEnd {
+                break;
+            }
+        }
+        assert_eq!(
+            m.match_state_for_test(),
+            MatchState::BackendMatchEnd,
+            "the walk reached BackendMatchEnd(17)"
+        );
+
+        // CONTROL: mid-dwell nothing advances on its own, so this test can fail.
+        now += Duration::from_millis(200);
+        let idle = m.on_tick(2, now);
+        assert!(
+            !idle.iter().any(|(_, b)| matches!(
+                classify_interround(b),
+                Some(InterRoundFrame::MatchState(..))
+            )),
+            "control: mid-dwell the walk is quiet"
+        );
+        assert_eq!(m.match_state_for_test(), MatchState::BackendMatchEnd);
+
+        // The Ready press. BOTH slots, because this fixture is a two-HUMAN match and a
+        // hold ends on the timer or when EVERY player has readied (report #113); a
+        // solo/bot match has one human peer, so one press is enough there.
+        let op57_a = c2s_handshake(m.combat.fighters[0].player_net_object_id, 57);
+        let op57_b = c2s_handshake(m.combat.fighters[1].player_net_object_id, 57);
+        assert!(
+            m.on_c2s(0, &op57_a, now).is_empty(),
+            "op57 is a handshake frame — it emits nothing by itself"
+        );
+        assert!(m.on_c2s(1, &op57_b, now).is_empty());
+
+        // The next tick must now advance instead of waiting out the hold.
+        now += Duration::from_millis(100);
+        let out = m.on_tick(2, now);
+        assert!(
+            !out.is_empty(),
+            "a Ready press on the victory screen must make the walk emit"
+        );
+        assert_eq!(
+            m.match_state_for_test(),
+            MatchState::Victory,
+            "BackendMatchEnd(17) → Victory(15): the Ready press skipped the remaining hold"
+        );
+    }
+
     #[test]
     fn op57_skip_current_state_advances_the_pending_state() {
         let (mut m, t0) = live_inst(2);
