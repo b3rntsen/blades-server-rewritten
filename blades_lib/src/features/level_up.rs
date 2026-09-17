@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::economy::{GEMS, GOLD, RewardGrant};
-use crate::features::character_ops::{Attribute, MAX_ATTRIBUTE_POINT_LEVEL, apply_levelup};
+use crate::features::character_ops::{Attribute, apply_levelup};
 use crate::user_data::CompleteCharacter;
 
 #[derive(Deserialize, Clone, Debug)]
@@ -192,6 +192,7 @@ pub fn apply_level_up(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::features::character_ops::MAX_ATTRIBUTE_POINT_LEVEL;
     use serde_json::Value;
 
     /// The shipped `level_rewards.json` — the same file the server loads at boot.

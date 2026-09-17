@@ -1,0 +1,51 @@
+{
+ "_meta": {
+  "description": "Retail observations behind the progression tests. Measured, not modelled: every number is read from a captured Bethesda response. Regenerate with script/extract_journey_fixtures.py.",
+  "source": "blades-snapshot-20260607-112415.db",
+  "user": "164824943366766592",
+  "captures": 18135,
+  "count": 10
+ },
+ "observations": {
+  "52291bce-3585-49e5-85e4-afbdfa5ba422/0/aa133662-053d-434e-8779-3f2a41d1271e": {
+   "townXp": 72,
+   "observations": 13
+  },
+  "52291bce-3585-49e5-85e4-afbdfa5ba422/0/1d6696b3-963b-48d4-8924-d43505cb2807": {
+   "townXp": 82,
+   "observations": 52
+  },
+  "52291bce-3585-49e5-85e4-afbdfa5ba422/0/c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+   "townXp": 104,
+   "observations": 41
+  },
+  "ce2b1c43-3391-499a-80cf-fc4fa6b92718/0/c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+   "townXp": 184,
+   "observations": 1
+  },
+  "488f91a9-7a3b-421e-82a9-e2571915beff/0/c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+   "townXp": 104,
+   "observations": 1
+  },
+  "8c6f4962-6522-42fb-bfcb-f653da832d04/0/c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+   "townXp": 104,
+   "observations": 4
+  },
+  "8c6f4962-6522-42fb-bfcb-f653da832d04/0/1d6696b3-963b-48d4-8924-d43505cb2807": {
+   "townXp": 82,
+   "observations": 3
+  },
+  "a6a2de53-d65c-445a-8b55-d2a73c15b635/9/c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+   "townXp": 546,
+   "observations": 4
+  },
+  "a6a2de53-d65c-445a-8b55-d2a73c15b635/9/1d6696b3-963b-48d4-8924-d43505cb2807": {
+   "townXp": 234,
+   "observations": 4
+  },
+  "a6a2de53-d65c-445a-8b55-d2a73c15b635/10/c462a43a-0547-4cd0-a755-5c0aff0f74f8": {
+   "townXp": 546,
+   "observations": 1
+  }
+ }
+}

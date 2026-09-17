@@ -228,15 +228,23 @@ def extract_town_ops(rows):
                 rec["townLevelAfter"] = level_info.get("level")
             # The mutated building: prefer this response's own copy, fall back
             # to the running picture (a `destroy` no longer lists it at all).
-            b = seen.get(building_id) or known.get(building_id)
+            before = known.get(building_id)
+            b = seen.get(building_id) or before
             if op == "place":
                 new_ids = [i for i in seen if i not in known]
                 b = seen[new_ids[0]] if len(new_ids) == 1 else None
+                before = None
             rec["buildingKnown"] = b is not None
             if b:
                 rec["building"] = {"typeId": b.get("typeId"), "styleId": b.get("styleId"),
                                    "level": b.get("level"), "state": b.get("state"),
                                    "constructionEnd": b.get("constructionEnd")}
+            # The style the building wore going IN. A style change's town-XP grant
+            # turns out to be a difference between the two, so without this the
+            # observation cannot be checked against the table at all.
+            if before is not None:
+                rec["previousStyleId"] = before.get("styleId")
+                rec["previousLevel"] = before.get("level")
             out.append(rec)
 
         if isinstance(town, dict) and isinstance(town.get("levelInfo"), dict):
@@ -315,6 +323,50 @@ def extract_objective_rewards(rows):
     return out
 
 
+
+# ── 5. what a style change actually pays ─────────────────────────────────────
+
+def extract_style_prestige(town_ops):
+    """The town XP a style change grants, keyed `typeId/level/styleId`.
+
+    Retail pays for a restyle — 124 captured `…/styles/<id>` posts, every one of
+    them moving `town.levelInfo.experiencePoints` — and the amount depends only on
+    the building type, its level and the style being applied. It is NOT a
+    difference from the style being replaced: the same change pays the same amount
+    in both directions (aa133662→1d6696b3 pays 82 and the reverse pays 72, every
+    time), and the TownHall's two observed restyles pay the full table value with
+    nothing subtracted.
+
+    `building_upgrades.json`'s `styleInputs[...].prestigeForLevel` predicts this
+    exactly for the TownHall, and is high by a constant for the walls (65) and the
+    main gate (115) — the same constant for all three of the wall's styles, so the
+    table's SHAPE is right and one of its numbers is not. Rather than guess which,
+    the measured values are written out here and used in preference to the table
+    where they exist.
+
+    Only observations where the delta is attributable are used: no quest reward
+    banked in the same window, and the building actually in view.
+    """
+    grants = defaultdict(Counter)
+    for o in town_ops:
+        if o["op"] != "style" or o.get("pendingQuestTownXp"):
+            continue
+        delta = o.get("townXpDelta")
+        b = o.get("building") or {}
+        if delta is None or not b.get("typeId") or not b.get("styleId"):
+            continue
+        grants[f"{b['typeId']}/{b.get('level', 0)}/{b['styleId']}"][delta] += 1
+
+    out = {}
+    for key, seen in grants.items():
+        value, n = seen.most_common(1)[0]
+        out[key] = {"townXp": value, "observations": sum(seen.values())}
+        if len(seen) > 1:
+            # Never silently pick a winner out of a disagreement.
+            out[key]["disagreements"] = dict(seen)
+    return out
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -343,9 +395,11 @@ def main():
         "captures": len(rows),
     }
 
+    town_ops = extract_town_ops(rows)
     for name, data in [
         ("levelups.json", extract_levelups(rows)),
-        ("town_ops.json", extract_town_ops(rows)),
+        ("town_ops.json", town_ops),
+        ("style_prestige.json", extract_style_prestige(town_ops)),
         ("quest_completions.json", extract_quest_completions(rows)),
         ("objective_rewards.json", extract_objective_rewards(rows)),
     ]:

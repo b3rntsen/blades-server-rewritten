@@ -1,0 +1,19 @@
+{
+ "_meta": {
+  "description": "Town XP a building restyle grants, keyed \"<buildingTypeId>/<level>/<styleId>\". MEASURED from 124 captured POST .../towns/current/buildings/{id}/styles/{id} calls: every one moved town.levelInfo.experiencePoints, the amount depends only on these three keys, and the same change pays the same in both directions. Used in preference to building_upgrades.json styleInputs[].prestigeForLevel, which is exact for the TownHall but high by a fixed 65 for walls and 115 for the main gate. Regenerate with script/extract_journey_fixtures.py.",
+  "observations": 10,
+  "source": "blades-snapshot-20260607-112415.db"
+ },
+ "grants": {
+  "488f91a9-7a3b-421e-82a9-e2571915beff/0/c462a43a-0547-4cd0-a755-5c0aff0f74f8": 104,
+  "52291bce-3585-49e5-85e4-afbdfa5ba422/0/1d6696b3-963b-48d4-8924-d43505cb2807": 82,
+  "52291bce-3585-49e5-85e4-afbdfa5ba422/0/aa133662-053d-434e-8779-3f2a41d1271e": 72,
+  "52291bce-3585-49e5-85e4-afbdfa5ba422/0/c462a43a-0547-4cd0-a755-5c0aff0f74f8": 104,
+  "8c6f4962-6522-42fb-bfcb-f653da832d04/0/1d6696b3-963b-48d4-8924-d43505cb2807": 82,
+  "8c6f4962-6522-42fb-bfcb-f653da832d04/0/c462a43a-0547-4cd0-a755-5c0aff0f74f8": 104,
+  "a6a2de53-d65c-445a-8b55-d2a73c15b635/10/c462a43a-0547-4cd0-a755-5c0aff0f74f8": 546,
+  "a6a2de53-d65c-445a-8b55-d2a73c15b635/9/1d6696b3-963b-48d4-8924-d43505cb2807": 234,
+  "a6a2de53-d65c-445a-8b55-d2a73c15b635/9/c462a43a-0547-4cd0-a755-5c0aff0f74f8": 546,
+  "ce2b1c43-3391-499a-80cf-fc4fa6b92718/0/c462a43a-0547-4cd0-a755-5c0aff0f74f8": 184
+ }
+}
