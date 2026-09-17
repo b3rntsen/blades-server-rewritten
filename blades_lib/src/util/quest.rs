@@ -137,6 +137,8 @@ mod tests {
                 offset_by_skull: [("2".to_string(), 0i64)].into_iter().collect(),
                 default_skull: 2,
             },
+            // No measured curve: this fixture exercises the skull-offset fallback.
+            measured: Default::default(),
         }
     }
 
@@ -156,5 +158,203 @@ mod tests {
         let s = QuestLevelScaling::default();
         assert_eq!(s.enemy_level(37), 37, "no table → the player's own level");
         assert_eq!(s.enemy_level(0), 1, "clamped to at least 1");
+    }
+}
+
+/// How retail scaled quest enemies — replayed against 66,994 captured spawns.
+///
+/// These are the two numbers that decide how fast a character levels: what an
+/// enemy is worth, and how hard it is. Both were formulas here and neither
+/// matched retail, so they are asserted against the corpus rather than against
+/// each other.
+#[cfg(test)]
+mod how_retail_scaled_enemies {
+    use crate::static_data::QuestLevelScaling;
+    use serde_json::Value;
+
+    /// The shipped table — the one the server loads at boot.
+    fn shipped() -> QuestLevelScaling {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/quests_daily.json");
+        let raw = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
+        let json: Value = serde_json::from_str(&raw).expect("valid quests_daily.json");
+        let scaling: QuestLevelScaling =
+            serde_json::from_value(json["levelScaling"].clone()).expect("levelScaling parses");
+        assert!(
+            !scaling.measured.given_xp_by_enemy_level.is_empty()
+                && !scaling.measured.enemy_level_by_player_level.is_empty(),
+            "the measured curves did not survive deserialization — both tables carry a \
+             prose `note` next to their numeric rows and a stricter reader drops the lot"
+        );
+        scaling
+    }
+
+    /// `[[playerLevel, enemyLevel, count], ...]` plus `[[enemyLevel, xp, n], ...]`.
+    fn corpus() -> Value {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/retail-journey/spawn_levels.json");
+        let raw = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
+        serde_json::from_str(&raw).expect("valid spawn_levels.json")
+    }
+
+    fn pairs() -> Vec<(i64, i64, u64)> {
+        corpus()["playerEnemyPairs"]
+            .as_array()
+            .expect("playerEnemyPairs")
+            .iter()
+            .map(|r| {
+                (
+                    r[0].as_i64().unwrap(),
+                    r[1].as_i64().unwrap(),
+                    r[2].as_u64().unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    /// Share of captured spawns a candidate rule reproduces exactly, and within
+    /// two levels.
+    fn score(rule: impl Fn(i64) -> i64) -> (f64, f64) {
+        let (mut total, mut exact, mut near) = (0u64, 0u64, 0u64);
+        for (player, enemy, n) in pairs() {
+            total += n;
+            let want = rule(player);
+            if want == enemy {
+                exact += n;
+            }
+            if (want - enemy).abs() <= 2 {
+                near += n;
+            }
+        }
+        assert!(total > 60_000, "only {total} spawns in the fixture");
+        (exact as f64 / total as f64, near as f64 / total as f64)
+    }
+
+    /// THE measurement, with its controls.
+    ///
+    /// The curve is a median over every spawn group, so it is closer rather than
+    /// right — which is exactly why it is scored against alternatives instead of
+    /// asserted to be exact. What matters is that it beats what we shipped, and
+    /// by how much.
+    #[test]
+    fn the_measured_curve_beats_serving_enemies_at_the_players_level() {
+        let scaling = shipped();
+        let (exact, near) = score(|p| scaling.enemy_level(p));
+        // What the server did before: enemyLevel = playerLevel.
+        let (flat_exact, flat_near) = score(|p| p.clamp(1, 100));
+        // A second control, so "anything below the player" cannot be the reason.
+        let (minus_ten_exact, _) = score(|p| (p - 10).clamp(1, 100));
+
+        assert!(
+            exact > flat_exact * 2.0,
+            "the curve reproduces {:.1}% of captured spawns exactly against {:.1}% \
+             for enemy=player — it must beat it by a wide margin or it is not \
+             worth the table",
+            exact * 100.0,
+            flat_exact * 100.0
+        );
+        assert!(
+            near > flat_near * 2.0,
+            "within two levels: {:.1}% vs {:.1}%",
+            near * 100.0,
+            flat_near * 100.0
+        );
+        assert!(
+            exact > minus_ten_exact * 2.0,
+            "the curve ({:.1}%) must beat a flat player-10 ({:.1}%); otherwise all \
+             it has found is 'lower'",
+            exact * 100.0,
+            minus_ten_exact * 100.0
+        );
+    }
+
+    /// The shape the fix exists for: retail's enemies track the player early and
+    /// fall behind later. Serving `playerLevel` all the way up is what made our
+    /// quests harder than retail's at high level.
+    #[test]
+    fn enemies_track_the_player_early_and_fall_behind_later() {
+        let scaling = shipped();
+        for p in 1..=20 {
+            let gap = scaling.enemy_level(p) - p;
+            assert!(
+                gap.abs() <= 3,
+                "at player level {p} retail's enemies were within 3 levels; ours are {gap:+}"
+            );
+        }
+        assert!(
+            scaling.enemy_level(100) <= 85,
+            "at player level 100 retail's median enemy was 78; ours is {}",
+            scaling.enemy_level(100)
+        );
+        // Monotone: a level-up must never make the world easier in absolute terms.
+        for p in 2..=100 {
+            assert!(
+                scaling.enemy_level(p) >= scaling.enemy_level(p - 1),
+                "enemy level went DOWN from player {} to {p}",
+                p - 1
+            );
+        }
+    }
+
+    /// Every enemy level the corpus covers is worth what retail paid for it.
+    ///
+    /// The canonical value is the maximum observed: the same enemy level carries
+    /// two XP populations (14 and 41 both appear at level 12) and the lower one is
+    /// the partial/zero-XP case.
+    #[test]
+    fn an_enemy_is_worth_what_retail_paid_for_it() {
+        let scaling = shipped();
+        let corpus = corpus();
+        let mut checked = 0;
+        for row in corpus["givenXpObservations"].as_array().unwrap() {
+            let (level, canonical, n) = (
+                row[0].as_i64().unwrap(),
+                row[1].as_u64().unwrap(),
+                row[2].as_u64().unwrap(),
+            );
+            // The extractor drops thin and zero-XP rows from the shipped table on
+            // purpose; skip them here for the same reason.
+            if n < 5 || canonical == 0 {
+                continue;
+            }
+            assert_eq!(
+                scaling.given_xp(level),
+                canonical,
+                "an enemy of level {level} was worth {canonical} XP at retail ({n} observations)"
+            );
+            checked += 1;
+        }
+        assert!(checked >= 80, "only {checked} enemy levels checked");
+    }
+
+    /// THE CONTROL on the XP fix: the old formula was not slightly off, it was an
+    /// order of magnitude out, and that is most of why levelling here was fast.
+    #[test]
+    fn the_old_hundred_times_level_formula_was_an_order_of_magnitude_out() {
+        let scaling = shipped();
+        assert_eq!(scaling.given_xp(50), 220, "retail's level-50 enemy");
+        assert_eq!(100 * 50, 5000, "what we paid for it");
+        assert!(
+            scaling.given_xp(50) * 20 < 5000,
+            "the formula was more than 20x retail at level 50"
+        );
+        // Both ends stay sane: the table's floor at 1 and its flat top past 90.
+        assert_eq!(scaling.given_xp(1), 11);
+        assert_eq!(scaling.given_xp(0), 11, "clamped, not zero");
+        assert_eq!(
+            scaling.given_xp(200),
+            scaling.given_xp(90),
+            "past the table's top it holds, rather than resuming a formula that \
+             would pay 9,100 at level 91 against 284 at 90"
+        );
+    }
+
+    /// A server booted with no static data must still spawn something playable.
+    #[test]
+    fn an_empty_table_degrades_instead_of_breaking() {
+        let empty = QuestLevelScaling::default();
+        assert_eq!(empty.enemy_level(37), 37, "the player's own level");
+        assert_eq!(empty.enemy_level(0), 1, "clamped");
+        assert_eq!(empty.given_xp(50), 5000, "the old formula, only as a last resort");
     }
 }

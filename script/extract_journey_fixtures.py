@@ -367,6 +367,66 @@ def extract_style_prestige(town_ops):
     return out
 
 
+
+# ── 6. how retail scaled quest enemies ───────────────────────────────────────
+
+def extract_spawn_levels(conn, archive):
+    """Captured `(playerLevel, enemyLevel)` spawn pairs and XP per enemy level.
+
+    Read across EVERY captured player, not just `--user`: the question is how
+    retail scaled its enemies, and one player's level range is far too narrow to
+    see the curve bend. Yumeko reached 38; the corpus reaches 100.
+
+    `dungeonGeneratedDataList[].enemyGeneratedData` is
+    `{spawnGroupId: [[spawn, ...], ...]}` — a map, not a list, which is the shape
+    a first attempt at this got wrong and silently counted zero spawns.
+    """
+    if archive:
+        body = "COALESCE(ar.capture_bodies.response_body, c.response_body)"
+        join = "LEFT JOIN ar.capture_bodies ON c.id = ar.capture_bodies.capture_id"
+    else:
+        body, join = "c.response_body", ""
+    sql = (f"SELECT {body} FROM api_captures c {join} WHERE c.url LIKE ? "
+           f"AND (c.url LIKE '%/quests' OR c.url LIKE '%/accept')")
+
+    pairs = Counter()
+    xp = defaultdict(Counter)
+    for (blob,) in conn.execute(sql, ("https://blades.bgs.services/%",)):
+        resp = _json(blob)
+        if not isinstance(resp, dict):
+            continue
+        character = resp.get("character")
+        player = character.get("level") if isinstance(character, dict) else None
+        generated = list(resp.get("dungeonGeneratedDataList") or [])
+        if isinstance(resp.get("dungeonGeneratedData"), dict):
+            generated.append(resp["dungeonGeneratedData"])
+        for gd in generated:
+            groups = gd.get("enemyGeneratedData") if isinstance(gd, dict) else None
+            if not isinstance(groups, dict):
+                continue
+            for spawners in groups.values():
+                for spawner in spawners or []:
+                    for spawn in (spawner if isinstance(spawner, list) else [spawner]):
+                        if not isinstance(spawn, dict):
+                            continue
+                        level = spawn.get("enemyLevel")
+                        if level is None:
+                            continue
+                        if player is not None:
+                            pairs[(player, level)] += 1
+                        given = spawn.get("givenXP", spawn.get("givenXp"))
+                        if given is not None:
+                            xp[level][given] += 1
+
+    return {
+        "playerEnemyPairs": [[p, e, n] for (p, e), n in sorted(pairs.items())],
+        # The canonical XP at a level is the MAXIMUM observed: the same enemy level
+        # carries two populations (14 and 41 at level 12), and the lower one is the
+        # partial/zero-XP case.
+        "givenXpObservations": [[lvl, max(v), sum(v.values())] for lvl, v in sorted(xp.items())],
+    }
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -402,7 +462,20 @@ def main():
         ("style_prestige.json", extract_style_prestige(town_ops)),
         ("quest_completions.json", extract_quest_completions(rows)),
         ("objective_rewards.json", extract_objective_rewards(rows)),
+        ("spawn_levels.json", extract_spawn_levels(conn, args.archive)),
     ]:
+        if isinstance(data, dict) and "playerEnemyPairs" in data:
+            payload = dict(data, _meta=dict(
+                meta,
+                user="(every captured player — see extract_spawn_levels)",
+                pairs=len(data["playerEnemyPairs"]),
+                spawnEntries=sum(n for _, _, n in data["playerEnemyPairs"]),
+            ))
+            with open(os.path.join(args.out, name), "w") as fh:
+                json.dump(payload, fh, indent=1)
+                fh.write("\n")
+            print(f"  {name}: {len(data['playerEnemyPairs'])} pairs", file=sys.stderr)
+            continue
         payload = {"_meta": dict(meta, count=len(data)), "observations": data}
         with open(os.path.join(args.out, name), "w") as fh:
             json.dump(payload, fh, indent=1, sort_keys=False)
