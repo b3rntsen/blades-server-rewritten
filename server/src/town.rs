@@ -1021,7 +1021,12 @@ fn insert_building(
                     "startIndex": start_index,
                     "constructionEnd": now + construction_time_ms,
                     "customized": false,
-                    "state": "UPGRADING",
+                    // BUILDING, not UPGRADING. Retail distinguishes the two and the
+                    // client picks its construction UI from them: all 33 captured
+                    // placements are `BUILDING` and all 72 captured upgrades are
+                    // `UPGRADING`. We said UPGRADING for both — a brand-new building
+                    // claiming to be an upgrade of something.
+                    "state": "BUILDING",
                 }),
             );
             return Some(());
@@ -2837,7 +2842,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_building_adds_level0_upgrading_building_to_segment() {
+    fn insert_building_adds_a_level0_building_under_construction() {
         let mut town = json!({
             "levelInfo": {"level": 5},
             "districts": [{"segments": {"seg-a": {"id": "seg-a"}}}]
@@ -2851,7 +2856,9 @@ mod tests {
         insert_building(&mut town, seg, bid, ty, st, 0, 5000, 1_000).unwrap();
         let b = &town["districts"][0]["segments"][seg.to_string()]["buildings"][bid.to_string()];
         assert_eq!(b["level"], json!(0));
-        assert_eq!(b["state"], json!("UPGRADING"));
+        // BUILDING, not UPGRADING — see `placing_says_building_and_upgrading_says_upgrading`.
+        // This asserted UPGRADING, which is how the wire stayed wrong.
+        assert_eq!(b["state"], json!("BUILDING"));
         assert_eq!(b["constructionEnd"], json!(6000));
         assert_eq!(b["typeId"], json!(ty.to_string()));
     }
@@ -3469,4 +3476,55 @@ mod when_the_town_is_paid {
              `complete` and `styles/<id>`, never `place`, `upgrade` or `destroy`"
         );
     }
+
+    /// Placing is not upgrading, and retail's wire says so.
+    ///
+    /// MEASURED: all 33 captured placements leave the building `BUILDING` and all
+    /// 72 captured upgrades leave it `UPGRADING`. We used `UPGRADING` for both, so
+    /// a brand-new building announced itself as an upgrade of something that was
+    /// never there. Found by placing one against a running server and reading the
+    /// state back, which no unit test was doing.
+    #[test]
+    fn placing_says_building_and_upgrading_says_upgrading() {
+        let mut place = 0;
+        let mut upgrade = 0;
+        for o in retail_town_ops() {
+            let Some(state) = o["building"]["state"].as_str() else {
+                continue;
+            };
+            match o["op"].as_str().unwrap() {
+                "place" => {
+                    assert_eq!(state, "BUILDING", "capture {}", o["captureId"]);
+                    place += 1;
+                }
+                "upgrade" => {
+                    assert_eq!(state, "UPGRADING", "capture {}", o["captureId"]);
+                    upgrade += 1;
+                }
+                _ => {}
+            }
+        }
+        assert!(place >= 30 && upgrade >= 70, "{place} places, {upgrade} upgrades");
+
+        // And our two writers agree with that.
+        let mut b = json!({ "id": "x", "level": 2, "state": "NORMAL" });
+        apply_upgrade_transition(&mut b, 3, 1000, 0);
+        assert_eq!(b["state"], "UPGRADING", "an upgrade is an upgrade");
+
+        let seg = Uuid::from_u128(5);
+        let mut town = json!({
+            "levelInfo": {"level": 1},
+            "districts": [{ "segments": { seg.to_string(): {"id": seg.to_string()} } }]
+        });
+        let placed = Uuid::from_u128(6);
+        insert_building(&mut town, seg, placed, Uuid::from_u128(7), Uuid::from_u128(8), 0, 900, 0)
+            .expect("the segment exists");
+        assert_eq!(
+            town["districts"][0]["segments"][seg.to_string()]["buildings"]
+                [placed.to_string()]["state"],
+            "BUILDING",
+            "a placement is a build, not an upgrade"
+        );
+    }
+
 }

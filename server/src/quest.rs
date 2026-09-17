@@ -205,8 +205,9 @@ fn assemble_generated_data_list(
     mut from_rows: Vec<DungeonGeneratedDataWithId>,
     game_data: &blades_lib::game_data::GameData,
     jobs: &[Value],
+    scaling: &blades_lib::static_data::QuestLevelScaling,
 ) -> Vec<DungeonGeneratedDataWithId> {
-    from_rows.extend(jobs_gen::job_generated_data_list(game_data, jobs));
+    from_rows.extend(jobs_gen::job_generated_data_list(game_data, jobs, scaling));
     from_rows
 }
 
@@ -244,6 +245,30 @@ fn refresh_empty_item_loot(
 
     stored.item_generated_data = fresh.item_generated_data;
     true
+}
+
+
+/// The shipped `quests_daily.json` scaling — the same table the server loads.
+///
+/// Tests reached for `QuestLevelScaling::default()`, which is EMPTY and therefore
+/// exercises the last-resort `100 * level` formula rather than the real one. That
+/// is exactly how the job board kept paying the old XP after the real numbers moved
+/// into the file: every test agreed with the bug, because every test was asking the
+/// fallback.
+#[cfg(test)]
+pub(crate) fn shipped_scaling() -> blades_lib::static_data::QuestLevelScaling {
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../deploy/static/quests_daily.json");
+    let raw = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
+    let json: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+    let scaling: blades_lib::static_data::QuestLevelScaling =
+        serde_json::from_value(json["levelScaling"].clone()).expect("levelScaling parses");
+    assert!(
+        !scaling.measured.given_xp_by_enemy_level.is_empty(),
+        "the shipped scaling parsed to an empty table — the tests would silently \
+         fall back to the old formula and agree with any regression"
+    );
+    scaling
 }
 
 #[cfg(test)]
@@ -419,7 +444,12 @@ pub async fn get_quests(
                 // Upsert the current window's job rows (idempotent within the window).
                 for job in &jobs {
                     if let Some(entry) =
-                        jobs_gen::job_quest_db_entry(job, character_id_var, &globals.game_data)
+                        jobs_gen::job_quest_db_entry(
+                            job,
+                            character_id_var,
+                            &globals.game_data,
+                            &globals.static_data.quests_daily.level_scaling,
+                        )
                     {
                         use crate::schema::quests;
                         insert_into(quests::table)
@@ -605,7 +635,12 @@ pub async fn get_quests(
                 &open_event_instances,
             );
             let result_generated_data =
-                assemble_generated_data_list(row_generated_data, &globals.game_data, &jobs);
+                assemble_generated_data_list(
+                    row_generated_data,
+                    &globals.game_data,
+                    &jobs,
+                    &globals.static_data.quests_daily.level_scaling,
+                );
 
             // Events opening within the next 24h, announced but not yet playable.
             let game_event_quests_in_warning = event_quests::upcoming(
@@ -732,7 +767,12 @@ async fn accept_quest(
             j.get("questId").and_then(|v| v.as_str()) == Some(&quest_id.to_string())
         }) {
             if let Some(entry) =
-                jobs_gen::job_quest_db_entry(job, character_id, &app_state.game_data)
+                jobs_gen::job_quest_db_entry(
+                    job,
+                    character_id,
+                    &app_state.game_data,
+                    &app_state.static_data.quests_daily.level_scaling,
+                )
             {
                 use crate::schema::quests;
                 insert_into(quests::table)
@@ -1067,7 +1107,9 @@ fn resolve_completion_reward(
         // at every daily reset, so this heals itself within a day; until it does,
         // pay the XP the difficulty implies rather than nothing. No gold: the count
         // was a per-job roll and is not recoverable from the row.
-        let xp = blades_lib::static_data::QuestLevelScaling::default()
+        let xp = static_data
+            .quests_daily
+            .level_scaling
             .given_xp(quest.difficulty_level.max(1));
         log::info!(
             "[quest] job {quest_id} predates jobSetup reward capture — paying {xp} xp, no gold"
@@ -2173,16 +2215,24 @@ pub(crate) mod jobs_gen {
     /// how retail does it — with the enemies scaled to the job's own `difficultyLevel`.
     /// A job's `difficultyLevel` IS its enemy level (retail: a level-48 character's board
     /// carried jobs at 42 and 46), so it goes straight in; the XP per enemy comes from the
-    /// shared `givenXpFormula` rather than a second copy of `100 * level` here.
+    /// shared table rather than a second copy of `100 * level` here.
+    ///
+    /// `scaling` must be the LOADED table. This took `QuestLevelScaling::default()`,
+    /// which was harmless while the default *was* the formula and became a silent
+    /// bug the moment the real numbers moved into `quests_daily.json`: an empty
+    /// table falls through to `100 * enemyLevel`, so every job on every board kept
+    /// paying the old XP while quests paid retail's. A fresh character's board is
+    /// all jobs, so this was the first thing a new player saw.
     ///
     /// Returns `None` only when `parsed.json` is missing the reference dungeon, which the
     /// caller treats as "no entry" rather than an error — same policy as the quest path.
     pub fn generated_data_for_job(
         game_data: &GameData,
         job: &Value,
+        scaling: &QuestLevelScaling,
     ) -> Option<DungeonGeneratedData> {
         let enemy_level = get_i64(job, "difficultyLevel", 1).max(1);
-        let given_xp = QuestLevelScaling::default().given_xp(enemy_level);
+        let given_xp = scaling.given_xp(enemy_level);
         let mut data = blades_lib::util::dungeon::generate_for_dungeon(
             game_data,
             &JOB_SPAWN_GROUPS_REFERENCE,
@@ -2208,7 +2258,7 @@ pub(crate) mod jobs_gen {
                 } else {
                     enemy_level
                 };
-                let xp = QuestLevelScaling::default().given_xp(level);
+                let xp = scaling.given_xp(level);
                 for enemies in spawners {
                     for enemy in enemies {
                         enemy.enemy_level = level;
@@ -2271,7 +2321,7 @@ pub(crate) mod jobs_gen {
             //    under retail (1395/1395 carry `difficultyLevel + bossLevelDelta`).
             let boss_level = enemy_level + get_i64(&setup, "bossLevelDelta", 0);
             if let Some(spawners) = data.enemy_generated_data.get_mut(&JOB_BOSS_SPAWN_GROUP) {
-                let xp = QuestLevelScaling::default().given_xp(boss_level);
+                let xp = scaling.given_xp(boss_level);
                 for enemies in spawners {
                     for enemy in enemies {
                         enemy.enemy_level = boss_level;
@@ -2307,13 +2357,14 @@ pub(crate) mod jobs_gen {
     pub fn job_generated_data_list(
         game_data: &GameData,
         jobs: &[Value],
+        scaling: &QuestLevelScaling,
     ) -> Vec<DungeonGeneratedDataWithId> {
         jobs.iter()
             .filter_map(|job| {
                 let quest_id = Uuid::parse_str(get_str(job, "questId")?).ok()?;
                 Some(DungeonGeneratedDataWithId {
                     quest_id,
-                    inner: generated_data_for_job(game_data, job)?,
+                    inner: generated_data_for_job(game_data, job, scaling)?,
                 })
             })
             .collect()
@@ -2361,6 +2412,7 @@ pub(crate) mod jobs_gen {
         job: &Value,
         character_id: Uuid,
         game_data: &GameData,
+        scaling: &QuestLevelScaling,
     ) -> Option<QuestDbEntry> {
         let quest_id = Uuid::parse_str(get_str(job, "questId")?).ok()?;
         let mut objective_statuses = HashMap::new();
@@ -2391,7 +2443,7 @@ pub(crate) mod jobs_gen {
             id: quest_id,
             character_id,
             info: JsonDbWrapper(quest),
-            generated_data: JsonDbWrapper(generated_data_for_job(game_data, job)),
+            generated_data: JsonDbWrapper(generated_data_for_job(game_data, job, scaling)),
             dungeon_state: None,
         })
     }
@@ -3038,7 +3090,7 @@ mod jobs_tests {
         let gd = super::report85_job_generated_data_tests::game_data();
         for j in &jobs {
             assert!(
-                jobs_gen::job_quest_db_entry(j, CHAR, &gd).is_some(),
+                jobs_gen::job_quest_db_entry(j, CHAR, &gd, &crate::quest::shipped_scaling()).is_some(),
                 "job must build a persistable quest row"
             );
         }
@@ -3242,7 +3294,7 @@ mod report85_job_generated_data_tests {
     fn every_job_on_the_board_has_generated_data() {
         let gd = game_data();
         let jobs = board();
-        let list = assemble_generated_data_list(Vec::new(), &gd, &jobs);
+        let list = assemble_generated_data_list(Vec::new(), &gd, &jobs, &crate::quest::shipped_scaling());
 
         let job_ids: Vec<Uuid> = jobs
             .iter()
@@ -3282,7 +3334,7 @@ mod report85_job_generated_data_tests {
     fn a_jobs_generated_data_is_not_empty() {
         let gd = game_data();
         for job in board() {
-            let data = jobs_gen::generated_data_for_job(&gd, &job)
+            let data = jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling())
                 .expect("the reference dungeon resolves");
             assert!(
                 !data.enemy_generated_data.is_empty(),
@@ -3318,7 +3370,7 @@ mod report85_job_generated_data_tests {
             .iter()
             .find(|j| j["jobSetup"]["jobType"] == 5)
             .expect("the weekly boss pool must produce a Duel");
-        let data = jobs_gen::generated_data_for_job(&gd, duel).expect("Duel generates");
+        let data = jobs_gen::generated_data_for_job(&gd, duel, &crate::quest::shipped_scaling()).expect("Duel generates");
 
         let actual: HashSet<Uuid> = data.enemy_generated_data.keys().copied().collect();
         let expected: HashSet<Uuid> = jobs_gen::DUEL_ENEMY_SPAWN_GROUPS.into_iter().collect();
@@ -3359,7 +3411,7 @@ mod report85_job_generated_data_tests {
             .find(|j| j["jobSetup"]["jobType"] != 5)
             .expect("the daily pool must produce ordinary jobs");
         let ordinary_data =
-            jobs_gen::generated_data_for_job(&gd, ordinary).expect("ordinary job generates");
+            jobs_gen::generated_data_for_job(&gd, ordinary, &crate::quest::shipped_scaling()).expect("ordinary job generates");
         assert!(ordinary_data.enemy_generated_data.len() > 3);
         assert!(!ordinary_data.item_generated_data.is_empty());
     }
@@ -3440,7 +3492,7 @@ mod report85_job_generated_data_tests {
         let mut checked = 0usize;
 
         for job in jobs.iter().filter(|j| j["jobSetup"]["jobType"] != 5) {
-            let data = jobs_gen::generated_data_for_job(&gd, job).expect("job generates");
+            let data = jobs_gen::generated_data_for_job(&gd, job, &crate::quest::shipped_scaling()).expect("job generates");
             let has = |u: Uuid| data.item_generated_data.contains_key(&u);
 
             assert!(has(jobs_gen::JOB_ITEM_R1), "the main rarity-1 group is always present");
@@ -3477,9 +3529,9 @@ mod report85_job_generated_data_tests {
             .find(|j| j["jobSetup"]["jobType"] != 5)
             .expect("an ordinary job");
 
-        let first = jobs_gen::generated_data_for_job(&gd, job).expect("generates");
+        let first = jobs_gen::generated_data_for_job(&gd, job, &crate::quest::shipped_scaling()).expect("generates");
         for _ in 0..5 {
-            let again = jobs_gen::generated_data_for_job(&gd, job).expect("generates");
+            let again = jobs_gen::generated_data_for_job(&gd, job, &crate::quest::shipped_scaling()).expect("generates");
             let a: std::collections::BTreeSet<_> = first.item_generated_data.keys().collect();
             let b: std::collections::BTreeSet<_> = again.item_generated_data.keys().collect();
             assert_eq!(a, b, "the same job must always generate the same item groups");
@@ -3507,7 +3559,7 @@ mod report85_job_generated_data_tests {
 
         for job in jobs.iter().filter(|j| j["jobSetup"]["jobType"] != 5) {
             let setup = &job["jobSetup"];
-            let data = jobs_gen::generated_data_for_job(&gd, job).expect("job generates");
+            let data = jobs_gen::generated_data_for_job(&gd, job, &crate::quest::shipped_scaling()).expect("job generates");
             let has_secret_boss = !setup["secretBossEnemyFamilyId"].is_null();
             let carries = data
                 .enemy_generated_data
@@ -3595,7 +3647,7 @@ mod report85_job_generated_data_tests {
         let enemies: HashSet<Uuid> = reference.spawn_info.enemy_spawn_groups.keys().copied().collect();
 
         for job in board() {
-            let data = jobs_gen::generated_data_for_job(&gd, &job).expect("generated");
+            let data = jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling()).expect("generated");
             for id in data.enemy_generated_data.keys() {
                 assert!(enemies.contains(id), "job spawn id {id} is not in the reference dungeon");
             }
@@ -3616,7 +3668,7 @@ mod report85_job_generated_data_tests {
     fn a_stored_job_row_carries_its_generated_data() {
         let gd = game_data();
         for job in board() {
-            let entry = jobs_gen::job_quest_db_entry(&job, CHAR, &gd).expect("row builds");
+            let entry = jobs_gen::job_quest_db_entry(&job, CHAR, &gd, &crate::quest::shipped_scaling()).expect("row builds");
             let data = entry
                 .generated_data
                 .0
@@ -3632,7 +3684,7 @@ mod report85_job_generated_data_tests {
     fn job_entries_carry_the_captured_version_and_story_quests_are_unchanged() {
         let gd = game_data();
         for job in board() {
-            let data = jobs_gen::generated_data_for_job(&gd, &job).expect("generated");
+            let data = jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling()).expect("generated");
             assert_eq!(data.version, 1, "retail sends version 1 on job entries");
             assert_eq!(data.algorithm_version, 1);
         }
@@ -3651,7 +3703,7 @@ mod report85_job_generated_data_tests {
     fn a_job_entry_serializes_to_retails_key_set() {
         let gd = game_data();
         let jobs = board();
-        let list = assemble_generated_data_list(Vec::new(), &gd, &jobs);
+        let list = assemble_generated_data_list(Vec::new(), &gd, &jobs, &crate::quest::shipped_scaling());
         let entry = serde_json::to_value(&list[0]).expect("entry serializes");
         let mut keys: Vec<&str> = entry
             .as_object()
@@ -3696,7 +3748,7 @@ mod report85_job_generated_data_tests {
             vec![(story_id, story_quest.clone(), story_data.clone())].into_iter(),
             &Default::default(),
         );
-        let generated = assemble_generated_data_list(from_rows, &gd, &jobs);
+        let generated = assemble_generated_data_list(from_rows, &gd, &jobs, &crate::quest::shipped_scaling());
 
         assert_eq!(quests_out.len(), 1, "the control quest is advertised");
 
@@ -4088,7 +4140,7 @@ mod report92_job_completion_reward_tests {
         let mut state = blades_lib::server_state::ServerState::default();
         let jobs = board();
         for job in &jobs {
-            let row = jobs_gen::job_quest_db_entry(job, CHAR, &gd).expect("job row");
+            let row = jobs_gen::job_quest_db_entry(job, CHAR, &gd, &crate::quest::shipped_scaling()).expect("job row");
             let paid = resolve_completion_reward(&sd, row.id, &row.info.0, &mut state);
             let declared = jobs_gen::job_completion_reward(job);
             assert!(
@@ -4140,10 +4192,19 @@ mod report92_job_completion_reward_tests {
         assert!(legacy.job_reward.is_none(), "the fixture is the legacy shape");
 
         let reward = resolve_completion_reward(&sd, Uuid::from_u128(1), &legacy, &mut state);
+        // From the SHIPPED table, not `QuestLevelScaling::default()`. The default is
+        // empty and answers with the last-resort `100 * level` formula, so asserting
+        // against it would have this test agree with exactly the bug that let the job
+        // board keep paying 7,500 xp for a difficulty-75 job where retail paid 261.
+        let expected = sd.quests_daily.level_scaling.given_xp(75);
         assert_eq!(
-            reward.character_xp,
-            QuestLevelScaling::default().given_xp(75),
-            "the legacy path pays the difficulty's xp"
+            reward.character_xp, expected,
+            "the legacy path pays the difficulty's xp from the real table"
+        );
+        assert_ne!(
+            expected,
+            100 * 75,
+            "and the real table is not the old formula, or this proves nothing"
         );
         assert!(reward.currencies.is_empty(), "and no gold, which is unrecoverable");
     }
