@@ -48,7 +48,7 @@ use actix_web::{
 };
 use blades_lib::{
     economy::{RewardGrant, apply_reward, consume_stackable},
-    features::abyss_rewards,
+    features::{abyss_rewards, revive},
     server_state::{AbyssRun, AbyssSliceEntry},
     user_data::{CompleteCharacterWithIdWithoutData, CompleteInventory, CompleteInventoryUpdate,
                 CompleteWallet, DungeonGeneratedData, InventoryChangeTracker},
@@ -288,7 +288,12 @@ struct SliceCompletedAction {
     time: u64,
 }
 
-/// `revive` — the player spent gems to continue after dying.
+/// `revive` — the player stood back up after dying.
+///
+/// Paid in Scrolls of Revival, charged by the server: see
+/// [`blades_lib::features::revive`]. `gemsPayment` is `false` in all 14 captured
+/// abyss revives (and all 80 dungeon ones), and the APK's `_reviveItemCostList`
+/// prices a revive purely in scrolls, so there is no gem tender to read here.
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct ReviveAction {
@@ -459,7 +464,8 @@ pub async fn update_abyss(
             let mut tracker = InventoryChangeTracker::default();
 
             if let Some(run) = entry.server_state.0.abyss.as_mut() {
-                apply_actions(&app_state.static_data.abyss, run, &body.actions);
+                let revive_scrolls =
+                    apply_actions(&app_state.static_data.abyss, run, &body.actions);
 
                 let revive_count = run.revive_count;
                 let future_rewards =
@@ -470,7 +476,23 @@ pub async fn update_abyss(
                     &mut entry.inventory.0,
                     &mut tracker,
                 );
-                if consumed > 0 {
+                // A revive is paid for by the server, not by a client-sent
+                // `item_consumed`: all 14 captured abyss revives come back with the
+                // Scroll of Revival at its new count (1802 -> 1800 -> 1796, the same
+                // 1/2/4 ladder the quest dungeons charge).
+                let charged_revive = revive_scrolls > 0
+                    && consume_stackable(
+                        &mut entry.inventory.0,
+                        revive::REVIVE_SCROLL_TEMPLATE,
+                        revive_scrolls,
+                        &mut tracker,
+                    )
+                    .inspect_err(|error| {
+                        log::warn!("abyss: revive charged nothing -- {error}");
+                    })
+                    .is_ok();
+
+                if consumed > 0 || charged_revive {
                     // Retail increments once per inventory-mutating request, not once
                     // per action in the batch.
                     entry.inventory.0.backpack_version += 1;
@@ -916,11 +938,15 @@ fn build_generated_data(
 /// Order matters: a body can carry the last kill of a floor AND that floor's
 /// `abyss_slice_completed`, and the kill has to be credited to the floor the player was
 /// still standing on when it happened.
+/// Returns the Scrolls of Revival this batch's `revive` actions owe, priced off the
+/// run's revive count as each one lands — a batch carrying two revives pays two
+/// different rungs of the ladder. The caller charges it; `run` has no inventory.
 fn apply_actions(
     static_abyss: &blades_lib::static_data::AbyssStaticData,
     run: &mut AbyssRun,
     actions: &[AbyssUpdateAction],
-) {
+) -> u64 {
+    let mut revive_scrolls = 0;
     for action in actions {
         match action {
             AbyssUpdateAction::EnemyKilled(_) => {
@@ -946,6 +972,8 @@ fn apply_actions(
                 }
             }
             AbyssUpdateAction::Revive(_) => {
+                // Priced BEFORE the increment: the first revive of a run is rung 0.
+                revive_scrolls += revive::scroll_cost(u64::from(run.revive_count));
                 run.revive_count += 1;
             }
             // Inventory changes are applied separately from run scoring below.
@@ -954,6 +982,7 @@ fn apply_actions(
             AbyssUpdateAction::EnemyLootCollected(_) | AbyssUpdateAction::Unknown => {}
         }
     }
+    revive_scrolls
 }
 
 /// Apply the durability reported after abyss combat to gear this character has equipped.

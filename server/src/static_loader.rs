@@ -125,6 +125,19 @@ fn read_json<T: DeserializeOwned + Default>(path: &Path) -> T {
     }
 }
 
+/// Product ids that are not UUIDs, are retail's own, and can never be bought again.
+///
+/// `53c6f124-3603-4100-ba9a-e2fe23969f7p` ends in a `p` where a hex digit belongs.
+/// Bethesda authored it that way — the same string appears in
+/// `global_shop_overrides.json` — and the capture corpus labels it
+/// `DecoOffer_S_Candelabra_2019-02-14 00:00_2019-02-17 23:59`: a Valentine's
+/// decoration offer whose four-day window closed on 17 February 2019. Dropping it
+/// costs nothing, so it is reported at INFO rather than warned about on every boot.
+///
+/// An id NOT on this list still warns: that one would be new, and a new dropped id
+/// is a hole in the live shop.
+const KNOWN_DEAD_PRODUCT_IDS: &[&str] = &["53c6f124-3603-4100-ba9a-e2fe23969f7p"];
+
 pub fn load(dir: &Path) -> StaticData {
     let gifts: Vec<GiftDef> = read_json(&dir.join("gifts.json"));
     let announcements: Vec<Announcement> = read_json(&dir.join("announcements.json"));
@@ -164,17 +177,37 @@ pub fn load(dir: &Path) -> StaticData {
         );
         // Report #93: one non-UUID product id used to fail the whole map, so all 541
         // offers were dropped and only a startup WARN said so. It is tolerated now —
-        // but say which ids were dropped, at WARN, every boot, so a silent hole in
-        // the shop is visible rather than inferred from a purchase that 404s.
-        if !file.unparseable_ids.is_empty() {
+        // but say which ids were dropped, every boot, so a silent hole in the shop is
+        // visible rather than inferred from a purchase that 404s.
+        //
+        // Report #184: that WARN fires on every boot for an id nothing can ever ask
+        // for, which reads like a fault the operator should act on. A dropped id only
+        // deserves a warning when it could still cost a player a purchase, so the one
+        // id we have identified as retail's own dead typo is reported at INFO and
+        // anything else still warns.
+        let (unexpected, known): (Vec<&String>, Vec<&String>) = file
+            .unparseable_ids
+            .iter()
+            .partition(|id| !KNOWN_DEAD_PRODUCT_IDS.contains(&id.as_str()));
+        if !unexpected.is_empty() {
             log::warn!(
                 "[static] global_shop_offer_contents.json: {} offer(s) loaded, {} skipped \
                  for an unparseable product id: {:?}",
                 file.offers.len(),
-                file.unparseable_ids.len(),
-                file.unparseable_ids,
+                unexpected.len(),
+                unexpected,
             );
-        } else {
+        }
+        if !known.is_empty() {
+            log::info!(
+                "[static] global_shop_offer_contents.json: {} offers loaded; {} known dead \
+                 product id(s) skipped: {:?}",
+                file.offers.len(),
+                known.len(),
+                known,
+            );
+        }
+        if file.unparseable_ids.is_empty() {
             log::info!(
                 "[static] global_shop_offer_contents.json: {} offers loaded",
                 file.offers.len()
@@ -564,5 +597,34 @@ mod tests {
              than the built-in copy — otherwise arena.sh static could never ship an update"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod known_dead_product_id_tests {
+    use super::KNOWN_DEAD_PRODUCT_IDS;
+
+    /// Every entry must actually be unparseable. A parseable id would never reach
+    /// `unparseable_ids`, so it would sit here silencing nothing while looking like
+    /// it did — and the next genuinely broken id would be the one to go quiet.
+    #[test]
+    fn every_known_dead_id_is_really_unparseable() {
+        for id in KNOWN_DEAD_PRODUCT_IDS {
+            assert!(
+                uuid::Uuid::parse_str(id).is_err(),
+                "{id} parses as a UUID, so listing it here silences nothing"
+            );
+        }
+    }
+
+    /// The list is an allowlist for *known* breakage, so it stays short and explicit.
+    /// Growing it is a decision, not a reflex: a second entry means a second offer the
+    /// live shop cannot sell.
+    #[test]
+    fn the_list_holds_only_the_one_retail_typo() {
+        assert_eq!(
+            KNOWN_DEAD_PRODUCT_IDS,
+            &["53c6f124-3603-4100-ba9a-e2fe23969f7p"]
+        );
     }
 }

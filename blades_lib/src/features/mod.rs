@@ -15,6 +15,7 @@ pub mod global_shop;
 pub mod merchant;
 pub mod recipe_outputs;
 pub mod repair;
+pub mod revive;
 pub mod salvage;
 pub mod sigil_grades;
 pub mod store_bundles;
