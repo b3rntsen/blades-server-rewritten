@@ -1,0 +1,1766 @@
+{
+ "_meta": {
+  "description": "Retail observations behind the progression tests. Measured, not modelled: every number is read from a captured Bethesda response. Regenerate with script/extract_journey_fixtures.py.",
+  "source": "blades-snapshot-20260607-112415.db",
+  "user": "164824943366766592",
+  "captures": 18135,
+  "count": 51
+ },
+ "observations": {
+  "5ad30483-8994-484e-b6dc-a5e9014cc4d5": {
+   "reward": {
+    "characterXp": 50,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 600
+    },
+    "stackableItems": {
+     "e7193116-d761-479b-8a20-5633737977f5": 110
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "3b478dfa-73bb-42df-a420-05cf83d015bc": {
+   "reward": {
+    "characterXp": 90,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 200
+    },
+    "stackableItems": {
+     "05a7d501-f096-41e9-8443-fd6a090d8425": 1
+    },
+    "townXp": 200
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "e53a430b-35f4-4848-8b4e-c1f0089e098a": {
+   "reward": {
+    "characterXp": 105,
+    "chests": [
+     {
+      "id": "1",
+      "level": 3,
+      "tier": 2
+     }
+    ],
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 250
+    },
+    "stackableItems": {
+     "e7193116-d761-479b-8a20-5633737977f5": 145
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "1709a8bc-79dd-4a7f-b7f8-3a6022646dda": {
+   "reward": {
+    "characterXp": 135,
+    "stackableItems": {
+     "55e82826-2d68-469c-8870-753665ca62cd": 12,
+     "e7193116-d761-479b-8a20-5633737977f5": 35,
+     "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 25
+    },
+    "townXp": 100
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "6a0337d0-82a3-4ee6-80bc-9c64ff5e2b1b": {
+   "reward": {
+    "characterXp": 60,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 275
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "3458f97d-c615-4f2d-a024-589d567ed380": {
+   "reward": {
+    "characterXp": 60,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 275
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "92f75a98-502a-4c5c-b9e9-0b3c102280d7": {
+   "reward": {
+    "characterXp": 120,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 350
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "caeb8f88-b692-4788-94d6-a370c090e035": {
+   "reward": {
+    "characterXp": 94,
+    "currencies": {
+     "470c8f58-a8dd-4c07-8c92-843b785e1139": 4
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "8ac51d1a-284c-4727-a184-c0d8773d1873": {
+   "reward": {
+    "characterXp": 94,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 310
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "d7ad2d5e-6393-4ff3-bd57-158ca4db8089": {
+   "reward": {
+    "characterXp": 148,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 410
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "d0a45d66-c8bc-4e80-9405-56f62977a716": {
+   "reward": {
+    "characterXp": 148,
+    "currencies": {
+     "470c8f58-a8dd-4c07-8c92-843b785e1139": 12
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "9c081474-4480-4f4b-89bf-4eaaaae0b449": {
+   "reward": {
+    "characterXp": 106,
+    "currencies": {
+     "470c8f58-a8dd-4c07-8c92-843b785e1139": 4
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "8d1f84f2-acfa-4df6-a7c5-85e48db494b5": {
+   "reward": {
+    "characterXp": 120,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 350
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "e9f4067e-0a70-42f3-9984-3c1043b5928c": {
+   "reward": {
+    "characterXp": 94,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 310
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "949dece0-d169-4f22-88b0-391a958dc3d3": {
+   "reward": {
+    "characterXp": 164,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 440
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "4dbd2110-8830-4597-bfaa-b92372ee8c06": {
+   "reward": {
+    "characterXp": 180,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 440
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "9c4006d9-c338-4fc8-b4ae-cfe478bdf843": {
+   "reward": {
+    "characterXp": 134,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 370
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "7ceaf9aa-851c-4117-9042-2063a9a5ecd0": {
+   "reward": {
+    "characterXp": 232,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 480
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "838e49aa-6139-4938-84d3-e09e1da80ae8": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1
+    },
+    "stackableItems": {
+     "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 8
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 2
+     },
+     "stackableItems": {
+      "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 16
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 5
+     },
+     "stackableItems": {
+      "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 32
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 7
+     },
+     "stackableItems": {
+      "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 56
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 10,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 25000
+     },
+     "stackableItems": {
+      "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 96
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "0dd37f6b-28ad-4cb7-8e12-2ebbf43fb366": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 3
+    },
+    "stackableItems": {
+     "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 8
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4
+     },
+     "stackableItems": {
+      "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 16
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 7
+     },
+     "stackableItems": {
+      "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 32
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 10
+     },
+     "stackableItems": {
+      "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 56
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 36,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 15
+     },
+     "stackableItems": {
+      "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 96
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "4f562a99-d298-486c-b3f5-1e3188e85db2": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1,
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 1400
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 2,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2800
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 5,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 5600
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 7,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 9800
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 10,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 16800
+     },
+     "stackableItems": {
+      "9df9233f-e7b9-47e8-bc75-f37707917759": 3
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "6605fc97-e90f-4e37-817c-751afe6efdef": {
+   "reward": {
+    "characterXp": 310,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 520
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "2790f995-842c-42bb-9a67-959e9193b83c": {
+   "reward": {
+    "characterXp": 424,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 590
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "10fcb860-b921-49c2-b565-6dd4259a4d1d": {
+   "reward": {
+    "characterXp": 310,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 520
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "7040ca32-98bd-454b-99ab-c74027ac6401": {
+   "reward": {
+    "characterXp": 270,
+    "currencies": {
+     "470c8f58-a8dd-4c07-8c92-843b785e1139": 4
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "896a0f2e-84f7-4493-af6a-93292482e73b": {
+   "reward": {
+    "characterXp": 310,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 520
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "5d75c0e7-c996-4c14-a18b-c77d482310df": {
+   "reward": {
+    "characterXp": 270,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 520
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "facdb5ce-ac43-4fa1-9d7f-593565ac2ab8": {
+   "reward": {
+    "characterXp": 270,
+    "currencies": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 520
+    },
+    "townXp": 0
+   },
+   "observations": 1,
+   "distinctPayloads": 1,
+   "variants": []
+  },
+  "8ef9fad8-e7f6-4f7e-90e3-b0d2daf782bd": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1
+    },
+    "stackableItems": {
+     "74f091b5-fd88-464b-a98a-f60a5e8a0f25": 8
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 2
+     },
+     "stackableItems": {
+      "74f091b5-fd88-464b-a98a-f60a5e8a0f25": 16
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 5
+     },
+     "stackableItems": {
+      "74f091b5-fd88-464b-a98a-f60a5e8a0f25": 32
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 7
+     },
+     "stackableItems": {
+      "74f091b5-fd88-464b-a98a-f60a5e8a0f25": 56
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 10
+     },
+     "stackableItems": {
+      "74f091b5-fd88-464b-a98a-f60a5e8a0f25": 236
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "31baf922-2b1a-4605-ae52-4946e26994c6": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "470c8f58-a8dd-4c07-8c92-843b785e1139": 2,
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 3,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 2
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 5,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 5
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 9,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 7
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 15,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 10,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 25000
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "61f7a386-dd0c-4119-acf6-7f41a9c5b62b": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 3
+    },
+    "stackableItems": {
+     "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 18
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 6
+     },
+     "stackableItems": {
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 36
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 9
+     },
+     "stackableItems": {
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 72
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 12
+     },
+     "stackableItems": {
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 126
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 16
+     },
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 320,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 216
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "e8f3614c-8672-4f77-9dad-4b400676f4b6": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 3,
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2100
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 6,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 4200
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 9,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 8400
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 12,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 14700
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 16,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 25200
+     },
+     "stackableItems": {
+      "cf4b1b42-a736-4aa1-99b8-baca9f9c2276": 3
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "26eb6ab5-2d8c-4993-820e-ada79f6f00a8": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4
+    },
+    "stackableItems": {
+     "19ce1a65-057f-4f34-a0ed-27de7c085662": 1
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 6
+     },
+     "stackableItems": {
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 2
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 10
+     },
+     "stackableItems": {
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 2
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 14
+     },
+     "stackableItems": {
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 3
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 36,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 20
+     },
+     "stackableItems": {
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 5
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "7486296a-335a-4b46-aee1-5102090ce34f": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4
+    },
+    "stackableItems": {
+     "e7193116-d761-479b-8a20-5633737977f5": 18
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 6
+     },
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 36
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 10
+     },
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 72
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 14
+     },
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 126
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 20
+     },
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 216,
+      "f11fb90b-b441-4d72-a33f-50d14d3d6778": 140
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "e5b3c53d-a3af-409e-9f50-2c0a65227e25": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 5
+    },
+    "stackableItems": {
+     "19ce1a65-057f-4f34-a0ed-27de7c085662": 1
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 8
+     },
+     "stackableItems": {
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 2
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 12
+     },
+     "stackableItems": {
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 2
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 18
+     },
+     "stackableItems": {
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 3
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 26
+     },
+     "stackableItems": {
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 5,
+      "f11fb90b-b441-4d72-a33f-50d14d3d6778": 140
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "ff662bf7-a7fa-4ba7-9107-a8556db391e1": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1
+    },
+    "stackableItems": {
+     "19ce1a65-057f-4f34-a0ed-27de7c085662": 1
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 3
+     },
+     "stackableItems": {
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 2
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 6
+     },
+     "stackableItems": {
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 2
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 9
+     },
+     "stackableItems": {
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 3
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 12,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 38000
+     },
+     "stackableItems": {
+      "19ce1a65-057f-4f34-a0ed-27de7c085662": 5
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "bd05e8f6-439a-4c77-919e-edf33595c044": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1
+    },
+    "stackableItems": {
+     "f11fb90b-b441-4d72-a33f-50d14d3d6778": 8
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 3
+     },
+     "stackableItems": {
+      "f11fb90b-b441-4d72-a33f-50d14d3d6778": 16
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 6
+     },
+     "stackableItems": {
+      "f11fb90b-b441-4d72-a33f-50d14d3d6778": 32
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 9
+     },
+     "stackableItems": {
+      "f11fb90b-b441-4d72-a33f-50d14d3d6778": 56
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 12
+     },
+     "stackableItems": {
+      "cf4b1b42-a736-4aa1-99b8-baca9f9c2276": 3,
+      "f11fb90b-b441-4d72-a33f-50d14d3d6778": 96
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "2d1200ee-ecb8-4ea6-9892-54d1f538d83d": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 3
+    },
+    "stackableItems": {
+     "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 18
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 6
+     },
+     "stackableItems": {
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 36
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 9
+     },
+     "stackableItems": {
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 72
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 12
+     },
+     "stackableItems": {
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 126
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 16
+     },
+     "stackableItems": {
+      "f11fb90b-b441-4d72-a33f-50d14d3d6778": 140,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 216
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "816ff4c8-b56f-4645-bd2a-29bc7c1baf96": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 3,
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2100
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 6,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 4200
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 9,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 8400
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 12,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 14700
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 36,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 16,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 25200
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "a85408a6-7107-433d-b616-50105080574e": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 3
+    },
+    "stackableItems": {
+     "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 18
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 6
+     },
+     "stackableItems": {
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 36
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 9
+     },
+     "stackableItems": {
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 72
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 12
+     },
+     "stackableItems": {
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 126
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 16
+     },
+     "stackableItems": {
+      "3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5": 3,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 216
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "f4023a38-195a-4977-bfbc-f443a257566f": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4
+    },
+    "stackableItems": {
+     "21e6557f-17ca-4bd3-9379-00184efe0edc": 2
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 6
+     },
+     "stackableItems": {
+      "21e6557f-17ca-4bd3-9379-00184efe0edc": 4
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 10
+     },
+     "stackableItems": {
+      "21e6557f-17ca-4bd3-9379-00184efe0edc": 8
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 14
+     },
+     "stackableItems": {
+      "21e6557f-17ca-4bd3-9379-00184efe0edc": 14
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 20,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 38000
+     },
+     "stackableItems": {
+      "21e6557f-17ca-4bd3-9379-00184efe0edc": 24
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "a008cbbc-a164-4183-8b69-470ac8cd5707": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "470c8f58-a8dd-4c07-8c92-843b785e1139": 2,
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 3
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 3,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 6
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 5,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 9
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 9,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 15
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 15,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 21
+     },
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 410
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "fbeeaa85-13ae-479a-a751-5625688d682d": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 3
+    },
+    "stackableItems": {
+     "1c5c5ce3-178b-4938-89f3-faf3fa7f0664": 2
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 6
+     },
+     "stackableItems": {
+      "1c5c5ce3-178b-4938-89f3-faf3fa7f0664": 4
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 9
+     },
+     "stackableItems": {
+      "1c5c5ce3-178b-4938-89f3-faf3fa7f0664": 8
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 15
+     },
+     "stackableItems": {
+      "1c5c5ce3-178b-4938-89f3-faf3fa7f0664": 14
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 21
+     },
+     "stackableItems": {
+      "1c5c5ce3-178b-4938-89f3-faf3fa7f0664": 24,
+      "e80bee76-f92c-4005-9eff-20d1e8c64d24": 140
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "79cef1e4-0aa3-4c3e-bfba-385f0bf62405": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4
+    },
+    "stackableItems": {
+     "e7193116-d761-479b-8a20-5633737977f5": 23
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 7
+     },
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 46
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 11
+     },
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 92
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 17
+     },
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 161
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 24
+     },
+     "stackableItems": {
+      "16e102fb-b1c0-42de-8106-0aa27e77f7f0": 3,
+      "e7193116-d761-479b-8a20-5633737977f5": 276
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "2290ab73-8f56-4dba-a4f0-7a23270eb93c": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1
+    },
+    "stackableItems": {
+     "e7193116-d761-479b-8a20-5633737977f5": 23
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4
+     },
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 46
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 7
+     },
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 92
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 11
+     },
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 161
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 16
+     },
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 276,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 410
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "9181f784-9eb8-4872-953d-30ba8b6bc9d1": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 5
+    },
+    "stackableItems": {
+     "85ed5500-3581-4699-8095-4b5ff6514355": 8
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 8
+     },
+     "stackableItems": {
+      "85ed5500-3581-4699-8095-4b5ff6514355": 16
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 14
+     },
+     "stackableItems": {
+      "85ed5500-3581-4699-8095-4b5ff6514355": 32
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 21
+     },
+     "stackableItems": {
+      "85ed5500-3581-4699-8095-4b5ff6514355": 56
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 32
+     },
+     "stackableItems": {
+      "16e102fb-b1c0-42de-8106-0aa27e77f7f0": 3,
+      "85ed5500-3581-4699-8095-4b5ff6514355": 96
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "a1aafdc9-a35c-45c9-89f6-27f7d3a628e6": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1
+    },
+    "stackableItems": {
+     "1c5c5ce3-178b-4938-89f3-faf3fa7f0664": 2
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4
+     },
+     "stackableItems": {
+      "1c5c5ce3-178b-4938-89f3-faf3fa7f0664": 4
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 7
+     },
+     "stackableItems": {
+      "1c5c5ce3-178b-4938-89f3-faf3fa7f0664": 8
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 11
+     },
+     "stackableItems": {
+      "1c5c5ce3-178b-4938-89f3-faf3fa7f0664": 14
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 16
+     },
+     "stackableItems": {
+      "1c5c5ce3-178b-4938-89f3-faf3fa7f0664": 24,
+      "e7193116-d761-479b-8a20-5633737977f5": 410
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "cd66c93c-5086-4311-b0f6-e90af54099b2": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4
+    },
+    "stackableItems": {
+     "790a188b-3fa0-4f38-99d9-bc8d3675bc46": 1
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 7
+     },
+     "stackableItems": {
+      "790a188b-3fa0-4f38-99d9-bc8d3675bc46": 2
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 11
+     },
+     "stackableItems": {
+      "790a188b-3fa0-4f38-99d9-bc8d3675bc46": 2
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 17
+     },
+     "stackableItems": {
+      "790a188b-3fa0-4f38-99d9-bc8d3675bc46": 3
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "470c8f58-a8dd-4c07-8c92-843b785e1139": 36,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 24
+     },
+     "stackableItems": {
+      "790a188b-3fa0-4f38-99d9-bc8d3675bc46": 5
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "e2bda86c-0f80-43e4-9394-cdbff00a34c1": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1
+    },
+    "stackableItems": {
+     "8ef9f10c-3c46-492c-9a00-29fd1626d85e": 8
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4
+     },
+     "stackableItems": {
+      "8ef9f10c-3c46-492c-9a00-29fd1626d85e": 16
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 7
+     },
+     "stackableItems": {
+      "8ef9f10c-3c46-492c-9a00-29fd1626d85e": 32
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 11
+     },
+     "stackableItems": {
+      "8ef9f10c-3c46-492c-9a00-29fd1626d85e": 56
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 16
+     },
+     "stackableItems": {
+      "8ef9f10c-3c46-492c-9a00-29fd1626d85e": 96,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 410
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "ed1414eb-e94f-4d02-90e7-041ecc2b73d3": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1
+    },
+    "stackableItems": {
+     "1c5c5ce3-178b-4938-89f3-faf3fa7f0664": 2
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4
+     },
+     "stackableItems": {
+      "1c5c5ce3-178b-4938-89f3-faf3fa7f0664": 4
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 7
+     },
+     "stackableItems": {
+      "1c5c5ce3-178b-4938-89f3-faf3fa7f0664": 8
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 11
+     },
+     "stackableItems": {
+      "1c5c5ce3-178b-4938-89f3-faf3fa7f0664": 14
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 16
+     },
+     "stackableItems": {
+      "1c5c5ce3-178b-4938-89f3-faf3fa7f0664": 24,
+      "85ed5500-3581-4699-8095-4b5ff6514355": 140
+     },
+     "townXp": 0
+    }
+   ]
+  },
+  "01121c2f-6806-4b8c-998e-adc5d0e21db7": {
+   "reward": {
+    "characterXp": 700,
+    "currencies": {
+     "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1
+    },
+    "stackableItems": {
+     "e7193116-d761-479b-8a20-5633737977f5": 23
+    },
+    "townXp": 0
+   },
+   "observations": 5,
+   "distinctPayloads": 5,
+   "variants": [
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4
+     },
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 46
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 7
+     },
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 92
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 11
+     },
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 161
+     },
+     "townXp": 0
+    },
+    {
+     "characterXp": 700,
+     "currencies": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 16
+     },
+     "stackableItems": {
+      "16e102fb-b1c0-42de-8106-0aa27e77f7f0": 3,
+      "e7193116-d761-479b-8a20-5633737977f5": 276
+     },
+     "townXp": 0
+    }
+   ]
+  }
+ }
+}

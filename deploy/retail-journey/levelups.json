@@ -1,0 +1,617 @@
+{
+ "_meta": {
+  "description": "Retail observations behind the progression tests. Measured, not modelled: every number is read from a captured Bethesda response. Regenerate with script/extract_journey_fixtures.py.",
+  "source": "blades-snapshot-20260607-112415.db",
+  "user": "164824943366766592",
+  "captures": 18135,
+  "count": 30
+ },
+ "observations": [
+  {
+   "captureId": 4859,
+   "timestamp": "2026-05-09T20:12:18.767084+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 1,
+   "levelAfter": 2,
+   "experienceBefore": 57,
+   "experienceAfter": 7,
+   "experienceSpent": 50,
+   "staminaBefore": 0,
+   "staminaAfter": 1,
+   "magickaBefore": 0,
+   "magickaAfter": 0,
+   "walletCurrencyIds": [
+    "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+   ],
+   "responseKeys": [
+    "character",
+    "inventory",
+    "wallet"
+   ]
+  },
+  {
+   "captureId": 6283,
+   "timestamp": "2026-05-10T17:59:18.763190+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 2,
+   "levelAfter": 3,
+   "experienceBefore": 202,
+   "experienceAfter": 2,
+   "experienceSpent": 200,
+   "staminaBefore": 1,
+   "staminaAfter": 2,
+   "magickaBefore": 0,
+   "magickaAfter": 0,
+   "walletCurrencyIds": [
+    "470c8f58-a8dd-4c07-8c92-843b785e1139"
+   ],
+   "responseKeys": [
+    "character",
+    "inventory",
+    "wallet"
+   ]
+  },
+  {
+   "captureId": 8820,
+   "timestamp": "2026-05-11T10:44:18.246145+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 3,
+   "levelAfter": 4,
+   "experienceBefore": 506,
+   "experienceAfter": 6,
+   "experienceSpent": 500,
+   "staminaBefore": 2,
+   "staminaAfter": 3,
+   "magickaBefore": 0,
+   "magickaAfter": 0,
+   "walletCurrencyIds": [
+    "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+   ],
+   "responseKeys": [
+    "character",
+    "inventory",
+    "wallet"
+   ]
+  },
+  {
+   "captureId": 9410,
+   "timestamp": "2026-05-11T18:31:09.045225+00:00",
+   "attribute": "MAGICKA",
+   "levelBefore": 4,
+   "levelAfter": 5,
+   "experienceBefore": 774,
+   "experienceAfter": 196,
+   "experienceSpent": 578,
+   "staminaBefore": 3,
+   "staminaAfter": 3,
+   "magickaBefore": 0,
+   "magickaAfter": 1,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 10407,
+   "timestamp": "2026-05-12T16:09:23.570586+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 5,
+   "levelAfter": 6,
+   "experienceBefore": 786,
+   "experienceAfter": 104,
+   "experienceSpent": 682,
+   "staminaBefore": 3,
+   "staminaAfter": 4,
+   "magickaBefore": 1,
+   "magickaAfter": 1,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 11502,
+   "timestamp": "2026-05-13T01:19:26.594639+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 6,
+   "levelAfter": 7,
+   "experienceBefore": 886,
+   "experienceAfter": 66,
+   "experienceSpent": 820,
+   "staminaBefore": 4,
+   "staminaAfter": 5,
+   "magickaBefore": 1,
+   "magickaAfter": 1,
+   "walletCurrencyIds": [
+    "470c8f58-a8dd-4c07-8c92-843b785e1139"
+   ],
+   "responseKeys": [
+    "character",
+    "inventory",
+    "wallet"
+   ]
+  },
+  {
+   "captureId": 12227,
+   "timestamp": "2026-05-13T01:56:22.264917+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 7,
+   "levelAfter": 8,
+   "experienceBefore": 1082,
+   "experienceAfter": 82,
+   "experienceSpent": 1000,
+   "staminaBefore": 5,
+   "staminaAfter": 6,
+   "magickaBefore": 1,
+   "magickaAfter": 1,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 12581,
+   "timestamp": "2026-05-13T02:21:27.340064+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 8,
+   "levelAfter": 9,
+   "experienceBefore": 1438,
+   "experienceAfter": 211,
+   "experienceSpent": 1227,
+   "staminaBefore": 6,
+   "staminaAfter": 7,
+   "magickaBefore": 1,
+   "magickaAfter": 1,
+   "walletCurrencyIds": [
+    "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+   ],
+   "responseKeys": [
+    "character",
+    "inventory",
+    "wallet"
+   ]
+  },
+  {
+   "captureId": 13003,
+   "timestamp": "2026-05-13T02:36:53.799957+00:00",
+   "attribute": "MAGICKA",
+   "levelBefore": 9,
+   "levelAfter": 10,
+   "experienceBefore": 1515,
+   "experienceAfter": 9,
+   "experienceSpent": 1506,
+   "staminaBefore": 7,
+   "staminaAfter": 7,
+   "magickaBefore": 1,
+   "magickaAfter": 2,
+   "walletCurrencyIds": [
+    "470c8f58-a8dd-4c07-8c92-843b785e1139"
+   ],
+   "responseKeys": [
+    "character",
+    "inventory",
+    "wallet"
+   ]
+  },
+  {
+   "captureId": 14439,
+   "timestamp": "2026-05-13T17:09:17.101129+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 10,
+   "levelAfter": 11,
+   "experienceBefore": 14259,
+   "experienceAfter": 12417,
+   "experienceSpent": 1842,
+   "staminaBefore": 7,
+   "staminaAfter": 8,
+   "magickaBefore": 2,
+   "magickaAfter": 2,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 14505,
+   "timestamp": "2026-05-13T17:12:35.065977+00:00",
+   "attribute": "MAGICKA",
+   "levelBefore": 11,
+   "levelAfter": 12,
+   "experienceBefore": 12417,
+   "experienceAfter": 10177,
+   "experienceSpent": 2240,
+   "staminaBefore": 8,
+   "staminaAfter": 8,
+   "magickaBefore": 2,
+   "magickaAfter": 3,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 14573,
+   "timestamp": "2026-05-13T17:15:25.637833+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 12,
+   "levelAfter": 13,
+   "experienceBefore": 10177,
+   "experienceAfter": 7472,
+   "experienceSpent": 2705,
+   "staminaBefore": 8,
+   "staminaAfter": 9,
+   "magickaBefore": 3,
+   "magickaAfter": 3,
+   "walletCurrencyIds": [
+    "470c8f58-a8dd-4c07-8c92-843b785e1139"
+   ],
+   "responseKeys": [
+    "character",
+    "inventory",
+    "wallet"
+   ]
+  },
+  {
+   "captureId": 14639,
+   "timestamp": "2026-05-13T17:18:24.293793+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 13,
+   "levelAfter": 14,
+   "experienceBefore": 7472,
+   "experienceAfter": 4230,
+   "experienceSpent": 3242,
+   "staminaBefore": 9,
+   "staminaAfter": 10,
+   "magickaBefore": 3,
+   "magickaAfter": 3,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 14709,
+   "timestamp": "2026-05-13T17:21:31.410366+00:00",
+   "attribute": "MAGICKA",
+   "levelBefore": 14,
+   "levelAfter": 15,
+   "experienceBefore": 4230,
+   "experienceAfter": 374,
+   "experienceSpent": 3856,
+   "staminaBefore": 10,
+   "staminaAfter": 10,
+   "magickaBefore": 3,
+   "magickaAfter": 4,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 17861,
+   "timestamp": "2026-05-15T10:32:00.337666+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 15,
+   "levelAfter": 16,
+   "experienceBefore": 6831,
+   "experienceAfter": 2279,
+   "experienceSpent": 4552,
+   "staminaBefore": 10,
+   "staminaAfter": 11,
+   "magickaBefore": 4,
+   "magickaAfter": 4,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 18656,
+   "timestamp": "2026-05-15T11:07:54.103432+00:00",
+   "attribute": "MAGICKA",
+   "levelBefore": 16,
+   "levelAfter": 17,
+   "experienceBefore": 5865,
+   "experienceAfter": 530,
+   "experienceSpent": 5335,
+   "staminaBefore": 11,
+   "staminaAfter": 11,
+   "magickaBefore": 4,
+   "magickaAfter": 5,
+   "walletCurrencyIds": [
+    "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+   ],
+   "responseKeys": [
+    "character",
+    "inventory",
+    "wallet"
+   ]
+  },
+  {
+   "captureId": 20364,
+   "timestamp": "2026-05-16T13:34:41.717144+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 17,
+   "levelAfter": 18,
+   "experienceBefore": 10003,
+   "experienceAfter": 3793,
+   "experienceSpent": 6210,
+   "staminaBefore": 12,
+   "staminaAfter": 13,
+   "magickaBefore": 4,
+   "magickaAfter": 4,
+   "walletCurrencyIds": [
+    "470c8f58-a8dd-4c07-8c92-843b785e1139"
+   ],
+   "responseKeys": [
+    "character",
+    "inventory",
+    "wallet"
+   ]
+  },
+  {
+   "captureId": 23371,
+   "timestamp": "2026-05-18T01:01:00.071625+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 18,
+   "levelAfter": 19,
+   "experienceBefore": 9717,
+   "experienceAfter": 2535,
+   "experienceSpent": 7182,
+   "staminaBefore": 13,
+   "staminaAfter": 14,
+   "magickaBefore": 4,
+   "magickaAfter": 4,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 25144,
+   "timestamp": "2026-05-19T00:02:52.621492+00:00",
+   "attribute": "MAGICKA",
+   "levelBefore": 19,
+   "levelAfter": 20,
+   "experienceBefore": 9797,
+   "experienceAfter": 1569,
+   "experienceSpent": 8228,
+   "staminaBefore": 14,
+   "staminaAfter": 14,
+   "magickaBefore": 4,
+   "magickaAfter": 5,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 27275,
+   "timestamp": "2026-05-20T23:48:18.273141+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 20,
+   "levelAfter": 21,
+   "experienceBefore": 16253,
+   "experienceAfter": 6928,
+   "experienceSpent": 9325,
+   "staminaBefore": 14,
+   "staminaAfter": 15,
+   "magickaBefore": 5,
+   "magickaAfter": 5,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 29219,
+   "timestamp": "2026-05-23T00:07:53.269792+00:00",
+   "attribute": "MAGICKA",
+   "levelBefore": 21,
+   "levelAfter": 22,
+   "experienceBefore": 20139,
+   "experienceAfter": 9689,
+   "experienceSpent": 10450,
+   "staminaBefore": 15,
+   "staminaAfter": 15,
+   "magickaBefore": 5,
+   "magickaAfter": 6,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 30007,
+   "timestamp": "2026-05-24T00:13:42.917042+00:00",
+   "attribute": "MAGICKA",
+   "levelBefore": 22,
+   "levelAfter": 23,
+   "experienceBefore": 18501,
+   "experienceAfter": 6921,
+   "experienceSpent": 11580,
+   "staminaBefore": 15,
+   "staminaAfter": 15,
+   "magickaBefore": 6,
+   "magickaAfter": 7,
+   "walletCurrencyIds": [
+    "470c8f58-a8dd-4c07-8c92-843b785e1139"
+   ],
+   "responseKeys": [
+    "character",
+    "inventory",
+    "wallet"
+   ]
+  },
+  {
+   "captureId": 32645,
+   "timestamp": "2026-05-24T21:00:48.142657+00:00",
+   "attribute": "MAGICKA",
+   "levelBefore": 23,
+   "levelAfter": 24,
+   "experienceBefore": 18477,
+   "experienceAfter": 5785,
+   "experienceSpent": 12692,
+   "staminaBefore": 15,
+   "staminaAfter": 15,
+   "magickaBefore": 7,
+   "magickaAfter": 8,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 37760,
+   "timestamp": "2026-05-26T23:59:19.351250+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 24,
+   "levelAfter": 25,
+   "experienceBefore": 30188,
+   "experienceAfter": 16425,
+   "experienceSpent": 13763,
+   "staminaBefore": 15,
+   "staminaAfter": 16,
+   "magickaBefore": 8,
+   "magickaAfter": 8,
+   "walletCurrencyIds": [
+    "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
+   ],
+   "responseKeys": [
+    "character",
+    "inventory",
+    "wallet"
+   ]
+  },
+  {
+   "captureId": 37857,
+   "timestamp": "2026-05-27T00:03:16.394788+00:00",
+   "attribute": "MAGICKA",
+   "levelBefore": 25,
+   "levelAfter": 26,
+   "experienceBefore": 16425,
+   "experienceAfter": 1655,
+   "experienceSpent": 14770,
+   "staminaBefore": 16,
+   "staminaAfter": 16,
+   "magickaBefore": 8,
+   "magickaAfter": 9,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 40144,
+   "timestamp": "2026-05-28T22:18:45.701974+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 26,
+   "levelAfter": 27,
+   "experienceBefore": 18760,
+   "experienceAfter": 3070,
+   "experienceSpent": 15690,
+   "staminaBefore": 16,
+   "staminaAfter": 17,
+   "magickaBefore": 9,
+   "magickaAfter": 9,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 44071,
+   "timestamp": "2026-05-30T23:10:52.374169+00:00",
+   "attribute": "MAGICKA",
+   "levelBefore": 27,
+   "levelAfter": 28,
+   "experienceBefore": 21282,
+   "experienceAfter": 4782,
+   "experienceSpent": 16500,
+   "staminaBefore": 17,
+   "staminaAfter": 17,
+   "magickaBefore": 9,
+   "magickaAfter": 10,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 47737,
+   "timestamp": "2026-06-01T23:07:23.649619+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 28,
+   "levelAfter": 29,
+   "experienceBefore": 21930,
+   "experienceAfter": 4753,
+   "experienceSpent": 17177,
+   "staminaBefore": 17,
+   "staminaAfter": 18,
+   "magickaBefore": 10,
+   "magickaAfter": 10,
+   "walletCurrencyIds": [
+    "470c8f58-a8dd-4c07-8c92-843b785e1139"
+   ],
+   "responseKeys": [
+    "character",
+    "inventory",
+    "wallet"
+   ]
+  },
+  {
+   "captureId": 51143,
+   "timestamp": "2026-06-04T00:47:42.194464+00:00",
+   "attribute": "STAMINA",
+   "levelBefore": 29,
+   "levelAfter": 30,
+   "experienceBefore": 22625,
+   "experienceAfter": 4927,
+   "experienceSpent": 17698,
+   "staminaBefore": 18,
+   "staminaAfter": 19,
+   "magickaBefore": 10,
+   "magickaAfter": 10,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  },
+  {
+   "captureId": 56425,
+   "timestamp": "2026-06-05T23:12:40.565457+00:00",
+   "attribute": "MAGICKA",
+   "levelBefore": 30,
+   "levelAfter": 31,
+   "experienceBefore": 27807,
+   "experienceAfter": 9767,
+   "experienceSpent": 18040,
+   "staminaBefore": 19,
+   "staminaAfter": 19,
+   "magickaBefore": 10,
+   "magickaAfter": 11,
+   "walletCurrencyIds": [],
+   "responseKeys": [
+    "character",
+    "inventory"
+   ]
+  }
+ ]
+}

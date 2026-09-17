@@ -13,8 +13,8 @@ use actix_web::{
     post,
     web::{self, Json},
 };
-use blades_lib::economy::RewardGrant;
 use blades_lib::features::character_ops::{self, Attribute};
+use blades_lib::features::level_up;
 use blades_lib::user_data::{
     CompleteCharacter, CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate,
     CompleteWallet, InventoryChangeTracker,
@@ -110,14 +110,24 @@ fn set_level_up_offer(
     };
 }
 
-/// `POST /levelup` — spend a level into STAMINA or MAGICKA.
+/// `POST /levelup` — spend banked experience on a level, into STAMINA or MAGICKA.
+///
+/// The decision — is it affordable, what does it cost, what does it pay — lives in
+/// [`blades_lib::features::level_up::apply_level_up`], measured against 30 captured
+/// retail level-ups. This handler is the IO around it: load, apply, persist, and
+/// answer in retail's shape.
+///
+/// Retail's shape is `{character, inventory}` plus a `wallet` **only when the level
+/// credited a currency**, and then carrying only that currency (18 of the 30
+/// captured level-ups send no wallet at all). We used to send the whole purse on
+/// every call, which told the client a balance had changed when it had not.
 #[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/levelup")]
 pub async fn levelup(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
     path: web::Path<Uuid>,
     body: Json<LevelupRequest>,
-) -> Result<Json<CharacterWalletInventory>, BladeApiError> {
+) -> Result<Json<LevelupResponse>, BladeApiError> {
     let session = session.get_session_or_error()?;
     let user_id = session.session.user_id;
     let character_id = path.into_inner();
@@ -130,10 +140,15 @@ pub async fn levelup(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
-            character_ops::apply_levelup(&mut entry.character.0, attribute);
 
-            // Grant level-up rewards based on the new level
-            let new_level = entry.character.0.level;
+            // Refuse before anything is written: an unearned level must leave the
+            // character exactly as it was, not half-applied.
+            let outcome = level_up::apply_level_up(
+                &mut entry.character.0,
+                attribute,
+                &app_state_clone.level_up_data,
+            )
+            .map_err(levelup_refusal)?;
 
             // The client renders a level-up offer from `character.globalShopOffers`.
             // Returning the old/null value still opens the card, but leaves its
@@ -151,68 +166,26 @@ pub async fn levelup(
                 &app_state_clone.static_data.level_up_offers,
                 start_time,
             );
-            if let Some(reward) = app_state_clone.level_up_data.get_reward(new_level.into()) {
-                let mut tracker = InventoryChangeTracker::default();
-                
-                // Build a reward grant from the level-up data
-                let mut reward_grant = RewardGrant::default();
-                
-                // Add Gold
-                if reward.gold_reward > 0 {
-                    let gold_currency_id = Uuid::parse_str("f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2")
-                        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, CHAR_OPS_SERVICE_ID, 99))?;
-                    reward_grant.currencies.insert(gold_currency_id, reward.gold_reward.into());
-                }
 
-                // Add Gems
-                if reward.gems_reward > 0 {
-                    let gems_currency_id = Uuid::parse_str("470c8f58-a8dd-4c07-8c92-843b785e1139")
-                        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, CHAR_OPS_SERVICE_ID, 99))?;
-                    reward_grant.currencies.insert(gems_currency_id, reward.gems_reward.into());
-                }
-
-                /*
-                // Add Sygils
-                if reward.sygils_reward > 0 {
-                    let sygils_currency_id = Uuid::parse_str("c64bcb53-41f4-41ba-892a-fe2cca423caa")
-                        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, CHAR_OPS_SERVICE_ID, 99))?;
-                    reward_grant.currencies.insert(sygils_currency_id, reward.sygils_reward.into());
-                }
-                */
-
-                // Add Items
-                for item in &reward.items {
-                    let template_id = Uuid::parse_str(&item.template_id)
-                        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, CHAR_OPS_SERVICE_ID, 99))?;
-                    reward_grant.stackable_items.insert(template_id, item.quantity as u64);
-                }
-                log::debug!("Reward stackable_items: {:?}", reward_grant.stackable_items);
-
-                // Apply the reward
-                blades_lib::economy::apply_reward(
-                    &reward_grant,
-                    &mut entry.wallet.0,
-                    &mut entry.inventory.0,
-                    &mut entry.character.0,
-                    &mut tracker,
-                );
-                
-                if !reward_grant.stackable_items.is_empty() || !reward_grant.items.is_empty() {
-                    entry.inventory.0.backpack_version += 1;
-                }
-                log::debug!("Inventory stackables after apply: {:?}", entry.inventory.0.backpack.stackable_items);
+            let mut tracker = InventoryChangeTracker::default();
+            blades_lib::economy::apply_reward(
+                &outcome.reward,
+                &mut entry.wallet.0,
+                &mut entry.inventory.0,
+                &mut entry.character.0,
+                &mut tracker,
+            );
+            if !outcome.reward.stackable_items.is_empty() || !outcome.reward.items.is_empty() {
+                entry.inventory.0.backpack_version += 1;
             }
 
-            let resp = CharacterWalletInventory {
+            let resp = LevelupResponse {
                 character: CompleteCharacterWithIdWithoutData {
                     id: character_id,
                     character: entry.character.0.clone(),
                 },
-                wallet: entry.wallet.0.clone(),
-                inventory: entry
-                    .inventory
-                    .0
-                    .generate_client_update(&InventoryChangeTracker::default()),
+                wallet: credited_wallet(&entry.wallet.0, &outcome.credited_currencies),
+                inventory: entry.inventory.0.generate_client_update(&tracker),
             };
             write_back(&mut conn, entry).await?;
             Ok::<_, BladeApiError>(Json(resp))
@@ -220,6 +193,45 @@ pub async fn levelup(
         .scope_boxed()
     })
     .await
+}
+
+/// `/levelup`'s response. `wallet` is absent unless the level paid something —
+/// see the handler doc for the captured shape.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LevelupResponse {
+    character: CompleteCharacterWithIdWithoutData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wallet: Option<CompleteWallet>,
+    inventory: CompleteInventoryUpdate,
+}
+
+/// The post-credit balances of just the currencies this level paid out, or `None`
+/// when it paid none — which is what makes the `wallet` key disappear.
+fn credited_wallet(wallet: &CompleteWallet, credited: &[Uuid]) -> Option<CompleteWallet> {
+    if credited.is_empty() {
+        return None;
+    }
+    let mut out = HashMap::new();
+    for currency in credited {
+        if let Some(entry) = wallet.0.get(currency) {
+            out.insert(*currency, entry.clone());
+        }
+    }
+    Some(CompleteWallet(out))
+}
+
+/// Map a refusal onto the wire. All three are the client asking for a level it
+/// cannot have, so all three are 400s rather than 500s.
+fn levelup_refusal(err: level_up::LevelUpRefusal) -> BladeApiError {
+    use level_up::LevelUpRefusal::*;
+    let code = match err {
+        NotEnoughExperience { .. } => 2,
+        AlreadyMaxLevel { .. } => 3,
+        UnknownLevel { .. } => 4,
+    };
+    log::info!("levelup refused: {err:?}");
+    BladeApiError::new(StatusCode::BAD_REQUEST, CHAR_OPS_SERVICE_ID, code)
 }
 
 #[derive(Deserialize)]
@@ -529,6 +541,7 @@ pub async fn update_loadout(
 
 #[cfg(test)]
 mod tests {
+    use blades_lib::economy::{GEMS, GOLD};
     use super::*;
 
     #[test]
@@ -620,5 +633,83 @@ mod tests {
     fn an_absent_field_is_still_an_empty_map() {
         let req: LoadoutCurrentRequest = serde_json::from_str(r#"{}"#).unwrap();
         assert!(req.equipment_updates.is_empty());
+    }
+
+    // ── /levelup's response shape ────────────────────────────────────────────
+    //
+    // The serialized body is what the client parses, so these assert on the JSON
+    // rather than on the struct: a `skip_serializing_if` that stops working is
+    // invisible at the type level.
+
+    fn wallet_of(pairs: &[(uuid::Uuid, u64)]) -> CompleteWallet {
+        CompleteWallet(
+            pairs
+                .iter()
+                .map(|(c, b)| (*c, blades_lib::user_data::WalletEntry { balance: *b }))
+                .collect(),
+        )
+    }
+
+    fn body(wallet: Option<CompleteWallet>) -> serde_json::Value {
+        let resp = LevelupResponse {
+            character: CompleteCharacterWithIdWithoutData {
+                id: uuid::Uuid::nil(),
+                character: Default::default(),
+            },
+            wallet,
+            inventory: CompleteInventoryUpdate {
+                backpack: Default::default(),
+                loadout: Default::default(),
+                treasury: Default::default(),
+                overflow_treasury: Default::default(),
+                backpack_version: 1,
+                treasury_version: 1,
+            },
+        };
+        serde_json::to_value(resp).unwrap()
+    }
+
+    /// 18 of the 30 captured retail level-ups pay nothing and send no `wallet`
+    /// key. Sending an empty array instead is not the same thing: it reads as
+    /// "your balances are now these", which for an empty array means zero.
+    #[test]
+    fn a_level_that_pays_nothing_sends_no_wallet_key() {
+        let json = body(credited_wallet(&wallet_of(&[(GOLD, 900), (GEMS, 12)]), &[]));
+        assert!(
+            json.get("wallet").is_none(),
+            "expected no wallet key, got {json}"
+        );
+        assert!(json.get("character").is_some() && json.get("inventory").is_some());
+    }
+
+    /// …and a level that pays sends only what it paid, at its post-credit balance.
+    #[test]
+    fn a_paying_level_sends_only_the_currency_it_credited() {
+        let purse = wallet_of(&[(GOLD, 900), (GEMS, 12)]);
+        let json = body(credited_wallet(&purse, &[GEMS]));
+        let entries = json["wallet"].as_array().expect("wallet array");
+        assert_eq!(entries.len(), 1, "one currency, not the whole purse: {json}");
+        assert_eq!(entries[0]["currencyId"], GEMS.to_string());
+        assert_eq!(entries[0]["balance"], 12);
+    }
+
+    /// Every refusal is a 400 — the client asked for a level it cannot have, which
+    /// is a bad request, not a server fault. A 500 here would make the client
+    /// retry forever.
+    #[test]
+    fn every_levelup_refusal_is_a_client_error() {
+        use blades_lib::features::level_up::LevelUpRefusal::*;
+        for err in [
+            NotEnoughExperience { have: 1, need: 50 },
+            AlreadyMaxLevel { level: 100 },
+            UnknownLevel { level: 101 },
+        ] {
+            let api = levelup_refusal(err);
+            assert_eq!(
+                actix_web::ResponseError::status_code(&api),
+                StatusCode::BAD_REQUEST,
+                "refusals must not look like server faults"
+            );
+        }
     }
 }

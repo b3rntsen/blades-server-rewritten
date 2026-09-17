@@ -1,5 +1,7 @@
 target/
 .git/
 deploy/static/
+# Captured retail observations, read only by tests — never by the server.
+deploy/retail-journey/
 *.md
 **/*.pcap

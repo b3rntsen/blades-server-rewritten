@@ -1,0 +1,89 @@
+{
+ "_meta": {
+  "description": "Retail observations behind the progression tests. Measured, not modelled: every number is read from a captured Bethesda response. Regenerate with script/extract_journey_fixtures.py.",
+  "source": "blades-snapshot-20260607-112415.db",
+  "user": "164824943366766592",
+  "captures": 18135,
+  "count": 3
+ },
+ "observations": [
+  {
+   "captureId": 4747,
+   "request": {
+    "objectiveUpdates": {
+     "76b97069-67e9-4202-aa93-8bc1dc7fbc65": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "d5ccf370-0795-4554-9dab-68ccbb97473d": 5
+    },
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 4915,
+   "request": {
+    "objectiveUpdates": {
+     "03aa92b9-de0e-4e2b-b98c-a4d05a2c956f": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 140,
+     "42d91529-c88b-4c5b-815b-b55508b4e7ef": 150
+    },
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 6309,
+   "request": {
+    "objectiveUpdates": {
+     "3de9d4ab-77ac-48c6-bfac-fb4460aa2346": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "items": [
+     {
+      "id": "df70eac9-8686-4135-98cc-6620e786e112",
+      "itemTemplateId": "6fe63664-4252-4269-9f51-8546b5f138da",
+      "temperingLevel": 0,
+      "durability": 75.0
+     }
+    ],
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  }
+ ]
+}

@@ -55,8 +55,11 @@ pub const MAX_ATTRIBUTE_POINT_LEVEL: u16 = 50;
 /// satisfy `stamina + magicka == level - 1` exactly, while the one captured
 /// level-56 character holds **49**, i.e. still capped at level 50's total.
 ///
-/// (The client only calls this when the character has crossed an XP threshold,
-/// which it knows from its bundles; we trust it and apply the effect.)
+/// **This is the effect, not the decision.** It does not check that the level was
+/// earned and it does not spend the experience — that is
+/// [`crate::features::level_up::apply_level_up`], which gates on the captured XP
+/// table and then calls this. Nothing outside that function should call it: doing
+/// so hands out a free level.
 pub fn apply_levelup(ch: &mut CompleteCharacter, attribute: Attribute) {
     ch.level = ch.level.saturating_add(1);
     if ch.level <= MAX_ATTRIBUTE_POINT_LEVEL {
