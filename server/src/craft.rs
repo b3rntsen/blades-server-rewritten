@@ -566,7 +566,39 @@ pub async fn create_craft(
                             let results = mint_smith_craftable(craftable, tempering_level);
                             (results, crafting_type_id, craftable.duration_ms)
                         } else {
-                            // Not a smith craftable, and not a recipe we captured.
+                            // The APK says what this recipe makes. 898 recipes
+                            // declare an output template — 617 Smithing, 141
+                            // DecorationCrafting, 140 Alchemy — and every one of
+                            // those templates is a real item. That covers the
+                            // crafts that were falling through to the refusal
+                            // below, including the Steel Longsword and the
+                            // decoration that broke two players' saves.
+                            if let Some(out) =
+                                blades_lib::features::recipe_outputs::output_for(&recipe_id)
+                            {
+                                let crafting_type_id = out
+                                    .crafting_type_id
+                                    .or_else(|| apk_crafting_type(&recipe_id, &globals.static_data))
+                                    .unwrap_or_else(|| {
+                                        derive_plain_craft_type(building_id, &globals.static_data)
+                                    });
+                                let results = mint_recipe_output(
+                                    &CraftJob {
+                                        id: Uuid::nil(),
+                                        recipe_id,
+                                        building_id,
+                                        crafting_type_id,
+                                        completed_at_ms: 0,
+                                        results: serde_json::json!({}),
+                                    },
+                                    out.output_item_template_id,
+                                    crafting_type_id,
+                                    &globals.static_data,
+                                    &globals.repair_data,
+                                );
+                                (results, crafting_type_id, 0)
+                            } else {
+                            // Not a smith craftable, and not in the APK recipe table.
                             // REFUSE. There is no honest output for a recipe we never
                             // captured, and every alternative has now been tried:
                             //
@@ -602,6 +634,7 @@ pub async fn create_craft(
                                 20001,
                                 3,
                             ));
+                            }
                         }
                     }
                 }
