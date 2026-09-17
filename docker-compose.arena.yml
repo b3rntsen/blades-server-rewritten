@@ -195,6 +195,17 @@ services:
       # other services, so that was a real exposure rather than a theoretical
       # one.
       ARENA_DATABASE_URL: postgres://blades:${ARENA_DB_PASSWORD:?set ARENA_DB_PASSWORD in arena.env}@arena-db:5432/blades
+      # Per-player arena combat tracing (reports #152/#163/#164: desync and the
+      # end-of-match freeze). Writes one file per session under this directory.
+      # Bounded in the binary -- 32 MiB per session, 512 MiB total -- so it cannot
+      # fill the disk, and it is inert when unset.
+      #
+      # It has to be named HERE or it never reaches the process: compose passes
+      # only what this block lists, so setting it in arena.env alone does nothing
+      # (the same trap ARENA_ADVERTISE_HOST_PUBLIC documents above).
+      ARENA_TRACE_DIR: ${ARENA_TRACE_DIR:-/data/arena-traces}
+      ARENA_TRACE_MAX_SESSION_BYTES: ${ARENA_TRACE_MAX_SESSION_BYTES:-33554432}
+      ARENA_TRACE_MAX_TOTAL_BYTES: ${ARENA_TRACE_MAX_TOTAL_BYTES:-536870912}
     command:
       - run
       - --host
@@ -205,6 +216,10 @@ services:
       - /data/static
     volumes:
       - ./deploy/static:/data/static:ro
+      # Traces must OUTLIVE THE CONTAINER for the same reason the logs do: a
+      # deploy recreates it. The host path stays under /var/lib/newblades, which
+      # is what setup-deploy-user.sh validates.
+      - /var/lib/newblades/arena-traces:/data/arena-traces
     ports:
       # HTTP REST — bound to localhost; the newblades-web container reaches it
       # over edge_net by service name (http://arena-server:8080), not this port.
