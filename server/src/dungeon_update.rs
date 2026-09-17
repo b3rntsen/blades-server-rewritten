@@ -828,7 +828,13 @@ fn process_dungeon_actions(
                     continue;
                 }
 
-                let tier = chest_data.tier;
+                // The generated tier is signed because retail sent -1 on one
+                // chest spawn. The treasury has no pool below tier 1 and
+                // inventing one would be a fabrication, so a non-positive tier
+                // grants a tier-1 chest — which is exactly what this code did
+                // before the wire was corrected, so no player loses anything.
+                // Only the number the CLIENT is told has changed.
+                let tier = chest_data.tier.max(1) as u64;
                 let chest_id = character_data
                     .inventory
                     .0
