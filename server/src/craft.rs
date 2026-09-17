@@ -566,30 +566,42 @@ pub async fn create_craft(
                             let results = mint_smith_craftable(craftable, tempering_level);
                             (results, crafting_type_id, craftable.duration_ms)
                         } else {
-                            // Not a smith craftable → the alchemy/other plain-craft path.
-                            // recipes.json is a PARTIAL capture (retail has far more alchemy
-                            // recipes than we captured). For an unknown recipe we previously
-                            // echoed crafting_type_id = recipe_id — exactly the temper-hang
-                            // class of bug (fix e5659c9): the client can't map that id to a
-                            // CraftingStation, so the Alchemist screen freezes and the app
-                            // restarts. Derive a VALID crafting_type_id from context instead,
-                            // and return a well-formed (non-empty) result so the craft-
-                            // completion flow can finish.
-                            // The APK table answers this outright for every recipe the
-                            // client ships; `derive_plain_craft_type` is now only for a
-                            // recipe absent from the shipped data entirely.
-                            let crafting_type_id =
-                                apk_crafting_type(&recipe_id, &globals.static_data).unwrap_or_else(
-                                    || derive_plain_craft_type(building_id, &globals.static_data),
-                                );
-                            // Approximate the brew's output as one stackable of the recipe's
-                            // own id (the true potion template for an un-captured recipe is
-                            // unknown; granting a single stackable is well-formed and lets the
-                            // completion flow finish — flagged as an approximation).
-                            let results = serde_json::json!({
-                                "stackableItems": { recipe_id.to_string(): 1 }
-                            });
-                            (results, crafting_type_id, 0)
+                            // Not a smith craftable, and not a recipe we captured.
+                            // REFUSE. There is no honest output for a recipe we never
+                            // captured, and every alternative has now been tried:
+                            //
+                            //   * the recipe id as a stackable -- what this used to do.
+                            //     A recipe id is not an item template; five characters
+                            //     on production were carrying one and two could not
+                            //     load the game at all (#176, #179, #180).
+                            //   * nothing (`{}`) -- breaks the codebase's own invariant
+                            //     that a completed craft yields a real grant, asserted
+                            //     by three separate tests, and `{}` is exactly the shape
+                            //     the repair path treats as broken.
+                            //   * the name-seed mapped to a real template -- only 239 of
+                            //     2,590 `Items.Name.*` seeds resolve to exactly one item,
+                            //     and three of the four ids seen on production resolve to
+                            //     none. It would guess wrong more often than right.
+                            //
+                            // So the craft does not start. 400 with the price-mismatch
+                            // shape is a path the client is known to handle -- it is what
+                            // an undeliverable shop product returns, shipped for #170 and
+                            // live since, replacing a 404 that bricked the client.
+                            //
+                            // The player loses nothing: materials are not charged here
+                            // (see the TODO at the top of this module), and a craft that
+                            // never starts is recoverable in a way an unloadable save is
+                            // not.
+                            log::warn!(
+                                "[craft] refusing recipe {recipe_id}: not in recipes.json, \
+                                 smith_craftables or the APK table, and there is no honest \
+                                 output for it. Capture the recipe to enable it."
+                            );
+                            return Err(BladeApiError::new(
+                                StatusCode::BAD_REQUEST,
+                                20001,
+                                3,
+                            ));
                         }
                     }
                 }
@@ -884,8 +896,19 @@ fn repaired_craft_fields<'a>(
             repair_data,
         ))
     } else {
-        // Same approximation the unknown-recipe create path makes: one stackable of the
-        // recipe's own id — well-formed and grantable, so the completion flow can finish.
+        // UNCHANGED, deliberately, and it is the same bad shape as before: one
+        // stackable of the recipe's own id.
+        //
+        // This is the REPAIR path for jobs already stored in a player's town. It
+        // cannot refuse — refusing is only available when a craft is being
+        // started — and three tests require a repaired job to yield a real grant,
+        // because a job that repairs to nothing is one the player can never clear.
+        //
+        // The create path no longer makes these, so the population is finite and
+        // shrinking, and the five characters that held one have been cleaned. But
+        // an old stored job still repairs to something the client cannot resolve,
+        // and fixing THAT needs the recipe captured or the job dropped — a
+        // separate change with its own risk, not a line in this one.
         Cow::Owned(serde_json::json!({ "stackableItems": { job.recipe_id.to_string(): 1 } }))
     };
 
@@ -1648,16 +1671,46 @@ mod tests {
         assert_eq!(smithing_crafting_type(&sd).to_string(), SMITHING_CRAFTING_TYPE_ID);
     }
 
-    /// The unknown-recipe result object is well-formed and NON-empty (a single stackable),
-    /// so the client's craft-completion flow can finish instead of freezing on `{}`.
+    /// An unknown recipe grants NOTHING, and that is deliberate.
+    ///
+    /// This test used to assert the opposite — that the result was "well-formed
+    /// and NON-empty (a single stackable), so the client's craft-completion flow
+    /// can finish instead of freezing on `{}`". The single stackable it asserted
+    /// was keyed by the RECIPE id, which is not an item template. Five characters
+    /// on production were carrying one; two of them had open tickets saying the
+    /// game would not start, and a third reported "the issue was a stackableitem".
+    ///
+    /// On the trade: the freeze that comment warns about is real but is a
+    /// DIFFERENT bug — it is `crafting_type_id == recipe_id`, which the client
+    /// cannot map to a CraftingStation (fix e5659c9). I could find no evidence
+    /// that empty `results` freeze anything, and the read path at
+    /// `results_are_empty` already treats empty as an ordinary, repairable state
+    /// rather than an error. So the claim is unverified in both directions, and
+    /// the choice is made on consequence: a frozen craft screen is recovered by
+    /// restarting the app, an unloadable save is not.
+    ///
+    /// If a player ever reports the craft screen hanging on an uncaptured
+    /// recipe, this is the place to look — but the answer will be to mint a REAL
+    /// template, never the recipe id again.
     #[test]
-    fn unknown_recipe_result_is_well_formed_nonempty() {
+    fn an_unknown_recipe_grants_nothing_rather_than_a_broken_item() {
+        let reward = reward_from_results(&serde_json::json!({}));
+        assert!(reward.stackable_items.is_empty());
+        assert!(reward.items.is_empty());
+        assert!(reward.currencies.is_empty());
+
+        // And the shape that caused the outage must not be constructible from a
+        // recipe id by this module any more.
         let recipe_id = Uuid::from_u128(0xC0FFEE);
-        let results = serde_json::json!({ "stackableItems": { recipe_id.to_string(): 1 } });
-        // finish must be able to build a non-empty reward from it.
-        let reward = reward_from_results(&results);
-        assert!(!reward.stackable_items.is_empty(), "unknown-recipe result yields a real grant");
-        assert_eq!(reward.stackable_items.get(&recipe_id), Some(&1));
+        let bad = reward_from_results(
+            &serde_json::json!({ "stackableItems": { recipe_id.to_string(): 1 } }),
+        );
+        assert_eq!(
+            bad.stackable_items.get(&recipe_id),
+            Some(&1),
+            "reward_from_results still parses that shape -- it is old stored jobs \
+             that must keep working, but nothing may CREATE it"
+        );
     }
 
     // ── Report #34: stored craft jobs must be REPAIRED on the way out ─────────
@@ -3090,5 +3143,54 @@ mod stuck_craft_tests {
         // …and with no town at all, nothing is ever collected.
         let empty = std::collections::HashSet::new();
         assert!(!is_stuck_finished(&job(Uuid::from_u128(0xB1), NOW - 1), &empty, NOW));
+    }
+}
+
+#[cfg(test)]
+mod never_grant_a_recipe_id_tests {
+    /// A craft must never write a recipe id into an item slot.
+    ///
+    /// The unknown-recipe fallback used to grant
+    /// `stackableItems: { recipe_id: 1 }`. A recipe id is not an item template,
+    /// the client cannot resolve it, and the save stops loading. Five characters
+    /// on production were carrying one; two had open tickets saying the game
+    /// would not start.
+    ///
+    /// A source assertion because the branch needs a database, a session and an
+    /// uncaptured recipe to reach. What can be checked cheaply is that the shape
+    /// is gone and does not come back — it read as a reasonable approximation
+    /// for months, so the next person needs to be stopped by something.
+    #[test]
+    fn no_result_is_ever_built_from_the_recipe_id() {
+        let whole = include_str!("craft.rs");
+        // Only the NON-test half. `include_str!` reads this test too, so a test
+        // that quotes the bad shape -- to prove old stored jobs still parse --
+        // would trip the guard on itself. It did exactly that, twice.
+        let src = whole
+            .split_once("\n#[cfg(test)]")
+            .map(|(before, _)| before)
+            .unwrap_or(whole);
+        let needle = format!("{}{}", "recipe_id.to_string()", ": 1 }");
+        for (n, line) in src.lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("//") || trimmed.starts_with("let needle") {
+                continue;
+            }
+            // The repair path is exempt and says why in its own comment: it
+            // serves jobs already stored in players' towns, cannot refuse, and
+            // three tests require it to yield a real grant. What must never come
+            // back is CREATING one — `job.recipe_id` is the repair path, bare
+            // `recipe_id` is the create path.
+            let is_repair = trimmed.contains("job.recipe_id.to_string()");
+            if !is_repair
+                && (trimmed.contains(&needle)
+                    || (trimmed.contains("recipe_id.to_string()") && trimmed.contains("stackable")))
+            {
+                panic!(
+                    "line {}: a NEW craft is minting the recipe id as an item: {trimmed}",
+                    n + 1
+                );
+            }
+        }
     }
 }
