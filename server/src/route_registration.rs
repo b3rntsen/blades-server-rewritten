@@ -297,3 +297,110 @@ mod retail_coverage {
         }
     }
 }
+
+/// Production code must ask the LOADED scaling table, never `::default()`.
+///
+/// `QuestLevelScaling::default()` is an empty table, and `given_xp` falls through
+/// an empty table to the last-resort `100 * enemyLevel` formula. That was harmless
+/// while the default WAS the formula, and became a silent bug the moment retail's
+/// real numbers moved into `quests_daily.json`: five call sites on the town-job
+/// path kept handing out the old XP while quests paid retail's, and a fresh
+/// character's board is entirely jobs, so it was the first thing a new player saw.
+///
+/// Nothing failed. Every test agreed, because every test was asking the same
+/// fallback. Only driving a real character through a real server surfaced it —
+/// which is the argument for this check existing at all.
+#[cfg(test)]
+mod scaling_comes_from_the_loaded_table {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for e in fs::read_dir(dir).expect("read src").flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                rs_files(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+
+    /// The source with every `#[cfg(test)] mod … { … }` block removed.
+    ///
+    /// Cutting the file at its FIRST `#[cfg(test)]` is not good enough: `quest.rs`
+    /// interleaves eight test modules with production code, so that heuristic
+    /// treats 3,900 lines of handlers as tests and the check passes while the bug
+    /// sits in the middle of them. This one counts braces.
+    fn production_lines(src: &str) -> Vec<(usize, &str)> {
+        let mut out = Vec::new();
+        let mut depth: i32 = 0;
+        let mut in_test = false;
+        let mut pending = false;
+        for (n, line) in src.lines().enumerate() {
+            let t = line.trim_start();
+            if !in_test && t.starts_with("#[cfg(test)]") {
+                pending = true;
+                continue;
+            }
+            if pending && (t.starts_with("mod ") || t.starts_with("pub mod ")) {
+                in_test = true;
+                pending = false;
+                depth = 0;
+            }
+            if in_test {
+                depth += line.matches('{').count() as i32;
+                depth -= line.matches('}').count() as i32;
+                if depth <= 0 && line.contains('}') {
+                    in_test = false;
+                }
+                continue;
+            }
+            // `#[cfg(test)]` on a bare fn — one line of attribute, not a block.
+            if pending {
+                pending = false;
+                continue;
+            }
+            out.push((n + 1, line));
+        }
+        out
+    }
+
+    #[test]
+    fn no_production_code_asks_an_empty_scaling_table() {
+        let mut files = Vec::new();
+        rs_files(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+
+        let mut offenders = Vec::new();
+        let mut scanned = 0;
+        for f in files {
+            let name = f.file_name().unwrap().to_string_lossy().to_string();
+            if name == "route_registration.rs" {
+                continue; // this file quotes the pattern to explain it
+            }
+            let src = fs::read_to_string(&f).unwrap_or_default();
+            for (n, line) in production_lines(&src) {
+                scanned += 1;
+                // Prose naming the pattern in order to warn about it is not it.
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                if line.contains("QuestLevelScaling::default()") {
+                    offenders.push(format!("{name}:{n} — {}", line.trim()));
+                }
+            }
+        }
+        assert!(
+            scanned > 20_000,
+            "only {scanned} production lines scanned — the test-block stripper ate \
+             the codebase, and an empty scan cannot find anything"
+        );
+        assert!(
+            offenders.is_empty(),
+            "these ask an EMPTY scaling table, which silently answers with the old \
+             `100 * enemyLevel` formula. Thread the loaded \
+             `static_data.quests_daily.level_scaling` through instead:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+}

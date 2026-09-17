@@ -15,6 +15,16 @@ diesel::table! {
 }
 
 diesel::table! {
+    arena_credentials (username) {
+        username -> Text,
+        user_id -> Uuid,
+        password_hash -> Text,
+        created_at -> Int8,
+        updated_at -> Int8,
+    }
+}
+
+diesel::table! {
     arena_match_results (id) {
         id -> Uuid,
         character_id -> Uuid,
@@ -44,6 +54,59 @@ diesel::table! {
         paired -> Bool,
         recorded_at -> Timestamptz,
         resolved_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    arena_season_awards (id) {
+        id -> Uuid,
+        season_id -> Uuid,
+        character_id -> Uuid,
+        kind -> Text,
+        rank -> Int4,
+        tier -> Text,
+        payload -> Jsonb,
+        granted_at -> Nullable<Int8>,
+        created_at -> Int8,
+    }
+}
+
+diesel::table! {
+    arena_season_guild_standings (season_id, guild_id) {
+        season_id -> Uuid,
+        guild_id -> Text,
+        rank -> Int4,
+        trophies -> Int8,
+        members -> Int4,
+        recorded_at -> Int8,
+    }
+}
+
+diesel::table! {
+    arena_season_standings (season_id, character_id) {
+        season_id -> Uuid,
+        character_id -> Uuid,
+        rank -> Int4,
+        trophies -> Int8,
+        matches -> Int4,
+        wins -> Int4,
+        guild_id -> Nullable<Text>,
+        recorded_at -> Int8,
+    }
+}
+
+diesel::table! {
+    arena_seasons (id) {
+        id -> Uuid,
+        number -> Int4,
+        name -> Text,
+        starts_at -> Int8,
+        ends_at -> Int8,
+        status -> Text,
+        scoring -> Text,
+        reset_rule -> Text,
+        created_at -> Int8,
+        ended_at -> Nullable<Int8>,
     }
 }
 
@@ -173,15 +236,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    matchmaking (id) {
-        id -> Uuid,
-        other_id -> Nullable<Uuid>,
-        match_info -> Nullable<Jsonb>,
-        ack_info -> Nullable<Jsonb>,
-    }
-}
-
-diesel::table! {
     quests (id, character_id) {
         id -> Uuid,
         character_id -> Uuid,
@@ -211,8 +265,12 @@ diesel::table! {
 }
 
 diesel::joinable!(arena_ai_mimics -> characters (character_id));
+diesel::joinable!(arena_credentials -> users (user_id));
 diesel::joinable!(arena_match_results -> characters (character_id));
 diesel::joinable!(arena_matches -> users (user_id));
+diesel::joinable!(arena_season_awards -> arena_seasons (season_id));
+diesel::joinable!(arena_season_guild_standings -> arena_seasons (season_id));
+diesel::joinable!(arena_season_standings -> arena_seasons (season_id));
 diesel::joinable!(characters -> users (user_id));
 diesel::joinable!(device_bindings -> users (user_id));
 diesel::joinable!(event_completions -> characters (character_id));
@@ -222,8 +280,13 @@ diesel::joinable!(quests -> characters (character_id));
 diesel::allow_tables_to_appear_in_same_query!(
     arena_ai_mimic_control,
     arena_ai_mimics,
+    arena_credentials,
     arena_match_results,
     arena_matches,
+    arena_season_awards,
+    arena_season_guild_standings,
+    arena_season_standings,
+    arena_seasons,
     characters,
     device_bindings,
     event_completions,
@@ -234,71 +297,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     guild_messages,
     guild_removals,
     guilds,
-    matchmaking,
     quests,
     sessions,
     users,
 );
-
-diesel::table! {
-    arena_credentials (username) {
-        username -> Text,
-        user_id -> Uuid,
-        password_hash -> Text,
-        created_at -> Int8,
-        updated_at -> Int8,
-    }
-}
-
-diesel::table! {
-    arena_seasons (id) {
-        id -> Uuid,
-        number -> Int4,
-        name -> Text,
-        starts_at -> Int8,
-        ends_at -> Int8,
-        status -> Text,
-        scoring -> Text,
-        reset_rule -> Text,
-        created_at -> Int8,
-        ended_at -> Nullable<Int8>,
-    }
-}
-
-diesel::table! {
-    arena_season_standings (season_id, character_id) {
-        season_id -> Uuid,
-        character_id -> Uuid,
-        rank -> Int4,
-        trophies -> Int8,
-        matches -> Int4,
-        wins -> Int4,
-        guild_id -> Nullable<Text>,
-        recorded_at -> Int8,
-    }
-}
-
-diesel::table! {
-    arena_season_guild_standings (season_id, guild_id) {
-        season_id -> Uuid,
-        guild_id -> Text,
-        rank -> Int4,
-        trophies -> Int8,
-        members -> Int4,
-        recorded_at -> Int8,
-    }
-}
-
-diesel::table! {
-    arena_season_awards (id) {
-        id -> Uuid,
-        season_id -> Uuid,
-        character_id -> Uuid,
-        kind -> Text,
-        rank -> Int4,
-        tier -> Text,
-        payload -> Jsonb,
-        granted_at -> Nullable<Int8>,
-        created_at -> Int8,
-    }
-}

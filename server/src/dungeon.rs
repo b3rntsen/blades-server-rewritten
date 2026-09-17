@@ -659,14 +659,27 @@ pub async fn enter_quest_dungeon(
                 }
 
 
+                // `level` is the dungeon's own power and `seed` its generation
+                // seed. Both were the constants `1` and `54321` — so every dungeon
+                // any player has ever entered on the ordinary quest path reported
+                // itself as a level-1 dungeon with the same seed, whatever the
+                // quest was. Retail's captures carry the real pair (a level-40
+                // dungeon with seed 578299371), and the event-dungeon path beside
+                // this one already derives both; this makes the two agree.
+                //
+                // The level comes from the quest's own `difficultyLevel`, which is
+                // what the enemy generation was already scaled to, so the number the
+                // client is shown matches the fight it gets. The seed is generated
+                // once and persisted with the dungeon state, so re-entering restores
+                // it rather than rolling a new one.
                 let status = DungeonStatus {
                     dungeon_settings_ids: vec![dungeon_settings_id],
                     revive_count: 0,
                     algorithm_version: 1,
                     current_state: body.current_state,
                     enemy_status: HashMap::default(),
-                    seed: 54321,
-                    level: 1,
+                    seed: rand::random::<u32>() as i64,
+                    level: quest.info.0.difficulty_level.max(1) as u64,
                     version: 1, //TODO: figure out where this version come from.
                     collected_chests: HashSet::default(),
                 };
@@ -1000,7 +1013,7 @@ mod dungeon_settings_resolution {
             "difficultyLevel": 20,
             "objectiveStatuses": {},
         });
-        let generated = jobs_gen::generated_data_for_job(&gd, &job)
+        let generated = jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling())
             .expect("the reference dungeon is in the corpus");
 
         let settings_id = resolve_dungeon_settings_id(
@@ -1290,6 +1303,90 @@ mod event_window_reset_tests {
             resets, readers,
             "{readers} path(s) read a stored completion count but only {resets} reset the \
              window first; a stale count makes an event pay nothing and never tick"
+        );
+    }
+}
+
+/// No dungeon may report itself as a level-1 dungeon with a fixed seed.
+///
+/// `enter_quest_dungeon`'s ordinary-quest branch answered `level: 1, seed: 54321`
+/// for every quest any player ever entered, while the event-dungeon branch right
+/// beside it derived both. Retail's captures carry the real pair — a level-40
+/// dungeon with seed 578299371 — and `level` is what the client shows and scales
+/// its presentation to.
+///
+/// Nothing caught it: the constants are on a handler path that needs a database,
+/// and no test reached them. It took driving a character through a running server
+/// to see a level-1 dungeon come back for a level-20 job.
+#[cfg(test)]
+mod dungeon_status_is_derived {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for e in fs::read_dir(dir).expect("read src").flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                rs_files(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+
+    /// Every `DungeonStatus` literal must take its `seed` and `level` from
+    /// something, not from a constant.
+    #[test]
+    fn no_dungeon_status_carries_a_literal_seed_or_level() {
+        let mut files = Vec::new();
+        rs_files(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+
+        // The one place a literal is honest: `dungeon_update` answers an update
+        // that arrives after the event dungeon's state was already cleared. There
+        // is no seed or level left to report, the response exists only so a late
+        // client retry is not stranded, and the client discards it. Anything else
+        // that wants an exemption needs its own line here and a reason.
+        const HONEST_PLACEHOLDERS: &[&str] = &["dungeon_update.rs"];
+
+        let mut offenders = Vec::new();
+        let mut found = 0;
+        for f in files {
+            let src = fs::read_to_string(&f).unwrap_or_default();
+            let name = f.file_name().unwrap().to_string_lossy().to_string();
+            let mut rest = src.as_str();
+            while let Some(i) = rest.find("DungeonStatus {") {
+                rest = &rest[i + "DungeonStatus {".len()..];
+                let end = rest.find("};").unwrap_or(rest.len().min(800));
+                let body = &rest[..end];
+                found += 1;
+                if HONEST_PLACEHOLDERS.contains(&name.as_str()) {
+                    continue;
+                }
+                for field in ["seed", "level"] {
+                    let Some(j) = body.find(&format!("{field}: ")) else {
+                        continue;
+                    };
+                    let value = body[j + field.len() + 2..]
+                        .split(',')
+                        .next()
+                        .unwrap_or("")
+                        .trim();
+                    // A bare integer literal is the bug; anything derived is fine.
+                    if value.parse::<i64>().is_ok() {
+                        offenders.push(format!("{name}: {field}: {value}"));
+                    }
+                }
+            }
+        }
+        assert!(
+            found >= 2,
+            "only {found} DungeonStatus literals found — the scan is broken"
+        );
+        assert!(
+            offenders.is_empty(),
+            "a dungeon's seed and level must be derived from the quest, not \
+             hardcoded — the client shows `level` and scales to it:\n  {}",
+            offenders.join("\n  ")
         );
     }
 }
