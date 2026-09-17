@@ -83,7 +83,20 @@ pub struct DungeonItemResult {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ChestGeneratedData {
-    pub tier: u64,
+    /// SIGNED, because retail sent a negative tier.
+    ///
+    /// One of the 292 chest spawns in the APK carries `rarity: -1`
+    /// (`1d8b6737-…`, in `MQ03_DungeonSettings`). That was read as "unset" and
+    /// replaced with tier 1. It is not unset: retail put **-1 on the wire**, in
+    /// all 5 captured generations of that chest.
+    ///
+    /// Measured with the control that matters — for the 204 chest spawns whose
+    /// APK tier is known AND which retail generated, the tier retail sent
+    /// matches the APK exactly, 204 agree and 0 disagree. So the extraction is
+    /// right everywhere else, and this one really is -1.
+    ///
+    /// `u64` could not represent it, which is why the wrong value shipped.
+    pub tier: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

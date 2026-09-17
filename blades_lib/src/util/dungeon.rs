@@ -86,6 +86,9 @@ struct ChestTierCorpus {
 
 #[derive(Deserialize)]
 struct ChestSpawnDefinition {
+    /// The APK's own value, which is -1 on one spawn. `tier` next to it is the
+    /// same number with the negative filtered out, kept for the corpus tests.
+    rarity: i64,
     tier: Option<u64>,
     quantity: u64,
 }
@@ -507,9 +510,15 @@ pub fn generate_for_dungeon(
             .iter()
             .map(|(chest_spawn_id, _)| {
                 let definition = chest_tiers().chests.get(chest_spawn_id);
-                // One APK row has the unset -1 rarity. Tier 1 is the existing safe
-                // fallback for it and for a future dungeon absent from this corpus.
-                let tier = definition.and_then(|d| d.tier).unwrap_or(1);
+                // The APK rarity, verbatim -- INCLUDING -1.
+                //
+                // That -1 was treated as "unset" and replaced with tier 1. Retail
+                // sent -1 for that chest in all 5 captured generations, so tier 1
+                // was our invention. A spawn genuinely absent from the corpus
+                // (a future dungeon) still falls back to 1.
+                let tier = definition
+                    .map(|d| d.rarity)
+                    .unwrap_or(1);
                 let quantity = definition.map(|d| d.quantity).unwrap_or(1).max(1);
                 (
                     *chest_spawn_id,
@@ -587,6 +596,7 @@ mod chest_generation_tests {
         let raw = std::fs::read_to_string(path).expect("read parsed.json");
         let game_data: GameData = serde_json::from_str(&raw).expect("parse game data");
         let mut checked = 0;
+        let mut negative = 0;
 
         for (dungeon_id, dungeon) in &game_data.dungeons {
             let Some(generated) = generate_for_dungeon(&game_data, dungeon_id, 1, 1) else {
@@ -602,13 +612,27 @@ mod chest_generation_tests {
                     .get(chest_id)
                     .expect("generated chest group");
                 assert_eq!(actual.len(), expected.quantity.max(1) as usize, "{chest_id}");
-                let expected_tier = expected.tier.unwrap_or(1);
-                assert!(actual.iter().all(|c| c.tier == expected_tier), "{chest_id}");
+                // The APK rarity verbatim, INCLUDING the one spawn whose rarity
+                // is -1. This used to read `tier.unwrap_or(1)`, which is what
+                // turned retail's -1 into a 1 on the wire.
+                assert!(
+                    actual.iter().all(|c| c.tier == expected.rarity),
+                    "{chest_id}: generated {:?}, APK rarity {}",
+                    actual.iter().map(|c| c.tier).collect::<Vec<_>>(),
+                    expected.rarity
+                );
+                if expected.rarity < 0 {
+                    negative += 1;
+                }
                 checked += 1;
             }
         }
 
         assert_eq!(checked, 292, "the test must cover the complete APK corpus");
+        // Exactly one spawn carries a negative rarity, and retail sent -1 for it
+        // in all 5 captured generations. If this reaches 0 the value has been
+        // silently clamped again.
+        assert_eq!(negative, 1, "the -1 chest must still reach the wire as -1");
     }
 }
 
