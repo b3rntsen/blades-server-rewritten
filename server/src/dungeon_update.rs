@@ -575,6 +575,30 @@ async fn handle_event_dungeon_update(
                 }));
             };
 
+            // The SAME variant repair the quest path does. Retail builds several
+            // versions of a dungeon and a quest names exactly one; when the
+            // client walks a different one, every kill it reports names a
+            // spawner we have no data for and is thrown away — no XP, no loot,
+            // for that whole stage (#174).
+            //
+            // Only the quest path repaired it. The warnings in the report are
+            // from EVENT dungeons, so the half that was missing is the half that
+            // was being hit. Same shape as #166: two paths, one of them forgot.
+            let generated_data = match repair_variant_mismatch(
+                &app_state.game_data,
+                &generated_data,
+                &body.actions,
+            ) {
+                Some(repaired) => {
+                    log::info!(
+                        "dungeon_update: character {character_id} is in a different EVENT dungeon \
+                         variant than we generated; regenerated from the spawner it reported (#174)"
+                    );
+                    repaired
+                }
+                None => generated_data,
+            };
+
             let mut dungeon_state: DungeonState = serde_json::from_value(dungeon_state_value)
                 .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2))?;
 
@@ -1618,6 +1642,37 @@ mod tests {
             [(chest_a, 0), (chest_a, 0), (chest_a, 1), (chest_b, 0)].len(),
             4,
             "the unguarded count differs from the guarded one, so the test is not vacuous"
+        );
+    }
+}
+
+#[cfg(test)]
+mod variant_repair_coverage_tests {
+    /// Every path that feeds `process_dungeon_actions` must try the variant
+    /// repair first.
+    ///
+    /// A source assertion, for the reason this file keeps needing them: the
+    /// handlers want a database and a session, and the bug is that ONE of two
+    /// paths forgot a call. The quest path repaired a variant mismatch and the
+    /// event path did not — and the warnings in report #174 are all from event
+    /// dungeons, so the half that was missing was the half being hit.
+    ///
+    /// The same shape as #166, where the enter path reset a stale event window
+    /// and the exit path did not. Two paths, one forgets, and only the players
+    /// notice.
+    #[test]
+    fn every_dungeon_update_path_attempts_the_variant_repair() {
+        let src = include_str!("dungeon_update.rs");
+
+        let runs = src.matches("process_dungeon_actions(\n").count();
+        let repairs = src.matches("repair_variant_mismatch(").count()
+            - src.matches("fn repair_variant_mismatch(").count();
+
+        assert!(runs >= 2, "expected the quest and event paths, found {runs}");
+        assert_eq!(
+            repairs, runs,
+            "{runs} path(s) run dungeon actions but only {repairs} attempt the variant repair; \
+             the one that does not will discard every kill a player makes in the wrong variant"
         );
     }
 }
