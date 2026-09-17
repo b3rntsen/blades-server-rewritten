@@ -1,10 +1,10 @@
 {
  "_meta": {
   "description": "Retail observations behind the progression tests. Measured, not modelled: every number is read from a captured Bethesda response. Regenerate with script/extract_journey_fixtures.py.",
-  "source": "blades-snapshot-20260607-112415.db",
+  "source": "blades.db",
   "user": "164824943366766592",
-  "captures": 18135,
-  "count": 3
+  "captures": 34551,
+  "count": 21
  },
  "observations": [
   {
@@ -75,6 +75,433 @@
       "durability": 75.0
      }
     ],
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 153199,
+   "request": {
+    "objectiveUpdates": {
+     "db18cfdc-2605-42b7-8b69-44784d163ca4": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "2dece2d5-4b07-4c7f-ad0e-bfa904fe5069": 1
+    },
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 175306,
+   "request": {
+    "objectiveUpdates": {
+     "ce31fec4-3595-4612-84e0-918fc92bd2a6": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "dc353c0a-adb9-4da7-9485-48ff4319f631": 1
+    },
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 175334,
+   "request": {
+    "objectiveUpdates": {
+     "adb526cf-391e-423a-ac26-154f754d14ac": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "b04cd7a7-e878-4f1c-a741-3ee64f8f2e28": 1
+    },
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 175406,
+   "request": {
+    "objectiveUpdates": {
+     "30885cfc-c6e5-4e40-a937-07a4c12f5d3d": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "7bb63437-6c01-46e5-ab11-a2b242bc1ebf": 1
+    },
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 178826,
+   "request": {
+    "objectiveUpdates": {
+     "3b1084b5-48fd-443f-a999-07c13df5cd51": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "characterXp": 50,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 179450,
+   "request": {
+    "objectiveUpdates": {
+     "0e93fdea-18f4-4fca-8059-9fc6a51bc5ca": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "characterXp": 50,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 181084,
+   "request": {
+    "objectiveUpdates": {
+     "f3d44e21-3a69-41bd-ab80-5d8bc5055581": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "523e17a2-b0ed-4c03-9889-7a4f500e19d0": 1
+    },
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 182631,
+   "request": {
+    "objectiveUpdates": {
+     "6814720c-cee9-4eb4-8df3-6fc410992a57": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "characterXp": 50,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 186167,
+   "request": {
+    "objectiveUpdates": {
+     "9cc24d2c-60e1-4e32-8c86-2d7566ac22e0": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "498cb6f9-c0ac-4e69-91a3-030685793840": 1
+    },
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 187310,
+   "request": {
+    "objectiveUpdates": {
+     "ea572b50-43e2-409b-8873-46a6e63392e3": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "088549aa-2d54-444a-806c-fd90262aac3d": 1
+    },
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 187698,
+   "request": {
+    "objectiveUpdates": {
+     "a2f0bfff-842a-410a-b943-61ca05c65dc4": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "62a4cd7b-5b75-4357-a1d7-8a295bada878": 1
+    },
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 188202,
+   "request": {
+    "objectiveUpdates": {
+     "129867f2-cd28-459e-933e-df83096f8e4e": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "6909748e-5e4b-4ef7-a81b-140f3ffec07e": 1
+    },
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 189123,
+   "request": {
+    "objectiveUpdates": {
+     "8308b056-8991-4a4b-a744-7d77a31b94b7": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "de01ecc6-dccf-4131-b3c9-5837dee0ca41": 1
+    },
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 189135,
+   "request": {
+    "objectiveUpdates": {
+     "f1accce0-a4cf-4bc7-af7e-738ce7f24b4a": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "6cec9a40-8734-44d7-8ead-a06c23dc327e": 1
+    },
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 189177,
+   "request": {
+    "objectiveUpdates": {
+     "d5d50409-1602-4011-9957-dbac5df6b8f7": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "f0ab14ca-9d79-4e51-9214-8a143f4816f8": 1
+    },
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 189228,
+   "request": {
+    "objectiveUpdates": {
+     "e125af4a-f42a-4eb0-a62f-2aaad0a30245": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "eac91648-907d-499d-9eea-841cf1e9032b": 1
+    },
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 189327,
+   "request": {
+    "objectiveUpdates": {
+     "8a77fea8-567a-4db6-ae41-0f419fa2d3b5": {
+      "status": "Completed",
+      "progress": 1.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "e2ae8695-3aea-4b17-96b7-89d96931290e": 1
+    },
+    "characterXp": 0,
+    "townXp": 0
+   },
+   "responseKeys": [
+    "character",
+    "inventory",
+    "quest",
+    "reward"
+   ]
+  },
+  {
+   "captureId": 214165,
+   "request": {
+    "objectiveUpdates": {
+     "aa7eb662-fe65-46ef-a5a9-b8a7a8b29e21": {
+      "status": "Completed",
+      "progress": 0.0
+     },
+     "5a7ef3d4-cc21-4f96-a6da-f0bb7585510c": {
+      "status": "Active",
+      "progress": 0.0
+     }
+    }
+   },
+   "reward": {
+    "stackableItems": {
+     "8958a1df-63c8-4f12-bf62-f37215200d0b": 1
+    },
     "characterXp": 0,
     "townXp": 0
    },

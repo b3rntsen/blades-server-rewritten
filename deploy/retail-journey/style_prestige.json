@@ -1,9 +1,9 @@
 {
  "_meta": {
   "description": "Retail observations behind the progression tests. Measured, not modelled: every number is read from a captured Bethesda response. Regenerate with script/extract_journey_fixtures.py.",
-  "source": "blades-snapshot-20260607-112415.db",
+  "source": "blades.db",
   "user": "164824943366766592",
-  "captures": 18135,
+  "captures": 34551,
   "count": 10
  },
  "observations": {

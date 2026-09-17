@@ -3271,8 +3271,9 @@ mod when_the_town_is_paid {
     /// payloads cannot say which building a delta belonged to; they are skipped
     /// rather than explained away. On the rest the agreement is 70 of 71 — the one
     /// exception is the corpus's very first completion, a TownHall whose table row
-    /// says level 1 pays 0 while retail paid 525. That is a table gap, recorded in
-    /// `docs/town-progression.md`, not a disagreement with the rule.
+    /// says level 1 pays 0 while retail paid 525 — a gap in `building_upgrades.json`
+    /// (every TownHall level above 0 is authored with `prestigeForLevel: 0`), not a
+    /// disagreement with the rule. The test pins it so it cannot grow.
     #[test]
     fn a_completion_pays_the_levels_prestige_and_not_the_styles() {
         let table = upgrades();
@@ -3298,10 +3299,15 @@ mod when_the_town_is_paid {
                 disagreed.push((o["captureId"].clone(), type_id.to_string(), level, delta, ours));
             }
         }
+        assert!(
+            agreed >= 70 && disagreed.len() == 1,
+            "the measurement was 72 agreements and exactly one disagreement (the \
+             TownHall table gap); now {agreed} and {}: {disagreed:?}",
+            disagreed.len()
+        );
         assert_eq!(
-            (agreed, disagreed.len()),
-            (70, 1),
-            "70 of 71 was the measurement; disagreements now: {disagreed:?}"
+            disagreed[0].1, "a6a2de53-d65c-445a-8b55-d2a73c15b635",
+            "the only permitted disagreement is the TownHall's level-1 table row"
         );
     }
 

@@ -1,10 +1,10 @@
 {
  "_meta": {
   "description": "Retail observations behind the progression tests. Measured, not modelled: every number is read from a captured Bethesda response. Regenerate with script/extract_journey_fixtures.py.",
-  "source": "blades-snapshot-20260607-112415.db",
+  "source": "blades.db",
   "user": "164824943366766592",
-  "captures": 18135,
-  "count": 354
+  "captures": 34551,
+  "count": 357
  },
  "observations": [
   {
@@ -8144,6 +8144,73 @@
    },
    "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
    "previousLevel": 7
+  },
+  {
+   "captureId": 65440,
+   "timestamp": "2026-06-07T23:07:21.194263+00:00",
+   "op": "complete",
+   "request": {
+    "speedUp": false
+   },
+   "pendingQuestTownXp": 0,
+   "townXpDelta": 460,
+   "townLevelBefore": 10,
+   "townLevelAfter": 10,
+   "buildingKnown": true,
+   "building": {
+    "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+    "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+    "level": 8,
+    "state": "NORMAL",
+    "constructionEnd": 0
+   },
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "previousLevel": 8
+  },
+  {
+   "captureId": 65444,
+   "timestamp": "2026-06-07T23:07:28.622637+00:00",
+   "op": "upgrade",
+   "request": {
+    "gemsPayment": false
+   },
+   "pendingQuestTownXp": 0,
+   "goldDelta": -364920,
+   "townXpDelta": 0,
+   "townLevelBefore": 10,
+   "townLevelAfter": 10,
+   "buildingKnown": true,
+   "building": {
+    "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+    "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+    "level": 9,
+    "state": "UPGRADING",
+    "constructionEnd": 1781180848524
+   },
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "previousLevel": 8
+  },
+  {
+   "captureId": 75011,
+   "timestamp": "2026-06-12T00:48:10.076575+00:00",
+   "op": "complete",
+   "request": {
+    "speedUp": false
+   },
+   "pendingQuestTownXp": 0,
+   "townXpDelta": 500,
+   "townLevelBefore": 10,
+   "townLevelAfter": 10,
+   "buildingKnown": true,
+   "building": {
+    "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+    "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+    "level": 9,
+    "state": "NORMAL",
+    "constructionEnd": 0
+   },
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "previousLevel": 9
   }
  ]
 }
