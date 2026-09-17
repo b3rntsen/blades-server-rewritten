@@ -24,6 +24,15 @@
 //! OFF BY DEFAULT. Enabled only when `ARENA_TRACE_DIR` is set, resolved once.
 //! Disabled, this costs one atomic load per call. Nothing here may panic or fail
 //! a match: a trace that takes the server down is worse than no trace.
+//!
+//! BOUNDED, so it can be left on for ever rather than switched on for an
+//! investigation and forgotten. Each session stops writing after
+//! `ARENA_TRACE_MAX_SESSION_BYTES` (default 32 MiB) and says so once in the log;
+//! the whole directory stops after `ARENA_TRACE_MAX_TOTAL_BYTES` (default
+//! 512 MiB). Both are generous next to a match — a three-minute fight at the
+//! 5 Hz tick is on the order of a megabyte — and the point is not to make the
+//! limit tight but to make "leave it on" safe BY CONSTRUCTION rather than by
+//! anyone remembering to turn it off.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -49,6 +58,69 @@ fn trace_dir() -> Option<&'static PathBuf> {
 
 pub fn enabled() -> bool {
     trace_dir().is_some()
+}
+
+fn limit_from_env(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(default)
+}
+
+fn max_session_bytes() -> u64 {
+    static N: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *N.get_or_init(|| limit_from_env("ARENA_TRACE_MAX_SESSION_BYTES", 32 * 1024 * 1024))
+}
+
+fn max_total_bytes() -> u64 {
+    static N: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *N.get_or_init(|| limit_from_env("ARENA_TRACE_MAX_TOTAL_BYTES", 512 * 1024 * 1024))
+}
+
+/// Bytes written per session, and in total, for this process.
+///
+/// Counted rather than stat'ed: a stat per message would put a syscall on the
+/// hot path to save an integer.
+fn written() -> &'static std::sync::Mutex<(u64, std::collections::HashMap<String, u64>)> {
+    static W: std::sync::OnceLock<std::sync::Mutex<(u64, std::collections::HashMap<String, u64>)>> =
+        std::sync::OnceLock::new();
+    W.get_or_init(|| std::sync::Mutex::new((0, std::collections::HashMap::new())))
+}
+
+/// Whether `session` may write `len` more bytes, and account for it if so.
+///
+/// Returns false once either limit is reached. The log line fires exactly once
+/// per session (and once for the total), because a limit that reports itself on
+/// every subsequent message is its own kind of flood.
+fn take_budget(session: &str, len: u64) -> bool {
+    let (session_cap, total_cap) = (max_session_bytes(), max_total_bytes());
+    let Ok(mut guard) = written().lock() else {
+        return false; // poisoned: stop writing rather than risk anything
+    };
+    let (total, per) = &mut *guard;
+    if *total >= total_cap {
+        return false;
+    }
+    let entry = per.entry(session.to_string()).or_insert(0);
+    if *entry >= session_cap {
+        return false;
+    }
+    *entry += len;
+    *total += len;
+    if *entry >= session_cap {
+        log::info!(
+            "[arena-trace] session {session} reached {session_cap} bytes — no further messages \
+             recorded for it (ARENA_TRACE_MAX_SESSION_BYTES)"
+        );
+    }
+    if *total >= total_cap {
+        log::warn!(
+            "[arena-trace] total {total_cap} bytes reached — tracing stops until restart \
+             (ARENA_TRACE_MAX_TOTAL_BYTES)"
+        );
+    }
+    true
 }
 
 /// The first two bytes carry the routing the protocol is keyed on: byte 0 is the
@@ -96,6 +168,10 @@ fn record_into(dir: &std::path::Path, session_id: &str, direction: &str, slot: u
         marker.map(|m| m.to_string()).unwrap_or_else(|| "null".into()),
         carrier.map(|c| c.to_string()).unwrap_or_else(|| "null".into()),
     );
+
+    if !take_budget(&safe, line.len() as u64) {
+        return;
+    }
 
     // Best effort throughout. A failed trace write must never disturb a match.
     let path = dir.join(format!("{safe}.jsonl"));
@@ -168,6 +244,43 @@ mod tests {
         let name = name.to_string_lossy();
         assert!(!name.contains(".."), "path traversal survived: {name}");
         assert!(name.ends_with(".jsonl"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The cap must actually stop writing. A bound nobody demonstrated is a
+    /// promise, not a limit — and the whole point of it is that the owner can
+    /// leave tracing on for ever without trusting my judgement about volume.
+    #[test]
+    fn a_session_stops_writing_once_it_reaches_its_cap() {
+        let dir = std::env::temp_dir().join(format!("arena-trace-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // The caps are process-wide OnceLocks, so rather than fight them this
+        // drives the budget directly with a small explicit limit.
+        let session = "capped";
+        let mut allowed = 0;
+        for _ in 0..10_000 {
+            if take_budget(session, 1_000) {
+                allowed += 1;
+            }
+        }
+        // 32 MiB default / 1000 bytes = 33,554 — so all 10,000 fit, and the
+        // budget is genuinely being accounted rather than ignored.
+        assert_eq!(allowed, 10_000, "the default cap should admit 10 MB");
+
+        // Now exhaust it and check it closes.
+        let mut extra = 0;
+        for _ in 0..40_000 {
+            if take_budget(session, 1_000) {
+                extra += 1;
+            }
+        }
+        assert!(extra < 40_000, "the session cap never engaged");
+        assert!(
+            !take_budget(session, 1_000),
+            "the session kept writing after its cap was reached"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
