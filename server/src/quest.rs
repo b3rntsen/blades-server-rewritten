@@ -2829,11 +2829,13 @@ pub(crate) mod event_quests {
         player_level: i64,
         now: i64,
     ) -> Vec<MintedEventQuest> {
-        static_data
-            .game_events
-            .iter()
-            .filter_map(|def| {
-                let start = def.active_instance_start(now)?;
+        // Through `open_instances`, NOT `active_instance_start` per def: that is
+        // the shared, capped answer the `/gameevents` feed also uses. Computing it
+        // here independently is how a third event quest reached a client whose
+        // quest screen retail never gave three.
+        game_events::open_instances(&static_data.game_events, now)
+            .into_iter()
+            .filter_map(|(start, def)| {
                 build(def, start, static_data, game_data, character_id, player_level)
             })
             .collect()
