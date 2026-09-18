@@ -1179,16 +1179,20 @@ mod post_match_disconnect_tests {
         // nothing.
         let code = src.split("\n#[cfg(test)]").next().expect("source has a body");
 
-        let bad = format!("peer.{}(0)", "disconnect");
-        let good = format!("peer.{}(0)", "disconnect_later");
+        // Match on the METHOD CALL, not on a receiver name. The shipped line was
+        // `host.peer_mut(pid).disconnect(0)`, which does not contain any particular
+        // variable name — an earlier version of this guard keyed on `peer.` and would
+        // have passed happily if the original form came back.
+        let bad = format!(".{}(0)", "disconnect");
+        let good = format!(".{}(0)", "disconnect_later");
 
         assert!(
             code.contains(&good),
             "the post-match teardown must call disconnect_later so queued fragments drain"
         );
-        // `peer.disconnect(0)` and `peer.disconnect_later(0)` are distinct strings —
-        // the trailing `(0)` means neither contains the other — so this counts bare
-        // calls directly.
+        // `.disconnect(0)` and `.disconnect_later(0)` are distinct strings — the
+        // trailing `(0)` means neither contains the other — so this counts bare calls
+        // directly, whatever they are called on.
         assert_eq!(
             code.matches(&bad).count(), 0,
             "a bare disconnect() in the shipped path discards unacknowledged packets — \
