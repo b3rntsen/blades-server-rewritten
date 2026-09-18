@@ -541,6 +541,28 @@ async fn anon_log_in(
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
     let effective_device_id: Option<String> = info.0.device_id.clone().or_else(|| source_wg_ip.clone());
+    // ONE line per anon login saying how (and whether) this client can be
+    // recognised. Without it a player reporting "it gives me a new character
+    // every launch" is indistinguishable from one whose game never reached us at
+    // all: both look like silence. Reports #149 and #187 each cost several rounds
+    // of guessing for exactly this reason — six anon logins arrived in the hour a
+    // player was trying and not one wrote a device_bindings row, which is the
+    // whole answer, but it could only be inferred from a table that stayed empty.
+    //
+    // `none` is the interesting value: no client device id AND no WG header means
+    // nothing to bind, so every launch mints a fresh account and the player sees
+    // the first-run flow again. Never log the id itself at info — it is a stable
+    // per-device identifier.
+    log::info!(
+        "anon login: device identity = {} (client sent deviceId: {}, wg header: {})",
+        match (&info.0.device_id, &source_wg_ip) {
+            (Some(_), _) => "client deviceId",
+            (None, Some(_)) => "wg peer ip",
+            (None, None) => "none — this client cannot be recognised next launch",
+        },
+        if info.0.device_id.is_some() { "yes" } else { "null" },
+        if source_wg_ip.is_some() { "present" } else { "absent" },
+    );
     if let Some(device_id_val) = effective_device_id {
         let mut conn = app_state.db_pool.get().await.unwrap();
         // Upsert the device_bindings row. Also write `source_wg_ip` when the
@@ -607,6 +629,7 @@ async fn anon_log_in(
             bound
         };
         if let Some(b) = bound {
+            log::info!("anon login: device is CLAIMED → resolving to user {}", b.user_id);
             let result = users
                 .select(UserDBEntry::as_select())
                 .filter(id.eq(b.user_id))
@@ -811,6 +834,15 @@ async fn anon_log_in(
         }
 
         // create a new user
+        //
+        // Logged because this is what the player experiences as "it keeps giving me
+        // a new character": an unrecognised device lands here on EVERY launch, and
+        // each pass mints another account plus a starter character. A run of these
+        // from one address is the signature of a client that sends no device id.
+        log::info!(
+            "anon login: no existing account for this device → MINTING A NEW ONE \
+             (a repeat of this line per launch means the device is not being recognised)"
+        );
         let mut new_user = UserAccount::new_random();
         // Nothing to record for a client that sends `deviceId: null` — recording
         // the WG peer IP here would make a reassigned address recognise the
@@ -1143,5 +1175,49 @@ mod link_tests {
     fn case_does_not_change_the_answer() {
         let secret = Uuid::from_u128(0xABCDEF);
         assert!(is_same_account(Some(&secret.to_string().to_uppercase()), secret));
+    }
+}
+
+#[cfg(test)]
+mod anon_login_diagnostics_tests {
+    /// The three anon-login log points must stay, and must not print the device id.
+    ///
+    /// A source guard, because the branches they sit in need a live Postgres and a
+    /// real request to reach. What it protects is cheap to delete by accident and
+    /// expensive to be without: reports #149 and #187 each ran for several rounds
+    /// on the question "did this player's game reach us at all", which one of these
+    /// lines answers outright.
+    #[test]
+    fn anon_login_says_how_the_device_was_recognised() {
+        let src = include_str!("authentification.rs");
+        // Everything before the first test MODULE — newline-anchored, so an indented
+        // attribute above the guarded code cannot cut the shipped path out of the
+        // haystack and leave the guard inspecting nothing.
+        let code = src.split("\n#[cfg(test)]").next().expect("source has a body");
+
+        for needle in [
+            "anon login: device identity",
+            "anon login: device is CLAIMED",
+            "anon login: no existing account for this device",
+        ] {
+            assert!(
+                code.contains(needle),
+                "the anon-login diagnostic {needle:?} is gone — without it, \
+                 \"my game gives me a new character every launch\" and \"my game \
+                 never reached the server\" look identical in the log"
+            );
+        }
+
+        // The device id is a stable per-device identifier; the entry line reports
+        // only WHICH KIND of identity arrived, never the value.
+        let entry = code
+            .split("anon login: device identity")
+            .nth(1)
+            .expect("entry log present");
+        let line = &entry[..entry.find(';').unwrap_or(entry.len())];
+        assert!(
+            !line.contains("device_id_val"),
+            "the entry diagnostic must not log the device id itself"
+        );
     }
 }
