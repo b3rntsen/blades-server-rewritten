@@ -466,5 +466,41 @@
    "durationSecs": 172800,
    "recurrenceInterval": 39
   }
+ },
+ {
+  "eventId": "d196fd1f-722e-57b5-9b36-849199cdedb2",
+  "questId": "f116b952-9932-4b1a-b20d-246ca2945bb4",
+  "important": true,
+  "instanceDurationSecs": 691200,
+  "annual": true,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1792800000,
+   "durationSecs": 691200,
+   "recurrenceInterval": 365
+  },
+  "_meta": {
+   "name": "EQ40 Season of the Witch",
+   "authored": true,
+   "note": "Retired before our capture corpus begins, so this calendar entry is ours. recurrenceType stays \"daily\" because that is the only string retail ever sent the client (it means \"this recurs\"; the 39-day rotation uses it too), and recurrenceInterval 365 is what the client is told. The server repeats it on the anchor's calendar DATE \u2014 see EventDef.annual \u2014 because 365 days is not a year. Report #189."
+  }
+ },
+ {
+  "eventId": "9b1dda7f-b282-51c1-a7c9-73e982d53861",
+  "questId": "b82b5384-5d68-4703-9450-1815f6d7d28b",
+  "important": true,
+  "instanceDurationSecs": 1209600,
+  "annual": true,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1797552000,
+   "durationSecs": 1209600,
+   "recurrenceInterval": 365
+  },
+  "_meta": {
+   "name": "EQ42 The Long Night",
+   "authored": true,
+   "note": "Retired before our capture corpus begins, so this calendar entry is ours. recurrenceType stays \"daily\" because that is the only string retail ever sent the client (it means \"this recurs\"; the 39-day rotation uses it too), and recurrenceInterval 365 is what the client is told. The server repeats it on the anchor's calendar DATE \u2014 see EventDef.annual \u2014 because 365 days is not a year. Report #189."
+  }
  }
 ]

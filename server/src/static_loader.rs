@@ -286,6 +286,72 @@ mod tests {
     /// The committed `deploy/static/*.json` must deserialize into the `StaticData`
     /// structs — a no-DB guard that the capture-derived data still matches our types
     /// (e.g. catches an Item that drops `properties`).
+    /// Report #189 (Mɾʂιɾι): "Make seasonal festivities work again, Halloween,
+    /// Christmas themes."
+    ///
+    /// The holiday event quests — EQ40 *Season of the Witch* and EQ42 *The Long
+    /// Night* — exist in the shipped game data but were retired before our capture
+    /// corpus begins, so they were absent from `game_events.json` and simply never
+    /// ran. This asserts the CALENDAR, against the real committed file: an identity
+    /// test, not a shape test. A seasonal event that loads, parses and never opens
+    /// on the holiday would pass every count assertion above and still deliver
+    /// nothing.
+    ///
+    /// It also pins the thing a 365-day period gets wrong: leap years pull each
+    /// instance a day earlier, so the window has to be wide enough to absorb the
+    /// drift for the life of the server, not just in its anchor year.
+    #[test]
+    fn the_holiday_events_open_on_their_holidays_and_stay_shut_otherwise() {
+        use blades_lib::features::game_events::active_events;
+        use uuid::uuid;
+
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let sd = load(&dir);
+
+        const WITCH: uuid::Uuid = uuid!("f116b952-9932-4b1a-b20d-246ca2945bb4");
+        const LONG_NIGHT: uuid::Uuid = uuid!("b82b5384-5d68-4703-9450-1815f6d7d28b");
+
+        // Midnight UTC on a given day, without pulling in a date crate.
+        const DAY: i64 = 86_400;
+        let day = |epoch_of_2026_01_01_plus: i64| 1_767_225_600 + epoch_of_2026_01_01_plus * DAY;
+        let open_on = |d: i64, quest: uuid::Uuid| {
+            active_events(&sd.game_events, day(d))
+                .iter()
+                .any(|e| e.quest_id == quest)
+        };
+
+        // 2026: 31 Oct is day 303, 25 Dec is day 358, 15 Jun is day 165.
+        assert!(open_on(303, WITCH), "Season of the Witch must run at Halloween");
+        assert!(open_on(358, LONG_NIGHT), "The Long Night must run at midwinter");
+
+        // …and nowhere else. Midsummer is the control: if these were simply always
+        // open, every assertion above would still pass.
+        assert!(!open_on(165, WITCH), "Season of the Witch must not run in June");
+        assert!(!open_on(165, LONG_NIGHT), "The Long Night must not run in June");
+        assert!(!open_on(358, WITCH), "Halloween event open at Christmas");
+        assert!(!open_on(303, LONG_NIGHT), "midwinter event open at Halloween");
+
+        // Four years on, after a leap day has shifted the 365-day series a day
+        // earlier, both must still cover their holiday.
+        let four_years = 365 * 4 + 1;
+        assert!(
+            open_on(303 + four_years, WITCH),
+            "leap drift pushed Season of the Witch off Halloween"
+        );
+        assert!(
+            open_on(358 + four_years, LONG_NIGHT),
+            "leap drift pushed The Long Night off Christmas"
+        );
+
+        // The rotation is untouched: the daily/Sigil events still deliver retail's
+        // expected 1-2 open at an arbitrary moment in June.
+        let midsummer = active_events(&sd.game_events, day(165)).len();
+        assert!(
+            (1..=2).contains(&midsummer),
+            "the 39-day rotation now shows {midsummer} events at midsummer, not 1-2"
+        );
+    }
+
     /// Report #141: "chests in the store still load the same loot". The old pool was
     /// a flat 40-bundle list keyed only by chest id, so a tier-1 and a tier-5 chest
     /// could draw the same bundle and a chest's level changed nothing. Assert the
@@ -447,8 +513,34 @@ mod tests {
         // The event calendar and its milestone tables must both survive the load, and
         // must agree with each other — an event whose template is missing would
         // advertise a Sigil quest that pays nothing.
-        assert_eq!(sd.game_events.len(), 39, "game_events.json");
-        assert_eq!(sd.event_quests.templates.len(), 39, "event_quests.json");
+        // 39 capture-derived events on the 39-day rotation, plus the two AUTHORED
+        // seasonal ones restored for #189 (Mɾʂιɾι: "make seasonal festivities work
+        // again"). Counting is not the point — the split is, so assert on the
+        // recurrence period rather than on a total that any addition would bump.
+        assert_eq!(sd.game_events.len(), 41, "game_events.json");
+        assert_eq!(sd.event_quests.templates.len(), 41, "event_quests.json");
+        let rotating = sd
+            .game_events
+            .iter()
+            .filter(|d| d.recurrence.recurrence_interval == 39)
+            .count();
+        let annual: Vec<_> = sd
+            .game_events
+            .iter()
+            .filter(|d| d.recurrence.recurrence_interval == 365)
+            .collect();
+        assert_eq!(rotating, 39, "the captured 39-day rotation must be untouched");
+        assert_eq!(annual.len(), 2, "the two seasonal events");
+        // A seasonal event that opened for two days like the rotation ones would be a
+        // silent regression — the whole point is a holiday-length window.
+        for d in &annual {
+            assert!(
+                d.window_secs() >= 8 * 86_400,
+                "seasonal event {} opens for only {}s",
+                d.event_id,
+                d.window_secs()
+            );
+        }
         for def in &sd.game_events {
             assert!(
                 sd.event_quests.templates.contains_key(&def.quest_id),
