@@ -4869,8 +4869,16 @@ mod playability_sweep {
     fn every_calendar_event_is_fully_backed() {
         let sd = static_data();
         let gd = game_data();
-        assert_eq!(sd.game_events.len(), 46, "the committed calendar");
-        let rotating = sd.game_events.iter().filter(|d| !d.annual).count();
+        assert_eq!(
+            sd.game_events.iter().filter(|d| !d.preview).count(),
+            46,
+            "the committed calendar"
+        );
+        let rotating = sd
+            .game_events
+            .iter()
+            .filter(|d| !d.annual && !d.preview)
+            .count();
         for def in &sd.game_events {
             assert!(
                 gd.quests.contains_key(&def.quest_id),
@@ -4883,7 +4891,14 @@ mod playability_sweep {
                 "event {} has no milestone table",
                 def.event_id
             );
-            if def.annual {
+            if def.preview {
+                // A one-off preview window (#189): not retail's schedule, and
+                // self-expiring — `recurrenceInterval: 0` means it never reopens.
+                assert_eq!(
+                    def.recurrence.recurrence_interval, 0,
+                    "a preview must be one-shot or it becomes a permanent event"
+                );
+            } else if def.annual {
                 // The holiday events (#189) are ours: a year apart, and open for a
                 // holiday's length rather than the rotation's two days.
                 assert_eq!(

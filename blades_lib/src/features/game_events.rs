@@ -71,6 +71,15 @@ pub struct EventDef {
     /// what the client understands; only our choice of window start differs.
     #[serde(default)]
     pub annual: bool,
+    /// A deliberate, self-expiring extra window that is NOT retail's schedule.
+    ///
+    /// Marked so the tests that assert retail's shape can exclude it by meaning
+    /// rather than by name, and so nobody later reads it as a measurement. A
+    /// preview uses `recurrenceInterval: 0`, which makes it one-shot: it opens at
+    /// its anchor, closes after its window and never returns, so a forgotten
+    /// preview cannot quietly become part of the calendar.
+    #[serde(default)]
+    pub preview: bool,
 }
 
 /// Days from 1970-01-01 to `y-m-d` (proleptic Gregorian). Howard Hinnant's
@@ -250,6 +259,7 @@ mod tests {
             important: true,
             instance_duration_secs: 172800,
             annual: false,
+            preview: false,
         }
     }
 
@@ -406,8 +416,16 @@ mod tests {
             .join("../deploy/static/game_events.json");
         let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         let all: Vec<EventDef> = serde_json::from_str(&raw).expect("valid game_events.json");
-        let lib: Vec<EventDef> = all.iter().filter(|d| !d.annual).cloned().collect();
-        assert_eq!(all.len() - lib.len(), 2, "the two annual holiday events");
+        let lib: Vec<EventDef> = all
+            .iter()
+            .filter(|d| !d.annual && !d.preview)
+            .cloned()
+            .collect();
+        assert_eq!(
+            all.iter().filter(|d| d.annual).count(),
+            2,
+            "the two annual holiday events"
+        );
 
         // One event per day-slot of the cycle, which is what produces the shape.
         let period = lib[0].recurrence.recurrence_interval;
@@ -436,5 +454,43 @@ mod tests {
             assert_eq!(d.recurrence.duration_secs, 172_800);
             assert_eq!(d.window_secs(), 172_800);
         }
+    }
+
+    /// A preview window opens once and never comes back (#189).
+    ///
+    /// `recurrenceInterval: 0` is what makes that true, and it is the whole
+    /// safety property: a preview nobody remembers to delete must not quietly
+    /// become a second annual event. This asserts it never reopens rather than
+    /// trusting the comment in the data.
+    #[test]
+    fn a_preview_window_opens_once_and_never_returns() {
+        const DAY: i64 = 86_400;
+        let mut d = def(7);
+        d.preview = true;
+        d.annual = false;
+        d.recurrence.start_time_secs = 1_800_000_000;
+        d.recurrence.recurrence_interval = 0;
+        d.recurrence.duration_secs = 7 * DAY;
+        d.instance_duration_secs = 7 * DAY;
+
+        let anchor = 1_800_000_000i64;
+        assert_eq!(d.active_instance_start(anchor), Some(anchor), "open at the anchor");
+        assert_eq!(d.active_instance_start(anchor + 6 * DAY), Some(anchor), "still open on day 6");
+        assert_eq!(d.active_instance_start(anchor + 7 * DAY), None, "shut when the window ends");
+        // …and stays shut. A year, and five years, later.
+        assert_eq!(d.active_instance_start(anchor + 365 * DAY), None);
+        assert_eq!(d.active_instance_start(anchor + 5 * 365 * DAY), None);
+        assert_eq!(d.next_instance_start_after(anchor + 8 * DAY), None, "nothing follows it");
+
+        // CONTROL: the same definition with a real interval DOES come back, so
+        // the assertions above are about `recurrenceInterval: 0` and not about
+        // the event being broken.
+        let mut recurring = d.clone();
+        recurring.recurrence.recurrence_interval = 365;
+        assert_eq!(
+            recurring.active_instance_start(anchor + 365 * DAY),
+            Some(anchor + 365 * DAY),
+            "a recurring event reopens; the preview must not"
+        );
     }
 }
