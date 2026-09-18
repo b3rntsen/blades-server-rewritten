@@ -405,8 +405,8 @@ mod tests {
         let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         let all: Vec<EventDef> = serde_json::from_str(&raw).expect("valid game_events.json");
         let lib: Vec<EventDef> = all.iter().filter(|d| !d.annual).cloned().collect();
-        assert_eq!(lib.len(), 39, "the committed library is the full captured set");
-        assert_eq!(all.len() - lib.len(), 2, "the two authored holiday events");
+        assert_eq!(lib.len(), 44, "39 captured + the 5 restored retired events");
+        assert_eq!(all.len() - lib.len(), 2, "the two annual holiday events");
 
         let start = 1_777_800_000i64;
         let mut totals = (0usize, 0usize);
@@ -430,5 +430,23 @@ mod tests {
             "expected ~1 event within a day of opening, got {mean_upcoming}"
         );
         assert!(max_active <= 4, "never a firehose: max {max_active} open at once");
+
+        // …and the DEVIATION is pinned, not hidden inside that band. Retail's 39
+        // events opened one per day of a 39-day cycle, so exactly 2 were ever open.
+        // The five retired events restored for #189 share a day-slot with an
+        // existing one, so a third is open alongside — and because every instance
+        // stays open for two days, that is 10 days of every 39, not 5. That is
+        // deliberate (it is more of the game, which is what was asked for) but it is
+        // ours and not retail's, so it is pinned here rather than left to drift.
+        let mut three_or_more = 0;
+        for day in 0..39 {
+            if active_events(&lib, start + day * 86_400).len() >= 3 {
+                three_or_more += 1;
+            }
+        }
+        assert_eq!(
+            three_or_more, 10,
+            "the 5 restored events share a slot, and each instance lasts 2 days"
+        );
     }
 }

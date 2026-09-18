@@ -431,7 +431,7 @@ mod tier_progression {
     fn authored_templates_are_labelled_as_such() {
         let d = data();
         let authored: Vec<_> = d.templates.values().filter(|t| t._meta.authored).collect();
-        assert_eq!(authored.len(), 2, "the two holiday events, and only those");
+        assert_eq!(authored.len(), 7, "the seven retired events, and only those");
 
         for t in &authored {
             assert_eq!(

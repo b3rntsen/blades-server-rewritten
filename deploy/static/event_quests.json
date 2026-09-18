@@ -10,8 +10,8 @@
    "c64bcb53-41f4-41ba-892a-fe2cca423caa",
    "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2"
   ],
-  "templates": 41,
-  "seasonalEvents": "EQ40 Season of the Witch (Halloween) and EQ42 The Long Night (midwinter) are AUTHORED, not capture-derived \u2014 they were retired before our corpus begins. Each carries _meta.authored = true and names what it was copied from. Report #189."
+  "templates": 46,
+  "seasonalEvents": "Seven events are AUTHORED rather than capture-derived \u2014 EQ28, EQ30, EQ38, EQ39, EQ40, EQ41 and EQ42 were all retired before our corpus begins. EQ40 (Halloween) and EQ42 (midwinter) run on a calendar date; the other five join retail's 39-day rotation. Each carries _meta.authored = true and names what it was copied from. Report #189."
  },
  "templates": {
   "01121c2f-6806-4b8c-998e-adc5d0e21db7": {
@@ -10768,6 +10768,683 @@
     "questResolvedBy": "parsed.json quests[] \u2014 unique match on BOTH the objective uuid and the dungeon uuid of the APK's quests.json entry for this event",
     "copiedFrom": "7f0d1508-312b-4036-970f-ff5f4c342526",
     "note": "This event was retired before our capture corpus begins, so nothing about its payouts is capture-derived. The whole milestone table \u2014 wire rewards, granting tiers and final reward \u2014 is copied verbatim from the retail template named in copiedFrom, which carries the modal Sigil ladder (14 of 39 events) and 700 XP a step. Only the quest, the objective and the calendar window are ours. Report #189."
+   }
+  },
+  "3405ea07-6655-49c0-b149-b0e19f9f1c85": {
+   "gldQuestId": "3405ea07-6655-49c0-b149-b0e19f9f1c85",
+   "version": 1,
+   "objectiveIds": [
+    "66a91a92-7db2-4194-a4f3-954f368ef958"
+   ],
+   "rewards": [
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 3500
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 7000
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 9,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 14000
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 14,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 24500
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 22,
+      "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 42000
+     }
+    }
+   ],
+   "finalReward": {
+    "stackableItems": {
+     "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 560
+    }
+   },
+   "eventIds": [
+    "045e2a59-67b7-5880-80c9-735114da1c3e"
+   ],
+   "payableRewards": {
+    "0": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1,
+       "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 3500
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "1": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4,
+       "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 5400
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "2": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 7,
+       "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 10800
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "3": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 11,
+       "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 18900
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "4": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 16,
+       "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 32400
+      },
+      "stackableItems": {
+       "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 410
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    }
+   },
+   "_meta": {
+    "instancesObserved": 0,
+    "rewardsObservations": 0,
+    "finalRewardObservations": 0,
+    "authored": true,
+    "name": "EQ28 The Trickster",
+    "questResolvedBy": "parsed.json quests[] \u2014 unique match on BOTH the objective uuid and the dungeon uuid of the APK's quests.json entry for this event",
+    "copiedFrom": "5675e806-8842-4791-870f-d8558ba035ec",
+    "note": "Retired before our capture corpus begins, so nothing about its payouts is capture-derived. The whole milestone table is copied verbatim from the retail template named in copiedFrom. Only the quest, the objectives and the calendar slot are ours. Report #189."
+   }
+  },
+  "11ffa10c-f587-432b-8901-fde27f37f65a": {
+   "gldQuestId": "11ffa10c-f587-432b-8901-fde27f37f65a",
+   "version": 1,
+   "objectiveIds": [
+    "214a59e8-9aeb-4152-a8f4-7bcdcf2c51b6",
+    "021ba40d-225d-48a3-b22a-11c5b79fab21",
+    "83645ef1-0c2d-48da-b85f-a51b0e01f51f",
+    "b9f52498-cd5d-492c-86e3-6107753d5442",
+    "30b08cb6-1997-42ce-a7ca-e0fd36c1b390"
+   ],
+   "rewards": [
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1,
+      "d523932f-8c7f-4192-9112-5dbd60883c2b": 8
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4,
+      "d523932f-8c7f-4192-9112-5dbd60883c2b": 16
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 9,
+      "d523932f-8c7f-4192-9112-5dbd60883c2b": 32
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 14,
+      "d523932f-8c7f-4192-9112-5dbd60883c2b": 56
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 22,
+      "d523932f-8c7f-4192-9112-5dbd60883c2b": 96
+     }
+    }
+   ],
+   "finalReward": {
+    "stackableItems": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 63000
+    }
+   },
+   "eventIds": [
+    "569be3b4-9737-5a5e-9a7e-2848b702c2db"
+   ],
+   "payableRewards": {
+    "0": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1
+      },
+      "stackableItems": {
+       "d523932f-8c7f-4192-9112-5dbd60883c2b": 8
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "1": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4
+      },
+      "stackableItems": {
+       "d523932f-8c7f-4192-9112-5dbd60883c2b": 16
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "2": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 9
+      },
+      "stackableItems": {
+       "d523932f-8c7f-4192-9112-5dbd60883c2b": 32
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "3": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 14
+      },
+      "stackableItems": {
+       "d523932f-8c7f-4192-9112-5dbd60883c2b": 56
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "4": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 22,
+       "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 63000
+      },
+      "stackableItems": {
+       "d523932f-8c7f-4192-9112-5dbd60883c2b": 96
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    }
+   },
+   "_meta": {
+    "instancesObserved": 0,
+    "rewardsObservations": 0,
+    "finalRewardObservations": 0,
+    "authored": true,
+    "name": "EQ30 Spirit of the Hunt",
+    "questResolvedBy": "parsed.json quests[] \u2014 unique match on BOTH the objective uuid and the dungeon uuid of the APK's quests.json entry for this event",
+    "copiedFrom": "7f0d1508-312b-4036-970f-ff5f4c342526",
+    "note": "Retired before our capture corpus begins, so nothing about its payouts is capture-derived. The whole milestone table is copied verbatim from the retail template named in copiedFrom. Only the quest, the objectives and the calendar slot are ours. Report #189."
+   }
+  },
+  "c08cf606-e3e8-42ed-adc3-f5d5af7e2490": {
+   "gldQuestId": "c08cf606-e3e8-42ed-adc3-f5d5af7e2490",
+   "version": 1,
+   "objectiveIds": [
+    "1c7d14ed-c15b-47a4-b973-11b8c51b7148",
+    "083a14a8-4e6c-4258-9877-b5634c4a0b9d",
+    "22de30b5-b606-4a35-85a1-af0dc29d6b53",
+    "c92a8a20-c98d-42a8-8528-e85c16e7f057",
+    "e298e57a-8a64-41bd-b398-f37b98b8e889"
+   ],
+   "rewards": [
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 31
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 62
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 9,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 124
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 14,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 217
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 22,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 372
+     }
+    }
+   ],
+   "finalReward": {
+    "stackableItems": {
+     "e7193116-d761-479b-8a20-5633737977f5": 560
+    }
+   },
+   "eventIds": [
+    "606b2e0f-7bf8-5b3a-91a1-d50ffbc42ac8"
+   ],
+   "payableRewards": {
+    "0": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1
+      },
+      "stackableItems": {
+       "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 14
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "1": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 2
+      },
+      "stackableItems": {
+       "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 28
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "2": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 5
+      },
+      "stackableItems": {
+       "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 56
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "3": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 7
+      },
+      "stackableItems": {
+       "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 98
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "4": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 10
+      },
+      "stackableItems": {
+       "e7193116-d761-479b-8a20-5633737977f5": 250,
+       "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 168
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    }
+   },
+   "_meta": {
+    "instancesObserved": 0,
+    "rewardsObservations": 0,
+    "finalRewardObservations": 0,
+    "authored": true,
+    "name": "EQ38 Attack of the Spell Casters",
+    "questResolvedBy": "parsed.json quests[] \u2014 unique match on BOTH the objective uuid and the dungeon uuid of the APK's quests.json entry for this event",
+    "copiedFrom": "9c9cf9d4-c8f1-4ae8-9868-0ce695e9509b",
+    "note": "Retired before our capture corpus begins, so nothing about its payouts is capture-derived. The whole milestone table is copied verbatim from the retail template named in copiedFrom. Only the quest, the objectives and the calendar slot are ours. Report #189."
+   }
+  },
+  "c23cd046-a7f1-431b-9c14-5b023d6a104b": {
+   "gldQuestId": "c23cd046-a7f1-431b-9c14-5b023d6a104b",
+   "version": 1,
+   "objectiveIds": [
+    "04b0952b-a7e9-40ef-84c9-e15a9ea6f0b4"
+   ],
+   "rewards": [
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 31
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 62
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 9,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 124
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 14,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 217
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 22,
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 372
+     }
+    }
+   ],
+   "finalReward": {
+    "stackableItems": {
+     "d523932f-8c7f-4192-9112-5dbd60883c2b": 140
+    }
+   },
+   "eventIds": [
+    "0f02755a-f988-5de2-abd6-c2ef56ce2ba6"
+   ],
+   "payableRewards": {
+    "0": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1
+      },
+      "stackableItems": {
+       "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 31
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "1": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4
+      },
+      "stackableItems": {
+       "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 62
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "2": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 9
+      },
+      "stackableItems": {
+       "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 124
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "3": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 14
+      },
+      "stackableItems": {
+       "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 217
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "4": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 22
+      },
+      "stackableItems": {
+       "d523932f-8c7f-4192-9112-5dbd60883c2b": 140,
+       "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 372
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    }
+   },
+   "_meta": {
+    "instancesObserved": 0,
+    "rewardsObservations": 0,
+    "finalRewardObservations": 0,
+    "authored": true,
+    "name": "EQ39 The Trap",
+    "questResolvedBy": "parsed.json quests[] \u2014 unique match on BOTH the objective uuid and the dungeon uuid of the APK's quests.json entry for this event",
+    "copiedFrom": "beb2284b-9525-4bfa-83bd-5ed6e089c97c",
+    "note": "Retired before our capture corpus begins, so nothing about its payouts is capture-derived. The whole milestone table is copied verbatim from the retail template named in copiedFrom. Only the quest, the objectives and the calendar slot are ours. Report #189."
+   }
+  },
+  "41aef1a7-bbf7-4f32-9eb5-9cf6fe5332a0": {
+   "gldQuestId": "41aef1a7-bbf7-4f32-9eb5-9cf6fe5332a0",
+   "version": 1,
+   "objectiveIds": [
+    "77f3d83d-c288-4d05-bc2a-64eb9318e37d",
+    "f410f693-5309-4cbc-b71b-fb45fea31918",
+    "931431cc-9f8e-4bcf-b5b3-9b8d0683c502"
+   ],
+   "rewards": [
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "34ddfe0e-5119-4e52-8eef-a77b6bc810a7": 8,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "34ddfe0e-5119-4e52-8eef-a77b6bc810a7": 16,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 4
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "34ddfe0e-5119-4e52-8eef-a77b6bc810a7": 32,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 9
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "34ddfe0e-5119-4e52-8eef-a77b6bc810a7": 56,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 14
+     }
+    },
+    {
+     "characterXp": 700,
+     "stackableItems": {
+      "34ddfe0e-5119-4e52-8eef-a77b6bc810a7": 96,
+      "c64bcb53-41f4-41ba-892a-fe2cca423caa": 22
+     }
+    }
+   ],
+   "finalReward": {
+    "stackableItems": {
+     "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 63000
+    }
+   },
+   "eventIds": [
+    "ceab4fd9-9302-5a5e-910c-eff3f0446dd7"
+   ],
+   "payableRewards": {
+    "0": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 1
+      },
+      "stackableItems": {
+       "34ddfe0e-5119-4e52-8eef-a77b6bc810a7": 8
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "1": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 2
+      },
+      "stackableItems": {
+       "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 16
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "2": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 5
+      },
+      "stackableItems": {
+       "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 32
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "3": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 7
+      },
+      "stackableItems": {
+       "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 56
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    },
+    "4": {
+     "reward": {
+      "characterXp": 700,
+      "currencies": {
+       "c64bcb53-41f4-41ba-892a-fe2cca423caa": 10,
+       "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 25000
+      },
+      "stackableItems": {
+       "b74a5c55-a687-4604-aa59-ba3ddfddcd2a": 96
+      },
+      "townXp": 0
+     },
+     "observations": 0,
+     "variants": []
+    }
+   },
+   "_meta": {
+    "instancesObserved": 0,
+    "rewardsObservations": 0,
+    "finalRewardObservations": 0,
+    "authored": true,
+    "name": "EQ41 Feats of Strength",
+    "questResolvedBy": "parsed.json quests[] \u2014 unique match on BOTH the objective uuid and the dungeon uuid of the APK's quests.json entry for this event",
+    "copiedFrom": "838e49aa-6139-4938-84d3-e09e1da80ae8",
+    "note": "Retired before our capture corpus begins, so nothing about its payouts is capture-derived. The whole milestone table is copied verbatim from the retail template named in copiedFrom. Only the quest, the objectives and the calendar slot are ours. Report #189."
    }
   }
  }
