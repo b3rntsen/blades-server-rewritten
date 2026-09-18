@@ -30,14 +30,30 @@
 //!
 //! # Ranking source
 //!
-//! The active season's bounded slice of `arena_match_results`, not the character's
-//! lifetime/current JSON. Trophy deltas are replayed from a zero season baseline
-//! (including the floor at zero), while windowed counts supply current-season wins.
-//! Replaying is intentional: late imports used to carry retail trophies into their
-//! first local result, making the stored `trophies_after` inconsistent with the
-//! season-scoped win count. This excludes that inherited balance, excludes characters
-//! carried over from an old season, and admits a participant who played this season
-//! but finished on zero cups. Bot opponents have no result row and cannot enter.
+//! `score` is the player's own `character.pvpTrophies` — the same field the player
+//! screen and the social card serve, so the board cannot disagree with what a
+//! player sees. It is NOT reconstructed from `arena_match_results`; that
+//! reconstruction applied a retroactive zero-floor where the live counter clamps
+//! per match, and the two answers diverged for anyone who had ever bottomed out.
+//!
+//! `wins` is a windowed count over the active season, as a LEFT join, so a
+//! character with trophies but no matches this season still appears at zero wins
+//! rather than vanishing. Bot opponents have no result row and cannot enter.
+//!
+//! # Both numbers must describe the SAME season
+//!
+//! `pvpTrophies` is a live counter that the season rollover zeroes
+//! ([`crate::arena::arena_season::roll_character_into`]). A character still
+//! stamped with a different `pvpSeasonId` never had that rollover applied, so its
+//! balance was earned in another season — or, for a retail import, on Bethesda's
+//! servers. Serving it beside a count of THIS season's wins is what produces the
+//! shape this module has now had twice: hundreds of cups against zero wins.
+//!
+//! So membership is gated on the character's season stamp. The nil stamp is
+//! admitted on purpose: it means "never been through a rollover", so any cups such
+//! a character holds were necessarily earned here and now. Excluding it would
+//! repeat the mistake that once hid the server's highest scorer — narrowing
+//! membership until the board stops describing the server.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -129,7 +145,8 @@ struct CountRow {
 /// on the board or in what order.
 const RANKED_CTE: &str = "
     WITH active_season AS (
-        SELECT starts_at,
+        SELECT id,
+               starts_at,
                LEAST(ends_at, EXTRACT(EPOCH FROM now())::bigint) AS cutoff
         FROM arena_seasons
         WHERE status = 'active'
@@ -159,10 +176,22 @@ const RANKED_CTE: &str = "
                             c.id
                ) AS rank
         FROM characters c
+        CROSS JOIN active_season s
         LEFT JOIN season_wins w ON w.character_id = c.id
         LEFT JOIN guild_members gm ON gm.character_id = c.id
         LEFT JOIN guilds g ON g.id = gm.guild_id
         WHERE COALESCE((c.character ->> 'pvpTrophies')::bigint, 0) > 0
+          -- Cups this character holds FOR THIS SEASON. `pvpTrophies` is a live
+          -- counter the season rollover zeroes; a character still stamped with
+          -- another season's id never had that rollover applied, so its balance
+          -- was earned somewhere else. Counting it here is what puts hundreds of
+          -- cups against zero wins. The nil stamp is admitted deliberately — see
+          -- `an_unstamped_character_is_not_treated_as_off_season`.
+          AND (
+                c.character ->> 'pvpSeasonId' IS NULL
+             OR c.character ->> 'pvpSeasonId' = '00000000-0000-0000-0000-000000000000'
+             OR c.character ->> 'pvpSeasonId' = s.id::text
+          )
     )
 ";
 
@@ -417,5 +446,74 @@ mod tests {
         assert_eq!(page_count(100), 1);
         assert_eq!(page_count(101), 2);
         assert_eq!(page_count(0), 0);
+    }
+}
+
+/// Cups and wins must describe the same season.
+///
+/// This module has produced "hundreds of cups, zero wins" twice. The first time,
+/// late imports carried a retail trophy balance into their first local result;
+/// `admin::align_import_with_active_season` fixed that at the entry point and its
+/// doc comment names this exact symptom. The second time, the board switched from
+/// reconstructing scores out of `arena_match_results` to reading `pvpTrophies`
+/// directly — a correct fix for a different bug — and in doing so stopped
+/// season-scoping the cups at all, which put every character still holding an
+/// unrolled balance straight onto the board.
+///
+/// Measured on production when this was written: 10 characters carried
+/// `pvpSeasonId = 7a3985ae-…`, an id that has no row in `arena_seasons` at all,
+/// and between them held 3,877 cups — more than the entire real season's 2,403
+/// across 102 properly-stamped characters. Seven of them ranked, one at 1,061 cups
+/// with 3 wins and six at 396–440 cups having never played a single match.
+#[cfg(test)]
+mod cups_and_wins_describe_one_season {
+    use super::*;
+
+    #[test]
+    fn membership_is_gated_on_the_characters_season_stamp() {
+        assert!(
+            RANKED_CTE.contains("'pvpSeasonId'") && RANKED_CTE.contains("s.id::text"),
+            "the board must compare the character's season stamp with the active \
+             season, or an unrolled balance counts as this season's cups: {RANKED_CTE}"
+        );
+        assert!(
+            RANKED_CTE.contains("CROSS JOIN active_season"),
+            "the comparison needs the active season in scope on the character join"
+        );
+        assert!(
+            RANKED_CTE.contains("SELECT id,"),
+            "active_season must project its id, or the comparison cannot be made"
+        );
+    }
+
+    /// THE CONTROL, and the half most likely to be "tidied" away.
+    ///
+    /// A character that has never been through a rollover carries the nil stamp.
+    /// Any cups it holds were therefore earned here, this season, and it belongs on
+    /// the board. Tightening this to a bare equality would drop those players —
+    /// the same failure mode as the inner join that once hid the top scorer.
+    #[test]
+    fn an_unstamped_character_is_not_treated_as_off_season() {
+        assert!(
+            RANKED_CTE.contains("'pvpSeasonId' IS NULL"),
+            "a character with no season field must still rank"
+        );
+        assert!(
+            RANKED_CTE.contains("00000000-0000-0000-0000-000000000000"),
+            "the nil uuid is the 'never rolled over' stamp and must still rank"
+        );
+    }
+
+    /// The gate is a WHERE clause, not a join that could also drop rows for an
+    /// unrelated reason — guilds and wins stay LEFT joins.
+    #[test]
+    fn the_gate_does_not_disturb_the_optional_joins() {
+        assert!(RANKED_CTE.contains("LEFT JOIN season_wins"));
+        assert!(RANKED_CTE.contains("LEFT JOIN guild_members"));
+        assert!(RANKED_CTE.contains("LEFT JOIN guilds"));
+        assert!(
+            !RANKED_CTE.contains("INNER JOIN"),
+            "nothing about this gate justifies narrowing membership by a join"
+        );
     }
 }
