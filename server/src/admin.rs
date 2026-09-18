@@ -290,6 +290,33 @@ pub async fn import_character(
                             inherited_matches,
                         );
                     }
+                } else if inherited_trophies != 0 || inherited_matches != 0 {
+                    // NO ACTIVE SEASON, AND THE CUPS STILL DO NOT COME IN.
+                    //
+                    // This used to be the silent path: the whole alignment hung off
+                    // `if let Some(active_season)`, so with no row in `arena_seasons`
+                    // an import kept whatever standing it arrived with. An alt
+                    // brought in between seasons therefore entered holding a retail
+                    // balance it had never earned here — which is how seven
+                    // characters reached the board on 396-440 cups having never
+                    // played a match.
+                    //
+                    // A season stamp needs a season, so that part genuinely cannot
+                    // happen yet and the character keeps whatever id it arrived
+                    // with. Zeroing does not: a standing earned somewhere else is
+                    // never ours to honour, and the next rollover will stamp it.
+                    // Between "arrives at zero" and "arrives with retail's trophies"
+                    // only one is defensible when we do not know what season it is.
+                    character.pvp_trophies = 0;
+                    character.matchmaking_pvp_trophies = 0;
+                    character.number_pvp_match_played = 0;
+                    character.pvp_winning_streak = 0;
+                    log::warn!(
+                        "[import] no active arena season — zeroed user {user_id}'s inherited \
+                         cups {} and matches {} anyway; it will be stamped by the next rollover",
+                        inherited_trophies,
+                        inherited_matches,
+                    );
                 }
 
                 // 1. Ensure a backing `users` row exists (characters.user_id is a
@@ -2204,6 +2231,15 @@ pub struct SeasonRolloverRequest {
     /// Only useful for re-running an older rollover; normally omitted.
     #[serde(default)]
     pub season_id: Option<Uuid>,
+    /// Only roll characters that have NOT played in the target season's window.
+    ///
+    /// The repair scope. A character carrying another season's standing but
+    /// already competing in this one has a live position on the ladder; zeroing
+    /// it mid-season is a different act from tidying up an import that has never
+    /// played a match here. Default false keeps the season-boundary sweep — where
+    /// everybody resets — behaving exactly as before.
+    #[serde(default)]
+    pub only_idle_this_season: bool,
 }
 
 /// What the rollover did (or would do).
@@ -2224,10 +2260,20 @@ pub struct SeasonRolloverResponse {
     pub characters_archived: usize,
     /// Characters already in this season — left untouched.
     pub characters_already_current: usize,
+    /// Characters skipped because they have played in this season's window and
+    /// `onlyIdleThisSeason` was set. Zero on a season-boundary sweep.
+    pub characters_played_this_season: usize,
     /// Rows whose `character` JSONB would not deserialize; skipped, never written.
     pub characters_unreadable: usize,
     /// The largest standing that was archived, as a sanity line for the operator.
     pub highest_archived_trophies: i64,
+}
+
+/// `SELECT COUNT(*)` — diesel needs a named, typed row even for one number.
+#[derive(diesel::QueryableByName)]
+struct CountRow {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    count: i64,
 }
 
 /// One `characters` row, narrowed to what the rollover touches.
@@ -2268,19 +2314,49 @@ pub async fn arena_season_rollover(
     check_import_token(&app_state, &req)?;
     let body = body.map(|b| b.into_inner()).unwrap_or_default();
 
-    let season: &SeasonConfig = match body.season_id {
-        Some(id) => arena_season::SEASONS
-            .iter()
-            .find(|s| s.id == id)
-            .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 12))?,
-        None => arena_season::season_at(arena_season::now_unix())
-            .or_else(|| arena_season::SEASONS.last())
-            .ok_or_else(|| {
-                BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 13)
-            })?,
-    };
-
     let mut conn = app_state.db_pool.get().await.unwrap();
+
+    // THE SEASON COMES FROM THE DATABASE, not from `arena_season::SEASONS`.
+    //
+    // Those statics are a build-time constant; `arena_seasons` is what the rest
+    // of the server actually runs on — `import_character` stamps from it,
+    // `leaderboards` ranks from it, and the season console creates rows in it.
+    // The two had drifted: the only static id is 9b3f1c74-… while production's
+    // live season is 6d26822b-… . Resolving from the statics meant this endpoint
+    // would stamp every character with an id that has NO arena_seasons row,
+    // zeroing the 102 players who were correctly seasoned and manufacturing the
+    // very phantom-season state this repairs — for 251 characters instead of 10.
+    //
+    // A `seasonId` is looked up in the table for the same reason, so it cannot
+    // name a season the database has never heard of.
+    let active_db_season: Option<season_store::SeasonRow> = {
+        use crate::schema::arena_seasons::dsl as s;
+        match body.season_id {
+            Some(id) => s::arena_seasons
+                .filter(s::id.eq(id))
+                .select(season_store::SeasonRow::as_select())
+                .first(&mut conn)
+                .await
+                .optional()?,
+            None => s::arena_seasons
+                .filter(s::status.eq("active"))
+                .select(season_store::SeasonRow::as_select())
+                .order(s::starts_at.desc())
+                .first(&mut conn)
+                .await
+                .optional()?,
+        }
+    };
+    let db_season = active_db_season.ok_or_else(|| {
+        warn!("season rollover: no matching season row in arena_seasons — refusing");
+        BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 12)
+    })?;
+    let cfg = db_season.config();
+    let season: &SeasonConfig = &cfg;
+
+    // The window the "has this character played?" scope is measured over.
+    let window_start = db_season.starts_at;
+    let window_end = db_season.ends_at.min(arena_season::now_unix());
     let rows: Vec<SeasonRolloverRow> =
         diesel::sql_query("SELECT id, character FROM characters ORDER BY id")
             .get_results(&mut conn)
@@ -2298,6 +2374,7 @@ pub async fn arena_season_rollover(
         characters_reset: 0,
         characters_archived: 0,
         characters_already_current: 0,
+        characters_played_this_season: 0,
         characters_unreadable: 0,
         highest_archived_trophies: 0,
     };
@@ -2311,6 +2388,29 @@ pub async fn arena_season_rollover(
                 continue;
             }
         };
+        // The repair scope: skip anyone who has actually competed in this season.
+        if body.only_idle_this_season {
+            let played: i64 = diesel::sql_query(
+                "SELECT COUNT(*) AS count FROM arena_match_results \
+                 WHERE character_id = $1 AND recorded_at >= to_timestamp($2) \
+                   AND recorded_at < to_timestamp($3)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(row.id)
+            .bind::<diesel::sql_types::BigInt, _>(window_start)
+            .bind::<diesel::sql_types::BigInt, _>(window_end)
+            .get_result::<CountRow>(&mut conn)
+            .await
+            .map_err(|e| {
+                warn!("season rollover: match count failed for {}: {e}", row.id);
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 17)
+            })?
+            .count;
+            if played > 0 {
+                resp.characters_played_this_season += 1;
+                continue;
+            }
+        }
+
         let standing = ch.pvp_trophies;
         let outcome = arena_season::roll_character_into(&mut ch, season);
         if !outcome.reset {
@@ -2343,7 +2443,7 @@ pub async fn arena_season_rollover(
 
     log::info!(
         "arena season rollover ({}) into season {} (#{}) — seen {}, reset {}, archived {}, \
-         already current {}, unreadable {}",
+         already current {}, played this season {}, unreadable {}",
         if body.apply { "APPLIED" } else { "dry run" },
         resp.season_id,
         resp.season_number,
@@ -2351,6 +2451,7 @@ pub async fn arena_season_rollover(
         resp.characters_reset,
         resp.characters_archived,
         resp.characters_already_current,
+        resp.characters_played_this_season,
         resp.characters_unreadable,
     );
     Ok(Json(resp))
@@ -3523,6 +3624,131 @@ mod tests {
                     .any(|t| t == "source_wg_ip"),
                 "recent-devices stopped returning source_wg_ip, so the capture \
                  platform cannot attribute an unclaimed device: {RECENT_DEVICES_SQL}"
+            );
+        }
+    }
+}
+
+/// Seasons: where the rollover takes its target from, and what an import may keep.
+///
+/// Both halves of one rule — a character's cups belong to the season it is
+/// stamped with — and both had a hole that reached production.
+#[cfg(test)]
+mod seasons_are_what_the_database_says {
+    /// The rollover must resolve its season from `arena_seasons`, not from the
+    /// build-time `arena_season::SEASONS`.
+    ///
+    /// The two had drifted: the only static id is `9b3f1c74-…`, while
+    /// production's live season is `6d26822b-…`. Resolving from the statics
+    /// meant this endpoint would stamp all 251 characters with an id that has no
+    /// row in `arena_seasons` — zeroing the 102 who were correctly seasoned, and
+    /// manufacturing the exact phantom-season state it exists to repair, at 25
+    /// times the scale. Nothing would have failed; it would simply have been run.
+    /// The handler's CODE, with comments stripped — the fix is explained in a
+    /// comment that names the thing it removed, and a scan that cannot tell the
+    /// two apart finds the warning instead of the bug.
+    fn handler_code(name: &str) -> String {
+        let src = include_str!("admin.rs");
+        src.split(name)
+            .nth(1)
+            .expect("the handler")
+            .split("\n#[")
+            .next()
+            .unwrap()
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_rollover_takes_its_season_from_the_seasons_table() {
+        let body = handler_code("pub async fn arena_season_rollover(");
+        let body = body.as_str();
+
+        assert!(
+            body.contains("arena_seasons") && body.contains("season_store::SeasonRow"),
+            "the target season must be read from the arena_seasons table"
+        );
+        assert!(
+            !body.contains("arena_season::SEASONS"),
+            "the build-time season list must not decide who gets zeroed — it \
+             drifted from the database and would have reset every player"
+        );
+        assert!(
+            body.contains("db_season.config()"),
+            "the SeasonConfig must be derived from the row that was read"
+        );
+    }
+
+    /// An explicit `seasonId` is looked up too, so it cannot name a season the
+    /// database has never heard of.
+    #[test]
+    fn an_explicit_season_id_is_still_checked_against_the_table() {
+        let body = handler_code("pub async fn arena_season_rollover(");
+        let body = body.as_str();
+        assert!(
+            body.contains("s::id.eq(id)"),
+            "a caller-supplied season id must be resolved against arena_seasons"
+        );
+    }
+
+    /// The repair scope skips anyone competing in this season — zeroing a live
+    /// ladder position mid-season is a different act from tidying up an import
+    /// that has never played a match here.
+    #[test]
+    fn the_idle_scope_is_opt_in_and_measures_the_seasons_own_window() {
+        let body = handler_code("pub async fn arena_season_rollover(");
+        let body = body.as_str();
+        assert!(
+            body.contains("only_idle_this_season"),
+            "the scope must exist"
+        );
+        assert!(body.contains("arena_match_results"), "it must count real matches");
+        // BOTH bounds, on `recorded_at`. Binding the window and then not comparing
+        // against it counts a character's whole history, which would skip anyone
+        // who ever played — including every player this repair exists for.
+        assert!(
+            body.contains("recorded_at >= to_timestamp(") && body.contains("recorded_at < to_timestamp("),
+            "\"played this season\" must be bounded on recorded_at at both ends, \
+             not measured over all time"
+        );
+        assert!(
+            body.contains("window_start") && body.contains("window_end"),
+            "…and the bounds must be the season's own window"
+        );
+        // Opt-in: the season-boundary sweep, where everybody resets, is the default.
+        let src = include_str!("admin.rs");
+        assert!(
+            src.contains("pub only_idle_this_season: bool,")
+                && src.contains("#[serde(default)]\n    pub only_idle_this_season"),
+            "the scope must default to false so the boundary sweep is unchanged"
+        );
+    }
+
+    /// An import must never keep a standing it earned somewhere else — including
+    /// when there is no active season to roll it into.
+    ///
+    /// The alignment used to hang entirely off `if let Some(active_season)`, so an
+    /// alt brought in between seasons kept its retail cups. That is how seven
+    /// characters reached the leaderboard on 396–440 cups having never played a
+    /// match here.
+    #[test]
+    fn an_import_between_seasons_still_arrives_at_zero() {
+        let body = handler_code("pub async fn import_character(");
+        let body = body.as_str();
+
+        let (_, no_season) = body
+            .split_once("} else if inherited_trophies != 0")
+            .expect("the no-active-season branch must exist");
+        for field in [
+            "character.pvp_trophies = 0",
+            "character.matchmaking_pvp_trophies = 0",
+            "character.number_pvp_match_played = 0",
+        ] {
+            assert!(
+                no_season.contains(field),
+                "with no active season the import must still zero `{field}`"
             );
         }
     }
