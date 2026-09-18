@@ -181,15 +181,38 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
         }
         // Post-match: a match whose FSM reached the terminal MatchState
         // (DisconnectingPlayersAfterMatch=19 → Finished) is retired here, and we ENet-
-        // DISCONNECT its peer(s) — the literal meaning of state 19. `disconnect(0)` is
-        // graceful: rusty_enet flushes the already-queued reliable end-of-match frames
-        // (op48 result, the MatchState updates) and THEN tears the connection down, so
-        // the client applies the result and returns to the arena lobby instead of
-        // holding the connection open at the result screen.
+        // DISCONNECT its peer(s) — the literal meaning of state 19.
+        //
+        // It MUST be `disconnect_later`, not `disconnect`. The comment here used to
+        // claim `disconnect(0)` was "graceful: rusty_enet flushes the already-queued
+        // reliable end-of-match frames and THEN tears the connection down". It does the
+        // opposite: `enet_peer_disconnect` begins with `enet_peer_reset_queues(peer)`,
+        // which THROWS AWAY every outgoing command the peer has not yet acknowledged.
+        // `enet_peer_disconnect_later` is the one that waits for the outgoing queue to
+        // drain and only then disconnects.
+        //
+        // What that cost (report #163): the end-of-match op49 carries the recipient's
+        // whole character record — 41 KB for a level-61 player with a full backpack —
+        // so it leaves here as ~30 fragments of a reliable packet. Sixteen seconds
+        // later the terminal walk finishes and we reset the queue, discarding whatever
+        // fragments were still in flight. The client cannot reassemble a message it
+        // only half received, so it never raises the victory overlay, never draws the
+        // Continue button, and sits in the post-match third-person camera until the
+        // player force-quits — which is the reported bug, verbatim, on every match.
+        // Bigger inventory, bigger card, more fragments to lose.
         for addr in registry.take_finished_peers() {
             if let Some(&pid) = peer_at.get(&addr) {
-                info!("arena-enet: match finished → disconnecting peer {addr}");
-                host.peer_mut(pid).disconnect(0);
+                let peer = host.peer_mut(pid);
+                // Logged at the disconnect so a recurrence can be read off the server
+                // instead of inferred: a client that never acknowledged the results
+                // card shows up as loss against a healthy round-trip time.
+                info!(
+                    "arena-enet: match finished → disconnect_later peer {addr}                      (packets sent {}, lost {}, rtt {:?}) — draining the queue first",
+                    peer.packets_sent(),
+                    peer.packets_lost(),
+                    peer.round_trip_time(),
+                );
+                peer.disconnect_later(0);
                 peer_at.remove(&addr);
             }
         }
@@ -1129,6 +1152,51 @@ mod tests {
             a.inbox.iter().any(|m| m.ends_with(b"StateTimeout"))
                 && b.inbox.iter().any(|m| m.ends_with(b"StateTimeout")),
             "the second H2H match reaches a live, damageable round"
+        );
+    }
+}
+
+#[cfg(test)]
+mod post_match_disconnect_tests {
+    /// The post-match teardown must use `disconnect_later`, never `disconnect`.
+    ///
+    /// `enet_peer_disconnect` opens with `enet_peer_reset_queues`, discarding every
+    /// unacknowledged outgoing command; `enet_peer_disconnect_later` drains the queue
+    /// first. With a 41 KB op49 results card leaving as ~30 fragments, the difference
+    /// is whether the client can reassemble its own match result — report #163.
+    ///
+    /// This is a source guard rather than a behavioural test on purpose: the call sits
+    /// inside the live socket loop, and the distinction it protects lives in a C
+    /// transliteration we do not drive from tests. The needle is built at runtime so
+    /// this file's own source cannot satisfy the assertion by containing it literally.
+    #[test]
+    fn post_match_teardown_drains_before_disconnecting() {
+        let src = include_str!("enet_host.rs");
+        // Everything before the first test MODULE. Split on the newline-anchored
+        // attribute, not the bare one: there is an INDENTED #[cfg(test)] on a field
+        // far above the code being guarded, and splitting on that cut the shipped
+        // path out of the haystack entirely — the guard then passed by inspecting
+        // nothing.
+        let code = src.split("\n#[cfg(test)]").next().expect("source has a body");
+
+        // Match on the METHOD CALL, not on a receiver name. The shipped line was
+        // `host.peer_mut(pid).disconnect(0)`, which does not contain any particular
+        // variable name — an earlier version of this guard keyed on `peer.` and would
+        // have passed happily if the original form came back.
+        let bad = format!(".{}(0)", "disconnect");
+        let good = format!(".{}(0)", "disconnect_later");
+
+        assert!(
+            code.contains(&good),
+            "the post-match teardown must call disconnect_later so queued fragments drain"
+        );
+        // `.disconnect(0)` and `.disconnect_later(0)` are distinct strings — the
+        // trailing `(0)` means neither contains the other — so this counts bare calls
+        // directly, whatever they are called on.
+        assert_eq!(
+            code.matches(&bad).count(), 0,
+            "a bare disconnect() in the shipped path discards unacknowledged packets — \
+             it is what left report #163's client waiting for fragments that never came"
         );
     }
 }
