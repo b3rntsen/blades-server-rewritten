@@ -385,68 +385,56 @@ mod tests {
         assert_eq!(d.active_instance_start(1_835_395_200 + 3600), Some(1_835_395_200));
     }
 
-    /// The committed rotation, checked against what retail's captures show.
+    /// The committed rotation, against what retail's captures actually show.
     ///
-    /// With 39 events on a 39-day period and a 2-day window, `39 x 2/39 = 2` events
-    /// should be open at any instant and `39 x 1/39 = 1` should be within a day of
-    /// opening. Retail's `/quests` captures show 2 active in 614 responses and 1 in
-    /// 43, and exactly 1 warning entry in all 686 responses that had one. Sampling a
-    /// year of days must land in the same place; the old day-slice implementation
-    /// returned a flat 3 active and 0 upcoming, every day.
+    /// MEASURED, from the 36 distinct `/gameevents` responses in the corpus: 35
+    /// carry exactly three events, and every one of those is **2 open + 1 about
+    /// to open**, the future one 4.1-21.1 h away. (The 36th is empty.) Every
+    /// event in all 105 sightings has `recurrenceInterval: 39`,
+    /// `durationSecs: 172800`, a 172 800 s instance window, and its own day —
+    /// 39 events across 39 distinct anchors spanning exactly 38 days. Not one
+    /// questId ever changed its recurrence.
     ///
-    /// The two annual holiday events (#189) are excluded from the sample on purpose:
-    /// they are ours, not retail's, and a fortnight of extra content a year would
-    /// drag the mean without saying anything about the rotation this test exists to
-    /// protect. Their own calendar is asserted in `static_loader`.
+    /// So retail's schedule is: **one event opens every day, each stays open two
+    /// days**, which yields exactly two open and exactly one within a day of
+    /// opening, forever. That invariant — not the number 39 — is what this
+    /// asserts, because the library is now 44 events on a 44-day cycle (#189
+    /// restored five retired ones) and the invariant survives that unchanged.
     #[test]
-    fn the_committed_library_opens_about_two_events_at_a_time() {
+    fn the_rotation_keeps_two_open_and_one_about_to_open_every_day() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../deploy/static/game_events.json");
         let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         let all: Vec<EventDef> = serde_json::from_str(&raw).expect("valid game_events.json");
         let lib: Vec<EventDef> = all.iter().filter(|d| !d.annual).cloned().collect();
-        assert_eq!(lib.len(), 44, "39 captured + the 5 restored retired events");
         assert_eq!(all.len() - lib.len(), 2, "the two annual holiday events");
 
-        let start = 1_777_800_000i64;
-        let mut totals = (0usize, 0usize);
-        let mut max_active = 0usize;
-        for day in 0..365 {
-            let now = start + day * 86_400;
-            let a = active_events(&lib, now).len();
-            let u = upcoming_events(&lib, now, WARNING_LEAD_SECS).len();
-            totals.0 += a;
-            totals.1 += u;
-            max_active = max_active.max(a);
-        }
-        let mean_active = totals.0 as f64 / 365.0;
-        let mean_upcoming = totals.1 as f64 / 365.0;
-        assert!(
-            (1.5..=2.5).contains(&mean_active),
-            "expected ~2 open events on an average day, got {mean_active}"
-        );
-        assert!(
-            (0.5..=1.5).contains(&mean_upcoming),
-            "expected ~1 event within a day of opening, got {mean_upcoming}"
-        );
-        assert!(max_active <= 4, "never a firehose: max {max_active} open at once");
+        // One event per day-slot of the cycle, which is what produces the shape.
+        let period = lib[0].recurrence.recurrence_interval;
+        assert_eq!(period as usize, lib.len(), "one event opens per day of the cycle");
+        let mut slots: Vec<i64> = lib
+            .iter()
+            .map(|d| d.recurrence.start_time_secs.rem_euclid(period * SECS_PER_DAY) / SECS_PER_DAY)
+            .collect();
+        slots.sort_unstable();
+        slots.dedup();
+        assert_eq!(slots.len(), lib.len(), "two events share a day-slot");
 
-        // …and the DEVIATION is pinned, not hidden inside that band. Retail's 39
-        // events opened one per day of a 39-day cycle, so exactly 2 were ever open.
-        // The five retired events restored for #189 share a day-slot with an
-        // existing one, so a third is open alongside — and because every instance
-        // stays open for two days, that is 10 days of every 39, not 5. That is
-        // deliberate (it is more of the game, which is what was asked for) but it is
-        // ours and not retail's, so it is pinned here rather than left to drift.
-        let mut three_or_more = 0;
-        for day in 0..39 {
-            if active_events(&lib, start + day * 86_400).len() >= 3 {
-                three_or_more += 1;
-            }
+        // …and the observable consequence, sampled across a full cycle. Retail
+        // never showed three open at once, so neither may we.
+        let start = 1_777_800_000i64;
+        for day in 0..period {
+            let now = start + day * SECS_PER_DAY;
+            let open = active_events(&lib, now).len();
+            let soon = upcoming_events(&lib, now, WARNING_LEAD_SECS).len();
+            assert_eq!(open, 2, "day {day}: {open} open, retail always showed 2");
+            assert_eq!(soon, 1, "day {day}: {soon} about to open, retail always showed 1");
         }
-        assert_eq!(
-            three_or_more, 10,
-            "the 5 restored events share a slot, and each instance lasts 2 days"
-        );
+
+        // The window itself is retail's, in every one of the 105 sightings.
+        for d in &lib {
+            assert_eq!(d.recurrence.duration_secs, 172_800);
+            assert_eq!(d.window_secs(), 172_800);
+        }
     }
 }

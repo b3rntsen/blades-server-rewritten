@@ -1,374 +1,39 @@
 [
  {
-  "eventId": "00414d25-fda9-4bf8-8ec1-76e62d01d16e",
-  "questId": "a846b491-b439-447d-a8a1-9c2611522610",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1663560000,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "11233dc0-f6e3-472d-bf33-3014e5572337",
-  "questId": "f4023a38-195a-4977-bfbc-f443a257566f",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1665201600,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "15ac04e8-97d2-4bb3-9070-33e1016054bf",
-  "questId": "ff662bf7-a7fa-4ba7-9107-a8556db391e1",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1664769600,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "1d7ac820-b32c-41df-afcb-98d4b91ebc0c",
-  "questId": "fbeeaa85-13ae-479a-a751-5625688d682d",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1665374400,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "1dbc9a09-36d3-42ea-ace6-623dc7e29dbf",
-  "questId": "cd66c93c-5086-4311-b0f6-e90af54099b2",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1665806400,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "2ba72412-3a6c-4708-b49f-b15c8c7f8907",
-  "questId": "e8f3614c-8672-4f77-9dad-4b400676f4b6",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1664424000,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "2cc8f717-7e08-4dcc-9cb3-f992a343ccab",
-  "questId": "9c9cf9d4-c8f1-4ae8-9868-0ce695e9509b",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1666411200,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "30b20b6f-9ae4-477a-9b10-0264969bd966",
-  "questId": "260f2cdf-adea-4ad1-b221-8c4cb8abaefe",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1663300800,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "3b4864b8-69d2-46b3-b129-1a15f3b324d7",
-  "questId": "1f26d523-f182-436a-9f50-f99fffd51b66",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1663387200,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "3c6f4f2e-318e-4f8d-9f99-3f75120c5f5f",
-  "questId": "838e49aa-6139-4938-84d3-e09e1da80ae8",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1663905600,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "3df60c54-ed45-4085-b472-4b5d0a489705",
-  "questId": "90f184df-71e7-43a3-abf8-09a639fa2431",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1663473600,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "4334e445-7cb9-45bf-943e-8a7fc55b3042",
-  "questId": "2d1200ee-ecb8-4ea6-9892-54d1f538d83d",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1664942400,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "4f6e4b9e-19d2-49af-9428-d5777a549e66",
-  "questId": "be7732ad-2ff0-4fb4-8684-e2f6d089965e",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1666238400,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "50ea3b8a-f000-434a-98cd-a7c06f3fe19f",
-  "questId": "2290ab73-8f56-4dba-a4f0-7a23270eb93c",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1665547200,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "511b53a8-67e9-43d0-bba6-d1d718a731b2",
-  "questId": "0dd37f6b-28ad-4cb7-8e12-2ebbf43fb366",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1663992000,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "5a1916f9-15a4-4741-8b8f-55197ff10c31",
-  "questId": "5675e806-8842-4791-870f-d8558ba035ec",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1663646400,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "5ea03a01-4be2-432d-98b9-28db9bdbb7f8",
-  "questId": "26eb6ab5-2d8c-4993-820e-ada79f6f00a8",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1664510400,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "688972ba-77c0-445b-9fad-ea6134e4b0dc",
-  "questId": "beb2284b-9525-4bfa-83bd-5ed6e089c97c",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1663819200,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "818b20fa-fffd-4dcc-9bf7-d5eff1dd214e",
-  "questId": "8ef9fad8-e7f6-4f7e-90e3-b0d2daf782bd",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1664164800,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "87ff988d-a09b-49ad-a541-614a810c3cb5",
-  "questId": "e2bda86c-0f80-43e4-9394-cdbff00a34c1",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1665892800,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "9576a10f-52ea-4919-b126-d6a6feb01b88",
-  "questId": "9181f784-9eb8-4872-953d-30ba8b6bc9d1",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1665633600,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "a0e3cec7-bc35-49dd-969f-142d192e3655",
-  "questId": "cbc5a18d-42ae-4c3f-a48d-7d7a6da9c42c",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1666324800,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "a11a03ee-5198-4267-95b5-0a3d918f9b06",
-  "questId": "a008cbbc-a164-4183-8b69-470ac8cd5707",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1665288000,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "aa13aa4c-5d6a-4a85-a74e-4120774278bd",
-  "questId": "4f562a99-d298-486c-b3f5-1e3188e85db2",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1664078400,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "aa758102-e70a-4d5c-b2da-383cc0c87dc0",
-  "questId": "6fe1271e-66eb-4f71-aa23-4576710e071f",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1666152000,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
   "eventId": "b09f45e0-8606-4f6c-8c46-60e48789502a",
   "questId": "7486296a-335a-4b46-aee1-5102090ce34f",
   "important": true,
   "instanceDurationSecs": 172800,
   "recurrence": {
    "recurrenceType": "daily",
-   "startTimeSecs": 1664596800,
+   "startTimeSecs": 1661212800,
    "durationSecs": 172800,
-   "recurrenceInterval": 39
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1664596800,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
   }
  },
  {
-  "eventId": "b253d721-e0fa-4d57-8586-8d4bd86598fe",
-  "questId": "31baf922-2b1a-4605-ae52-4946e26994c6",
+  "eventId": "045e2a59-67b7-5880-80c9-735114da1c3e",
+  "questId": "3405ea07-6655-49c0-b149-b0e19f9f1c85",
   "important": true,
   "instanceDurationSecs": 172800,
   "recurrence": {
    "recurrenceType": "daily",
-   "startTimeSecs": 1664251200,
+   "startTimeSecs": 1661299200,
    "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "b483c668-5ff6-4aa2-b731-33c522d04001",
-  "questId": "7f0d1508-312b-4036-970f-ff5f4c342526",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1663214400,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "b654d3d1-0fd3-4025-8003-69b9ee08f6ea",
-  "questId": "6249e106-70f7-4395-8a19-3211a312bb0e",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1663732800,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "bf6a0ec0-24fe-4627-b085-9720025d2cfe",
-  "questId": "bd05e8f6-439a-4c77-919e-edf33595c044",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1664856000,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "c6d32752-b6fc-436e-a7db-3c5d87c2f1e1",
-  "questId": "a1aafdc9-a35c-45c9-89f6-27f7d3a628e6",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1665720000,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "name": "EQ28 The Trickster",
+   "authored": true,
+   "note": "Retired before our capture corpus begins, so this calendar entry is ours. It joins retail's own 39-day rotation with a 2-day window, on a day-slot that already holds one event \u2014 so on five days of every thirty-nine three events are open instead of two. Report #189."
   }
  },
  {
@@ -378,21 +43,77 @@
   "instanceDurationSecs": 172800,
   "recurrence": {
    "recurrenceType": "daily",
-   "startTimeSecs": 1664683200,
+   "startTimeSecs": 1661385600,
    "durationSecs": 172800,
-   "recurrenceInterval": 39
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1664683200,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
   }
  },
  {
-  "eventId": "df4c0cf5-68bd-4c41-bae2-6e3e728720d2",
-  "questId": "61f7a386-dd0c-4119-acf6-7f41a9c5b62b",
+  "eventId": "15ac04e8-97d2-4bb3-9070-33e1016054bf",
+  "questId": "ff662bf7-a7fa-4ba7-9107-a8556db391e1",
   "important": true,
   "instanceDurationSecs": 172800,
   "recurrence": {
    "recurrenceType": "daily",
-   "startTimeSecs": 1664337600,
+   "startTimeSecs": 1661472000,
    "durationSecs": 172800,
-   "recurrenceInterval": 39
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1664769600,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "bf6a0ec0-24fe-4627-b085-9720025d2cfe",
+  "questId": "bd05e8f6-439a-4c77-919e-edf33595c044",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1661558400,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1664856000,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "4334e445-7cb9-45bf-943e-8a7fc55b3042",
+  "questId": "2d1200ee-ecb8-4ea6-9892-54d1f538d83d",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1661644800,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1664942400,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
   }
  },
  {
@@ -402,45 +123,17 @@
   "instanceDurationSecs": 172800,
   "recurrence": {
    "recurrenceType": "daily",
-   "startTimeSecs": 1665028800,
+   "startTimeSecs": 1661731200,
    "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "e7b2c8ad-f05f-43b1-a355-80fad2031abd",
-  "questId": "79cef1e4-0aa3-4c3e-bfba-385f0bf62405",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1665460800,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "f68b7d31-8465-4f26-9dd1-506e73cf07ab",
-  "questId": "ed1414eb-e94f-4d02-90e7-041ecc2b73d3",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1665979200,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  }
- },
- {
-  "eventId": "fc6859a7-d59a-4059-99ab-e7b75a4096d2",
-  "questId": "01121c2f-6806-4b8c-998e-adc5d0e21db7",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1666065600,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1665028800,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
   }
  },
  {
@@ -450,9 +143,351 @@
   "instanceDurationSecs": 172800,
   "recurrence": {
    "recurrenceType": "daily",
-   "startTimeSecs": 1665115200,
+   "startTimeSecs": 1661817600,
    "durationSecs": 172800,
-   "recurrenceInterval": 39
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1665115200,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "11233dc0-f6e3-472d-bf33-3014e5572337",
+  "questId": "f4023a38-195a-4977-bfbc-f443a257566f",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1661904000,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1665201600,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "569be3b4-9737-5a5e-9a7e-2848b702c2db",
+  "questId": "11ffa10c-f587-432b-8901-fde27f37f65a",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1661990400,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "name": "EQ30 Spirit of the Hunt",
+   "authored": true,
+   "note": "Retired before our capture corpus begins, so this calendar entry is ours. It joins retail's own 39-day rotation with a 2-day window, on a day-slot that already holds one event \u2014 so on five days of every thirty-nine three events are open instead of two. Report #189."
+  }
+ },
+ {
+  "eventId": "a11a03ee-5198-4267-95b5-0a3d918f9b06",
+  "questId": "a008cbbc-a164-4183-8b69-470ac8cd5707",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1662076800,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1665288000,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "1d7ac820-b32c-41df-afcb-98d4b91ebc0c",
+  "questId": "fbeeaa85-13ae-479a-a751-5625688d682d",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1662163200,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1665374400,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "e7b2c8ad-f05f-43b1-a355-80fad2031abd",
+  "questId": "79cef1e4-0aa3-4c3e-bfba-385f0bf62405",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1662249600,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1665460800,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "50ea3b8a-f000-434a-98cd-a7c06f3fe19f",
+  "questId": "2290ab73-8f56-4dba-a4f0-7a23270eb93c",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1662336000,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1665547200,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "9576a10f-52ea-4919-b126-d6a6feb01b88",
+  "questId": "9181f784-9eb8-4872-953d-30ba8b6bc9d1",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1662422400,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1665633600,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "c6d32752-b6fc-436e-a7db-3c5d87c2f1e1",
+  "questId": "a1aafdc9-a35c-45c9-89f6-27f7d3a628e6",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1662508800,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1665720000,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "1dbc9a09-36d3-42ea-ace6-623dc7e29dbf",
+  "questId": "cd66c93c-5086-4311-b0f6-e90af54099b2",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1662595200,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1665806400,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "87ff988d-a09b-49ad-a541-614a810c3cb5",
+  "questId": "e2bda86c-0f80-43e4-9394-cdbff00a34c1",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1662681600,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1665892800,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "606b2e0f-7bf8-5b3a-91a1-d50ffbc42ac8",
+  "questId": "c08cf606-e3e8-42ed-adc3-f5d5af7e2490",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1662768000,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "name": "EQ38 Attack of the Spell Casters",
+   "authored": true,
+   "note": "Retired before our capture corpus begins, so this calendar entry is ours. It joins retail's own 39-day rotation with a 2-day window, on a day-slot that already holds one event \u2014 so on five days of every thirty-nine three events are open instead of two. Report #189."
+  }
+ },
+ {
+  "eventId": "f68b7d31-8465-4f26-9dd1-506e73cf07ab",
+  "questId": "ed1414eb-e94f-4d02-90e7-041ecc2b73d3",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1662854400,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1665979200,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "fc6859a7-d59a-4059-99ab-e7b75a4096d2",
+  "questId": "01121c2f-6806-4b8c-998e-adc5d0e21db7",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1662940800,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1666065600,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "aa758102-e70a-4d5c-b2da-383cc0c87dc0",
+  "questId": "6fe1271e-66eb-4f71-aa23-4576710e071f",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1663027200,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1666152000,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "4f6e4b9e-19d2-49af-9428-d5777a549e66",
+  "questId": "be7732ad-2ff0-4fb4-8684-e2f6d089965e",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1663113600,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1666238400,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "a0e3cec7-bc35-49dd-969f-142d192e3655",
+  "questId": "cbc5a18d-42ae-4c3f-a48d-7d7a6da9c42c",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1663200000,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1666324800,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "2cc8f717-7e08-4dcc-9cb3-f992a343ccab",
+  "questId": "9c9cf9d4-c8f1-4ae8-9868-0ce695e9509b",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1663286400,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1666411200,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
   }
  },
  {
@@ -462,9 +497,371 @@
   "instanceDurationSecs": 172800,
   "recurrence": {
    "recurrenceType": "daily",
-   "startTimeSecs": 1666497600,
+   "startTimeSecs": 1663372800,
    "durationSecs": 172800,
-   "recurrenceInterval": 39
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1666497600,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "b483c668-5ff6-4aa2-b731-33c522d04001",
+  "questId": "7f0d1508-312b-4036-970f-ff5f4c342526",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1663459200,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1663214400,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "30b20b6f-9ae4-477a-9b10-0264969bd966",
+  "questId": "260f2cdf-adea-4ad1-b221-8c4cb8abaefe",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1663545600,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1663300800,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "0f02755a-f988-5de2-abd6-c2ef56ce2ba6",
+  "questId": "c23cd046-a7f1-431b-9c14-5b023d6a104b",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1663632000,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "name": "EQ39 The Trap",
+   "authored": true,
+   "note": "Retired before our capture corpus begins, so this calendar entry is ours. It joins retail's own 39-day rotation with a 2-day window, on a day-slot that already holds one event \u2014 so on five days of every thirty-nine three events are open instead of two. Report #189."
+  }
+ },
+ {
+  "eventId": "3b4864b8-69d2-46b3-b129-1a15f3b324d7",
+  "questId": "1f26d523-f182-436a-9f50-f99fffd51b66",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1663718400,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1663387200,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "3df60c54-ed45-4085-b472-4b5d0a489705",
+  "questId": "90f184df-71e7-43a3-abf8-09a639fa2431",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1663804800,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1663473600,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "00414d25-fda9-4bf8-8ec1-76e62d01d16e",
+  "questId": "a846b491-b439-447d-a8a1-9c2611522610",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1663891200,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1663560000,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "5a1916f9-15a4-4741-8b8f-55197ff10c31",
+  "questId": "5675e806-8842-4791-870f-d8558ba035ec",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1663977600,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1663646400,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "b654d3d1-0fd3-4025-8003-69b9ee08f6ea",
+  "questId": "6249e106-70f7-4395-8a19-3211a312bb0e",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1664064000,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1663732800,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "688972ba-77c0-445b-9fad-ea6134e4b0dc",
+  "questId": "beb2284b-9525-4bfa-83bd-5ed6e089c97c",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1664150400,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1663819200,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "3c6f4f2e-318e-4f8d-9f99-3f75120c5f5f",
+  "questId": "838e49aa-6139-4938-84d3-e09e1da80ae8",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1664236800,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1663905600,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "511b53a8-67e9-43d0-bba6-d1d718a731b2",
+  "questId": "0dd37f6b-28ad-4cb7-8e12-2ebbf43fb366",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1664323200,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1663992000,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "ceab4fd9-9302-5a5e-910c-eff3f0446dd7",
+  "questId": "41aef1a7-bbf7-4f32-9eb5-9cf6fe5332a0",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1664409600,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "name": "EQ41 Feats of Strength",
+   "authored": true,
+   "note": "Retired before our capture corpus begins, so this calendar entry is ours. It joins retail's own 39-day rotation with a 2-day window, on a day-slot that already holds one event \u2014 so on five days of every thirty-nine three events are open instead of two. Report #189."
+  }
+ },
+ {
+  "eventId": "aa13aa4c-5d6a-4a85-a74e-4120774278bd",
+  "questId": "4f562a99-d298-486c-b3f5-1e3188e85db2",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1664496000,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1664078400,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "818b20fa-fffd-4dcc-9bf7-d5eff1dd214e",
+  "questId": "8ef9fad8-e7f6-4f7e-90e3-b0d2daf782bd",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1664582400,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1664164800,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "b253d721-e0fa-4d57-8586-8d4bd86598fe",
+  "questId": "31baf922-2b1a-4605-ae52-4946e26994c6",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1664668800,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1664251200,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "df4c0cf5-68bd-4c41-bae2-6e3e728720d2",
+  "questId": "61f7a386-dd0c-4119-acf6-7f41a9c5b62b",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1664755200,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1664337600,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "2ba72412-3a6c-4708-b49f-b15c8c7f8907",
+  "questId": "e8f3614c-8672-4f77-9dad-4b400676f4b6",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1664841600,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1664424000,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
+  }
+ },
+ {
+  "eventId": "5ea03a01-4be2-432d-98b9-28db9bdbb7f8",
+  "questId": "26eb6ab5-2d8c-4993-820e-ada79f6f00a8",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1664928000,
+   "durationSecs": 172800,
+   "recurrenceInterval": 44
+  },
+  "_meta": {
+   "capturedRecurrence": {
+    "recurrenceType": "daily",
+    "startTimeSecs": 1664510400,
+    "durationSecs": 172800,
+    "recurrenceInterval": 39
+   }
   }
  },
  {
@@ -501,91 +898,6 @@
    "name": "EQ42 The Long Night",
    "authored": true,
    "note": "Retired before our capture corpus begins, so this calendar entry is ours. recurrenceType stays \"daily\" because that is the only string retail ever sent the client (it means \"this recurs\"; the 39-day rotation uses it too), and recurrenceInterval 365 is what the client is told. The server repeats it on the anchor's calendar DATE \u2014 see EventDef.annual \u2014 because 365 days is not a year. Report #189."
-  }
- },
- {
-  "eventId": "045e2a59-67b7-5880-80c9-735114da1c3e",
-  "questId": "3405ea07-6655-49c0-b149-b0e19f9f1c85",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1661212800,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  },
-  "_meta": {
-   "name": "EQ28 The Trickster",
-   "authored": true,
-   "note": "Retired before our capture corpus begins, so this calendar entry is ours. It joins retail's own 39-day rotation with a 2-day window, on a day-slot that already holds one event \u2014 so on five days of every thirty-nine three events are open instead of two. Report #189."
-  }
- },
- {
-  "eventId": "569be3b4-9737-5a5e-9a7e-2848b702c2db",
-  "questId": "11ffa10c-f587-432b-8901-fde27f37f65a",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1661904000,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  },
-  "_meta": {
-   "name": "EQ30 Spirit of the Hunt",
-   "authored": true,
-   "note": "Retired before our capture corpus begins, so this calendar entry is ours. It joins retail's own 39-day rotation with a 2-day window, on a day-slot that already holds one event \u2014 so on five days of every thirty-nine three events are open instead of two. Report #189."
-  }
- },
- {
-  "eventId": "606b2e0f-7bf8-5b3a-91a1-d50ffbc42ac8",
-  "questId": "c08cf606-e3e8-42ed-adc3-f5d5af7e2490",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1662595200,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  },
-  "_meta": {
-   "name": "EQ38 Attack of the Spell Casters",
-   "authored": true,
-   "note": "Retired before our capture corpus begins, so this calendar entry is ours. It joins retail's own 39-day rotation with a 2-day window, on a day-slot that already holds one event \u2014 so on five days of every thirty-nine three events are open instead of two. Report #189."
-  }
- },
- {
-  "eventId": "0f02755a-f988-5de2-abd6-c2ef56ce2ba6",
-  "questId": "c23cd046-a7f1-431b-9c14-5b023d6a104b",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1663286400,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  },
-  "_meta": {
-   "name": "EQ39 The Trap",
-   "authored": true,
-   "note": "Retired before our capture corpus begins, so this calendar entry is ours. It joins retail's own 39-day rotation with a 2-day window, on a day-slot that already holds one event \u2014 so on five days of every thirty-nine three events are open instead of two. Report #189."
-  }
- },
- {
-  "eventId": "ceab4fd9-9302-5a5e-910c-eff3f0446dd7",
-  "questId": "41aef1a7-bbf7-4f32-9eb5-9cf6fe5332a0",
-  "important": true,
-  "instanceDurationSecs": 172800,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1663977600,
-   "durationSecs": 172800,
-   "recurrenceInterval": 39
-  },
-  "_meta": {
-   "name": "EQ41 Feats of Strength",
-   "authored": true,
-   "note": "Retired before our capture corpus begins, so this calendar entry is ours. It joins retail's own 39-day rotation with a 2-day window, on a day-slot that already holds one event \u2014 so on five days of every thirty-nine three events are open instead of two. Report #189."
   }
  }
 ]

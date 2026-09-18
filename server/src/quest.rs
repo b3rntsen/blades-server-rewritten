@@ -4870,6 +4870,7 @@ mod playability_sweep {
         let sd = static_data();
         let gd = game_data();
         assert_eq!(sd.game_events.len(), 46, "the committed calendar");
+        let rotating = sd.game_events.iter().filter(|d| !d.annual).count();
         for def in &sd.game_events {
             assert!(
                 gd.quests.contains_key(&def.quest_id),
@@ -4895,9 +4896,15 @@ mod playability_sweep {
                     def.window_secs()
                 );
             } else {
+                // Retail ran 39 events on a 39-day cycle — one opening per day,
+                // each open for two, so exactly two were ever open. The number
+                // that matters is that one opens per day, not 39: with the five
+                // retired events restored (#189) the library is 44 on a 44-day
+                // cycle and the behaviour players saw is unchanged. Measured in
+                // `the_rotation_keeps_two_open_and_one_about_to_open_every_day`.
                 assert_eq!(
-                    def.recurrence.recurrence_interval, 39,
-                    "every captured event recurs on 39 days"
+                    def.recurrence.recurrence_interval as usize, rotating,
+                    "the cycle must be as many days as there are rotating events"
                 );
                 assert_eq!(def.window_secs(), 172_800, "…and stays open for two");
             }
