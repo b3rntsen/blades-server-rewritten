@@ -135,6 +135,192 @@ pub async fn effective_gift(
     }
 }
 
+// --- publishing a gift without a restart -------------------------------------
+
+/// One gift in a publish request. The field names are the wire shape the admin
+/// UI already stores, so the body is the authored payload verbatim.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GiftPublishItem {
+    pub global_gift_id: Uuid,
+    #[serde(default)]
+    pub items: Vec<GiftItem>,
+    #[serde(default)]
+    pub chests: Vec<GiftChest>,
+    #[serde(default)]
+    pub start_time: i64,
+    #[serde(default)]
+    pub end_time: i64,
+    #[serde(default = "one")]
+    pub claim_count_limit: i64,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+fn one() -> i64 {
+    1
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GiftPublishRequest {
+    pub gifts: Vec<GiftPublishItem>,
+    /// Dry run unless set, matching the giveaway console.
+    #[serde(default)]
+    pub apply: bool,
+    #[serde(default)]
+    pub published_by: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GiftPublishResponse {
+    pub applied: bool,
+    pub written: usize,
+    pub gift_ids: Vec<Uuid>,
+    pub summary: String,
+}
+
+/// The first gift in a publish that would hand over nothing, if any.
+///
+/// An empty gift is a claim button that gives air. `build-gifts-static.py`
+/// already refuses to ship one — it says so at length in its own header — and a
+/// publish path that did not would simply be the easier way to make the same
+/// mistake.
+fn first_empty_gift(gifts: &[GiftPublishItem]) -> Option<Uuid> {
+    gifts
+        .iter()
+        .find(|g| g.items.is_empty() && g.chests.is_empty())
+        .map(|g| g.global_gift_id)
+}
+
+/// The stored claim limit for an authored one.
+///
+/// Clamped on the way IN as well as on the way out. `GiftOverrideRow::to_def`
+/// already clamps when reading, but a negative in the table read back as u64 is
+/// 18 quintillion free claims, and one typo should not be one missing clamp away
+/// from that.
+fn stored_claim_limit(authored: i64) -> i64 {
+    authored.max(0)
+}
+
+/// `POST /…/api/dev/v1/gifts` — publish authored gifts straight into the
+/// database, where `effective_gift` already looks first.
+///
+/// WHY THIS EXISTS
+///
+/// A gift authored in the admin UI used to reach players only after somebody ran
+/// `scripts/build-gifts-static.py` and redeployed the arena, because gifts lived
+/// in a bind-mounted `gifts.json` read once at process start. The admin page
+/// said so in a banner. That is a deploy to hand somebody a hat.
+///
+/// The database half already existed — `gift_overrides` and `effective_gift`,
+/// added so the giveaway could hand things out at runtime. This is the missing
+/// write path: the UI posts the payload it already has, the row lands, and the
+/// very next request serves it. No file, no regeneration, no restart.
+///
+/// The static catalogue stays as the floor: `effective_gift` falls back to it,
+/// so a gift that has never been published behaves exactly as before.
+#[post("/blades.bgs.services/api/dev/v1/gifts")]
+pub async fn publish_gifts(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    body: Json<GiftPublishRequest>,
+) -> Result<Json<GiftPublishResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let body = body.into_inner();
+
+    if body.gifts.is_empty() {
+        return Err(bad(6, StatusCode::BAD_REQUEST));
+    }
+
+    let now = now_secs();
+    let ids: Vec<Uuid> = body.gifts.iter().map(|g| g.global_gift_id).collect();
+
+    if let Some(empty) = first_empty_gift(&body.gifts) {
+        log::warn!(
+            "[gifts] refusing to publish {empty} with no items and no chests"
+        );
+        return Err(bad(7, StatusCode::BAD_REQUEST));
+    }
+
+    let summary = format!(
+        "{} gift(s): {}",
+        body.gifts.len(),
+        body.gifts
+            .iter()
+            .map(|g| {
+                format!(
+                    "{} ({} item(s), {} chest(s))",
+                    g.global_gift_id,
+                    g.items.len(),
+                    g.chests.len()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    if !body.apply {
+        return Ok(Json(GiftPublishResponse {
+            applied: false,
+            written: 0,
+            gift_ids: ids,
+            summary,
+        }));
+    }
+
+    let mut conn = app_state
+        .db_pool
+        .get()
+        .await
+        .map_err(|_| bad(5, StatusCode::SERVICE_UNAVAILABLE))?;
+
+    use crate::schema::gift_overrides::dsl as go;
+    let mut written = 0usize;
+    for g in &body.gifts {
+        let row = GiftOverrideRow {
+            gift_id: g.global_gift_id,
+            items: JsonDbWrapper(g.items.clone()),
+            chests: JsonDbWrapper(g.chests.clone()),
+            start_time: g.start_time,
+            end_time: g.end_time,
+            // Clamp on the way in as well as on the way out: a negative limit
+            // read back as u64 is 18 quintillion free claims, and the read-side
+            // clamp in `to_def` should not be the only thing standing between a
+            // typo and that.
+            claim_count_limit: stored_claim_limit(g.claim_count_limit),
+            description: g.description.clone(),
+            updated_at: now,
+            updated_by: body.published_by.clone(),
+        };
+        diesel::insert_into(go::gift_overrides)
+            .values(&row)
+            .on_conflict(go::gift_id)
+            .do_update()
+            .set(&row)
+            .execute(&mut conn)
+            .await
+            .map_err(|e| {
+                log::error!("[gifts] publishing {}: {e}", g.global_gift_id);
+                bad(5, StatusCode::INTERNAL_SERVER_ERROR)
+            })?;
+        written += 1;
+    }
+
+    log::info!(
+        "[gifts] published {written} gift(s) by {}: {summary}",
+        body.published_by.as_deref().unwrap_or("unknown")
+    );
+
+    Ok(Json(GiftPublishResponse {
+        applied: true,
+        written,
+        gift_ids: ids,
+        summary,
+    }))
+}
+
 // --- the giveaway ------------------------------------------------------------
 
 #[derive(Debug, Clone, diesel::Queryable, diesel::Selectable, diesel::Insertable)]
@@ -600,5 +786,62 @@ mod tests {
             updated_by: None,
         };
         assert_eq!(row.to_def().claim_count_limit, 0);
+    }
+}
+
+#[cfg(test)]
+mod publish_tests {
+    use super::*;
+
+    fn gift(items: usize, chests: usize) -> GiftPublishItem {
+        GiftPublishItem {
+            global_gift_id: Uuid::new_v4(),
+            items: (0..items)
+                .map(|_| serde_json::from_str::<GiftItem>(
+                    r#"{"itemTemplateId":"def810af-e9f5-4e23-9247-1edf391d82e1","quantity":1}"#,
+                ).expect("a GiftItem the wire shape parses"))
+                .collect(),
+            chests: (0..chests)
+                .map(|_| serde_json::from_str::<GiftChest>(r#"{"rarity":3}"#)
+                    .expect("a GiftChest the wire shape parses"))
+                .collect(),
+            start_time: 0,
+            end_time: 0,
+            claim_count_limit: 1,
+            description: None,
+        }
+    }
+
+    /// A gift with neither items nor chests is a claim button that gives air.
+    #[test]
+    fn an_empty_gift_is_refused() {
+        assert!(first_empty_gift(&[gift(0, 0)]).is_some());
+        // …and it is found even when it is not the first in the batch, which is
+        // the case a `gifts[0]`-only check would wave through.
+        let batch = vec![gift(1, 0), gift(0, 0), gift(0, 1)];
+        let found = first_empty_gift(&batch).expect("the empty one");
+        assert_eq!(found, batch[1].global_gift_id);
+    }
+
+    /// CONTROL: a gift with contents of either kind is accepted, so the test
+    /// above is about emptiness and not about the check refusing everything.
+    #[test]
+    fn a_gift_with_contents_is_accepted() {
+        assert!(first_empty_gift(&[gift(1, 0)]).is_none());
+        assert!(first_empty_gift(&[gift(0, 1)]).is_none());
+        assert!(first_empty_gift(&[gift(2, 3)]).is_none());
+        assert!(first_empty_gift(&[]).is_none());
+    }
+
+    /// A negative limit stored verbatim reads back as u64 — 18 quintillion free
+    /// claims. The clamp is what stops one typo becoming unlimited loot.
+    #[test]
+    fn a_negative_claim_limit_clamps_to_zero() {
+        assert_eq!(stored_claim_limit(-1), 0);
+        assert_eq!(stored_claim_limit(i64::MIN), 0);
+        // CONTROL: real limits pass through untouched.
+        assert_eq!(stored_claim_limit(0), 0);
+        assert_eq!(stored_claim_limit(1), 1);
+        assert_eq!(stored_claim_limit(50), 50);
     }
 }
