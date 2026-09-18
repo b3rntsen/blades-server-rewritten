@@ -522,7 +522,7 @@ mod tests {
         let rotating = sd
             .game_events
             .iter()
-            .filter(|d| d.recurrence.recurrence_interval == 39)
+            .filter(|d| !d.annual)
             .count();
         let annual: Vec<_> = sd
             .game_events
