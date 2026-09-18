@@ -2181,6 +2181,100 @@ mod tests {
         );
     }
 
+    /// Report #165: "I can't craft any weapon in town smithy."
+    ///
+    /// EVERY recipe that reaches the plain-craft path must resolve to something we
+    /// can mint. The refusal at the end of that path is a safety net, not a
+    /// feature — it exists so an unknown recipe cannot corrupt a save (#176, #179,
+    /// #180) — and any recipe that lands there is a craft a player cannot perform.
+    ///
+    /// The APK's own table is the authority on what the client can ask for: 2,978
+    /// recipes across seven crafting types. Only three of those types reach this
+    /// path, and for those three the coverage must be TOTAL.
+    ///
+    /// The other four are excluded by construction and asserted separately below,
+    /// because "we cover 921 of 2,978 recipes" is the false alarm this test exists
+    /// to prevent — I raised exactly that alarm from a partial count that ignored
+    /// both the `recipe_outputs` fallback and the item-mod branch.
+    #[test]
+    fn every_recipe_that_reaches_the_craft_path_can_be_minted() {
+        let sd = static_data_from_deploy();
+
+        let resolvable = |recipe_id: &Uuid| -> bool {
+            sd.recipes.contains_key(recipe_id)
+                || sd.smith_craftables.resolve(recipe_id).is_some()
+                || blades_lib::features::recipe_outputs::output_for(recipe_id).is_some()
+        };
+
+        // The three types a plain craft (no itemId) can carry.
+        for name in ["Smithing", "DecorationCrafting", "Alchemy"] {
+            let type_id = sd
+                .recipe_crafting_types
+                .type_by_name(name)
+                .unwrap_or_else(|| panic!("{name} crafting type in the table"));
+            let of_type: Vec<&Uuid> = sd
+                .recipe_crafting_types
+                .recipes
+                .iter()
+                .filter(|(_, r)| r.crafting_type_id == type_id)
+                .map(|(id, _)| id)
+                .collect();
+            assert!(!of_type.is_empty(), "{name}: no recipes — is the table loaded?");
+
+            let unresolvable: Vec<&Uuid> =
+                of_type.iter().copied().filter(|id| !resolvable(id)).collect();
+            assert!(
+                unresolvable.is_empty(),
+                "{name}: {} of {} recipes would be REFUSED, e.g. {:?}",
+                unresolvable.len(),
+                of_type.len(),
+                &unresolvable[..unresolvable.len().min(3)]
+            );
+        }
+    }
+
+    /// CONTROL for the test above: the four types it does NOT cover are the ones
+    /// that never reach the refusal, and they must stay that way.
+    ///
+    /// Repairing and Salvaging have their own endpoints (`repair::repair_items`,
+    /// `salvage::salvage_items`) and never call `create_craft` at all. Tempering and
+    /// Enchanting arrive WITH an `itemId`, which takes the item-mod branch — that
+    /// branch is deliberately lenient for an unknown recipe, because retail has one
+    /// temper recipe per item per level and our captured 23 are a rounding error.
+    ///
+    /// So their absence from the mintable set is expected, and this asserts it
+    /// rather than leaving it to be rediscovered as a scare.
+    #[test]
+    fn the_other_crafting_types_deliberately_do_not_mint() {
+        let sd = static_data_from_deploy();
+        let resolvable = |recipe_id: &Uuid| -> bool {
+            sd.recipes.contains_key(recipe_id)
+                || sd.smith_craftables.resolve(recipe_id).is_some()
+                || blades_lib::features::recipe_outputs::output_for(recipe_id).is_some()
+        };
+        for name in ["Repairing", "Salvaging", "Tempering", "Enchanting"] {
+            let type_id = sd
+                .recipe_crafting_types
+                .type_by_name(name)
+                .unwrap_or_else(|| panic!("{name} crafting type in the table"));
+            let of_type: Vec<&Uuid> = sd
+                .recipe_crafting_types
+                .recipes
+                .iter()
+                .filter(|(_, r)| r.crafting_type_id == type_id)
+                .map(|(id, _)| id)
+                .collect();
+            assert!(!of_type.is_empty(), "{name}: no recipes — is the table loaded?");
+            let covered = of_type.iter().filter(|id| resolvable(id)).count();
+            assert!(
+                covered * 4 < of_type.len(),
+                "{name}: {covered} of {} now mint — if this type has started going \
+                 through the plain-craft path, add it to the total-coverage test above",
+                of_type.len()
+            );
+        }
+    }
+
     /// An un-captured ENCHANTING recipe the capture never saw.
     fn an_uncaptured_enchanting_recipe(sd: &blades_lib::static_data::StaticData) -> (Uuid, Uuid) {
         let enchanting = sd
