@@ -711,6 +711,7 @@ async fn main() -> Result<()> {
                     .service(admin::grant_arena_season_awards)
                     .service(admin::start_arena_season)
                     .service(free_for_all::free_for_all_state)
+                    .service(free_for_all::publish_gifts)
                     .service(free_for_all::free_for_all_open)
                     .service(free_for_all::free_for_all_close)
                     // Guild support console (dev-token gated; the web /guilds
