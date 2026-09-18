@@ -103,6 +103,17 @@ pub struct EventQuestTemplateMeta {
     #[serde(rename = "finalRewardVariants")]
     #[serde(default)]
     pub final_reward_variants: Vec<EventQuestFinalRewardVariant>,
+    /// True for a template WE wrote rather than one the captures gave us (#189:
+    /// the holiday events were retired before our corpus begins, so there is
+    /// nothing to derive them from).
+    ///
+    /// It exists so authored data can never pass itself off as capture-derived:
+    /// `authored_templates_are_labelled_as_such` pins that a template with zero
+    /// observations says so, and that one claiming observations does not.
+    #[serde(default)]
+    pub authored: bool,
+    #[serde(default)]
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -401,6 +412,44 @@ mod tier_progression {
         match tpl.payable_rewards.get(&n.to_string()) {
             Some(p) => p.reward.clone(),
             None => tpl.rewards[n].clone(),
+        }
+    }
+
+    /// Authored data must say it is authored (#189).
+    ///
+    /// Two holiday events were restored from the shipped game data, not from
+    /// captures — nothing in our corpus ever saw them run. Their payouts are copied
+    /// from a retail template, which is a defensible choice but NOT evidence, and
+    /// the difference has to survive in the file: a later reader deciding what
+    /// retail actually paid must be able to tell the two apart without knowing this
+    /// commit exists.
+    ///
+    /// The test runs both ways on purpose. "Every authored row has zero
+    /// observations" alone would pass if every row were marked authored; "every
+    /// zero-observation row is marked authored" alone would pass if none were.
+    #[test]
+    fn authored_templates_are_labelled_as_such() {
+        let d = data();
+        let authored: Vec<_> = d.templates.values().filter(|t| t._meta.authored).collect();
+        assert_eq!(authored.len(), 2, "the two holiday events, and only those");
+
+        for t in &authored {
+            assert_eq!(
+                t._meta.instances_observed, 0,
+                "{} claims to be authored AND observed",
+                t.gld_quest_id
+            );
+            assert!(!t._meta.name.is_empty(), "{}: an authored row needs a name", t.gld_quest_id);
+            // It must still be playable — authored is not an excuse for a half table.
+            assert_eq!(t.rewards.len(), 5, "{}", t.gld_quest_id);
+            assert_eq!(t.payable_rewards.len(), 5, "{}", t.gld_quest_id);
+        }
+        for t in d.templates.values().filter(|t| !t._meta.authored) {
+            assert!(
+                t._meta.instances_observed > 0,
+                "{} has no observations but is not marked authored",
+                t.gld_quest_id
+            );
         }
     }
 
