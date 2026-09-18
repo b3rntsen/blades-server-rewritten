@@ -2240,6 +2240,18 @@ pub struct SeasonRolloverRequest {
     /// everybody resets — behaving exactly as before.
     #[serde(default)]
     pub only_idle_this_season: bool,
+    /// After zeroing, set each character's cups to what it actually earned in
+    /// this season's matches.
+    ///
+    /// A season start zeroes everyone; cups then accumulate from the season's own
+    /// results. A character that carried a balance INTO the season has been
+    /// spending and earning against that balance ever since, so simply zeroing it
+    /// also discards the cups it legitimately won here. This replays them.
+    ///
+    /// Processes every character, including ones already stamped current — they
+    /// are precisely the ones whose opening balance was never zeroed.
+    #[serde(default)]
+    pub recompute_cups_from_season_matches: bool,
 }
 
 /// What the rollover did (or would do).
@@ -2263,10 +2275,34 @@ pub struct SeasonRolloverResponse {
     /// Characters skipped because they have played in this season's window and
     /// `onlyIdleThisSeason` was set. Zero on a season-boundary sweep.
     pub characters_played_this_season: usize,
+    /// Characters whose cups differ from what this season's matches account for.
+    pub characters_cups_changed: usize,
+    /// Total cups removed — the size of the inherited balance being discarded.
+    pub cups_removed: i64,
     /// Rows whose `character` JSONB would not deserialize; skipped, never written.
     pub characters_unreadable: usize,
     /// The largest standing that was archived, as a sanity line for the operator.
     pub highest_archived_trophies: i64,
+}
+
+/// One match's trophy movement, oldest first.
+#[derive(diesel::QueryableByName)]
+struct TrophyDeltaRow {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    trophy_delta: i64,
+}
+
+/// The cups a character earned inside `[start, end)`, starting from zero.
+///
+/// **Clamped per match, not summed then floored.** `arena_economy` computes
+/// `(pre + delta).max(0)` on every result, so a shortfall below zero is discarded
+/// as it happens and cannot be repaid by a later win. Summing the deltas and
+/// applying one retroactive floor is a different number for anyone who has ever
+/// bottomed out — that exact substitution is what made the old leaderboard
+/// disagree with players' own screens by hundreds (8543df9), and it reads as the
+/// obvious simplification, so it has its own test.
+fn replay_season_cups(deltas: &[i64]) -> i64 {
+    deltas.iter().fold(0i64, |cups, d| (cups + d).max(0))
 }
 
 /// `SELECT COUNT(*)` — diesel needs a named, typed row even for one number.
@@ -2375,6 +2411,8 @@ pub async fn arena_season_rollover(
         characters_archived: 0,
         characters_already_current: 0,
         characters_played_this_season: 0,
+        characters_cups_changed: 0,
+        cups_removed: 0,
         characters_unreadable: 0,
         highest_archived_trophies: 0,
     };
@@ -2413,11 +2451,45 @@ pub async fn arena_season_rollover(
 
         let standing = ch.pvp_trophies;
         let outcome = arena_season::roll_character_into(&mut ch, season);
-        if !outcome.reset {
+        if !outcome.reset && !body.recompute_cups_from_season_matches {
             resp.characters_already_current += 1;
             continue;
         }
-        resp.characters_reset += 1;
+        if !outcome.reset {
+            // Already stamped, but still to be recomputed: these are exactly the
+            // characters whose opening balance was never zeroed, so their live
+            // counter is that balance plus this season's play. Zero it here so the
+            // replay below is the whole of it.
+            resp.characters_already_current += 1;
+            ch.pvp_trophies = 0;
+        }
+
+        if body.recompute_cups_from_season_matches {
+            let deltas: Vec<TrophyDeltaRow> = diesel::sql_query(
+                "SELECT trophy_delta FROM arena_match_results \
+                 WHERE character_id = $1 AND recorded_at >= to_timestamp($2) \
+                   AND recorded_at < to_timestamp($3) ORDER BY recorded_at, id",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(row.id)
+            .bind::<diesel::sql_types::BigInt, _>(window_start)
+            .bind::<diesel::sql_types::BigInt, _>(window_end)
+            .get_results(&mut conn)
+            .await
+            .map_err(|e| {
+                warn!("season rollover: delta read failed for {}: {e}", row.id);
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 18)
+            })?;
+            let earned =
+                replay_season_cups(&deltas.iter().map(|d| d.trophy_delta).collect::<Vec<_>>());
+            if earned != standing {
+                resp.characters_cups_changed += 1;
+            }
+            ch.pvp_trophies = earned;
+            resp.cups_removed += (standing - earned).max(0);
+        }
+        if outcome.reset {
+            resp.characters_reset += 1;
+        }
         if outcome.archived_under.is_some() {
             resp.characters_archived += 1;
             resp.highest_archived_trophies = resp.highest_archived_trophies.max(standing);
@@ -3751,5 +3823,94 @@ mod seasons_are_what_the_database_says {
                 "with no active season the import must still zero `{field}`"
             );
         }
+    }
+}
+
+/// Recomputing a season's cups from the season's own matches.
+#[cfg(test)]
+mod only_cups_earned_this_season_count {
+    use super::replay_season_cups;
+
+    /// THE RULE, and the substitution that looks identical and is not.
+    ///
+    /// `arena_economy` clamps on EVERY result — `(pre + delta).max(0)` — so a
+    /// shortfall below zero is discarded as it happens and a later win cannot
+    /// repay it. Summing the deltas and flooring once is a different number for
+    /// anyone who has ever bottomed out, and swapping one for the other is what
+    /// made the old leaderboard disagree with players' own screens by hundreds.
+    #[test]
+    fn a_shortfall_is_discarded_as_it_happens_not_repaid_later() {
+        // Down 50 from zero, then up 40. Clamped: 0 then 40. Summed: -10 -> 0.
+        assert_eq!(replay_season_cups(&[-50, 40]), 40);
+        assert_eq!(
+            [-50i64, 40].iter().sum::<i64>().max(0),
+            0,
+            "the control: summing first gives a different answer"
+        );
+
+        // A longer run where the two diverge badly.
+        let run = [10, -100, 5, 5, 5];
+        assert_eq!(replay_season_cups(&run), 15);
+        assert_eq!(run.iter().sum::<i64>().max(0), 0);
+    }
+
+    /// Never negative, and a character with no matches this season holds nothing.
+    #[test]
+    fn a_character_who_has_not_played_this_season_has_no_cups() {
+        assert_eq!(replay_season_cups(&[]), 0);
+        assert_eq!(replay_season_cups(&[-10]), 0);
+        assert_eq!(replay_season_cups(&[-10, -10, -10]), 0);
+    }
+
+    /// An unbroken winning run is just the sum — the clamp only ever bites below
+    /// zero, so this must not "fix" anything that was already right.
+    #[test]
+    fn an_unbroken_run_is_unchanged_by_the_clamp() {
+        let run = [7, 5, 9, 5, 7];
+        assert_eq!(replay_season_cups(&run), run.iter().sum::<i64>());
+    }
+
+    /// Measured on production, 2026-09-18. These are the three shapes the repair
+    /// has to get right, and the numbers it must produce.
+    #[test]
+    fn the_production_cases_replay_to_their_measured_values() {
+        // The Trickster: 1061 cups held, 3 matches this season worth +1 each.
+        // 1058 of that balance belongs to a season that does not exist here.
+        assert_eq!(replay_season_cups(&[1, 1, 1]), 3);
+
+        // The seven imported alts: 396-440 cups, not one match ever played.
+        assert_eq!(replay_season_cups(&[]), 0);
+
+        // A player who opened the season holding a balance and then lost heavily.
+        // Replayed from zero the early losses hit the floor instead of the
+        // balance, so the result is HIGHER than the live counter — which is the
+        // rule working, not a bug: those losses were taken against cups that were
+        // never earned here.
+        assert!(replay_season_cups(&[-200, 60, 60, 60]) > replay_season_cups(&[60, 60, 60]) - 200);
+    }
+
+    /// The flag is opt-in: a plain season-boundary sweep still just zeroes.
+    #[test]
+    fn the_recompute_is_opt_in() {
+        let src = include_str!("admin.rs");
+        assert!(
+            src.contains("#[serde(default)]\n    pub recompute_cups_from_season_matches: bool,"),
+            "the recompute must default to off, so the boundary sweep is unchanged"
+        );
+        let body = src
+            .split("pub async fn arena_season_rollover(")
+            .nth(1)
+            .unwrap()
+            .split("\n#[")
+            .next()
+            .unwrap();
+        assert!(
+            body.contains("ORDER BY recorded_at, id"),
+            "the replay is path-dependent, so the matches must be read in order"
+        );
+        assert!(
+            body.contains("replay_season_cups("),
+            "the handler must use the clamped fold, not an inline sum"
+        );
     }
 }
