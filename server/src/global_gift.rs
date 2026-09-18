@@ -183,9 +183,9 @@ pub async fn get_global_gift(
                 season_rewards::gift_for_awards(
                     gift_id,
                     season.number,
-                    awards.iter().map(|award| {
-                        (award.kind.as_str(), award.tier.as_str(), &award.payload)
-                    }),
+                    awards
+                        .iter()
+                        .map(|award| (award.kind.as_str(), award.tier.as_str(), &award.payload)),
                 )
             })?
         })
@@ -199,11 +199,12 @@ pub async fn get_global_gift(
         }));
     }
 
-    let def = app_state
-        .static_data
-        .gifts
-        .get(&gift_id)
-        .cloned()
+    // Database first, static catalogue second. Reading `static_data.gifts`
+    // directly would serve the payload this process booted with, and would miss
+    // every gift created at runtime — a Free for All opened today would not
+    // exist at all until the next restart.
+    let def = crate::free_for_all::effective_gift(&app_state, &mut conn, gift_id)
+        .await
         .ok_or_else(|| map_gift_err(GiftError::NotFound))?;
     let claim_count = entry
         .server_state
@@ -413,11 +414,12 @@ pub async fn claim_global_gift(
             .await;
     }
 
-    let def = app_state
-        .static_data
-        .gifts
-        .get(&gift_id)
-        .cloned()
+    // Database first, static catalogue second. Reading `static_data.gifts`
+    // directly would serve the payload this process booted with, and would miss
+    // every gift created at runtime — a Free for All opened today would not
+    // exist at all until the next restart.
+    let def = crate::free_for_all::effective_gift(&app_state, &mut conn, gift_id)
+        .await
         .ok_or_else(|| map_gift_err(GiftError::NotFound))?;
 
     conn.transaction(move |mut conn| {

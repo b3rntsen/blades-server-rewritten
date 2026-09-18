@@ -65,10 +65,45 @@ pub async fn get_announcements(
 
     let mut announcements = app_state.static_data.announcements.clone();
     announcements.extend(pending.iter().map(season_reward_announcement));
+
+    // A Free for All the client cannot see is a giveaway nobody collects: gift
+    // ids are only discoverable through this feed. Derived from the open run
+    // rather than stored alongside it, so the advert and the gift cannot drift.
+    if let Some(run) = crate::free_for_all::open_run(&mut conn, now_secs()).await {
+        announcements.push(free_for_all_announcement(&run));
+    }
+
     Ok(Json(AnnouncementsResponse { announcements }))
 }
 
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 const REWARD_ANNOUNCEMENT_LIFETIME: i64 = 31 * 24 * 60 * 60;
+
+/// The banner for an open Free for All.
+///
+/// `ttl` is the window's own close time, not a fixed lifetime: the banner must
+/// not outlive the gift, or players tap Claim and get a "not active" error.
+fn free_for_all_announcement(run: &crate::free_for_all::FreeForAllRun) -> Announcement {
+    Announcement {
+        id: run.id.to_string(),
+        r#type: "BASIC".into(),
+        start_time: run.opens_at,
+        ttl: run.closes_at,
+        // Same namespaced shape as the season banner: the edge routes this to a
+        // generic presentation and inserts the trailing uuid — here the GIFT id,
+        // not the run id — into the manifest's GlobalGiftId.
+        asset_url: format!(
+            "https://announcements.blades.bgs.services/free-for-all/{}",
+            run.gift_id
+        ),
+    }
+}
 
 fn season_reward_announcement(season: &season_store::SeasonRow) -> Announcement {
     let start = season.ended_at.unwrap_or(season.ends_at);
@@ -90,6 +125,42 @@ fn season_reward_announcement(season: &season_store::SeasonRow) -> Announcement 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn a_run(opens_at: i64, closes_at: i64) -> crate::free_for_all::FreeForAllRun {
+        crate::free_for_all::FreeForAllRun {
+            id: Uuid::from_u128(1),
+            gift_id: Uuid::from_u128(2),
+            opens_at,
+            closes_at,
+            gems: 100,
+            multiplier: 1,
+            claim_limit: 1,
+            cadence: "first_saturday".into(),
+            opened_by: None,
+            note: None,
+            created_at: opens_at,
+        }
+    }
+
+    #[test]
+    fn the_free_for_all_banner_points_at_the_gift_not_the_run() {
+        // The edge copies the trailing uuid into GlobalGiftId, so the run id
+        // here would send every Claim to a gift that does not exist.
+        let a = free_for_all_announcement(&a_run(100, 200));
+        assert!(
+            a.asset_url
+                .ends_with(&format!("/free-for-all/{}", Uuid::from_u128(2)))
+        );
+        assert!(!a.asset_url.contains(&Uuid::from_u128(1).to_string()));
+    }
+
+    #[test]
+    fn the_banner_expires_with_the_window() {
+        // A banner that outlives the gift is a Claim button that errors.
+        let a = free_for_all_announcement(&a_run(100, 200));
+        assert_eq!(a.start_time, 100);
+        assert_eq!(a.ttl, 200);
+    }
 
     #[test]
     fn reward_entry_uses_the_db_season_id_for_asset_and_gift_routing() {

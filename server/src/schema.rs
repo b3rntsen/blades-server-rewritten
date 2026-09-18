@@ -277,6 +277,36 @@ diesel::joinable!(event_completions -> characters (character_id));
 diesel::joinable!(event_dungeons -> characters (character_id));
 diesel::joinable!(quests -> characters (character_id));
 
+diesel::table! {
+    gift_overrides (gift_id) {
+        gift_id -> Uuid,
+        items -> Jsonb,
+        chests -> Jsonb,
+        start_time -> Int8,
+        end_time -> Int8,
+        claim_count_limit -> Int8,
+        description -> Nullable<Text>,
+        updated_at -> Int8,
+        updated_by -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    free_for_all_runs (id) {
+        id -> Uuid,
+        gift_id -> Uuid,
+        opens_at -> Int8,
+        closes_at -> Int8,
+        gems -> Int8,
+        multiplier -> Int4,
+        claim_limit -> Int8,
+        cadence -> Text,
+        opened_by -> Nullable<Text>,
+        note -> Nullable<Text>,
+        created_at -> Int8,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
     arena_ai_mimic_control,
     arena_ai_mimics,
@@ -291,6 +321,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     device_bindings,
     event_completions,
     event_dungeons,
+    free_for_all_runs,
+    gift_overrides,
     guild_applications,
     guild_exchanges,
     guild_members,
