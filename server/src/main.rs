@@ -47,6 +47,7 @@ mod dungeon;
 mod dungeon_update;
 mod error;
 mod event_quests;
+mod free_for_all;
 mod gameevent;
 mod global_gift;
 mod global_shop;
@@ -709,6 +710,9 @@ async fn main() -> Result<()> {
                     .service(admin::end_arena_season)
                     .service(admin::grant_arena_season_awards)
                     .service(admin::start_arena_season)
+                    .service(free_for_all::free_for_all_state)
+                    .service(free_for_all::free_for_all_open)
+                    .service(free_for_all::free_for_all_close)
                     // Guild support console (dev-token gated; the web /guilds
                     // page is its only intended caller).
                     .service(guild_admin::list_guilds)
