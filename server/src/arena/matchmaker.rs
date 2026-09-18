@@ -234,6 +234,26 @@ pub fn bracket_for(waited: Duration) -> Option<(i32, i64)> {
 /// allowed to be a worse match than a human would have been.
 pub const BRACKET_STEPS: [(i32, i64); 3] = [(5, 150), (10, 300), (20, 600)];
 
+/// How many bot candidates a bracket step must offer before it is taken.
+///
+/// [`pick_bot_index`] used to take the TIGHTEST step with anybody in it, which is
+/// the best single match — and, when that step held exactly one character, meant
+/// the same opponent every match for ever. Measured on production: of six ranked
+/// players, three drew from a pool of one and two of those three drew the SAME
+/// character, because the roster is small and the tightest step that contained
+/// anyone contained only them.
+///
+/// So a step must offer real variety to be taken, and the ladder keeps walking
+/// until one does. Tightest-first is unchanged, so this gives up as little match
+/// quality as possible: the tightest step that offers a choice wins.
+///
+/// It stays a preference. If no step reaches three the widest set is used anyway —
+/// and if the roster itself holds fewer than three eligible characters, that is
+/// what a player gets. The fix for that is more roster, not a worse match, and
+/// **never** a character whose owner has not opted in: see [`should_widen`], where
+/// a managed roster is a consent boundary rather than a curation preference.
+pub const MIN_BOT_POOL: usize = 3;
+
 /// Are these two inside one specific bracket step? The single level/trophy
 /// comparison in this module — [`compatible`] and [`pick_bot_index`] both go
 /// through it so the human and bot paths cannot drift apart.
@@ -664,10 +684,28 @@ fn skill_of_row(r: &CharacterDbEntryCharacterWalletInventory) -> Option<Skill> {
     })
 }
 
+/// Has this character ever actually fought, so its rating means anything?
+///
+/// A character that has never played carries `matchmakingPvpTrophies: 0`, and 0 on
+/// that axis is indistinguishable from "the weakest fighter on the server". It is
+/// not the same claim: one is unrated, the other is measured.
+///
+/// It matters because every fresh mimic is unrated. Measured on production
+/// 2026-09-18: of 16 complete, never-played characters at level 68-100 — the exact
+/// pool a strong player should be sparring against — all 16 sat at 0, so the
+/// highest-rated human on the server (883) could not be bracketed against a single
+/// one of them however many were opted in. Adding roster would not have fixed it.
+fn is_rated(r: &CharacterDbEntryCharacterWalletInventory) -> bool {
+    r.character.0.number_pvp_match_played > 0
+}
+
 /// One row of the bot pool, as [`pick_bot_index`] sees it: the candidate's
 /// character UUID, whether its profile is COMPLETE enough to render, and its
 /// strength (`None` when the row's level/trophies could not be read).
-pub type BotCandidate = (String, bool, Option<Skill>);
+/// One row of the bot pool: character UUID, whether the profile is COMPLETE
+/// enough to render, its strength, and whether that strength is MEASURED — see
+/// [`is_rated`]. An unrated candidate is bracketed on level alone.
+pub type BotCandidate = (String, bool, Option<Skill>, bool);
 
 /// The outcome of a bot draw.
 ///
@@ -720,7 +758,7 @@ fn pick_bot_index(
     let eligible: Vec<usize> = candidates
         .iter()
         .enumerate()
-        .filter(|(_, (uuid, complete, _))| *complete && !is_self_match(human_char_uuid, uuid))
+        .filter(|(_, (uuid, complete, _, _))| *complete && !is_self_match(human_char_uuid, uuid))
         .map(|(i, _)| i)
         .collect();
     if eligible.is_empty() {
@@ -737,18 +775,61 @@ fn pick_bot_index(
             step: None,
         });
     };
+    // Tightest-first, but a step must offer a CHOICE (see `MIN_BOT_POOL`). The
+    // steps are nested — a wider one's set contains the tighter one's — so walking
+    // outwards only ever adds candidates.
+    // Two different things are tracked, because they answer two questions.
+    // `tightest_step` is the best bracket this pairing COULD satisfy, which is
+    // what `step` has always meant and what `should_widen` reads. `widest_tier`
+    // is the biggest bracketed set, which is where the draw comes from when no
+    // single step offers a choice.
+    let mut tightest_step: Option<(i32, i64)> = None;
+    let mut widest_tier: Option<Vec<usize>> = None;
     for step in BRACKET_STEPS {
         let tier: Vec<usize> = eligible
             .iter()
             .copied()
-            .filter(|&i| candidates[i].2.is_some_and(|c| within_step(h, c, step)))
+            .filter(|&i| {
+                candidates[i].2.is_some_and(|c| {
+                    if candidates[i].3 {
+                        within_step(h, c, step)
+                    } else {
+                        // Unrated: its trophy count carries no information, so only
+                        // the level gate applies. Deliberately NOT a free pass —
+                        // level is still enforced, which is what keeps a level-43
+                        // player away from a level-68 bot (tracker #49).
+                        (h.level - c.level).abs() <= step.0
+                    }
+                })
+            })
             .collect();
-        if !tier.is_empty() {
+        if tier.len() >= MIN_BOT_POOL {
             return Some(BotDraw {
                 index: rotate(&tier),
                 step: Some(step),
             });
         }
+        if !tier.is_empty() {
+            if tightest_step.is_none() {
+                tightest_step = Some(step);
+            }
+            // The steps are nested, so the last non-empty one is the largest
+            // bracketed set — the most variety the bracket permits.
+            widest_tier = Some(tier);
+        }
+    }
+    if let (Some(tier), Some(step)) = (widest_tier, tightest_step) {
+        // Nothing reached the minimum, so take the widest BRACKETED set — never
+        // the whole eligible pool.
+        //
+        // Widening to everyone here is tracker #49 in reverse: it drew a level-43
+        // player against a level-68 bot while a level-45 one sat inside the
+        // bracket. Variety is worth a step of match quality; it is not worth
+        // leaving the bracket while somebody inside it is available.
+        return Some(BotDraw {
+            index: rotate(&tier),
+            step: Some(step),
+        });
     }
     Some(BotDraw {
         index: rotate(&eligible),
@@ -1009,7 +1090,12 @@ fn should_widen(
 
 /// One bot-pool row as [`pick_bot_index`] sees it.
 fn candidate_of_row(r: &CharacterDbEntryCharacterWalletInventory) -> BotCandidate {
-    (r.id.to_string(), row_has_customization(r), skill_of_row(r))
+    (
+        r.id.to_string(),
+        row_has_customization(r),
+        skill_of_row(r),
+        is_rated(r),
+    )
 }
 
 /// Every OTHER character, capped. The pool used when no roster is configured, and
@@ -1705,12 +1791,25 @@ mod bot_pick_tests {
     /// A candidate whose strength is unknown — the shape these tests used before the
     /// bot bracket existed, so they keep asserting exactly what they asserted then.
     fn cand(uuid: &str, complete: bool) -> BotCandidate {
-        (uuid.to_string(), complete, None)
+        (uuid.to_string(), complete, None, true)
     }
 
     /// A candidate at a known level / trophy count.
+    /// A candidate at a known level / trophy count, RATED — its trophy count is
+    /// measured, so both bracket axes apply.
     fn cand_at(uuid: &str, level: i32, trophies: i64) -> BotCandidate {
-        (uuid.to_string(), true, Some(Skill { level, trophies }))
+        (uuid.to_string(), true, Some(Skill { level, trophies }), true)
+    }
+
+    /// A candidate that has never fought: its 0 trophies mean "unrated", so only
+    /// the level axis gates it. See [`super::is_rated`].
+    fn cand_unrated(uuid: &str, level: i32) -> BotCandidate {
+        (
+            uuid.to_string(),
+            true,
+            Some(Skill { level, trophies: 0 }),
+            false,
+        )
     }
 
     /// These tests assert WHICH candidate is drawn. The bracket step that justified
@@ -1830,6 +1929,7 @@ mod bot_pick_tests {
                 level: 43,
                 trophies: 49,
             }), // a perfect bracket match
+            true,
         ));
         assert_eq!(
             drawn_step(&wide, nwah(), 0),
@@ -1952,10 +2052,21 @@ mod bot_pick_tests {
         assert_eq!(blind, vec![Some(0), Some(1), Some(2), Some(3), Some(4)]);
     }
 
-    /// The ladder is walked TIGHTEST FIRST, and it is the human bracket's own table.
-    /// A bot inside step 0 beats a bot that only makes step 1, which beats step 2.
+    /// The ladder is walked TIGHTEST FIRST, and it is the human bracket's own
+    /// table — but a step must now offer a CHOICE to be taken (`MIN_BOT_POOL`).
+    ///
+    /// This test used to assert that a lone step-0 candidate "wins outright". That
+    /// was the right rule when the only goal was match quality, and it is what
+    /// produced the reported bug: a player whose tightest step held exactly one
+    /// character fought that same character every match, for ever. The rule was
+    /// changed deliberately on 2026-09-18 — variety is now worth a step of match
+    /// quality — so the assertion is inverted here rather than deleted, because the
+    /// old behaviour is what a future reader would otherwise reintroduce.
+    ///
+    /// What did NOT change: the draw never leaves the bracket while somebody is
+    /// inside it (tracker #49), and tighter steps still win when they have enough.
     #[test]
-    fn the_bot_ladder_takes_the_tightest_step_that_has_anyone() {
+    fn a_step_must_offer_a_choice_before_the_ladder_stops_at_it() {
         let me = Some(Skill {
             level: 50,
             trophies: 400,
@@ -1963,33 +2074,51 @@ mod bot_pick_tests {
         // One candidate per step, plus one outside every step.
         let cands = vec![
             cand_at("00000000-0000-0000-0000-00000000000f", 90, 2000), // outside all
-            cand_at("00000000-0000-0000-0000-000000000003", 68, 970), // outside all (level 18 ok, trophies 570 → step 2)
-            cand_at("00000000-0000-0000-0000-000000000002", 59, 690), // step 1 (9 / 290)
-            cand_at("00000000-0000-0000-0000-000000000001", 53, 500), // step 0 (3 / 100)
+            cand_at("00000000-0000-0000-0000-000000000003", 68, 970), // step 2
+            cand_at("00000000-0000-0000-0000-000000000002", 59, 690), // step 1
+            cand_at("00000000-0000-0000-0000-000000000001", 53, 500), // step 0
+        ];
+        // No step holds three, so the draw comes from the widest BRACKETED tier —
+        // indices 1, 2 and 3 — and varies. Index 0 is outside every step and must
+        // never appear while those three exist.
+        let drawn: std::collections::BTreeSet<Option<usize>> = [0u8, 1, 7, 128, 255]
+            .into_iter()
+            .map(|s| pick_bot_index(&cands, NOBODY, me, gsid_with_first_byte(s)))
+            .collect();
+        assert!(
+            !drawn.contains(&Some(0)),
+            "the out-of-bracket candidate must never be drawn while bracketed ones \
+             exist — that is tracker #49: {drawn:?}"
+        );
+        assert!(
+            drawn.len() > 1,
+            "a lone tight candidate must no longer win outright: {drawn:?}"
+        );
+
+        // Three inside step 0 → the tightest step wins again, as it always did.
+        let tight = vec![
+            cand_at("00000000-0000-0000-0000-000000000001", 53, 500),
+            cand_at("00000000-0000-0000-0000-000000000002", 52, 450),
+            cand_at("00000000-0000-0000-0000-000000000004", 51, 420),
+            cand_at("00000000-0000-0000-0000-00000000000f", 90, 2000),
         ];
         for seed in [0u8, 1, 7, 128, 255] {
+            let got = pick_bot_index(&tight, NOBODY, me, gsid_with_first_byte(seed));
+            assert!(
+                got != Some(3),
+                "step 0 has three candidates, so the far one is unreachable"
+            );
             assert_eq!(
-                pick_bot_index(&cands, NOBODY, me, gsid_with_first_byte(seed)),
-                Some(3),
-                "the step-0 candidate wins outright",
+                drawn_step(&tight, me, seed),
+                Some(BRACKET_STEPS[0]),
+                "and the draw reports the tightest step"
             );
         }
-        // Drop it → the step-1 candidate. Then the step-2 one. Then anyone.
-        let mut pool = cands.clone();
-        pool.remove(3);
+
+        // Only the far one left: a bad match still beats no match.
+        let far_only = vec![cand_at("00000000-0000-0000-0000-00000000000f", 90, 2000)];
         assert_eq!(
-            pick_bot_index(&pool, NOBODY, me, gsid_with_first_byte(0)),
-            Some(2)
-        );
-        pool.remove(2);
-        assert_eq!(
-            pick_bot_index(&pool, NOBODY, me, gsid_with_first_byte(0)),
-            Some(1)
-        );
-        pool.remove(1);
-        // Only the far one is left: a bad match beats no match.
-        assert_eq!(
-            pick_bot_index(&pool, NOBODY, me, gsid_with_first_byte(0)),
+            pick_bot_index(&far_only, NOBODY, me, gsid_with_first_byte(0)),
             Some(0)
         );
     }
@@ -2028,6 +2157,7 @@ mod bot_pick_tests {
                 level: 5,
                 trophies: 10,
             }),
+            true,
         )];
         assert_eq!(
             pick_bot_index(&incomplete, NOBODY, me, gsid_with_first_byte(0)),
@@ -2080,6 +2210,7 @@ mod bot_pick_tests {
                     level: 50,
                     trophies: 400,
                 }),
+                true,
             ),
             cand_at("00000000-0000-0000-0000-000000000002", 95, 3000),
         ];
@@ -2217,6 +2348,207 @@ mod bot_pick_tests {
                 "bracket must not narrow with time"
             );
         }
+    }
+
+
+    // ── a bracket step must offer a choice (MIN_BOT_POOL) ────────────────────
+
+    /// THE REPORTED BUG. The tightest step held exactly one character, so that
+    /// player fought the same opponent every single match.
+    ///
+    /// Measured on production: of six ranked players, three drew from a pool of
+    /// one, and two of those three drew the SAME character. Rotation was working
+    /// perfectly — `gsid % 1` is always 0.
+    #[test]
+    fn a_step_holding_one_candidate_is_widened_rather_than_repeated() {
+        let human = "aaaaaaaa-0000-0000-0000-000000000001";
+        let me = Some(Skill { level: 86, trophies: 883 });
+        // One character inside the tightest step, three more further out.
+        let cands = vec![
+            cand_at("cccccccc-0000-0000-0000-00000000000a", 86, 900), // step 0 alone
+            cand_at("cccccccc-0000-0000-0000-00000000000b", 80, 640), // step 2
+            cand_at("cccccccc-0000-0000-0000-00000000000c", 78, 600), // step 2
+            cand_at("cccccccc-0000-0000-0000-00000000000d", 76, 560), // step 2
+        ];
+
+        // Across many matches the draw must not be constant.
+        let drawn: std::collections::BTreeSet<usize> = (0u8..64)
+            .map(|b| {
+                let mut raw = [0u8; 16];
+                raw[0] = b.wrapping_mul(4);
+                super::pick_bot_index(&cands, human, me, Uuid::from_bytes(raw))
+                    .expect("a draw")
+                    .index
+            })
+            .collect();
+        assert!(
+            drawn.len() >= MIN_BOT_POOL,
+            "the player must see at least {MIN_BOT_POOL} different opponents, saw {}: {drawn:?}",
+            drawn.len()
+        );
+    }
+
+    /// …and the widening is only as far as it needs to be. The tightest step that
+    /// offers a choice wins, so match quality is given up a step at a time.
+    #[test]
+    fn the_tightest_step_that_offers_a_choice_is_the_one_taken() {
+        let human = "aaaaaaaa-0000-0000-0000-000000000001";
+        let me = Some(Skill { level: 50, trophies: 500 });
+        let cands = vec![
+            cand_at("cccccccc-0000-0000-0000-00000000000a", 50, 500),
+            cand_at("cccccccc-0000-0000-0000-00000000000b", 52, 520),
+            cand_at("cccccccc-0000-0000-0000-00000000000c", 48, 480),
+            cand_at("cccccccc-0000-0000-0000-00000000000d", 65, 1000), // far away
+        ];
+        let draw = super::pick_bot_index(&cands, human, me, Uuid::from_u128(7)).expect("a draw");
+        assert_eq!(
+            draw.step,
+            Some(BRACKET_STEPS[0]),
+            "three candidates sit inside the tightest step, so it must not widen"
+        );
+        assert_ne!(draw.index, 3, "the far candidate must not be reachable at step 0");
+    }
+
+    /// THE CONTROL: this is a preference, not a gate. A roster too small to offer
+    /// three still produces a match rather than refusing one — the fix for a thin
+    /// roster is more roster, never a missing opponent.
+    #[test]
+    fn a_roster_smaller_than_the_minimum_still_yields_an_opponent() {
+        let human = "aaaaaaaa-0000-0000-0000-000000000001";
+        let me = Some(Skill { level: 50, trophies: 500 });
+        let two = vec![
+            cand_at("cccccccc-0000-0000-0000-00000000000a", 50, 500),
+            cand_at("cccccccc-0000-0000-0000-00000000000b", 51, 510),
+        ];
+        let draw = super::pick_bot_index(&two, human, me, Uuid::from_u128(3));
+        assert!(draw.is_some(), "two candidates must still give a match");
+
+        let one = vec![cand_at("cccccccc-0000-0000-0000-00000000000a", 50, 500)];
+        assert!(
+            super::pick_bot_index(&one, human, me, Uuid::from_u128(3)).is_some(),
+            "even one candidate must still give a match"
+        );
+    }
+
+    /// A thin-but-bracketed draw still reports its step, so `should_widen` does not
+    /// mistake it for an unbracketed fallback and fire a second query it cannot use.
+    #[test]
+    fn a_thin_draw_still_reports_the_bracket_it_satisfied() {
+        let human = "aaaaaaaa-0000-0000-0000-000000000001";
+        let me = Some(Skill { level: 50, trophies: 500 });
+        let two = vec![
+            cand_at("cccccccc-0000-0000-0000-00000000000a", 50, 500),
+            cand_at("cccccccc-0000-0000-0000-00000000000b", 51, 510),
+        ];
+        let draw = super::pick_bot_index(&two, human, me, Uuid::from_u128(3)).expect("a draw");
+        assert_eq!(
+            draw.step,
+            Some(BRACKET_STEPS[0]),
+            "both sit inside the tightest step; the draw is thin, not unbracketed"
+        );
+    }
+
+    /// Nobody bracketed at all is still an unbracketed fallback — unchanged.
+    #[test]
+    fn nobody_in_any_step_is_still_an_unbracketed_draw() {
+        let human = "aaaaaaaa-0000-0000-0000-000000000001";
+        let me = Some(Skill { level: 5, trophies: 10 });
+        let far = vec![
+            cand_at("cccccccc-0000-0000-0000-00000000000a", 90, 2000),
+            cand_at("cccccccc-0000-0000-0000-00000000000b", 95, 2200),
+        ];
+        let draw = super::pick_bot_index(&far, human, me, Uuid::from_u128(3)).expect("a draw");
+        assert_eq!(draw.step, None, "no step contained anyone");
+    }
+
+
+    // ── an unrated candidate is bracketed on level alone ─────────────────────
+
+    /// THE OTHER HALF OF THE REPORTED BUG, and the one more roster could not fix.
+    ///
+    /// A character that has never fought carries `matchmakingPvpTrophies: 0`, and
+    /// the bracket read that as "the weakest fighter on the server" rather than
+    /// "unrated". Measured on production 2026-09-18: 16 complete, never-played
+    /// characters at level 68-100 — exactly the sparring pool a strong player
+    /// needs — all sat at 0, so the highest-rated human (883) could not be
+    /// bracketed against one of them. Opting in more characters would have changed
+    /// nothing.
+    #[test]
+    fn a_strong_player_can_draw_unrated_opponents_at_their_own_level() {
+        let human = "aaaaaaaa-0000-0000-0000-000000000001";
+        let flappety = Some(Skill { level: 86, trophies: 883 });
+        let never_played = vec![
+            cand_unrated("cccccccc-0000-0000-0000-00000000000a", 89), // Scarlet
+            cand_unrated("cccccccc-0000-0000-0000-00000000000b", 86), // Bagos
+            cand_unrated("cccccccc-0000-0000-0000-00000000000c", 84), // Huracan
+        ];
+        let draw = super::pick_bot_index(&never_played, human, flappety, Uuid::from_u128(1))
+            .expect("an unrated opponent at his own level is a fair fight");
+        assert_eq!(
+            draw.step,
+            Some(BRACKET_STEPS[0]),
+            "all three are within 5 levels, so this is the TIGHTEST step — an \
+             unrated rating must not push the pairing outwards"
+        );
+
+        // …and with the rating gate applied it would have been unreachable.
+        let as_if_rated = vec![
+            cand_at("cccccccc-0000-0000-0000-00000000000a", 89, 0),
+            cand_at("cccccccc-0000-0000-0000-00000000000b", 86, 0),
+            cand_at("cccccccc-0000-0000-0000-00000000000c", 84, 0),
+        ];
+        assert_eq!(
+            super::pick_bot_index(&as_if_rated, human, flappety, Uuid::from_u128(1))
+                .expect("a fallback draw")
+                .step,
+            None,
+            "THE CONTROL: treating 0 as a measured rating puts all three outside \
+             every step, which is the bug"
+        );
+    }
+
+    /// Unrated is NOT a free pass. Level is still enforced, which is what keeps
+    /// tracker #49's level-43 player away from a level-68 opponent.
+    #[test]
+    fn being_unrated_does_not_excuse_a_level_mismatch() {
+        let human = "aaaaaaaa-0000-0000-0000-000000000001";
+        let low = Some(Skill { level: 43, trophies: 49 });
+        let far = vec![
+            cand_unrated("cccccccc-0000-0000-0000-00000000000a", 68),
+            cand_unrated("cccccccc-0000-0000-0000-00000000000b", 89),
+        ];
+        assert_eq!(
+            super::pick_bot_index(&far, human, low, Uuid::from_u128(1))
+                .expect("a match still starts")
+                .step,
+            None,
+            "25 and 46 levels away is outside every step, rated or not"
+        );
+
+        // One at his own level is reachable, and preferred.
+        let mixed = vec![
+            cand_unrated("cccccccc-0000-0000-0000-00000000000a", 68),
+            cand_unrated("cccccccc-0000-0000-0000-00000000000c", 45),
+        ];
+        let draw = super::pick_bot_index(&mixed, human, low, Uuid::from_u128(1)).expect("a draw");
+        assert_eq!(draw.index, 1, "the level-45 one, not the level-68 one");
+        assert_eq!(draw.step, Some(BRACKET_STEPS[0]));
+    }
+
+    /// A RATED candidate is unchanged — both axes still apply, so a genuinely
+    /// weak-but-measured opponent is still kept away from a strong player.
+    #[test]
+    fn a_measured_rating_still_gates_both_axes() {
+        let human = "aaaaaaaa-0000-0000-0000-000000000001";
+        let strong = Some(Skill { level: 86, trophies: 883 });
+        let measured_weak = vec![cand_at("cccccccc-0000-0000-0000-00000000000a", 86, 10)];
+        assert_eq!(
+            super::pick_bot_index(&measured_weak, human, strong, Uuid::from_u128(1))
+                .expect("a match still starts")
+                .step,
+            None,
+            "873 trophies apart is outside every step, even at the same level"
+        );
     }
 
     #[test]
