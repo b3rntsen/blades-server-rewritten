@@ -517,18 +517,20 @@ mod tests {
         // authored ones restored for #189 (Mɾʂιɾι: "make seasonal festivities work
         // again") — five back on the rotation, two on a calendar date. Counting is
         // not the point; the split is, so assert on the recurrence period too.
-        assert_eq!(sd.game_events.len(), 46, "game_events.json");
+        // 44 rotating + 2 annual + any self-expiring preview windows (#189). Counting
+        // the total is the brittle half; the split below is the real assertion.
+        assert_eq!(
+            sd.game_events.iter().filter(|d| !d.preview).count(),
+            46,
+            "game_events.json"
+        );
         assert_eq!(sd.event_quests.templates.len(), 46, "event_quests.json");
         let rotating = sd
             .game_events
             .iter()
-            .filter(|d| !d.annual)
+            .filter(|d| !d.annual && !d.preview)
             .count();
-        let annual: Vec<_> = sd
-            .game_events
-            .iter()
-            .filter(|d| d.recurrence.recurrence_interval == 365)
-            .collect();
+        let annual: Vec<_> = sd.game_events.iter().filter(|d| d.annual).collect();
         assert_eq!(rotating, 44, "39 captured + the 5 restored retired events");
         assert_eq!(annual.len(), 2, "the two seasonal events");
         // A seasonal event that opened for two days like the rotation ones would be a
