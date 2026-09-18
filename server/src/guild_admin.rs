@@ -218,6 +218,33 @@ pub struct SetGrandmasterResponse {
     pub change: GmChange,
 }
 
+
+/// `POST /…/guilds/{guild_id}/name` — rename a guild from the support console.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetGuildNameRequest {
+    pub name: String,
+    /// Write the change. Absent or false = report only, exactly as
+    /// [`SetGrandmasterRequest`] does — an operator should be able to see what a
+    /// rename would do before doing it.
+    #[serde(default)]
+    pub apply: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetGuildNameResponse {
+    pub applied: bool,
+    pub guild_id: String,
+    /// The name as stored before this call.
+    pub from: String,
+    /// The trimmed name that would be (or was) stored.
+    pub to: String,
+    /// `from == to`, so applying is a no-op. Reported rather than inferred by the
+    /// caller, because the trim happens here.
+    pub unchanged: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -431,6 +458,136 @@ pub async fn set_grandmaster(
     Ok(Json(SetGrandmasterResponse { applied: body.apply, guild_id, change }))
 }
 
+
+/// One guild's text, for validating a rename against the whole row.
+#[derive(QueryableByName)]
+struct GuildTextRow {
+    #[diesel(sql_type = Text)]
+    name: String,
+    #[diesel(sql_type = Text)]
+    short_description: String,
+    #[diesel(sql_type = Text)]
+    long_description: String,
+}
+
+/// `POST /…/api/dev/v1/guilds/{guild_id}/name` — rename a guild.
+///
+/// # Why a support console can rename a guild at all
+///
+/// A guild's name is its members' business, and the in-game rename
+/// (`guild::update_guild_impl`) is GRANDMASTER-only. That stays the default;
+/// this does not change it.
+///
+/// What it cannot reach is the case support actually gets asked about. **Three
+/// guilds on production carry an empty name** — created before the create
+/// handler was corrected to read retail's actual `name` parameter, so the field
+/// silently defaulted to `""`. Nobody in those guilds can fix it: the in-game
+/// path would have to pass the same whole-row validation, and an empty name
+/// fails it. A guild whose Grand Master has stopped playing has nobody who can
+/// use that path at all — `guild_policy::successor` only fires when a Grand
+/// Master *leaves*.
+///
+/// Same shape, and the same reasoning, as the Grand Master handover beside it:
+/// retail's answer here was "contact Bethesda support and a human fixes it".
+///
+/// # Validation
+///
+/// [`guild_policy::guild_text_ok`] over the WHOLE row, not the name alone. A
+/// rename must not be the one path that can leave a guild's text in a state the
+/// in-game editor would refuse — and the three guilds this exists for all carry
+/// valid descriptions, so it does not lock them out. Length bounds only: retail's
+/// code-point whitelist is a serialized Unity asset, not code, and inventing a
+/// charset rule here would refuse names the game itself accepts (production holds
+/// `SØVNGÅRD`).
+///
+/// The name is trimmed before validating and before storing, as `create_guild`
+/// and `update_guild_impl` both do.
+#[post("/blades.bgs.services/api/dev/v1/guilds/{guild_id}/name")]
+pub async fn set_guild_name(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<String>,
+    body: web::Json<SetGuildNameRequest>,
+) -> Result<Json<SetGuildNameResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let guild_id = path.into_inner();
+    let body = body.into_inner();
+    let mut conn = db(&app_state).await?;
+
+    let rows: Vec<GuildTextRow> = sql_query(
+        "SELECT name, short_description, long_description FROM guilds WHERE id = $1",
+    )
+    .bind::<Text, _>(&guild_id)
+    .get_results(&mut conn)
+    .await
+    .map_err(|e| {
+        warn!("guild console: name read failed for {guild_id}: {e}");
+        err(StatusCode::INTERNAL_SERVER_ERROR, 22)
+    })?;
+
+    // 404 with an envelope, so the caller can tell "no such guild" from actix's
+    // BODILESS 404 for a route that does not exist. The console distinguishes
+    // exactly these two.
+    let current = rows.into_iter().next().ok_or_else(|| {
+        warn!("guild console: rename asked for unknown guild {guild_id}");
+        err(StatusCode::NOT_FOUND, 23)
+    })?;
+
+    let to = body.name.trim().to_string();
+    if !crate::guild_policy::guild_text_ok(
+        &to,
+        &current.short_description,
+        &current.long_description,
+    ) {
+        warn!(
+            "guild console: refused rename of {guild_id} to {:?} ({} code points)",
+            to,
+            to.chars().count()
+        );
+        return Err(err(StatusCode::BAD_REQUEST, 24));
+    }
+
+    let unchanged = to == current.name;
+    let applied = body.apply && !unchanged;
+
+    if applied {
+        sql_query("UPDATE guilds SET name = $1 WHERE id = $2")
+            .bind::<Text, _>(&to)
+            .bind::<Text, _>(&guild_id)
+            .execute(&mut conn)
+            .await
+            .map_err(|e| {
+                warn!("guild console: rename failed for {guild_id}: {e}");
+                err(StatusCode::INTERNAL_SERVER_ERROR, 25)
+            })?;
+    }
+
+    // Every admin action is logged — a support tool that can rename a community's
+    // guild must leave a trail, and the previous name is the part that is
+    // otherwise unrecoverable.
+    info!(
+        "guild console: guild {} name {:?} -> {:?} ({})",
+        guild_id,
+        current.name,
+        to,
+        if applied {
+            "APPLIED"
+        } else if unchanged {
+            "no-op, already that name"
+        } else {
+            "dry run"
+        },
+    );
+
+    Ok(Json(SetGuildNameResponse {
+        applied,
+        guild_id,
+        from: current.name,
+        to,
+        unchanged,
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -635,6 +792,155 @@ mod tests {
         assert!(
             serde_json::from_str::<SetGrandmasterRequest>(r#"{"apply":true}"#).is_err(),
             "a body with no characterId must be rejected"
+        );
+    }
+}
+
+/// Renaming a guild from the support console.
+///
+/// The handler needs a database, so these pin the parts that do not: the request
+/// and response contracts the web console is already written against, and the
+/// validation rule — including the case that would have shipped this feature
+/// unable to fix the guilds it exists for.
+#[cfg(test)]
+mod renaming_a_guild {
+    use super::*;
+    use crate::guild_policy::{NAME_MAX_LEN, NAME_MIN_LEN, guild_text_ok};
+
+    /// `apply` defaults to false. A support tool whose default is "write" is one
+    /// misclick from renaming a community's guild, and the console previews first.
+    #[test]
+    fn a_request_without_apply_is_a_dry_run() {
+        let r: SetGuildNameRequest = serde_json::from_str(r#"{"name":"Bladeworks"}"#).unwrap();
+        assert!(!r.apply, "absent apply must mean dry run");
+        assert_eq!(r.name, "Bladeworks");
+
+        let r: SetGuildNameRequest =
+            serde_json::from_str(r#"{"name":"Bladeworks","apply":true}"#).unwrap();
+        assert!(r.apply);
+    }
+
+    /// The four keys the console reads, in camelCase.
+    #[test]
+    fn the_response_carries_both_names_and_whether_it_wrote() {
+        let body = serde_json::to_value(SetGuildNameResponse {
+            applied: false,
+            guild_id: "85c13555f81847e39dadcb1c".into(),
+            from: String::new(),
+            to: "Bladeworks".into(),
+            unchanged: false,
+        })
+        .unwrap();
+        let mut keys: Vec<_> = body.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, vec!["applied", "from", "guildId", "to", "unchanged"]);
+        assert_eq!(body["from"], "");
+        assert_eq!(body["to"], "Bladeworks");
+    }
+
+    /// THE CASE THIS FEATURE EXISTS FOR.
+    ///
+    /// Three production guilds carry an empty name. Validation is over the WHOLE
+    /// row, so if those guilds also had an empty `short_description` the rename
+    /// would refuse them and the feature would be unable to fix the only guilds
+    /// it was built for. They do not — all three carry a real description,
+    /// checked against production before this was written — and this pins the
+    /// property rather than the luck.
+    #[test]
+    fn an_empty_named_guild_with_a_real_description_can_be_renamed() {
+        // The three, verbatim from prod.
+        for short in [
+            "Во имя Søvngård",
+            "Risen from the dead! ",
+            "www.bladesarena.com",
+        ] {
+            assert!(
+                !guild_text_ok("", short, ""),
+                "the guild's CURRENT state is what makes it unfixable in game"
+            );
+            assert!(
+                guild_text_ok("Bladeworks", short, ""),
+                "…and giving it a name must make the row valid, or the console \
+                 cannot repair the guilds it exists for ({short:?})"
+            );
+        }
+    }
+
+    /// Bounds are code points on the TRIMMED name, and the trim happens before
+    /// validation — otherwise a name of spaces passes the minimum.
+    #[test]
+    fn the_name_is_trimmed_before_it_is_measured() {
+        let short = "a real description";
+        assert!(!guild_text_ok("   ", short, ""), "whitespace is not a name");
+        assert!(!guild_text_ok("  ab  ", short, ""), "2 code points after trim");
+        assert!(guild_text_ok("  abc  ", short, ""), "3 after trim is the minimum");
+
+        assert!(guild_text_ok(&"x".repeat(NAME_MAX_LEN), short, ""));
+        assert!(!guild_text_ok(&"x".repeat(NAME_MAX_LEN + 1), short, ""));
+
+        // Code points, not UTF-16 units: a name of astral characters that is
+        // exactly at the limit must be accepted, or the console and the server
+        // disagree about the same string.
+        let astral = "𝔅".repeat(NAME_MAX_LEN);
+        assert_eq!(astral.chars().count(), NAME_MAX_LEN);
+        assert!(astral.encode_utf16().count() > NAME_MAX_LEN, "the control");
+        assert!(guild_text_ok(&astral, short, ""));
+    }
+
+    /// Length bounds ONLY. Retail's code-point whitelist is a serialized Unity
+    /// asset, not code, so it is not recoverable from the dump — and inventing a
+    /// charset rule would refuse names the game itself accepts. Production holds
+    /// `SØVNGÅRD`.
+    #[test]
+    fn a_non_ascii_name_the_game_already_accepts_is_not_refused() {
+        assert!(guild_text_ok("SØVNGÅRD", "Во имя SØVNGÅRD!", ""));
+        assert!(guild_text_ok("Во имя", "a real description", ""));
+        assert_eq!(NAME_MIN_LEN, 3);
+        assert_eq!(NAME_MAX_LEN, 40);
+    }
+
+    /// The two handler behaviours the tests above cannot reach.
+    ///
+    /// `guild_text_ok` trims internally, so a handler that forgot to trim would
+    /// still VALIDATE correctly and then STORE the untrimmed string — and the
+    /// response's `to`, which the console shows the operator, would disagree with
+    /// the row. Likewise, validating the name against invented descriptions
+    /// instead of the guild's own would let a rename leave a row the in-game
+    /// editor refuses.
+    ///
+    /// Both survive the unit tests untouched (checked by mutation), and both need
+    /// a database to exercise properly. Until this module has one, the source is
+    /// the only place the invariant can be pinned — the same reasoning, and the
+    /// same idiom, as `route_registration.rs`.
+    #[test]
+    fn the_handler_trims_and_validates_against_the_guilds_own_row() {
+        let src = include_str!("guild_admin.rs");
+        let body = src
+            .split("pub async fn set_guild_name(")
+            .nth(1)
+            .expect("the handler")
+            .split("\n/// ")
+            .next()
+            .unwrap();
+
+        assert!(
+            body.contains("body.name.trim()"),
+            "the stored name must be trimmed here, not merely tolerated by the \
+             validator — otherwise the row and the reported `to` disagree"
+        );
+        assert!(
+            body.contains("&current.short_description") && body.contains("&current.long_description"),
+            "validate against the guild's OWN descriptions, so a rename cannot \
+             leave a row the in-game editor would refuse"
+        );
+        assert!(
+            body.contains("UPDATE guilds SET name"),
+            "the write is a single targeted column update"
+        );
+        assert!(
+            body.contains("if applied {"),
+            "the write must be gated on `applied`, which folds in both `apply` \
+             and `unchanged`"
         );
     }
 }

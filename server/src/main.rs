@@ -713,6 +713,7 @@ async fn main() -> Result<()> {
                     // page is its only intended caller).
                     .service(guild_admin::list_guilds)
                     .service(guild_admin::set_grandmaster)
+                    .service(guild_admin::set_guild_name)
                     // Registered AFTER the /grandmaster route: `{guild_id}` is a
                     // greedy single segment, so the more specific path must be
                     // offered to the router first or a handover POST would be
