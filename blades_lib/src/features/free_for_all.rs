@@ -1,25 +1,42 @@
-//! Free for All — the recurring "everyone gets gems" giveaway.
+//! Arena Giveaway — the recurring "turn up and earn Gems" event.
 //!
-//! Retail ran this by hand: on (roughly) the first Saturday of the month every
-//! player who turned up in the Arena got 100 Gems, and when Bethesda forgot a
-//! month they paid 200 the next time instead. This module is the schedule and
-//! the doubling rule as pure arithmetic; the server owns delivery and the web
-//! console owns who may press the button.
+//! Retail's own wording, read off the in-game banner in player footage
+//! (`youtu.be/GiJDWvCEeXE`, 78-84s):
 //!
-//! Delivery is the **global-gift** channel, which is the only out-of-band grant
-//! the retail client knows how to render. That channel has one hard constraint,
-//! and the whole design follows from it: the client only ever asks about gift
-//! ids that are **baked into the APK** — in our captures it polls exactly three
-//! (`GET .../globalgifts/{id}` for each, 893 times across the corpus) and never
-//! discovers a new one. So a run cannot mint a fresh gift id; it re-points an
-//! existing one at new contents, a new window, and a claim limit one higher than
-//! last time, which is what lets the same id pay out again every month.
+//! > **Arena Giveaway**
+//! > Mark your calendar - some of the mightiest competitors are gathering in the
+//! > Arena to battle this Saturday from 10am-12pm ET. Join them during that time
+//! > and earn free Gems!
+//! > `[OK]`
+//!
+//! Three facts in that screen drive this whole module, and the first version of
+//! it got all three wrong:
+//!
+//! 1. **It is a two-hour window on a Saturday**, not an all-day one.
+//! 2. **The button is OK, not Claim.** The banner advertises; it grants nothing.
+//!    So this is not the global-gift channel — there is no gift to claim.
+//! 3. **You earn it by playing.** "Join them during that time" means the Gems
+//!    land when a match is played inside the window, once per character.
+//!
+//! This module is the schedule and the doubling rule as pure arithmetic. The
+//! server hooks the arena match-end path for delivery, and the web console owns
+//! who may open a window.
 
 use std::time::Duration;
 
-/// Seconds in a day. The window is a whole day because a player should not have
-/// to be online at a particular hour to collect.
+/// Seconds in a day.
 pub const DAY: i64 = 86_400;
+
+/// Seconds in an hour.
+pub const HOUR: i64 = 3_600;
+
+/// Retail ran 10am-12pm ET. ET is UTC-4 in summer and UTC-5 in winter; this is
+/// the summer value, and the console can override the hour per run rather than
+/// this module pretending to know about daylight saving.
+pub const DEFAULT_START_HOUR_UTC: i64 = 14;
+
+/// Two hours, from the banner.
+pub const DEFAULT_DURATION_SECS: i64 = 2 * HOUR;
 
 /// What retail paid when it remembered.
 pub const BASE_GEMS: u64 = 100;
@@ -107,7 +124,7 @@ pub fn following_occurrence(cadence: Cadence, after: i64) -> i64 {
     next_occurrence(cadence, midnight(after) + DAY)
 }
 
-/// A run that has been opened.
+/// A window that has been (or would be) opened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Run {
     pub opens_at: i64,
@@ -116,19 +133,44 @@ pub struct Run {
     pub multiplier: u32,
 }
 
+/// How a window is positioned on its day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Window {
+    /// Hour of the day, UTC, the window opens.
+    pub start_hour_utc: i64,
+    pub duration_secs: i64,
+}
+
+impl Default for Window {
+    fn default() -> Self {
+        Window {
+            start_hour_utc: DEFAULT_START_HOUR_UTC,
+            duration_secs: DEFAULT_DURATION_SECS,
+        }
+    }
+}
+
 /// Plan the next run.
 ///
 /// `last_opened_at` is when the previous run opened (`None` if this is the
 /// first). The doubling is derived, never stored as a flag: if at least one
 /// scheduled occurrence fell between the last run and this one, the giveaway was
 /// missed and this one pays double.
-pub fn plan(cadence: Cadence, now: i64, last_opened_at: Option<i64>) -> Run {
-    let opens_at = next_occurrence(cadence, now);
+pub fn plan(cadence: Cadence, window: Window, now: i64, last_opened_at: Option<i64>) -> Run {
+    let mut day = next_occurrence(cadence, now);
+    let mut opens_at = day + window.start_hour_utc * HOUR;
+    // A window that has already closed today is not "next" — asking at 3pm on the
+    // Saturday must return the FOLLOWING occurrence, or the console offers to
+    // open a window that ended two hours ago.
+    if opens_at + window.duration_secs <= now {
+        day = following_occurrence(cadence, day);
+        opens_at = day + window.start_hour_utc * HOUR;
+    }
     let missed = missed_since(cadence, last_opened_at, opens_at);
     let multiplier = if missed > 0 { MAX_MULTIPLIER } else { 1 };
     Run {
         opens_at,
-        closes_at: opens_at + DAY,
+        closes_at: opens_at + window.duration_secs,
         gems: BASE_GEMS * multiplier as u64,
         multiplier,
     }
@@ -152,7 +194,7 @@ pub fn missed_since(cadence: Cadence, last_opened_at: Option<i64>, upto: i64) ->
     n
 }
 
-/// Whether a planned run is collectable right now.
+/// Whether a planned window is live right now — i.e. a match played now earns.
 pub fn is_open(run: &Run, now: i64) -> bool {
     now >= run.opens_at && now < run.closes_at
 }
@@ -222,38 +264,109 @@ mod tests {
 
     #[test]
     fn first_run_is_never_doubled() {
-        let run = plan(Cadence::FirstSaturdayOfMonth, FRI_2026_09_18, None);
+        let run = plan(
+            Cadence::FirstSaturdayOfMonth,
+            Window::default(),
+            FRI_2026_09_18,
+            None,
+        );
         assert_eq!(run.multiplier, 1);
         assert_eq!(run.gems, BASE_GEMS);
     }
 
     #[test]
+    fn the_window_is_two_hours_on_the_day_not_the_whole_day() {
+        // Straight off the retail banner: "this Saturday from 10am-12pm ET".
+        let run = plan(
+            Cadence::EverySaturday,
+            Window::default(),
+            FRI_2026_09_18,
+            None,
+        );
+        assert_eq!(run.closes_at - run.opens_at, 2 * HOUR);
+        assert_eq!(weekday(run.opens_at), SATURDAY);
+        assert_eq!(
+            run.opens_at - midnight(run.opens_at),
+            DEFAULT_START_HOUR_UTC * HOUR
+        );
+    }
+
+    #[test]
+    fn a_window_that_already_closed_today_is_not_the_next_one() {
+        // Asking mid-afternoon on the Saturday must offer the FOLLOWING week, not
+        // a window that ended two hours ago — which would open in the past and be
+        // instantly closed.
+        let sat = midnight(FRI_2026_09_18) + DAY;
+        let after = sat + (DEFAULT_START_HOUR_UTC + 3) * HOUR;
+        let run = plan(Cadence::EverySaturday, Window::default(), after, None);
+        assert!(run.opens_at > after, "next window must be in the future");
+        assert_eq!(weekday(run.opens_at), SATURDAY);
+        assert_eq!(run.opens_at, sat + 7 * DAY + DEFAULT_START_HOUR_UTC * HOUR);
+    }
+
+    #[test]
+    fn asking_before_the_window_on_the_day_keeps_that_day() {
+        let sat = midnight(FRI_2026_09_18) + DAY;
+        let run = plan(
+            Cadence::EverySaturday,
+            Window::default(),
+            sat + 2 * HOUR,
+            None,
+        );
+        assert_eq!(run.opens_at, sat + DEFAULT_START_HOUR_UTC * HOUR);
+    }
+
+    #[test]
     fn a_run_on_schedule_pays_the_base_rate() {
-        let first = plan(Cadence::FirstSaturdayOfMonth, FRI_2026_09_18, None);
-        // Next month, having run last month.
+        let first = plan(
+            Cadence::FirstSaturdayOfMonth,
+            Window::default(),
+            FRI_2026_09_18,
+            None,
+        );
         let later = first.opens_at + 31 * DAY;
-        let second = plan(Cadence::FirstSaturdayOfMonth, later, Some(first.opens_at));
-        assert_ne!(second.opens_at, first.opens_at, "a new occurrence");
-        assert_eq!(second.multiplier, 1, "nothing was skipped");
+        let second = plan(
+            Cadence::FirstSaturdayOfMonth,
+            Window::default(),
+            later,
+            Some(first.opens_at),
+        );
+        assert_ne!(second.opens_at, first.opens_at);
+        assert_eq!(second.multiplier, 1);
         assert_eq!(second.gems, BASE_GEMS);
     }
 
     #[test]
     fn a_skipped_month_doubles_the_next_one() {
-        let first = plan(Cadence::FirstSaturdayOfMonth, FRI_2026_09_18, None);
-        // Two months later: one occurrence went by unserved.
+        let first = plan(
+            Cadence::FirstSaturdayOfMonth,
+            Window::default(),
+            FRI_2026_09_18,
+            None,
+        );
         let later = first.opens_at + 62 * DAY;
-        let second = plan(Cadence::FirstSaturdayOfMonth, later, Some(first.opens_at));
+        let second = plan(
+            Cadence::FirstSaturdayOfMonth,
+            Window::default(),
+            later,
+            Some(first.opens_at),
+        );
         assert_eq!(second.multiplier, MAX_MULTIPLIER);
         assert_eq!(second.gems, BASE_GEMS * 2);
     }
 
     #[test]
     fn a_long_outage_still_only_doubles() {
-        let first = plan(Cadence::FirstSaturdayOfMonth, FRI_2026_09_18, None);
+        let first = plan(
+            Cadence::FirstSaturdayOfMonth,
+            Window::default(),
+            FRI_2026_09_18,
+            None,
+        );
         let much_later = first.opens_at + 400 * DAY;
         let run = plan(
             Cadence::FirstSaturdayOfMonth,
+            Window::default(),
             much_later,
             Some(first.opens_at),
         );
@@ -272,21 +385,38 @@ mod tests {
     }
 
     #[test]
-    fn the_window_is_a_whole_day() {
-        let run = plan(Cadence::EverySaturday, FRI_2026_09_18, None);
-        assert_eq!(run.closes_at - run.opens_at, DAY);
+    fn open_is_closed_at_the_boundary_not_after() {
+        let run = plan(
+            Cadence::EverySaturday,
+            Window::default(),
+            FRI_2026_09_18,
+            None,
+        );
         assert!(!is_open(&run, run.opens_at - 1));
         assert!(is_open(&run, run.opens_at));
         assert!(is_open(&run, run.closes_at - 1));
-        assert!(
-            !is_open(&run, run.closes_at),
-            "closed at the boundary, not after"
-        );
+        assert!(!is_open(&run, run.closes_at));
+    }
+
+    #[test]
+    fn a_custom_window_is_honoured() {
+        let w = Window {
+            start_hour_utc: 19,
+            duration_secs: 3 * HOUR,
+        };
+        let run = plan(Cadence::EverySaturday, w, FRI_2026_09_18, None);
+        assert_eq!(run.opens_at - midnight(run.opens_at), 19 * HOUR);
+        assert_eq!(run.closes_at - run.opens_at, 3 * HOUR);
     }
 
     #[test]
     fn countdown_is_none_once_open() {
-        let run = plan(Cadence::EverySaturday, FRI_2026_09_18, None);
+        let run = plan(
+            Cadence::EverySaturday,
+            Window::default(),
+            FRI_2026_09_18,
+            None,
+        );
         assert!(time_until(&run, FRI_2026_09_18).is_some());
         assert!(time_until(&run, run.opens_at).is_none());
     }

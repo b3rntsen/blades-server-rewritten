@@ -95,12 +95,12 @@ fn free_for_all_announcement(run: &crate::free_for_all::FreeForAllRun) -> Announ
         r#type: "BASIC".into(),
         start_time: run.opens_at,
         ttl: run.closes_at,
-        // Same namespaced shape as the season banner: the edge routes this to a
-        // generic presentation and inserts the trailing uuid — here the GIFT id,
-        // not the run id — into the manifest's GlobalGiftId.
+        // Namespaced like the season banner, but deliberately NOT carrying a
+        // gift id: this one grants nothing on tap, so the edge serves the
+        // namespace with an empty GlobalGiftId and the dialog renders a single OK.
         asset_url: format!(
             "https://announcements.blades.bgs.services/free-for-all/{}",
-            run.gift_id
+            run.id
         ),
     }
 }
@@ -129,12 +129,10 @@ mod tests {
     fn a_run(opens_at: i64, closes_at: i64) -> crate::free_for_all::FreeForAllRun {
         crate::free_for_all::FreeForAllRun {
             id: Uuid::from_u128(1),
-            gift_id: Uuid::from_u128(2),
             opens_at,
             closes_at,
             gems: 100,
             multiplier: 1,
-            claim_limit: 1,
             cadence: "first_saturday".into(),
             opened_by: None,
             note: None,
@@ -143,15 +141,16 @@ mod tests {
     }
 
     #[test]
-    fn the_free_for_all_banner_points_at_the_gift_not_the_run() {
-        // The edge copies the trailing uuid into GlobalGiftId, so the run id
-        // here would send every Claim to a gift that does not exist.
+    fn the_giveaway_banner_is_its_own_namespace_and_carries_no_gift() {
+        // Gems are earned by fighting, not claimed, so this must not reuse the
+        // season namespace — whose trailing uuid the edge copies into
+        // GlobalGiftId to arm a Claim button.
         let a = free_for_all_announcement(&a_run(100, 200));
         assert!(
             a.asset_url
-                .ends_with(&format!("/free-for-all/{}", Uuid::from_u128(2)))
+                .ends_with(&format!("/free-for-all/{}", Uuid::from_u128(1)))
         );
-        assert!(!a.asset_url.contains(&Uuid::from_u128(1).to_string()));
+        assert!(!a.asset_url.contains("arena-season"));
     }
 
     #[test]

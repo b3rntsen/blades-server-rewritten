@@ -278,6 +278,15 @@ diesel::joinable!(event_dungeons -> characters (character_id));
 diesel::joinable!(quests -> characters (character_id));
 
 diesel::table! {
+    free_for_all_grants (run_id, character_id) {
+        run_id -> Uuid,
+        character_id -> Uuid,
+        gems -> Int8,
+        granted_at -> Int8,
+    }
+}
+
+diesel::table! {
     gift_overrides (gift_id) {
         gift_id -> Uuid,
         items -> Jsonb,
@@ -294,12 +303,10 @@ diesel::table! {
 diesel::table! {
     free_for_all_runs (id) {
         id -> Uuid,
-        gift_id -> Uuid,
         opens_at -> Int8,
         closes_at -> Int8,
         gems -> Int8,
         multiplier -> Int4,
-        claim_limit -> Int8,
         cadence -> Text,
         opened_by -> Nullable<Text>,
         note -> Nullable<Text>,
@@ -321,6 +328,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     device_bindings,
     event_completions,
     event_dungeons,
+    free_for_all_grants,
     free_for_all_runs,
     gift_overrides,
     guild_applications,

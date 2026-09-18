@@ -1,5 +1,5 @@
--- Free for All — the recurring gem giveaway, plus the runtime gift overrides it
--- needs to exist at all.
+-- Arena Giveaway — the recurring "turn up and earn Gems" window — plus runtime
+-- gift overrides, which are a separate capability this ships alongside it.
 --
 -- WHY OVERRIDES: `static_data.gifts` is loaded once from `deploy/static/gifts.json`
 -- at process start, and `deploy/static` is a bind mount that merging never ships
@@ -8,13 +8,18 @@
 -- server. This table moves a gift's payload and window into the database, where
 -- an endpoint — and a console — can change it without a redeploy or a restart.
 --
--- WHY A NEW GIFT ID PER RUN: the client discovers gift ids at runtime, from
--- `/announcements` — an entry's assetUrl resolves to a manifest carrying a
--- GlobalGiftId, and the Claim button posts to that. Retail leaned on this hard:
--- captured characters carry 311 distinct claimed gift ids between them. Claim
--- counts are permanent per (character, gift), so minting a fresh id each month
--- gives everyone exactly one claim, where reusing an id would need its limit
--- raised every time and would hand a brand-new player a claim they never earned.
+-- WHY THE GIVEAWAY IS NOT A GIFT: retail's own banner, read off player footage
+-- (youtu.be/GiJDWvCEeXE at 78-84s), says:
+--
+--   "Arena Giveaway — Mark your calendar - some of the mightiest competitors are
+--    gathering in the Arena to battle this Saturday from 10am-12pm ET. Join them
+--    during that time and earn free Gems!"   [OK]
+--
+-- The button is OK, not Claim. The banner advertises; it grants nothing. The
+-- Gems are EARNED by playing inside a two-hour window. So the giveaway hooks the
+-- arena match-end path, and `free_for_all_grants` is the once-per-character
+-- ledger that makes that idempotent. The gift tables below are a separate
+-- capability that happens to ship in the same change.
 --
 -- WHY SEPARATE FROM schema.rs: `server/src/schema.rs` is diesel's COMPILE-TIME
 -- description of the database; adding `diesel::table!` blocks creates nothing.
@@ -49,25 +54,33 @@ CREATE TABLE IF NOT EXISTS gift_overrides (
 -- from a flag somebody has to remember to set.
 CREATE TABLE IF NOT EXISTS free_for_all_runs (
     id            UUID PRIMARY KEY,
-    gift_id       UUID NOT NULL,
     opens_at      BIGINT NOT NULL,
     closes_at     BIGINT NOT NULL,
     gems          BIGINT NOT NULL,
     -- 1 = paid on schedule, 2 = catching up for a skipped occurrence.
     multiplier    INTEGER NOT NULL DEFAULT 1,
-    -- The claim limit this run wrote onto the gift, kept so a re-run can tell
-    -- whether it already bumped the counter.
-    claim_limit   BIGINT NOT NULL,
     cadence       TEXT NOT NULL DEFAULT 'first_saturday',
     opened_by     TEXT,
     note          TEXT,
     created_at    BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM now())::bigint
 );
 
--- Two runs on the same day would double-bump the claim limit and pay twice. The
--- constraint is in the database because the console is not the only caller: the
--- scheduler tick and a curl can both reach the same endpoint.
+-- Two windows opening at the same instant would pay twice. The constraint is in
+-- the database because the console is not the only caller: a scheduler tick and a
+-- curl can both reach the same endpoint.
 CREATE UNIQUE INDEX IF NOT EXISTS free_for_all_runs_one_per_occurrence
-    ON free_for_all_runs (gift_id, opens_at);
+    ON free_for_all_runs (opens_at);
 CREATE INDEX IF NOT EXISTS free_for_all_runs_recent
     ON free_for_all_runs (opens_at DESC);
+
+-- Who has already earned this window's Gems. The primary key IS the idempotency
+-- guard: a player fighting five matches inside the window is paid once, and the
+-- insert races safely against itself because two concurrent match-end writers
+-- cannot both win the same (run, character).
+CREATE TABLE IF NOT EXISTS free_for_all_grants (
+    run_id       UUID NOT NULL REFERENCES free_for_all_runs(id) ON DELETE CASCADE,
+    character_id UUID NOT NULL,
+    gems         BIGINT NOT NULL,
+    granted_at   BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM now())::bigint,
+    PRIMARY KEY (run_id, character_id)
+);

@@ -126,6 +126,14 @@ pub fn record(outcome: MatchEconomyOutcome) {
     }
 }
 
+/// Wall clock in unix seconds, for the Arena Giveaway window check.
+fn ffa_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Add the fixed portion of crossed promotion loot to the same `RewardGrant`
 /// that is applied transactionally with match gold and XP.
 fn add_promotion_stackables(
@@ -133,8 +141,8 @@ fn add_promotion_stackables(
     promo: &arena_ladder::PromotionRewards,
 ) -> u64 {
     for (template, quantity) in &promo.stackable_items {
-        let template = Uuid::parse_str(template)
-            .expect("generated arena-promotion item id is a valid UUID");
+        let template =
+            Uuid::parse_str(template).expect("generated arena-promotion item id is a valid UUID");
         *reward.stackable_items.entry(template).or_insert(0) += quantity;
     }
     promo.stackable_items.iter().map(|(_, n)| n).sum()
@@ -169,199 +177,226 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
     // needs, or `None` when there was no character row to reward (bot).
     let applied: Option<AppliedOutcome> = conn
         .transaction(move |mut conn| {
-        async move {
-            let mut entry = {
-                use crate::schema::characters;
-                characters::table
-                    .filter(characters::id.eq(o.character_id))
-                    .select(CharacterDbEntryEconomy::as_select())
-                    .for_no_key_update()
-                    .load(&mut conn)
-                    .await?
-                    .into_iter()
-                    .next()
-            };
-            let Some(entry) = entry.take() else {
-                // A bot / starter loadout has no character row. Not an error.
-                log::debug!(
-                    "arena economy: no character row for {} (bot?); nothing to persist",
-                    o.character_id
+            async move {
+                let mut entry = {
+                    use crate::schema::characters;
+                    characters::table
+                        .filter(characters::id.eq(o.character_id))
+                        .select(CharacterDbEntryEconomy::as_select())
+                        .for_no_key_update()
+                        .load(&mut conn)
+                        .await?
+                        .into_iter()
+                        .next()
+                };
+                let Some(entry) = entry.take() else {
+                    // A bot / starter loadout has no character row. Not an error.
+                    log::debug!(
+                        "arena economy: no character row for {} (bot?); nothing to persist",
+                        o.character_id
+                    );
+                    return Ok::<_, anyhow::Error>(None);
+                };
+                let mut entry = entry;
+
+                let ch = &mut entry.character.0;
+                let pre_trophies = ch.pvp_trophies;
+                let pre_high_water = ch.matchmaking_pvp_trophies;
+
+                // --- PvP counters -------------------------------------------------
+                // Trophies never go below zero (retail cards bottom out at 0, never
+                // negative — flapdroid sat at 0 through a 20-loss streak).
+                ch.pvp_trophies = (pre_trophies + o.trophy_delta).max(0);
+                // `matchmakingPvpTrophies` is the season HIGH-WATER mark: monotone
+                // non-decreasing, and what the ladder promotes on. Capture-proven
+                // across all 108 op49 cards.
+                ch.matchmaking_pvp_trophies = pre_high_water.max(ch.pvp_trophies);
+                // Streak: positive counts consecutive wins, negative consecutive
+                // losses; a result of the other sign resets it to +/-1.
+                ch.pvp_winning_streak = if o.win {
+                    if ch.pvp_winning_streak > 0 {
+                        ch.pvp_winning_streak + 1
+                    } else {
+                        1
+                    }
+                } else if ch.pvp_winning_streak < 0 {
+                    ch.pvp_winning_streak - 1
+                } else {
+                    -1
+                };
+                // The chest meter counts ROUNDS won and wraps at capacity 8.
+                let (meter, filled) =
+                    arena_ladder::advance_chest_meter(ch.pvp_chest_meter, o.rounds_won);
+                ch.pvp_chest_meter = meter;
+                ch.number_pvp_match_played += 1;
+
+                // --- Ladder position ---------------------------------------------
+                let tier = arena_ladder::tier_for_trophies(ch.matchmaking_pvp_trophies);
+                ch.highest_arena_reached = tier.arena as u64;
+                ch.highest_level_arena_reached = tier.level as u64;
+
+                // --- Currency, XP and promotion chests ----------------------------
+                let promo = arena_ladder::promotion_rewards(
+                    pre_high_water,
+                    ch.matchmaking_pvp_trophies,
+                    ch.level,
                 );
-                return Ok::<_, anyhow::Error>(None);
-            };
-            let mut entry = entry;
+                let mut reward = RewardGrant::default();
+                if o.gold > 0 {
+                    reward
+                        .currencies
+                        .insert(ARENA_GOLD_CURRENCY_UUID_PARSED.clone(), o.gold as u64);
+                }
+                reward.character_xp = o.character_xp.max(0) as u64;
+                let promotion_stackables = add_promotion_stackables(&mut reward, &promo);
 
-            let ch = &mut entry.character.0;
-            let pre_trophies = ch.pvp_trophies;
-            let pre_high_water = ch.matchmaking_pvp_trophies;
+                // Arena Giveaway. Retail's banner promised Gems for turning up inside
+                // a two-hour Saturday window — "Join them during that time and earn
+                // free Gems!" — so the grant belongs HERE, on a finished match,
+                // rather than on a claim button.
+                //
+                // It rides the same RewardGrant and therefore the same transaction as
+                // the gold: `try_earn` writes the once-per-character ledger row, and a
+                // rollback takes both or neither. Splitting them would let a crash
+                // mark a player paid who never was.
+                let giveaway = crate::free_for_all::try_earn(&mut conn, entry.id, ffa_now()).await;
+                if let Some((_, gems)) = giveaway {
+                    if gems > 0 {
+                        *reward
+                            .currencies
+                            .entry(blades_lib::economy::GEMS)
+                            .or_insert(0) += gems as u64;
+                    }
+                }
 
-            // --- PvP counters -------------------------------------------------
-            // Trophies never go below zero (retail cards bottom out at 0, never
-            // negative — flapdroid sat at 0 through a 20-loss streak).
-            ch.pvp_trophies = (pre_trophies + o.trophy_delta).max(0);
-            // `matchmakingPvpTrophies` is the season HIGH-WATER mark: monotone
-            // non-decreasing, and what the ladder promotes on. Capture-proven
-            // across all 108 op49 cards.
-            ch.matchmaking_pvp_trophies = pre_high_water.max(ch.pvp_trophies);
-            // Streak: positive counts consecutive wins, negative consecutive
-            // losses; a result of the other sign resets it to +/-1.
-            ch.pvp_winning_streak = if o.win {
-                if ch.pvp_winning_streak > 0 { ch.pvp_winning_streak + 1 } else { 1 }
-            } else if ch.pvp_winning_streak < 0 {
-                ch.pvp_winning_streak - 1
-            } else {
-                -1
-            };
-            // The chest meter counts ROUNDS won and wraps at capacity 8.
-            let (meter, filled) = arena_ladder::advance_chest_meter(ch.pvp_chest_meter, o.rounds_won);
-            ch.pvp_chest_meter = meter;
-            ch.number_pvp_match_played += 1;
-
-            // --- Ladder position ---------------------------------------------
-            let tier = arena_ladder::tier_for_trophies(ch.matchmaking_pvp_trophies);
-            ch.highest_arena_reached = tier.arena as u64;
-            ch.highest_level_arena_reached = tier.level as u64;
-
-            // --- Currency, XP and promotion chests ----------------------------
-            let promo = arena_ladder::promotion_rewards(
-                pre_high_water,
-                ch.matchmaking_pvp_trophies,
-                ch.level,
-            );
-            let mut reward = RewardGrant::default();
-            if o.gold > 0 {
-                reward
-                    .currencies
-                    .insert(ARENA_GOLD_CURRENCY_UUID_PARSED.clone(), o.gold as u64);
-            }
-            reward.character_xp = o.character_xp.max(0) as u64;
-            let promotion_stackables = add_promotion_stackables(&mut reward, &promo);
-
-            let mut tracker = InventoryChangeTracker::default();
-            apply_reward(
-                &reward,
-                &mut entry.wallet.0,
-                &mut entry.inventory.0,
-                &mut entry.character.0,
-                &mut tracker,
-            );
-            if !promo.stackable_items.is_empty() {
-                entry.inventory.0.backpack_version += 1;
-                entry
-                    .server_state
-                    .0
-                    .arena_promotion_loot_grants
-                    .extend(promo.loot_thresholds.iter().copied());
-            }
-
-            // Ladder promotion chests (`rewards_once_reached`) plus any chest the
-            // meter completed this match. Both land in the treasury exactly like a
-            // quest/dungeon chest does.
-            let mut granted = 0usize;
-            for (rarity, level) in &promo.chests {
-                grant_chest(&mut entry.inventory.0, *rarity as u64, *level as u64, &mut tracker);
-                granted += 1;
-            }
-            for _ in 0..filled {
-                let award = arena_ladder::next_pvp_chest(
-                    o.character_id,
-                    entry.server_state.0.arena_chests_earned,
-                    entry.server_state.0.arena_last_elder_one_chest_at_secs,
-                    entry.server_state.0.arena_last_elder_two_chest_at_secs,
-                    entry.server_state.0.arena_last_legendary_chest_at_secs,
-                    o.completed_at_secs,
-                );
-                grant_chest(
+                let mut tracker = InventoryChangeTracker::default();
+                apply_reward(
+                    &reward,
+                    &mut entry.wallet.0,
                     &mut entry.inventory.0,
-                    award.kind.tier() as u64,
-                    entry.character.0.level as u64,
+                    &mut entry.character.0,
                     &mut tracker,
                 );
-                entry.server_state.0.arena_chests_earned = entry
-                    .server_state
-                    .0
-                    .arena_chests_earned
-                    .saturating_add(1);
-                match award.rule {
-                    Some(arena_ladder::PvpChestRule::ElderOne) => {
-                        entry.server_state.0.arena_last_elder_one_chest_at_secs =
-                            o.completed_at_secs;
-                    }
-                    Some(arena_ladder::PvpChestRule::ElderTwo) => {
-                        entry.server_state.0.arena_last_elder_two_chest_at_secs =
-                            o.completed_at_secs;
-                    }
-                    Some(arena_ladder::PvpChestRule::Legendary) => {
-                        entry.server_state.0.arena_last_legendary_chest_at_secs =
-                            o.completed_at_secs;
-                    }
-                    _ => {}
+                if !promo.stackable_items.is_empty() {
+                    entry.inventory.0.backpack_version += 1;
+                    entry
+                        .server_state
+                        .0
+                        .arena_promotion_loot_grants
+                        .extend(promo.loot_thresholds.iter().copied());
                 }
-                granted += 1;
-            }
-            if granted > 0 {
-                entry.inventory.0.treasury_version += 1;
-            }
 
-            let post_trophies = entry.character.0.pvp_trophies;
-            let post_high_water = entry.character.0.matchmaking_pvp_trophies;
-            let character_id = entry.id;
-
-            {
-                use crate::schema::characters;
-                diesel::update(characters::table)
-                    .filter(characters::id.eq(character_id))
-                    .set(entry)
-                    .execute(&mut conn)
-                    .await?;
-            }
-
-            // GUILD TROPHIES. `guilds.trophies` is the guild's running trophy
-            // total — it is what `GET /guilds/leaderboard` orders on and what the
-            // client shows on every guild card. It was written once, as 0, at guild
-            // creation and never again, so every guild sat at 0 and the "top guilds"
-            // ladder was really ordering by guild id.
-            //
-            // The aggregation rule is the one `season_store::guild_standings_from`
-            // already encodes: a guild's trophies are the SUM of its members'
-            // trophies. Applied here as the same delta the character just took, so
-            // the total tracks play without a full re-scan on every match.
-            //
-            // Clamped at 0 for the same reason the character's own count is:
-            // retail cards bottom out at zero and never go negative.
-            if o.trophy_delta != 0 {
-                use crate::schema::{guild_members, guilds};
-                let guild_of: Option<String> = guild_members::table
-                    .filter(guild_members::character_id.eq(character_id))
-                    .select(guild_members::guild_id)
-                    .first(&mut conn)
-                    .await
-                    .optional()?;
-                if let Some(gid) = guild_of {
-                    let _ = guilds::table; // keep the import meaningful for the reader
-                    diesel::sql_query(
-                        "UPDATE guilds SET trophies = GREATEST(trophies + $1, 0) WHERE id = $2",
-                    )
-                    .bind::<diesel::sql_types::BigInt, _>(o.trophy_delta)
-                    .bind::<diesel::sql_types::Text, _>(&gid)
-                    .execute(&mut conn)
-                    .await?;
+                // Ladder promotion chests (`rewards_once_reached`) plus any chest the
+                // meter completed this match. Both land in the treasury exactly like a
+                // quest/dungeon chest does.
+                let mut granted = 0usize;
+                for (rarity, level) in &promo.chests {
+                    grant_chest(
+                        &mut entry.inventory.0,
+                        *rarity as u64,
+                        *level as u64,
+                        &mut tracker,
+                    );
+                    granted += 1;
                 }
-            }
+                for _ in 0..filled {
+                    let award = arena_ladder::next_pvp_chest(
+                        o.character_id,
+                        entry.server_state.0.arena_chests_earned,
+                        entry.server_state.0.arena_last_elder_one_chest_at_secs,
+                        entry.server_state.0.arena_last_elder_two_chest_at_secs,
+                        entry.server_state.0.arena_last_legendary_chest_at_secs,
+                        o.completed_at_secs,
+                    );
+                    grant_chest(
+                        &mut entry.inventory.0,
+                        award.kind.tier() as u64,
+                        entry.character.0.level as u64,
+                        &mut tracker,
+                    );
+                    entry.server_state.0.arena_chests_earned =
+                        entry.server_state.0.arena_chests_earned.saturating_add(1);
+                    match award.rule {
+                        Some(arena_ladder::PvpChestRule::ElderOne) => {
+                            entry.server_state.0.arena_last_elder_one_chest_at_secs =
+                                o.completed_at_secs;
+                        }
+                        Some(arena_ladder::PvpChestRule::ElderTwo) => {
+                            entry.server_state.0.arena_last_elder_two_chest_at_secs =
+                                o.completed_at_secs;
+                        }
+                        Some(arena_ladder::PvpChestRule::Legendary) => {
+                            entry.server_state.0.arena_last_legendary_chest_at_secs =
+                                o.completed_at_secs;
+                        }
+                        _ => {}
+                    }
+                    granted += 1;
+                }
+                if granted > 0 {
+                    entry.inventory.0.treasury_version += 1;
+                }
 
-            Ok(Some(AppliedOutcome {
-                character_id,
-                pre_trophies,
-                post_trophies,
-                post_high_water,
-                arena: tier.arena as i32,
-                arena_level: tier.level as i32,
-                meter,
-                granted,
-                promotion_stackables,
-            }))
-        }
-        .scope_boxed()
+                let post_trophies = entry.character.0.pvp_trophies;
+                let post_high_water = entry.character.0.matchmaking_pvp_trophies;
+                let character_id = entry.id;
+
+                {
+                    use crate::schema::characters;
+                    diesel::update(characters::table)
+                        .filter(characters::id.eq(character_id))
+                        .set(entry)
+                        .execute(&mut conn)
+                        .await?;
+                }
+
+                // GUILD TROPHIES. `guilds.trophies` is the guild's running trophy
+                // total — it is what `GET /guilds/leaderboard` orders on and what the
+                // client shows on every guild card. It was written once, as 0, at guild
+                // creation and never again, so every guild sat at 0 and the "top guilds"
+                // ladder was really ordering by guild id.
+                //
+                // The aggregation rule is the one `season_store::guild_standings_from`
+                // already encodes: a guild's trophies are the SUM of its members'
+                // trophies. Applied here as the same delta the character just took, so
+                // the total tracks play without a full re-scan on every match.
+                //
+                // Clamped at 0 for the same reason the character's own count is:
+                // retail cards bottom out at zero and never go negative.
+                if o.trophy_delta != 0 {
+                    use crate::schema::{guild_members, guilds};
+                    let guild_of: Option<String> = guild_members::table
+                        .filter(guild_members::character_id.eq(character_id))
+                        .select(guild_members::guild_id)
+                        .first(&mut conn)
+                        .await
+                        .optional()?;
+                    if let Some(gid) = guild_of {
+                        let _ = guilds::table; // keep the import meaningful for the reader
+                        diesel::sql_query(
+                            "UPDATE guilds SET trophies = GREATEST(trophies + $1, 0) WHERE id = $2",
+                        )
+                        .bind::<diesel::sql_types::BigInt, _>(o.trophy_delta)
+                        .bind::<diesel::sql_types::Text, _>(&gid)
+                        .execute(&mut conn)
+                        .await?;
+                    }
+                }
+
+                Ok(Some(AppliedOutcome {
+                    giveaway_gems: giveaway.map(|(_, g)| g).unwrap_or(0),
+                    character_id,
+                    pre_trophies,
+                    post_trophies,
+                    post_high_water,
+                    arena: tier.arena as i32,
+                    arena_level: tier.level as i32,
+                    meter,
+                    granted,
+                    promotion_stackables,
+                }))
+            }
+            .scope_boxed()
         })
         .await?;
 
@@ -383,13 +418,24 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
         a.arena,
         a.arena_level,
         a.meter,
-        if a.granted > 0 { format!(", {} chest(s)", a.granted) } else { String::new() },
+        if a.granted > 0 {
+            format!(", {} chest(s)", a.granted)
+        } else {
+            String::new()
+        },
         if a.promotion_stackables > 0 {
             format!(", {} promotion stackable(s)", a.promotion_stackables)
         } else {
             String::new()
         },
     );
+
+    if a.giveaway_gems > 0 {
+        info!(
+            "arena giveaway: character {} earned {} Gems for fighting inside the window",
+            a.character_id, a.giveaway_gems
+        );
+    }
 
     // Phase 2 — the audit row, OUTSIDE the transaction above (see the doc comment:
     // a missing table would otherwise roll the reward back). Failure only logs.
@@ -440,13 +486,16 @@ struct AppliedOutcome {
     meter: i64,
     granted: usize,
     promotion_stackables: u64,
+    /// Gems paid by an open Arena Giveaway window, 0 when none was running.
+    giveaway_gems: i64,
 }
 
 /// The arena gold currency uuid, parsed once. Same constant the op49 card uses, so
 /// the wallet we credit and the wallet the card shows can never drift apart.
-static ARENA_GOLD_CURRENCY_UUID_PARSED: std::sync::LazyLock<Uuid> = std::sync::LazyLock::new(|| {
-    Uuid::parse_str(ARENA_GOLD_CURRENCY_UUID).expect("ARENA_GOLD_CURRENCY_UUID is a valid uuid")
-});
+static ARENA_GOLD_CURRENCY_UUID_PARSED: std::sync::LazyLock<Uuid> =
+    std::sync::LazyLock::new(|| {
+        Uuid::parse_str(ARENA_GOLD_CURRENCY_UUID).expect("ARENA_GOLD_CURRENCY_UUID is a valid uuid")
+    });
 
 #[cfg(test)]
 mod tests {
@@ -486,9 +535,9 @@ mod tests {
         let mut reward = RewardGrant::default();
         assert_eq!(add_promotion_stackables(&mut reward, &promo), 3);
         assert_eq!(
-            reward.stackable_items.get(
-                &Uuid::parse_str("d94bab85-53d5-4c9c-a637-acd94fc66c98").unwrap()
-            ),
+            reward
+                .stackable_items
+                .get(&Uuid::parse_str("d94bab85-53d5-4c9c-a637-acd94fc66c98").unwrap()),
             Some(&3)
         );
     }
