@@ -466,6 +466,27 @@ async fn handle_event_dungeon_exit(
     let mut inventory_modification_tracker = InventoryChangeTracker::default();
 
     if let Some(rewards) = payout.as_ref() {
+        // Report #183: "events upon completion give negative value of sigils".
+        // Nothing on the server had a negative balance, and the completion table
+        // stores only a count — so there was no way to see what a completion
+        // actually paid, and the container's log is discarded every time the
+        // image is replaced. Two restarts on deploy day lost the evidence for a
+        // ticket that was waiting on exactly that. This records the payout at the
+        // moment it is granted, so the next report is answerable from the log
+        // instead of from a request to the reporter.
+        //
+        // The currency ids are logged raw: this is a diagnostic, and resolving
+        // them to names here would need the item table in a hot path for no gain.
+        log::info!(
+            "event exit: character {} tier {}/{} of event quest {} pays xp={} townXp={} currencies={:?}",
+            char_id,
+            completion_index + 1,
+            tier_count,
+            quest_id,
+            rewards.character_xp.unwrap_or(0),
+            rewards.town_xp.unwrap_or(0),
+            rewards.currencies,
+        );
         apply_event_rewards(
             rewards,
             &mut character_data,
