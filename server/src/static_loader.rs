@@ -513,12 +513,12 @@ mod tests {
         // The event calendar and its milestone tables must both survive the load, and
         // must agree with each other — an event whose template is missing would
         // advertise a Sigil quest that pays nothing.
-        // 39 capture-derived events on the 39-day rotation, plus the two AUTHORED
-        // seasonal ones restored for #189 (Mɾʂιɾι: "make seasonal festivities work
-        // again"). Counting is not the point — the split is, so assert on the
-        // recurrence period rather than on a total that any addition would bump.
-        assert_eq!(sd.game_events.len(), 41, "game_events.json");
-        assert_eq!(sd.event_quests.templates.len(), 41, "event_quests.json");
+        // 39 capture-derived events on the 39-day rotation, plus the SEVEN
+        // authored ones restored for #189 (Mɾʂιɾι: "make seasonal festivities work
+        // again") — five back on the rotation, two on a calendar date. Counting is
+        // not the point; the split is, so assert on the recurrence period too.
+        assert_eq!(sd.game_events.len(), 46, "game_events.json");
+        assert_eq!(sd.event_quests.templates.len(), 46, "event_quests.json");
         let rotating = sd
             .game_events
             .iter()
@@ -529,7 +529,7 @@ mod tests {
             .iter()
             .filter(|d| d.recurrence.recurrence_interval == 365)
             .collect();
-        assert_eq!(rotating, 39, "the captured 39-day rotation must be untouched");
+        assert_eq!(rotating, 44, "39 captured + the 5 restored retired events");
         assert_eq!(annual.len(), 2, "the two seasonal events");
         // A seasonal event that opened for two days like the rotation ones would be a
         // silent regression — the whole point is a holiday-length window.

@@ -4825,9 +4825,9 @@ mod playability_sweep {
             .collect();
 
         assert_eq!(flat, 128, "flat rewards from quest_rewards.json");
-        // 39 capture-derived ladders + the two authored holiday events (#189).
-        assert_eq!(evented, 41, "milestone ladders from event_quests.json");
-        assert_eq!(covered.len(), 169, "169 of 185 quests pay something");
+        // 39 capture-derived ladders + the seven authored retired events (#189).
+        assert_eq!(evented, 46, "milestone ladders from event_quests.json");
+        assert_eq!(covered.len(), 174, "174 of 185 quests pay something");
         assert!(
             covered.len() as f64 / gd.quests.len() as f64 > 0.80,
             "coverage must stay above 80%"
@@ -4848,7 +4848,7 @@ mod playability_sweep {
     #[test]
     fn every_event_template_ships_a_complete_milestone_ladder() {
         let sd = static_data();
-        assert_eq!(sd.event_quests.templates.len(), 41);
+        assert_eq!(sd.event_quests.templates.len(), 46);
         for (gld, tmpl) in &sd.event_quests.templates {
             assert_eq!(tmpl.rewards.len(), 5, "{gld}: five wire milestones");
             assert_eq!(tmpl.payable_rewards.len(), 5, "{gld}: five granting milestones");
@@ -4869,7 +4869,7 @@ mod playability_sweep {
     fn every_calendar_event_is_fully_backed() {
         let sd = static_data();
         let gd = game_data();
-        assert_eq!(sd.game_events.len(), 41, "the committed calendar");
+        assert_eq!(sd.game_events.len(), 46, "the committed calendar");
         for def in &sd.game_events {
             assert!(
                 gd.quests.contains_key(&def.quest_id),

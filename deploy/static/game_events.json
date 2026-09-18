@@ -502,5 +502,90 @@
    "authored": true,
    "note": "Retired before our capture corpus begins, so this calendar entry is ours. recurrenceType stays \"daily\" because that is the only string retail ever sent the client (it means \"this recurs\"; the 39-day rotation uses it too), and recurrenceInterval 365 is what the client is told. The server repeats it on the anchor's calendar DATE \u2014 see EventDef.annual \u2014 because 365 days is not a year. Report #189."
   }
+ },
+ {
+  "eventId": "045e2a59-67b7-5880-80c9-735114da1c3e",
+  "questId": "3405ea07-6655-49c0-b149-b0e19f9f1c85",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1661212800,
+   "durationSecs": 172800,
+   "recurrenceInterval": 39
+  },
+  "_meta": {
+   "name": "EQ28 The Trickster",
+   "authored": true,
+   "note": "Retired before our capture corpus begins, so this calendar entry is ours. It joins retail's own 39-day rotation with a 2-day window, on a day-slot that already holds one event \u2014 so on five days of every thirty-nine three events are open instead of two. Report #189."
+  }
+ },
+ {
+  "eventId": "569be3b4-9737-5a5e-9a7e-2848b702c2db",
+  "questId": "11ffa10c-f587-432b-8901-fde27f37f65a",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1661904000,
+   "durationSecs": 172800,
+   "recurrenceInterval": 39
+  },
+  "_meta": {
+   "name": "EQ30 Spirit of the Hunt",
+   "authored": true,
+   "note": "Retired before our capture corpus begins, so this calendar entry is ours. It joins retail's own 39-day rotation with a 2-day window, on a day-slot that already holds one event \u2014 so on five days of every thirty-nine three events are open instead of two. Report #189."
+  }
+ },
+ {
+  "eventId": "606b2e0f-7bf8-5b3a-91a1-d50ffbc42ac8",
+  "questId": "c08cf606-e3e8-42ed-adc3-f5d5af7e2490",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1662595200,
+   "durationSecs": 172800,
+   "recurrenceInterval": 39
+  },
+  "_meta": {
+   "name": "EQ38 Attack of the Spell Casters",
+   "authored": true,
+   "note": "Retired before our capture corpus begins, so this calendar entry is ours. It joins retail's own 39-day rotation with a 2-day window, on a day-slot that already holds one event \u2014 so on five days of every thirty-nine three events are open instead of two. Report #189."
+  }
+ },
+ {
+  "eventId": "0f02755a-f988-5de2-abd6-c2ef56ce2ba6",
+  "questId": "c23cd046-a7f1-431b-9c14-5b023d6a104b",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1663286400,
+   "durationSecs": 172800,
+   "recurrenceInterval": 39
+  },
+  "_meta": {
+   "name": "EQ39 The Trap",
+   "authored": true,
+   "note": "Retired before our capture corpus begins, so this calendar entry is ours. It joins retail's own 39-day rotation with a 2-day window, on a day-slot that already holds one event \u2014 so on five days of every thirty-nine three events are open instead of two. Report #189."
+  }
+ },
+ {
+  "eventId": "ceab4fd9-9302-5a5e-910c-eff3f0446dd7",
+  "questId": "41aef1a7-bbf7-4f32-9eb5-9cf6fe5332a0",
+  "important": true,
+  "instanceDurationSecs": 172800,
+  "recurrence": {
+   "recurrenceType": "daily",
+   "startTimeSecs": 1663977600,
+   "durationSecs": 172800,
+   "recurrenceInterval": 39
+  },
+  "_meta": {
+   "name": "EQ41 Feats of Strength",
+   "authored": true,
+   "note": "Retired before our capture corpus begins, so this calendar entry is ours. It joins retail's own 39-day rotation with a 2-day window, on a day-slot that already holds one event \u2014 so on five days of every thirty-nine three events are open instead of two. Report #189."
+  }
  }
 ]
