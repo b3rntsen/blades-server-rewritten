@@ -176,7 +176,7 @@ async fn update_data(
 /// `characterCustomizationCost` (see `appearance_change_cost.json`), but we also
 /// accept the bare object. Returns `None` (→ no debit) if the table is missing or
 /// malformed — the appearance change must never fail on a cost-table problem.
-fn parse_appearance_cost(cost: &Value) -> Option<(Uuid, u64)> {
+pub(crate) fn parse_appearance_cost(cost: &Value) -> Option<(Uuid, u64)> {
     let obj = cost
         .get("characterCustomizationCost")
         .filter(|v| v.is_object())

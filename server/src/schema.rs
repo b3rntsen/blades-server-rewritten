@@ -185,6 +185,18 @@ diesel::table! {
 }
 
 diesel::table! {
+    /// One row per character that has had its character-creation allowance
+    /// (#193). The primary key IS the idempotency guard — see the migration.
+    character_creation_allowance (character_id) {
+        character_id -> Uuid,
+        currency_id -> Uuid,
+        amount -> Int8,
+        reason -> Text,
+        granted_at -> Int8,
+    }
+}
+
+diesel::table! {
     gift_overrides (gift_id) {
         gift_id -> Uuid,
         items -> Jsonb,
@@ -325,6 +337,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     arena_season_guild_standings,
     arena_season_standings,
     arena_seasons,
+    character_creation_allowance,
     characters,
     device_bindings,
     event_completions,
