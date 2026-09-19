@@ -899,24 +899,5 @@
    "authored": true,
    "note": "Retired before our capture corpus begins, so this calendar entry is ours. recurrenceType stays \"daily\" because that is the only string retail ever sent the client (it means \"this recurs\"; the 39-day rotation uses it too), and recurrenceInterval 365 is what the client is told. The server repeats it on the anchor's calendar DATE \u2014 see EventDef.annual \u2014 because 365 days is not a year. Report #189."
   }
- },
- {
-  "eventId": "a6019c28-27dc-52df-beb5-9482a070096f",
-  "questId": "f116b952-9932-4b1a-b20d-246ca2945bb4",
-  "important": true,
-  "instanceDurationSecs": 604800,
-  "preview": true,
-  "recurrence": {
-   "recurrenceType": "daily",
-   "startTimeSecs": 1789689600,
-   "durationSecs": 604800,
-   "recurrenceInterval": 0
-  },
-  "_meta": {
-   "name": "EQ40 Season of the Witch \u2014 one-off preview",
-   "authored": true,
-   "preview": true,
-   "note": "A SELF-EXPIRING preview so Season of the Witch can be seen and tested before its real window on 24 October (#189, M\u027e\u0282\u03b9\u027e\u03b9 asked whether he had to wait). recurrenceInterval 0 makes it one-shot: it opens at the anchor, closes a week later and never returns, so nothing has to be remembered or cleaned up. The annual entry for the same quest is untouched and still opens on 24 October. REMOVE THIS ENTRY once the preview has served its purpose \u2014 it is harmless if left, but it is not retail."
-  }
  }
 ]
