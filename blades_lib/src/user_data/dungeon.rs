@@ -13,6 +13,18 @@ pub struct LootTableResult {
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     #[serde(default)]
     pub currencies: HashMap<Uuid, u64>,
+    /// MEASURED: the wire key is `items`, plural.
+    ///
+    /// Across 103,368 captured `lootTableLoot` results retail writes `items`
+    /// 9,542 times and `item` **zero** times. We had the singular, which cost
+    /// twice over: every item we rolled was published under a key the client
+    /// does not read, and every item retail sent us was dropped on import as an
+    /// unknown field — silently, because this struct is not
+    /// `deny_unknown_fields`.
+    ///
+    /// The `alias` is for our own stored dungeon rows, which were written under
+    /// the old name and are durable. It is not a retail shape.
+    #[serde(rename = "items", alias = "item")]
     #[serde(skip_serializing_if = "Items::is_empty")]
     #[serde(default)]
     pub item: Items,
@@ -42,17 +54,24 @@ pub struct DungeonEnemyResult {
     pub enemy_level: i64,
     #[serde(rename = "givenXP")]
     pub given_xp: u64,
-    //TODO: need to find a filled spawn_group_loot to verify it really is that.
+    /// Always serialized, even when empty — retail always sends it.
     ///
-    /// Both maps are OMITTED by retail when empty, so both must default or one rare
-    /// object kills the whole character import (report #61). Measured over 1,045
-    /// captured `/quests` bodies: of 68,683 enemy results, 190 omit `lootTableLoot`.
-    /// `spawnGroupLoot` was present on all of them, but it is the same shape from the
-    /// same generator and is defaulted for the same reason — the cost of defaulting a
-    /// collection that is always sent is nil; the cost of not defaulting one that is
-    /// occasionally omitted is a player who cannot transfer at all.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    /// MEASURED over 66,994 captured enemy results: `spawnGroupLoot` is present
+    /// on **every one**, as `{}` in 66,956 of them and filled in 38. It is the
+    /// one field here that is never omitted, so skipping it when empty put our
+    /// responses in a shape retail never produces.
+    ///
+    /// It still `default`s on the way in: a field we always send is not
+    /// necessarily a field every stored row already has.
+    #[serde(default)]
     pub spawn_group_loot: HashMap<Uuid, LootTableResult>,
+    /// Omitted when empty — the opposite rule to the field above, and measured
+    /// the same way: of those 66,994 results, 190 omit `lootTableLoot` entirely
+    /// and **not one** sends it as `{}`. Absent is retail's encoding of "no loot
+    /// table" here; `{}` is retail's encoding of it one field up.
+    ///
+    /// Defaulting on the way in is what report #61 needed: without it those 190
+    /// objects fail a whole character import.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub loot_table_loot: HashMap<Uuid, LootTableResult>,
 }
@@ -409,5 +428,127 @@ mod collected_chests_compat {
         s.collected_chests.insert(Uuid::nil().to_string());
         let out = serde_json::to_value(&s).unwrap();
         assert!(out.get("collectedChests").is_some(), "a non-empty set must be sent");
+    }
+}
+
+/// The wire shape of enemy loot, pinned against retail rather than against us.
+///
+/// The bug these exist for was invisible to a round-trip test: we serialized
+/// `item`, deserialized `item`, and agreed with ourselves perfectly while
+/// disagreeing with every response retail ever sent. So each test here names a
+/// literal retail key and a literal count from the corpus, and none of them
+/// compares our output to our own input.
+///
+/// Corpus: 773 captured `/quests` bodies, 66,994 enemy results inside them,
+/// 103,368 `LootTableResult` objects.
+#[cfg(test)]
+mod enemy_loot_wire_shape {
+    use super::*;
+    use serde_json::{json, Value};
+
+    fn enemy(json_text: Value) -> DungeonEnemyResult {
+        serde_json::from_value(json_text).expect("enemy result parses")
+    }
+
+    fn one_item() -> Items {
+        let raw = json!([{
+            "id": "1c1e4c3c-0000-4000-8000-000000000001",
+            "itemTemplateId": "2a2e4c3c-0000-4000-8000-000000000002",
+            "grade": 1,
+            "durability": 100.0,
+            "temperingLevel": 0,
+            "properties": {}
+        }]);
+        serde_json::from_value(raw).expect("item map parses")
+    }
+
+    #[test]
+    fn loot_items_go_on_the_wire_under_the_plural_key() {
+        let result = LootTableResult { item: one_item(), ..Default::default() };
+        let wire = serde_json::to_value(&result).unwrap();
+
+        // 9,542 captured results carry `items`. Zero carry `item`.
+        assert!(wire.get("items").is_some(), "expected retail's `items`, got {wire}");
+        assert!(
+            wire.get("item").is_none(),
+            "`item` is a key retail never sent; got {wire}"
+        );
+    }
+
+    #[test]
+    fn an_item_retail_sent_us_is_not_dropped_on_the_way_in() {
+        // Lifted from a capture: the plural key is what actually arrives.
+        let retail = json!({
+            "currencies": { "3c3e4c3c-0000-4000-8000-000000000003": 40 },
+            "items": [{
+                "id": "1c1e4c3c-0000-4000-8000-000000000001",
+                "itemTemplateId": "2a2e4c3c-0000-4000-8000-000000000002",
+                "grade": 2,
+                "durability": 87.5,
+                "temperingLevel": 3,
+                "properties": {}
+            }]
+        });
+        let parsed: LootTableResult = serde_json::from_value(retail).unwrap();
+        assert_eq!(parsed.item.0.len(), 1, "retail's item was silently discarded");
+        assert_eq!(parsed.currencies.len(), 1);
+    }
+
+    #[test]
+    fn a_row_we_stored_under_the_old_singular_key_still_loads() {
+        // Not a retail shape — our own durable rows, kept readable by the alias.
+        let ours = json!({
+            "item": [{
+                "id": "1c1e4c3c-0000-4000-8000-000000000001",
+                "itemTemplateId": "2a2e4c3c-0000-4000-8000-000000000002",
+                "grade": 1,
+                "durability": 100.0,
+                "temperingLevel": 0,
+                "properties": {}
+            }]
+        });
+        let parsed: LootTableResult = serde_json::from_value(ours).unwrap();
+        assert_eq!(parsed.item.0.len(), 1, "a stored row stopped loading");
+    }
+
+    #[test]
+    fn an_empty_loot_result_stays_empty_on_the_wire() {
+        // 29,844 captured results are `{}`. None of them spell out empty members,
+        // so the three `skip_serializing_if`s are the measured behaviour.
+        let wire = serde_json::to_value(LootTableResult::default()).unwrap();
+        assert_eq!(wire, json!({}), "an empty result should serialize bare");
+    }
+
+    #[test]
+    fn spawn_group_loot_is_sent_even_when_it_is_empty() {
+        // Present on 66,994 of 66,994 enemy results — empty in 66,956 of them.
+        let e = enemy(json!({ "enemyLevel": 12, "givenXP": 340, "lootTableLoot": {} }));
+        let wire = serde_json::to_value(&e).unwrap();
+        assert_eq!(
+            wire.get("spawnGroupLoot"),
+            Some(&json!({})),
+            "retail never omits spawnGroupLoot; got {wire}"
+        );
+    }
+
+    #[test]
+    fn loot_table_loot_is_omitted_when_it_is_empty() {
+        // The opposite rule, and also measured: 190 results omit `lootTableLoot`
+        // and none sends `{}`. If this ever starts matching the field above, one
+        // of the two rules has been applied to both.
+        let e = enemy(json!({ "enemyLevel": 12, "givenXP": 340 }));
+        let wire = serde_json::to_value(&e).unwrap();
+        assert!(
+            wire.get("lootTableLoot").is_none(),
+            "empty lootTableLoot should be absent, not `{{}}`; got {wire}"
+        );
+    }
+
+    #[test]
+    fn an_enemy_result_retail_omitted_loot_table_loot_from_still_parses() {
+        // The 190. Report #61 was a whole import lost to one of these.
+        let e = enemy(json!({ "enemyLevel": 3, "givenXP": 10, "spawnGroupLoot": {} }));
+        assert!(e.loot_table_loot.is_empty());
+        assert!(e.spawn_group_loot.is_empty());
     }
 }
