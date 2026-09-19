@@ -79,6 +79,20 @@ static CHEST_TIERS_RAW: &str = include_str!("../chest_tiers.json");
 // invented.
 static FLOOR_PILE_SIZES_RAW: &str = include_str!("../floor_pile_sizes.json");
 
+// SQ206_TheWizardsTower2 changes three ordinary urn spawns into the key urns
+// used by The Wizard's Challenge. That quest-script substitution is visible in
+// two complete retail generations, but not in parsed.json: the static dungeon
+// asset still labels each spawn as the ordinary uncommon urn. Both retail runs
+// put the dedicated UrnKey table on these exact three spawns, and every one of
+// the 269 captured rolls of that table yielded one Door Key (report #192).
+const WIZARDS_CHALLENGE_DUNGEON: Uuid = Uuid::from_u128(0x108a7290_cea1_4af2_b58d_9c592af7d9d8);
+const WIZARDS_CHALLENGE_KEY_TABLE: Uuid = Uuid::from_u128(0x8858f284_4f33_4da4_8085_0befa7ef2637);
+const WIZARDS_CHALLENGE_KEY_POTS: [Uuid; 3] = [
+    Uuid::from_u128(0x9f2a4d7d_debf_457f_8007_19a0e40dfb0c),
+    Uuid::from_u128(0x588b0b05_d460_4c07_96f5_5a9c18f882c2),
+    Uuid::from_u128(0x5a448ce2_8c35_4e22_b4c9_323a2b9a85ff),
+];
+
 #[derive(Deserialize)]
 struct ChestTierCorpus {
     chests: HashMap<Uuid, ChestSpawnDefinition>,
@@ -539,8 +553,8 @@ pub fn generate_for_dungeon(
                 // One result per thing retail put on this spawn, each rolled
                 // separately — a pile of seven is seven draws, not one repeated.
                 let pile = (0..floor_pile_size(item_spawn_id))
-                    .map(|result_index| DungeonItemResult {
-                        loot_table_loot: interactable
+                    .map(|result_index| {
+                        let mut loot_table_loot: HashMap<Uuid, LootTableResult> = interactable
                             .loot_table
                             .iter()
                             .map(|(k, _)| {
@@ -554,7 +568,26 @@ pub fn generate_for_dungeon(
                                     ),
                                 )
                             })
-                            .collect(),
+                            .collect();
+
+                        // This table is added by SQ206's quest script, not by the
+                        // base urn asset retained in parsed.json. Keep the override
+                        // bounded to the three capture-proven spawns.
+                        if *dungeon_uuid == WIZARDS_CHALLENGE_DUNGEON
+                            && WIZARDS_CHALLENGE_KEY_POTS.contains(item_spawn_id)
+                        {
+                            loot_table_loot.insert(
+                                WIZARDS_CHALLENGE_KEY_TABLE,
+                                roll_loot_table(
+                                    dungeon_uuid,
+                                    item_spawn_id,
+                                    &WIZARDS_CHALLENGE_KEY_TABLE,
+                                    result_index,
+                                ),
+                            );
+                        }
+
+                        DungeonItemResult { loot_table_loot }
                     })
                     .collect();
                 Some((*item_spawn_id, pile))
@@ -563,6 +596,50 @@ pub fn generate_for_dungeon(
         algorithm_version: 1,
         version: 0,
     })
+}
+
+#[cfg(test)]
+mod report192_wizards_challenge_key_tests {
+    use super::*;
+
+    const DOOR_KEY: Uuid = Uuid::from_u128(0xfaa3aeb3_9284_4d83_8981_1af00e3a6398);
+
+    #[test]
+    fn only_the_three_retail_key_pots_contain_a_door_key() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+        let raw = std::fs::read_to_string(path).expect("read parsed.json");
+        let game_data: GameData = serde_json::from_str(&raw).expect("parse game data");
+        let generated = generate_for_dungeon(&game_data, &WIZARDS_CHALLENGE_DUNGEON, 12, 50)
+            .expect("The Wizard's Challenge dungeon exists");
+
+        let mut key_spawns: Vec<Uuid> = generated
+            .item_generated_data
+            .iter()
+            .filter_map(|(spawn, results)| {
+                let key_count: u64 = results
+                    .iter()
+                    .filter_map(|result| result.loot_table_loot.get(&WIZARDS_CHALLENGE_KEY_TABLE))
+                    .map(|loot| loot.stackable_items.get(&DOOR_KEY).copied().unwrap_or(0))
+                    .sum();
+                (key_count > 0).then_some(*spawn)
+            })
+            .collect();
+        key_spawns.sort();
+
+        let mut expected = WIZARDS_CHALLENGE_KEY_POTS.to_vec();
+        expected.sort();
+        assert_eq!(key_spawns, expected, "the two retail runs agree on these exact pots");
+        for spawn in expected {
+            let result = &generated.item_generated_data[&spawn][0];
+            assert_eq!(
+                result.loot_table_loot[&WIZARDS_CHALLENGE_KEY_TABLE]
+                    .stackable_items
+                    .get(&DOOR_KEY),
+                Some(&1),
+                "retail's UrnKey table always yields exactly one Door Key",
+            );
+        }
+    }
 }
 
 #[cfg(test)]

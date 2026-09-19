@@ -211,15 +211,15 @@ fn assemble_generated_data_list(
     from_rows
 }
 
-/// Upgrade only the interactable-loot part of a persisted quest generated before the
-/// capture-derived tables shipped. Those rows have all the right spawn ids but every
-/// `lootTableLoot` result is empty, so keeping the row forever keeps breakables and
-/// floor pickups empty forever too (report #152).
+/// Upgrade only missing interactable-loot parts of a persisted server-generated quest.
+/// Rows accepted before the capture-derived tables shipped have all the right spawn ids
+/// but empty results (report #152). A later static-data correction can also add one
+/// capture-proven table to an existing spawn, as with the scripted key urns in #192.
 ///
 /// Do not replace the whole generated-data object: an entered quest may already carry
 /// enemy/chest state authored by retail or imported with the character. The fresh item
 /// map is safe because its rolls are deterministic for the dungeon + spawn ids.
-fn refresh_empty_item_loot(
+fn refresh_missing_item_loot(
     stored: &mut DungeonGeneratedData,
     fresh: DungeonGeneratedData,
 ) -> bool {
@@ -235,16 +235,35 @@ fn refresh_empty_item_loot(
 
     // Server-generated story rows use version 0. Retail/imported generated data is
     // version 1 and must remain byte-for-byte the player's captured state.
-    if stored.version != 0
-        || stored.item_generated_data.is_empty()
-        || has_item_loot(stored)
-        || !has_item_loot(&fresh)
-    {
+    if stored.version != 0 || stored.item_generated_data.is_empty() || !has_item_loot(&fresh) {
         return false;
     }
 
-    stored.item_generated_data = fresh.item_generated_data;
-    true
+    if !has_item_loot(stored) {
+        stored.item_generated_data = fresh.item_generated_data;
+        return true;
+    }
+
+    // Preserve all existing rolls and only supply tables that the old generator
+    // did not know existed. Do not add whole spawns/results: that could recreate
+    // an already-collected floor pile after an unrelated corpus expansion.
+    let mut changed = false;
+    for (spawn_id, fresh_results) in fresh.item_generated_data {
+        let Some(stored_results) = stored.item_generated_data.get_mut(&spawn_id) else {
+            continue;
+        };
+        for (stored_result, fresh_result) in stored_results.iter_mut().zip(fresh_results) {
+            for (table_id, loot) in fresh_result.loot_table_loot {
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    stored_result.loot_table_loot.entry(table_id)
+                {
+                    entry.insert(loot);
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
 }
 
 
@@ -315,7 +334,7 @@ mod report152_stale_story_loot_tests {
         let enemies_before = serde_json::to_value(&stale.enemy_generated_data).unwrap();
         let chests_before = serde_json::to_value(&stale.chest_generated_data).unwrap();
 
-        assert!(refresh_empty_item_loot(&mut stale, fresh.clone()));
+        assert!(refresh_missing_item_loot(&mut stale, fresh.clone()));
         assert_eq!(
             serde_json::to_value(&stale.item_generated_data).unwrap(),
             serde_json::to_value(&fresh.item_generated_data).unwrap(),
@@ -344,7 +363,75 @@ mod report152_stale_story_loot_tests {
         let fresh = fresh.expect("Haunted Forest has a dungeon");
         let mut stored = fresh.clone();
 
-        assert!(!refresh_empty_item_loot(&mut stored, fresh));
+        assert!(!refresh_missing_item_loot(&mut stored, fresh));
+    }
+}
+
+#[cfg(test)]
+mod report192_stale_wizards_challenge_tests {
+    use super::*;
+    use blades_lib::static_data::QuestLevelScaling;
+
+    const QUEST: Uuid = Uuid::from_u128(0x334e582f_95ba_4263_b381_ac6d91eabe92);
+    const KEY_TABLE: Uuid = Uuid::from_u128(0x8858f284_4f33_4da4_8085_0befa7ef2637);
+    const KEY_POTS: [Uuid; 3] = [
+        Uuid::from_u128(0x9f2a4d7d_debf_457f_8007_19a0e40dfb0c),
+        Uuid::from_u128(0x588b0b05_d460_4c07_96f5_5a9c18f882c2),
+        Uuid::from_u128(0x5a448ce2_8c35_4e22_b4c9_323a2b9a85ff),
+    ];
+
+    fn generated() -> DungeonGeneratedData {
+        let game_data = super::report85_job_generated_data_tests::game_data();
+        generate_quest_data(&game_data, QUEST, 12, &QuestLevelScaling::default())
+            .expect("The Wizard's Challenge exists")
+            .1
+            .expect("The Wizard's Challenge has generated dungeon data")
+    }
+
+    #[test]
+    fn accepted_server_quest_receives_the_new_key_tables_without_losing_old_loot() {
+        let fresh = generated();
+        let mut stored = fresh.clone();
+        for spawn in KEY_POTS {
+            assert!(stored.item_generated_data[&spawn][0]
+                .loot_table_loot
+                .contains_key(&KEY_TABLE));
+            stored.item_generated_data.get_mut(&spawn).unwrap()[0]
+                .loot_table_loot
+                .remove(&KEY_TABLE);
+        }
+        let ordinary_loot_before = stored.item_generated_data.clone();
+
+        assert!(refresh_missing_item_loot(&mut stored, fresh));
+        for spawn in KEY_POTS {
+            assert!(stored.item_generated_data[&spawn][0]
+                .loot_table_loot
+                .contains_key(&KEY_TABLE));
+
+            let mut repaired_without_key = stored.item_generated_data[&spawn][0].clone();
+            repaired_without_key.loot_table_loot.remove(&KEY_TABLE);
+            assert_eq!(
+                serde_json::to_value(repaired_without_key.loot_table_loot).unwrap(),
+                serde_json::to_value(&ordinary_loot_before[&spawn][0].loot_table_loot).unwrap(),
+                "repair must preserve the pot's already-generated ordinary loot",
+            );
+        }
+    }
+
+    #[test]
+    fn imported_retail_quest_is_never_rewritten() {
+        let fresh = generated();
+        let mut imported = fresh.clone();
+        imported.version = 1;
+        for spawn in KEY_POTS {
+            imported.item_generated_data.get_mut(&spawn).unwrap()[0]
+                .loot_table_loot
+                .remove(&KEY_TABLE);
+        }
+        let before = serde_json::to_value(&imported).unwrap();
+
+        assert!(!refresh_missing_item_loot(&mut imported, fresh));
+        assert_eq!(serde_json::to_value(imported).unwrap(), before);
     }
 }
 
@@ -615,7 +702,7 @@ pub async fn get_quests(
                 ) else {
                     continue;
                 };
-                if refresh_empty_item_loot(stored, fresh) {
+                if refresh_missing_item_loot(stored, fresh) {
                     use crate::schema::quests;
                     diesel::update(
                         quests::table
