@@ -2498,20 +2498,54 @@ pub async fn donate_exchange(
     conn.transaction(move |conn| {
         async move {
             // Find the exchange (must be in same guild, not redeemed).
+            //
+            // A DONATE NAMES NO EXCHANGE ID. The client sends only
+            // `{requesterUserId, requesterCharacterId, itemTemplateId}`, so when a
+            // player has more than one open request for the SAME item the three of
+            // them do not identify a row — and nothing stops that: production holds
+            // two Grand Soul Gem requests from one character, one already full at
+            // 10/10 and one open at 0/1.
+            //
+            // This used to take whatever the database returned first, with no
+            // ORDER BY. Landing on the full one answers 409 while the player is
+            // looking at the open one, and the client restarts rather than showing
+            // the error. Reported 2026-09-19.
+            //
+            // So all candidates are read, in a deterministic order, and the first
+            // one this donor can actually give to wins. The refusals below are
+            // unchanged and still fire when NO candidate is donatable — the point
+            // is that "some other request of theirs is full" must not be mistaken
+            // for "this request is full".
             use crate::schema::guild_exchanges::dsl as ge;
-            let exchange: GuildExchangeRow = ge::guild_exchanges
+            let candidates: Vec<GuildExchangeRow> = ge::guild_exchanges
                 .filter(ge::guild_id.eq(&m.guild_id))
                 .filter(ge::requester_user_id.eq(req.requester_user_id))
                 .filter(ge::requester_character_id.eq(req.requester_character_id))
                 .filter(ge::item_template_id.eq(req.item_template_id))
                 .filter(ge::redeemed.eq(false))
+                .order((ge::creation_time.asc(), ge::id.asc()))
                 .select(GuildExchangeRow::as_select())
                 .for_no_key_update()
                 .load(conn)
-                .await?
-                .into_iter()
-                .next()
-                .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, GUILD_SERVICE_ID, 11))?;
+                .await?;
+            if candidates.is_empty() {
+                return Err(BladeApiError::new(StatusCode::NOT_FOUND, GUILD_SERVICE_ID, 11));
+            }
+            // Oldest request this donor can still give to. Falling back to the
+            // first candidate keeps the existing refusal codes meaningful: with
+            // nothing donatable, the checks below explain WHY.
+            let pick = candidates
+                .iter()
+                .position(|e| {
+                    e.donation_sum < e.requested_amount
+                        && !e
+                            .donations
+                            .0
+                            .iter()
+                            .any(|d| d.donator_user_id == donor_user_id)
+                })
+                .unwrap_or(0);
+            let exchange: GuildExchangeRow = candidates.into_iter().nth(pick).expect("non-empty");
 
             // A donor may not donate twice to the same request. Nothing stopped a
             // single player filling a request by themselves, repeatedly, which is
@@ -2858,5 +2892,108 @@ mod create_wire {
         // control: the rest of the response is still there, so the assertion
         // above is about the wallet key and not an empty object.
         assert!(v.get("guild").is_some());
+    }
+}
+
+/// Donating to one of several requests for the same item.
+///
+/// Reported 2026-09-19: donating to a Grand Soul Gem request answered an error
+/// and the app restarted. Production had TWO open requests from one character for
+/// `68d7941e` (`Items.Name.SoulGem8`) — one full at 10/10, one open at 0/1 — and
+/// the donate request names no exchange id, only
+/// `{requesterUserId, requesterCharacterId, itemTemplateId}`. The lookup took
+/// whatever the database returned first, with no ORDER BY, so it could answer 409
+/// "already fulfilled" about a request the player was not looking at.
+#[cfg(test)]
+mod donating_with_several_requests_for_one_item {
+    use super::*;
+
+    /// The selection rule, extracted so it can be tested without a database: the
+    /// oldest candidate this donor can still give to, else the first.
+    fn pick(rows: &[(i64, i64, Vec<Uuid>)], donor: Uuid) -> usize {
+        rows.iter()
+            .position(|(sum, requested, donors)| {
+                sum < requested && !donors.iter().any(|d| *d == donor)
+            })
+            .unwrap_or(0)
+    }
+
+    const DONOR: Uuid = Uuid::from_u128(1);
+    const OTHER: Uuid = Uuid::from_u128(2);
+
+    /// THE PRODUCTION CASE. Ordered oldest-first, the full request comes first;
+    /// the donation must still land on the open one.
+    #[test]
+    fn a_full_request_does_not_shadow_an_open_one_for_the_same_item() {
+        // (donation_sum, requested_amount, donors)
+        let rows = vec![
+            (10, 10, vec![OTHER]), // the 10/10 Grand Soul Gem request
+            (0, 1, vec![]),        // the open one the player tapped
+        ];
+        assert_eq!(pick(&rows, DONOR), 1, "the open request must be chosen");
+    }
+
+    /// Order does not rescue it by accident — the open one is found wherever it sits.
+    #[test]
+    fn the_open_request_is_found_in_either_order() {
+        let a = vec![(0, 1, vec![]), (10, 10, vec![OTHER])];
+        assert_eq!(pick(&a, DONOR), 0);
+        let b = vec![(10, 10, vec![OTHER]), (0, 1, vec![])];
+        assert_eq!(pick(&b, DONOR), 1);
+    }
+
+    /// A donor who has already given to the only open request is not silently
+    /// moved onto a different one — they fall through to the refusal.
+    #[test]
+    fn a_donor_who_already_gave_is_not_rerouted() {
+        let rows = vec![(5, 10, vec![DONOR])];
+        assert_eq!(
+            pick(&rows, DONOR),
+            0,
+            "falls back to the first so the existing 409 explains why"
+        );
+    }
+
+    /// THE CONTROL: when nothing is donatable the refusal must still happen. The
+    /// fix must not turn "this request is full" into a successful donation.
+    #[test]
+    fn nothing_donatable_still_falls_through_to_a_refusal() {
+        let all_full = vec![(10, 10, vec![OTHER]), (1, 1, vec![OTHER])];
+        let chosen = pick(&all_full, DONOR);
+        let (sum, requested, _) = &all_full[chosen];
+        assert!(
+            sum >= requested,
+            "the chosen row is still full, so the handler's remaining==0 check fires"
+        );
+    }
+
+    /// Multiple open requests: the OLDEST wins, because the query orders by
+    /// creation time and the rule takes the first match.
+    #[test]
+    fn the_oldest_open_request_is_preferred() {
+        let rows = vec![(0, 5, vec![]), (0, 5, vec![])];
+        assert_eq!(pick(&rows, DONOR), 0);
+    }
+
+    /// The query must be ordered, or "oldest" is whatever the database felt like
+    /// returning — which is the bug this fixes.
+    #[test]
+    fn the_candidate_query_is_deterministically_ordered() {
+        let src = include_str!("guild.rs");
+        let body = src
+            .split("pub async fn donate_exchange(")
+            .nth(1)
+            .expect("the handler")
+            .split("\n#[")
+            .next()
+            .unwrap();
+        assert!(
+            body.contains("ge::creation_time.asc()"),
+            "candidates must be ordered by creation time, not database whim"
+        );
+        assert!(
+            !body.contains(".into_iter()\n                .next()\n                .ok_or_else"),
+            "the unordered first-row lookup must not come back"
+        );
     }
 }
