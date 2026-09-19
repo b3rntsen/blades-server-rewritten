@@ -54,12 +54,25 @@ pub struct ObjectiveStatus {
     pub completed: bool,
 }
 
+/// What retail puts in a story quest's `difficultyLevel`: `-1`.
+///
+/// MEASURED: all 611 `quests[]` entries in the captured corpus carry `-1`. It is
+/// a "not applicable" sentinel, and it has to be spelled out because the very
+/// same field holds a real enemy level (1-84) for jobs and event quests.
+pub const STORY_QUEST_DIFFICULTY_LEVEL: i64 = -1;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Quest {
     pub version: u64,
     pub r#type: QuestType,
     pub objective_statuses: HashMap<Uuid, ObjectiveStatus>,
+    /// For a story quest this is always [`STORY_QUEST_DIFFICULTY_LEVEL`].
+    ///
+    /// The field carries an enemy LEVEL, not a 1-3 skull tier: in the captured
+    /// corpus `jobs[]` and `gameEventQuests[]` put 1-84 here. Story quests are
+    /// the exception, because a story quest takes its level from its dungeon
+    /// rather than from the board entry.
     pub difficulty_level: i64,
     /// Retail's quest seed does not fit ANY fixed integer type, so this field
     /// stores the JSON number verbatim and never narrows it.

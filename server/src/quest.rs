@@ -11,7 +11,7 @@ use blades_lib::{
     user_data::{
         CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
         DungeonGeneratedData, DungeonGeneratedDataWithId, InventoryChangeTracker, Item,
-        ItemPropertiesAll, QuestWithId,
+        ItemPropertiesAll, QuestWithId, STORY_QUEST_DIFFICULTY_LEVEL,
     },
     util::quest::{GenerateQuestDataError, generate_quest_data},
 };
@@ -142,6 +142,26 @@ pub struct GetQuestsResponse {
 /// response the event instance's id was also in `dungeonGeneratedDataList`.
 /// Is this row an ordinary quest the player has already completed?
 ///
+/// Strip a job's difficulty off a story quest, in place.
+///
+/// Returns whether the row changed, so the caller knows to persist it.
+///
+/// Guards on row kind itself rather than trusting the caller: the same field
+/// legitimately holds a real enemy level for a job or an event quest, and only
+/// `quests[]` entries take the `-1` sentinel.
+fn repair_story_quest_difficulty(info: &mut blades_lib::user_data::Quest) -> bool {
+    if jobs_gen::is_job_row(info)
+        || matches!(info.r#type, blades_lib::user_data::QuestType::GameEvent)
+    {
+        return false;
+    }
+    if info.difficulty_level == STORY_QUEST_DIFFICULTY_LEVEL {
+        return false;
+    }
+    info.difficulty_level = STORY_QUEST_DIFFICULTY_LEVEL;
+    true
+}
+
 /// "Ordinary" excludes the two row kinds that have their own lifecycle: town jobs
 /// (rotated on the daily reset) and event quests (retired when their window
 /// closes). What is left is the quest log proper, and a completed entry there is
@@ -769,6 +789,36 @@ pub async fn get_quests(
                 {
                     continue;
                 }
+                // Repair a story quest stamped with a job's difficulty.
+                //
+                // A retired code path minted story quests with a real
+                // difficulty level (and the tell-tale `seed: 1234`) where retail
+                // sends -1 on every one of 611 captured entries. Those rows are
+                // durable, so deploying the corrected accept path did nothing for
+                // the players already holding one: 45 rows across 34 characters.
+                //
+                // The symptom is the quest map spinning forever — the client
+                // builds that screen from this response and never re-requests it,
+                // so one unrenderable entry wedges QUESTS, JOBS and EVENTS
+                // together with nothing but 200s in the log. A character with no
+                // story quest at all is unaffected, which is why this reproduced
+                // on one character and not another.
+                //
+                // Same shape as the loot repair below, and deliberately ahead of
+                // it: that one gives up when a row has no generated_data, and
+                // this must run for every story row regardless.
+                if repair_story_quest_difficulty(&mut row.info.0) {
+                    use crate::schema::quests;
+                    diesel::update(
+                        quests::table
+                            .filter(quests::id.eq(row.id))
+                            .filter(quests::character_id.eq(character_id_var)),
+                    )
+                    .set(quests::info.eq(JsonDbWrapper(row.info.0.clone())))
+                    .execute(&mut conn)
+                    .await?;
+                }
+
                 let Some(stored) = row.generated_data.0.as_mut() else {
                     continue;
                 };
@@ -5505,5 +5555,88 @@ mod completed_quests_key_tests {
                 "{kind:?} must keep the template key",
             );
         }
+    }
+}
+
+/// A story quest must go out with retail's `difficultyLevel`, and jobs must not.
+///
+/// MEASURED over 773 captured `/quests` bodies: all 611 `quests[]` entries carry
+/// `-1`, while `jobs[]` (4,444 entries) and `gameEventQuests[]` carry real enemy
+/// levels from 1 to 84. So the sentinel is specific to story quests, and a test
+/// that only checked "story quests are -1" would be satisfied by a repair that
+/// flattened the other two arrays as well.
+///
+/// This existed because a retired code path minted story quests with a job-style
+/// difficulty (and the tell-tale `seed: 1234`). Those rows are durable — 45 of
+/// them across 34 characters — so fixing the accept path did nothing for players
+/// already holding one, and the repair has to run on read.
+#[cfg(test)]
+mod story_quest_difficulty_repair {
+    use super::*;
+    use blades_lib::user_data::{ObjectiveStatus, Quest, QuestStatus, QuestType};
+    use std::collections::HashMap;
+
+    const STORY: Uuid = Uuid::from_u128(0xe0212e3f_5f6a_458c_8544_78d3532b2cb9);
+
+    fn row(kind: QuestType, gld: Uuid, difficulty: i64) -> Quest {
+        let mut objective_statuses = HashMap::new();
+        objective_statuses.insert(
+            Uuid::from_u128(1),
+            ObjectiveStatus { status: QuestStatus::Active, progress: 0.0, completed: false },
+        );
+        Quest {
+            version: 2,
+            r#type: kind,
+            objective_statuses,
+            difficulty_level: difficulty,
+            seed: serde_json::Number::from(1234),
+            gld_quest_id: gld,
+            completed: false,
+            game_event_quest_data: None,
+            rewards: None,
+            final_reward: None,
+            job_reward: None,
+        }
+    }
+
+    #[test]
+    fn a_story_quest_stamped_with_a_job_difficulty_is_repaired() {
+        // Flappety's row, from prod: the same quest another 19 characters hold
+        // with -1. The only field that differed was this one.
+        let mut q = row(QuestType::Normal, STORY, 3);
+        assert!(repair_story_quest_difficulty(&mut q), "should report a change");
+        assert_eq!(q.difficulty_level, -1);
+    }
+
+    #[test]
+    fn a_healthy_story_quest_is_left_alone_and_reports_no_write() {
+        let mut q = row(QuestType::Normal, STORY, STORY_QUEST_DIFFICULTY_LEVEL);
+        assert!(
+            !repair_story_quest_difficulty(&mut q),
+            "an already-correct row must not be rewritten on every /quests"
+        );
+        assert_eq!(q.difficulty_level, -1);
+    }
+
+    #[test]
+    fn a_job_keeps_its_difficulty() {
+        // Retail's jobs[] carry 1-84 here; flattening them to -1 would erase the
+        // skull rating on the whole job board.
+        let mut q = row(QuestType::Normal, jobs_gen::JOB_SENTINEL_GLD, 42);
+        assert!(!repair_story_quest_difficulty(&mut q));
+        assert_eq!(q.difficulty_level, 42, "a job's difficulty is a real level");
+    }
+
+    #[test]
+    fn an_event_quest_keeps_its_difficulty() {
+        let mut q = row(QuestType::GameEvent, STORY, 72);
+        assert!(!repair_story_quest_difficulty(&mut q));
+        assert_eq!(q.difficulty_level, 72);
+    }
+
+    /// The constant is the retail value, not merely "not what we had".
+    #[test]
+    fn the_sentinel_is_minus_one() {
+        assert_eq!(STORY_QUEST_DIFFICULTY_LEVEL, -1);
     }
 }
