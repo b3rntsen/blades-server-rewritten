@@ -21,7 +21,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::{BladeApiError, ServerGlobal, session::SessionLookedUpMaybe};
+use crate::{
+    BladeApiError, ServerGlobal, character_data::parse_appearance_cost,
+    session::SessionLookedUpMaybe,
+};
 
 #[derive(Serialize)]
 struct CharacterListResponse {
@@ -246,7 +249,7 @@ pub(crate) async fn build_starter_character(
         user_id: owner,
         character: JsonDbWrapper(new_character),
         data: JsonDbWrapper(new_data),
-        wallet: JsonDbWrapper(CompleteWallet::default()),
+        wallet: JsonDbWrapper(starter_wallet(&app_state.appearance_change_cost)),
         inventory: JsonDbWrapper(inventory.clone()),
         // Fresh character → no captured town; get_town serves default_town.json.
         town: None,
@@ -262,6 +265,14 @@ pub(crate) async fn build_starter_character(
         .execute(&mut conn)
         .await?;
 
+    // Best-effort: the allowance is already in the wallet above, and a character
+    // can only be created once, so a missing ledger table must not fail the
+    // creation. It records WHAT was granted for the next economy question.
+    if let Some((currency, amount)) = parse_appearance_cost(&app_state.appearance_change_cost) {
+        let _ = record_creation_allowance(&mut conn, character_uuid, currency, amount, "creation")
+            .await;
+    }
+
     Ok(CharacterCreationResponse {
         character: CompleteCharacterWithIdAndData {
             id: character_uuid,
@@ -270,6 +281,146 @@ pub(crate) async fn build_starter_character(
         },
         inventory,
     })
+}
+
+/// Pay the creation allowance to a character that predates it (#193).
+///
+/// Returns whether anything was granted. Every failure path is "no" and logs
+/// nothing louder than a debug line: this runs inside a login, and a login must
+/// not break because an economy nicety could not be applied. In particular, if
+/// the ledger table has not been created yet the insert errors and the grant is
+/// SKIPPED — never repeated, which is the failure that would actually cost
+/// something.
+async fn backfill_creation_allowance(
+    app_state: &ServerGlobal,
+    conn: &mut diesel_async::AsyncPgConnection,
+    existing: &CharacterDbEntryCharacterAndData,
+) -> bool {
+    let Some((currency, amount)) = parse_appearance_cost(&app_state.appearance_change_cost) else {
+        return false;
+    };
+    let wallet: Option<JsonDbWrapper<CompleteWallet>> = {
+        use crate::schema::characters::dsl as ch;
+        ch::characters
+            .filter(ch::id.eq(existing.id))
+            .select(ch::wallet)
+            .first(conn)
+            .await
+            .ok()
+    };
+    let Some(mut wallet) = wallet else {
+        return false;
+    };
+    if !owes_creation_allowance(
+        customization_visual(&existing.data.0),
+        existing.character.0.level as i64,
+        wallet.0.balance(currency),
+        amount,
+    ) {
+        return false;
+    }
+    match record_creation_allowance(conn, existing.id, currency, amount, "backfill").await {
+        Ok(true) => {}
+        // Already paid, or the ledger is not there yet. Either way: do not pay.
+        Ok(false) => return false,
+        Err(e) => {
+            log::debug!("creation allowance ledger unavailable for {}: {e}", existing.id);
+            return false;
+        }
+    }
+    wallet.0.credit(currency, amount);
+    use crate::schema::characters::dsl as ch;
+    if let Err(e) = diesel::update(ch::characters.filter(ch::id.eq(existing.id)))
+        .set(ch::wallet.eq(wallet))
+        .execute(conn)
+        .await
+    {
+        log::warn!("creation allowance credited in ledger but not wallet for {}: {e}", existing.id);
+        return false;
+    }
+    log::info!(
+        "granted the character-creation allowance ({amount} of {currency}) to {}",
+        existing.id
+    );
+    true
+}
+
+/// The wallet a server-provisioned character is born with: the one-time
+/// character-creation allowance, and nothing else (#193).
+///
+/// In retail you chose race, sex and name during the FTUE, free, before any cost
+/// existed. Our FTUE is patched out by design and this starter character is the
+/// compensation — but it is a male Argonian called "Adventurer", and the only way
+/// to change any of that is the town appearance NPC, which the APK prices at 50
+/// Gems. A fresh character has none, so the one free choice retail gave everybody
+/// is unreachable here: 30 of the 73 characters on the box still wearing the
+/// default Argonian visual cannot afford it.
+///
+/// The amount is read from the same cost table the debit reads, so the player is
+/// left with exactly nothing spare after making the choice and the two numbers
+/// cannot drift. Retail's own level-1 wallets carried 0 Gems (measured: four
+/// captured level-1 characters, 0 Gems each, 4-10 Gold), which is why this is an
+/// allowance for one specific action rather than a starting balance.
+fn starter_wallet(appearance_cost: &Value) -> CompleteWallet {
+    let mut wallet = CompleteWallet::default();
+    if let Some((currency, amount)) = parse_appearance_cost(appearance_cost) {
+        wallet.credit(currency, amount);
+    }
+    wallet
+}
+
+/// Does this character still owe its creation allowance?
+///
+/// Pure so the rule is testable without a database, because the rule is the
+/// whole risk: too loose and it pays 50 Gems per relaunch, too tight and the
+/// player it exists for never gets it.
+///
+/// `visual` is `data.customization.CharacterUID.id._v` — the only field that says
+/// "this player has never chosen". A character that has been through the
+/// appearance NPC wears something else and is not owed anything.
+fn owes_creation_allowance(visual: Option<&str>, level: i64, balance: u64, cost: u64) -> bool {
+    visual == Some(STARTER_VISUAL) && level <= 1 && balance < cost
+}
+
+/// The male-Argonian visual every server-provisioned character is born wearing
+/// (`Visual_Player_MaleArgonians…`), from `assets/starter_customization.json`.
+const STARTER_VISUAL: &str = "9c2cc2b3-804c-4e97-8ad5-56371690bdf5";
+
+/// `data.customization.CharacterUID.id._v`, the race/sex visual.
+fn customization_visual(data: &CompleteCharacterData) -> Option<&str> {
+    data.customization
+        .get("CharacterUID")?
+        .get("id")?
+        .get("_v")?
+        .as_str()
+}
+
+/// Write the ledger row, returning whether THIS call created it.
+///
+/// `ON CONFLICT DO NOTHING` is the guard: two logins racing each other cannot
+/// both win the same character, so the caller credits only when this returns
+/// `Ok(true)`. A missing table is an error, which the caller treats as "not
+/// granted" — the grant is skipped entirely rather than repeated.
+async fn record_creation_allowance(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character: Uuid,
+    currency: Uuid,
+    amount: u64,
+    reason: &str,
+) -> Result<bool, diesel::result::Error> {
+    use crate::schema::character_creation_allowance::dsl as led;
+    let inserted = insert_into(led::character_creation_allowance)
+        .values((
+            led::character_id.eq(character),
+            led::currency_id.eq(currency),
+            led::amount.eq(amount as i64),
+            led::reason.eq(reason.to_string()),
+        ))
+        .on_conflict(led::character_id)
+        .do_nothing()
+        .execute(conn)
+        .await?;
+    Ok(inserted > 0)
 }
 
 /// Give a brand-new player a character if they have none.
@@ -308,8 +459,14 @@ pub(crate) async fn ensure_starter_character(
             .next()
     };
     if let Some(mut existing) = existing {
+        // Characters that predate the creation allowance (#193) are stranded as a
+        // male Argonian they cannot afford to change. Pay it once, here, on the
+        // login they were already making. Separate from the bootstrap repair
+        // below because a character can need either, both, or neither.
+        let backfilled = backfill_creation_allowance(app_state, &mut conn, &existing).await;
+
         if !make_bootstrap_data_loadable(&mut existing.data.0, &existing.character.0.name) {
-            return Ok(false);
+            return Ok(backfilled);
         }
         use crate::schema::characters::dsl::*;
         diesel::update(characters.filter(id.eq(existing.id)))
@@ -560,5 +717,102 @@ mod creation_route_tests {
             ),
             "character creation must be registered at the path the retail client calls"
         );
+    }
+}
+
+#[cfg(test)]
+mod report193_creation_allowance_tests {
+    use super::*;
+
+    /// The shipped cost table: Gem 50, from the APK's own `UpdateCostData`.
+    fn shipped_cost() -> Value {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/appearance_change_cost.json");
+        serde_json::from_str(&std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p:?}: {e}")))
+            .expect("appearance_change_cost.json parses")
+    }
+
+    /// THE BUG (#193). A server-provisioned character is a male Argonian called
+    /// "Adventurer", and the appearance NPC — the only way to change race, sex or
+    /// name — costs 50 Gems the character does not have. Retail gave that choice
+    /// away free in the FTUE we patch out, so here it was simply unreachable.
+    #[test]
+    fn a_new_character_can_afford_the_choice_retail_gave_for_free() {
+        let cost = shipped_cost();
+        let (currency, amount) = parse_appearance_cost(&cost).expect("the shipped table parses");
+        assert_eq!(amount, 50, "the APK's price for a customization change");
+        assert_eq!(currency, blades_lib::economy::GEMS);
+
+        let wallet = starter_wallet(&cost);
+        assert_eq!(wallet.balance(currency), amount);
+    }
+
+    /// CONTROL: and nothing more than the choice. Retail's own level-1 wallets
+    /// carried 0 Gems — four captured level-1 characters, 0 each, 4–10 Gold — so
+    /// this is an allowance for one action, not a starting balance. After using
+    /// it the player is back to nothing, exactly as a retail player was.
+    #[test]
+    fn and_is_left_with_nothing_spare() {
+        let cost = shipped_cost();
+        let (currency, amount) = parse_appearance_cost(&cost).unwrap();
+        let mut wallet = starter_wallet(&cost);
+        wallet.debit(currency, amount).expect("the change is affordable");
+        assert_eq!(wallet.balance(currency), 0);
+        assert_eq!(wallet.balance(blades_lib::economy::GOLD), 0, "no gold either");
+    }
+
+    /// A broken or absent cost table must not mint currency.
+    #[test]
+    fn a_missing_cost_table_grants_nothing() {
+        assert_eq!(starter_wallet(&json!(null)).balance(blades_lib::economy::GEMS), 0);
+        assert_eq!(
+            starter_wallet(&json!({"characterCustomizationCost": {"amount": 50}}))
+                .balance(blades_lib::economy::GEMS),
+            0
+        );
+    }
+
+    /// The backfill rule, which is the whole risk: too loose and it pays 50 Gems
+    /// every relaunch, too tight and the 30 players it exists for never get it.
+    #[test]
+    fn the_backfill_rule_picks_the_stranded_and_nobody_else() {
+        // Stranded: still the default Argonian, level 1, cannot afford it.
+        assert!(owes_creation_allowance(Some(STARTER_VISUAL), 1, 0, 50));
+        assert!(owes_creation_allowance(Some(STARTER_VISUAL), 1, 49, 50));
+
+        // Has already chosen — a different visual is the proof, and the one
+        // signal a player cannot fake without having made the choice.
+        assert!(!owes_creation_allowance(
+            Some("46b0d965-00be-478d-914a-996ff8f3e5a0"),
+            1,
+            0,
+            50
+        ));
+        // Can already afford it: 43 of the 73 default-Argonian characters can,
+        // and paying them would be a gem grant rather than an allowance.
+        assert!(!owes_creation_allowance(Some(STARTER_VISUAL), 1, 50, 50));
+        assert!(!owes_creation_allowance(Some(STARTER_VISUAL), 1, 24_790, 50));
+        // A progressed character is not a fresh one, whatever it is wearing.
+        assert!(!owes_creation_allowance(Some(STARTER_VISUAL), 48, 0, 50));
+        // No customization at all → not eligible; the bootstrap repair runs first.
+        assert!(!owes_creation_allowance(None, 1, 0, 50));
+    }
+
+    /// The visual is read from the same place the client writes it, and the
+    /// constant must match the bundled starter asset — if the asset changes and
+    /// this does not, the backfill silently stops finding anybody.
+    #[test]
+    fn the_starter_visual_matches_the_bundled_asset() {
+        let data = default_starter_customization("Adventurer");
+        assert_eq!(
+            data.get("CharacterUID")
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.get("_v"))
+                .and_then(Value::as_str),
+            Some(STARTER_VISUAL),
+        );
+        let mut complete = CompleteCharacterData::default();
+        complete.customization = data;
+        assert_eq!(customization_visual(&complete), Some(STARTER_VISUAL));
     }
 }
