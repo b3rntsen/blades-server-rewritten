@@ -3047,6 +3047,59 @@ mod jobs_tests {
     /// 05:00 reset) — the day matching prod capture id=1105, whose board was:
     ///   4 daily (`4956c6ab`) + 1 weekly boss (`361da91e`) + 1 featured (`9fcbb01c`,
     ///   dayOfWeek=2/Tue, active during the Wed game-day) = 6 jobs, and 10 timers.
+    /// The job board never grows past the size retail ever sent, on ANY day.
+    ///
+    /// MEASURED over 773 captured `/quests` bodies: `jobs` holds 4, 5 or 6 entries
+    /// and never more. The test above pins one Wednesday at 6; this sweeps a whole
+    /// year, because the pools that make up the board are not all on the same
+    /// cycle — four standard daily, one featured daily, one featured per weekday,
+    /// and a boss pool whose instance runs a full week. Nothing in `generate`
+    /// bounds their SUM: `maxActiveJobs` is applied per pool, and only to pools
+    /// with `presentation == 0`.
+    ///
+    /// This is the same shape of hole that left the quest map spinning: the client
+    /// builds that screen from the boot `/quests` response and never re-requests
+    /// it, so an array longer than retail ever sent wedges the screen until the app
+    /// restarts. If a future pool edit pushes some weekday to 7, this fails here
+    /// instead of on a player's device.
+    #[test]
+    fn no_day_of_the_year_produces_a_longer_board_than_retail_ever_sent() {
+        /// Max `jobs[]` length across the corpus: 6 (635 bodies), 5 (82), 4 (56).
+        const RETAIL_MAX_JOBS: usize = 6;
+        const DAY: u64 = 86_400;
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/job_pools.json");
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        let pools: Value = serde_json::from_str(&raw).expect("valid job_pools.json");
+
+        let mut seen: std::collections::BTreeMap<usize, usize> = Default::default();
+        for day in 0..365u64 {
+            let now = NOW_WED + day * DAY;
+            let boundary = jobs_gen::current_reset_boundary(&pools, now);
+            let (jobs, _) = jobs_gen::generate(&pools, CHAR, 30, 0, boundary, now);
+            *seen.entry(jobs.len()).or_default() += 1;
+            assert!(
+                jobs.len() <= RETAIL_MAX_JOBS,
+                "day +{day}: board of {} jobs, retail never sent more than {RETAIL_MAX_JOBS}",
+                jobs.len()
+            );
+        }
+
+        // Control: a generator that returned nothing would satisfy the bound above
+        // without telling us anything, and so would one stuck on a single count.
+        assert!(
+            seen.keys().copied().all(|n| n > 0),
+            "some day produced an empty board: {seen:?}"
+        );
+        assert!(
+            seen.contains_key(&RETAIL_MAX_JOBS),
+            "the sweep never reached a full {RETAIL_MAX_JOBS}-job board, so the \
+             bound was never approached: {seen:?}"
+        );
+    }
+
     #[test]
     fn real_job_pools_file_generates_prod_shaped_board() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -287,6 +287,19 @@ pub fn active_events(library: &[EventDef], now_secs: i64) -> Vec<GameEvent> {
 
 /// The events whose next instance opens within `lead_secs` of `now` — retail's
 /// `gameEventQuestsInWarning`, i.e. "starting soon", not "ending soon".
+/// How many events retail ever announces as "starting soon" at once: one.
+///
+/// MEASURED over 773 captured `/quests` bodies: `gameEventQuestsInWarning` holds
+/// exactly 1 entry in 686 of them and 0 in the other 87. It is never 2.
+///
+/// This is the sibling of [`MAX_CONCURRENT_EVENTS`] and exists for the same
+/// reason. The open-event array had no ceiling either until a third open event
+/// left the whole quest map spinning — the client renders the screen from the
+/// boot `/quests` response and never re-requests it, so an array one longer
+/// than retail ever sends wedges the screen until the app is restarted. The
+/// warning array feeds the same screen and had the same shape of hole.
+pub const MAX_WARNING_EVENTS: usize = 1;
+
 pub fn upcoming_events(library: &[EventDef], now_secs: i64, lead_secs: i64) -> Vec<GameEvent> {
     let mut out: Vec<GameEvent> = library
         .iter()
@@ -296,6 +309,9 @@ pub fn upcoming_events(library: &[EventDef], now_secs: i64, lead_secs: i64) -> V
         })
         .collect();
     out.sort_by_key(|e| (e.start_time_secs, e.game_event_instance_id.clone()));
+    // Keep the soonest. A warning is an announcement of the next event, and the
+    // sort above is by start time, so the head is the one retail would name.
+    out.truncate(MAX_WARNING_EVENTS);
     out
 }
 
@@ -319,6 +335,90 @@ mod tests {
             preview: false,
         }
     }
+
+    /// The warning array has a ceiling too, and it is 1.
+    ///
+    /// MEASURED: `gameEventQuestsInWarning` holds exactly 1 entry in 686 of 773
+    /// captured `/quests` bodies and 0 in the other 87. Never 2.
+    ///
+    /// Swept across a year against a library dense enough that several events
+    /// start inside the same 24 h lead window. Without the truncate this returns
+    /// 2 and 3 — a shape retail never sent, on the same screen whose other array
+    /// wedged the quest map when it ran one entry long.
+    #[test]
+    fn at_most_one_event_is_ever_announced_as_starting_soon() {
+        const DAY: i64 = 86_400;
+        let lib: Vec<EventDef> = (0..5u128)
+            .map(|i| {
+                let mut d = def(i);
+                d.recurrence.recurrence_type = "daily".to_string();
+                d.recurrence.recurrence_interval = 1;
+                d.recurrence.start_time_secs = 1663214400 + (i as i64) * 3 * 3600;
+                d
+            })
+            .collect();
+
+        let mut saw_a_warning = false;
+        let mut cap_was_exercised = false;
+        for day in 0..365i64 {
+            let now = 1663214400 + day * DAY;
+            let got = upcoming_events(&lib, now, DAY);
+            assert!(
+                got.len() <= MAX_WARNING_EVENTS,
+                "day {day}: announced {} events as starting soon",
+                got.len()
+            );
+            if !got.is_empty() {
+                saw_a_warning = true;
+            }
+            // Control: count what the window actually holds, so a bug that just
+            // empties the array cannot make this pass by vacuity.
+            let in_window = lib
+                .iter()
+                .filter(|d| {
+                    d.next_instance_start_after(now)
+                        .is_some_and(|start| start - now <= DAY)
+                })
+                .count();
+            if in_window > MAX_WARNING_EVENTS {
+                cap_was_exercised = true;
+                assert_eq!(got.len(), 1, "day {day}: the warning was dropped entirely");
+            }
+        }
+        assert!(saw_a_warning, "the sweep never produced a warning at all");
+        assert!(
+            cap_was_exercised,
+            "the fixture never crowded the window, so the cap was never tested"
+        );
+    }
+
+    /// And it keeps the SOONEST one, which is what an announcement means.
+    #[test]
+    fn the_announced_event_is_the_next_one_to_start() {
+        const DAY: i64 = 86_400;
+        let mut early = def(1);
+        early.recurrence.recurrence_type = "daily".to_string();
+        early.recurrence.recurrence_interval = 1;
+        let mut late = def(2);
+        late.recurrence.recurrence_type = "daily".to_string();
+        late.recurrence.recurrence_interval = 1;
+        late.recurrence.start_time_secs = early.recurrence.start_time_secs + 6 * 3600;
+
+        let now = early.recurrence.start_time_secs + DAY - 3600;
+        let soonest = [&early, &late]
+            .iter()
+            .filter_map(|d| d.next_instance_start_after(now))
+            .min()
+            .expect("something starts next");
+
+        let got = upcoming_events(&[early, late], now, DAY);
+        assert_eq!(got.len(), 1);
+        assert_eq!(
+            got[0].start_time_secs, soonest,
+            "the warning named a later event than the one starting next"
+        );
+    }
+
 
     const ANCHOR: i64 = 1_663_214_400;
     const PERIOD: i64 = 39 * 86_400;
