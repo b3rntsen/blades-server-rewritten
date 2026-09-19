@@ -18,6 +18,7 @@ use blades_lib::user_data::{
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper, insert_into};
 use diesel_async::RunQueryDsl;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{BladeApiError, ServerGlobal, session::SessionLookedUpMaybe};
@@ -147,6 +148,7 @@ pub(crate) async fn build_starter_character(
 
     let mut new_data = CompleteCharacterData::default();
     new_data.customization = customization;
+    make_bootstrap_data_loadable(&mut new_data, &new_character.name);
 
     let character_uuid = Uuid::new_v4();
 
@@ -295,16 +297,30 @@ pub(crate) async fn ensure_starter_character(
         Ok(c) => c,
         Err(_) => return Ok(false),
     };
-    let existing: i64 = {
+    let existing: Option<CharacterDbEntryCharacterAndData> = {
         use crate::schema::characters::dsl::*;
         characters
             .filter(user_id.eq(owner))
-            .count()
-            .get_result(&mut conn)
+            .select(CharacterDbEntryCharacterAndData::as_select())
+            .load(&mut conn)
             .await?
+            .into_iter()
+            .next()
     };
-    if existing > 0 {
-        return Ok(false);
+    if let Some(mut existing) = existing {
+        if !make_bootstrap_data_loadable(&mut existing.data.0, &existing.character.0.name) {
+            return Ok(false);
+        }
+        use crate::schema::characters::dsl::*;
+        diesel::update(characters.filter(id.eq(existing.id)))
+            .set(data.eq(existing.data))
+            .execute(&mut conn)
+            .await?;
+        log::info!(
+            "repaired unloadable bootstrap data for starter character {}",
+            existing.id
+        );
+        return Ok(true);
     }
     drop(conn);
 
@@ -322,8 +338,168 @@ pub(crate) async fn ensure_starter_character(
 /// game; this only has to be recognisable as "we made this for you".
 const STARTER_NAME: &str = "Adventurer";
 
+/// Fill the three player-data blocks that the retail client dereferences while
+/// constructing the town scene.
+///
+/// Report #191 supplied the cleanest production control: a fresh no-VPN client
+/// received a server-created character with all three blocks empty, completed
+/// every HTTP bootstrap request with status 200, and then stopped forever on the
+/// loading spinner. A healthy character loading minutes later had the same ten
+/// misc-flag keys as retail plus a 48-key customization block. This is the same
+/// invariant already enforced by the capture-platform importer; server-created
+/// characters must not be the one path that still emits an unloadable model.
+///
+/// Return true when any repair was made. This lets `ensure_starter_character`
+/// heal the already-stranded characters on their next anonymous login as well
+/// as making new characters valid from the start.
+fn make_bootstrap_data_loadable(data: &mut CompleteCharacterData, name: &str) -> bool {
+    let mut changed = false;
+    if object_is_missing_or_empty(&data.customization) {
+        data.customization = default_starter_customization(name);
+        changed = true;
+    }
+    if object_is_missing_or_empty(&data.new_flags) {
+        data.new_flags = default_starter_new_flags();
+        changed = true;
+    }
+    if !dialog_is_loadable(&data.dialog) {
+        data.dialog = json!({ "Flags": [] });
+        changed = true;
+    }
+    changed
+}
+
+fn object_is_missing_or_empty(value: &Value) -> bool {
+    match value.as_object() {
+        Some(object) => object.is_empty(),
+        None => true,
+    }
+}
+
+fn dialog_is_loadable(value: &Value) -> bool {
+    value
+        .as_object()
+        .and_then(|object| object.get("Flags"))
+        .is_some_and(Value::is_array)
+}
+
+/// A captured, known-loadable 48-key appearance template. The source identity
+/// is always replaced before the value is returned; only its coherent model,
+/// presets, morphs and tints are reused.
+fn default_starter_customization(name: &str) -> Value {
+    let mut customization: Value =
+        serde_json::from_str(include_str!("../assets/starter_customization.json"))
+            .expect("bundled starter customization must be valid JSON");
+    let object = customization
+        .as_object_mut()
+        .expect("bundled starter customization must be an object");
+    object.insert(
+        "Name".to_string(),
+        json!({ "_t": "String", "_v": base64_utf8(name) }),
+    );
+    object.insert("TagId".to_string(), json!({ "_t": "String", "_v": "" }));
+    customization
+}
+
+/// Exact ten-key block the client itself produced for a fresh character
+/// (capture 331319), with a distinct analytics id for each new character.
+fn default_starter_new_flags() -> Value {
+    json!({
+        "FulfillmentPurchases": [],
+        "NewLastChanceOffers": {},
+        "GuildData": {
+            "GuildsRemovedFrom": {},
+            "ReceivedGuildApplicationSeen": {},
+            "SentGuildApplication": {}
+        },
+        "EmoteLoadout": { "Version": { "_t": "Int32", "_v": 1 }, "Slots": {} },
+        "QuestStatusData": { "ActiveQuests": {}, "UnlockableQuests": {} },
+        "IsEulaShown": { "_t": "Boolean", "_v": false },
+        "SessionCount": { "_t": "Int32", "_v": 1 },
+        "LootAlgorithmVersion": { "_t": "Int32", "_v": 4 },
+        "DebriefingNPCId": { "id": { "_t": "String", "_v": "" } },
+        "AnalyticsId": { "_t": "String", "_v": Uuid::new_v4().to_string() }
+    })
+}
+
+/// The customization name uses the game's `NameVersion: base64` convention.
+/// Keep this tiny encoder local rather than adding a dependency for one field.
+fn base64_utf8(value: &str) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = value.as_bytes();
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let bits = ((chunk[0] as u32) << 16)
+            | ((chunk.get(1).copied().unwrap_or(0) as u32) << 8)
+            | chunk.get(2).copied().unwrap_or(0) as u32;
+        out.push(ALPHABET[((bits >> 18) & 0x3f) as usize] as char);
+        out.push(ALPHABET[((bits >> 12) & 0x3f) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[((bits >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[(bits & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod starter_character_tests {
+    use super::*;
+
+    #[test]
+    fn generated_player_data_is_loadable_and_retail_shaped() {
+        let mut data = CompleteCharacterData::default();
+        assert!(make_bootstrap_data_loadable(&mut data, STARTER_NAME));
+
+        let customization = data.customization.as_object().unwrap();
+        assert_eq!(customization.len(), 48);
+        assert_eq!(
+            customization["Name"],
+            json!({ "_t": "String", "_v": "QWR2ZW50dXJlcg==" })
+        );
+        assert_eq!(
+            customization["NameVersion"],
+            json!({ "_t": "String", "_v": "base64" })
+        );
+        assert_eq!(
+            customization["CharacterUID"]["id"]["_v"],
+            "9c2cc2b3-804c-4e97-8ad5-56371690bdf5"
+        );
+
+        assert_eq!(data.new_flags.as_object().unwrap().len(), 10);
+        assert_eq!(
+            data.new_flags["LootAlgorithmVersion"],
+            json!({ "_t": "Int32", "_v": 4 })
+        );
+        assert_eq!(data.dialog, json!({ "Flags": [] }));
+    }
+
+    #[test]
+    fn bootstrap_repair_preserves_good_captured_values() {
+        let mut data = CompleteCharacterData {
+            customization: json!({ "real": "appearance" }),
+            new_flags: json!({ "real": "flags" }),
+            dialog: json!({ "Flags": ["met_blacksmith"] }),
+        };
+        let original = format!("{data:?}");
+        assert!(!make_bootstrap_data_loadable(&mut data, "Keep Me"));
+        assert_eq!(format!("{data:?}"), original);
+    }
+
+    #[test]
+    fn base64_name_encoding_handles_utf8_and_padding() {
+        assert_eq!(base64_utf8(""), "");
+        assert_eq!(base64_utf8("A"), "QQ==");
+        assert_eq!(base64_utf8("Alt"), "QWx0");
+        assert_eq!(base64_utf8("Søvngård"), "U8O4dm5nw6VyZA==");
+    }
+
     /// Every exit from `anon_log_in` must provision a starter character.
     ///
     /// The APK we ship has the FTUE patched out, so a player with no character
@@ -348,7 +524,9 @@ mod starter_character_tests {
             .unwrap_or(src.len());
         let body = &src[start..end];
 
-        let exits = body.matches("return Ok(web::Json(SessionResponse {").count();
+        let exits = body
+            .matches("return Ok(web::Json(SessionResponse {")
+            .count();
         let guards = body.matches("ensure_starter_character(&app_state").count();
         assert!(exits > 0, "the function must still return a session");
         assert_eq!(
