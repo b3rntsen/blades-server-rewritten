@@ -2516,6 +2516,24 @@ pub async fn donate_exchange(
             // unchanged and still fire when NO candidate is donatable — the point
             // is that "some other request of theirs is full" must not be mistaken
             // for "this request is full".
+            // Nobody funds their own request.
+            //
+            // MEASURED: 3,198 donations across 1,350 captured retail exchanges,
+            // and not one has `donatorUserId == requesterUserId`. That absence
+            // is not vacuous — 48 people appear as both a requester and a donor,
+            // contributing 208 donations, and every one of those went to
+            // somebody else's request.
+            //
+            // We allowed it, and 2 of the 11 donations on prod are self
+            // donations. Self-funding is free guild score: the donor debits and
+            // the requester credits the same inventory.
+            //
+            // Checked against the REQUEST rather than any candidate row, since
+            // it is a property of who is asking, not of which row wins below.
+            if req.requester_user_id == donor_user_id {
+                return Err(BladeApiError::new(StatusCode::CONFLICT, GUILD_SERVICE_ID, 14));
+            }
+
             use crate::schema::guild_exchanges::dsl as ge;
             let candidates: Vec<GuildExchangeRow> = ge::guild_exchanges
                 .filter(ge::guild_id.eq(&m.guild_id))
@@ -2994,6 +3012,84 @@ mod donating_with_several_requests_for_one_item {
         assert!(
             !body.contains(".into_iter()\n                .next()\n                .ok_or_else"),
             "the unordered first-row lookup must not come back"
+        );
+    }
+}
+
+/// Nobody funds their own guild request.
+///
+/// MEASURED: across 1,350 captured retail exchanges carrying 3,198 donations,
+/// not one has `donatorUserId == requesterUserId`. The absence is not vacuous —
+/// 48 people appear as BOTH a requester and a donor, contributing 208
+/// donations, and every one went to somebody else's request. That control is
+/// the difference between "retail forbade this" and "nobody happened to try".
+///
+/// We allowed it: 2 of the 11 donations on prod are self donations. It is free
+/// guild score, since the donor debit and the requester credit land on the same
+/// inventory.
+///
+/// `donate_exchange` needs a database, so this reads the source the way
+/// `route_registration` does. The unit-testable half of the same bug — the
+/// client being told the wrong `userId`, which is why it offered the button at
+/// all — is covered by `session_identity` in `authentification.rs`.
+#[cfg(test)]
+mod self_donation_is_refused {
+    /// `donate_exchange`'s body, comments stripped, so a rule cannot be
+    /// satisfied by prose describing it.
+    fn donate_body() -> String {
+        let src = include_str!("guild.rs");
+        let start = src
+            .find("pub async fn donate_exchange")
+            .expect("donate_exchange still exists");
+        let rest = &src[start..];
+        // Up to the next top-level item.
+        let end = rest[1..]
+            .find("\npub async fn ")
+            .or_else(|| rest[1..].find("\n#[cfg(test)]"))
+            .map(|i| i + 1)
+            .unwrap_or(rest.len());
+        rest[..end]
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_donor_is_compared_against_the_requester() {
+        let body = donate_body();
+        assert!(
+            body.contains("req.requester_user_id == donor_user_id"),
+            "donate_exchange no longer refuses a self donation"
+        );
+    }
+
+    #[test]
+    fn the_refusal_comes_before_a_row_is_chosen() {
+        // A property of who is asking, not of which candidate wins. Placed after
+        // the lookup it could be skipped whenever the picker fell through.
+        let body = donate_body();
+        let check = body
+            .find("req.requester_user_id == donor_user_id")
+            .expect("the self-donation check");
+        let query = body
+            .find("ge::guild_exchanges")
+            .expect("the candidate query");
+        assert!(
+            check < query,
+            "the self-donation check must precede the candidate lookup"
+        );
+    }
+
+    #[test]
+    fn the_scan_can_actually_fail() {
+        // Control: the needles are real substrings of the real body, so a typo
+        // in either would be a silently-passing test rather than a red one.
+        let body = donate_body();
+        assert!(!body.is_empty(), "donate_exchange body came back empty");
+        assert!(
+            !body.contains("a needle that is deliberately absent"),
+            "the scan matches anything"
         );
     }
 }

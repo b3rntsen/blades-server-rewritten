@@ -76,16 +76,38 @@ impl SessionResponseInner {
 
         SessionResponseInner {
             session_id: session_id.to_string(),
-            user_id: session.secret_user_id.to_string(),
+            // The PUBLIC user id, not the secret one.
+            //
+            // This is the id the client compares against every userId we send
+            // it elsewhere — `requesterUserId` on a guild exchange, for one. We
+            // were handing it `secret_user_id`, so that comparison could never
+            // match and the client offered a DONATE button on the player's own
+            // guild request. Two players took it; retail's corpus has 0 self
+            // donations in 3,198.
+            //
+            // MEASURED, in retail: 26 of the session `userId`s handed out also
+            // appear as a guild requester or donor id, so it is the same
+            // namespace; and `userId` equals `loginToken` in 0 of 96, while ours
+            // were always the same value.
+            //
+            // Sending the secret here also published a bearer credential in a
+            // field meant to be public. Nothing re-reads it: the inbound
+            // `userId` branch of anon login still resolves against `secret_id`
+            // only, and it is dead in practice — retail clients send no `userId`
+            // in 998 of 998 captured auth requests, and all 256 logins on prod
+            // in the last 10 days took the device path. `loginToken` is
+            // unchanged and remains the re-establish credential.
+            user_id: session.user_id.to_string(),
             token: session.generate_token(&session_id),
             schema: "blades_v1".to_string(),
             // The client persists this value and sends it alone to bnet/login
             // on the next cold start. Retail's token is a UUID (capture 145996),
             // while our old `session_id|extra_secret` value was only understood
             // by Authorization middleware and expired with that session. The
-            // secret user id is already the persistent bearer used by auth/anon
-            // (`userId`), so this grants no new authority; it makes the BNet
-            // route honour the same existing account secret.
+            // secret user id is already the persistent bearer used by auth/anon,
+            // so this grants no new authority; it makes the BNet route honour
+            // the same existing account secret. (It used to say "(`userId`)" —
+            // that stopped being true when `userId` above became the public id.)
             login_token: persistent_login_token(session.secret_user_id),
             feature_status: 7,
             // Session.LinkedAccountsStatus bitmask (client dump.cs:484710). The client's
@@ -1219,5 +1241,68 @@ mod anon_login_diagnostics_tests {
             !line.contains("device_id_val"),
             "the entry diagnostic must not log the device id itself"
         );
+    }
+}
+
+/// Which identifier the client is told is its own.
+///
+/// The client has no "is this mine?" flag to work from — a captured guild
+/// exchange carries exactly 9 keys and none of them is one — so it can only
+/// compare the `userId` it was handed at login against the `userId`s we send it
+/// elsewhere. Handing it the SECRET id broke every such comparison at once; the
+/// visible consequence was a DONATE button on the player's own guild request.
+///
+/// Measured in retail: 26 of the session `userId`s handed out also appear as a
+/// guild requester or donor id (same namespace), and `userId` equals
+/// `loginToken` in 0 of 96 captured sessions — while ours were always equal.
+#[cfg(test)]
+mod session_identity {
+    use super::*;
+    use std::time::Duration;
+
+    fn response() -> (SessionResponseInner, Uuid, Uuid) {
+        let public = Uuid::from_u128(0x155f3ba5_ff2c_5b14_84c9_3920d264fe3f);
+        let secret = Uuid::from_u128(0x3c1cd975_245d_49ed_800a_4c6fec57b09b);
+        let session = Session::new(public, secret, Duration::from_secs(3600));
+        (
+            SessionResponseInner::from_session(Uuid::from_u128(7), &session),
+            public,
+            secret,
+        )
+    }
+
+    #[test]
+    fn the_client_is_told_its_public_user_id() {
+        let (r, public, _) = response();
+        assert_eq!(r.user_id, public.to_string());
+    }
+
+    #[test]
+    fn the_secret_user_id_is_never_published_as_user_id() {
+        // It is a bearer credential; the inbound anon-login branch resolves
+        // against it.
+        let (r, _, secret) = response();
+        assert_ne!(
+            r.user_id,
+            secret.to_string(),
+            "the login secret was handed out as the public user id"
+        );
+    }
+
+    #[test]
+    fn user_id_and_login_token_are_different_values() {
+        // 0 of 96 captured retail sessions have them equal. Ours always did.
+        let (r, _, _) = response();
+        assert_ne!(
+            r.user_id, r.login_token,
+            "retail never sends the same value for both"
+        );
+    }
+
+    #[test]
+    fn the_login_token_is_still_the_secret() {
+        // The re-establish credential must not change: existing installs hold it.
+        let (r, _, secret) = response();
+        assert_eq!(r.login_token, secret.to_string());
     }
 }
