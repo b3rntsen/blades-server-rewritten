@@ -84,7 +84,64 @@ pub async fn get_announcements(
         announcements.push(authored_gift_announcement(&gift, now));
     }
 
+    // Last, and for every source at once: put the asset on a host the client can
+    // actually resolve. Done here rather than at each `push` so a new kind of
+    // announcement cannot be added on an unreachable host by omission.
+    for a in &mut announcements {
+        a.asset_url = reachable_asset_url(&a.asset_url, asset_base());
+    }
+
     Ok(Json(AnnouncementsResponse { announcements }))
+}
+
+/// The host every announcement's `assetUrl` was minted on, retail's own.
+const RETAIL_ASSET_ORIGIN: &str = "https://announcements.blades.bgs.services";
+
+/// Where those assets actually live for us.
+const DEFAULT_ASSET_ORIGIN: &str = "https://announcements-feed.nb.dethele.com";
+
+/// Put an announcement's asset on a host the client can reach.
+///
+/// THE BUG. An announcement is only ever a pointer: the client takes `assetUrl`,
+/// fetches `<assetUrl>/manifest.ms`, and shows nothing at all unless that
+/// manifest arrives. Every url we serve — the 156 mined from retail, and the
+/// ones we mint for seasons, giveaways and authored gifts — named
+/// `announcements.blades.bgs.services`. That host is Bethesda's, it is now a
+/// DANGLING CNAME, and from the public internet it does not resolve at all.
+///
+/// A VPN player never noticed: our own DNS answers for it and the mitm addon
+/// serves the same routes. A no-VPN player could not see a single announcement,
+/// ever — and the failure is silent, because a name that will not resolve
+/// produces no request, no error page and no log line anywhere we look. It took
+/// an authored gift that was live, open and correctly advertised to surface it:
+/// 30 hours of edge logs hold ZERO announcement-asset fetches from any game
+/// client, while the feed itself was served 200 every few minutes.
+///
+/// The repointed APK rewrites this host inside `global-metadata.dat`, which is
+/// why it is in `patch-il2cpp-hosts.py` — but that only rewrites COMPILE-TIME
+/// literals. `assetUrl` arrives at runtime, in our own JSON, so the patch never
+/// touches it and the server has to hand over a reachable host itself.
+///
+/// Host-only, and only for that one origin: the path carries the uuid that
+/// becomes `GlobalGiftId` and arms the Claim button, so it must survive
+/// byte-for-byte, and a url on any other host is left alone rather than
+/// rewritten on a guess.
+fn reachable_asset_url(url: &str, base: &str) -> String {
+    match url.strip_prefix(RETAIL_ASSET_ORIGIN) {
+        Some(path) => format!("{}{}", base.trim_end_matches('/'), path),
+        None => url.to_string(),
+    }
+}
+
+/// `ANNOUNCEMENTS_ASSET_ORIGIN`, or the edge host that serves these today.
+fn asset_base() -> &'static str {
+    static BASE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    BASE.get_or_init(|| {
+        std::env::var("ANNOUNCEMENTS_ASSET_ORIGIN")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_ASSET_ORIGIN.to_string())
+    })
 }
 
 fn now_secs() -> i64 {
@@ -290,5 +347,106 @@ mod tests {
         assert!(a.asset_url.ends_with(&format!("/arena-season/{id}")));
         assert_eq!(a.start_time, 210);
         assert_eq!(a.ttl, 210 + REWARD_ANNOUNCEMENT_LIFETIME);
+    }
+}
+
+#[cfg(test)]
+mod asset_host_tests {
+    use super::*;
+
+    const OURS: &str = "https://announcements-feed.nb.dethele.com";
+
+    /// THE BUG: every url we serve pointed at a host that does not resolve, so
+    /// no no-VPN client could fetch a manifest, so no announcement was ever
+    /// shown — including a live, open, correctly-advertised gift.
+    #[test]
+    fn a_retail_url_moves_to_a_host_that_resolves() {
+        assert_eq!(
+            reachable_asset_url(
+                "https://announcements.blades.bgs.services/gift/6f7c99c5-e403-4928-bc68-a82f6be18ded",
+                OURS,
+            ),
+            "https://announcements-feed.nb.dethele.com/gift/6f7c99c5-e403-4928-bc68-a82f6be18ded",
+        );
+    }
+
+    /// THE PROPERTY THAT MATTERS MOST. The uuid in the path becomes the
+    /// manifest's `GlobalGiftId`, which is the only thing that arms Claim. A
+    /// rewrite that touched the path would leave a banner that grants nothing.
+    #[test]
+    fn the_path_survives_byte_for_byte() {
+        for path in [
+            "/gift/6f7c99c5-e403-4928-bc68-a82f6be18ded",
+            "/arena-season/11111111-2222-4333-8444-555555555555",
+            "/free-for-all/99999999-8888-4777-8666-555555555555",
+            "/2026/02/26/a99973b7-459f-4aed-9bce-c32f5d57ab30",
+        ] {
+            let out = reachable_asset_url(&format!("{RETAIL_ASSET_ORIGIN}{path}"), OURS);
+            assert_eq!(out, format!("{OURS}{path}"), "path changed for {path}");
+        }
+    }
+
+    /// CONTROL: only that one origin is touched. A url already on our host, or
+    /// on anything else, is left exactly as it is — this must not become a
+    /// blanket rewriter that redirects whatever it is handed.
+    #[test]
+    fn every_other_host_is_left_alone() {
+        for url in [
+            "https://announcements-feed.nb.dethele.com/gift/6f7c99c5-e403-4928-bc68-a82f6be18ded",
+            "https://example.invalid/gift/6f7c99c5-e403-4928-bc68-a82f6be18ded",
+            "http://announcements.blades.bgs.services/gift/x", // http, not https
+            "",
+        ] {
+            assert_eq!(reachable_asset_url(url, OURS), url);
+        }
+    }
+
+    /// A trailing slash on the configured origin must not produce `//gift/…`:
+    /// the edge's location regexes are anchored at `^/gift/`, so a double slash
+    /// falls through to the inert template and the banner silently dies again.
+    #[test]
+    fn a_trailing_slash_does_not_double_up() {
+        assert_eq!(
+            reachable_asset_url(
+                "https://announcements.blades.bgs.services/gift/6f7c99c5-e403-4928-bc68-a82f6be18ded",
+                "https://announcements-feed.nb.dethele.com/",
+            ),
+            "https://announcements-feed.nb.dethele.com/gift/6f7c99c5-e403-4928-bc68-a82f6be18ded",
+        );
+    }
+
+    /// And the shipped corpus, because the mined feed is the bulk of it: all 156
+    /// retail announcements were minted on the dead host, and every one of them
+    /// has to come out reachable. If this number moves, the file was regenerated
+    /// — check the new entries carry a host a client can resolve.
+    #[test]
+    fn the_whole_shipped_feed_becomes_reachable() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/announcements.json");
+        let raw = std::fs::read_to_string(path).expect("read announcements.json");
+        let feed: Vec<Announcement> = serde_json::from_str(&raw).expect("parse announcements");
+        assert_eq!(feed.len(), 156, "the shipped retail feed");
+
+        let mut rewritten = 0;
+        for a in &feed {
+            let out = reachable_asset_url(&a.asset_url, OURS);
+            assert!(
+                out.starts_with(OURS),
+                "{} still points at a host no client can resolve",
+                a.id
+            );
+            if out != a.asset_url {
+                rewritten += 1;
+            }
+        }
+        assert_eq!(rewritten, 156, "every shipped url was minted on the dead host");
+    }
+
+    /// The default must be the host that actually answers, because an operator
+    /// who sets nothing is the normal case — and the previous default was a
+    /// name that does not resolve.
+    #[test]
+    fn the_default_origin_is_the_edge_that_serves_these() {
+        assert_eq!(DEFAULT_ASSET_ORIGIN, "https://announcements-feed.nb.dethele.com");
+        assert_ne!(DEFAULT_ASSET_ORIGIN, RETAIL_ASSET_ORIGIN);
     }
 }
