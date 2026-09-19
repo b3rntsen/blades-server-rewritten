@@ -79,6 +79,21 @@ static CHEST_TIERS_RAW: &str = include_str!("../chest_tiers.json");
 // invented.
 static FLOOR_PILE_SIZES_RAW: &str = include_str!("../floor_pile_sizes.json");
 
+// WHICH tables hang on each floor spawn, also measured rather than derived.
+//
+// A spawn's tables came from its interactable in parsed.json, and that mapping
+// is the APK's, not retail's. Retail sent the tables per SPAWN POINT, and on
+// 700 of the 1,285 spawns in the corpus it named at least one table the
+// interactable does not. Most of that is town-resource loot -- but one is
+// 8858f284, a table whose 269 observed draws are 269 DoorKeys, which retail
+// hung on three of the sixty pots in The Wizard's Challenge. Without it the key
+// never drops and the locked door cannot open (#192).
+//
+// Unioned with the interactable's own tables rather than replacing them,
+// because the gap is one-directional: 700 spawns gain a table, 6 would lose
+// one. A spawn absent from this file keeps exactly the tables it had.
+static SPAWN_LOOT_TABLES_RAW: &str = include_str!("../spawn_loot_tables.json");
+
 #[derive(Deserialize)]
 struct ChestTierCorpus {
     chests: HashMap<Uuid, ChestSpawnDefinition>,
@@ -123,6 +138,37 @@ fn floor_pile_size(spawn_id: &Uuid) -> usize {
         .and_then(|n| n.as_u64())
         .unwrap_or(1)
         .max(1) as usize
+}
+
+fn spawn_loot_tables() -> &'static serde_json::Value {
+    static TABLE: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        serde_json::from_str(SPAWN_LOOT_TABLES_RAW)
+            .unwrap_or_else(|_| serde_json::json!({ "spawns": {} }))
+    })
+}
+
+/// The loot tables this floor spawn carries: what retail was observed sending,
+/// unioned with what the spawn's interactable names.
+///
+/// Order is deterministic (the interactable's first, then the mined additions in
+/// corpus order) and each table is rolled under its own seed, so adding one
+/// never moves the result of another.
+fn tables_for_spawn(spawn_id: &Uuid, from_interactable: &[Uuid]) -> Vec<Uuid> {
+    let mut out: Vec<Uuid> = from_interactable.to_vec();
+    let mined = spawn_loot_tables()
+        .get("spawns")
+        .and_then(|s| s.get(spawn_id.to_string()))
+        .and_then(|e| e.get("tables"))
+        .and_then(|t| t.as_array());
+    for t in mined.into_iter().flatten() {
+        if let Some(uuid) = t.as_str().and_then(|s| Uuid::parse_str(s).ok()) {
+            if !out.contains(&uuid) {
+                out.push(uuid);
+            }
+        }
+    }
+    out
 }
 
 fn interactable_loot() -> &'static serde_json::Value {
@@ -536,14 +582,18 @@ pub fn generate_for_dungeon(
             .filter_map(|(item_spawn_id, spawn_info)| {
                 let picked = spawn_info.apparition_settings.first()?;
                 let interactable = game_data.interactables.get(&picked.interactable_uuid)?;
+                let from_interactable: Vec<Uuid> =
+                    interactable.loot_table.keys().copied().collect();
+                // What the interactable names, plus what retail was observed
+                // hanging on this spawn point and the APK mapping omits (#192).
+                let tables = tables_for_spawn(item_spawn_id, &from_interactable);
                 // One result per thing retail put on this spawn, each rolled
                 // separately — a pile of seven is seven draws, not one repeated.
                 let pile = (0..floor_pile_size(item_spawn_id))
                     .map(|result_index| DungeonItemResult {
-                        loot_table_loot: interactable
-                            .loot_table
+                        loot_table_loot: tables
                             .iter()
-                            .map(|(k, _)| {
+                            .map(|k| {
                                 (
                                     *k,
                                     roll_loot_table(
@@ -1326,5 +1376,231 @@ mod floor_pile_tests {
             }
         }
         assert!(compared > 1_000, "only {compared} floor results compared");
+    }
+}
+
+#[cfg(test)]
+mod spawn_table_tests {
+    use super::*;
+
+    /// The Wizard's Challenge (SQ206), where breaking the pots is the puzzle.
+    const WIZARDS_CHALLENGE: &str = "108a7290-cea1-4af2-b58d-9c592af7d9d8";
+    /// `Items.Name.DoorKey`. 269 of the table's 269 observed draws are this.
+    const DOOR_KEY: &str = "faa3aeb3-9284-4d83-8981-1af00e3a6398";
+    const KEY_TABLE: &str = "8858f284-4f33-4da4-8085-0befa7ef2637";
+    /// The three pots retail hung the key table on, of that dungeon's sixty.
+    const KEY_SPAWNS: [&str; 3] = [
+        "9f2a4d7d-debf-457f-8007-19a0e40dfb0c",
+        "588b0b05-d460-4c07-96f5-5a9c18f882c2",
+        "5a448ce2-8c35-4e22-b4c9-323a2b9a85ff",
+    ];
+    /// The table all three resolve to through their interactable: Lumber, and
+    /// never a key. This is the whole bug in one constant.
+    const LUMBER_TABLE: &str = "49173c2c-e34c-4664-b2cd-d1bae46c39fa";
+    /// Retail hung this one on the same pots too; 74% of its draws are empty.
+    const LIMESTONE_TABLE: &str = "37a41796-7a32-4119-8444-60c48a445b5b";
+
+    fn game_data() -> GameData {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+        serde_json::from_str(&std::fs::read_to_string(path).expect("read parsed.json"))
+            .expect("parse game data")
+    }
+
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).expect("uuid")
+    }
+
+    /// Compiled in and holding what was mined. Parsed explicitly so a
+    /// deserialization failure names itself instead of silently degrading to
+    /// "no spawn has an extra table", which is the pre-fix behaviour and looks
+    /// exactly like working code.
+    #[test]
+    fn the_spawn_table_sidecar_loads() {
+        let v: serde_json::Value =
+            serde_json::from_str(SPAWN_LOOT_TABLES_RAW).expect("spawn_loot_tables.json must parse");
+        let spawns = v["spawns"].as_object().expect("spawns object");
+        assert_eq!(spawns.len(), 1285, "the mined floor spawn points");
+        assert_eq!(v["_meta"]["dungeons"].as_u64(), Some(3033));
+
+        let on_key_table: Vec<&String> = spawns
+            .iter()
+            .filter(|(_, e)| {
+                e["tables"]
+                    .as_array()
+                    .is_some_and(|t| t.iter().any(|v| v.as_str() == Some(KEY_TABLE)))
+            })
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(on_key_table.len(), 11, "spawn points carrying the DoorKey table");
+    }
+
+    #[test]
+    fn every_mined_spawn_is_a_real_floor_spawn() {
+        let game_data = game_data();
+        let known: std::collections::HashSet<Uuid> = game_data
+            .dungeons
+            .values()
+            .flat_map(|d| d.spawn_info.item.keys().copied())
+            .collect();
+        let v: serde_json::Value = serde_json::from_str(SPAWN_LOOT_TABLES_RAW).unwrap();
+        let unknown: Vec<&String> = v["spawns"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .filter(|id| !known.contains(&uuid(id)))
+            .collect();
+        assert!(unknown.is_empty(), "mined spawns absent from parsed.json: {unknown:?}");
+    }
+
+    /// THE BUG (#192). Three of the sixty pots in The Wizard's Challenge hold
+    /// the key that opens the final door. Their interactable names only the
+    /// Lumber table, so the key never dropped and the quest could not be
+    /// finished — "I'm not getting any keys for a pot".
+    #[test]
+    fn the_wizards_challenge_pots_yield_the_door_key() {
+        let game_data = game_data();
+        let generated =
+            generate_for_dungeon(&game_data, &uuid(WIZARDS_CHALLENGE), 20, 5).expect("dungeon");
+        assert_eq!(generated.item_generated_data.len(), 60, "retail's sixty pots");
+
+        for spawn in KEY_SPAWNS {
+            let results = generated
+                .item_generated_data
+                .get(&uuid(spawn))
+                .unwrap_or_else(|| panic!("{spawn} is a spawn of this dungeon"));
+            let keys: u64 = results
+                .iter()
+                .flat_map(|r| r.loot_table_loot.values())
+                .filter_map(|loot| loot.stackable_items.get(&uuid(DOOR_KEY)))
+                .sum();
+            assert!(keys >= 1, "pot {spawn} yielded no door key");
+        }
+    }
+
+    /// CONTROL, and the one that keeps the test above honest: the other
+    /// fifty-seven pots must NOT hand out keys. A repair that sprayed the key
+    /// table over the dungeon would pass the test above and make the puzzle
+    /// meaningless.
+    #[test]
+    fn the_other_pots_do_not() {
+        let game_data = game_data();
+        let generated =
+            generate_for_dungeon(&game_data, &uuid(WIZARDS_CHALLENGE), 20, 5).expect("dungeon");
+        let key_spawns: std::collections::HashSet<Uuid> =
+            KEY_SPAWNS.iter().map(|s| uuid(s)).collect();
+        let stray: Vec<Uuid> = generated
+            .item_generated_data
+            .iter()
+            .filter(|(spawn, results)| {
+                !key_spawns.contains(spawn)
+                    && results.iter().any(|r| {
+                        r.loot_table_loot
+                            .values()
+                            .any(|l| l.stackable_items.contains_key(&uuid(DOOR_KEY)))
+                    })
+            })
+            .map(|(spawn, _)| *spawn)
+            .collect();
+        assert!(stray.is_empty(), "pots that should hold no key do: {stray:?}");
+    }
+
+    /// The union never takes a table away. Six of the 1,285 mined spawns name
+    /// fewer tables than their interactable does — a corpus gap, not a
+    /// correction — and replacing instead of unioning would silently empty
+    /// them.
+    #[test]
+    fn the_interactables_own_tables_survive_the_union() {
+        // That pot gains two: the key, and the Limestone table retail also hung
+        // on it. The interactable's own table stays, and stays first.
+        assert_eq!(
+            tables_for_spawn(&uuid(KEY_SPAWNS[0]), &[uuid(LUMBER_TABLE)]),
+            vec![uuid(LUMBER_TABLE), uuid(LIMESTONE_TABLE), uuid(KEY_TABLE)],
+            "the interactable's table comes first and the mined ones are added"
+        );
+        // A table already present is not added twice: a duplicate would collapse
+        // in the HashMap anyway, but the vector is what the roll iterates.
+        assert_eq!(
+            tables_for_spawn(
+                &uuid(KEY_SPAWNS[0]),
+                &[uuid(KEY_TABLE), uuid(LUMBER_TABLE), uuid(LIMESTONE_TABLE)]
+            )
+            .len(),
+            3
+        );
+    }
+
+    /// CONTROL: a spawn the corpus never saw keeps exactly what it had. 691 of
+    /// the 1,976 floor spawns are unobserved, and inventing a table for them
+    /// would be fabrication rather than repair.
+    #[test]
+    fn an_unobserved_spawn_is_left_alone() {
+        // A uuid no dungeon uses; the corpus is keyed by real spawn ids.
+        let never_seen = uuid("ffffffff-ffff-4fff-8fff-ffffffffffff");
+        assert_eq!(
+            tables_for_spawn(&never_seen, &[uuid(LUMBER_TABLE)]),
+            vec![uuid(LUMBER_TABLE)]
+        );
+        assert!(tables_for_spawn(&never_seen, &[]).is_empty());
+    }
+
+    /// Adding a table must not move what the others pay. Each table is rolled
+    /// under its own seed, so the Lumber result on a key pot is the same value
+    /// it was before the key table joined it — otherwise this fix would quietly
+    /// re-roll loot across 700 spawns.
+    #[test]
+    fn adding_a_table_does_not_disturb_the_others() {
+        let game_data = game_data();
+        let dungeon = uuid(WIZARDS_CHALLENGE);
+        let generated = generate_for_dungeon(&game_data, &dungeon, 20, 5).expect("dungeon");
+        let spawn = uuid(KEY_SPAWNS[0]);
+        let lumber = uuid(LUMBER_TABLE);
+        let from_generation = generated.item_generated_data[&spawn][0]
+            .loot_table_loot
+            .get(&lumber)
+            .expect("the interactable's own table is still rolled");
+        let direct = roll_loot_table(&dungeon, &spawn, &lumber, 0);
+        assert_eq!(
+            serde_json::to_value(from_generation).unwrap(),
+            serde_json::to_value(&direct).unwrap(),
+        );
+    }
+
+    /// The corpus pays out where the APK mapping said nothing. Not an assertion
+    /// about one dungeon: across every dungeon, the number of floor spawns that
+    /// produce something must rise well past what the interactables alone reach.
+    #[test]
+    fn the_corpus_recovers_loot_across_the_game() {
+        let game_data = game_data();
+        let mut paying = 0;
+        let mut with_extra_table = 0;
+        for dungeon_id in game_data.dungeons.keys() {
+            let generated = generate_for_dungeon(&game_data, dungeon_id, 20, 5).unwrap();
+            for (spawn, results) in &generated.item_generated_data {
+                let from_interactable = game_data
+                    .dungeons
+                    .get(dungeon_id)
+                    .and_then(|d| d.spawn_info.item.get(spawn))
+                    .and_then(|s| s.apparition_settings.first())
+                    .and_then(|a| game_data.interactables.get(&a.interactable_uuid))
+                    .map(|i| i.loot_table.len())
+                    .unwrap_or(0);
+                let rolled = results.first().map(|r| r.loot_table_loot.len()).unwrap_or(0);
+                if rolled > from_interactable {
+                    with_extra_table += 1;
+                }
+                if results.iter().any(|r| {
+                    r.loot_table_loot.values().any(|l| {
+                        !l.stackable_items.is_empty() || !l.currencies.is_empty() || !l.item.is_empty()
+                    })
+                }) {
+                    paying += 1;
+                }
+            }
+        }
+        assert!(
+            with_extra_table >= 690,
+            "only {with_extra_table} spawns gained a table; the corpus adds one to 700"
+        );
+        assert!(paying > 600, "only {paying} floor spawns pay anything");
     }
 }
