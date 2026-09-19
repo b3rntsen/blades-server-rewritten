@@ -69,8 +69,19 @@ pub async fn get_announcements(
     // A Free for All the client cannot see is a giveaway nobody collects: gift
     // ids are only discoverable through this feed. Derived from the open run
     // rather than stored alongside it, so the advert and the gift cannot drift.
-    if let Some(run) = crate::free_for_all::open_run(&mut conn, now_secs()).await {
+    let now = now_secs();
+    if let Some(run) = crate::free_for_all::open_run(&mut conn, now).await {
         announcements.push(free_for_all_announcement(&run));
+    }
+
+    // Hand-authored gifts, same reasoning as the line above and the reason it
+    // was written: a gift the client cannot see is one nobody collects. The
+    // Publish button on /admin/gifts writes a row the server will honour and,
+    // until this, nothing told a client the id existed — so it could never be
+    // asked for. Derived from the open rows rather than a second table, so the
+    // advert and the gift cannot drift apart.
+    for gift in crate::free_for_all::open_gifts(&mut conn, now).await {
+        announcements.push(authored_gift_announcement(&gift, now));
     }
 
     Ok(Json(AnnouncementsResponse { announcements }))
@@ -105,6 +116,39 @@ fn free_for_all_announcement(run: &crate::free_for_all::FreeForAllRun) -> Announ
     }
 }
 
+/// The banner for one hand-authored gift.
+///
+/// GIFT-BEARING: the edge turns the uuid in this path into the manifest's
+/// `GlobalGiftId`, which is what arms the Claim button. That is why the id in
+/// the URL must be the gift's own id and not a fresh one.
+///
+/// `ttl` is the gift's close time, never a fixed lifetime, so the banner cannot
+/// outlive the gift — a Claim on a closed gift returns "not active", which
+/// reads to a player as the game being broken. A gift with no end date (0, what
+/// the admin form writes for "always") gets a rolling month so the feed does
+/// not carry a banner forever.
+fn authored_gift_announcement(
+    gift: &crate::free_for_all::GiftOverrideRow,
+    now: i64,
+) -> Announcement {
+    let start = if gift.start_time > 0 { gift.start_time } else { now };
+    let ttl = if gift.end_time > 0 {
+        gift.end_time
+    } else {
+        now + REWARD_ANNOUNCEMENT_LIFETIME
+    };
+    Announcement {
+        id: gift.gift_id.to_string(),
+        r#type: "BASIC".into(),
+        start_time: start,
+        ttl,
+        asset_url: format!(
+            "https://announcements.blades.bgs.services/gift/{}",
+            gift.gift_id
+        ),
+    }
+}
+
 fn season_reward_announcement(season: &season_store::SeasonRow) -> Announcement {
     let start = season.ended_at.unwrap_or(season.ends_at);
     Announcement {
@@ -125,6 +169,71 @@ fn season_reward_announcement(season: &season_store::SeasonRow) -> Announcement 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn a_gift(start: i64, end: i64) -> crate::free_for_all::GiftOverrideRow {
+        crate::free_for_all::GiftOverrideRow {
+            gift_id: uuid::uuid!("6f7c99c5-e403-4928-bc68-a82f6be18ded"),
+            items: crate::json_db::JsonDbWrapper(Vec::new()),
+            chests: crate::json_db::JsonDbWrapper(Vec::new()),
+            start_time: start,
+            end_time: end,
+            claim_count_limit: 1,
+            description: None,
+            updated_at: 0,
+            updated_by: None,
+        }
+    }
+
+    /// The banner must carry the GIFT's own id in its path.
+    ///
+    /// The edge turns that uuid into the manifest's `GlobalGiftId`, which is the
+    /// only thing that arms Claim. A fresh id here would render a banner that
+    /// looks right and grants nothing — which is exactly the failure this whole
+    /// feature exists to fix, so it is asserted rather than assumed.
+    #[test]
+    fn the_banner_points_at_the_gift_itself() {
+        let g = a_gift(100, 200);
+        let a = authored_gift_announcement(&g, 150);
+        assert_eq!(a.id, g.gift_id.to_string());
+        assert!(
+            a.asset_url.ends_with(&g.gift_id.to_string()),
+            "asset_url {} must end with the gift id",
+            a.asset_url
+        );
+        assert!(a.asset_url.contains("/gift/"), "gift-bearing namespace");
+    }
+
+    /// The banner must not outlive the gift. A Claim on a closed gift answers
+    /// "not active", which reads to a player as the game being broken.
+    #[test]
+    fn the_banner_expires_with_the_gift() {
+        let a = authored_gift_announcement(&a_gift(100, 200), 150);
+        assert_eq!(a.start_time, 100);
+        assert_eq!(a.ttl, 200, "ttl is the gift's close time, not a lifetime");
+    }
+
+    /// A gift with no dates is "always" in the admin form, which stores 0/0.
+    /// Zero must not be read as "expired in 1970" nor advertised forever.
+    #[test]
+    fn a_dateless_gift_starts_now_and_rolls() {
+        let now = 1_789_792_376;
+        let a = authored_gift_announcement(&a_gift(0, 0), now);
+        assert_eq!(a.start_time, now, "0 start means now, not 1970");
+        assert_eq!(a.ttl, now + REWARD_ANNOUNCEMENT_LIFETIME);
+        assert!(a.ttl > now, "a dateless gift must still be live");
+    }
+
+    /// CONTROL: the Free for All banner is deliberately NOT gift-bearing, and
+    /// must stay on its own namespace. If these two ever shared one, the
+    /// giveaway would grow a Claim button that posts to a gift that does not
+    /// exist.
+    #[test]
+    fn the_free_for_all_banner_is_a_different_namespace() {
+        let gift = authored_gift_announcement(&a_gift(100, 200), 150);
+        assert!(!gift.asset_url.contains("/free-for-all/"));
+        assert!(!gift.asset_url.contains("/arena-season/"));
+    }
+
 
     fn a_run(opens_at: i64, closes_at: i64) -> crate::free_for_all::FreeForAllRun {
         crate::free_for_all::FreeForAllRun {

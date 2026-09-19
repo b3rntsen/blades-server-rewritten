@@ -42,7 +42,7 @@ use actix_web::{
 use blades_lib::economy::GEMS;
 use blades_lib::features::free_for_all::{self as ffa, Cadence, Window};
 use blades_lib::static_data::{GiftChest, GiftDef, GiftItem};
-use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
+use diesel::{BoolExpressionMethods, ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -133,6 +133,27 @@ pub async fn effective_gift(
         Some(r) => Some(r.to_def()),
         None => app_state.static_data.gifts.get(&gift_id).cloned(),
     }
+}
+
+/// Every authored gift whose window covers `now`.
+///
+/// A gift is only discoverable through the announcements feed, so this is what
+/// the feed advertises. Reading it from `gift_overrides` rather than from a
+/// second "what to advertise" table is deliberate: the banner and the gift then
+/// cannot drift, and a gift that closes stops being advertised by the same
+/// clause that stops it being claimable.
+///
+/// `start_time`/`end_time` of 0 mean "always", which is what the admin form
+/// writes for a gift with both dates blank — so those are open, not expired.
+pub async fn open_gifts(conn: &mut AsyncPgConnection, now: i64) -> Vec<GiftOverrideRow> {
+    use crate::schema::gift_overrides::dsl as go;
+    go::gift_overrides
+        .filter(go::start_time.le(now).or(go::start_time.eq(0)))
+        .filter(go::end_time.gt(now).or(go::end_time.eq(0)))
+        .select(GiftOverrideRow::as_select())
+        .load(conn)
+        .await
+        .unwrap_or_default()
 }
 
 // --- publishing a gift without a restart -------------------------------------
