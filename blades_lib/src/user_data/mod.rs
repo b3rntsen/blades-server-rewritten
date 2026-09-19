@@ -53,8 +53,27 @@ pub struct CharacterChallengeSeason {
     /// `Option` + `skip_serializing_if` is the faithful shape, matching `grade` and
     /// `arcane_tier` in `backpack.rs`: retail omits the key rather than sending a
     /// zero, so emitting one would be a shape retail never produced.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current_session_id: Option<Uuid>,
+    /// THE KEY IS `currentSeasonId`. Retail sent it in **386 of 386** captured
+    /// `challengeSeason` objects and never once sent `currentSessionId`, which is
+    /// what this emitted.
+    ///
+    /// The comment above measured "773 of 1,032 omit it" — counting the
+    /// misspelled key, which retail does not have, so "omitted" was 100 % true by
+    /// construction. The measurement confirmed the typo instead of catching it.
+    /// That is the trap in measuring absence: it cannot tell "retail omits this"
+    /// from "I asked for the wrong name".
+    ///
+    /// `alias` keeps the 268 production characters readable — every one of them
+    /// has the value stored under the old key, written by the web transfer's
+    /// placeholder — so this needs no data migration. Written back under the
+    /// correct name on the next save.
+    #[serde(
+        rename = "currentSeasonId",
+        alias = "currentSessionId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub current_season_id: Option<Uuid>,
     pub rank: i64,
     pub rank_rewarded: i64,
     pub points: i64,
@@ -155,7 +174,7 @@ impl Default for CompleteCharacter {
             stamina_attribute_points: 0,
             magicka_attribute_points: 0,
             challenge_season: CharacterChallengeSeason {
-                current_session_id: Some(
+                current_season_id: Some(
                     Uuid::from_str("3d336fe7-be60-46a1-b88b-540f3ad5efa2").unwrap(),
                 ),
                 rank: 1,
@@ -241,33 +260,58 @@ mod challenge_season_tests {
         Ok(serde_json::to_value(&c).unwrap())
     }
 
-    /// Retail OMITS `currentSessionId` when no challenge session is running:
-    /// 773 of 1,032 captured `challengeSeason` objects have no such key.
+    /// THE KEY RETAIL ACTUALLY SENDS.
+    ///
+    /// Measured over the capture corpus: **386 of 386** `challengeSeason` objects
+    /// carry `currentSeasonId`, and not one carries `currentSessionId`.
+    ///
+    /// The tests this replaces asserted the misspelled key and passed, because
+    /// they only ever round-tripped our own output against itself. The comment
+    /// above them said retail omitted the key in "773 of 1,032" objects — that
+    /// count was of `currentSessionId`, which retail does not have, so it was 100 %
+    /// true by construction. Measuring an ABSENCE cannot distinguish "retail omits
+    /// this" from "I asked for the wrong name"; only comparing against the key
+    /// retail DOES send can.
     #[test]
-    fn an_omitted_session_id_deserializes() {
-        let v = parse("").expect("retail omits currentSessionId with no session running");
+    fn the_wire_key_is_the_one_retail_sends() {
+        let id = "3d336fe7-be60-46a1-b88b-540f3ad5efa2";
+        let v = parse(&format!(r#","currentSeasonId":"{id}""#)).unwrap();
+        assert_eq!(
+            v["currentSeasonId"],
+            serde_json::json!(id),
+            "retail's key, in 386 of 386 captured objects"
+        );
         assert!(
             v.get("currentSessionId").is_none(),
-            "an absent session id must not be invented on serialize, got {v}",
+            "and the misspelling must not come back: {v}"
         );
     }
 
-    /// And sends an explicit `null` in the case `arena-transfer.ts` documented.
-    /// A bare `Uuid` holds neither this nor the omission above, which is why the
-    /// transfer builder substituted a placeholder for every character it imported.
+    /// The 268 production characters have the value stored under the OLD key —
+    /// the web transfer's placeholder wrote it that way. They must keep it, and
+    /// come back out under the correct name, so no data migration is needed.
     #[test]
-    fn an_explicit_null_session_id_deserializes() {
-        let v = parse(r#","currentSessionId":null"#)
-            .expect("retail sends an explicit null here");
-        assert!(v.get("currentSessionId").is_none());
+    fn a_character_stored_under_the_old_key_is_still_read() {
+        let id = "3d336fe7-be60-46a1-b88b-540f3ad5efa2";
+        let v = parse(&format!(r#","currentSessionId":"{id}""#))
+            .expect("the stored shape must still deserialize");
+        assert_eq!(
+            v["currentSeasonId"],
+            serde_json::json!(id),
+            "read under the old alias, written back under retail's name"
+        );
     }
 
-    /// A real session id must still survive — the control. A change that simply
-    /// dropped the field would pass both tests above and fail this one.
+    /// Absent and explicit-null both still deserialize — a character with no
+    /// season must not fail to load. A bare `Uuid` held neither, which is why the
+    /// transfer builder substituted a placeholder for every character it imported.
     #[test]
-    fn a_real_session_id_round_trips() {
-        let id = "3d336fe7-be60-46a1-b88b-540f3ad5efa2";
-        let v = parse(&format!(r#","currentSessionId":"{id}""#)).unwrap();
-        assert_eq!(v["currentSessionId"], serde_json::json!(id));
+    fn an_absent_or_null_season_id_still_loads() {
+        let v = parse("").expect("absent");
+        assert!(v.get("currentSeasonId").is_none(), "not invented: {v}");
+        let v = parse(r#","currentSeasonId":null"#).expect("explicit null");
+        assert!(v.get("currentSeasonId").is_none());
+        let v = parse(r#","currentSessionId":null"#).expect("explicit null, old key");
+        assert!(v.get("currentSeasonId").is_none());
     }
 }
