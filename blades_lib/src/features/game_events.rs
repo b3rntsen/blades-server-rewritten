@@ -219,13 +219,70 @@ impl EventDef {
 }
 
 /// The events whose instance window covers `now`.
-pub fn active_events(library: &[EventDef], now_secs: i64) -> Vec<GameEvent> {
-    let mut out: Vec<GameEvent> = library
+/// The most event quests retail ever had open at once.
+///
+/// MEASURED over the pre-shutdown corpus: `gameEventQuests[]` carried two entries
+/// in 614 `/quests` responses and one in 43. Never three. The arithmetic behind it
+/// is retail's own — 39 events, one opening per day, each open for two days.
+///
+/// This is a WIRE cap, not a calendar change. The calendar may legitimately have
+/// three open: a seasonal event runs a SEVEN-day window (#189/#304) across a
+/// one-per-day cadence, so for the whole week it runs there is always a third.
+/// The client's quest screen is retail's and was never given that case.
+pub const MAX_CONCURRENT_EVENTS: usize = 2;
+
+/// The events open right now, capped at what retail ever served.
+///
+/// Truncated from the FRONT after sorting by start time, so the two most recently
+/// opened win. That is what retail's pair always was — "opened today" and "opened
+/// yesterday" — and it stops a long seasonal window from permanently occupying a
+/// slot and starving the daily rotation the player is meant to see turning over.
+/// THE one place that decides which event instances are open right now.
+///
+/// Both callers must agree: `active_events` builds the `/gameevents` feed from
+/// this, and `event_quests::mint` builds the per-character `GAME_EVENT` rows that
+/// become `gameEventQuests[]`. They used to compute it separately — `mint` called
+/// `active_instance_start` on each def itself — so a cap added to one did nothing
+/// to the other. That is exactly the bug this function exists to make impossible,
+/// and `mint_and_active_events_agree` pins it.
+///
+/// Returns `(instance_start, def)` sorted by start, already capped.
+///
+/// **Which two survive: the ones with the most time left.** The instance closest
+/// to expiring is dropped, because it is the one a player has least opportunity
+/// to act on and it would have gone on its own within hours.
+///
+/// The obvious alternative — keep the two most recently OPENED — is wrong, and
+/// `the_holiday_events_open_on_their_holidays_and_stay_shut_otherwise` caught it:
+/// an annual event opens at midnight alongside that day's ordinary rotation, so
+/// "newest" evicted Season of the Witch on Halloween. A rare seasonal event must
+/// not be displaced by a routine daily one.
+pub fn open_instances<'a>(library: &'a [EventDef], now_secs: i64) -> Vec<(i64, &'a EventDef)> {
+    let mut out: Vec<(i64, &EventDef)> = library
         .iter()
-        .filter_map(|def| Some(def.instance(def.active_instance_start(now_secs)?)))
+        .filter_map(|def| Some((def.active_instance_start(now_secs)?, def)))
         .collect();
-    out.sort_by_key(|e| (e.start_time_secs, e.game_event_instance_id.clone()));
+    if out.len() > MAX_CONCURRENT_EVENTS {
+        // Annual first, then most recently opened; `event_id` breaks ties so the
+        // choice is stable rather than dependent on library order.
+        out.sort_by(|a, b| {
+            b.1.annual
+                .cmp(&a.1.annual)
+                .then_with(|| b.0.cmp(&a.0))
+                .then_with(|| a.1.event_id.cmp(&b.1.event_id))
+        });
+        out.truncate(MAX_CONCURRENT_EVENTS);
+    }
+    // The wire is ordered by start, whatever the selection was.
+    out.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.event_id.cmp(&b.1.event_id)));
     out
+}
+
+pub fn active_events(library: &[EventDef], now_secs: i64) -> Vec<GameEvent> {
+    open_instances(library, now_secs)
+        .into_iter()
+        .map(|(start, def)| def.instance(start))
+        .collect()
 }
 
 /// The events whose next instance opens within `lead_secs` of `now` — retail's
@@ -491,6 +548,139 @@ mod tests {
             recurring.active_instance_start(anchor + 365 * DAY),
             Some(anchor + 365 * DAY),
             "a recurring event reopens; the preview must not"
+        );
+    }
+}
+
+/// The client is never handed more open event quests than retail ever served.
+///
+/// Reported from a real device: the quest screen spun. Reproduced by replaying
+/// that player's exact character and quest rows against the build before and
+/// after the day's deploys — the only behavioural change in `/quests` besides the
+/// XP tables was `gameEventQuests` going from 2 to 3.
+///
+/// The third instance is real, not a calendar bug: a seasonal event runs a
+/// SEVEN-day window (#189/#304) across retail's one-opening-per-day cadence, so
+/// for the whole week it runs there is always a third open. Retail's own
+/// `gameEventQuests[]` carried two entries in 614 captured responses and one in
+/// 43, never three, and the quest screen is retail's.
+#[cfg(test)]
+mod never_serve_more_open_events_than_retail {
+    use super::*;
+
+    fn library() -> Vec<EventDef> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/game_events.json");
+        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        serde_json::from_str(&raw).expect("valid game_events.json")
+    }
+
+    /// How many instances the calendar has open, before any cap.
+    fn uncapped(lib: &[EventDef], now: i64) -> usize {
+        lib.iter()
+            .filter(|d| d.active_instance_start(now).is_some())
+            .count()
+    }
+
+    /// The window the seasonal event is actually open — found by scanning rather
+    /// than hard-coded, so this keeps working when the calendar moves.
+    fn a_day_with_three_open(lib: &[EventDef]) -> Option<i64> {
+        let day = 86_400i64;
+        let start = 1_789_000_000i64;
+        (0..400).map(|d| start + d * day).find(|&t| uncapped(lib, t) >= 3)
+    }
+
+    #[test]
+    fn a_third_open_instance_is_never_advertised() {
+        let lib = library();
+        let day = a_day_with_three_open(&lib).expect(
+            "THE CONTROL: no day in the scanned year has three open, so the cap \
+             would be untested and this test would prove nothing",
+        );
+        assert!(uncapped(&lib, day) >= 3, "the calendar really does have three");
+        assert_eq!(
+            active_events(&lib, day).len(),
+            MAX_CONCURRENT_EVENTS,
+            "but only two are served"
+        );
+    }
+
+    /// THE INVARIANT THE FIRST FIX MISSED.
+    ///
+    /// `event_quests::mint` used to compute the open set itself, so capping
+    /// `active_events` changed the `/gameevents` feed and left `gameEventQuests[]`
+    /// at three — verified against a running server before this was written. Both
+    /// now go through `open_instances`, and this is what stops them drifting apart
+    /// again.
+    #[test]
+    fn open_instances_is_the_only_definition_of_open() {
+        let lib = library();
+        let day = 86_400i64;
+        for d in 0..120 {
+            let now = 1_789_000_000i64 + d * day;
+            let from_open: Vec<i64> = open_instances(&lib, now).iter().map(|(s, _)| *s).collect();
+            let from_active: Vec<i64> = active_events(&lib, now)
+                .iter()
+                .map(|e| e.start_time_secs)
+                .collect();
+            assert_eq!(
+                from_open, from_active,
+                "day {d}: the feed and the shared selection must be the same set"
+            );
+            assert!(from_open.len() <= MAX_CONCURRENT_EVENTS, "day {d}");
+        }
+    }
+
+    #[test]
+    fn an_ordinary_day_is_unchanged() {
+        let lib = library();
+        let day = 86_400i64;
+        let mut ordinary = 0;
+        for d in 0..120 {
+            let now = 1_789_000_000i64 + d * day;
+            let n = uncapped(&lib, now);
+            if n <= MAX_CONCURRENT_EVENTS {
+                assert_eq!(active_events(&lib, now).len(), n, "day {d}");
+                ordinary += 1;
+            }
+        }
+        assert!(ordinary > 0, "the window must contain ordinary days too");
+    }
+
+    /// An annual event is never evicted by the daily rotation — a player has a
+    /// single window a year to play it.
+    ///
+    /// Checked on EVERY day of a year, not one sampled day, because two earlier
+    /// policies each passed a single-day check and failed elsewhere: "keep the
+    /// most recently opened" dropped Season of the Witch on Halloween, and "drop
+    /// the one ending soonest" dropped it late in its run.
+    #[test]
+    fn an_annual_event_holds_its_slot_against_the_daily_rotation() {
+        let lib = library();
+        let day = 86_400i64;
+        let mut contested = 0;
+        for d in 0..366 {
+            let now = 1_767_225_600i64 + d * day;
+            let open_annual: Vec<uuid::Uuid> = lib
+                .iter()
+                .filter(|x| x.annual && x.active_instance_start(now).is_some())
+                .map(|x| x.quest_id)
+                .collect();
+            if open_annual.is_empty() {
+                continue;
+            }
+            if uncapped(&lib, now) > MAX_CONCURRENT_EVENTS {
+                contested += 1;
+            }
+            let served: Vec<uuid::Uuid> =
+                active_events(&lib, now).iter().map(|e| e.quest_id).collect();
+            for q in open_annual {
+                assert!(served.contains(&q), "day {d}: annual event {q} was evicted");
+            }
+        }
+        assert!(
+            contested > 0,
+            "THE CONTROL: if an annual event never competes for a slot this proves nothing"
         );
     }
 }
