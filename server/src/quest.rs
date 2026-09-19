@@ -248,6 +248,47 @@ fn refresh_empty_item_loot(
 }
 
 
+/// Add loot tables a stored row predates (#192).
+///
+/// [`refresh_empty_item_loot`] repairs a row whose item loot is ENTIRELY empty.
+/// It cannot help one that is only partly stale, and after the per-spawn table
+/// corpus shipped that is the common case: a Wizard's Challenge pot that already
+/// rolls Lumber looks perfectly healthy while the key table beside it is simply
+/// absent. Without this, a player who had already accepted the quest would keep
+/// keyless pots forever and the only way out would be abandoning it.
+///
+/// Only tables the stored row LACKS are added. An existing roll is never
+/// touched, so nothing the player has already seen changes under them, and
+/// spawns absent from the stored row are left alone rather than grown.
+fn add_missing_item_tables(
+    stored: &mut DungeonGeneratedData,
+    fresh: &DungeonGeneratedData,
+) -> bool {
+    // Retail/imported generated data is version 1 and must stay byte-for-byte
+    // the player's captured state.
+    if stored.version != 0 {
+        return false;
+    }
+    let mut changed = false;
+    for (spawn, fresh_results) in &fresh.item_generated_data {
+        let Some(stored_results) = stored.item_generated_data.get_mut(spawn) else {
+            continue;
+        };
+        for (index, fresh_result) in fresh_results.iter().enumerate() {
+            let Some(stored_result) = stored_results.get_mut(index) else {
+                continue;
+            };
+            for (table, loot) in &fresh_result.loot_table_loot {
+                if !stored_result.loot_table_loot.contains_key(table) {
+                    stored_result.loot_table_loot.insert(*table, loot.clone());
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
+}
+
 /// The shipped `quests_daily.json` scaling — the same table the server loads.
 ///
 /// Tests reached for `QuestLevelScaling::default()`, which is EMPTY and therefore
@@ -269,6 +310,130 @@ pub(crate) fn shipped_scaling() -> blades_lib::static_data::QuestLevelScaling {
          fall back to the old formula and agree with any regression"
     );
     scaling
+}
+
+#[cfg(test)]
+mod report192_missing_table_tests {
+    use super::*;
+
+    const WIZARDS_CHALLENGE_QUEST: &str = "334e582f-95ba-4263-b381-ac6d91eabe92";
+    const KEY_TABLE: &str = "8858f284-4f33-4da4-8085-0befa7ef2637";
+    const KEY_POT: &str = "9f2a4d7d-debf-457f-8007-19a0e40dfb0c";
+
+    fn fresh_wizards_challenge() -> DungeonGeneratedData {
+        let game_data = super::report85_job_generated_data_tests::game_data();
+        let quest_id = Uuid::parse_str(WIZARDS_CHALLENGE_QUEST).unwrap();
+        let (_, generated) = generate_quest_data(
+            &game_data,
+            quest_id,
+            48,
+            &blades_lib::static_data::QuestLevelScaling::default(),
+        )
+        .expect("The Wizard's Challenge exists");
+        generated.expect("it has a dungeon")
+    }
+
+    /// The stored row shape of a player who accepted the quest before the
+    /// per-spawn corpus shipped: the pots roll Lumber and nothing else.
+    fn as_stored_before_the_fix(fresh: &DungeonGeneratedData) -> DungeonGeneratedData {
+        let key_table = Uuid::parse_str(KEY_TABLE).unwrap();
+        let mut stored = fresh.clone();
+        for results in stored.item_generated_data.values_mut() {
+            for result in results {
+                result.loot_table_loot.remove(&key_table);
+            }
+        }
+        stored
+    }
+
+    /// THE REPAIR. `refresh_empty_item_loot` refuses this row — its item loot is
+    /// not empty, the Lumber table pays — so without this the accepted quest
+    /// keeps keyless pots and the door never opens.
+    #[test]
+    fn an_accepted_quest_gains_the_key_table_it_predates() {
+        let fresh = fresh_wizards_challenge();
+        let mut stored = as_stored_before_the_fix(&fresh);
+        let pot = Uuid::parse_str(KEY_POT).unwrap();
+        let key_table = Uuid::parse_str(KEY_TABLE).unwrap();
+
+        assert!(
+            !refresh_empty_item_loot(&mut stored, fresh.clone()),
+            "the old repair must refuse this row — that is why this one exists"
+        );
+        assert!(!stored.item_generated_data[&pot][0]
+            .loot_table_loot
+            .contains_key(&key_table));
+
+        assert!(add_missing_item_tables(&mut stored, &fresh));
+        assert_eq!(
+            serde_json::to_value(&stored.item_generated_data).unwrap(),
+            serde_json::to_value(&fresh.item_generated_data).unwrap(),
+        );
+    }
+
+    /// CONTROL: a roll the player may already have seen is never rewritten, and
+    /// the enemy and chest sections are not touched at all.
+    #[test]
+    fn it_adds_and_never_rewrites() {
+        let fresh = fresh_wizards_challenge();
+        let mut stored = as_stored_before_the_fix(&fresh);
+        let pot = Uuid::parse_str(KEY_POT).unwrap();
+        let lumber = *stored.item_generated_data[&pot][0]
+            .loot_table_loot
+            .keys()
+            .next()
+            .expect("the pot already rolls something");
+        // Something only the stored row has: a value the fresh roll disagrees with.
+        stored
+            .item_generated_data
+            .get_mut(&pot)
+            .unwrap()[0]
+            .loot_table_loot
+            .get_mut(&lumber)
+            .unwrap()
+            .stackable_items
+            .insert(Uuid::nil(), 99);
+        let enemies_before = serde_json::to_value(&stored.enemy_generated_data).unwrap();
+        let chests_before = serde_json::to_value(&stored.chest_generated_data).unwrap();
+
+        assert!(add_missing_item_tables(&mut stored, &fresh));
+
+        assert_eq!(
+            stored.item_generated_data[&pot][0].loot_table_loot[&lumber]
+                .stackable_items
+                .get(&Uuid::nil()),
+            Some(&99),
+            "the existing roll was rewritten"
+        );
+        assert_eq!(
+            serde_json::to_value(&stored.enemy_generated_data).unwrap(),
+            enemies_before
+        );
+        assert_eq!(
+            serde_json::to_value(&stored.chest_generated_data).unwrap(),
+            chests_before
+        );
+    }
+
+    /// CONTROL: retail and imported rows are version 1 and stay byte-for-byte.
+    #[test]
+    fn it_leaves_captured_rows_alone() {
+        let fresh = fresh_wizards_challenge();
+        let mut stored = as_stored_before_the_fix(&fresh);
+        stored.version = 1;
+        let before = serde_json::to_value(&stored).unwrap();
+        assert!(!add_missing_item_tables(&mut stored, &fresh));
+        assert_eq!(serde_json::to_value(&stored).unwrap(), before);
+    }
+
+    /// CONTROL: a row that already has everything reports no change, so the
+    /// /quests refresh does not write the same bytes back on every poll.
+    #[test]
+    fn an_up_to_date_row_is_not_rewritten() {
+        let fresh = fresh_wizards_challenge();
+        let mut stored = fresh.clone();
+        assert!(!add_missing_item_tables(&mut stored, &fresh));
+    }
 }
 
 #[cfg(test)]
@@ -615,7 +780,9 @@ pub async fn get_quests(
                 ) else {
                     continue;
                 };
-                if refresh_empty_item_loot(stored, fresh) {
+                let refreshed = refresh_empty_item_loot(stored, fresh.clone());
+                let grew = add_missing_item_tables(stored, &fresh);
+                if refreshed || grew {
                     use crate::schema::quests;
                     diesel::update(
                         quests::table
