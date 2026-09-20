@@ -537,7 +537,11 @@ fn loadout_from_row(r: &CharacterDbEntryCharacterWalletInventory) -> crate::aren
     lo.character_uuid = r.id.to_string();
     lo.profile_equipped_json =
         serde_json::json!({ "equippedItems": &r.inventory.0.loadout.equipped_items }).to_string();
-    lo.profile_character_json = build_profile_character_json(&r.data.0, r.id, &r.character.0);
+    lo.profile_character_json = fit_profile_to_retail_transport_envelope(
+        build_profile_character_json(&r.data.0, r.id, &r.character.0),
+        &lo.profile_equipped_json,
+        r.id,
+    );
     let gold = uuid::Uuid::parse_str(crate::arena::combat::messages::ARENA_GOLD_CURRENCY_UUID)
         .expect("arena gold currency is a valid UUID");
     lo.wallet_gold = r.wallet.0.balance(gold);
@@ -619,9 +623,12 @@ fn build_profile_character_json(
         return serialized;
     };
     if let Some(obj) = value.as_object_mut() {
-        // retail's profile has no `challengeSeason`, `completedQuests`, or
-        // `globalShopOffers` — capture-proven: across ALL 830 op54 PROFILE frames in
-        // the capture DB (s506 etc.) none of these three top-level keys ever appears.
+        // retail's profile has no `challengeSeason`, `completedQuests`,
+        // `globalShopOffers`, or top-level `highestLevelArenaReachedTimeSecs` —
+        // capture-proven from the reassembled op54 PROFILEs in sessions 486/506
+        // (including the 39,532-byte largest captured frame). The timestamp DOES
+        // belong inside each pvpSeasonHistory entry; it does not belong at profile
+        // top level.
         // The client's profile deserializer rejects an opponent profile that carries
         // keys retail never sends, so `OnUserMessage` never fires, the opponent's
         // loadout/appearance never loads, and the match hangs at "Connecting". Our
@@ -632,6 +639,7 @@ fn build_profile_character_json(
         obj.remove("challengeSeason");
         obj.remove("completedQuests");
         obj.remove("globalShopOffers");
+        obj.remove("highestLevelArenaReachedTimeSecs");
         // retail's `data` is `customization`-only — rebuild it from scratch so
         // `dialog` / `new-flags` are dropped, not blanked.
         let customization = obj
@@ -645,6 +653,96 @@ fn build_profile_character_json(
         );
     }
     serde_json::to_string(&value).unwrap_or(serialized)
+}
+
+/// Largest complete retail op54 PROFILE frame in the reassembled capture corpus.
+/// Session 486 carries this exact 39,532-byte frame: 36,158 bytes of character JSON,
+/// 3,354 bytes of equipped-items JSON, and the 20-byte NetData/frame envelope.
+///
+/// This is a transport envelope, not a save-data cap. Report #163's two human matches
+/// isolated the distinction: the viewer receiving a 40,788-byte opponent profile
+/// completed the setup handshake but never produced combat input, while the other
+/// viewer received 27,680 bytes and fought normally. The same split repeated twice.
+/// Keep the stored character intact and trim only the oldest archived season snapshots
+/// from the opponent-only wire projection when it exceeds retail's proven envelope.
+const RETAIL_MAX_OP54_PROFILE_BYTES: usize = 39_532;
+
+fn profile_frame_len(character_json: &str, equipped_json: &str) -> usize {
+    crate::arena::combat::messages::player_profile(0, equipped_json, character_json, false).len()
+}
+
+fn fit_profile_to_retail_transport_envelope(
+    character_json: String,
+    equipped_json: &str,
+    character_id: Uuid,
+) -> String {
+    let original_len = profile_frame_len(&character_json, equipped_json);
+    if original_len <= RETAIL_MAX_OP54_PROFILE_BYTES {
+        return character_json;
+    }
+
+    let Ok(mut profile) = serde_json::from_str::<serde_json::Value>(&character_json) else {
+        warn!(
+            "arena profile: character {character_id} is {original_len} B on wire but its JSON \
+             cannot be parsed for the retail transport envelope"
+        );
+        return character_json;
+    };
+
+    // Retail's history values carry the within-season timestamp. Oldest first; a
+    // missing timestamp sorts as zero. UUID tie-breaking keeps the projection stable.
+    let mut oldest: Vec<(String, i64)> = profile
+        .get("pvpSeasonHistory")
+        .and_then(|v| v.as_object())
+        .map(|history| {
+            history
+                .iter()
+                .map(|(season_id, snapshot)| {
+                    (
+                        season_id.clone(),
+                        snapshot
+                            .get("highestLevelArenaReachedTimeSecs")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    oldest.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
+
+    let mut candidate = character_json;
+    let mut removed = 0usize;
+    for (season_id, _) in oldest {
+        let Some(history) = profile
+            .get_mut("pvpSeasonHistory")
+            .and_then(|v| v.as_object_mut())
+        else {
+            break;
+        };
+        history.remove(&season_id);
+        removed += 1;
+        let Ok(serialized) = serde_json::to_string(&profile) else {
+            break;
+        };
+        let new_len = profile_frame_len(&serialized, equipped_json);
+        candidate = serialized;
+        if new_len <= RETAIL_MAX_OP54_PROFILE_BYTES {
+            warn!(
+                "arena profile: character {character_id} was {original_len} B on wire; omitted \
+                 {removed} oldest archived season snapshot(s) from op54 only → {new_len} B \
+                 (stored save remains unchanged)"
+            );
+            return candidate;
+        }
+    }
+
+    let final_len = profile_frame_len(&candidate, equipped_json);
+    warn!(
+        "arena profile: character {character_id} remains {final_len} B after omitting {removed} \
+         archived season snapshot(s); no live combat/profile field was removed"
+    );
+    candidate
 }
 
 /// True iff the ghost would be a **self-match** against the human — i.e. they
@@ -4851,9 +4949,15 @@ mod tests {
             serde_json::from_str(&out).expect("profile character JSON must parse");
         let obj = v.as_object().expect("profile is a JSON object");
 
-        // No top-level `challengeSeason`, `completedQuests`, or `globalShopOffers`
-        // (retail's profile carries none of the three — capture-proven from s506).
-        for forbidden in ["challengeSeason", "completedQuests", "globalShopOffers"] {
+        // No top-level profile-only keys (capture-proven from reassembled s486/s506).
+        // The arena timestamp remains inside each pvpSeasonHistory entry, where retail
+        // sends it; it is absent at the character-profile top level.
+        for forbidden in [
+            "challengeSeason",
+            "completedQuests",
+            "globalShopOffers",
+            "highestLevelArenaReachedTimeSecs",
+        ] {
             assert!(
                 !obj.contains_key(forbidden),
                 "{forbidden} must be trimmed from the op54 profile; got keys: {:?}",
@@ -4892,6 +4996,106 @@ mod tests {
             Some(id.to_string().as_str())
         );
         assert_eq!(obj.get("name").and_then(|n| n.as_str()), Some("Opponent"));
+    }
+
+    /// Report #163 produced the same asymmetric human-match failure twice: the peer
+    /// sent a 40,788-byte opponent profile completed setup but never entered combat;
+    /// its opponent received 27,680 bytes and fought. Retail's largest reassembled
+    /// op54 PROFILE is 39,532 bytes. Bound only the transient opponent projection by
+    /// removing oldest archived seasons; keep current combat/loadout/appearance data.
+    #[test]
+    fn oversized_profile_drops_only_oldest_history_until_it_fits_retail() {
+        use blades_lib::user_data::{CompleteCharacter, CompleteCharacterData};
+        use serde_json::{Map, json};
+
+        let mut history = Map::new();
+        let mut season_ids = Vec::new();
+        for n in 1..=72u128 {
+            let season_id = Uuid::from_u128(n).to_string();
+            season_ids.push(season_id.clone());
+            history.insert(
+                season_id,
+                json!({
+                    "highestArenaReached": 6,
+                    "highestLevelArenaReached": 15,
+                    "highestLevelArenaReachedTimeSecs": 1_700_000_000i64 + n as i64,
+                    "matchmakingPvpTrophies": 2500,
+                    "numberPvpMatchPlayed": 219,
+                    "pvpChestMeter": 2,
+                    "pvpExceptionEasierMatchRemaining": 0,
+                    "pvpExceptionHarderMatchRemaining": 0,
+                    "pvpTrophies": 2500,
+                    "pvpWinningStreak": 2,
+                    "trophyCountModifier": -40
+                }),
+            );
+        }
+
+        let mut character = CompleteCharacter::default();
+        character.name = "Sheogorath-sized".into();
+        character.abilities = json!({ "payload": "a".repeat(1_600) });
+        character.equipped_abilities = json!({ "payload": "e".repeat(260) });
+        character.loadout_profiles = json!([{ "payload": "l".repeat(7_300) }]);
+        character.pvp_season_history = serde_json::Value::Object(history);
+        let data = CompleteCharacterData {
+            customization: json!({ "payload": "c".repeat(6_300) }),
+            ..Default::default()
+        };
+        let equipped = json!({ "equippedItems": { "payload": "g".repeat(3_250) } }).to_string();
+        let id = Uuid::new_v4();
+        let full = build_profile_character_json(&data, id, &character);
+        assert!(
+            profile_frame_len(&full, &equipped) > RETAIL_MAX_OP54_PROFILE_BYTES,
+            "fixture must reproduce the oversized op54 class"
+        );
+
+        let fitted = fit_profile_to_retail_transport_envelope(full, &equipped, id);
+        assert!(
+            profile_frame_len(&fitted, &equipped) <= RETAIL_MAX_OP54_PROFILE_BYTES,
+            "op54 must fit the largest capture-proven retail envelope"
+        );
+        let value: serde_json::Value = serde_json::from_str(&fitted).unwrap();
+        let remaining = value["pvpSeasonHistory"].as_object().unwrap();
+        assert!(
+            remaining.len() < 72,
+            "at least one archived season must be omitted"
+        );
+        assert!(
+            !remaining.contains_key(&season_ids[0]),
+            "the oldest archived season is omitted first"
+        );
+        assert!(
+            remaining.contains_key(&season_ids[71]),
+            "the newest archived season must survive"
+        );
+        assert_eq!(
+            value["loadoutProfiles"], character.loadout_profiles,
+            "live loadout data is not a transport-budget casualty"
+        );
+        assert_eq!(
+            value["data"]["customization"], data.customization,
+            "appearance data is not a transport-budget casualty"
+        );
+    }
+
+    /// Ordinary profiles are byte-stable: the envelope is an oversized-profile
+    /// repair, not a general rewrite of every opponent payload.
+    #[test]
+    fn profile_inside_retail_envelope_is_unchanged() {
+        use blades_lib::user_data::{CompleteCharacter, CompleteCharacterData};
+
+        let id = Uuid::new_v4();
+        let profile = build_profile_character_json(
+            &CompleteCharacterData::default(),
+            id,
+            &CompleteCharacter::default(),
+        );
+        let equipped = r#"{"equippedItems":{}}"#;
+        assert!(profile_frame_len(&profile, equipped) < RETAIL_MAX_OP54_PROFILE_BYTES);
+        assert_eq!(
+            fit_profile_to_retail_transport_envelope(profile.clone(), equipped, id),
+            profile
+        );
     }
 }
 
