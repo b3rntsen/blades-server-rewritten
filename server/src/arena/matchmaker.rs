@@ -870,6 +870,17 @@ const BOT_FALLBACK_NAME: &str = "Fighter";
 ///
 /// Idempotent: `load_bot_loadout` has two return paths and a future third would
 /// otherwise be able to produce "Blank (AI) (AI)".
+/// Whether this loadout is one of ours, not a player's.
+///
+/// The marker is the display-name suffix [`BOT_NAME_SUFFIX`] that
+/// [`mark_loadout_as_bot`] applies — there is no separate flag on the wire, and
+/// the suffix is what the player sees, so it is the honest definition. Reading
+/// it through this function rather than re-spelling the suffix is what keeps
+/// the two from drifting; `the_bot_marker_round_trips` pins that.
+pub fn is_bot_loadout(lo: &crate::arena::combat::Loadout) -> bool {
+    lo.display_name.ends_with(BOT_NAME_SUFFIX)
+}
+
 fn mark_loadout_as_bot(lo: &mut crate::arena::combat::Loadout) {
     if lo.display_name.is_empty() {
         // The `starter()` fallback carries no name, and the engine substitutes
@@ -4881,5 +4892,52 @@ mod tests {
             Some(id.to_string().as_str())
         );
         assert_eq!(obj.get("name").and_then(|n| n.as_str()), Some("Opponent"));
+    }
+}
+
+/// The AI marker has one definition, and both halves of it agree.
+#[cfg(test)]
+mod bot_marker_is_one_definition {
+    use super::*;
+
+    fn loadout_named(name: &str) -> crate::arena::combat::Loadout {
+        let mut lo = crate::arena::combat::loadout::starter();
+        lo.display_name = name.to_string();
+        lo
+    }
+
+    /// Marking a loadout as a bot must make `is_bot_loadout` say so. These are
+    /// the writer and the reader of the same convention, in the same file, and
+    /// a literal suffix in either would let them drift — which is how the cup
+    /// policy would silently stop applying.
+    #[test]
+    fn the_bot_marker_round_trips() {
+        for name in ["Meryl Andra", "Aurora", ""] {
+            let mut lo = loadout_named(name);
+            assert!(!is_bot_loadout(&lo) || name.is_empty());
+            mark_loadout_as_bot(&mut lo);
+            assert!(
+                is_bot_loadout(&lo),
+                "marked as a bot but not read back as one: {:?}",
+                lo.display_name
+            );
+        }
+    }
+
+    /// A real player is not a bot, including one whose name merely contains the
+    /// suffix text somewhere other than the end.
+    #[test]
+    fn a_player_is_not_a_bot() {
+        assert!(!is_bot_loadout(&loadout_named("Flappety")));
+        assert!(!is_bot_loadout(&loadout_named("Fighter (AI) of the Keep")));
+    }
+
+    /// Marking twice must not double the suffix — the name is player-visible.
+    #[test]
+    fn marking_twice_does_not_double_the_suffix() {
+        let mut lo = loadout_named("Aurora");
+        mark_loadout_as_bot(&mut lo);
+        mark_loadout_as_bot(&mut lo);
+        assert_eq!(lo.display_name, format!("Aurora{BOT_NAME_SUFFIX}"));
     }
 }

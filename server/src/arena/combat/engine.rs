@@ -310,8 +310,32 @@ const MATCH_STATE_INTERROUND_PROGRESSION: &[(MatchState, Duration, f32)] = &[
     (MatchState::InRound, Duration::from_secs(4), ROUND_TIMEOUT_WIRE),
 ];
 
+/// Whether a finished match's cups and W/L must be thrown away.
+///
+/// Owner policy, 2026-09-20: a bug in a human-vs-AI match nulls the result. We
+/// cannot enumerate "bugs", so this keys on the one thing no functioning match
+/// can look like — the player sent us NOTHING for the entire match, so they
+/// never saw it. The opponent being ours is what makes voiding free: there is
+/// no second player to treat unfairly.
+///
+/// Deliberately not applied to human-vs-human. There, voiding one side's loss
+/// would have to void the other side's win, and a silent client would become a
+/// way to refuse a defeat.
+fn void_ai_match_result(player_sent_anything: bool, opponent_is_bot: bool) -> bool {
+    opponent_is_bot && !player_sent_anything
+}
+
 pub struct MatchInstance {
     combat: MatchCombat,
+    /// Whether each slot has EVER sent us a c2s message in this match.
+    ///
+    /// Recorded at the one inbound seam, for the same reason the trace is:
+    /// `on_c2s` is the only way client bytes enter the engine, so a flag set
+    /// there cannot be missed by a path that forgets to update it.
+    ///
+    /// A player who never sent a single byte did not play the match — they
+    /// never saw it. See `void_for_a_player_who_never_arrived`.
+    saw_c2s: [bool; 2],
     /// s2c ENet reliable sequence (used by the raw-socket dev path framing).
     s2c_seq: u16,
     last_heartbeat: Instant,
@@ -402,6 +426,7 @@ impl MatchInstance {
         combat.match_net_object_id = combat.alloc_net_object_id();
         let debug_hold_window = super::debug_hold_window();
         MatchInstance {
+            saw_c2s: [false; 2],
             combat,
             s2c_seq: 0,
             last_heartbeat: now,
@@ -509,6 +534,9 @@ impl MatchInstance {
         // Both directions at the one seam — see `trace`. Off unless
         // ARENA_TRACE_DIR is set, and it can never fail a match.
         super::trace::record(&self.combat.game_session_id, "c2s", sender, user_data);
+        if let Some(seen) = self.saw_c2s.get_mut(sender) {
+            *seen = true;
+        }
         let mut out = self.on_c2s_resolved(sender, user_data, now);
         out.extend(resolve::drain_state_changes(&mut self.combat, now));
         super::trace::record_outbound(&self.combat.game_session_id, &out);
@@ -1716,6 +1744,37 @@ impl MatchInstance {
             );
             out.push((slot, frame));
 
+            // A match against one of our own bots that this player never played
+            // costs them nothing.
+            //
+            // Policy, set by the owner 2026-09-20: a bug in a human-vs-AI match
+            // nulls the result. Cups lost to a fight the player never saw
+            // generate a support complaint we do not want and cannot answer,
+            // and the opponent is ours, so there is no one to be unfair to.
+            //
+            // The test is "sent us not one byte all match". `on_c2s` is the only
+            // way client bytes reach the engine, so this cannot be true of a
+            // player who actually fought — any tap, block or move sets it. It is
+            // deliberately NOT a heuristic about damage or rounds: a player can
+            // legitimately lose without landing a hit, but cannot legitimately
+            // play a whole match in total silence.
+            //
+            // Only the cups and the win/loss record are voided. Gold and XP are
+            // left alone: taking those back turns one complaint into a different
+            // one, and they are not what the policy is about.
+            let never_arrived = !self.saw_c2s.get(slot).copied().unwrap_or(true);
+            let versus_bot = opponent
+                .map(|o| crate::arena::matchmaker::is_bot_loadout(&self.combat.fighters[o].loadout))
+                .unwrap_or(false);
+            let void_result = void_ai_match_result(!never_arrived, versus_bot);
+            if void_result {
+                log::warn!(
+                    "arena: voiding result for slot {slot} in {:?} — no c2s all match against a bot; \
+                     cups and W/L not recorded (trophy_delta would have been {trophy_delta})",
+                    game_session_id
+                );
+            }
+
             // Persist. A bot / starter loadout has no character uuid to write to, and
             // the queue is a no-op when the server runs without a database (unit tests,
             // the offline round-trip harness).
@@ -1726,10 +1785,10 @@ impl MatchInstance {
                     level,
                     gold: payout.gold,
                     character_xp: payout.character_xp,
-                    trophy_delta,
+                    trophy_delta: if void_result { 0 } else { trophy_delta },
                     rounds_won,
                     rounds_lost,
-                    win: is_winner,
+                    win: is_winner && !void_result,
                     completed_at_secs,
                     opponent_character_id: opponent.and_then(|o| {
                         uuid::Uuid::parse_str(&self.combat.fighters[o].loadout.character_uuid).ok()
@@ -4827,5 +4886,62 @@ pub(in crate::arena::combat) mod tests {
             vec![Some(2), Some(3)],
             "viewer 0 gets BOTH Avatar op50: own (Autonomous=3) AND opponent (Simulated=2)"
         );
+    }
+}
+
+/// Cups lost to a fight the player never saw.
+///
+/// Flappety, 2026-09-20 session `99ed040e`: the client showed a zoomed-out
+/// scene, the match played itself, and the loss took **87 cups** to an AI. The
+/// owner's rule is that this costs nothing — a bug between a human and one of
+/// our own bots nulls the result, because the complaint is not worth the cups
+/// and there is no opponent to be unfair to.
+#[cfg(test)]
+mod void_for_a_player_who_never_arrived {
+    use super::void_ai_match_result;
+
+    #[test]
+    fn a_silent_player_against_a_bot_is_voided() {
+        assert!(void_ai_match_result(false, true));
+    }
+
+    #[test]
+    fn a_player_who_fought_and_lost_to_a_bot_keeps_the_result() {
+        // Losing fairly still costs cups; this is not an AI-loss amnesty.
+        assert!(!void_ai_match_result(true, true));
+    }
+
+    #[test]
+    fn a_silent_player_against_a_human_is_not_voided() {
+        // Voiding here would let a muted client refuse a defeat, and would have
+        // to steal the winner's cups to stay consistent.
+        assert!(!void_ai_match_result(false, false));
+    }
+
+    /// The rule is only as good as the flag it reads, and the flag has exactly
+    /// one writer: the `on_c2s` seam. Deleting that write compiles cleanly and
+    /// makes EVERY match look silent, so every AI loss would be voided —
+    /// a mutation the four tests above cannot see, because they take the flag
+    /// as an argument. So the seam is pinned here, in source.
+    #[test]
+    fn the_inbound_seam_still_records_that_the_player_spoke() {
+        let src = include_str!("engine.rs");
+        let start = src
+            .find("pub fn on_c2s(")
+            .expect("on_c2s still exists");
+        let body = &src[start..start + 800];
+        assert!(
+            body.contains("saw_c2s"),
+            "on_c2s no longer records that the player sent anything; every \
+             match would look silent and every AI loss would be voided"
+        );
+        // Control: the needle is real, so a typo here is a red test, not a
+        // silently-passing one.
+        assert!(!body.contains("saw_c2s_that_does_not_exist"));
+    }
+
+    #[test]
+    fn a_normal_human_match_is_untouched() {
+        assert!(!void_ai_match_result(true, false));
     }
 }
