@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::economy::{self, RewardChest, RewardGrant, RewardItem};
+use crate::user_data::CompleteInventory;
 use crate::game_data::GameDataItem;
 use crate::features::repair::RepairData;
 use crate::static_data::GiftDef;
@@ -109,6 +110,94 @@ pub fn build_gift_reward(
         })
         .collect();
     reward
+}
+
+/// The most instances one gift line may expand into.
+///
+/// A stackable line is a count; an instanced one is that many separate objects
+/// in a backpack with a capacity. 100 is far above anything retail authored (the
+/// largest gift gear line is 1) and far below a number that would fill an
+/// inventory from a typo in the admin form.
+pub const MAX_INSTANCED_GIFT_ITEMS: u64 = 100;
+
+/// Move gear that a pre-#194 gift payout filed as a stackable into real item
+/// instances, in place.
+///
+/// Returns what it moved, as `(template, count)`; an empty vector means there
+/// was nothing to do and the caller must not write.
+///
+/// WHY IT IS NEEDED AT ALL. [`build_gift_reward`] now grants gear correctly, but
+/// four characters had already been handed an Ebony Mail as
+/// `{"count": 1, "itemTemplateId": "def810af-…"}` — an armour with no instance
+/// id, no durability and no properties, which renders as locked and broken and
+/// which repair, sell and salvage all refuse because each addresses an instance
+/// that does not exist.
+///
+/// The classification is [`economy::bucket_for_template`], the same table the
+/// payout and the shop grant read, so a row repaired here cannot disagree with
+/// a row granted today. A template the game data cannot name is left alone: it
+/// is not ours to reinterpret.
+///
+/// `new_item_id` is injected so a test can assert the ids rather than watch
+/// random ones go by.
+pub fn promote_legacy_gift_gear(
+    items: &HashMap<Uuid, GameDataItem>,
+    repair_data: &RepairData,
+    inventory: &mut CompleteInventory,
+    mut new_item_id: impl FnMut() -> Uuid,
+) -> Vec<(Uuid, u64)> {
+    // Snapshot first: the loop below mutates the same map this reads.
+    let candidates: Vec<(Uuid, u64, f64)> = inventory
+        .backpack
+        .stackable_items
+        .counts()
+        .filter_map(|(template, count)| {
+            if !needs_instance(template, items) || count == 0 || count > MAX_INSTANCED_GIFT_ITEMS {
+                return None;
+            }
+            // Rings and jewellery never carry durability — absent on all 34,867
+            // captured instances — so 0.0 is their faithful value, not a
+            // fallback. Everything else takes the table's, or its default.
+            let durability = if economy::template_skips_durability(template, items) {
+                0.0
+            } else {
+                repair_data
+                    .max_durability(template, 0)
+                    .unwrap_or(crate::features::repair::DEFAULT_DURABILITY)
+            };
+            Some((template, count, durability))
+        })
+        .collect();
+
+    let mut promoted = Vec::with_capacity(candidates.len());
+    for (template, count, durability) in candidates {
+        // The count came from the snapshot above and nothing else has touched
+        // the map, so this cannot fail; if it ever does, leaving the stack in
+        // place is the safe outcome rather than minting items for free.
+        if inventory
+            .backpack
+            .stackable_items
+            .remove(template, count)
+            .is_err()
+        {
+            continue;
+        }
+        for _ in 0..count {
+            inventory.backpack.items.0.insert(
+                new_item_id(),
+                Item {
+                    item_template_id: template,
+                    grade: None,
+                    tempering_level: 0,
+                    durability,
+                    properties: ItemPropertiesAll::default(),
+                    arcane_tier: None,
+                },
+            );
+        }
+        promoted.push((template, count));
+    }
+    promoted
 }
 
 /// Whether the gift can be claimed now, given how many times this character has
@@ -377,5 +466,153 @@ mod report194_gear_instance_tests {
             let table = HashMap::from([(id, GameDataItem { name: "x".into(), r#type: t })]);
             assert_eq!(needs_instance(id, &table), instanced, "type {t}");
         }
+    }
+}
+
+#[cfg(test)]
+mod report194_legacy_promotion_tests {
+    //! The repair for rows the old payout already wrote. Ported from the
+    //! parallel fix (fork #329), with one assertion changed — see
+    //! `a_ring_is_promoted_without_durability`.
+    use super::*;
+    use crate::game_data::GameDataItem;
+    use crate::user_data::{Backpack, CompleteInventory, Loadout, Treasury};
+    use serde_json::json;
+
+    const EBONY_MAIL: Uuid = Uuid::from_u128(0xdef810af_e9f5_4e23_9247_1edf391d82e1);
+    const RING: Uuid = Uuid::from_u128(0x11111111_2222_4333_8444_555555555555);
+    const MATERIAL: Uuid = Uuid::from_u128(0x42d91529_c88b_4c5b_815b_b55508b4e7ef);
+
+    fn game_items() -> HashMap<Uuid, GameDataItem> {
+        HashMap::from([
+            (EBONY_MAIL, GameDataItem { name: "Ebony Mail".into(), r#type: 3 }),
+            (RING, GameDataItem { name: "Ring".into(), r#type: 10 }),
+            (MATERIAL, GameDataItem { name: "Material".into(), r#type: 8 }),
+        ])
+    }
+
+    fn repair_data() -> RepairData {
+        let durability = json!({
+            EBONY_MAIL.to_string(): {
+                "0": 453.0, "1": 453.0, "2": 453.0, "3": 453.0, "4": 453.0,
+                "5": 453.0, "6": 453.0, "7": 453.0, "8": 453.0, "9": 453.0, "10": 453.0
+            }
+        });
+        RepairData::from_json(&durability, &json!({}))
+    }
+
+    /// `uuid` is built without the `v4` feature here, so mint distinct ids by
+    /// counting rather than randomly — which a test wants anyway.
+    fn fresh_id() -> Uuid {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0x1000);
+        Uuid::from_u128(N.fetch_add(1, Ordering::Relaxed) as u128)
+    }
+
+    fn inventory() -> CompleteInventory {
+        CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: Loadout::default(),
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        }
+    }
+
+    /// THE REPAIR. Four characters hold an Ebony Mail filed as a stackable; this
+    /// is what turns it back into something they can wear, repair and sell.
+    #[test]
+    fn legacy_gift_gear_is_promoted_to_full_item_instances() {
+        let mut inv = inventory();
+        inv.backpack.stackable_items.add(EBONY_MAIL, 2);
+        inv.backpack.stackable_items.add(RING, 1);
+        inv.backpack.stackable_items.add(MATERIAL, 7);
+
+        let mut next = 1u128;
+        let promoted = promote_legacy_gift_gear(&game_items(), &repair_data(), &mut inv, || {
+            let id = Uuid::from_u128(next);
+            next += 1;
+            id
+        });
+
+        assert_eq!(promoted.len(), 2, "the armour and the ring, not the material");
+        assert_eq!(inv.backpack.stackable_items.count(EBONY_MAIL), 0);
+        assert_eq!(inv.backpack.stackable_items.count(RING), 0);
+        // CONTROL: a material is a stackable and must stay one.
+        assert_eq!(inv.backpack.stackable_items.count(MATERIAL), 7);
+        assert_eq!(inv.backpack.items.0.len(), 3, "two armours and one ring");
+        assert!(inv.backpack.items.0.values().any(|i| {
+            i.item_template_id == EBONY_MAIL && i.durability == 453.0
+        }));
+    }
+
+    /// The one place this differs from fork #329, which gave a promoted ring
+    /// `DEFAULT_DURABILITY` (100).
+    ///
+    /// Rings and jewellery carry NO durability in retail — absent on all 34,867
+    /// captured instances, and absent from `item_durability.json` because they
+    /// do not wear out. Handing a gift ring 100 would make it the only ring in
+    /// the game with a durability bar, so the faithful value is 0.
+    #[test]
+    fn a_ring_is_promoted_without_durability() {
+        let mut inv = inventory();
+        inv.backpack.stackable_items.add(RING, 1);
+        promote_legacy_gift_gear(&game_items(), &repair_data(), &mut inv, fresh_id);
+        let ring = inv
+            .backpack
+            .items
+            .0
+            .values()
+            .find(|i| i.item_template_id == RING)
+            .expect("the ring was promoted");
+        assert_eq!(ring.durability, 0.0);
+    }
+
+    /// An absurd stack is left alone rather than expanded into a backpack full
+    /// of objects — a typo in the admin form must not cost someone their
+    /// inventory.
+    #[test]
+    fn an_absurd_stack_is_not_expanded() {
+        let mut inv = inventory();
+        inv.backpack
+            .stackable_items
+            .add(EBONY_MAIL, MAX_INSTANCED_GIFT_ITEMS + 1);
+        assert!(
+            promote_legacy_gift_gear(&game_items(), &repair_data(), &mut inv, Uuid::nil).is_empty()
+        );
+        assert_eq!(
+            inv.backpack.stackable_items.count(EBONY_MAIL),
+            MAX_INSTANCED_GIFT_ITEMS + 1
+        );
+        assert!(inv.backpack.items.is_empty());
+    }
+
+    /// CONTROL, and the one that keeps the caller honest: a healthy inventory
+    /// reports nothing moved, so the inventory handler does not write on every
+    /// single fetch for every single player.
+    #[test]
+    fn a_healthy_inventory_is_not_touched() {
+        let mut inv = inventory();
+        inv.backpack.stackable_items.add(MATERIAL, 3);
+        assert!(
+            promote_legacy_gift_gear(&game_items(), &repair_data(), &mut inv, fresh_id)
+                .is_empty()
+        );
+        assert_eq!(inv.backpack.stackable_items.count(MATERIAL), 3);
+        assert!(inv.backpack.items.is_empty());
+    }
+
+    /// A template the game data cannot name is not ours to reinterpret.
+    #[test]
+    fn an_unknown_template_is_left_stacked() {
+        let mut inv = inventory();
+        let unknown = Uuid::from_u128(0x99999999_8888_4777_8666_555555555555);
+        inv.backpack.stackable_items.add(unknown, 1);
+        assert!(
+            promote_legacy_gift_gear(&game_items(), &repair_data(), &mut inv, fresh_id)
+                .is_empty()
+        );
+        assert_eq!(inv.backpack.stackable_items.count(unknown), 1);
     }
 }
