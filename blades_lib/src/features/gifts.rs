@@ -35,32 +35,15 @@ pub enum GiftError {
     LimitReached,
 }
 
-/// The item types retail keeps as INSTANCES, in `backpack.items`, rather than as
-/// a counted line in `backpack.stackableItems`.
-///
-/// MEASURED, not assumed, across 606 captured retail inventories — the split is
-/// total, with no template ever appearing on both sides:
-///
-/// | type | as instance | as stackable |
-/// | --- | --- | --- |
-/// | weapon (2) | 13,695 | 0 |
-/// | armor (3) | 25,592 | 0 |
-/// | shield (9) | 12,502 | 0 |
-/// | ring (10) | 23,927 | 0 |
-/// | jewelry (11) | 10,940 | 0 |
-/// | consumable, material, decoration, emote, quest_item, special | 0 | 72,883 |
-const INSTANCED_ITEM_TYPES: [u64; 5] = [2, 3, 9, 10, 11];
-
 /// Does this template need an item instance of its own?
 ///
 /// A template the game data does not know is left stackable: that is the old
 /// behaviour, and inventing an instance for an id we cannot classify would put
 /// an unopenable object in someone's backpack — which is the very bug this
-/// function exists to stop.
+/// function exists to stop. The type table it reads is in
+/// [`crate::economy::bucket_for_template`], shared with the shop grant.
 pub fn needs_instance(template: Uuid, items: &HashMap<Uuid, GameDataItem>) -> bool {
-    items
-        .get(&template)
-        .is_some_and(|i| INSTANCED_ITEM_TYPES.contains(&i.r#type))
+    economy::bucket_for_template(template, items) == Some(economy::ItemBucket::Instance)
 }
 
 /// Build the reward a gift grants.
