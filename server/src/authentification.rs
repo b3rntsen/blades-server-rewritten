@@ -6,14 +6,14 @@ use diesel::{
     ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper, associations::HasTable,
     insert_into,
 };
-use diesel_async::RunQueryDsl;
+use diesel_async::{AsyncConnection, RunQueryDsl};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
     BladeApiError, ServerGlobal,
     json_db::JsonDbWrapper,
-    models::UserDBEntry,
+    models::{CharacterDbAlone, UserDBEntry},
     schema,
     session::{Session, SessionLookedUpMaybe},
 };
@@ -545,39 +545,93 @@ async fn swap_character_ownership(
         return Ok((0, 0));
     }
 
-    // Snapshot both sides first: the two updates below would otherwise chase
-    // each other's rows and move everything one way.
-    let played: Vec<Uuid> = ch::characters
-        .filter(ch::user_id.eq(played_user_id))
-        .select(ch::id)
+    // Lock both sides in a deterministic order. `characters.user_id` is
+    // UNIQUE, so an ordinary A -> B / B -> A pair of updates can never work:
+    // the first statement collides with the row which has not moved yet.
+    let rows: Vec<CharacterDbAlone> = ch::characters
+        .filter(ch::user_id.eq_any([played_user_id, linked_user_id]))
+        .select(CharacterDbAlone::as_select())
+        .order(ch::user_id.asc())
+        .for_update()
         .load(conn)
         .await?;
-    let displaced: Vec<Uuid> = ch::characters
-        .filter(ch::user_id.eq(linked_user_id))
-        .select(ch::id)
-        .load(conn)
-        .await?;
+    let played = rows
+        .iter()
+        .find(|row| row.user_id == played_user_id)
+        .map(|row| row.id);
+    let displaced = rows
+        .iter()
+        .find(|row| row.user_id == linked_user_id)
+        .map(|row| row.id);
 
     // Nothing to adopt: leave the account exactly as it was rather than
     // emptying it. An account with no character at all is the #191 loading-
     // screen hang, which is a worse outcome than keeping the wrong one.
-    if played.is_empty() {
+    let Some(played) = played else {
         return Ok((0, 0));
-    }
+    };
 
-    let adopted = diesel::update(ch::characters.filter(ch::id.eq_any(&played)))
+    let Some(displaced) = displaced else {
+        let adopted = diesel::update(ch::characters.filter(ch::id.eq(played)))
+            .set(ch::user_id.eq(linked_user_id))
+            .execute(conn)
+            .await?;
+        return Ok((adopted, 0));
+    };
+
+    // Park B on a transaction-local user, freeing B before A moves into it.
+    // The parking user is removed before commit, so neither it nor an
+    // intermediate ownership state is visible outside this transaction.
+    use crate::schema::users::dsl as u;
+    let parking_user_id = Uuid::new_v4();
+    insert_into(u::users)
+        .values(UserDBEntry {
+            id: parking_user_id,
+            secret_id: Uuid::new_v4(),
+            data: JsonDbWrapper(UserAccount::new_random()),
+        })
+        .execute(conn)
+        .await?;
+
+    let parked = diesel::update(ch::characters.filter(ch::id.eq(displaced)))
+        .set(ch::user_id.eq(parking_user_id))
+        .execute(conn)
+        .await?;
+    let adopted = diesel::update(ch::characters.filter(ch::id.eq(played)))
         .set(ch::user_id.eq(linked_user_id))
         .execute(conn)
         .await?;
-    let moved_aside = if displaced.is_empty() {
-        0
-    } else {
-        diesel::update(ch::characters.filter(ch::id.eq_any(&displaced)))
-            .set(ch::user_id.eq(played_user_id))
-            .execute(conn)
-            .await?
-    };
+    let moved_aside = diesel::update(ch::characters.filter(ch::id.eq(displaced)))
+        .set(ch::user_id.eq(played_user_id))
+        .execute(conn)
+        .await?;
+    diesel::delete(u::users.filter(u::id.eq(parking_user_id)))
+        .execute(conn)
+        .await?;
+
+    debug_assert_eq!(parked, moved_aside);
     Ok((adopted, moved_aside))
+}
+
+/// Device rebinding and the optional character swap are one operation. If
+/// either half fails, the other rolls back and the player can safely retry the
+/// conflict choice instead of receiving a success response for partial state.
+async fn apply_forced_link_changes(
+    conn: &mut diesel_async::AsyncPgConnection,
+    source_user_id: Uuid,
+    linked_user_id: Uuid,
+    keep_played: bool,
+) -> Result<(usize, (usize, usize)), diesel::result::Error> {
+    conn.transaction(move |mut conn| Box::pin(async move {
+        let rebound = bind_linked_devices(&mut conn, source_user_id, linked_user_id).await?;
+        let moved = if keep_played {
+            swap_character_ownership(&mut conn, source_user_id, linked_user_id).await?
+        } else {
+            (0, 0)
+        };
+        Ok((rebound, moved))
+    }))
+    .await
 }
 
 /// `POST /…/auth/bnet/link/force` — the player answered the conflict prompt.
@@ -608,33 +662,15 @@ async fn bnet_link_force(
 
     let (rebound, moved) = {
         let mut conn = app_state.db_pool.get().await.unwrap();
-        let rebound = bind_linked_devices(&mut conn, source_user_id, user_id)
+        apply_forced_link_changes(&mut conn, source_user_id, user_id, keep_played)
             .await
             .map_err(|error| {
                 log::error!(
-                    "account link (forced): failed to bind devices from user {source_user_id} \
-                     to user {user_id}: {error}"
+                    "account link (forced): could not atomically bind devices and apply the \
+                     character choice from user {source_user_id} to user {user_id}: {error}"
                 );
                 BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 114)
-            })?;
-        let moved = if keep_played {
-            swap_character_ownership(&mut conn, source_user_id, user_id)
-                .await
-                .map_err(|error| {
-                    // The link itself already succeeded; failing the request now
-                    // would leave the player signed in nowhere. Log loudly and
-                    // let them in on the account they linked.
-                    log::error!(
-                        "account link (forced): kept the played character but could not move it \
-                         from {source_user_id} to {user_id}: {error}"
-                    );
-                    error
-                })
-                .unwrap_or((0, 0))
-        } else {
-            (0, 0)
-        };
-        (rebound, moved)
+            })?
     };
 
     let session_id = app_state.session_store.store_new_session(session.clone());
@@ -1477,5 +1513,124 @@ mod report185_link_choice_tests {
         // secret id would mean the opposite against the row id.
         assert!(!keeps_the_played_character(Some(&CREDENTIAL.to_string()), CREDENTIAL));
         assert!(keeps_the_played_character(Some(&CREDENTIAL.to_string()), row_id));
+    }
+
+    /// Exercise the production transaction against the real UNIQUE(user_id)
+    /// shape. The original #335 implementation updated the played character
+    /// directly to the occupied linked account, so Postgres rejected the first
+    /// statement and the handler nevertheless returned success.
+    #[tokio::test]
+    async fn choosing_the_played_character_swaps_occupied_accounts_atomically() {
+        use diesel_async::{AsyncConnection, AsyncPgConnection};
+
+        let Some(url) = std::env::var("TEST_DATABASE_URL").ok() else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — #185 ownership swap not verified");
+            return;
+        };
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction()
+            .await
+            .expect("could not open a test transaction");
+        let test_schema = format!("t{}", Uuid::new_v4().simple());
+        diesel::sql_query(format!("CREATE SCHEMA {test_schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        diesel::sql_query(format!("SET LOCAL search_path TO {test_schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        diesel::sql_query(
+            "CREATE TABLE users ( \
+                 id UUID PRIMARY KEY, \
+                 secret_id UUID NOT NULL UNIQUE, \
+                 data JSONB NOT NULL)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        diesel::sql_query(
+            "CREATE TABLE characters ( \
+                 id UUID PRIMARY KEY, \
+                 user_id UUID NOT NULL UNIQUE REFERENCES users(id))",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        diesel::sql_query(
+            "CREATE TABLE device_bindings ( \
+                 device_id TEXT PRIMARY KEY, \
+                 user_id UUID REFERENCES users(id), \
+                 last_seen TIMESTAMPTZ NOT NULL DEFAULT now(), \
+                 bound_at TIMESTAMPTZ)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+        let source = Uuid::new_v4();
+        let linked = Uuid::new_v4();
+        let played_character = Uuid::new_v4();
+        let displaced_character = Uuid::new_v4();
+        for (id, devices) in [
+            (source, serde_json::json!(["phone"])),
+            (linked, serde_json::json!([])),
+        ] {
+            diesel::sql_query("INSERT INTO users (id, secret_id, data) VALUES ($1, $2, $3)")
+                .bind::<diesel::sql_types::Uuid, _>(id)
+                .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+                .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"gp_deviceids": devices}))
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+        for (id, owner) in [(played_character, source), (displaced_character, linked)] {
+            diesel::sql_query("INSERT INTO characters (id, user_id) VALUES ($1, $2)")
+                .bind::<diesel::sql_types::Uuid, _>(id)
+                .bind::<diesel::sql_types::Uuid, _>(owner)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+        diesel::sql_query("INSERT INTO device_bindings (device_id, user_id) VALUES ('phone', $1)")
+            .bind::<diesel::sql_types::Uuid, _>(source)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            apply_forced_link_changes(&mut conn, source, linked, true)
+                .await
+                .unwrap(),
+            (1, (1, 1))
+        );
+
+        #[derive(diesel::QueryableByName)]
+        struct IdRow {
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            id: Uuid,
+        }
+        async fn character_for(conn: &mut AsyncPgConnection, owner: Uuid) -> Uuid {
+            diesel::sql_query("SELECT id FROM characters WHERE user_id = $1")
+                .bind::<diesel::sql_types::Uuid, _>(owner)
+                .get_result::<IdRow>(conn)
+                .await
+                .unwrap()
+                .id
+        }
+
+        assert_eq!(character_for(&mut conn, linked).await, played_character);
+        assert_eq!(character_for(&mut conn, source).await, displaced_character);
+        assert_eq!(
+            diesel::sql_query("SELECT id FROM users")
+                .load::<IdRow>(&mut conn)
+                .await
+                .unwrap()
+                .len(),
+            2,
+            "the transaction-local parking user must be removed"
+        );
     }
 }
