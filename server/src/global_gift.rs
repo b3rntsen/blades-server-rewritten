@@ -422,6 +422,9 @@ pub async fn claim_global_gift(
         .await
         .ok_or_else(|| map_gift_err(GiftError::NotFound))?;
 
+    // Cloned before the transaction closure takes ownership: the gear branch of
+    // the reward needs the item table and the durability table.
+    let globals = app_state.get_ref().clone();
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = {
@@ -447,7 +450,16 @@ pub async fn claim_global_gift(
                 .unwrap_or(0);
             gifts::can_claim(&def, current, now).map_err(map_gift_err)?;
 
-            let mut reward = gifts::build_gift_reward(&def);
+            let mut reward = gifts::build_gift_reward(
+                &def,
+                &globals.game_data.items_template,
+                &globals.repair_data,
+            );
+            // Gear arrives as an instance and every instance needs its own id —
+            // two claims of the same gift must not share one.
+            for item in &mut reward.items {
+                item.id = Uuid::new_v4();
+            }
             for chest in &mut reward.chests {
                 if chest.level == 0 {
                     chest.level = entry.character.0.level as u64;
