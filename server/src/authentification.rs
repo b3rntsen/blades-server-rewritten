@@ -63,6 +63,21 @@ fn persistent_login_token(secret_user_id: Uuid) -> String {
     secret_user_id.to_string()
 }
 
+/// The user id this server PUBLISHES to the client, from one place.
+///
+/// The client compares the id it was handed at login against every userId we
+/// send it elsewhere — a guild member row, for one. Those two answers live in
+/// different modules, and when they disagreed the client could not find its own
+/// membership and the guild menu spun forever (report #123, and again the day
+/// `SessionResponseInner` switched currencies while `guild.rs` did not).
+///
+/// So there is exactly one function that decides, and both callers use it.
+/// Changing the published identity is now a one-line change that moves every
+/// consumer with it.
+pub(crate) fn published_user_id(session: &Session) -> Uuid {
+    session.user_id
+}
+
 impl SessionResponseInner {
     fn from_session(session_id: Uuid, session: &Session) -> Self {
         let mut denied_features = HashMap::new();
@@ -97,7 +112,7 @@ impl SessionResponseInner {
             // in 998 of 998 captured auth requests, and all 256 logins on prod
             // in the last 10 days took the device path. `loginToken` is
             // unchanged and remains the re-establish credential.
-            user_id: session.user_id.to_string(),
+            user_id: published_user_id(session).to_string(),
             token: session.generate_token(&session_id),
             schema: "blades_v1".to_string(),
             // The client persists this value and sends it alone to bnet/login

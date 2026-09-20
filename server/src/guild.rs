@@ -271,30 +271,20 @@ impl MemberWire {
     }
 }
 
-/// Serialize the current guild without changing identity currencies mid-response.
+/// The member rows as the client will read them.
 ///
-/// Membership rows use the private `users.id` foreign key, while the client only
-/// knows the authenticated account as `SessionResponse.userId` — `users.secret_id`.
-/// Retail's captured current-guild response includes that exact session user id
-/// for the current player's member row. If ours exposes the private id instead,
-/// the client cannot find its own membership/rank and leaves the guild menu on
-/// its initial spinner. Other member ids remain in the existing server currency
-/// until the whole social surface is migrated together.
-fn current_guild_members(
-    members: &[GuildMemberRow],
-    current_user_id: Uuid,
-    current_public_user_id: Uuid,
-) -> Vec<MemberWire> {
-    members
-        .iter()
-        .map(|row| {
-            let mut wire = MemberWire::from_row(row);
-            if row.user_id == current_user_id {
-                wire.user_id = current_public_user_id;
-            }
-            wire
-        })
-        .collect()
+/// There is no id translation here any more, and that is the point. Membership
+/// rows key on `users.id`, and [`published_user_id`] now hands the client that
+/// same id at login, so the two already agree.
+///
+/// This used to rewrite the current player's row to `users.secret_id`, because
+/// the login response published the secret (report #123). When the login
+/// response was corrected to publish the public id, this rewrite was left
+/// behind and started doing the very harm it was added to prevent: the client's
+/// own id matched no row, it could not find its membership, and the guild menu
+/// sat on its initial spinner. A bridge outlives the gap it spans.
+fn current_guild_members(members: &[GuildMemberRow]) -> Vec<MemberWire> {
+    members.iter().map(MemberWire::from_row).collect()
 }
 
 #[derive(Serialize)]
@@ -662,11 +652,7 @@ pub async fn get_current_guild(
                 let wire = GuildWire::from_row(&g, members.len() as i64);
                 (
                     Some(wire),
-                    current_guild_members(
-                        &members,
-                        session.session.user_id,
-                        session.session.secret_user_id,
-                    ),
+                    current_guild_members(&members),
                 )
             }
             None => (None, Vec::new()),
@@ -2847,19 +2833,45 @@ mod create_wire {
         }
     }
 
-    /// Report #123: retail's own member row uses the same public id as its
-    /// authenticated session. Our database id is deliberately different from
-    /// that public bearer, so the current-guild response must bridge it.
+    /// The member row the client sees must carry the SAME id we hand it at
+    /// login, or it cannot find itself and the guild menu spins forever.
+    ///
+    /// This is asserted against [`crate::authentification::published_user_id`]
+    /// rather than against a literal, because the bug this replaces was exactly
+    /// the two sides drifting: the login response was corrected to publish the
+    /// public id and this file kept translating to the secret one, so the guild
+    /// screen hung on prod (2026-09-20). A literal here would have passed
+    /// through that entire regression.
     #[test]
-    fn current_players_member_uses_the_session_user_id() {
-        let private_id = Uuid::from_u128(0x123);
-        let public_id = Uuid::from_u128(0x456);
-        let another = Uuid::from_u128(0x789);
-        let rows = vec![member_row(private_id), member_row(another)];
+    fn the_members_id_is_the_one_login_publishes() {
+        use crate::authentification::published_user_id;
+        use crate::session::Session;
+        use std::time::Duration;
 
-        let wire = current_guild_members(&rows, private_id, public_id);
-        assert_eq!(wire[0].user_id, public_id, "the client must find itself");
-        assert_eq!(wire[1].user_id, another, "unrelated members are unchanged");
+        let private_id = Uuid::from_u128(0x123);
+        let secret_id = Uuid::from_u128(0x456);
+        let another = Uuid::from_u128(0x789);
+        let session = Session::new(private_id, secret_id, Duration::from_secs(60));
+
+        let rows = vec![member_row(private_id), member_row(another)];
+        let wire = current_guild_members(&rows);
+
+        assert_eq!(
+            wire[0].user_id,
+            published_user_id(&session),
+            "the client cannot find its own membership"
+        );
+        assert_eq!(wire[1].user_id, another, "other members are unchanged");
+    }
+
+    /// And the secret must never appear in a member row: it is a credential,
+    /// and publishing it here was the original defect in the other direction.
+    #[test]
+    fn a_member_row_never_carries_the_login_secret() {
+        let private_id = Uuid::from_u128(0x123);
+        let secret_id = Uuid::from_u128(0x456);
+        let wire = current_guild_members(&[member_row(private_id)]);
+        assert_ne!(wire[0].user_id, secret_id);
     }
 
     /// Retail's guild object carries thirteen fields; we were sending twelve.
