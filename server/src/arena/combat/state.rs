@@ -387,7 +387,8 @@ pub enum ActorStateType {
     Paralyzed = 13,
     /// Draining an enemy (life/magicka leech). `PlayerDrainingStateChange` (gmid 42).
     PlayerDraining = 14,
-    /// An ability swing in progress. Distinct from `PlayerAutoAttack`.
+    /// A pointer-driven manual slash. Distinct from the tap/hold fallback
+    /// `PlayerAutoAttack`; serialized in `PlayerAttackStateChange` (gmid 40).
     PlayerAttack = 15,
     /// Post-swing recovery — the window in which the player may NOT act again.
     /// `PlayerRecoveryStateChange` (gmid 44) is what tells the client when the
@@ -413,6 +414,17 @@ pub enum ActorStateType {
 /// the `retainedCount` byte at the head of propId 7 rises to 20 and then saturates,
 /// and the widest ByteArray in the retail corpus is 23 bytes = 3 header + 20 entries.
 pub const STATE_HISTORY_MAX: usize = 20;
+
+/// The visual geometry for a pointer-driven slash.
+///
+/// Retail sends this only on `PlayerAttackStateChange` (gmid 40): a unit swipe
+/// direction plus the screen-space point at which the slash was recognised. It is
+/// presentation data only. Damage, side and charge remain server-authoritative.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ManualAttackGesture {
+    pub direction: (f32, f32),
+    pub execution_point: (f32, f32),
+}
 
 /// One recorded `old → new` actor-state transition, queued on the fighter until the
 /// resolver drains it into the matching s2c `PlayerStateChange`-family frame.
@@ -1272,6 +1284,13 @@ pub struct Fighter {
     /// When [`Self::last_input_x`] was recorded. A sample older than
     /// `SIDE_CLASSIFY_SAMPLE_TTL` is treated as stale and ignored.
     pub last_input_at: Option<Instant>,
+    /// Manual-slash geometry recognised from the current input path. The client
+    /// explicitly marks a gmid-47 sample `IsStartAttackTriggerReady`; we retain the
+    /// matching segment until the release chooses gmid 40 instead of gmid 52.
+    pub pending_manual_attack: Option<ManualAttackGesture>,
+    /// Geometry belonging to an already committed `PlayerAttack` transition. Kept
+    /// through the actor-state outbox drain, then cleared after gmid 40 is built.
+    pub active_manual_attack: Option<ManualAttackGesture>,
     /// The **client-reported** charge/hold duration in seconds (gmid 46 propId 5, and
     /// the same value latched into gmid 47 propId 7).
     ///
@@ -1625,6 +1644,8 @@ impl Fighter {
             last_input_x: None,
             last_input_y: None,
             last_input_at: None,
+            pending_manual_attack: None,
+            active_manual_attack: None,
             last_client_charge: None,
             last_input_block_zone: None,
             damage_history: HashMap::new(),
@@ -2745,6 +2766,8 @@ impl MatchCombat {
         for f in &mut self.fighters {
             f.pending_state_changes.clear();
             f.scheduled_states.clear();
+            f.pending_manual_attack = None;
+            f.active_manual_attack = None;
             if f.actor_state != ActorStateType::Idle {
                 f.set_actor_state(ActorStateType::Idle, now);
             }
@@ -2794,6 +2817,8 @@ impl MatchCombat {
             f.last_input_x = None;
             f.last_input_y = None;
             f.last_input_at = None;
+            f.pending_manual_attack = None;
+            f.active_manual_attack = None;
             f.last_client_charge = None;
             f.last_input_block_zone = None;
             f.damage_history.clear(); // ClearDamageHistory on round reset (§5.5)

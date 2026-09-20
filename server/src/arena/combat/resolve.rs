@@ -37,7 +37,7 @@ use super::messages;
 use super::messages_state::{self, StateFrame};
 use super::state::{
     ActiveSide, ActorStateType, DamageSource, FlowState, MatchCombat, MatchState, NetObjectType,
-    PendingHit,
+    ManualAttackGesture, PendingHit,
 };
 use super::tables;
 
@@ -237,6 +237,11 @@ const CHARGE_CROSS_CHECK_TOLERANCE_SECS: f32 = 0.35;
 const PROP_POS_X: u8 = 4;
 const PROP_POS_Y: u8 = 5;
 const PROP_POS_CHARGE: u8 = 7;
+const PROP_POS_FLAGS: u8 = 8;
+/// `PlayerCombatInputPositionMessage.START_TRIGGER_FLAG` (dump.cs:589451).
+/// The client sets this after its measured screen-swipe speed and attack angle cross
+/// the shipped `PlayerCombatParameters` gates (5.0 and 75 degrees on device).
+const POS_START_ATTACK_TRIGGER_FLAG: i32 = 512;
 // NetData propIds — gmid 46 `PlayerCombatInputActivate`.
 const PROP_ACT_HELD: u8 = 4;
 const PROP_ACT_CHARGE: u8 = 5;
@@ -260,6 +265,15 @@ fn netdata_bool(nd: &arena_proto::NetDataParse, prop: u8) -> Option<bool> {
     }
 }
 
+/// Read an exact `Int` NetData prop. Prop 8 of gmid 47 is a packed ushort-shaped
+/// integer; accepting a Bool/Byte coercion here would manufacture trigger flags.
+fn netdata_i32(nd: &arena_proto::NetDataParse, prop: u8) -> Option<i32> {
+    match nd.get(prop) {
+        Some(arena_proto::NetDataValue::Int(v)) => Some(*v),
+        _ => None,
+    }
+}
+
 /// One decoded `PlayerCombatInputPosition` (gmid 47) pointer sample.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct PointerSample {
@@ -269,6 +283,10 @@ struct PointerSample {
     y: f32,
     /// Client-reported charge seconds latched at propId 7 (telemetry only).
     client_charge: Option<f32>,
+    /// The client-side input path crossed the authored swipe-speed and angle gates.
+    /// This selects only the visual state (manual gmid 40 vs fallback gmid 52); it
+    /// never changes damage, charge, target, or hit acceptance.
+    start_attack_trigger_ready: bool,
 }
 
 /// One decoded `PlayerCombatInputActivate` (gmid 46) press/release event.
@@ -294,6 +312,35 @@ fn parse_input_position(user_data: &[u8]) -> Option<PointerSample> {
         x: netdata_f32(&nd, PROP_POS_X)?,
         y: netdata_f32(&nd, PROP_POS_Y)?,
         client_charge: netdata_f32(&nd, PROP_POS_CHARGE),
+        start_attack_trigger_ready: netdata_i32(&nd, PROP_POS_FLAGS)
+            .is_some_and(|flags| flags & POS_START_ATTACK_TRIGGER_FLAG != 0),
+    })
+}
+
+/// Derive the two vectors retail puts on gmid 40 from the segment that tripped the
+/// client's swipe gate. `PlayerAttackState` expects the direction from CURRENT back
+/// to PREVIOUS (capture-pinned in s616), and the previous point as the execution
+/// point. The client flag remains presentational input: malformed geometry simply
+/// falls back to gmid 52 and cannot affect damage.
+fn manual_attack_gesture(
+    previous: (f32, f32),
+    current: (f32, f32),
+) -> Option<ManualAttackGesture> {
+    if ![previous.0, previous.1, current.0, current.1]
+        .into_iter()
+        .all(|v| v.is_finite() && (0.0..=1.0).contains(&v))
+    {
+        return None;
+    }
+    let dx = previous.0 - current.0;
+    let dy = previous.1 - current.1;
+    let length = dx.hypot(dy);
+    if length <= f32::EPSILON {
+        return None;
+    }
+    Some(ManualAttackGesture {
+        direction: (dx / length, dy / length),
+        execution_point: previous,
     })
 }
 
@@ -663,6 +710,16 @@ pub fn on_c2s_input(
     if sender < combat.fighters.len() {
         if let Some(sample) = parse_input_position(user_data) {
             let f = &mut combat.fighters[sender];
+            let previous = f.last_input_x.zip(f.last_input_y);
+            // A flagged sample BEFORE the attack press must not leak into the next
+            // gesture. Retail does send such samples while merely repositioning the
+            // sword; only a path inside the current Charging window is a committed
+            // manual slash candidate.
+            if sample.start_attack_trigger_ready && f.charge_press_at.is_some() {
+                f.pending_manual_attack = previous.and_then(|p| {
+                    manual_attack_gesture(p, (sample.x, sample.y))
+                });
+            }
             f.last_input_x = Some(sample.x);
             f.last_input_y = Some(sample.y);
             f.last_input_at = Some(now);
@@ -779,6 +836,7 @@ pub fn on_c2s_input(
         // single one `ActiveSide::Left` and register a left swing on every guard.
         if act.block_zone == Some(true) {
             let f = &mut combat.fighters[sender];
+            f.pending_manual_attack = None;
             if act.held {
                 // Guard UP. `set_actor_state` queues the transition; the drain turns it
                 // into the gmid 41 that raises the shield on BOTH screens.
@@ -813,6 +871,7 @@ pub fn on_c2s_input(
             // Button DOWN — start the server's charge stopwatch AND enter the wind-up.
             f.charge_press_at = Some(now);
             f.bot_swing_at = None;
+            f.pending_manual_attack = None;
             debug!(
                 "combat: slot {sender} op46 DOWN (carrier 0x36) — charge press recorded \
                  (blockZone={:?})",
@@ -973,6 +1032,9 @@ fn resolve_swing_with_side(
     decoded_side: Option<ActiveSide>,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
+    // Consume the gesture at commit even when the cadence gate rejects this swing;
+    // otherwise a rejected release could make the NEXT tap look like a manual slash.
+    let manual_attack = combat.fighters[sender].pending_manual_attack.take();
     let cooldown = swing_cooldown_for(&combat.fighters[sender], now);
     if let Some(last) = combat.fighters[sender].last_swing {
         let elapsed = now.saturating_duration_since(last);
@@ -1033,10 +1095,10 @@ fn resolve_swing_with_side(
     };
 
     // The swing is committed: walk the attacker's actor state through
-    // AutoAttack → FollowThrough → Recovery → Idle so BOTH clients animate it. Runs
+    // Attack/AutoAttack → FollowThrough → Recovery → Idle so BOTH clients animate it. Runs
     // after `register_combo_swing` so `last_combo_side` is this swing's side, and
     // before damage so the wind-up precedes the hit on the wire, as in retail.
-    begin_swing_animation(combat, sender, now);
+    let impact_delay = begin_swing_animation(combat, sender, manual_attack, now);
 
     // The hit lands with the FollowThrough beat, not now (tracker #21).
     //
@@ -1054,10 +1116,10 @@ fn resolve_swing_with_side(
         side: next_side,
         swing_factor,
         combo_count,
-        due: now + FOLLOW_THROUGH_DELAY,
+        due: now + impact_delay,
     });
     debug!(
-        "combat: slot {sender} swing COMMITTED — lands in {FOLLOW_THROUGH_DELAY:?}"
+        "combat: slot {sender} swing COMMITTED — lands in {impact_delay:?}"
     );
     Vec::new()
 }
@@ -4276,6 +4338,12 @@ const BOT_CHARGE_WINDUP: Duration = Duration::from_millis(350);
 /// its own delay, and the two agree.
 pub(super) const FOLLOW_THROUGH_DELAY: Duration = Duration::from_millis(50);
 
+/// A pointer-driven `PlayerAttack` stays in its collision/trail state longer than an
+/// auto attack. This is both authored and captured: the APK's
+/// `PlayerCombatParameters._attackStateMinimumTime` is 0.150000006 s, and the gmid
+/// 43 immediately following every decoded gmid 40 reference carries prop 8 ≈ 0.15.
+const MANUAL_ATTACK_FOLLOW_THROUGH_DELAY: Duration = Duration::from_millis(150);
+
 /// Delay from `PlayerFollowThroughStateChange` (43) to `PlayerRecoveryStateChange`
 /// (44) — one 60 Hz frame. Measured retail gaps: 16, 17, 17, 20, 21 ms, against a
 /// `_timeInPreviousState` of 1/60 s on the 44 frame.
@@ -4294,8 +4362,8 @@ const RECOVERY_DELAY: Duration = Duration::from_millis(17);
 ///
 /// Retail's mapping of state → message, from the decoded corpus:
 /// * `Blocking` → 41, the frame that raises the shield;
-/// * `PlayerAutoAttack` / `PlayerFollowThrough` / `PlayerRecovery` → 52 / 43 / 44, the
-///   three beats of a swing;
+/// * `PlayerAttack` / `PlayerAutoAttack` → 40 / 52, the manual-slash and fallback
+///   first beats; both continue through 43 / 44;
 /// * `PlayerDraining` → 42;
 /// * everything else → 39, the generic member. That includes `Idle`, which is how a
 ///   block **ends**: there is no shield-down variant of 41 (all 248 decoded 41 frames
@@ -4339,6 +4407,10 @@ pub fn drain_state_changes_for(
             .map(|f| f.packed_stats())
             .unwrap_or(0);
         let actor_net_object_id = combat.fighters[slot].net_object_id;
+        let manual_gesture = combat.fighters[slot].active_manual_attack;
+        let emitted_manual_attack = changes
+            .iter()
+            .any(|change| change.to == ActorStateType::PlayerAttack);
         // `InitialActiveSide` for the swing family. The three beats of one swing share
         // the side the swing was committed on, which is what `last_combo_side` holds
         // until the next swing replaces it.
@@ -4376,6 +4448,23 @@ pub fn drain_state_changes_for(
                         t,
                     )
                 }
+                ActorStateType::PlayerAttack => {
+                    // `begin_swing_animation` enters this state only with a gesture.
+                    // Keep a defensive zero fallback so a future direct state writer
+                    // still emits a well-formed frame instead of dropping the whole
+                    // animation stream.
+                    let gesture = manual_gesture.unwrap_or(ManualAttackGesture {
+                        direction: (0.0, 0.0),
+                        execution_point: (0.0, 0.0),
+                    });
+                    messages_state::player_attack_state_change(
+                        &ctx,
+                        gesture.direction,
+                        gesture.execution_point,
+                        swing_side,
+                        t,
+                    )
+                }
                 ActorStateType::PlayerFollowThrough => {
                     messages_state::player_follow_through_state_change(&ctx, swing_side, t)
                 }
@@ -4395,6 +4484,9 @@ pub fn drain_state_changes_for(
                 out.push((viewer, bytes.clone()));
             }
         }
+        if emitted_manual_attack {
+            combat.fighters[slot].active_manual_attack = None;
+        }
     }
     let _ = now;
     out
@@ -4402,8 +4494,9 @@ pub fn drain_state_changes_for(
 
 /// Walk the attacker through the three beats of a swing.
 ///
-/// `PlayerAutoAttack` now, then `PlayerFollowThrough` and `PlayerRecovery` on the
-/// capture-measured delays, then back to `Idle` at the template's
+/// `PlayerAttack` (manual slash) or `PlayerAutoAttack` (fallback) now, then
+/// `PlayerFollowThrough` and `PlayerRecovery` on the capture-measured delays, then
+/// back to `Idle` at the template's
 /// `attackDelay + recoveryToNeutralTime`. A combo is legal earlier, at
 /// `attackDelay + recoveryToComboTime`, so the animation and input gates deliberately
 /// use separate values. The transitions land on the outbox;
@@ -4412,22 +4505,34 @@ pub fn drain_state_changes_for(
 /// Retail's per-session counts corroborate one of each per swing: s503 sent 330 × gmid
 /// 52, 325 × 43 and 291 × 44 — near-1:1, with 44 slightly lower because a swing that
 /// is interrupted never reaches recovery.
-fn begin_swing_animation(combat: &mut MatchCombat, slot: usize, now: Instant) {
+fn begin_swing_animation(
+    combat: &mut MatchCombat,
+    slot: usize,
+    manual_attack: Option<ManualAttackGesture>,
+    now: Instant,
+) -> Duration {
     let neutral = combat.fighters[slot].loadout.neutral_interval();
     let f = &mut combat.fighters[slot];
     // A new combo may start while the previous swing is still recovering. Drop that
     // swing's pending Idle transition so it cannot interrupt the new animation.
     f.clear_scheduled_states();
-    f.set_actor_state(ActorStateType::PlayerAutoAttack, now);
-    f.schedule_state(now + FOLLOW_THROUGH_DELAY, ActorStateType::PlayerFollowThrough);
+    f.active_manual_attack = manual_attack;
+    let (first_state, follow_delay) = if manual_attack.is_some() {
+        (ActorStateType::PlayerAttack, MANUAL_ATTACK_FOLLOW_THROUGH_DELAY)
+    } else {
+        (ActorStateType::PlayerAutoAttack, FOLLOW_THROUGH_DELAY)
+    };
+    f.set_actor_state(first_state, now);
+    f.schedule_state(now + follow_delay, ActorStateType::PlayerFollowThrough);
     f.schedule_state(
-        now + FOLLOW_THROUGH_DELAY + RECOVERY_DELAY,
+        now + follow_delay + RECOVERY_DELAY,
         ActorStateType::PlayerRecovery,
     );
     // Never idle earlier than the Recovery beat, even for a special template with
     // unusually short authored values.
-    let idle_at = (now + neutral).max(now + FOLLOW_THROUGH_DELAY + RECOVERY_DELAY * 2);
+    let idle_at = (now + neutral).max(now + follow_delay + RECOVERY_DELAY * 2);
     f.schedule_state(idle_at, ActorStateType::Idle);
+    follow_delay
 }
 
 /// How long after a round goes live before a bot may take its first action.
@@ -6974,8 +7079,8 @@ mod phase4_tests {
 
     /// A prod-shaped `PlayerCombatInputPosition` (gmid 47) on the generic 0x36
     /// carrier: `{0:Int obj · 1:Byte 56 · 2:Byte 3 · 3:Byte 47 · 4:Float x ·
-    /// 5:Float y · 6:Float frameDelta · 7:Float charge · 8:Int seq}`.
-    fn make_pos_frame(x: f32, y: f32, charge: f32) -> Vec<u8> {
+    /// 5:Float y · 6:Float frameDelta · 7:Float charge · 8:Int flags}`.
+    fn make_pos_frame_with_flags(x: f32, y: f32, charge: f32, flags: i32) -> Vec<u8> {
         let mut w = arena_proto::NetDataWriter::new();
         w.int(0, 565)
             .byte(1, 56)
@@ -6985,10 +7090,16 @@ mod phase4_tests {
             .float(5, y)
             .float(6, 0.033_334)
             .float(7, charge)
-            .int(8, 410);
+            .int(8, flags);
         let mut f = messages::frame_for_test(w.finish());
         f[0] = 0x84; // c2s marker
         f
+    }
+
+    /// `410` is the capture-observed non-attack control value used by the existing
+    /// phase-4 tests. It has no `START_TRIGGER_FLAG` bit.
+    fn make_pos_frame(x: f32, y: f32, charge: f32) -> Vec<u8> {
+        make_pos_frame_with_flags(x, y, charge, 410)
     }
 
     /// A prod-shaped `PlayerCombatInputActivate` (gmid 46) on the generic 0x36
@@ -7175,6 +7286,15 @@ mod phase4_tests {
         assert!((pos.x - 0.7946).abs() < 1e-4, "propId 4 is normalised screen X");
         assert!((pos.y - 0.4528).abs() < 1e-4, "propId 5 is normalised screen Y");
         assert!((pos.client_charge.unwrap() - 0.4169).abs() < 1e-4, "propId 7 is charge secs");
+        assert!(!pos.start_attack_trigger_ready, "410 has no start-attack bit");
+        let swipe = parse_input_position(&make_pos_frame_with_flags(
+            0.729_055,
+            0.337_963,
+            0.1,
+            410 | POS_START_ATTACK_TRIGGER_FLAG,
+        ))
+        .expect("flagged gmid 47 decodes");
+        assert!(swipe.start_attack_trigger_ready, "bit 512 is the start-attack trigger");
 
         let down = parse_input_activate(&make_act_frame(true, 0.0, true)).expect("gmid 46 decodes");
         assert!(down.held, "propId 4 true = press");
@@ -7188,6 +7308,117 @@ mod phase4_tests {
         assert!(parse_input_activate(&make_pos_frame(0.5, 0.5, 0.0)).is_none());
         assert!(parse_input_position(&[0x84, 0x36]).is_none());
         assert!(parse_input_activate(&[0x84, 0x36]).is_none());
+    }
+
+    /// Report #171: the client explicitly marks the pointer segment that passed its
+    /// authored swipe-speed/angle gates. That path must enter retail's manual
+    /// `PlayerAttack` state (gmid 40), preserving the slash geometry used by the
+    /// weapon trail/collision effects, rather than flattening every swing to gmid 52.
+    /// Damage remains server-owned and lands at the capture-measured 150 ms beat.
+    #[test]
+    fn a_flagged_swipe_emits_manual_attack_and_lands_at_its_follow_through() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        let before = combat.fighters[1].health;
+
+        // Real s616 geometry, rounded to six decimals. The segment from previous to
+        // current normalises to approximately (0.305514, 0.952187), exactly the
+        // direction carried on the corresponding retail gmid 40.
+        on_c2s_input(
+            &mut combat,
+            0,
+            &make_pos_frame_with_flags(0.760_250, 0.435_185, 0.0, 410),
+            now,
+        );
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, false), now);
+        let windup = drain_state_changes(&mut combat, now);
+        assert_eq!(
+            windup
+                .iter()
+                .filter(|(_, frame)| messages::user_message_gmid(frame) == Some(45))
+                .count(),
+            2,
+            "both viewers must receive the Charging wind-up",
+        );
+
+        let release = now + Duration::from_millis(400);
+        on_c2s_input(
+            &mut combat,
+            0,
+            &make_pos_frame_with_flags(
+                0.729_055,
+                0.337_963,
+                0.4,
+                410 | POS_START_ATTACK_TRIGGER_FLAG,
+            ),
+            release - Duration::from_millis(1),
+        );
+        on_c2s_input(
+            &mut combat,
+            0,
+            &make_act_frame(false, 0.4, false),
+            release,
+        );
+        let swing = drain_state_changes(&mut combat, release);
+        assert_eq!(
+            swing
+                .iter()
+                .filter(|(_, frame)| messages::user_message_gmid(frame) == Some(40))
+                .count(),
+            2,
+            "both viewers must receive PlayerAttackStateChange",
+        );
+        assert!(
+            swing
+                .iter()
+                .all(|(_, frame)| messages::user_message_gmid(frame) != Some(52)),
+            "a recognised manual slash must not be downgraded to auto-attack",
+        );
+
+        land_due_hits(
+            &mut combat,
+            release + MANUAL_ATTACK_FOLLOW_THROUGH_DELAY - Duration::from_millis(1),
+        );
+        assert_eq!(combat.fighters[1].health, before, "manual damage landed too early");
+        land_due_hits(
+            &mut combat,
+            release + MANUAL_ATTACK_FOLLOW_THROUGH_DELAY + Duration::from_millis(1),
+        );
+        assert!(
+            combat.fighters[1].health < before,
+            "manual damage must land with the 150 ms follow-through",
+        );
+    }
+
+    /// A normal tap with no client swipe trigger keeps the already-working gmid 52
+    /// fallback. This prevents the visual fix from inventing geometry for bots or
+    /// clients that do not report a qualifying path.
+    #[test]
+    fn an_unflagged_tap_keeps_the_auto_attack_fallback() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        on_c2s_input(&mut combat, 0, &make_pos_frame(0.8, 0.5, 0.0), now);
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, false), now);
+        drain_state_changes(&mut combat, now);
+        on_c2s_input(
+            &mut combat,
+            0,
+            &make_act_frame(false, 0.1, false),
+            now + Duration::from_millis(100),
+        );
+        let swing = drain_state_changes(&mut combat, now + Duration::from_millis(100));
+        assert_eq!(
+            swing
+                .iter()
+                .filter(|(_, frame)| messages::user_message_gmid(frame) == Some(52))
+                .count(),
+            2,
+        );
+        assert!(
+            swing
+                .iter()
+                .all(|(_, frame)| messages::user_message_gmid(frame) != Some(40)),
+        );
     }
 
     /// The X midpoint splits Left from Right; garbage coordinates classify to nothing
