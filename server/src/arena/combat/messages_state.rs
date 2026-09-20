@@ -26,7 +26,7 @@
 //!
 //! # The shared frame
 //!
-//! Every member of the family (39/41/42/43/44/45/52) is one inheritance chain, and
+//! Every member of the family (39/40/41/42/43/44/45/52) is one inheritance chain, and
 //! the property ids fall out of it base-first, in field-declaration order. From
 //! `reference/il2cpp/dump.cs` in the `blades-capture` repo:
 //!
@@ -58,9 +58,9 @@
 //! | 9+ | the leaf's own `Parameters` | per message | — |
 //!
 //! **propId 9 is not uniformly typed.** Retail writes it as a `Byte` for gmid
-//! 42/43/45/52 and as a 4-byte `Int` for gmid 41 and 44. It is a quirk, not a
-//! pattern, and it is reproduced here per-gmid because the type nibble changes the
-//! byte layout of everything after it.
+//! 42/43/45/52 and as a 4-byte `Int` for gmid 41 and 44. Gmid 40 instead starts
+//! with two `Vector2`s at props 9/10 and puts its side byte at prop 11. These quirks
+//! are reproduced per-gmid because the type nibble changes every later byte's layout.
 //!
 //! The derivation was calibrated against the two members we already ship that are
 //! pinned to real captured bytes — gmid 45 (13,060 frames) and gmid 41 (400 frames)
@@ -262,6 +262,43 @@ pub fn player_charging_state_change(
         time_in_previous_state,
     );
     w.byte(9, wire_side(side));
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// gmid 40 `PlayerAttackStateChange` — a pointer-driven manual slash.
+///
+/// Capture-pinned against 208 s2c frames across 26 retail sessions; the nine indexed
+/// reference frames in sessions 503/615/616 all have the same prop set and types:
+/// state id 15, prop 9 `Vector2` direction, prop 10 `Vector2` execution point, and
+/// prop 11 `Byte` `InitialActiveSide`. The direction is unit length in every decoded
+/// reference frame. The execution point lies in normalised screen coordinates.
+///
+/// The dump declares `PlayerAttackState.Parameters` at dump.cs:596994-597004. Wire
+/// order is capture authority here: direction precedes execution point on the wire,
+/// irrespective of the managed field declaration order.
+pub fn player_attack_state_change(
+    ctx: &StateFrame<'_>,
+    direction: (f32, f32),
+    execution_point: (f32, f32),
+    side: ActiveSide,
+    time_in_previous_state: f32,
+) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    ctx.prefix(
+        &mut w,
+        GameMessageId::PlayerAttackStateChange,
+        ActorStateType::PlayerAttack,
+        time_in_previous_state,
+    );
+    let mut direction_wire = [0u8; 8];
+    direction_wire[..4].copy_from_slice(&direction.0.to_le_bytes());
+    direction_wire[4..].copy_from_slice(&direction.1.to_le_bytes());
+    let mut execution_wire = [0u8; 8];
+    execution_wire[..4].copy_from_slice(&execution_point.0.to_le_bytes());
+    execution_wire[4..].copy_from_slice(&execution_point.1.to_le_bytes());
+    w.put(9, NetDataValue::Vector2(direction_wire))
+        .put(10, NetDataValue::Vector2(execution_wire))
+        .byte(11, wire_side(side));
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
@@ -507,6 +544,16 @@ mod tests {
             (39, player_state_change(&c, ActorStateType::Idle, 0.25)),
             (41, player_blocking_state_change(&c, 0.30, true)),
             (
+                40,
+                player_attack_state_change(
+                    &c,
+                    (0.305_514, 0.952_187),
+                    (0.760_250, 0.435_185),
+                    ActiveSide::Right,
+                    0.25,
+                ),
+            ),
+            (
                 52,
                 player_auto_attack_state_change(&c, ActiveSide::Right, (0.0, 0.0), 0.25),
             ),
@@ -564,6 +611,16 @@ mod tests {
     fn state_ids_match_the_dump_and_the_captures() {
         let c = ctx();
         let cases = [
+            (
+                15i64,
+                player_attack_state_change(
+                    &c,
+                    (0.305_514, 0.952_187),
+                    (0.760_250, 0.435_185),
+                    ActiveSide::Right,
+                    0.0,
+                ),
+            ),
             (
                 19i64,
                 player_auto_attack_state_change(&c, ActiveSide::Right, (0.0, 0.0), 0.0),
@@ -669,6 +726,33 @@ mod tests {
             }
             other => panic!("prop10 must be a Vector2, got {other:?}"),
         }
+    }
+
+    /// Real s616 row 4,415,169, rounded to six decimals. Gmid 40's two vectors are
+    /// not optional decoration: `PlayerAttackState` uses them to move the weapon and
+    /// run its slash-collision trail/impact path.
+    #[test]
+    fn manual_attack_carries_direction_execution_point_and_side() {
+        let nd = props(&player_attack_state_change(
+            &ctx(),
+            (0.305_514, 0.952_187),
+            (0.760_250, 0.435_185),
+            ActiveSide::Right,
+            0.15,
+        ));
+        for (prop, expected) in [
+            (9, (0.305_514, 0.952_187)),
+            (10, (0.760_250, 0.435_185)),
+        ] {
+            match nd.get(prop) {
+                Some(NetDataValue::Vector2(v)) => {
+                    assert_eq!(f32::from_le_bytes(v[..4].try_into().unwrap()), expected.0);
+                    assert_eq!(f32::from_le_bytes(v[4..].try_into().unwrap()), expected.1);
+                }
+                other => panic!("prop{prop} must be a Vector2, got {other:?}"),
+            }
+        }
+        assert_eq!(nd.get(11), Some(&NetDataValue::Byte(3)));
     }
 
     /// gmid 59 is outside the family: no packed stats, no state id, payload at 4/5.
