@@ -180,6 +180,75 @@ pub struct RewardItem {
     pub item: Item,
 }
 
+/// Where a template belongs in an inventory: its own instance, a counted stack,
+/// or the wallet.
+///
+/// MEASURED across 606 captured retail inventories, and the split is total — no
+/// template ever appears on both sides:
+///
+/// | type | as instance | as stackable |
+/// | --- | --- | --- |
+/// | weapon (2) | 13,695 | 0 |
+/// | armor (3) | 25,592 | 0 |
+/// | shield (9) | 12,502 | 0 |
+/// | ring (10) | 23,927 | 0 |
+/// | jewelry (11) | 10,940 | 0 |
+/// | consumable, material, decoration, emote, quest_item, special | 0 | 72,883 |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemBucket {
+    /// `backpack.items` — its own id, durability and properties.
+    Instance,
+    /// `backpack.stackableItems` — a template and a count.
+    Stackable,
+    /// The wallet.
+    Currency,
+}
+
+/// The five types retail keeps as instances.
+const INSTANCED_ITEM_TYPES: [u64; 5] = [2, 3, 9, 10, 11];
+
+/// Ring (10) and jewelry (11) NEVER carry a durability value: absent on all
+/// 34,867 captured instances, and absent from `item_durability.json`. They do
+/// not wear out, so a missing durability entry for one is not a data gap and
+/// must not be read as a reason to refuse the grant.
+const ITEM_TYPES_WITHOUT_DURABILITY: [u64; 2] = [10, 11];
+
+/// Which bucket this template belongs in, or `None` when the game data cannot
+/// name the template at all.
+///
+/// `None` means refuse, never guess: putting gold in the backpack or a sword in
+/// the wallet is worse than declining to grant.
+pub fn bucket_for_template(
+    template: Uuid,
+    items: &std::collections::HashMap<Uuid, crate::game_data::GameDataItem>,
+) -> Option<ItemBucket> {
+    if is_currency(template) {
+        return Some(ItemBucket::Currency);
+    }
+    let kind = items.get(&template)?.r#type;
+    Some(if INSTANCED_ITEM_TYPES.contains(&kind) {
+        ItemBucket::Instance
+    } else {
+        ItemBucket::Stackable
+    })
+}
+
+/// Is this a template whose type is KNOWN to carry no durability?
+///
+/// True only for a template the game data names as a ring or a jewel. A template
+/// the data cannot name is false — deliberately: the caller then falls through
+/// to the durability table, which refuses when it has no entry. Answering "skips
+/// durability" for an unknown id would hand out gear at zero durability instead,
+/// which reads in game as broken and unrepairable.
+pub fn template_skips_durability(
+    template: Uuid,
+    items: &std::collections::HashMap<Uuid, crate::game_data::GameDataItem>,
+) -> bool {
+    items
+        .get(&template)
+        .is_some_and(|i| ITEM_TYPES_WITHOUT_DURABILITY.contains(&i.r#type))
+}
+
 /// The uniform `reward` block returned by quest/event/challenge completion, chest
 /// collection, shop/global-shop purchase, gift claim, salvage, etc. Empty
 /// collections and zero XP are omitted so each endpoint's wire matches its captures.

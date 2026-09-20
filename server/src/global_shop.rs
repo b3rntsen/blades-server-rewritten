@@ -416,6 +416,8 @@ struct PurchaseResponse {
 fn grant_from_offer_contents(
     contents: Option<&OfferContents>,
     repair_data: &blades_lib::features::repair::RepairData,
+    // The template -> bucket table, for entries the extractor left `unknown`.
+    items: &std::collections::HashMap<uuid::Uuid, blades_lib::game_data::GameDataItem>,
     // Varies per purchase, so buying the same arcane offer twice can roll two
     // different grades — which is what retail did. Unlike dungeon loot this does
     // NOT need to be reproducible: the purchase response IS the grant, there is
@@ -433,7 +435,9 @@ fn grant_from_offer_contents(
     // player. `Unclassified`/`Unknown` carry a bucket this build cannot place.
     if !matches!(
         c.kind,
-        OfferContentsKind::Literal | OfferContentsKind::NeedsRoll
+        OfferContentsKind::Literal
+            | OfferContentsKind::NeedsRoll
+            | OfferContentsKind::Unclassified
     ) {
         return None;
     }
@@ -447,7 +451,17 @@ fn grant_from_offer_contents(
         // It no longer does, so the instance is known: template, temper, arcane
         // tier and enchantments come from the APK, and durability from the repair
         // table at that temper level.
-        if entry.bucket == "items" {
+        // `unknown` is the extractor's "I could not place this", not retail's.
+        // Resolve it from the template's own type, which is measured and total
+        // (see `economy::bucket_for_template`). An entry whose template the game
+        // data cannot name at all still refuses the whole offer.
+        let bucket = match entry.bucket.as_str() {
+            "items" => blades_lib::economy::ItemBucket::Instance,
+            "currencies" => blades_lib::economy::ItemBucket::Currency,
+            "stackableItems" => blades_lib::economy::ItemBucket::Stackable,
+            _ => blades_lib::economy::bucket_for_template(entry.item_template_id, items)?,
+        };
+        if bucket == blades_lib::economy::ItemBucket::Instance {
             // `grading` empty on an arcane item means retail ROLLED the grade at
             // purchase; the APK records that a roll happens, never its outcome.
             // Ninety offers are like this and they used to be refused outright,
@@ -471,7 +485,20 @@ fn grant_from_offer_contents(
             } else {
                 None
             };
-            let durability = repair_data.max_durability(entry.item_template_id, entry.tempering_level)?;
+            // Rings and jewellery never carry durability — absent on all 34,867
+            // captured instances and absent from the table by design. Refusing
+            // them for a "missing" entry is what kept 39 of the 51 unclassified
+            // offers ungrantable (#184). Everything that DOES wear out is still
+            // refused when the table cannot price it, because there the missing
+            // entry really is a gap and the alternative is inventing a number.
+            let durability = if blades_lib::economy::template_skips_durability(
+                entry.item_template_id,
+                items,
+            ) {
+                0.0
+            } else {
+                repair_data.max_durability(entry.item_template_id, entry.tempering_level)?
+            };
             let properties = blades_lib::user_data::ItemPropertiesAll {
                 enchanting: entry
                     .enchanting
@@ -514,12 +541,11 @@ fn grant_from_offer_contents(
             }
             continue;
         }
-        let slot = match entry.bucket.as_str() {
-            "currencies" => &mut reward.currencies,
-            "stackableItems" => &mut reward.stackable_items,
-            // A bucket this build does not know: the offer is not grantable. A
-            // partial grant is a silent short-change, and the player paid.
-            _ => return None,
+        let slot = match bucket {
+            blades_lib::economy::ItemBucket::Currency => &mut reward.currencies,
+            blades_lib::economy::ItemBucket::Stackable => &mut reward.stackable_items,
+            // Handled above; the `continue` there makes this unreachable.
+            blades_lib::economy::ItemBucket::Instance => return None,
         };
         *slot.entry(entry.item_template_id).or_insert(0) += entry.quantity;
     }
@@ -645,6 +671,7 @@ pub async fn purchase_global_shop(
                 .global_shop_offer_contents
                 .get(&body.global_shop_product_id),
             &app_state.repair_data,
+            &app_state.game_data.items_template,
             // Fresh per purchase. Retail rolled the arcane grade every time, and
             // the purchase response is the grant, so there is nothing described
             // in advance that this has to stay consistent with.
@@ -895,6 +922,21 @@ pub async fn purchase_global_shop(
 #[cfg(test)]
 /// The real durability table, for grants that need an instance. File-scope so
 /// every test module in this file can reach it.
+/// The shipped template table, for the entries whose bucket the extractor left
+/// `unknown`. Read from the same file the server loads.
+fn item_table() -> &'static std::collections::HashMap<uuid::Uuid, blades_lib::game_data::GameDataItem> {
+    static T: std::sync::OnceLock<
+        std::collections::HashMap<uuid::Uuid, blades_lib::game_data::GameDataItem>,
+    > = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+        let gd: blades_lib::game_data::GameData =
+            serde_json::from_str(&std::fs::read_to_string(p).expect("parsed.json"))
+                .expect("game data");
+        gd.items_template
+    })
+}
+
 fn repair_data() -> blades_lib::features::repair::RepairData {
     let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../deploy/static/item_durability.json");
@@ -1300,7 +1342,7 @@ mod replay_tests {
             .filter_map(|k| Uuid::parse_str(k).ok())
             .find(|id| {
                 !sd.global_shop_grants.contains_key(id)
-                    && grant_from_offer_contents(sd.global_shop_offer_contents.get(id), &repair_data(), 1).is_none()
+                    && grant_from_offer_contents(sd.global_shop_offer_contents.get(id), &repair_data(), item_table(), 1).is_none()
             });
         let id = undeliverable.expect(
             "the corpus must still contain undeliverable offers, or this test is moot",
@@ -1512,6 +1554,7 @@ mod replay_tests {
                 || grant_from_offer_contents(
                     sd.global_shop_offer_contents.get(&uuid),
                     &repair_data(),
+                    item_table(),
                     1,
                 )
                 .is_some();
@@ -1770,7 +1813,7 @@ mod offer_contents_fallback {
             OfferContentsKind::Literal,
             vec![entry(GOLD, 10_000, "currencies"), entry(CLAY, 85, "stackableItems")],
         );
-        let r = grant_from_offer_contents(Some(&o), &repair_data(), 1).expect("literal must be grantable");
+        let r = grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1).expect("literal must be grantable");
         assert_eq!(r.currencies.get(&GOLD), Some(&10_000));
         assert_eq!(r.stackable_items.get(&CLAY), Some(&85));
         assert!(r.items.is_empty(), "nothing may be invented into `items`");
@@ -1798,7 +1841,7 @@ mod offer_contents_fallback {
             if recorded.items.len() != 1 {
                 continue;
             }
-            let Some(built) = grant_from_offer_contents(sd.global_shop_offer_contents.get(id), &rd, 1)
+            let Some(built) = grant_from_offer_contents(sd.global_shop_offer_contents.get(id), &rd, item_table(), 1)
             else {
                 continue;
             };
@@ -1857,7 +1900,7 @@ mod offer_contents_fallback {
         // two purchases can come out differently.
         let mut outcomes = std::collections::HashSet::new();
         for nonce in 0..80u64 {
-            let r = grant_from_offer_contents(Some(&arcane_no_grading), &repair_data(), nonce)
+            let r = grant_from_offer_contents(Some(&arcane_no_grading), &repair_data(), item_table(), nonce)
                 .expect("an arcane offer must now be grantable");
             // indexed, not `.first()`: diesel's prelude brings its own `first`
             // into scope here and it shadows the slice method.
@@ -1880,7 +1923,7 @@ mod offer_contents_fallback {
         let mut unknown_tier = arcane_no_grading.clone();
         unknown_tier.contents[0].arcane_tier = 9;
         assert!(
-            grant_from_offer_contents(Some(&unknown_tier), &repair_data(), 1).is_none(),
+            grant_from_offer_contents(Some(&unknown_tier), &repair_data(), item_table(), 1).is_none(),
             "a grade must not be invented for a tier retail never showed"
         );
 
@@ -1893,7 +1936,7 @@ mod offer_contents_fallback {
         }];
         // (Only reaches the durability lookup; a template with no durability row is
         // still refused, which is asserted separately.)
-        let _ = grant_from_offer_contents(Some(&graded), &repair_data(), 1);
+        let _ = grant_from_offer_contents(Some(&graded), &repair_data(), item_table(), 1);
     }
 
     /// The refusals that REMAIN.
@@ -1908,21 +1951,25 @@ mod offer_contents_fallback {
     /// this refusal is by KIND and not per entry.
     #[test]
     fn every_other_kind_is_refused() {
-        for kind in [
-            OfferContentsKind::ChestRoll,
-            OfferContentsKind::Unclassified,
-            OfferContentsKind::Unknown,
-        ] {
+        for kind in [OfferContentsKind::ChestRoll, OfferContentsKind::Unknown] {
             let o = offer(kind, vec![entry(GOLD, 1, "currencies")]);
             assert!(
-                grant_from_offer_contents(Some(&o), &repair_data(), 1).is_none(),
+                grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1).is_none(),
                 "{kind:?} must not be grantable from template data"
             );
         }
         // control: the identical contents under `Literal` ARE grantable, so the
         // refusals above are about the kind and not about the contents.
         let o = offer(OfferContentsKind::Literal, vec![entry(GOLD, 1, "currencies")]);
-        assert!(grant_from_offer_contents(Some(&o), &repair_data(), 1).is_some());
+        assert!(grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1).is_some());
+        // …and `Unclassified` left this list (#184). The extractor could not place
+        // its entries in a bucket; the template's own type can, and 51 offers whose
+        // contents are all real item templates were being refused for a label.
+        let o = offer(OfferContentsKind::Unclassified, vec![entry(GOLD, 1, "currencies")]);
+        assert!(
+            grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1).is_some(),
+            "an unclassified offer whose entries resolve must be grantable"
+        );
     }
 
     /// A gear entry inside an otherwise-literal offer must sink the whole offer,
@@ -1934,7 +1981,7 @@ mod offer_contents_fallback {
             vec![entry(GOLD, 500, "currencies"), entry(SWORD, 1, "items")],
         );
         assert!(
-            grant_from_offer_contents(Some(&o), &repair_data(), 1).is_none(),
+            grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1).is_none(),
             "a partial grant is a silent short-change"
         );
     }
@@ -1943,9 +1990,9 @@ mod offer_contents_fallback {
     /// the price is charged before the reward is applied.
     #[test]
     fn an_empty_or_absent_offer_is_not_a_purchase() {
-        assert!(grant_from_offer_contents(None, &repair_data(), 1).is_none(), "unknown product");
+        assert!(grant_from_offer_contents(None, &repair_data(), item_table(), 1).is_none(), "unknown product");
         let o = offer(OfferContentsKind::Literal, vec![]);
-        assert!(grant_from_offer_contents(Some(&o), &repair_data(), 1).is_none(), "empty reward");
+        assert!(grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1).is_none(), "empty reward");
     }
 
     /// townXp rides through, and on its own is enough to be a real reward —
@@ -1954,7 +2001,7 @@ mod offer_contents_fallback {
     fn town_xp_rides_through() {
         let mut o = offer(OfferContentsKind::Literal, vec![entry(GOLD, 5, "currencies")]);
         o.town_xp = 40;
-        let r = grant_from_offer_contents(Some(&o), &repair_data(), 1).expect("grantable");
+        let r = grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1).expect("grantable");
         assert_eq!(r.town_xp, 40);
     }
 
@@ -1965,7 +2012,7 @@ mod offer_contents_fallback {
             OfferContentsKind::Literal,
             vec![entry(GOLD, 100, "currencies"), entry(GOLD, 25, "currencies")],
         );
-        let r = grant_from_offer_contents(Some(&o), &repair_data(), 1).expect("grantable");
+        let r = grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1).expect("grantable");
         assert_eq!(r.currencies.get(&GOLD), Some(&125));
     }
 }
@@ -2046,5 +2093,143 @@ mod purchase_item_id_tests {
             "the item itself must be untouched — only its instance id changes"
         );
         assert_eq!(a.items.len(), grant.items.len(), "no item is added or lost");
+    }
+}
+
+#[cfg(test)]
+mod report184_unclassified_tests {
+    use super::*;
+
+    fn shipped() -> blades_lib::static_data::StaticData {
+        crate::static_loader::load(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static"
+        )))
+    }
+
+    /// The same two helpers the fallback tests use, which are private to that
+    /// module; duplicated rather than made public so the surface stays closed.
+    fn item_table() -> &'static std::collections::HashMap<uuid::Uuid, blades_lib::game_data::GameDataItem> {
+        static T: std::sync::OnceLock<
+            std::collections::HashMap<uuid::Uuid, blades_lib::game_data::GameDataItem>,
+        > = std::sync::OnceLock::new();
+        T.get_or_init(|| {
+            let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+            let gd: blades_lib::game_data::GameData =
+                serde_json::from_str(&std::fs::read_to_string(p).expect("parsed.json"))
+                    .expect("game data");
+            gd.items_template
+        })
+    }
+
+    fn repair_data() -> blades_lib::features::repair::RepairData {
+        let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static"));
+        let durability: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("item_durability.json")).unwrap())
+                .unwrap();
+        let costs: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("repair_costs.json")).unwrap())
+                .unwrap();
+        blades_lib::features::repair::RepairData::from_json(&durability, &costs)
+    }
+
+    /// THE REPORT (#184). Mɾʂιɾι's two failing purchases were both `unclassified`
+    /// offers: the extractor could not place their entries in a bucket, so the
+    /// whole kind was refused — even though every one of those entries names a
+    /// real item template the game data can classify by type.
+    #[test]
+    fn unclassified_offers_are_grantable_when_their_templates_resolve() {
+        let sd = shipped();
+        let rd = repair_data();
+        let mut unclassified = 0;
+        let mut grantable = 0;
+        for contents in sd.global_shop_offer_contents.values() {
+            if !matches!(contents.kind, OfferContentsKind::Unclassified) {
+                continue;
+            }
+            unclassified += 1;
+            if grant_from_offer_contents(Some(contents), &rd, item_table(), 1).is_some() {
+                grantable += 1;
+            }
+        }
+        // 50 here and 51 in the file's own `_meta`: one product id appears twice
+        // in the catalogue and collapses on load.
+        assert_eq!(unclassified, 50, "the shipped unclassified offers");
+        assert!(
+            grantable >= 45,
+            "only {grantable} of {unclassified} unclassified offers are grantable; \
+             before this change it was 0"
+        );
+    }
+
+    /// The two products the reporter actually hit.
+    #[test]
+    fn the_two_reported_products_are_grantable() {
+        let sd = shipped();
+        let rd = repair_data();
+        for id in [
+            "a66c27d2-6fc1-47f9-9c9c-419d1fa98855", // SigilShop_LTUltimate_OffensiveSpellsRing
+            "23931dab-b680-4eb4-900e-1e0e5180bc55", // EmoteOffer_Guffaw
+        ] {
+            let uuid = uuid::Uuid::parse_str(id).unwrap();
+            let contents = sd
+                .global_shop_offer_contents
+                .get(&uuid)
+                .unwrap_or_else(|| panic!("{id} is in the shipped catalogue"));
+            assert!(
+                grant_from_offer_contents(Some(contents), &rd, item_table(), 1).is_some(),
+                "{id} still refuses"
+            );
+        }
+    }
+
+    /// A ring grants with no durability rather than being refused for a table
+    /// entry it was never going to have — 39 of the 51 hung on exactly this.
+    #[test]
+    fn a_ring_grants_without_a_durability_entry() {
+        let sd = shipped();
+        let rd = repair_data();
+        let uuid =
+            uuid::Uuid::parse_str("a66c27d2-6fc1-47f9-9c9c-419d1fa98855").unwrap();
+        let reward = grant_from_offer_contents(
+            Some(sd.global_shop_offer_contents.get(&uuid).unwrap()),
+            &rd,
+            item_table(),
+            1,
+        )
+        .expect("the ring offer grants");
+        assert_eq!(reward.items.len(), 1, "one ring, as an instance");
+        assert_eq!(reward.items[0].item.durability, 0.0, "rings never wear out");
+        assert!(
+            reward.stackable_items.is_empty(),
+            "a ring must not become a stackable"
+        );
+    }
+
+    /// CONTROL, and the guarantee this change must not lose: an entry whose
+    /// template the game data cannot name still sinks the WHOLE offer. A partial
+    /// grant is a silent short-change, and the player paid.
+    #[test]
+    fn an_unnameable_template_still_sinks_the_offer() {
+        use blades_lib::static_data::{OfferContentEntry, OfferContents};
+        let unknown = uuid::Uuid::from_u128(0x99999999_8888_4777_8666_555555555555);
+        let contents = OfferContents {
+            kind: OfferContentsKind::Unclassified,
+            town_xp: 0,
+            contents: vec![OfferContentEntry {
+                item_template_id: unknown,
+                quantity: 1,
+                bucket: "unknown".to_string(),
+                tempering_level: 0,
+                arcane_tier: 0,
+                enchanting: vec![],
+                grading: vec![],
+            }],
+        };
+        assert!(
+            grant_from_offer_contents(Some(&contents), &repair_data(), item_table(), 1)
+                .is_none(),
+            "an id nothing can classify must refuse, not guess a bucket"
+        );
     }
 }
