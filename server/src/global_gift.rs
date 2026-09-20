@@ -424,7 +424,7 @@ pub async fn claim_global_gift(
     let def = crate::free_for_all::effective_gift(&app_state, &mut conn, gift_id)
         .await
         .ok_or_else(|| map_gift_err(GiftError::NotFound))?;
-    let repair_data = app_state.repair_data.clone();
+    let globals = app_state.get_ref().clone();
 
     conn.transaction(move |mut conn| {
         async move {
@@ -451,8 +451,13 @@ pub async fn claim_global_gift(
                 .unwrap_or(0);
             gifts::can_claim(&def, current, now).map_err(map_gift_err)?;
 
-            let mut reward =
-                gifts::build_gift_reward(&def, &repair_data, Uuid::new_v4).map_err(map_gift_err)?;
+            let mut reward = gifts::build_gift_reward(
+                &def,
+                &globals.game_data.items_template,
+                &globals.repair_data,
+                Uuid::new_v4,
+            )
+            .map_err(map_gift_err)?;
             for chest in &mut reward.chests {
                 if chest.level == 0 {
                     chest.level = entry.character.0.level as u64;

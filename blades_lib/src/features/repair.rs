@@ -48,9 +48,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::economy::GOLD;
-use crate::user_data::{
-    CompleteInventory, CompleteWallet, InventoryChangeTracker, Item, ItemPropertiesAll,
-};
+use crate::user_data::{CompleteInventory, CompleteWallet, InventoryChangeTracker, Item};
 
 /// `ItemTemplate.DEFAULT_DURABILITY` (dump.cs:559431). Last-resort value for a
 /// breakable item whose template is absent from the table — chosen so an unknown
@@ -60,12 +58,6 @@ pub const DEFAULT_DURABILITY: f64 = 100.0;
 
 /// Highest temper level the client models (`0` = untempered).
 pub const MAX_TEMPER_LEVEL: u64 = 10;
-
-/// A gift line this large is not a plausible gear grant and must not be expanded
-/// into thousands of UUID-backed inventory instances. The authored gift editor
-/// permits large currency/material quantities, so the bound belongs here where
-/// the APK durability table has identified the line as gear.
-pub const MAX_INSTANCED_GIFT_ITEMS: u64 = 100;
 
 /// The APK-derived repair tables (`deploy/static/item_durability.json` +
 /// `repair_costs.json`), parsed once at startup.
@@ -213,62 +205,6 @@ impl RepairData {
             _ => false,
         }
     }
-}
-
-/// Convert gear that the old global-gift path incorrectly stored as a stack.
-///
-/// Before report #194, every non-currency gift line became a stackable. That is
-/// correct for materials, but not for a breakable item such as Ebony Mail: retail
-/// represents it as an item instance with an id and full durability. The client
-/// consequently built malformed repair/sell requests for the fake stack and the
-/// JSON extractor rejected them before their handlers ran.
-///
-/// The APK-derived durability table is an exact, conservative discriminator:
-/// materials are absent; breakable weapons, armour and shields are present. Each
-/// plausible legacy stack becomes the same number of fresh, untempered instances.
-/// Implausibly large counts are left untouched so loading an inventory can never
-/// turn one bad gift row into an unbounded allocation.
-pub fn promote_legacy_gift_gear(
-    data: &RepairData,
-    inventory: &mut CompleteInventory,
-    mut new_item_id: impl FnMut() -> Uuid,
-) -> Vec<(Uuid, u64)> {
-    let candidates: Vec<(Uuid, u64, f64)> = inventory
-        .backpack
-        .stackable_items
-        .counts()
-        .filter_map(|(template, count)| {
-            let durability = data.max_durability(template, 0)?;
-            (count > 0 && count <= MAX_INSTANCED_GIFT_ITEMS)
-                .then_some((template, count, durability))
-        })
-        .collect();
-
-    let mut promoted = Vec::with_capacity(candidates.len());
-    for (template, count, durability) in candidates {
-        // The count was snapshotted above and no other code can mutate this
-        // in-memory inventory concurrently inside its row transaction.
-        inventory
-            .backpack
-            .stackable_items
-            .remove(template, count)
-            .expect("snapshotted stackable count is still available");
-        for _ in 0..count {
-            inventory.backpack.items.0.insert(
-                new_item_id(),
-                Item {
-                    item_template_id: template,
-                    grade: None,
-                    tempering_level: 0,
-                    durability,
-                    properties: ItemPropertiesAll::default(),
-                    arcane_tier: None,
-                },
-            );
-        }
-        promoted.push((template, count));
-    }
-    promoted
 }
 
 /// Every repairable item the character owns, equipped or in the backpack, as
@@ -514,57 +450,6 @@ mod tests {
         assert!(!d.needs_repair(&it));
         assert!(!d.restore(&mut it));
         assert_eq!(d.repair_cost(&it), 0);
-    }
-
-    /// Report #194's persisted shape: a breakable APK template in
-    /// `stackableItems`, created by the old global-gift classifier.
-    #[test]
-    fn legacy_gift_gear_is_promoted_to_full_item_instances() {
-        let d = data();
-        let mut inv = inventory();
-        inv.backpack.stackable_items.add(TPL, 2);
-        inv.backpack.stackable_items.add(TPL_UNKNOWN, 7);
-
-        let mut next = 1u128;
-        let promoted = promote_legacy_gift_gear(&d, &mut inv, || {
-            let id = Uuid::from_u128(next);
-            next += 1;
-            id
-        });
-
-        assert_eq!(promoted, vec![(TPL, 2)]);
-        assert_eq!(inv.backpack.stackable_items.count(TPL), 0);
-        assert_eq!(
-            inv.backpack.stackable_items.count(TPL_UNKNOWN),
-            7,
-            "ordinary/unknown stackables stay stackable"
-        );
-        let gear: Vec<&Item> = inv
-            .backpack
-            .items
-            .0
-            .values()
-            .filter(|item| item.item_template_id == TPL)
-            .collect();
-        assert_eq!(gear.len(), 2);
-        assert!(gear.iter().all(|item| item.tempering_level == 0));
-        assert!(gear.iter().all(|item| item.durability == 325.0));
-    }
-
-    #[test]
-    fn absurd_legacy_gear_stack_is_not_expanded_during_inventory_load() {
-        let d = data();
-        let mut inv = inventory();
-        inv.backpack
-            .stackable_items
-            .add(TPL, MAX_INSTANCED_GIFT_ITEMS + 1);
-
-        assert!(promote_legacy_gift_gear(&d, &mut inv, Uuid::nil).is_empty());
-        assert_eq!(
-            inv.backpack.stackable_items.count(TPL),
-            MAX_INSTANCED_GIFT_ITEMS + 1
-        );
-        assert!(inv.backpack.items.is_empty());
     }
 
     #[test]

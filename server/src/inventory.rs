@@ -5,7 +5,7 @@ use actix_web::{
     web::{self, Json},
 };
 use blades_lib::{
-    features::repair::promote_legacy_gift_gear,
+    features::gifts::promote_legacy_gift_gear,
     user_data::{Backpack, CompleteInventory, Loadout, Treasury},
 };
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
@@ -84,7 +84,7 @@ pub async fn get_inventory(
 ) -> Result<Json<GetInventoryResponse>, BladeApiError> {
     let session = session.get_session_or_error()?;
     let character_id = path.into_inner();
-    let repair_data = app_state.repair_data.clone();
+    let globals = app_state.get_ref().clone();
     // A filtered response omits either backpack items or stackables. Convert only
     // on a full fetch so the response which removes the bad stack also delivers
     // the new item instance.
@@ -108,7 +108,8 @@ pub async fn get_inventory(
 
                 if full_fetch {
                     let promoted = promote_legacy_gift_gear(
-                        &repair_data,
+                        &globals.game_data.items_template,
+                        &globals.repair_data,
                         &mut entry.inventory.0,
                         Uuid::new_v4,
                     );
