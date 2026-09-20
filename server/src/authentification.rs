@@ -502,10 +502,93 @@ async fn bnet_link(
     }))
 }
 
-/// `POST /…/auth/bnet/link/force` — the player answered the conflict prompt and
-/// chose the linked account. Same credential check; the anonymous account they
-/// were using is simply left behind (never deleted — it may hold a character
-/// they later want, and deleting on a menu tap is not recoverable).
+/// Did the player choose to keep the character they were PLAYING, rather than
+/// the one already on the account they are linking to?
+///
+/// `selectedUserId` is a SECRET id — the only kind of user id the client is ever
+/// told (see `SessionResponseInner`). The conflict picker offers two of them: the
+/// account the client is signed in as, and the credential's. So "not the
+/// credential's" means "the one I am playing", and an absent or unparseable
+/// value means we cannot tell and must not move anything.
+///
+/// #185: this answer used to be computed and thrown away. Both branches of the
+/// picker kept the credential's character, so a player with a fresh level 48
+/// "Adventurer" on the linked account could never get their real character onto
+/// it, whichever option they tapped.
+fn keeps_the_played_character(selected: Option<&str>, credential_secret: Uuid) -> bool {
+    match selected.and_then(|s| Uuid::parse_str(s).ok()) {
+        Some(chosen) => chosen != credential_secret,
+        None => false,
+    }
+}
+
+/// Hand the played character to the linked account, and park the account's
+/// previous character on the abandoned one.
+///
+/// A SWAP rather than a delete, deliberately. The client's own wording is that
+/// the other profile "will be discarded", but discarding on a menu tap is not
+/// recoverable, and this project exists to keep characters that cannot be
+/// re-captured. Moving the displaced character to the account the player just
+/// walked away from keeps it reachable — by us, and by them if they ever ask —
+/// while leaving exactly one character where the client looks for it.
+///
+/// Returns `(adopted, displaced)` row counts. Both zero means there was nothing
+/// to move and the caller need not log an ownership change.
+async fn swap_character_ownership(
+    conn: &mut diesel_async::AsyncPgConnection,
+    played_user_id: Uuid,
+    linked_user_id: Uuid,
+) -> Result<(usize, usize), diesel::result::Error> {
+    use crate::schema::characters::dsl as ch;
+
+    if played_user_id == linked_user_id {
+        return Ok((0, 0));
+    }
+
+    // Snapshot both sides first: the two updates below would otherwise chase
+    // each other's rows and move everything one way.
+    let played: Vec<Uuid> = ch::characters
+        .filter(ch::user_id.eq(played_user_id))
+        .select(ch::id)
+        .load(conn)
+        .await?;
+    let displaced: Vec<Uuid> = ch::characters
+        .filter(ch::user_id.eq(linked_user_id))
+        .select(ch::id)
+        .load(conn)
+        .await?;
+
+    // Nothing to adopt: leave the account exactly as it was rather than
+    // emptying it. An account with no character at all is the #191 loading-
+    // screen hang, which is a worse outcome than keeping the wrong one.
+    if played.is_empty() {
+        return Ok((0, 0));
+    }
+
+    let adopted = diesel::update(ch::characters.filter(ch::id.eq_any(&played)))
+        .set(ch::user_id.eq(linked_user_id))
+        .execute(conn)
+        .await?;
+    let moved_aside = if displaced.is_empty() {
+        0
+    } else {
+        diesel::update(ch::characters.filter(ch::id.eq_any(&displaced)))
+            .set(ch::user_id.eq(played_user_id))
+            .execute(conn)
+            .await?
+    };
+    Ok((adopted, moved_aside))
+}
+
+/// `POST /…/auth/bnet/link/force` — the player answered the conflict prompt.
+///
+/// Same credential check either way; what changes is WHICH character the linked
+/// account ends up holding. If they kept the character they were playing, it
+/// moves onto the linked account and that account's previous character is parked
+/// on the abandoned one (never deleted — deleting on a menu tap is not
+/// recoverable, and a character here cannot be re-captured). If they kept the
+/// linked account's character, nothing moves, which is what this endpoint did
+/// for every answer before #185.
 #[post("/blades.bgs.services/api/authentication/v1/public/auth/bnet/link/force")]
 async fn bnet_link_force(
     current_session: SessionLookedUpMaybe,
@@ -517,12 +600,15 @@ async fn bnet_link_force(
     // authoritative source account whose installation is being linked.
     let source_user_id = current_session.get_session_or_error()?.session.user_id;
     let body = body.into_inner();
-    let (user_id, _secret_id, session) =
+    let (user_id, secret_id, session) =
         resolve_link(&app_state, &body.username, &body.password).await?;
 
-    let rebound = {
+    // The player's answer, which this endpoint used to discard (#185).
+    let keep_played = keeps_the_played_character(body.selected_user_id.as_deref(), secret_id);
+
+    let (rebound, moved) = {
         let mut conn = app_state.db_pool.get().await.unwrap();
-        bind_linked_devices(&mut conn, source_user_id, user_id)
+        let rebound = bind_linked_devices(&mut conn, source_user_id, user_id)
             .await
             .map_err(|error| {
                 log::error!(
@@ -530,14 +616,35 @@ async fn bnet_link_force(
                      to user {user_id}: {error}"
                 );
                 BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 114)
-            })?
+            })?;
+        let moved = if keep_played {
+            swap_character_ownership(&mut conn, source_user_id, user_id)
+                .await
+                .map_err(|error| {
+                    // The link itself already succeeded; failing the request now
+                    // would leave the player signed in nowhere. Log loudly and
+                    // let them in on the account they linked.
+                    log::error!(
+                        "account link (forced): kept the played character but could not move it \
+                         from {source_user_id} to {user_id}: {error}"
+                    );
+                    error
+                })
+                .unwrap_or((0, 0))
+        } else {
+            (0, 0)
+        };
+        (rebound, moved)
     };
 
     let session_id = app_state.session_store.store_new_session(session.clone());
     crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
     log::info!(
-        "account link (forced): user {source_user_id} kept user {user_id}; \
-         rebound {rebound} device(s)"
+        "account link (forced): user {source_user_id} kept {}; rebound {rebound} device(s); \
+         adopted {} character(s), parked {} (#185)",
+        if keep_played { "the character they were playing" } else { "the linked account" },
+        moved.0,
+        moved.1,
     );
     Ok(web::Json(SessionResponse {
         session: SessionResponseInner::from_session(session_id, session.as_ref()),
@@ -1319,5 +1426,56 @@ mod session_identity {
         // The re-establish credential must not change: existing installs hold it.
         let (r, _, secret) = response();
         assert_eq!(r.login_token, secret.to_string());
+    }
+}
+
+#[cfg(test)]
+mod report185_link_choice_tests {
+    use super::*;
+
+    /// The credential's secret id — one of the two the picker offers.
+    const CREDENTIAL: Uuid = Uuid::from_u128(0x11111111_2222_4333_8444_555555555555);
+    /// The account the client is signed in as — the other one.
+    const PLAYED: Uuid = Uuid::from_u128(0x99999999_8888_4777_8666_555555555555);
+
+    /// THE BUG (#185). The picker's two answers were indistinguishable: whichever
+    /// the player tapped, the linked account kept its own character. LiquidOtacon
+    /// could not get his character onto an account holding a default level 48.
+    #[test]
+    fn choosing_the_played_character_is_recognised() {
+        assert!(keeps_the_played_character(Some(&PLAYED.to_string()), CREDENTIAL));
+    }
+
+    /// CONTROL, and the half that must not change: choosing the linked account
+    /// moves nothing. This is the behaviour that already worked, and a fix that
+    /// swapped in both directions would silently overwrite the character of
+    /// anyone who answered the other way.
+    #[test]
+    fn choosing_the_linked_account_moves_nothing() {
+        assert!(!keeps_the_played_character(Some(&CREDENTIAL.to_string()), CREDENTIAL));
+    }
+
+    /// An absent or unparseable answer must not move a character. The client
+    /// omits the field on some paths, and "I could not tell" has to mean "leave
+    /// it alone" — the same safe direction `/link` takes when it reports a
+    /// conflict rather than assuming.
+    #[test]
+    fn an_unknown_answer_moves_nothing() {
+        assert!(!keeps_the_played_character(None, CREDENTIAL));
+        assert!(!keeps_the_played_character(Some("not-a-uuid"), CREDENTIAL));
+        assert!(!keeps_the_played_character(Some(""), CREDENTIAL));
+    }
+
+    /// The id in the answer is a SECRET id, never a row id — it is the only kind
+    /// the client is ever told. Comparing against the row id would read every
+    /// answer as "keep the played character" and move a character on every link.
+    #[test]
+    fn the_answer_is_compared_against_the_secret_id() {
+        let row_id = Uuid::from_u128(0xdeadbeef_0000_4000_8000_000000000001);
+        assert_ne!(row_id, CREDENTIAL);
+        // The same string that means "keep the linked account" against the
+        // secret id would mean the opposite against the row id.
+        assert!(!keeps_the_played_character(Some(&CREDENTIAL.to_string()), CREDENTIAL));
+        assert!(keeps_the_played_character(Some(&CREDENTIAL.to_string()), row_id));
     }
 }
