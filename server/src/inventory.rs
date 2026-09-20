@@ -4,9 +4,12 @@ use actix_web::{
     get,
     web::{self, Json},
 };
-use blades_lib::user_data::{Backpack, CompleteInventory, Loadout, Treasury};
+use blades_lib::{
+    features::repair::promote_legacy_gift_gear,
+    user_data::{Backpack, CompleteInventory, Loadout, Treasury},
+};
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
-use diesel_async::RunQueryDsl;
+use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -81,25 +84,59 @@ pub async fn get_inventory(
 ) -> Result<Json<GetInventoryResponse>, BladeApiError> {
     let session = session.get_session_or_error()?;
     let character_id = path.into_inner();
+    let repair_data = app_state.repair_data.clone();
+    // A filtered response omits either backpack items or stackables. Convert only
+    // on a full fetch so the response which removes the bad stack also delivers
+    // the new item instance.
+    let full_fetch = !query.consumable_stackable_items_only && !query.equipped_items_only;
     let mut conn = app_state.db_pool.get().await.unwrap();
 
-    let inventory_result = {
-        use crate::schema::characters::dsl::*;
-        characters
-            .filter(id.eq(character_id))
-            .select(CharacterDbEntryInventory::as_select())
-            .load(&mut conn)
-            .await
-            .unwrap()
-    };
+    let inventory = conn
+        .transaction(move |mut conn| {
+            async move {
+                use crate::schema::characters;
+                let inventory_result = characters::table
+                    .filter(characters::id.eq(character_id))
+                    .select(CharacterDbEntryInventory::as_select())
+                    .for_no_key_update()
+                    .load(&mut conn)
+                    .await?;
+                let mut entry = get_only_single_character_and_check_permission(
+                    inventory_result,
+                    &session.session,
+                )?;
 
-    let inventory =
-        get_only_single_character_and_check_permission(inventory_result, &session.session)?;
+                if full_fetch {
+                    let promoted = promote_legacy_gift_gear(
+                        &repair_data,
+                        &mut entry.inventory.0,
+                        Uuid::new_v4,
+                    );
+                    if !promoted.is_empty() {
+                        entry.inventory.0.backpack_version += 1;
+                        diesel::update(
+                            characters::table.filter(characters::id.eq(character_id)),
+                        )
+                        .set(characters::inventory.eq(&entry.inventory))
+                        .execute(&mut conn)
+                        .await?;
+                        log::info!(
+                            "[inventory] promoted {} legacy gift gear template(s) for character {character_id} (report #194)",
+                            promoted.len()
+                        );
+                    }
+                }
+
+                Ok::<_, BladeApiError>(entry.inventory.0)
+            }
+            .scope_boxed()
+        })
+        .await?;
 
     // Honor the query filters instead of panicking on them (a request param must never
     // crash the handler → "Unable to connect").
     let filtered = apply_inventory_filters(
-        inventory.inventory.0,
+        inventory,
         query.consumable_stackable_items_only,
         query.equipped_items_only,
     );
