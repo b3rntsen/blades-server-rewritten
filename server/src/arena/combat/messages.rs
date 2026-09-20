@@ -1411,8 +1411,8 @@ impl Default for MatchEndReward {
 
 /// Build the op49 `ResultsJSON` (propId 13) — the victory-card payload
 /// (`docs/arena-match-end-spec.md` §3). PER-RECIPIENT: `characterId`,
-/// `reward.{currencies, characterXp}`, the recipient `character` snapshot (with the
-/// post-match `pvpTrophies`/`matchmakingPvpTrophies`/`challengeSeason.rank` overlaid),
+/// `reward.{currencies, characterXp}`, the recipient's compact post-match `character`
+/// snapshot (with `pvpTrophies`/`matchmakingPvpTrophies`/`challengeSeason.rank` overlaid),
 /// `inventory` (the op54 equipped snapshot), and the credited `wallet`.
 ///
 /// `character_json` / `equipped_items_json` are the recipient's op54 PROFILE blobs (the
@@ -1429,12 +1429,33 @@ pub fn results_json(
 ) -> String {
     use serde_json::{json, Value};
 
-    // Start from the recipient's op54 character record; overlay the post-match PvP
-    // fields the card reads (the rest of the snapshot is preserved verbatim).
+    // Start from the recipient's op54 character record, then project it down to the
+    // compact character snapshot retail puts in op49. These seven progression and
+    // alternate-loadout fields belong in op54 / the REST profile, not in the result
+    // card: retail s506's complete ResultsJSON is 4,002 bytes, while preserving them
+    // made one real production card 41,154 bytes (pvpSeasonHistory alone was 23 KB).
+    // Besides diverging from the captured shape, that made the client parse an entire
+    // account history at the exact point where it should open the victory overlay.
+    //
+    // Keep this an explicit deny-list instead of an allow-list: the small scalar
+    // character fields include card/menu state and have changed as more captured
+    // behavior has been implemented.
     let mut character: Value = serde_json::from_str(character_json).unwrap_or_else(|_| {
         json!({ "id": recipient_char_uuid, "name": "" })
     });
     if let Some(obj) = character.as_object_mut() {
+        for profile_only_field in [
+            "abilities",
+            "equippedAbilities",
+            "completedQuests",
+            "currentQuestDungeon",
+            "globalShopOffers",
+            "loadoutProfiles",
+            "pvpSeasonHistory",
+        ] {
+            obj.remove(profile_only_field);
+        }
+
         obj.insert("id".into(), json!(recipient_char_uuid));
         obj.insert("pvpTrophies".into(), json!(reward.pvp_trophies));
         obj.insert("matchmakingPvpTrophies".into(), json!(reward.matchmaking_pvp_trophies));
@@ -2744,6 +2765,72 @@ mod tests {
         // rewardNewLevelArena empty (no promotion); currentRequestIndex echoed.
         assert_eq!(v["rewardNewLevelArena"], serde_json::json!({}));
         assert_eq!(v["currentRequestIndex"], 789104);
+    }
+
+    /// Retail op49 carries a compact post-match character snapshot, not the full
+    /// op54 profile. Production report #163 caught the regression this distinction
+    /// matters for: a veteran character's card grew to 41,154 bytes, then the client
+    /// remained behind the avatar instead of opening the victory overlay. The seven
+    /// omitted fields are profile/history data; the card fields and other small
+    /// scalar character state must survive the projection.
+    #[test]
+    fn results_json_omits_profile_only_history_from_the_victory_card() {
+        let character = serde_json::json!({
+            "id": "old",
+            "name": "Sheogorath",
+            "level": 61,
+            "experience": 123_456,
+            "treasuryLevel": 10,
+            "abilities": { "ability": "x".repeat(1_600) },
+            "equippedAbilities": { "0": "ability" },
+            "completedQuests": { "quests": "x".repeat(4_900) },
+            "currentQuestDungeon": null,
+            "globalShopOffers": [{ "offer": "x" }],
+            "loadoutProfiles": [{ "loadout": "x".repeat(7_300) }],
+            "pvpSeasonHistory": { "history": "x".repeat(23_000) },
+        })
+        .to_string();
+        let reward = MatchEndReward {
+            character_experience: 123_736,
+            pvp_trophies: 760,
+            matchmaking_pvp_trophies: 800,
+            ..Default::default()
+        };
+
+        let out = results_json(
+            "85f4a4d6-e4e3-439a-a598-b3c3b1e78c3b",
+            &character,
+            r#"{"equippedItems":{}}"#,
+            &reward,
+            1,
+        );
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let card_character = value["character"].as_object().unwrap();
+
+        for profile_only_field in [
+            "abilities",
+            "equippedAbilities",
+            "completedQuests",
+            "currentQuestDungeon",
+            "globalShopOffers",
+            "loadoutProfiles",
+            "pvpSeasonHistory",
+        ] {
+            assert!(
+                !card_character.contains_key(profile_only_field),
+                "{profile_only_field} belongs in the profile, not the victory card"
+            );
+        }
+        assert_eq!(card_character["name"], "Sheogorath");
+        assert_eq!(card_character["level"], 61);
+        assert_eq!(card_character["treasuryLevel"], 10);
+        assert_eq!(card_character["experience"], 123_736);
+        assert_eq!(card_character["pvpTrophies"], 760);
+        assert!(
+            out.len() < 4_002,
+            "profile-only history must not make this minimal card larger than retail s506: {} bytes",
+            out.len()
+        );
     }
 
     /// The rest of the post-match PvP block (Phase 5.2). Retail's cards carry
