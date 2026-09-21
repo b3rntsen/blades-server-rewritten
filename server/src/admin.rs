@@ -150,6 +150,13 @@ pub struct ImportCharacterRequest {
     /// dungeon was never generated in the capture simply has no entry here.
     #[serde(default)]
     pub dungeon_generated_data_list: Vec<DungeonGeneratedDataWithId>,
+    /// Which alt this payload is, so the snapshot taken before the overwrite can
+    /// be grouped by alt rather than by the arena row id — that id is minted
+    /// fresh on a first import and tells you nothing about which character a
+    /// version belongs to. Optional: an older caller that omits it still gets
+    /// its previous state snapshotted and restorable, just not grouped.
+    #[serde(default)]
+    pub source_alt_uuid: Option<Uuid>,
 }
 
 #[derive(Serialize)]
@@ -249,6 +256,71 @@ pub(crate) fn check_import_token(app_state: &ServerGlobal, req: &HttpRequest) ->
         Some(_) => Err(BladeApiError::new(StatusCode::FORBIDDEN, IMPORT_SERVICE_ID, 2)),
         None => Err(BladeApiError::new(StatusCode::UNAUTHORIZED, IMPORT_SERVICE_ID, 3)),
     }
+}
+
+/// Copy the live character row into `character_versions` before something
+/// replaces it.
+///
+/// Returns the new version id. Errors are the caller's to swallow: this is an
+/// archive, and failing a player's transfer because the archive is unavailable
+/// would be the worse outcome.
+/// Keep the character row exactly as it stands, so whatever is about to
+/// overwrite it can be undone.
+///
+/// The copy is done in SQL, column to column, and NEVER through
+/// `CompleteCharacter`. That is deliberate: this is an archive, and an archive
+/// that parses what it stores can only store what today's model understands. A
+/// field added to the game, a row written by an older build, a shape the
+/// deserializer has since tightened — any of those would turn "keep this
+/// character" into an error, at the exact moment the character is about to be
+/// destroyed. The first version of this function did parse, and the tests below
+/// failed on a missing `tagId`, which is that failure in miniature.
+///
+/// `name` and `level` are pulled out of the JSON for the picker, with defaults,
+/// because a snapshot that cannot be labelled is still worth keeping.
+///
+/// Runs inside the caller's transaction. A failure here must abort whatever
+/// write it was protecting rather than let it proceed unrecorded.
+const SNAPSHOT_CHARACTER_SQL: &str = r#"
+INSERT INTO character_versions
+    (id, character_id, user_id, source_alt_uuid, name, level,
+     "character", data, inventory, wallet, town, server_state, reason)
+SELECT $1, c.id, $3, $4,
+       COALESCE(c."character"->>'name', ''),
+       COALESCE((c."character"->>'level')::int, 0),
+       c."character", c.data, c.inventory, c.wallet, c.town, c.server_state, $5
+  FROM characters c
+ WHERE c.id = $2
+"#;
+
+async fn snapshot_character(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    user_id: Uuid,
+    source_alt_uuid: Option<Uuid>,
+    reason: &str,
+) -> Result<Uuid, diesel::result::Error> {
+    use diesel_async::RunQueryDsl as _;
+
+    let version_id = Uuid::new_v4();
+    let rows = diesel::sql_query(SNAPSHOT_CHARACTER_SQL)
+        .bind::<diesel::sql_types::Uuid, _>(version_id)
+        .bind::<diesel::sql_types::Uuid, _>(character_id)
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(source_alt_uuid)
+        .bind::<diesel::sql_types::Text, _>(reason.to_string())
+        .execute(conn)
+        .await?;
+
+    if rows == 0 {
+        // No such character. Reported rather than shrugged off: the caller is
+        // about to write over a row it believes exists.
+        return Err(diesel::result::Error::NotFound);
+    }
+    log::info!(
+        "[versions] kept a snapshot of character {character_id} (user {user_id}, reason {reason}) as {version_id}"
+    );
+    Ok(version_id)
 }
 
 #[post("/blades.bgs.services/api/dev/v1/import-character")]
@@ -357,6 +429,30 @@ pub async fn import_character(
                     Some(row) => (row.id, false),
                     None => (Uuid::new_v4(), true),
                 };
+
+                // KEEP WHAT WE ARE ABOUT TO REPLACE.
+                //
+                // An import overwrites the live row, which is correct for a
+                // transfer and catastrophic for anything played here since the
+                // last one: RonnieRaider lost four days that way, silently. The
+                // snapshot goes in before the write, inside the same
+                // transaction, so a failed import cannot leave a version behind
+                // for a row that was never replaced.
+                //
+                // Best-effort on the ledger table only: if `character_versions`
+                // has not been created yet the import still proceeds, because
+                // refusing a transfer because the archive is missing would be a
+                // worse failure than the one this prevents.
+                if !created {
+                    let _ = snapshot_character(
+                        &mut conn,
+                        character_id,
+                        user_id,
+                        body.source_alt_uuid,
+                        "import",
+                    )
+                    .await;
+                }
 
                 let entry = CharacterDbEntry {
                     id: character_id,
@@ -3095,6 +3191,388 @@ mod tests {
     // locally, set TEST_DATABASE_URL. Without it they SKIP rather than fail —
     // and `bind_sql_still_carries_its_guard` below is the backstop that fails
     // loudly if someone strips the guard while the DB tests are skipped.
+    /// Character versioning: the snapshot an import takes before it overwrites,
+    /// and the restore that puts one back.
+    ///
+    /// These are DB tests for the same reason the device-claim ones are: the
+    /// thing that can break is the SQL and the column mapping, and a mock of
+    /// either would be a mock of the part being tested. They SKIP without
+    /// TEST_DATABASE_URL (CI provides one) rather than failing.
+    mod character_versions {
+        use super::super::{apply_restore, snapshot_character};
+        use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+        use uuid::Uuid;
+
+        /// `characters` and `character_versions` as the migrations define them.
+        /// One statement per entry: Postgres refuses to prepare several at once.
+        const SCHEMA: [&str; 2] = [
+            "CREATE TABLE characters ( \
+                 id UUID PRIMARY KEY, \
+                 user_id UUID NOT NULL, \
+                 character JSONB NOT NULL, \
+                 data JSONB NOT NULL, \
+                 inventory JSONB NOT NULL, \
+                 wallet JSONB NOT NULL, \
+                 town JSONB, \
+                 server_state JSONB NOT NULL)",
+            "CREATE TABLE character_versions ( \
+                 id UUID PRIMARY KEY, \
+                 character_id UUID NOT NULL, \
+                 user_id UUID NOT NULL, \
+                 source_alt_uuid UUID, \
+                 name TEXT NOT NULL DEFAULT '', \
+                 level INTEGER NOT NULL DEFAULT 0, \
+                 character JSONB NOT NULL, \
+                 data JSONB NOT NULL, \
+                 inventory JSONB NOT NULL, \
+                 wallet JSONB NOT NULL, \
+                 town JSONB, \
+                 server_state JSONB NOT NULL, \
+                 reason TEXT NOT NULL DEFAULT 'import', \
+                 saved_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM now())::bigint)",
+        ];
+
+        async fn fixture() -> Option<AsyncPgConnection> {
+            let url = std::env::var("TEST_DATABASE_URL").ok()?;
+            let mut conn = AsyncPgConnection::establish(&url)
+                .await
+                .expect("TEST_DATABASE_URL is set but unreachable");
+            conn.begin_test_transaction()
+                .await
+                .expect("could not open a test transaction");
+            let schema = format!("t{}", Uuid::new_v4().simple());
+            diesel::sql_query(format!("CREATE SCHEMA {schema}"))
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            diesel::sql_query(format!("SET LOCAL search_path TO {schema}"))
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            for stmt in SCHEMA {
+                diesel::sql_query(stmt).execute(&mut conn).await.unwrap();
+            }
+            Some(conn)
+        }
+
+        macro_rules! db {
+            () => {
+                match fixture().await {
+                    Some(c) => c,
+                    None => {
+                        eprintln!(
+                            "SKIP: TEST_DATABASE_URL unset — character versioning NOT verified"
+                        );
+                        return;
+                    }
+                }
+            };
+        }
+
+        /// A live character row. `server_state` carries a claimed gift so the
+        /// tests can tell a real copy from a default one.
+        async fn seed_character(
+            conn: &mut AsyncPgConnection,
+            name: &str,
+            level: i64,
+            gold: i64,
+        ) -> (Uuid, Uuid) {
+            let (id, user_id) = (Uuid::new_v4(), Uuid::new_v4());
+            diesel::sql_query(
+                "INSERT INTO characters \
+                   (id, user_id, character, data, inventory, wallet, town, server_state) \
+                 VALUES ($1, $2, $3::jsonb, '{\"marker\":\"data\"}'::jsonb, \
+                         '{\"backpackVersion\":7}'::jsonb, $4::jsonb, \
+                         '{\"marker\":\"town\"}'::jsonb, \
+                         '{\"claimedGifts\":[\"ebony-mail\"]}'::jsonb)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .bind::<diesel::sql_types::Uuid, _>(user_id)
+            .bind::<diesel::sql_types::Text, _>(
+                serde_json::json!({"name": name, "level": level}).to_string(),
+            )
+            .bind::<diesel::sql_types::Text, _>(
+                serde_json::json!({"gold": gold}).to_string(),
+            )
+            .execute(conn)
+            .await
+            .unwrap();
+            (id, user_id)
+        }
+
+        #[derive(diesel::QueryableByName)]
+        struct VersionRow {
+            #[diesel(sql_type = diesel::sql_types::Text)]
+            name: String,
+            #[diesel(sql_type = diesel::sql_types::Integer)]
+            level: i32,
+            #[diesel(sql_type = diesel::sql_types::Text)]
+            reason: String,
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+            source_alt_uuid: Option<Uuid>,
+            #[diesel(sql_type = diesel::sql_types::Jsonb)]
+            server_state: serde_json::Value,
+            #[diesel(sql_type = diesel::sql_types::Jsonb)]
+            inventory: serde_json::Value,
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
+            town: Option<serde_json::Value>,
+        }
+
+        async fn version(conn: &mut AsyncPgConnection, id: Uuid) -> VersionRow {
+            diesel::sql_query(
+                "SELECT name, level, reason, source_alt_uuid, server_state, inventory, town \
+                   FROM character_versions WHERE id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .get_result(conn)
+            .await
+            .unwrap()
+        }
+
+        #[derive(diesel::QueryableByName)]
+        struct LiveRow {
+            #[diesel(sql_type = diesel::sql_types::Jsonb)]
+            character: serde_json::Value,
+            #[diesel(sql_type = diesel::sql_types::Jsonb)]
+            wallet: serde_json::Value,
+            #[diesel(sql_type = diesel::sql_types::Jsonb)]
+            server_state: serde_json::Value,
+        }
+
+        async fn live(conn: &mut AsyncPgConnection, id: Uuid) -> LiveRow {
+            diesel::sql_query(
+                "SELECT character, wallet, server_state FROM characters WHERE id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .get_result(conn)
+            .await
+            .unwrap()
+        }
+
+        /// The whole point: what the import is about to destroy is kept, blob
+        /// for blob, with the picker's name and level filled in.
+        #[tokio::test]
+        async fn a_snapshot_is_the_row_kept_verbatim() {
+            let mut c = db!();
+            let (cid, uid) = seed_character(&mut c, "Taheen", 72, 4200).await;
+            let alt = Uuid::new_v4();
+
+            let vid = snapshot_character(&mut c, cid, uid, Some(alt), "import")
+                .await
+                .unwrap();
+            let v = version(&mut c, vid).await;
+
+            assert_eq!(v.name, "Taheen");
+            assert_eq!(v.level, 72);
+            assert_eq!(v.reason, "import");
+            assert_eq!(v.source_alt_uuid, Some(alt));
+            assert_eq!(v.inventory["backpackVersion"], 7);
+            assert_eq!(v.town, Some(serde_json::json!({"marker": "town"})));
+        }
+
+        /// CONTROL for the trap this helper was written around: `server_state`
+        /// is read with its own SELECT rather than reconstructed from the
+        /// model, because a default would archive an EMPTY one and silently
+        /// lose every gift claim and shop purchase count in the snapshot.
+        ///
+        /// Without this assertion the feature would look like it worked right
+        /// up until somebody restored and found their gifts claimable again.
+        #[tokio::test]
+        async fn a_snapshot_keeps_server_state_rather_than_a_default() {
+            let mut c = db!();
+            let (cid, uid) = seed_character(&mut c, "Flappety", 30, 10).await;
+
+            let vid = snapshot_character(&mut c, cid, uid, None, "import")
+                .await
+                .unwrap();
+
+            assert_eq!(
+                version(&mut c, vid).await.server_state,
+                serde_json::json!({"claimedGifts": ["ebony-mail"]}),
+                "server_state must be the live one, not an empty default"
+            );
+        }
+
+        /// A caller that does not know the alt still gets its version kept —
+        /// only the grouping is lost, never the data.
+        #[tokio::test]
+        async fn a_version_without_an_alt_id_is_still_kept() {
+            let mut c = db!();
+            let (cid, uid) = seed_character(&mut c, "Swanne", 100, 0).await;
+            let vid = snapshot_character(&mut c, cid, uid, None, "import")
+                .await
+                .unwrap();
+            assert_eq!(version(&mut c, vid).await.source_alt_uuid, None);
+        }
+
+        /// Versions accumulate. Two imports on consecutive days must leave two
+        /// recoverable points, not one — RonnieRaider's case exactly.
+        #[tokio::test]
+        async fn every_import_adds_a_version_it_does_not_replace_one() {
+            let mut c = db!();
+            let (cid, uid) = seed_character(&mut c, "Ronnie", 40, 100).await;
+
+            let first = snapshot_character(&mut c, cid, uid, None, "import")
+                .await
+                .unwrap();
+            // Whatever the day of play did, here a level-up.
+            diesel::sql_query(
+                "UPDATE characters SET character = '{\"name\":\"Ronnie\",\"level\":41}'::jsonb \
+                 WHERE id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(cid)
+            .execute(&mut c)
+            .await
+            .unwrap();
+            let second = snapshot_character(&mut c, cid, uid, None, "import")
+                .await
+                .unwrap();
+
+            assert_ne!(first, second);
+            assert_eq!(version(&mut c, first).await.level, 40);
+            assert_eq!(version(&mut c, second).await.level, 41);
+        }
+
+        /// Going back to an alt restores it — and the level it is restored at
+        /// is the one it was kept at, not the one that was live.
+        #[tokio::test]
+        async fn restoring_puts_the_kept_row_back() {
+            let mut c = db!();
+            let (cid, uid) = seed_character(&mut c, "Taheen", 72, 4200).await;
+            let kept = snapshot_character(&mut c, cid, uid, None, "import")
+                .await
+                .unwrap();
+
+            // A transfer overwrites the live row with something older/other.
+            diesel::sql_query(
+                "UPDATE characters SET character = '{\"name\":\"Taheen\",\"level\":5}'::jsonb, \
+                        wallet = '{\"gold\":0}'::jsonb, server_state = '{}'::jsonb WHERE id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(cid)
+            .execute(&mut c)
+            .await
+            .unwrap();
+
+            let out = apply_restore(&mut c, kept).await.unwrap();
+            assert_eq!(out.character_id, cid);
+
+            let row = live(&mut c, cid).await;
+            assert_eq!(row.character["level"], 72);
+            assert_eq!(row.wallet["gold"], 4200);
+            assert_eq!(row.server_state["claimedGifts"][0], "ebony-mail");
+        }
+
+        /// A restore is itself undoable. If it were not, the feature would be
+        /// one misclick away from being the same data loss it exists to fix.
+        #[tokio::test]
+        async fn restoring_first_keeps_what_it_is_about_to_replace() {
+            let mut c = db!();
+            let (cid, uid) = seed_character(&mut c, "Viventus", 60, 1).await;
+            let kept = snapshot_character(&mut c, cid, uid, None, "import")
+                .await
+                .unwrap();
+            diesel::sql_query(
+                "UPDATE characters SET character = '{\"name\":\"Viventus\",\"level\":66}'::jsonb \
+                 WHERE id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(cid)
+            .execute(&mut c)
+            .await
+            .unwrap();
+
+            let out = apply_restore(&mut c, kept).await.unwrap();
+
+            let undo = out
+                .replaced_saved_as
+                .expect("the restore must keep what it replaced");
+            let v = version(&mut c, undo).await;
+            assert_eq!(v.reason, "restore");
+            assert_eq!(v.level, 66, "the undo point is the state that was live");
+
+            // And it really is a restore point: going back to it works.
+            apply_restore(&mut c, undo).await.unwrap();
+            assert_eq!(live(&mut c, cid).await.character["level"], 66);
+        }
+
+        /// CONTROL for the reason the copy is SQL and not the typed model.
+        ///
+        /// This row holds a `character` blob today's `CompleteCharacter` cannot
+        /// deserialize — a missing required field and an unknown extra one,
+        /// which is what an older row or a newer game build looks like. The
+        /// archive must keep it anyway. The first implementation parsed, and
+        /// every test in this module failed on `missing field tagId`; that is
+        /// exactly the character this feature would have failed to save.
+        #[tokio::test]
+        async fn a_row_the_model_cannot_parse_is_still_kept() {
+            let mut c = db!();
+            let (cid, uid) = seed_character(&mut c, "Ancient", 12, 0).await;
+            diesel::sql_query(
+                "UPDATE characters SET character = \
+                 '{\"name\":\"Ancient\",\"level\":12,\"somethingWeHaveNeverSeen\":true}'::jsonb \
+                 WHERE id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(cid)
+            .execute(&mut c)
+            .await
+            .unwrap();
+
+            let vid = snapshot_character(&mut c, cid, uid, None, "import")
+                .await
+                .expect("an unparseable row must still be archivable");
+            let v = version(&mut c, vid).await;
+            assert_eq!(v.name, "Ancient");
+            assert_eq!(v.level, 12);
+        }
+
+        /// Snapshotting a character that is not there fails, so a caller about
+        /// to overwrite a row it believes exists finds out rather than
+        /// proceeding.
+        #[tokio::test]
+        async fn snapshotting_a_missing_character_fails_rather_than_no_ops() {
+            let mut c = db!();
+            assert!(
+                snapshot_character(&mut c, Uuid::new_v4(), Uuid::new_v4(), None, "import")
+                    .await
+                    .is_err()
+            );
+        }
+
+        /// A version id nobody has is a 404, not a panic and not a write.
+        #[tokio::test]
+        async fn restoring_an_unknown_version_is_a_not_found() {
+            let mut c = db!();
+            let err = apply_restore(&mut c, Uuid::new_v4()).await.unwrap_err();
+            assert_eq!(
+                actix_web::ResponseError::status_code(&err),
+                actix_web::http::StatusCode::NOT_FOUND
+            );
+        }
+
+        /// A version whose owner no longer has a live character row is a
+        /// conflict, not a resurrection: restoring writes over a row, and
+        /// inventing one here would hand a character to a user the rest of the
+        /// server does not think has one.
+        #[tokio::test]
+        async fn restoring_with_no_live_character_is_a_conflict() {
+            let mut c = db!();
+            let (cid, uid) = seed_character(&mut c, "Gone", 10, 0).await;
+            let kept = snapshot_character(&mut c, cid, uid, None, "import")
+                .await
+                .unwrap();
+            diesel::sql_query("DELETE FROM characters WHERE id = $1")
+                .bind::<diesel::sql_types::Uuid, _>(cid)
+                .execute(&mut c)
+                .await
+                .unwrap();
+
+            let err = apply_restore(&mut c, kept).await.unwrap_err();
+            assert_eq!(
+                actix_web::ResponseError::status_code(&err),
+                actix_web::http::StatusCode::CONFLICT
+            );
+        }
+    }
+
     mod device_claims {
         use super::super::{
             BIND_DEVICE_NO_SUCH_USER, BIND_DEVICE_SQL, RECENT_DEVICES_SQL, map_bind_device_error,
@@ -3913,4 +4391,195 @@ mod only_cups_earned_this_season_count {
             "the handler must use the clamped fold, not an inline sum"
         );
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterVersionSummary {
+    pub id: Uuid,
+    pub character_id: Uuid,
+    pub source_alt_uuid: Option<Uuid>,
+    pub name: String,
+    pub level: i32,
+    pub reason: String,
+    pub saved_at: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterVersionsResponse {
+    pub versions: Vec<CharacterVersionSummary>,
+}
+
+/// `GET /…/dev/v1/character-versions?userId=…` — what this user can go back to.
+///
+/// Summaries only. The blobs are large and nobody picking a version needs them;
+/// the restore reads them server-side by id.
+#[get("/blades.bgs.services/api/dev/v1/character-versions")]
+pub async fn list_character_versions(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<CharacterVersionsResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let user_id = query
+        .get("userId")
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 4))?;
+
+    use crate::schema::character_versions::dsl as cv;
+    let mut conn = app_state
+        .db_pool
+        .get()
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5))?;
+
+    let rows: Vec<(Uuid, Uuid, Option<Uuid>, String, i32, String, i64)> = cv::character_versions
+        .filter(cv::user_id.eq(user_id))
+        .select((
+            cv::id,
+            cv::character_id,
+            cv::source_alt_uuid,
+            cv::name,
+            cv::level,
+            cv::reason,
+            cv::saved_at,
+        ))
+        .order(cv::saved_at.desc())
+        .limit(100)
+        .load(&mut conn)
+        .await
+        .unwrap_or_default();
+
+    Ok(Json(CharacterVersionsResponse {
+        versions: rows
+            .into_iter()
+            .map(
+                |(id, character_id, source_alt_uuid, name, level, reason, saved_at)| {
+                    CharacterVersionSummary {
+                        id,
+                        character_id,
+                        source_alt_uuid,
+                        name,
+                        level,
+                        reason,
+                        saved_at,
+                    }
+                },
+            )
+            .collect(),
+    }))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreVersionResponse {
+    pub restored: Uuid,
+    pub character_id: Uuid,
+    /// The snapshot taken of what was live before this restore, so the restore
+    /// is itself undoable.
+    pub replaced_saved_as: Option<Uuid>,
+}
+
+/// `POST /…/dev/v1/character-versions/{id}/restore` — put a kept version back.
+///
+/// Writes the stored blobs over the user's live character row, having first
+/// snapshotted what was there. A restore that cannot be undone would repeat the
+/// mistake this whole table exists to fix.
+#[post("/blades.bgs.services/api/dev/v1/character-versions/{version_id}/restore")]
+pub async fn restore_character_version(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<Uuid>,
+) -> Result<Json<RestoreVersionResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let version_id = path.into_inner();
+
+    let mut conn = app_state
+        .db_pool
+        .get()
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5))?;
+
+    conn.transaction(move |mut conn| {
+        async move { apply_restore(&mut conn, version_id).await }.scope_boxed()
+    })
+    .await
+    .map(Json)
+}
+
+/// The restore itself, separated from the handler so it can be tested against a
+/// real database without an HTTP stack.
+///
+/// Caller supplies the transaction: a restore that snapshotted and then failed
+/// to write would leave a version nobody asked for.
+async fn apply_restore(
+    conn: &mut diesel_async::AsyncPgConnection,
+    version_id: Uuid,
+) -> Result<RestoreVersionResponse, BladeApiError> {
+    use crate::schema::character_versions::dsl as cv;
+    use crate::schema::characters::dsl as ch;
+
+    let (user_id, source_alt_uuid, character, data, inventory, wallet, town, server_state): (
+        Uuid,
+        Option<Uuid>,
+        serde_json::Value,
+        serde_json::Value,
+        serde_json::Value,
+        serde_json::Value,
+        Option<serde_json::Value>,
+        serde_json::Value,
+    ) = cv::character_versions
+        .filter(cv::id.eq(version_id))
+        .select((
+            cv::user_id,
+            cv::source_alt_uuid,
+            cv::character,
+            cv::data,
+            cv::inventory,
+            cv::wallet,
+            cv::town,
+            cv::server_state,
+        ))
+        .first(conn)
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 6))?;
+
+    let character_id: Uuid = ch::characters
+        .filter(ch::user_id.eq(user_id))
+        .select(ch::id)
+        .for_update()
+        .first(conn)
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 7))?;
+
+    // Undoable, for the same reason the table exists at all.
+    let replaced_saved_as = snapshot_character(conn, character_id, user_id, source_alt_uuid, "restore")
+        .await
+        .map_err(|_| {
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
+        })?;
+
+    diesel::update(ch::characters.filter(ch::id.eq(character_id)))
+        .set((
+            ch::character.eq(character),
+            ch::data.eq(data),
+            ch::inventory.eq(inventory),
+            ch::wallet.eq(wallet),
+            ch::town.eq(town),
+            ch::server_state.eq(server_state),
+        ))
+        .execute(conn)
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
+
+    log::info!(
+        "[versions] restored version {version_id} onto character {character_id} \
+         (user {user_id}); previous state kept as {replaced_saved_as:?}"
+    );
+    Ok(RestoreVersionResponse {
+        restored: version_id,
+        character_id,
+        replaced_saved_as: Some(replaced_saved_as),
+    })
 }

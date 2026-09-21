@@ -108,6 +108,27 @@ jobs:
       # A skipped security test looks exactly like a passing one in the summary
       # line. This fails the job if the DB tests did not actually run, so the
       # guard cannot quietly stop being checked.
+      # Same reasoning as the device-claim guard below: these tests are the
+      # only thing standing between an import and a character nobody can get
+      # back, and a skip reads as a pass.
+      - name: the character-versioning tests really ran
+        env:
+          TEST_DATABASE_URL: postgres://blades:blades@127.0.0.1:5432/blades_test
+        run: |
+          set -euo pipefail
+          out=$(cargo test --locked -p server character_versions -- --nocapture 2>&1)
+          echo "$out"
+          if grep -q 'TEST_DATABASE_URL unset' <<<"$out"; then
+            echo "::error::character-versioning tests skipped — snapshots were NOT verified"
+            exit 1
+          fi
+          # A floor, not an exact count — see the note on the guard below.
+          n=$(grep -oE 'test result: ok\. [0-9]+ passed' <<<"$out" | grep -oE '[0-9]+' | tail -1)
+          if [ -z "$n" ] || [ "$n" -lt 10 ]; then
+            echo "::error::expected at least 10 character-versioning tests, saw ${n:-none}"
+            exit 1
+          fi
+
       - name: the device-claim guards really ran
         env:
           TEST_DATABASE_URL: postgres://blades:blades@127.0.0.1:5432/blades_test

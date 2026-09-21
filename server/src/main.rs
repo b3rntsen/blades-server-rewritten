@@ -695,6 +695,8 @@ async fn main() -> Result<()> {
                     .service(arena::debug_inject::debug_peers)
                     .service(arena::debug_inject::debug_inject)
                     .service(admin::import_character)
+                    .service(admin::list_character_versions)
+                    .service(admin::restore_character_version)
                     .service(admin::set_ai_mimic)
                     .service(admin::list_ai_mimics)
                     .service(admin::get_current_character)
