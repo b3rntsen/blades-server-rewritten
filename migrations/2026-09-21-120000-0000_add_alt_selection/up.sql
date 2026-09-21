@@ -1,0 +1,40 @@
+-- Which alt is live, and which alt each device chose.
+--
+-- WHY: `character_versions` (2026-09-21-000000) keeps the character an import
+-- replaces, so nothing is lost. It does not answer the next question the owner
+-- asked: "if a user switches to another alt, store a version of the alt they
+-- are leaving, so when they go back it is the most modern version of it — and
+-- they may have different alts on different phones."
+--
+-- Two facts are missing for that, and both are one nullable column.
+--
+-- `characters.source_alt_uuid` — WHICH ALT THE LIVE ROW IS. Without it a
+-- snapshot cannot be labelled correctly: the code had to pass the alt being
+-- imported, which is the INCOMING one, while the row being archived is the
+-- OUTGOING one. With a single alt per user those are the same and the bug is
+-- invisible; with two it files every version under the wrong alt, which is
+-- precisely the case this feature exists for.
+--
+-- `device_bindings.active_alt_uuid` — WHICH ALT THIS PHONE CHOSE. The binding
+-- row is already per-device (`device_id` is the primary key), so this is where
+-- "different alts on different phones" belongs.
+--
+-- WHAT THIS IS NOT: it is not two alts live at once. `characters` still carries
+-- `uq_characters_user_id`, and 27 call sites across the server resolve a
+-- character from `user_id` alone and rely on that. Switching is therefore a
+-- SWAP of the one live row — safe, and the honest limit is that two phones
+-- cannot play two different alts simultaneously. Removing that needs the unique
+-- constraint dropped and all 27 lookups given a character id, which is a
+-- separate change with its own risk.
+--
+-- Both columns are nullable with no backfill: an existing row simply does not
+-- know its alt yet, and the code treats NULL as "unknown" rather than as a
+-- value. The first import or switch fills it in.
+--
+-- WHY SEPARATE FROM schema.rs: `server/src/schema.rs` is diesel's COMPILE-TIME
+-- description of the database; adding columns there creates nothing. The
+-- migrate one-shot skips everything once `users` exists, so APPLY THIS BY HAND
+-- on the box before shipping the binary.
+
+ALTER TABLE characters       ADD COLUMN IF NOT EXISTS source_alt_uuid UUID;
+ALTER TABLE device_bindings  ADD COLUMN IF NOT EXISTS active_alt_uuid UUID;

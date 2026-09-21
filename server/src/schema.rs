@@ -141,6 +141,9 @@ diesel::table! {
         wallet -> Jsonb,
         town -> Nullable<Jsonb>,
         server_state -> Jsonb,
+        /// Which alt this row is a copy of. NULL for rows imported before
+        /// alt tracking existed — treated as "unknown", never as a value.
+        source_alt_uuid -> Nullable<Uuid>,
     }
 }
 
@@ -152,6 +155,9 @@ diesel::table! {
         last_seen -> Timestamptz,
         bound_at -> Nullable<Timestamptz>,
         source_wg_ip -> Nullable<Text>,
+        /// The alt this device last chose to play. Per-device because the
+        /// binding row is per-device: two phones can each remember their own.
+        active_alt_uuid -> Nullable<Uuid>,
     }
 }
 

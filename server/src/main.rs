@@ -697,6 +697,8 @@ async fn main() -> Result<()> {
                     .service(admin::import_character)
                     .service(admin::list_character_versions)
                     .service(admin::restore_character_version)
+                    .service(admin::list_alts)
+                    .service(admin::switch_alt)
                     .service(admin::set_ai_mimic)
                     .service(admin::list_ai_mimics)
                     .service(admin::get_current_character)

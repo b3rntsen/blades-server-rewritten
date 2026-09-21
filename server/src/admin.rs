@@ -279,13 +279,21 @@ pub(crate) fn check_import_token(app_state: &ServerGlobal, req: &HttpRequest) ->
 /// `name` and `level` are pulled out of the JSON for the picker, with defaults,
 /// because a snapshot that cannot be labelled is still worth keeping.
 ///
+/// THE ALT RECORDED IS THE LIVE ROW'S OWN — `COALESCE(c.source_alt_uuid, $4)`,
+/// not the caller's argument. The version being kept is of the character being
+/// REPLACED, so it belongs to the alt that was live, while the caller knows the
+/// alt arriving. With one alt per user those coincide and the difference is
+/// invisible; with two, taking the caller's value files every version under the
+/// wrong alt — which breaks exactly the case versions exist for. The argument
+/// survives as the fallback for rows imported before the column existed.
+///
 /// Runs inside the caller's transaction. A failure here must abort whatever
 /// write it was protecting rather than let it proceed unrecorded.
 const SNAPSHOT_CHARACTER_SQL: &str = r#"
 INSERT INTO character_versions
     (id, character_id, user_id, source_alt_uuid, name, level,
      "character", data, inventory, wallet, town, server_state, reason)
-SELECT $1, c.id, $3, $4,
+SELECT $1, c.id, $3, COALESCE(c.source_alt_uuid, $4),
        COALESCE(c."character"->>'name', ''),
        COALESCE((c."character"->>'level')::int, 0),
        c."character", c.data, c.inventory, c.wallet, c.town, c.server_state, $5
@@ -464,11 +472,23 @@ pub async fn import_character(
                     town: body.town.map(JsonDbWrapper),
                 };
 
+                // Stamp the row with the alt it now holds. Without this the next
+                // snapshot cannot label itself (see `snapshot_character`), and a
+                // switch cannot tell which alt it is leaving.
+                let incoming_alt = body.source_alt_uuid;
+
                 if created {
                     insert_into(characters::table)
                         .values(&entry)
                         .execute(&mut conn)
                         .await?;
+                    if incoming_alt.is_some() {
+                        diesel::update(characters::table)
+                            .filter(characters::id.eq(character_id))
+                            .set(characters::source_alt_uuid.eq(incoming_alt))
+                            .execute(&mut conn)
+                            .await?;
+                    }
                 } else {
                     // Overwrite all four payload columns of the existing row.
                     diesel::update(characters::table)
@@ -481,6 +501,15 @@ pub async fn import_character(
                         ))
                         .execute(&mut conn)
                         .await?;
+                    // Same for the alt stamp: an older caller that sends no
+                    // alt must not erase one we already knew.
+                    if incoming_alt.is_some() {
+                        diesel::update(characters::table)
+                            .filter(characters::id.eq(character_id))
+                            .set(characters::source_alt_uuid.eq(incoming_alt))
+                            .execute(&mut conn)
+                            .await?;
+                    }
                     // Town is overwritten only when the payload carries one, so a
                     // re-import without a captured town doesn't wipe a good one.
                     if let Some(town) = entry.town {
@@ -3199,13 +3228,13 @@ mod tests {
     /// either would be a mock of the part being tested. They SKIP without
     /// TEST_DATABASE_URL (CI provides one) rather than failing.
     mod character_versions {
-        use super::super::{apply_restore, snapshot_character};
+        use super::super::{apply_restore, apply_switch_alt, snapshot_character, SwitchAltRequest};
         use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
         use uuid::Uuid;
 
         /// `characters` and `character_versions` as the migrations define them.
         /// One statement per entry: Postgres refuses to prepare several at once.
-        const SCHEMA: [&str; 2] = [
+        const SCHEMA: [&str; 3] = [
             "CREATE TABLE characters ( \
                  id UUID PRIMARY KEY, \
                  user_id UUID NOT NULL, \
@@ -3214,7 +3243,8 @@ mod tests {
                  inventory JSONB NOT NULL, \
                  wallet JSONB NOT NULL, \
                  town JSONB, \
-                 server_state JSONB NOT NULL)",
+                 server_state JSONB NOT NULL, \
+                 source_alt_uuid UUID)",
             "CREATE TABLE character_versions ( \
                  id UUID PRIMARY KEY, \
                  character_id UUID NOT NULL, \
@@ -3230,6 +3260,10 @@ mod tests {
                  server_state JSONB NOT NULL, \
                  reason TEXT NOT NULL DEFAULT 'import', \
                  saved_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM now())::bigint)",
+            "CREATE TABLE device_bindings ( \
+                 device_id TEXT PRIMARY KEY, \
+                 user_id UUID, \
+                 active_alt_uuid UUID)",
         ];
 
         async fn fixture() -> Option<AsyncPgConnection> {
@@ -3277,6 +3311,18 @@ mod tests {
             level: i64,
             gold: i64,
         ) -> (Uuid, Uuid) {
+            seed_character_on_alt(conn, name, level, gold, None).await
+        }
+
+        /// Same, but the live row knows which alt it is — the state after an
+        /// import that sent `sourceAltUuid`.
+        async fn seed_character_on_alt(
+            conn: &mut AsyncPgConnection,
+            name: &str,
+            level: i64,
+            gold: i64,
+            alt: Option<Uuid>,
+        ) -> (Uuid, Uuid) {
             let (id, user_id) = (Uuid::new_v4(), Uuid::new_v4());
             diesel::sql_query(
                 "INSERT INTO characters \
@@ -3297,6 +3343,14 @@ mod tests {
             .execute(conn)
             .await
             .unwrap();
+            if alt.is_some() {
+                diesel::sql_query("UPDATE characters SET source_alt_uuid = $2 WHERE id = $1")
+                    .bind::<diesel::sql_types::Uuid, _>(id)
+                    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(alt)
+                    .execute(conn)
+                    .await
+                    .unwrap();
+            }
             (id, user_id)
         }
 
@@ -3535,6 +3589,237 @@ mod tests {
                     .await
                     .is_err()
             );
+        }
+
+        // --- alt selection ------------------------------------------------
+
+        async fn bind_device(conn: &mut AsyncPgConnection, device: &str, user: Uuid) {
+            diesel::sql_query(
+                "INSERT INTO device_bindings (device_id, user_id) VALUES ($1, $2)",
+            )
+            .bind::<diesel::sql_types::Text, _>(device.to_string())
+            .bind::<diesel::sql_types::Uuid, _>(user)
+            .execute(conn)
+            .await
+            .unwrap();
+        }
+
+        #[derive(diesel::QueryableByName)]
+        struct DeviceRow {
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+            active_alt_uuid: Option<Uuid>,
+        }
+
+        async fn device_alt(conn: &mut AsyncPgConnection, device: &str) -> Option<Uuid> {
+            let r: DeviceRow = diesel::sql_query(
+                "SELECT active_alt_uuid FROM device_bindings WHERE device_id = $1",
+            )
+            .bind::<diesel::sql_types::Text, _>(device.to_string())
+            .get_result(conn)
+            .await
+            .unwrap();
+            r.active_alt_uuid
+        }
+
+        #[derive(diesel::QueryableByName)]
+        struct LiveAltRow {
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+            source_alt_uuid: Option<Uuid>,
+        }
+
+        async fn live_alt(conn: &mut AsyncPgConnection, id: Uuid) -> Option<Uuid> {
+            let r: LiveAltRow =
+                diesel::sql_query("SELECT source_alt_uuid FROM characters WHERE id = $1")
+                    .bind::<diesel::sql_types::Uuid, _>(id)
+                    .get_result(conn)
+                    .await
+                    .unwrap();
+            r.source_alt_uuid
+        }
+
+        fn switch(user_id: Uuid, alt_uuid: Uuid, device_id: Option<&str>) -> SwitchAltRequest {
+            SwitchAltRequest {
+                user_id,
+                alt_uuid,
+                device_id: device_id.map(str::to_string),
+            }
+        }
+
+        /// THE BUG THE `source_alt_uuid` COLUMN EXISTS TO FIX.
+        ///
+        /// A snapshot is of the character being REPLACED, so it belongs to the
+        /// alt that was live — not to the alt the caller is bringing in. With
+        /// one alt per user the two coincide and nothing shows; with two, using
+        /// the caller's value files every version under the wrong alt, so
+        /// switching back hands you the other character.
+        #[tokio::test]
+        async fn a_snapshot_is_labelled_with_the_alt_it_is_leaving() {
+            let mut c = db!();
+            let (leaving, arriving) = (Uuid::new_v4(), Uuid::new_v4());
+            let (cid, uid) = seed_character_on_alt(&mut c, "Taheen", 72, 10, Some(leaving)).await;
+
+            // The caller passes the INCOMING alt, as import_character does.
+            let vid = snapshot_character(&mut c, cid, uid, Some(arriving), "import")
+                .await
+                .unwrap();
+
+            assert_eq!(
+                version(&mut c, vid).await.source_alt_uuid,
+                Some(leaving),
+                "the kept version is of the outgoing alt, not the incoming one"
+            );
+        }
+
+        /// CONTROL for the above: with no alt on the live row the caller's
+        /// value is still used, so older rows keep working.
+        #[tokio::test]
+        async fn an_unstamped_row_falls_back_to_the_callers_alt() {
+            let mut c = db!();
+            let alt = Uuid::new_v4();
+            let (cid, uid) = seed_character(&mut c, "Legacy", 5, 0).await;
+            let vid = snapshot_character(&mut c, cid, uid, Some(alt), "import")
+                .await
+                .unwrap();
+            assert_eq!(version(&mut c, vid).await.source_alt_uuid, Some(alt));
+        }
+
+        /// The owner's sentence, as a test: switch away, and going back gives
+        /// you the alt as you LEFT it, not as it was last transferred.
+        #[tokio::test]
+        async fn going_back_to_an_alt_returns_the_newest_state_of_it() {
+            let mut c = db!();
+            let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
+            let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 100, Some(alt_a)).await;
+
+            // Alt B exists as a kept version (an earlier transfer of it).
+            diesel::sql_query(
+                "UPDATE characters SET character = '{\"name\":\"Bryn\",\"level\":12}'::jsonb, \
+                        source_alt_uuid = $2 WHERE id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(cid)
+            .bind::<diesel::sql_types::Uuid, _>(alt_b)
+            .execute(&mut c)
+            .await
+            .unwrap();
+            snapshot_character(&mut c, cid, uid, None, "import").await.unwrap();
+
+            // Back on A, and A is played up to level 41.
+            diesel::sql_query(
+                "UPDATE characters SET character = '{\"name\":\"Aran\",\"level\":41}'::jsonb, \
+                        source_alt_uuid = $2 WHERE id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(cid)
+            .bind::<diesel::sql_types::Uuid, _>(alt_a)
+            .execute(&mut c)
+            .await
+            .unwrap();
+
+            // Switch to B: A must be kept at 41, and B comes back at 12.
+            let out = apply_switch_alt(&mut c, &switch(uid, alt_b, None)).await.unwrap();
+            assert_eq!(out.was_playing, Some(alt_a));
+            assert!(!out.noop);
+            assert_eq!(live(&mut c, cid).await.character["level"], 12);
+            assert_eq!(live_alt(&mut c, cid).await, Some(alt_b));
+            let kept = version(&mut c, out.left_behind_saved_as.unwrap()).await;
+            assert_eq!(kept.level, 41);
+            assert_eq!(kept.reason, "switch");
+            assert_eq!(kept.source_alt_uuid, Some(alt_a));
+
+            // And back again: A returns at 41, the level it was left at.
+            let back = apply_switch_alt(&mut c, &switch(uid, alt_a, None)).await.unwrap();
+            assert_eq!(back.was_playing, Some(alt_b));
+            assert_eq!(live(&mut c, cid).await.character["level"], 41);
+        }
+
+        /// Each phone remembers its own choice, and a switch on one must not
+        /// rewrite the other's row.
+        #[tokio::test]
+        async fn a_switch_records_only_the_calling_devices_choice() {
+            let mut c = db!();
+            let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
+            let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_a)).await;
+            snapshot_character(&mut c, cid, uid, Some(alt_b), "import").await.unwrap();
+            // Give alt_b a version of its own to switch to.
+            diesel::sql_query(
+                "UPDATE character_versions SET source_alt_uuid = $1 WHERE user_id = $2",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(alt_b)
+            .bind::<diesel::sql_types::Uuid, _>(uid)
+            .execute(&mut c)
+            .await
+            .unwrap();
+
+            bind_device(&mut c, "phone-a", uid).await;
+            bind_device(&mut c, "phone-b", uid).await;
+
+            apply_switch_alt(&mut c, &switch(uid, alt_b, Some("phone-b")))
+                .await
+                .unwrap();
+
+            assert_eq!(device_alt(&mut c, "phone-b").await, Some(alt_b));
+            assert_eq!(
+                device_alt(&mut c, "phone-a").await,
+                None,
+                "the other phone's choice must be untouched"
+            );
+        }
+
+        /// Pressing switch on the alt you are already playing is a no-op that
+        /// SUCCEEDS and still records the device.
+        ///
+        /// It returned a conflict at first, which rolled the transaction back
+        /// and silently discarded the device row written moments earlier — the
+        /// one thing the call was still supposed to do.
+        #[tokio::test]
+        async fn switching_to_the_alt_already_live_keeps_the_device_choice() {
+            let mut c = db!();
+            let alt = Uuid::new_v4();
+            let (_cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt)).await;
+            bind_device(&mut c, "phone-a", uid).await;
+
+            let out = apply_switch_alt(&mut c, &switch(uid, alt, Some("phone-a")))
+                .await
+                .unwrap();
+
+            assert!(out.noop);
+            assert!(out.left_behind_saved_as.is_none(), "a no-op must not add a version");
+            assert!(out.restored_from.is_none());
+            assert_eq!(device_alt(&mut c, "phone-a").await, Some(alt));
+        }
+
+        /// An alt with no kept version is a 404, and — the part that matters —
+        /// the live character is left exactly as it was. A switch that half
+        /// happened would leave a character made of two alts.
+        #[tokio::test]
+        async fn switching_to_an_unknown_alt_changes_nothing() {
+            let mut c = db!();
+            let alt_a = Uuid::new_v4();
+            let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 100, Some(alt_a)).await;
+
+            let err = apply_switch_alt(&mut c, &switch(uid, Uuid::new_v4(), None))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                actix_web::ResponseError::status_code(&err),
+                actix_web::http::StatusCode::NOT_FOUND
+            );
+            assert_eq!(live(&mut c, cid).await.character["level"], 40);
+            assert_eq!(live_alt(&mut c, cid).await, Some(alt_a));
+            let n: i64 = diesel::sql_query(
+                "SELECT count(*) AS count FROM character_versions WHERE user_id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(uid)
+            .get_result::<CountRow>(&mut c)
+            .await
+            .unwrap()
+            .count;
+            assert_eq!(n, 0, "a refused switch must not leave a snapshot behind");
+        }
+
+        #[derive(diesel::QueryableByName)]
+        struct CountRow {
+            #[diesel(sql_type = diesel::sql_types::BigInt)]
+            count: i64,
         }
 
         /// A version id nobody has is a 404, not a panic and not a write.
@@ -4582,4 +4867,354 @@ async fn apply_restore(
         character_id,
         replaced_saved_as: Some(replaced_saved_as),
     })
+}
+
+// ---------------------------------------------------------------------------
+// Alt selection: switching which character a device plays.
+//
+// The owner's ask: "if a user switches to another alt, we store a new version
+// of the alt they are leaving, so when they go back, it will be the most
+// modern version of it — and they may have different alts on different phones."
+//
+// HOW IT WORKS. There is one live `characters` row per user, enforced by
+// `uq_characters_user_id`. A switch is therefore a SWAP of that row: snapshot
+// what is live (labelled with its own alt), then write the newest kept version
+// of the requested alt over it. Both halves are in one transaction, so a switch
+// either happens completely or not at all — a half-swap would be a character
+// made of two alts.
+//
+// WHAT IT IS NOT. Two phones cannot play two different alts at the same time.
+// They share the one row, so the second to switch wins and the first is left on
+// a character it no longer holds. `device_bindings.active_alt_uuid` records
+// each device's choice so the disagreement is visible rather than silent, and
+// `/alts` reports it. Making it genuinely concurrent means dropping the unique
+// constraint and giving each of the 27 `characters::user_id` lookups a
+// character id — a much larger change, deliberately not bundled in here.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AltSummary {
+    pub alt_uuid: Uuid,
+    /// Name and level of the NEWEST kept version of this alt — what you would
+    /// get back by switching to it.
+    pub name: String,
+    pub level: i32,
+    pub versions: i64,
+    pub newest_saved_at: i64,
+    /// True for the alt currently in the live character row.
+    pub live: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AltsResponse {
+    pub live_alt_uuid: Option<Uuid>,
+    pub alts: Vec<AltSummary>,
+    /// Which alt each of this user's devices last chose. More than one distinct
+    /// value here means two phones disagree, which is the limit described above.
+    pub devices: Vec<DeviceAlt>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceAlt {
+    pub device_id: String,
+    pub active_alt_uuid: Option<Uuid>,
+}
+
+#[derive(diesel::QueryableByName)]
+struct AltRow {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    alt_uuid: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    name: String,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    level: i32,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    versions: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    newest_saved_at: i64,
+}
+
+/// One row per alt, carrying the newest version's name and level.
+///
+/// `DISTINCT ON` rather than a group-by plus a join back: the picker wants the
+/// newest version's label, and grouping would give it the max of each column
+/// independently — a name from one save and a level from another.
+const ALTS_SQL: &str = r#"
+SELECT DISTINCT ON (source_alt_uuid)
+       source_alt_uuid AS alt_uuid,
+       name,
+       level,
+       count(*)    OVER (PARTITION BY source_alt_uuid) AS versions,
+       max(saved_at) OVER (PARTITION BY source_alt_uuid) AS newest_saved_at
+  FROM character_versions
+ WHERE user_id = $1 AND source_alt_uuid IS NOT NULL
+ ORDER BY source_alt_uuid, saved_at DESC
+"#;
+
+/// `GET /…/dev/v1/characters/alts?userId=` — what this user can switch between.
+#[get("/blades.bgs.services/api/dev/v1/characters/alts")]
+pub async fn list_alts(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<AltsResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let user_id = query
+        .get("userId")
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 4))?;
+
+    let mut conn = app_state
+        .db_pool
+        .get()
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5))?;
+
+    use crate::schema::characters::dsl as ch;
+    use crate::schema::device_bindings::dsl as db;
+
+    let live_alt_uuid: Option<Uuid> = ch::characters
+        .filter(ch::user_id.eq(user_id))
+        .select(ch::source_alt_uuid)
+        .first(&mut conn)
+        .await
+        .optional()?
+        .flatten();
+
+    let rows: Vec<AltRow> = diesel::sql_query(ALTS_SQL)
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .get_results(&mut conn)
+        .await
+        .unwrap_or_default();
+
+    let devices: Vec<(String, Option<Uuid>)> = db::device_bindings
+        .filter(db::user_id.eq(user_id))
+        .select((db::device_id, db::active_alt_uuid))
+        .load(&mut conn)
+        .await
+        .unwrap_or_default();
+
+    Ok(Json(AltsResponse {
+        live_alt_uuid,
+        alts: rows
+            .into_iter()
+            .map(|r| AltSummary {
+                live: Some(r.alt_uuid) == live_alt_uuid,
+                alt_uuid: r.alt_uuid,
+                name: r.name,
+                level: r.level,
+                versions: r.versions,
+                newest_saved_at: r.newest_saved_at,
+            })
+            .collect(),
+        devices: devices
+            .into_iter()
+            .map(|(device_id, active_alt_uuid)| DeviceAlt {
+                device_id,
+                active_alt_uuid,
+            })
+            .collect(),
+    }))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwitchAltRequest {
+    pub user_id: Uuid,
+    /// The alt to switch TO. Must already have a kept version.
+    pub alt_uuid: Uuid,
+    /// The phone making the choice, so it can be remembered per device.
+    #[serde(default)]
+    pub device_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwitchAltResponse {
+    pub character_id: Uuid,
+    pub now_playing: Uuid,
+    pub was_playing: Option<Uuid>,
+    /// The version the outgoing character was kept as, so the switch is
+    /// reversible by switching back.
+    pub left_behind_saved_as: Option<Uuid>,
+    /// The version restored onto the live row. `None` when nothing moved.
+    pub restored_from: Option<Uuid>,
+    /// True when the device was already on this alt and nothing was swapped.
+    pub noop: bool,
+}
+
+/// `POST /…/dev/v1/characters/switch-alt` — play a different alt on this device.
+///
+/// Explicit rather than inferred from traffic. An implicit swap keyed off
+/// whatever alt a request seemed to be for would thrash the single live row
+/// between two phones, snapshotting on every flip; a player choosing an alt is
+/// a decision, and it should take one call.
+#[post("/blades.bgs.services/api/dev/v1/characters/switch-alt")]
+pub async fn switch_alt(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    body: web::Json<SwitchAltRequest>,
+) -> Result<Json<SwitchAltResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let body = body.into_inner();
+
+    let mut conn = app_state
+        .db_pool
+        .get()
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5))?;
+
+    conn.transaction(move |mut conn| {
+        async move { apply_switch_alt(&mut conn, &body).await }.scope_boxed()
+    })
+    .await
+    .map(Json)
+}
+
+/// The swap itself, separated from the handler so it can be tested against a
+/// real database without an HTTP stack. Caller supplies the transaction.
+async fn apply_switch_alt(
+    conn: &mut diesel_async::AsyncPgConnection,
+    body: &SwitchAltRequest,
+) -> Result<SwitchAltResponse, BladeApiError> {
+    use crate::schema::character_versions::dsl as cv;
+    use crate::schema::characters::dsl as ch;
+    use crate::schema::device_bindings::dsl as db;
+
+    // Lock the live row first: the whole operation is a read-modify-write of
+    // this one row, and two phones switching at once must queue, not interleave.
+    let (character_id, was_playing): (Uuid, Option<Uuid>) = ch::characters
+        .filter(ch::user_id.eq(body.user_id))
+        .select((ch::id, ch::source_alt_uuid))
+        .for_update()
+        .first(conn)
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 7))?;
+
+    if was_playing == Some(body.alt_uuid) {
+        // Already there. Record the device's choice and change nothing else —
+        // snapshotting here would add a version per button press.
+        //
+        // Deliberately a SUCCESS, not a conflict: an error rolls the
+        // transaction back, which would throw away the device row we just
+        // wrote. "You are already playing this" is also not a failure from the
+        // caller's side; `noop` says so without making them parse an error.
+        remember_device_alt(conn, body).await?;
+        return Ok(SwitchAltResponse {
+            character_id,
+            now_playing: body.alt_uuid,
+            was_playing,
+            left_behind_saved_as: None,
+            restored_from: None,
+            noop: true,
+        });
+    }
+
+    // The newest kept version of the alt being switched TO.
+    let target: (Uuid, serde_json::Value, serde_json::Value, serde_json::Value, serde_json::Value, Option<serde_json::Value>, serde_json::Value) =
+        cv::character_versions
+            .filter(cv::user_id.eq(body.user_id))
+            .filter(cv::source_alt_uuid.eq(body.alt_uuid))
+            .select((
+                cv::id,
+                cv::character,
+                cv::data,
+                cv::inventory,
+                cv::wallet,
+                cv::town,
+                cv::server_state,
+            ))
+            .order(cv::saved_at.desc())
+            .first(conn)
+            .await
+            // No version of that alt is not an error in the switch — it is a
+            // request to play a character this server has never been given.
+            .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 6))?;
+
+    // KEEP WHAT WE ARE LEAVING, before anything is overwritten. This is the
+    // half the owner actually asked for: going back must find the alt as it was
+    // left, not as it was last transferred.
+    let left_behind_saved_as =
+        snapshot_character(conn, character_id, body.user_id, was_playing, "switch")
+            .await
+            .map_err(|_| {
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
+            })?;
+
+    let (restored_from, character, data, inventory, wallet, town, server_state) = target;
+    diesel::update(ch::characters.filter(ch::id.eq(character_id)))
+        .set((
+            ch::character.eq(character),
+            ch::data.eq(data),
+            ch::inventory.eq(inventory),
+            ch::wallet.eq(wallet),
+            ch::town.eq(town),
+            ch::server_state.eq(server_state),
+            ch::source_alt_uuid.eq(Some(body.alt_uuid)),
+        ))
+        .execute(conn)
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
+
+    remember_device_alt(conn, body).await?;
+
+    log::info!(
+        "[versions] user {} switched character {character_id} from alt {was_playing:?} to {} \
+         (kept the old one as {left_behind_saved_as}, restored from {restored_from})",
+        body.user_id,
+        body.alt_uuid,
+    );
+
+    // Two phones on different alts is the documented limit, so say it in the
+    // log when it actually happens rather than leaving it to be discovered.
+    let disagreeing: i64 = db::device_bindings
+        .filter(db::user_id.eq(body.user_id))
+        .filter(db::active_alt_uuid.is_not_null())
+        .filter(db::active_alt_uuid.ne(body.alt_uuid))
+        .count()
+        .get_result(conn)
+        .await
+        .unwrap_or(0);
+    if disagreeing > 0 {
+        log::warn!(
+            "[versions] user {} has {disagreeing} other device(s) still set to a different alt — \
+             they share one live character row, so those devices are now on {}",
+            body.user_id,
+            body.alt_uuid,
+        );
+    }
+
+    Ok(SwitchAltResponse {
+        character_id,
+        now_playing: body.alt_uuid,
+        was_playing,
+        left_behind_saved_as: Some(left_behind_saved_as),
+        restored_from: Some(restored_from),
+        noop: false,
+    })
+}
+
+/// Remember which alt this phone chose. Only ever narrows to the calling
+/// device: a switch made on one phone must not rewrite another phone's row.
+async fn remember_device_alt(
+    conn: &mut diesel_async::AsyncPgConnection,
+    body: &SwitchAltRequest,
+) -> Result<(), BladeApiError> {
+    use crate::schema::device_bindings::dsl as db;
+    let Some(device_id) = body.device_id.as_ref() else {
+        return Ok(());
+    };
+    diesel::update(
+        db::device_bindings
+            .filter(db::device_id.eq(device_id))
+            .filter(db::user_id.eq(body.user_id)),
+    )
+    .set(db::active_alt_uuid.eq(Some(body.alt_uuid)))
+    .execute(conn)
+    .await
+    .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
+    Ok(())
 }
