@@ -111,6 +111,27 @@ diesel::table! {
 }
 
 diesel::table! {
+    /// Snapshots of a character row taken before something overwrote it (#—,
+    /// RonnieRaider's four lost days). See the migration for why.
+    character_versions (id) {
+        id -> Uuid,
+        character_id -> Uuid,
+        user_id -> Uuid,
+        source_alt_uuid -> Nullable<Uuid>,
+        name -> Text,
+        level -> Int4,
+        character -> Jsonb,
+        data -> Jsonb,
+        inventory -> Jsonb,
+        wallet -> Jsonb,
+        town -> Nullable<Jsonb>,
+        server_state -> Jsonb,
+        reason -> Text,
+        saved_at -> Int8,
+    }
+}
+
+diesel::table! {
     characters (id) {
         id -> Uuid,
         user_id -> Uuid,
@@ -338,6 +359,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     arena_season_standings,
     arena_seasons,
     character_creation_allowance,
+    character_versions,
     characters,
     device_bindings,
     event_completions,
