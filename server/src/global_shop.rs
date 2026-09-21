@@ -919,11 +919,10 @@ pub async fn purchase_global_shop(
 }
 
 
-#[cfg(test)]
-/// The real durability table, for grants that need an instance. File-scope so
-/// every test module in this file can reach it.
 /// The shipped template table, for the entries whose bucket the extractor left
-/// `unknown`. Read from the same file the server loads.
+/// `unknown`. Read from the same file the server loads. File-scope so every test
+/// module in this file can reach it.
+#[cfg(test)]
 fn item_table() -> &'static std::collections::HashMap<uuid::Uuid, blades_lib::game_data::GameDataItem> {
     static T: std::sync::OnceLock<
         std::collections::HashMap<uuid::Uuid, blades_lib::game_data::GameDataItem>,
@@ -937,6 +936,14 @@ fn item_table() -> &'static std::collections::HashMap<uuid::Uuid, blades_lib::ga
     })
 }
 
+/// The real durability table, for grants that need an instance. File-scope for
+/// the same reason as [`item_table`].
+///
+/// `#[cfg(test)]` is load-bearing: without it this compiles into the server
+/// binary, where nothing calls it, and the crate stops building warning-free
+/// (#84). It lost the attribute when `item_table` was inserted between the
+/// attribute and the function it applied to.
+#[cfg(test)]
 fn repair_data() -> blades_lib::features::repair::RepairData {
     let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../deploy/static/item_durability.json");
