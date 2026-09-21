@@ -124,8 +124,8 @@ jobs:
           fi
           # A floor, not an exact count — see the note on the guard below.
           n=$(grep -oE 'test result: ok\. [0-9]+ passed' <<<"$out" | grep -oE '[0-9]+' | tail -1)
-          if [ -z "$n" ] || [ "$n" -lt 10 ]; then
-            echo "::error::expected at least 10 character-versioning tests, saw ${n:-none}"
+          if [ -z "$n" ] || [ "$n" -lt 16 ]; then
+            echo "::error::expected at least 16 character-versioning tests, saw ${n:-none}"
             exit 1
           fi
 
