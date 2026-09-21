@@ -293,14 +293,25 @@ pub fn compatible(a: Option<Skill>, b: Option<Skill>, waited: Duration) -> bool 
 /// Among those present it still takes the CLOSEST in trophies, tie-broken by longest
 /// waiting — the same ordering as the in-bracket path.
 ///
+/// NEVER THE SAME ACCOUNT. Two tickets from one user — a second phone, or a
+/// re-queue whose old ticket has not been reaped — would otherwise be paired
+/// with each other. That is not a free win: both clients resolve the SAME
+/// character UUID, so `PvpEncounter.SpawnOpponent` never fires and the match
+/// hangs at "Connecting" for both. `pick_bot_index` has refused this since the
+/// ghost work (`is_self_match`); the human path never did, which is the hole.
+///
 /// Returns the index into `candidates`, or `None` if nobody else is waiting.
 fn last_call_partner(
-    candidates: &[(Option<Skill>, Instant)],
+    candidates: &[(Option<Skill>, Instant, Uuid)],
     lone: Option<Skill>,
+    lone_user: Uuid,
     now: Instant,
 ) -> Option<usize> {
     let mut best: Option<(usize, i64, Duration)> = None;
-    for (i, (skill, since)) in candidates.iter().enumerate() {
+    for (i, (skill, since, user)) in candidates.iter().enumerate() {
+        if *user == lone_user {
+            continue;
+        }
         let waited = now.saturating_duration_since(*since);
         let gap = match (skill, lone) {
             (Some(a), Some(b)) => (a.trophies - b.trophies).abs(),
@@ -1547,9 +1558,10 @@ mod human_priority_tests {
         );
 
         // At last call the bracket is dropped and the human is taken.
-        let waiting = [(adventurer, now - Duration::from_secs(2))];
+        let me_user = Uuid::new_v4();
+        let waiting = [(adventurer, now - Duration::from_secs(2), Uuid::new_v4())];
         assert_eq!(
-            last_call_partner(&waiting, me, now),
+            last_call_partner(&waiting, me, me_user, now),
             Some(0),
             "a human out of bracket must beat a bot at the deadline"
         );
@@ -1589,12 +1601,13 @@ mod human_priority_tests {
             level: 58,
             trophies: 480,
         });
+        let me_user = Uuid::new_v4();
         let waiting = [
-            (far, now - Duration::from_secs(9)),
-            (near, now - Duration::from_secs(1)),
+            (far, now - Duration::from_secs(9), Uuid::new_v4()),
+            (near, now - Duration::from_secs(1), Uuid::new_v4()),
         ];
         assert_eq!(
-            last_call_partner(&waiting, me, now),
+            last_call_partner(&waiting, me, me_user, now),
             Some(1),
             "closest in trophies wins even though the other waited longer"
         );
@@ -1616,14 +1629,82 @@ mod human_priority_tests {
             level: 45,
             trophies: 300,
         });
+        let me_user = Uuid::new_v4();
         let waiting = [
-            (a, now - Duration::from_secs(1)),
-            (b, now - Duration::from_secs(8)),
+            (a, now - Duration::from_secs(1), Uuid::new_v4()),
+            (b, now - Duration::from_secs(8), Uuid::new_v4()),
         ];
         assert_eq!(
-            last_call_partner(&waiting, me, now),
+            last_call_partner(&waiting, me, me_user, now),
             Some(1),
             "same 100-trophy gap either way — the longer wait breaks it"
+        );
+    }
+
+    /// NEVER YOURSELF, EVEN AT LAST CALL.
+    ///
+    /// Two devices signed into one account both queue. The bracket refuses
+    /// nobody at last call, so before this guard the queue would hand the
+    /// player their own ticket — and because both sides resolve the same
+    /// character UUID, `PvpEncounter.SpawnOpponent` never fires and the match
+    /// hangs at "Connecting" for both. The bot path has refused this since the
+    /// ghost work (`is_self_match`); the human path did not.
+    ///
+    /// The owner described retail's rule from the other side: opening the same
+    /// alt on a second device logged the first one out, so the situation could
+    /// not arise there.
+    #[test]
+    fn last_call_never_pairs_an_account_with_itself() {
+        let now = Instant::now();
+        let me_user = Uuid::new_v4();
+        let me = Some(Skill {
+            level: 50,
+            trophies: 400,
+        });
+
+        // My own second ticket is the ONLY thing waiting: a bot, not a mirror.
+        let mine = [(me, now - Duration::from_secs(9), me_user)];
+        assert_eq!(
+            last_call_partner(&mine, me, me_user, now),
+            None,
+            "my own second device must not be offered as my opponent"
+        );
+
+        // CONTROL: the identical shape from a different account IS taken, so
+        // the guard is refusing the account and not the skill or the wait.
+        let theirs = [(me, now - Duration::from_secs(9), Uuid::new_v4())];
+        assert_eq!(
+            last_call_partner(&theirs, me, me_user, now),
+            Some(0),
+            "the control: a different account with the same skill still pairs"
+        );
+    }
+
+    /// And with a real opponent also waiting, my own ticket is skipped rather
+    /// than the whole queue being abandoned — even when mine is the closer
+    /// match on trophies and has waited longer, which is when a naive guard
+    /// would still pick it.
+    #[test]
+    fn last_call_skips_my_own_ticket_and_takes_the_other_human() {
+        let now = Instant::now();
+        let me_user = Uuid::new_v4();
+        let me = Some(Skill {
+            level: 50,
+            trophies: 400,
+        });
+        let distant = Some(Skill {
+            level: 90,
+            trophies: 900,
+        });
+        let waiting = [
+            // Mine: identical trophies (gap 0) and the longest wait.
+            (me, now - Duration::from_secs(20), me_user),
+            (distant, now - Duration::from_secs(1), Uuid::new_v4()),
+        ];
+        assert_eq!(
+            last_call_partner(&waiting, me, me_user, now),
+            Some(1),
+            "the far stranger beats my own perfectly-matched ticket"
         );
     }
 
@@ -1636,7 +1717,7 @@ mod human_priority_tests {
             trophies: 400,
         });
         assert_eq!(
-            last_call_partner(&[], me, Instant::now()),
+            last_call_partner(&[], me, Uuid::new_v4(), Instant::now()),
             None,
             "nobody waiting -> no partner -> the bot path stays reachable"
         );
@@ -1648,7 +1729,7 @@ mod human_priority_tests {
     #[test]
     fn last_call_accepts_an_unknown_skill() {
         let now = Instant::now();
-        let waiting = [(None, now - Duration::from_secs(3))];
+        let waiting = [(None, now - Duration::from_secs(3), Uuid::new_v4())];
         assert_eq!(
             last_call_partner(
                 &waiting,
@@ -1656,6 +1737,7 @@ mod human_priority_tests {
                     level: 50,
                     trophies: 400
                 }),
+                Uuid::new_v4(),
                 now
             ),
             Some(0),
@@ -1668,9 +1750,11 @@ mod human_priority_tests {
                         level: 1,
                         trophies: 0
                     }),
-                    now
+                    now,
+                    Uuid::new_v4()
                 )],
                 None,
+                Uuid::new_v4(),
                 now
             ),
             Some(0),
@@ -3224,9 +3308,11 @@ async fn matchmaker_loop(
                 }
                 waiting = live_tickets;
 
-                let shape: Vec<(Option<Skill>, Instant)> =
-                    waiting.iter().map(|(t, s)| (t.skill, *s)).collect();
-                if let Some(idx) = last_call_partner(&shape, lone.skill, Instant::now()) {
+                let shape: Vec<(Option<Skill>, Instant, Uuid)> =
+                    waiting.iter().map(|(t, s)| (t.skill, *s, t.user_id)).collect();
+                if let Some(idx) =
+                    last_call_partner(&shape, lone.skill, lone.user_id, Instant::now())
+                {
                     let (partner, partner_since) = waiting.remove(idx);
                     info!(
                         "matchmaker: last call for ticket {} after {:.1}s — pairing with HUMAN {} out of bracket (they waited {:.1}s) rather than a bot",
@@ -3369,6 +3455,13 @@ async fn matchmaker_loop(
         let now = Instant::now();
         let mut best: Option<(usize, i64, Duration)> = None;
         for (i, (cand, since)) in waiting.iter().enumerate() {
+            // Never pair an account with itself — see `last_call_partner`. Two
+            // devices on one account both queueing is the ordinary way this
+            // happens, and the result is a match that hangs at "Connecting"
+            // for both rather than an obvious failure.
+            if cand.user_id == req.user_id {
+                continue;
+            }
             let waited = now.saturating_duration_since(*since);
             if !compatible(cand.skill, req.skill, waited) {
                 continue;
