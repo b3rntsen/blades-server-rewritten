@@ -40,7 +40,7 @@
 //! value persisted on the run rather than recomputing it, so fixing the derivation later
 //! is a one-line change confined to `start_abyss`.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use actix_web::{
     post,
@@ -217,6 +217,8 @@ pub async fn start_abyss(
                 algorithm_version: static_abyss.algorithm_version.max(1),
                 version: 1,
                 current_floor_index: 0,
+                killed_enemies: Default::default(),
+                collected_enemy_loot: Default::default(),
             };
 
             let wire = run_to_wire(&run, u64::from(player_level));
@@ -392,6 +394,26 @@ struct ItemConsumedAction {
     time: u64,
 }
 
+/// A corpse the player looted during the current floor.
+///
+/// Only the generated-enemy identity is authoritative. `loot` is deliberately
+/// accepted as an opaque value and ignored: trusting it would let a modified
+/// client name its own payout. The server reconstructs the enemy from the same
+/// deterministic generated data it sent when the floor opened.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct EnemyLootCollectedAction {
+    spawn_group_id: Uuid,
+    spawner_index: usize,
+    enemy_index: usize,
+    #[allow(dead_code)]
+    #[serde(default)]
+    loot: Value,
+    #[allow(dead_code)]
+    #[serde(default)]
+    time: u64,
+}
+
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AbyssUpdateAction {
@@ -406,10 +428,9 @@ enum AbyssUpdateAction {
     Revive(ReviveAction),
     /// Gear durability after a fight.
     CombatCompleted(CombatCompletedAction),
-    /// Loot the player picked up off a corpse. Not applied yet — the server does not
-    /// generate abyss enemy loot at all (see the follow-ups in the PR).
-    #[allow(dead_code)]
-    EnemyLootCollected(Value),
+    /// Loot the player picked up off a corpse. The request names the corpse;
+    /// the payout comes exclusively from server-generated floor data.
+    EnemyLootCollected(EnemyLootCollectedAction),
     /// A potion/food used mid-run. The server removes one owned, equipped stack.
     ItemConsumed(ItemConsumedAction),
     #[serde(other)]
@@ -464,6 +485,20 @@ pub async fn update_abyss(
             let mut tracker = InventoryChangeTracker::default();
 
             if let Some(run) = entry.server_state.0.abyss.as_mut() {
+                let enemy_loot = collect_enemy_loot(&app_state.game_data, run, &body.actions);
+                let looted_inventory = enemy_loot
+                    .iter()
+                    .any(|grant| !grant.stackable_items.is_empty() || !grant.items.is_empty());
+                for grant in &enemy_loot {
+                    apply_reward(
+                        grant,
+                        &mut entry.wallet.0,
+                        &mut entry.inventory.0,
+                        &mut entry.character.0,
+                        &mut tracker,
+                    );
+                }
+
                 let revive_scrolls =
                     apply_actions(&app_state.static_data.abyss, run, &body.actions);
 
@@ -492,7 +527,7 @@ pub async fn update_abyss(
                     })
                     .is_ok();
 
-                if consumed > 0 || charged_revive {
+                if looted_inventory || consumed > 0 || charged_revive {
                     // Retail increments once per inventory-mutating request, not once
                     // per action in the batch.
                     entry.inventory.0.backpack_version += 1;
@@ -931,6 +966,134 @@ fn build_generated_data(
         slice.difficulty_level as i64,
         0,
     )
+}
+
+fn abyss_enemy_key(
+    floor_index: u32,
+    spawn_group_id: Uuid,
+    spawner_index: usize,
+    enemy_index: usize,
+) -> String {
+    format!("{floor_index}:{spawn_group_id}:{spawner_index}:{enemy_index}")
+}
+
+/// Resolve corpse-loot actions against the generated data for the floor on which
+/// each action occurred.
+///
+/// The client is allowed to identify a corpse, never to choose its contents. A
+/// kill is recorded only when that identity exists in the server-generated floor;
+/// loot is paid only after such a kill and only once. Both sets live in the
+/// server-only abyss state, so retries are idempotent and no new client wire keys
+/// are introduced.
+fn collect_enemy_loot(
+    game_data: &blades_lib::game_data::GameData,
+    run: &mut AbyssRun,
+    actions: &[AbyssUpdateAction],
+) -> Vec<RewardGrant> {
+    let mut active_slice = run.current_floor_index;
+    let mut grants = Vec::new();
+    // A request commonly carries `enemy_killed` and `enemy_loot_collected` for
+    // the same floor. Generate that floor once, not once per action.
+    let mut generated_by_slice: HashMap<usize, Option<DungeonGeneratedData>> = HashMap::new();
+
+    for action in actions {
+        match action {
+            AbyssUpdateAction::EnemyKilled(kill) => {
+                let Some(slice) = run.slices.get(active_slice) else {
+                    continue;
+                };
+                let floor_index = slice.floor_index;
+                let generated = generated_by_slice.entry(active_slice).or_insert_with(|| {
+                    blades_lib::util::dungeon::generate_for_dungeon(
+                        game_data,
+                        &slice.dungeon_settings_id,
+                        slice.difficulty_level as i64,
+                        0,
+                    )
+                });
+                let Some(generated) = generated.as_ref() else {
+                    continue;
+                };
+                let enemy = blades_lib::user_data::EnemyIndex::new(
+                    kill.spawn_group_id,
+                    kill.spawner_index,
+                    kill.enemy_index,
+                );
+                if generated.get_enemy(&enemy).is_some() {
+                    run.killed_enemies.insert(abyss_enemy_key(
+                        floor_index,
+                        kill.spawn_group_id,
+                        kill.spawner_index,
+                        kill.enemy_index,
+                    ));
+                } else {
+                    log::warn!(
+                        "abyss: enemy_killed for unknown generated enemy {enemy} on floor {}",
+                        floor_index
+                    );
+                }
+            }
+            AbyssUpdateAction::EnemyLootCollected(collected) => {
+                let Some(slice) = run.slices.get(active_slice) else {
+                    continue;
+                };
+                let floor_index = slice.floor_index;
+                let key = abyss_enemy_key(
+                    floor_index,
+                    collected.spawn_group_id,
+                    collected.spawner_index,
+                    collected.enemy_index,
+                );
+                if !run.killed_enemies.contains(&key)
+                    || run.collected_enemy_loot.contains(&key)
+                {
+                    continue;
+                }
+
+                let generated = generated_by_slice.entry(active_slice).or_insert_with(|| {
+                    blades_lib::util::dungeon::generate_for_dungeon(
+                        game_data,
+                        &slice.dungeon_settings_id,
+                        slice.difficulty_level as i64,
+                        0,
+                    )
+                });
+                let Some(generated) = generated.as_ref() else {
+                    continue;
+                };
+                let enemy_index = blades_lib::user_data::EnemyIndex::new(
+                    collected.spawn_group_id,
+                    collected.spawner_index,
+                    collected.enemy_index,
+                );
+                let Some(enemy) = generated.get_enemy(&enemy_index) else {
+                    continue;
+                };
+
+                let loot = enemy.merged_loot_table();
+                run.collected_enemy_loot.insert(key);
+                grants.push(RewardGrant {
+                    currencies: loot.currencies,
+                    stackable_items: loot.stackable_items,
+                    items: loot
+                        .item
+                        .0
+                        .into_iter()
+                        .map(|(id, item)| blades_lib::economy::RewardItem { id, item })
+                        .collect(),
+                    ..RewardGrant::default()
+                });
+            }
+            AbyssUpdateAction::AbyssSliceCompleted(_) => {
+                if active_slice + 1 < run.slices.len() {
+                    active_slice += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    grants
 }
 
 /// Apply one `/update` body's actions to the run, in the order the client sent them.
@@ -1419,6 +1582,8 @@ mod tests {
             algorithm_version: 1,
             version: 1,
             current_floor_index: n,
+            killed_enemies: Default::default(),
+            collected_enemy_loot: Default::default(),
         }
     }
 
@@ -2036,6 +2201,110 @@ mod tests {
         ]));
         apply_actions(&sd, &mut run, &actions);
         assert_eq!(run.score, 10.0, "client-supplied xpReward must not reach the score");
+    }
+
+    /// Abyss corpse loot comes from the same capture-derived generated data the
+    /// server sent for the floor. The request may name a corpse, but it cannot
+    /// choose the contents, claim a corpse that was not killed, or replay one.
+    #[test]
+    fn abyss_enemy_loot_is_server_owned_and_once_only() {
+        let gd = game_data();
+
+        // Find one deterministic generated enemy that actually pays. This keeps
+        // the test tied to the compiled 49,602-observation corpus rather than a
+        // hand-authored payout that could disagree with it.
+        let mut fixture = None;
+        'dungeons: for dungeon_id in gd.dungeons.keys() {
+            let Some(generated) = blades_lib::util::dungeon::generate_for_dungeon(
+                &gd,
+                dungeon_id,
+                40,
+                0,
+            ) else {
+                continue;
+            };
+            for (spawn_group_id, spawners) in &generated.enemy_generated_data {
+                for (spawner_index, enemies) in spawners.iter().enumerate() {
+                    for (enemy_index, enemy) in enemies.iter().enumerate() {
+                        let loot = enemy.merged_loot_table();
+                        if !loot.currencies.is_empty()
+                            || !loot.stackable_items.is_empty()
+                            || !loot.item.is_empty()
+                        {
+                            fixture = Some((
+                                *dungeon_id,
+                                *spawn_group_id,
+                                spawner_index,
+                                enemy_index,
+                                loot,
+                            ));
+                            break 'dungeons;
+                        }
+                    }
+                }
+            }
+        }
+        let (dungeon_id, spawn_group_id, spawner_index, enemy_index, expected) =
+            fixture.expect("the retail-derived corpus must contain a paying enemy");
+
+        let mut run = run_from(&[(1, 40)], 40);
+        run.current_floor_index = 0;
+        run.slices[0].dungeon_settings_id = dungeon_id;
+        run.slices[0].completed = false;
+        run.slices[0].enemy_killed = false;
+
+        let actions = parse_actions(serde_json::json!([
+            {
+                "type": "enemy_killed",
+                "spawnGroupId": spawn_group_id,
+                "spawnerIndex": spawner_index,
+                "enemyIndex": enemy_index,
+                "xpReward": 999999999.0,
+                "time": 1
+            },
+            {
+                "type": "enemy_loot_collected",
+                "spawnGroupId": spawn_group_id,
+                "spawnerIndex": spawner_index,
+                "enemyIndex": enemy_index,
+                "loot": {"currencies": {GOLD_CURRENCY_UUID: 999999999}},
+                "time": 2
+            }
+        ]));
+
+        let grants = collect_enemy_loot(&gd, &mut run, &actions);
+        assert_eq!(grants.len(), 1, "a killed generated corpse pays once");
+        assert_eq!(grants[0].currencies, expected.currencies);
+        assert_eq!(grants[0].stackable_items, expected.stackable_items);
+        assert_eq!(grants[0].items.len(), expected.item.0.len());
+        for item in &grants[0].items {
+            assert_eq!(
+                item.item.item_template_id,
+                expected.item.0[&item.id].item_template_id,
+                "the generated item, not the request body, is granted"
+            );
+        }
+        assert_eq!(run.killed_enemies.len(), 1);
+        assert_eq!(run.collected_enemy_loot.len(), 1);
+
+        assert!(
+            collect_enemy_loot(&gd, &mut run, &actions).is_empty(),
+            "a retried body must not pay the corpse twice"
+        );
+
+        let loot_only = parse_actions(serde_json::json!([{
+            "type": "enemy_loot_collected",
+            "spawnGroupId": spawn_group_id,
+            "spawnerIndex": spawner_index,
+            "enemyIndex": enemy_index,
+            "loot": {"currencies": {GOLD_CURRENCY_UUID: 999999999}},
+            "time": 3
+        }]));
+        let mut unearned = run_from(&[(1, 40)], 40);
+        unearned.current_floor_index = 0;
+        unearned.slices[0].dungeon_settings_id = dungeon_id;
+        assert!(collect_enemy_loot(&gd, &mut unearned, &loot_only).is_empty());
+        assert!(unearned.collected_enemy_loot.is_empty());
     }
 
     #[test]

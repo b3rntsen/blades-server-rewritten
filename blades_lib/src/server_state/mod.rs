@@ -51,6 +51,15 @@ pub struct AbyssRun {
     pub version: u32,
     /// Index of the current active floor (0-based into `slices`).
     pub current_floor_index: usize,
+    /// Server-validated enemies killed during this run, keyed by floor and the
+    /// three-part generated-enemy identity. Kept out of the client wire shape;
+    /// this is only the replay/ownership proof for corpse loot.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub killed_enemies: BTreeSet<String>,
+    /// Corpse-loot identities already paid during this run. Taking the entry
+    /// before granting makes a retried update idempotent.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub collected_enemy_loot: BTreeSet<String>,
 }
 
 /// An in-progress craft job, persisted in `server_state.craft_jobs`. Created by
@@ -162,6 +171,27 @@ pub struct ServerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_in_flight_abyss_run_defaults_the_new_loot_ledger() {
+        let run: AbyssRun = serde_json::from_value(serde_json::json!({
+            "slices": [],
+            "reviveCount": 0,
+            "initialPlayerLevel": 1,
+            "seed": 1,
+            "score": 0.0,
+            "algorithmVersion": 1,
+            "version": 1,
+            "currentFloorIndex": 0
+        }))
+        .expect("runs persisted before the loot ledger must still load");
+        assert!(run.killed_enemies.is_empty());
+        assert!(run.collected_enemy_loot.is_empty());
+
+        let value = serde_json::to_value(run).unwrap();
+        assert!(value.get("killedEnemies").is_none());
+        assert!(value.get("collectedEnemyLoot").is_none());
+    }
 
     #[test]
     fn old_server_state_defaults_the_promotion_ledger() {
