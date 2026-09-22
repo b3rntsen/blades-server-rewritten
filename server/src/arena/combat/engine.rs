@@ -508,6 +508,19 @@ impl MatchInstance {
     /// slot→peer addressing applied one layer up; emitting it while a peer is still
     /// bound by FIFO admission order is what swaps the two players' identities.
     /// See `MatchRegistry::tick_matches`.
+    /// The character uuids of every fighter in this match, bots included.
+    ///
+    /// Used by bot selection to avoid handing out a character somebody is
+    /// playing right now — see `MatchRegistry::characters_in_live_matches`.
+    pub fn fighter_character_uuids(&self) -> Vec<String> {
+        self.combat
+            .fighters
+            .iter()
+            .map(|f| f.loadout.character_uuid.clone())
+            .filter(|u| !u.is_empty())
+            .collect()
+    }
+
     pub fn is_connecting(&self) -> bool {
         matches!(self.combat.phase, FlowState::Connecting)
     }

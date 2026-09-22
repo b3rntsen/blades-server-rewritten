@@ -1024,8 +1024,10 @@ async fn load_bot_loadout(
     human: Option<Skill>,
     config: &ArenaConfig,
     gsid: Uuid,
+    // Characters currently inside a live match — never drawn as a bot.
+    busy: &std::collections::HashSet<String>,
 ) -> crate::arena::combat::Loadout {
-    let mut lo = pick_bot_loadout(db, human_char_uuid, human, config, gsid).await;
+    let mut lo = pick_bot_loadout(db, human_char_uuid, human, config, gsid, busy).await;
     mark_loadout_as_bot(&mut lo);
     lo
 }
@@ -1036,6 +1038,7 @@ async fn pick_bot_loadout(
     human: Option<Skill>,
     config: &ArenaConfig,
     gsid: Uuid,
+    busy: &std::collections::HashSet<String>,
 ) -> crate::arena::combat::Loadout {
     use crate::arena::combat::loadout;
     let Some(db) = db else {
@@ -1073,6 +1076,18 @@ async fn pick_bot_loadout(
         BotRosterSource::WideFallback => load_wide_pool(&mut conn, human_char_uuid).await,
     };
 
+    // A BOT IS A COPY, NEVER THE CHARACTER SOMEBODY IS PLAYING.
+    //
+    // Owner's rule, 2026-09-23. `is_self_match` already refuses a ghost built
+    // from the human it is fighting; this is the wider case — a character in
+    // SOMEONE ELSE's live match. Handing that out as a bot is not a copy of a
+    // character, it is the character, being fought in two places at once.
+    //
+    // Dropped before the draw rather than after, so a busy character cannot win
+    // the bracket and then be discarded, leaving a worse fight than the pool
+    // could have given.
+    rows.retain(|r| !busy.contains(&r.id.to_string().to_lowercase()));
+
     let mut candidates: Vec<BotCandidate> = rows.iter().map(candidate_of_row).collect();
     let mut draw = pick_bot_index(&candidates, human_char_uuid, human, gsid);
 
@@ -1094,7 +1109,8 @@ async fn pick_bot_loadout(
     // Only ever a widening — if the wider pool has nobody bracketed either, the
     // roster draw stands.
     if should_widen(source, human, draw) {
-        let wide_rows = load_wide_pool(&mut conn, human_char_uuid).await;
+        let mut wide_rows = load_wide_pool(&mut conn, human_char_uuid).await;
+        wide_rows.retain(|r| !busy.contains(&r.id.to_string().to_lowercase()));
         let wide_candidates: Vec<BotCandidate> = wide_rows.iter().map(candidate_of_row).collect();
         if let Some(d) = pick_bot_index(&wide_candidates, human_char_uuid, human, gsid)
             && d.step.is_some()
@@ -1927,6 +1943,7 @@ mod bot_pick_tests {
                 None,
                 &config,
                 Uuid::nil(),
+                &std::collections::HashSet::new(),
             ));
         assert!(
             lo.display_name.ends_with(" (AI)"),
@@ -3660,7 +3677,14 @@ async fn resolve(
         while loadouts.len() < tickets.len() + bots {
             let bot = match tokio::time::timeout(
                 std::time::Duration::from_millis(1500),
-                load_bot_loadout(db, &human_char_uuid, human_skill, config, game_session_id),
+                load_bot_loadout(
+                    db,
+                    &human_char_uuid,
+                    human_skill,
+                    config,
+                    game_session_id,
+                    &registry.characters_in_live_matches(),
+                ),
             )
             .await
             {
@@ -5236,5 +5260,66 @@ mod bot_marker_is_one_definition {
         mark_loadout_as_bot(&mut lo);
         mark_loadout_as_bot(&mut lo);
         assert_eq!(lo.display_name, format!("Aurora{BOT_NAME_SUFFIX}"));
+    }
+}
+
+/// A bot is a COPY, never the character somebody is playing.
+///
+/// Owner's rule, 2026-09-23: "Any character can be used as an AI, but it should
+/// be a copy, not the character playing. The AI should always have (AI) added
+/// to its name."
+#[cfg(test)]
+mod a_bot_is_a_copy {
+    /// THE SEAM. The busy filter sits inside a selection function that needs a
+    /// database and a registry to drive, and deleting it compiles cleanly —
+    /// bots simply start being drawn from people who are mid-fight again. So
+    /// the call site is pinned in source.
+    #[test]
+    fn bot_selection_excludes_characters_in_a_live_match() {
+        let src = include_str!("matchmaker.rs");
+        let pick = src
+            .split("async fn pick_bot_loadout(")
+            .nth(1)
+            .expect("the picker exists");
+        let body = &pick[..pick.find("\nasync fn ").unwrap_or(pick.len())];
+        // Filtered BEFORE the draw, not after: a busy character must not win the
+        // bracket and then be discarded, leaving a worse fight than the pool
+        // could have given.
+        let retain = body
+            .find("rows.retain(|r| !busy.contains(")
+            .expect("the primary pool is filtered");
+        let draw = body
+            .find("pick_bot_index(&candidates")
+            .expect("the draw happens");
+        assert!(retain < draw, "the filter must run BEFORE the draw");
+        assert!(
+            body.contains("wide_rows.retain(|r| !busy.contains("),
+            "the widened fallback pool must be filtered too — it is the path that \
+             reaches outside the roster, so it is the one most likely to reach a \
+             character who is playing"
+        );
+    }
+
+    /// And the registry is what supplies it — an empty set would disable the
+    /// rule silently.
+    #[test]
+    fn the_live_match_set_comes_from_the_registry() {
+        let src = include_str!("matchmaker.rs");
+        assert!(
+            src.contains("&registry.characters_in_live_matches()"),
+            "production must pass the real live-match set, not an empty one"
+        );
+    }
+
+    /// The other half of the owner's rule: the name always carries the suffix.
+    #[test]
+    fn every_bot_is_marked_before_it_leaves_the_loader() {
+        let src = include_str!("matchmaker.rs");
+        let loader = src
+            .split("async fn load_bot_loadout(")
+            .nth(1)
+            .expect("the loader exists");
+        let body = &loader[..loader.find("\nasync fn ").unwrap_or(loader.len())];
+        assert!(body.contains("mark_loadout_as_bot(&mut lo)"));
     }
 }
