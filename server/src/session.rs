@@ -356,6 +356,37 @@ impl SessionStore {
             .clone()
     }
 
+    /// Drop every OTHER live session belonging to this user.
+    ///
+    /// One device owns the account at a time. Owner's rule, 2026-09-23: "one
+    /// device owns the sessions, and they cannot both be active … opening
+    /// device 1 automatically loads from the beginning, but it does not need a
+    /// login, or character transfer."
+    ///
+    /// That is exactly what dropping the session achieves and why nothing
+    /// heavier is needed. The old device's next request presents a token this
+    /// store no longer knows, gets a 401, and the client re-authenticates by
+    /// itself — anonymous login resolves the claimed device straight back to
+    /// the same account, so the player sees a reload, not a login screen and
+    /// not a lost character.
+    ///
+    /// It also closes the self-match hole from the other side: two live
+    /// sessions for one account are what let a player queue against themselves.
+    ///
+    /// Returns how many were evicted, for the log.
+    pub fn evict_other_sessions_for_user(&self, user_id: Uuid, keep: Uuid) -> Vec<Uuid> {
+        let mut locked = self.map.lock().unwrap();
+        let doomed: Vec<Uuid> = locked
+            .iter()
+            .filter(|(id, s)| **id != keep && s.user_id == user_id)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &doomed {
+            locked.remove(id);
+        }
+        doomed
+    }
+
     pub fn store_new_session(&self, session: Arc<Session>) -> Uuid {
         let now_instant = Instant::now();
         let clear_before_instant = now_instant - self.ttl;
@@ -466,4 +497,188 @@ async fn sync(session: SessionLookedUpMaybe) -> Result<web::Json<SyncResponse>, 
     Ok(web::Json(SyncResponse {
         request_index: session.session.current_request_index(),
     }))
+}
+
+
+/// Make `session_id` the only live session for this user, in memory and in the
+/// `sessions` table.
+///
+/// Called on every path that mints a session. The DB half matters because
+/// sessions are repopulated from that table after a restart — evicting only the
+/// in-memory copy would bring the displaced device's session back to life on the
+/// next deploy.
+///
+/// Best-effort on the DB, like `persist_session`: losing the row means the old
+/// session could survive a restart, which is a far smaller problem than failing
+/// a login.
+pub async fn claim_account_for_this_device(
+    store: &SessionStore,
+    db: &DbPool,
+    user_id: Uuid,
+    session_id: Uuid,
+) {
+    let evicted = store.evict_other_sessions_for_user(user_id, session_id);
+    if evicted.is_empty() {
+        return;
+    }
+    log::info!(
+        "session: user {user_id} signed in on a new device — evicted {} other live session(s); \
+         the displaced device will reload from the start on its next request (no login needed)",
+        evicted.len(),
+    );
+
+    use diesel_async::RunQueryDsl;
+    let mut conn = match db.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("session: could not evict old sessions from the database: {e}");
+            return;
+        }
+    };
+    if let Err(e) = diesel::sql_query("DELETE FROM sessions WHERE user_id = $1 AND session_id <> $2")
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .bind::<diesel::sql_types::Uuid, _>(session_id)
+        .execute(&mut conn)
+        .await
+    {
+        log::warn!("session: could not evict old sessions from the database: {e}");
+    }
+}
+
+/// One device owns the account.
+///
+/// Owner's rule, 2026-09-23: "I can play on device 1, go to main menu, lock
+/// screen, then on device 2 open the app, load and play, lock screen. Then
+/// opening device 1 automatically loads from the beginning, but it does not
+/// need a login, or character transfer."
+///
+/// Dropping the displaced session is what produces that: its next request 401s,
+/// the client re-authenticates on its own, and anonymous login resolves the
+/// claimed device back to the same account.
+#[cfg(test)]
+mod one_device_owns_the_account {
+    use super::{Session, SessionStore};
+    use std::{sync::Arc, time::Duration};
+    use uuid::Uuid;
+
+    fn store() -> SessionStore {
+        SessionStore::new(Duration::from_secs(3600))
+    }
+
+    /// Sessions are inserted under ids we choose rather than through
+    /// `store_new_session`, on purpose.
+    ///
+    /// That function derives the id from `now - time_base` and prunes anything
+    /// older than `now - ttl`. In a test the store is created microseconds
+    /// before the session, so both encode second 0 and the comparison falls
+    /// through to the random half of the uuid — a session can prune itself the
+    /// moment it is stored. (That is a real, if narrow, edge for the first
+    /// second after a server restart; it is not what these tests are about, and
+    /// fixing it is a separate change.)
+    fn add(s: &SessionStore, id: Uuid, user: Uuid) -> Uuid {
+        s.insert_existing(
+            id,
+            Arc::new(Session::new(user, Uuid::new_v4(), Duration::from_secs(3600))),
+        );
+        id
+    }
+
+    /// The scenario, end to end: device 1, then device 2, then device 1 again.
+    #[test]
+    fn the_newest_device_wins_and_the_older_one_is_dropped() {
+        let s = store();
+        let user = Uuid::new_v4();
+
+        let device1 = add(&s, Uuid::new_v4(), user);
+        assert!(s.get(device1).is_some(), "device 1 is live after signing in");
+
+        let device2 = add(&s, Uuid::new_v4(), user);
+        s.evict_other_sessions_for_user(user, device2);
+
+        assert!(s.get(device2).is_some(), "the newest device keeps its session");
+        assert!(
+            s.get(device1).is_none(),
+            "the older device's session is gone — its next request 401s and it reloads"
+        );
+
+        // And back again: picking device 1 up displaces device 2, symmetrically.
+        let device1_again = add(&s, Uuid::new_v4(), user);
+        s.evict_other_sessions_for_user(user, device1_again);
+        assert!(s.get(device1_again).is_some());
+        assert!(s.get(device2).is_none());
+    }
+
+    /// CONTROL, and the one that would make this a catastrophe if wrong: a login
+    /// must only ever evict the SAME user. Getting this backwards would sign out
+    /// the whole server on every login.
+    #[test]
+    fn another_players_session_is_never_touched() {
+        let s = store();
+        let (me, them) = (Uuid::new_v4(), Uuid::new_v4());
+        let their_session = add(&s, Uuid::new_v4(), them);
+        let my_first = add(&s, Uuid::new_v4(), me);
+        let my_second = add(&s, Uuid::new_v4(), me);
+
+        let evicted = s.evict_other_sessions_for_user(me, my_second);
+
+        assert_eq!(evicted, vec![my_first], "only my own older session goes");
+        assert!(s.get(their_session).is_some(), "the other player is untouched");
+        assert!(s.get(my_second).is_some());
+    }
+
+    /// Signing in when nothing else is live evicts nothing — so the log line
+    /// only appears when a device was actually displaced.
+    #[test]
+    fn a_first_login_displaces_nobody() {
+        let s = store();
+        let user = Uuid::new_v4();
+        let only = add(&s, Uuid::new_v4(), user);
+        assert!(s.evict_other_sessions_for_user(user, only).is_empty());
+        assert!(s.get(only).is_some());
+    }
+
+    /// Three devices, one account: after the third signs in, exactly one lives.
+    #[test]
+    fn only_ever_one_session_survives() {
+        let s = store();
+        let user = Uuid::new_v4();
+        let a = add(&s, Uuid::new_v4(), user);
+        let b = add(&s, Uuid::new_v4(), user);
+        let c = add(&s, Uuid::new_v4(), user);
+        let evicted = s.evict_other_sessions_for_user(user, c);
+        assert_eq!(evicted.len(), 2);
+        for gone in [a, b] {
+            assert!(s.get(gone).is_none());
+        }
+        assert!(s.get(c).is_some());
+    }
+
+    /// THE SEAM. The eviction is useless if the login paths do not call it, and
+    /// they compile perfectly well without. Every path that mints a session must
+    /// claim the account for that device.
+    #[test]
+    fn every_login_path_claims_the_account() {
+        let src = include_str!("authentification.rs");
+        let mints = src.matches("store_new_session(").count();
+        let claims = src.matches("claim_account_for_this_device(").count();
+        assert!(mints > 0, "there is at least one login path");
+        assert!(
+            claims >= mints,
+            "every path that mints a session must claim the account for that device \
+             ({mints} mint(s), {claims} claim(s))"
+        );
+    }
+
+    /// The database half is not optional: sessions are repopulated from the
+    /// `sessions` table after a restart, so evicting only the in-memory copy
+    /// would resurrect the displaced device on the next deploy.
+    #[test]
+    fn the_eviction_also_clears_the_persisted_row() {
+        let src = include_str!("session.rs");
+        let body = src
+            .split("pub async fn claim_account_for_this_device(")
+            .nth(1)
+            .expect("the helper exists");
+        assert!(body.contains("DELETE FROM sessions WHERE user_id = $1 AND session_id <> $2"));
+    }
 }

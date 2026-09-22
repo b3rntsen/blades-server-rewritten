@@ -1099,6 +1099,23 @@ impl MatchRegistry {
             .map(|m| m.players.len())
             .sum()
     }
+    /// Every character uuid currently inside a live match.
+    ///
+    /// Owner's rule, 2026-09-23: a bot "should be a copy, not the character
+    /// playing". `is_self_match` already stops a ghost being built from the
+    /// human it is fighting; this is the wider case — someone ELSE's match. A
+    /// character handed out as a bot while its owner is in a fight is the live
+    /// character, not a copy of it, however careful the economy is afterwards.
+    pub fn characters_in_live_matches(&self) -> std::collections::HashSet<String> {
+        self.matches
+            .lock()
+            .unwrap()
+            .values()
+            .flat_map(|m| m.instance.fighter_character_uuids())
+            .map(|u| u.to_lowercase())
+            .collect()
+    }
+
     pub fn available_permits(&self) -> usize {
         self.semaphore.available_permits()
     }

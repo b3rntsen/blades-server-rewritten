@@ -254,6 +254,13 @@ async fn bnet_log_in(
     ));
     let session_id = app_state.session_store.store_new_session(session.clone());
     crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
+    crate::session::claim_account_for_this_device(
+        &app_state.session_store,
+        &app_state.db_pool,
+        session.user_id,
+        session_id,
+    )
+    .await;
     match log_name {
         Some(username) => log::info!("account login: {username} -> user {}", user.id),
         None => log::info!("account login: persisted token -> user {}", user.id),
@@ -489,6 +496,13 @@ async fn bnet_link(
 
     let session_id = app_state.session_store.store_new_session(session.clone());
     crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
+    crate::session::claim_account_for_this_device(
+        &app_state.session_store,
+        &app_state.db_pool,
+        session.user_id,
+        session_id,
+    )
+    .await;
     let inner = SessionResponseInner::from_session(session_id, session.as_ref());
     let login_token = inner.login_token.clone();
     log::info!("account link: user {user_id} linked (no conflict)");
@@ -675,6 +689,13 @@ async fn bnet_link_force(
 
     let session_id = app_state.session_store.store_new_session(session.clone());
     crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
+    crate::session::claim_account_for_this_device(
+        &app_state.session_store,
+        &app_state.db_pool,
+        session.user_id,
+        session_id,
+    )
+    .await;
     log::info!(
         "account link (forced): user {source_user_id} kept {}; rebound {rebound} device(s); \
          adopted {} character(s), parked {} (#185)",
@@ -824,6 +845,13 @@ async fn anon_log_in(
                 ));
                 let session_id = app_state.session_store.store_new_session(session.clone());
                 crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
+    crate::session::claim_account_for_this_device(
+        &app_state.session_store,
+        &app_state.db_pool,
+        session.user_id,
+        session_id,
+    )
+    .await;
                 // Every exit from anon_log_in goes through this. Our APK has the FTUE
                 // patched out, so a player with no character never gets offered creation —
                 // it asks for its characters, gets an empty list and sits on the loading
@@ -866,6 +894,13 @@ async fn anon_log_in(
         ));
         let session_id = app_state.session_store.store_new_session(session.clone());
         crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
+    crate::session::claim_account_for_this_device(
+        &app_state.session_store,
+        &app_state.db_pool,
+        session.user_id,
+        session_id,
+    )
+    .await;
 
         // Same as above: never leave an anon login without a character.
         if let Err(e) = crate::character::ensure_starter_character(&app_state, session.user_id).await {
@@ -905,6 +940,13 @@ async fn anon_log_in(
         ));
         let session_id = app_state.session_store.store_new_session(session.clone());
         crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
+    crate::session::claim_account_for_this_device(
+        &app_state.session_store,
+        &app_state.db_pool,
+        session.user_id,
+        session_id,
+    )
+    .await;
 
         // Same as above: never leave an anon login without a character.
         if let Err(e) = crate::character::ensure_starter_character(&app_state, session.user_id).await {
@@ -993,6 +1035,13 @@ async fn anon_log_in(
                 let session_id = app_state.session_store.store_new_session(session.clone());
                 crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref())
                     .await;
+                crate::session::claim_account_for_this_device(
+                    &app_state.session_store,
+                    &app_state.db_pool,
+                    session.user_id,
+                    session_id,
+                )
+                .await;
                 // This is a completed login, not merely a lookup hint. Falling
                 // through creates a second user for the same device and returns
                 // that new identity instead of the session we just persisted.
@@ -1050,6 +1099,13 @@ async fn anon_log_in(
         ));
         let session_id = app_state.session_store.store_new_session(session.clone());
         crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
+    crate::session::claim_account_for_this_device(
+        &app_state.session_store,
+        &app_state.db_pool,
+        session.user_id,
+        session_id,
+    )
+    .await;
 
         // Same as above: never leave an anon login without a character.
         if let Err(e) = crate::character::ensure_starter_character(&app_state, session.user_id).await {
