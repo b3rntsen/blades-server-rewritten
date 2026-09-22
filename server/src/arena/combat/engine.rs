@@ -1775,10 +1775,37 @@ impl MatchInstance {
                 );
             }
 
-            // Persist. A bot / starter loadout has no character uuid to write to, and
-            // the queue is a no-op when the server runs without a database (unit tests,
-            // the offline round-trip harness).
-            if let Ok(character_id) = uuid::Uuid::parse_str(&f.loadout.character_uuid) {
+            // Persist — but NEVER for the bot's own side.
+            //
+            // The old comment here said "a bot / starter loadout has no character
+            // uuid to write to". That is true only of the `starter()` fallback. A
+            // real bot is deliberately built FROM a player's character, because
+            // without a complete loadout the client hangs at "Connecting" (see
+            // `pick_bot_loadout`) — so it does have a uuid, and every solo match
+            // was paying that player gold, XP, a chest meter and CUPS for a fight
+            // their owner never played.
+            //
+            // Measured on production 2026-09-22: LagorPing had climbed to 160
+            // trophies on three "wins", having never once launched the game. The
+            // human lost those same three matches. Trophies drive the matchmaking
+            // bracket, so this also quietly moved people up the ladder.
+            //
+            // `is_bot_loadout` is the same predicate the void-result rule above
+            // already trusts for the opponent, and `mark_loadout_as_bot` is applied
+            // on every bot path through a wrapper precisely so it cannot be missed.
+            let character_id = match uuid::Uuid::parse_str(&f.loadout.character_uuid) {
+                Ok(id) if !crate::arena::matchmaker::is_bot_loadout(&f.loadout) => Some(id),
+                Ok(_) => {
+                    log::debug!(
+                        "arena economy: slot {slot} is the bot ({}) — no reward, no audit row",
+                        f.loadout.display_name,
+                    );
+                    None
+                }
+                // `starter()` and the offline harness carry no uuid at all.
+                Err(_) => None,
+            };
+            if let Some(character_id) = character_id {
                 arena_economy::record(MatchEconomyOutcome {
                     character_id,
                     game_session_id,
@@ -4896,6 +4923,73 @@ pub(in crate::arena::combat) mod tests {
 /// owner's rule is that this costs nothing — a bug between a human and one of
 /// our own bots nulls the result, because the complaint is not worth the cups
 /// and there is no opponent to be unfair to.
+/// The bot side of a solo match must not be paid.
+///
+/// A real bot is built FROM a player's character on purpose — an incomplete
+/// loadout hangs the client at "Connecting" — so it carries a character uuid
+/// like any human, and the persist path used to treat it like one. Measured on
+/// production 2026-09-22: LagorPing sat on 160 trophies from three "wins" while
+/// its owner had never launched the game once; the humans lost those three
+/// matches. Cups drive the matchmaking bracket, so the inflation also moved
+/// people up the ladder.
+#[cfg(test)]
+mod the_bot_side_is_never_paid {
+    use crate::arena::combat::Loadout;
+    use crate::arena::matchmaker::is_bot_loadout;
+
+    fn named(display_name: &str) -> Loadout {
+        Loadout {
+            display_name: display_name.to_string(),
+            ..Loadout::default()
+        }
+    }
+
+    /// The predicate itself, on the case that actually occurs: a bot wearing a
+    /// real player's name. Before the marking existed, this was indistinguishable
+    /// from the player.
+    #[test]
+    fn a_marked_loadout_is_a_bot_and_the_same_name_unmarked_is_not() {
+        assert!(is_bot_loadout(&named("LagorPing (AI)")));
+        assert!(
+            !is_bot_loadout(&named("LagorPing")),
+            "the human whose character the bot was built from must still be paid"
+        );
+    }
+
+    /// The `starter()` fallback carries no name, so the marking spells out the
+    /// same substitute rather than shipping a bare " (AI)".
+    #[test]
+    fn the_nameless_fallback_is_still_recognised_once_marked() {
+        assert!(!is_bot_loadout(&named("")));
+        assert!(is_bot_loadout(&named("Fighter (AI)")));
+    }
+
+    /// THE SEAM. The guard lives inside a 200-line result loop that needs a whole
+    /// MatchInstance to drive, and deleting it compiles cleanly — the bot simply
+    /// starts getting paid again, silently, exactly as before. The four tests
+    /// above cannot see that, because they take the loadout as an argument. So
+    /// the call site is pinned here, in source, the same way the `on_c2s` seam is
+    /// pinned below.
+    #[test]
+    fn the_persist_path_still_checks_which_side_is_the_bot() {
+        let src = include_str!("engine.rs");
+        let start = src
+            .find("let character_id = match uuid::Uuid::parse_str(&f.loadout.character_uuid)")
+            .expect("the persist guard still exists");
+        let body = &src[start..start + 700];
+        assert!(
+            body.contains("is_bot_loadout(&f.loadout)"),
+            "the persist path must skip the bot's own side"
+        );
+        // And it must gate the RECORD, not merely log: the arena_economy call has
+        // to sit behind the Some(character_id) this produces.
+        assert!(
+            body.contains("if let Some(character_id) = character_id"),
+            "the reward must be behind the same check"
+        );
+    }
+}
+
 #[cfg(test)]
 mod void_for_a_player_who_never_arrived {
     use super::void_ai_match_result;
