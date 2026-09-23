@@ -387,12 +387,27 @@ fn current_event_window_start(
     app_state: &ServerGlobal,
     quest_id: Uuid,
 ) -> Option<chrono::NaiveDateTime> {
-    let now = chrono::Utc::now().timestamp();
-    blades_lib::features::game_events::active_events(&app_state.static_data.game_events, now)
-        .into_iter()
-        .find(|e| e.quest_id == quest_id)
-        .and_then(|e| chrono::DateTime::from_timestamp(e.start_time_secs, 0))
-        .map(|dt| dt.naive_utc())
+    event_window_start_at(&app_state.static_data, quest_id, chrono::Utc::now().timestamp())
+}
+
+/// [`current_event_window_start`] at a given instant, against the same themed
+/// calendar the feed serves. A themed window re-opens an event days after its
+/// last opening; reading the untouched calendar here would miss that new window
+/// and carry the old window's completions into it.
+fn event_window_start_at(
+    sd: &blades_lib::static_data::StaticData,
+    quest_id: Uuid,
+    now: i64,
+) -> Option<chrono::NaiveDateTime> {
+    blades_lib::features::game_events::active_events_themed(
+        &sd.game_events,
+        sd.game_event_theme.as_ref(),
+        now,
+    )
+    .into_iter()
+    .find(|e| e.quest_id == quest_id)
+    .and_then(|e| chrono::DateTime::from_timestamp(e.start_time_secs, 0))
+    .map(|dt| dt.naive_utc())
 }
 
 async fn handle_event_dungeon_exit(
@@ -798,6 +813,48 @@ mod dungeon_settings_resolution {
     /// the client receives and not merely that it failed.
     fn envelope(e: &BladeApiError) -> (u16, String) {
         (e.status_code().as_u16(), e.to_string())
+    }
+
+    /// A themed re-opening is a NEW window for the completion ladder. The reset
+    /// reads the window start from the themed calendar; against the untouched one
+    /// it would find nothing (or last cycle's window) and the second run of a
+    /// Halloween event would continue the first run's count instead of paying
+    /// its five milestones again.
+    #[test]
+    fn a_themed_reopening_is_a_new_completion_window() {
+        use blades_lib::features::game_events::{EventTheme, HALLOWEEN_THEME_QUESTS};
+
+        let mut sd = static_data();
+        let theme = EventTheme {
+            start_secs: 1_791_590_400, // 2026-10-10 00:00 UTC
+            end_secs: 1_793_404_800,   // 2026-10-31 00:00 UTC
+            quest_ids: HALLOWEEN_THEME_QUESTS.to_vec(),
+        };
+        let openings: Vec<(i64, Uuid, bool)> =
+            theme.plan(&sd.game_events).expect("plans").openings().collect();
+        sd.game_event_theme = Some(theme);
+
+        let undying = HALLOWEEN_THEME_QUESTS[2];
+        let runs: Vec<i64> = openings
+            .iter()
+            .filter(|(_, q, _)| *q == undying)
+            .map(|(s, _, _)| *s)
+            .collect();
+        assert!(runs.len() >= 2, "Wrath of the Undying opens {} time(s)", runs.len());
+        let second = runs[1];
+        let at = |t: i64| chrono::DateTime::from_timestamp(t, 0).unwrap().naive_utc();
+
+        assert_eq!(
+            event_window_start_at(&sd, undying, second + 3_600),
+            Some(at(second)),
+            "the second run is its own window"
+        );
+        // CONTROL: the untouched calendar does not know that window exists.
+        let plain = StaticData {
+            game_event_theme: None,
+            ..sd.clone()
+        };
+        assert_ne!(event_window_start_at(&plain, undying, second + 3_600), Some(at(second)));
     }
 
     // ---------------------------------------------------------------- the defect

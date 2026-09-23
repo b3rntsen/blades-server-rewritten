@@ -15,7 +15,7 @@ use crate::economy::RewardGrant;
 use crate::features::chests::ChestLootTables;
 use crate::features::challenges::ChallengeTemplate;
 use crate::features::daily_reward::DailyRewardDef;
-use crate::features::game_events::EventDef;
+use crate::features::game_events::{EventDef, EventTheme};
 use crate::user_data::ItemSingleProperty;
 
 /// One reward line of a global gift (`{itemTemplateId, quantity}`). The template
@@ -1200,6 +1200,12 @@ pub struct StaticData {
     pub chest_loots: ChestLootTables,
     /// Daily / Sigil quest event library (a rotating few are surfaced as active).
     pub game_events: Vec<EventDef>,
+    /// An optional themed window over [`Self::game_events`] (e.g. Halloween), read
+    /// from the optional `event_theme.json` at startup. `None` leaves the calendar
+    /// untouched.
+    /// Every reader of the calendar passes it through the `*_themed` functions so
+    /// the feed, the quest rows and the completion reset agree.
+    pub game_event_theme: Option<EventTheme>,
     /// Representative salvage yield per `recipeId` (`recipeId` -> {material -> count}),
     /// since the real yield is randomised.
     pub salvage_recipes: HashMap<Uuid, HashMap<Uuid, u64>>,

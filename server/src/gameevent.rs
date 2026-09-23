@@ -14,7 +14,7 @@ use actix_web::{
     post,
     web::{self, Json},
 };
-use blades_lib::features::game_events::{self, EventDef, GameEvent};
+use blades_lib::features::game_events::{self, EventDef, EventTheme, GameEvent};
 use serde::Serialize;
 
 use crate::ServerGlobal;
@@ -41,18 +41,20 @@ pub async fn get_game_events(app_state: web::Data<Arc<ServerGlobal>>) -> Json<Ge
     // This is the same "starting soon" set /quests advertises as
     // `gameEventQuestsInWarning`, which is why it reuses `upcoming_events`
     // rather than growing a second notion of soon.
+    let sd = &app_state.static_data;
     Json(GetGameEventsResponse {
-        game_events: response_events(&app_state.static_data.game_events, now),
+        game_events: response_events(&sd.game_events, sd.game_event_theme.as_ref(), now),
     })
 }
 
 /// What the endpoint puts on the wire: the open events, then the next one to
 /// open. Lifted out of the handler so it can be tested — the handler is the
 /// place a composition like this silently stops being what retail sent.
-fn response_events(library: &[EventDef], now: i64) -> Vec<GameEvent> {
-    let mut out = game_events::active_events(library, now);
-    out.extend(game_events::upcoming_events(
+fn response_events(library: &[EventDef], theme: Option<&EventTheme>, now: i64) -> Vec<GameEvent> {
+    let mut out = game_events::active_events_themed(library, theme, now);
+    out.extend(game_events::upcoming_events_themed(
         library,
+        theme,
         now,
         game_events::WARNING_LEAD_SECS,
     ));
@@ -93,7 +95,7 @@ mod tests {
             {
                 continue; // a holiday event is open; not the retail case
             }
-            let out = response_events(&lib, now);
+            let out = response_events(&lib, None, now);
             assert_eq!(out.len(), 3, "day {day}: retail always sent three");
             let open = out.iter().filter(|e| e.start_time_secs <= now).count();
             let soon = out.iter().filter(|e| e.start_time_secs > now).count();
@@ -123,6 +125,45 @@ mod tests {
         let lib: Vec<EventDef> = all.into_iter().filter(|d| !d.annual).collect();
         let now = 1_777_800_000i64;
         assert_eq!(game_events::active_events(&lib, now).len(), 2);
-        assert_eq!(response_events(&lib, now).len(), 3);
+        assert_eq!(response_events(&lib, None, now).len(), 3);
+    }
+
+    /// With a Halloween window configured the endpoint keeps retail's shape —
+    /// three events, 2 open + 1 about to open, three different quests — every
+    /// hour of the window and its edges, and the themed events really are what it
+    /// serves: each of them is in the feed on two or more separate openings.
+    #[test]
+    fn a_themed_window_keeps_the_three_event_shape_and_repeats_its_events() {
+        use game_events::HALLOWEEN_THEME_QUESTS;
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/game_events.json");
+        let raw = std::fs::read_to_string(&path).expect("read game_events.json");
+        let lib: Vec<EventDef> = serde_json::from_str(&raw).expect("valid game_events.json");
+        let theme = EventTheme {
+            start_secs: 1_791_590_400, // 2026-10-10 00:00 UTC
+            end_secs: 1_793_404_800,   // 2026-10-31 00:00 UTC
+            quest_ids: HALLOWEEN_THEME_QUESTS.to_vec(),
+        };
+
+        let mut seen: BTreeMap<uuid::Uuid, BTreeSet<i64>> = BTreeMap::new();
+        let mut now = theme.start_secs - 3 * 86_400;
+        while now < theme.end_secs + 3 * 86_400 {
+            let out = response_events(&lib, Some(&theme), now);
+            assert_eq!(out.len(), 3, "t={now}");
+            assert_eq!(out.iter().filter(|e| e.start_time_secs <= now).count(), 2, "t={now}");
+            assert_eq!(out.iter().filter(|e| e.start_time_secs > now).count(), 1, "t={now}");
+            let quests: BTreeSet<_> = out.iter().map(|e| e.quest_id).collect();
+            assert_eq!(quests.len(), 3, "t={now}: a quest listed twice");
+            for e in out.iter().filter(|e| e.start_time_secs <= now) {
+                seen.entry(e.quest_id).or_default().insert(e.start_time_secs);
+            }
+            now += 3_600;
+        }
+        for q in HALLOWEEN_THEME_QUESTS {
+            let n = seen.get(&q).map_or(0, |s| s.len());
+            assert!(n >= 2, "{q} was served on {n} opening(s)");
+        }
     }
 }
