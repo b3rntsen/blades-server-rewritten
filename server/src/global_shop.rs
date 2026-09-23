@@ -413,7 +413,56 @@ struct PurchaseResponse {
 /// here. An entry whose bucket is not one this function handles makes the whole
 /// offer ungrantable rather than being dropped: a partial grant is a silent
 /// short-change, and the player paid.
+///
+/// The tests' view of [`resolve_offer_contents`]; the handler calls that directly
+/// so it can log the reason.
+#[cfg(test)]
 fn grant_from_offer_contents(
+    contents: Option<&OfferContents>,
+    repair_data: &blades_lib::features::repair::RepairData,
+    items: &std::collections::HashMap<uuid::Uuid, blades_lib::game_data::GameDataItem>,
+    roll_nonce: u64,
+) -> Option<RewardGrant> {
+    resolve_offer_contents(contents, repair_data, items, roll_nonce).ok()
+}
+
+/// Why an offer's contents cannot be granted. One variant per refusal in
+/// [`resolve_offer_contents`], so the purchase log names the actual reason and a
+/// census over the shipped catalogue can group by it without re-deriving the
+/// rules.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum OfferRefusal {
+    /// No capture-derived grant, and the offer is absent from the APK contents.
+    NoContents,
+    /// `ChestRoll` or `Unknown`: refused by kind, not per entry.
+    Kind(String),
+    /// An entry's template that neither the extractor nor the game data can place.
+    UnnameableTemplate(Uuid),
+    /// An arcane tier the grade corpus has never seen, with no authored grading.
+    UnrolledArcaneTier(u64),
+    /// Gear that wears out, with no row in the durability table.
+    NoDurability(Uuid),
+    /// The contents resolve to nothing.
+    Empty,
+}
+
+impl std::fmt::Display for OfferRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OfferRefusal::NoContents => write!(f, "no grant and no APK contents"),
+            OfferRefusal::Kind(k) => write!(f, "contents kind {k} is not grantable"),
+            OfferRefusal::UnnameableTemplate(t) => write!(f, "template {t} cannot be classified"),
+            OfferRefusal::UnrolledArcaneTier(t) => {
+                write!(f, "arcane tier {t} has no grade distribution to roll from")
+            }
+            OfferRefusal::NoDurability(t) => write!(f, "gear template {t} has no durability row"),
+            OfferRefusal::Empty => write!(f, "contents resolve to an empty reward"),
+        }
+    }
+}
+
+/// [`grant_from_offer_contents`], saying WHY when it refuses.
+fn resolve_offer_contents(
     contents: Option<&OfferContents>,
     repair_data: &blades_lib::features::repair::RepairData,
     // The template -> bucket table, for entries the extractor left `unknown`.
@@ -423,8 +472,8 @@ fn grant_from_offer_contents(
     // NOT need to be reproducible: the purchase response IS the grant, there is
     // nothing described in advance to stay consistent with.
     roll_nonce: u64,
-) -> Option<RewardGrant> {
-    let c = contents?;
+) -> Result<RewardGrant, OfferRefusal> {
+    let c = contents.ok_or(OfferRefusal::NoContents)?;
     // `NeedsRoll` is now grantable — that is the whole of this change: its gear is
     // no longer "needs a roll", because the APK authors the enhancement and the
     // extractor finally reads it.
@@ -439,7 +488,7 @@ fn grant_from_offer_contents(
             | OfferContentsKind::NeedsRoll
             | OfferContentsKind::Unclassified
     ) {
-        return None;
+        return Err(OfferRefusal::Kind(format!("{:?}", c.kind)));
     }
     let mut reward = RewardGrant {
         town_xp: c.town_xp,
@@ -459,7 +508,8 @@ fn grant_from_offer_contents(
             "items" => blades_lib::economy::ItemBucket::Instance,
             "currencies" => blades_lib::economy::ItemBucket::Currency,
             "stackableItems" => blades_lib::economy::ItemBucket::Stackable,
-            _ => blades_lib::economy::bucket_for_template(entry.item_template_id, items)?,
+            _ => blades_lib::economy::bucket_for_template(entry.item_template_id, items)
+                .ok_or(OfferRefusal::UnnameableTemplate(entry.item_template_id))?,
         };
         if bucket == blades_lib::economy::ItemBucket::Instance {
             // `grading` empty on an arcane item means retail ROLLED the grade at
@@ -481,7 +531,8 @@ fn grant_from_offer_contents(
                 Some(blades_lib::features::sigil_grades::roll_grading(
                     entry.arcane_tier,
                     roll_nonce,
-                )?)
+                )
+                .ok_or(OfferRefusal::UnrolledArcaneTier(entry.arcane_tier))?)
             } else {
                 None
             };
@@ -497,7 +548,9 @@ fn grant_from_offer_contents(
             ) {
                 0.0
             } else {
-                repair_data.max_durability(entry.item_template_id, entry.tempering_level)?
+                repair_data
+                    .max_durability(entry.item_template_id, entry.tempering_level)
+                    .ok_or(OfferRefusal::NoDurability(entry.item_template_id))?
             };
             let properties = blades_lib::user_data::ItemPropertiesAll {
                 enchanting: entry
@@ -545,16 +598,16 @@ fn grant_from_offer_contents(
             blades_lib::economy::ItemBucket::Currency => &mut reward.currencies,
             blades_lib::economy::ItemBucket::Stackable => &mut reward.stackable_items,
             // Handled above; the `continue` there makes this unreachable.
-            blades_lib::economy::ItemBucket::Instance => return None,
+            blades_lib::economy::ItemBucket::Instance => return Err(OfferRefusal::Empty),
         };
         *slot.entry(entry.item_template_id).or_insert(0) += entry.quantity;
     }
     // An offer that resolves to nothing must not read as a successful purchase:
     // the player would be charged and handed an empty reward.
     if reward.is_empty() {
-        return None;
+        return Err(OfferRefusal::Empty);
     }
-    Some(reward)
+    Ok(reward)
 }
 
 /// The product's LIFETIME purchase cap, or `None` when it is unlimited.
@@ -665,7 +718,7 @@ pub async fn purchase_global_shop(
         .get(&body.global_shop_product_id)
     {
         Some(r) => r.clone(),
-        None => grant_from_offer_contents(
+        None => resolve_offer_contents(
             app_state
                 .static_data
                 .global_shop_offer_contents
@@ -680,7 +733,7 @@ pub async fn purchase_global_shop(
                 .map(|d| d.subsec_nanos() as u64 ^ d.as_secs())
                 .unwrap_or(0),
         )
-        .ok_or_else(|| {
+        .map_err(|why| {
             // NOT a 404. This comment's own neighbour records why: a 404 here makes
             // the client prompt the player to reconnect to Bethesda, and a player
             // who touched one of these lost the game entirely — "ever since I tried
@@ -699,7 +752,7 @@ pub async fn purchase_global_shop(
             // server-side; the client is simply told no.
             log::warn!(
                 "[shop] character {character_id} tried to buy product {} which has no \
-                 deliverable reward (#167); refusing with the price-mismatch shape \
+                 deliverable reward (#167): {why}; refusing with the price-mismatch shape \
                  rather than a 404, which would brick the client",
                 body.global_shop_product_id,
             );
@@ -2237,6 +2290,281 @@ mod report184_unclassified_tests {
             grant_from_offer_contents(Some(&contents), &repair_data(), item_table(), 1)
                 .is_none(),
             "an id nothing can classify must refuse, not guess a bucket"
+        );
+    }
+}
+
+/// HOW MANY STOREFRONT OFFERS STILL CANNOT BE BOUGHT, AND WHY (#184 follow-up).
+///
+/// Every product in the shipped catalogue goes through the same resolution the
+/// purchase handler runs — capture-derived grant first, then
+/// [`resolve_offer_contents`] over the APK contents — against the shipped
+/// template, durability and grade tables. Refusals are grouped by the reason the
+/// code itself returns, so the census cannot drift from the rules it counts.
+#[cfg(test)]
+mod report184_census_tests {
+    use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn dir() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static")
+    }
+
+    /// The repair table exactly as `main.rs` builds it.
+    fn prod_repair_data() -> blades_lib::features::repair::RepairData {
+        let read = |n: &str| -> Value {
+            serde_json::from_str(&std::fs::read_to_string(dir().join(n)).unwrap()).unwrap()
+        };
+        blades_lib::features::repair::RepairData::from_json(
+            &read("item_durability.json"),
+            &read("repair_costs.json"),
+        )
+    }
+
+    /// `editorName` per product, for naming examples.
+    fn editor_names() -> std::collections::HashMap<String, String> {
+        let raw: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir().join("global_shop_offer_contents.json")).unwrap(),
+        )
+        .unwrap();
+        raw["offers"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), v["editorName"].as_str().unwrap_or("?").to_string()))
+            .collect()
+    }
+
+    fn label(why: &OfferRefusal) -> &'static str {
+        match why {
+            OfferRefusal::NoContents => "no grant and no APK contents",
+            OfferRefusal::Kind(_) => "kind not grantable",
+            OfferRefusal::UnnameableTemplate(_) => "unnameable template",
+            OfferRefusal::UnrolledArcaneTier(_) => "arcane tier with no grade roll",
+            OfferRefusal::NoDurability(_) => "gear with no durability row",
+            OfferRefusal::Empty => "empty reward",
+        }
+    }
+
+    const UNPARSEABLE: &str = "unparseable product id";
+
+    /// Why this product's reward cannot be resolved, or `None` when it can —
+    /// exactly the handler's order: capture grant, then the APK contents.
+    fn refusal(
+        sd: &blades_lib::static_data::StaticData,
+        rd: &blades_lib::features::repair::RepairData,
+        id: &str,
+    ) -> Option<&'static str> {
+        let Ok(uuid) = Uuid::parse_str(id) else {
+            // The request body's `globalShopProductId` is a `Uuid`, so this id
+            // cannot even reach the handler.
+            return Some(UNPARSEABLE);
+        };
+        if sd.global_shop_grants.contains_key(&uuid) {
+            return None;
+        }
+        resolve_offer_contents(sd.global_shop_offer_contents.get(&uuid), rd, item_table(), 1)
+            .err()
+            .map(|why| label(&why))
+    }
+
+    /// Reason -> product ids refused for it, over the whole catalogue.
+    fn census(
+        rd: &blades_lib::features::repair::RepairData,
+    ) -> (usize, BTreeMap<&'static str, BTreeSet<String>>) {
+        let sd = crate::static_loader::load(&dir());
+        let mut total = 0;
+        let mut refused: BTreeMap<&'static str, BTreeSet<String>> = BTreeMap::new();
+        for id in sd.global_shop_overrides["globalShopOverrides"].as_object().unwrap().keys() {
+            total += 1;
+            if let Some(reason) = refusal(&sd, rd, id) {
+                refused.entry(reason).or_default().insert(id.clone());
+            }
+        }
+        (total, refused)
+    }
+
+    /// THE NUMBER THE REPORTER ASKED FOR. 4 of 547, and none of them is gear
+    /// refused for durability — every weapon, armour and shield in the catalogue
+    /// has a row, and rings/jewellery skip the table (#330).
+    ///
+    /// * 3 have no contents anywhere: absent from the APK's product catalogue,
+    ///   never bought in any retail capture, no base price, unnamed — and the
+    ///   only 3 entries retail itself served with `isActive: false`.
+    /// * 1 is `…9f7p`, retail's own malformed id (`IAP_Deco_S_Candelabra`).
+    #[test]
+    fn remaining_refusals_by_reason() {
+        let (total, refused) = census(&prod_repair_data());
+        let names = editor_names();
+        let n: usize = refused.values().map(BTreeSet::len).sum();
+        eprintln!("catalogue products: {total}; still refused: {n}");
+        for (reason, ids) in &refused {
+            eprintln!("  {reason}: {}", ids.len());
+            for id in ids {
+                eprintln!("    {id}  {}", names.get(id).map(String::as_str).unwrap_or("-"));
+            }
+        }
+        assert_eq!(total, 547, "the shipped catalogue");
+        assert_eq!(n, 4, "remaining refused offers");
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>();
+        let expected: BTreeMap<&'static str, BTreeSet<String>> = [
+            (
+                "no grant and no APK contents",
+                ids(&[
+                    "0413eb45-6b3f-485f-907d-42f106e5e1a0",
+                    "88589dc7-ee1c-4769-ae8e-9af96a155196",
+                    "9440d12e-140f-47c5-8bb8-b099ff2acdb3",
+                ]),
+            ),
+            (UNPARSEABLE, ids(&["53c6f124-3603-4100-ba9a-e2fe23969f7p"])),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(refused, expected);
+    }
+
+    /// The three content-less products are the catalogue's only inactive
+    /// entries, and have no price the server would accept, so even with contents
+    /// they could not be sold. Pinned so that changes loudly.
+    #[test]
+    fn the_contentless_products_are_retail_disabled_and_unpriced() {
+        let sd = crate::static_loader::load(&dir());
+        let catalogue = sd.global_shop_overrides["globalShopOverrides"].as_object().unwrap();
+        let inactive: BTreeSet<&str> = catalogue
+            .iter()
+            .filter(|(_, e)| !e["isActive"].as_bool().unwrap_or(false))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        let (_, refused) = census(&prod_repair_data());
+        let contentless: BTreeSet<&str> =
+            refused["no grant and no APK contents"].iter().map(String::as_str).collect();
+        assert_eq!(inactive, contentless);
+        for id in contentless {
+            let uuid = Uuid::parse_str(id).unwrap();
+            assert!(!sd.global_shop_prices.contains_key(&uuid), "{id} has no base price");
+            // Over a whole replay cycle the server never names a price for it.
+            let base = 1_783_000_000 + 400 * 86_400;
+            for day in 0..REPLAY_PERIOD_DAYS {
+                assert_eq!(authoritative_prices(&sd, uuid, base + day * 86_400), None, "{id}");
+            }
+        }
+    }
+
+    /// Everything the shop actually puts on sale across one whole replay cycle
+    /// passes the handler's price gate (with the price the client is served) and
+    /// resolves to a reward. Caps and the wallet are per-player and out of scope.
+    ///
+    /// Sampled every 6 hours, an hour past the boundary: every window starts on
+    /// the hour and the shortest runs just under 24 hours, so none falls between
+    /// samples. That is checked, not assumed — the sweep must see all 544 active
+    /// entries.
+    #[test]
+    fn every_offer_on_sale_across_the_rotation_can_be_bought() {
+        let sd = crate::static_loader::load(&dir());
+        let rd = prod_repair_data();
+        let base = 1_783_000_000 + 400 * 86_400;
+        let mut on_sale: BTreeSet<String> = BTreeSet::new();
+        let mut failures: BTreeMap<String, &'static str> = BTreeMap::new();
+        for step in 0..(REPLAY_PERIOD_DAYS * 4) {
+            let t = base + 3600 + step * 6 * 3600;
+            let served = apply_authored(
+                shift_to_now(&sd.global_shop_overrides, t),
+                &sd.global_shop_authored,
+            );
+            for (id, e) in served["globalShopOverrides"].as_object().unwrap() {
+                let live = e["isActive"].as_bool().unwrap_or(false)
+                    && e["activeStartDate"].as_i64().unwrap_or(i64::MAX) <= t
+                    && t <= e["activeEndDate"].as_i64().unwrap_or(i64::MIN);
+                if !live {
+                    continue;
+                }
+                on_sale.insert(id.clone());
+                if let Some(r) = refusal(&sd, &rd, id) {
+                    failures.insert(id.clone(), r);
+                    continue;
+                }
+                let uuid = Uuid::parse_str(id).unwrap();
+                let mut asked: Vec<Price> =
+                    serde_json::from_value(e["prices"].clone()).unwrap_or_default();
+                if sd.global_shop_free.contains(&uuid) {
+                    for p in &mut asked {
+                        p.quantity = 0;
+                    }
+                }
+                if validate_purchase_prices(&sd, uuid, &asked, t).is_err() {
+                    failures.insert(id.clone(), "served price refused");
+                }
+            }
+        }
+        eprintln!("on sale during the cycle: {}; refused: {failures:?}", on_sale.len());
+        // 547 less the 3 retail served inactive.
+        assert_eq!(on_sale.len(), 544, "the sweep must reach every active offer");
+        // Only retail's malformed id, which no request body can carry.
+        let expected: BTreeMap<String, &'static str> =
+            [("53c6f124-3603-4100-ba9a-e2fe23969f7p".to_string(), UNPARSEABLE)]
+                .into_iter()
+                .collect();
+        assert_eq!(failures, expected);
+    }
+
+    /// CONTROL: the census can see a durability gap. With no durability table,
+    /// every weapon/armour/shield offer that has no capture grant must refuse for
+    /// exactly that reason — so the zero in the real census is a measurement, not
+    /// a harness that cannot fail.
+    #[test]
+    fn control_an_empty_durability_table_is_detected() {
+        let empty = blades_lib::features::repair::RepairData::from_json(
+            &serde_json::json!({}),
+            &serde_json::json!({}),
+        );
+        let (_, refused) = census(&empty);
+        let n = refused.get("gear with no durability row").map_or(0, BTreeSet::len);
+        eprintln!("with no durability table: {n} gear offers refuse");
+        assert!(n > 100, "only {n} — the harness is not reaching the durability lookup");
+    }
+
+    /// CONTROL: a known-good offer passes, and the same offer broken three ways
+    /// fails with the matching reason.
+    #[test]
+    fn control_a_good_offer_passes_and_broken_copies_fail() {
+        let sd = crate::static_loader::load(&dir());
+        let rd = prod_repair_data();
+        // SigilShop_DivineIronLightHammer: gear, no capture grant, needs durability.
+        let id = Uuid::parse_str("003ed442-f6d1-4a78-94e7-1f82cb92b547").unwrap();
+        assert!(!sd.global_shop_grants.contains_key(&id), "must exercise the APK path");
+        let good = sd.global_shop_offer_contents.get(&id).unwrap().clone();
+        let reward = resolve_offer_contents(Some(&good), &rd, item_table(), 1).expect("buyable");
+        assert_eq!(reward.items.len(), 1);
+        assert!(reward.items[0].item.durability > 0.0, "a hammer wears out");
+
+        let template = good.contents[0].item_template_id;
+        let empty = blades_lib::features::repair::RepairData::from_json(
+            &serde_json::json!({}),
+            &serde_json::json!({}),
+        );
+        assert_eq!(
+            resolve_offer_contents(Some(&good), &empty, item_table(), 1).err(),
+            Some(OfferRefusal::NoDurability(template))
+        );
+
+        let mut unnamed = good.clone();
+        let bogus = Uuid::from_u128(0x99999999_8888_4777_8666_555555555555);
+        unnamed.contents[0].item_template_id = bogus;
+        unnamed.contents[0].bucket = "unknown".into();
+        assert_eq!(
+            resolve_offer_contents(Some(&unnamed), &rd, item_table(), 1).err(),
+            Some(OfferRefusal::UnnameableTemplate(bogus))
+        );
+
+        let mut chest = good.clone();
+        chest.kind = OfferContentsKind::ChestRoll;
+        assert!(matches!(
+            resolve_offer_contents(Some(&chest), &rd, item_table(), 1),
+            Err(OfferRefusal::Kind(_))
+        ));
+        assert_eq!(
+            resolve_offer_contents(None, &rd, item_table(), 1).err(),
+            Some(OfferRefusal::NoContents)
         );
     }
 }
