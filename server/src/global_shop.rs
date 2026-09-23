@@ -1219,9 +1219,14 @@ mod replay_tests {
         let shifted = shift_to_now(&raw, now);
         let a = raw["globalShopOverrides"].as_object().unwrap();
         let b = shifted["globalShopOverrides"].as_object().unwrap();
-        assert_eq!(a.len(), b.len(), "no offer is dropped");
+        let valid = a.keys().filter(|id| Uuid::parse_str(id).is_ok()).count();
+        assert_eq!(b.len(), valid, "every valid offer survives the replay");
         let mut offsets = std::collections::HashSet::new();
         for (id, before) in a {
+            if Uuid::parse_str(id).is_err() {
+                assert!(b.get(id).is_none(), "a malformed id must not be advertised");
+                continue;
+            }
             let after = &b[id];
             offsets.insert(after["activeStartDate"].as_i64().unwrap() - before["activeStartDate"].as_i64().unwrap());
             assert_eq!(
@@ -1260,6 +1265,13 @@ mod replay_tests {
         let now = 1_783_000_000 + 500 * 86_400;
         let shifted = shift_to_now(&raw, now);
         for (id, before) in raw["globalShopOverrides"].as_object().unwrap() {
+            if Uuid::parse_str(id).is_err() {
+                assert!(
+                    shifted["globalShopOverrides"].get(id).is_none(),
+                    "a malformed id must not be advertised"
+                );
+                continue;
+            }
             let s0 = before["activeStartDate"].as_i64().unwrap();
             let s1 = shifted["globalShopOverrides"][id]["activeStartDate"].as_i64().unwrap();
             assert_eq!(s0 % 86_400, s1 % 86_400, "offer {id} changed its time of day");
