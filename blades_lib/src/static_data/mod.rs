@@ -26,6 +26,15 @@ use crate::user_data::ItemSingleProperty;
 pub struct GiftItem {
     pub item_template_id: Uuid,
     pub quantity: u64,
+    /// Arcane tier (1 or 2) stamped on each granted gear instance. Server-side
+    /// only: [`GiftDef::for_client`] strips it from what the client is shown, so
+    /// the gift screen keeps retail's `{itemTemplateId, quantity}` shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arcane_tier: Option<u64>,
+    /// Enchant properties (`properties.ENCHANTING`) for each granted gear
+    /// instance, primary first. Server-side only, like `arcane_tier`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enchanting: Vec<ItemSingleProperty>,
 }
 
 /// A chest in a global-gift override. Retail identifies these by rarity only;
@@ -51,6 +60,20 @@ pub struct GiftDef {
     pub claim_count_limit: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+}
+
+impl GiftDef {
+    /// The gift as the client sees it: retail's line shape, `{itemTemplateId,
+    /// quantity}`. The enchant and arcane fields are applied at claim time and are
+    /// not part of any captured `globalGiftOverride`, so they never go on the wire.
+    pub fn for_client(&self) -> GiftDef {
+        let mut def = self.clone();
+        for item in &mut def.items {
+            item.arcane_tier = None;
+            item.enchanting.clear();
+        }
+        def
+    }
 }
 
 /// A news/announcement entry (`GET /announcements`). Server-authoritative list; the

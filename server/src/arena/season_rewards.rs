@@ -100,7 +100,9 @@ fn gift_lines(
                 vec![GiftItem {
                     item_template_id: GEMS,
                     quantity: gems,
-                }],
+                arcane_tier: None,
+                enchanting: vec![],
+            }],
                 vec![GiftChest { rarity }],
             ))
         }
@@ -111,11 +113,15 @@ fn gift_lines(
                     GiftItem {
                         item_template_id: template,
                         quantity: 1,
-                    },
+                arcane_tier: None,
+                enchanting: vec![],
+            },
                     GiftItem {
                         item_template_id: GEMS,
                         quantity: gems,
-                    },
+                arcane_tier: None,
+                enchanting: vec![],
+            },
                 ],
                 vec![],
             ))
@@ -125,19 +131,27 @@ fn gift_lines(
                 GiftItem {
                     item_template_id: GEMS,
                     quantity: 250,
-                },
+                arcane_tier: None,
+                enchanting: vec![],
+            },
                 GiftItem {
                     item_template_id: TRANSCENDENT_SOUL_GEM,
                     quantity: 2,
-                },
+                arcane_tier: None,
+                enchanting: vec![],
+            },
                 GiftItem {
                     item_template_id: GLORIOUS_SOUL_GEM,
                     quantity: 4,
-                },
+                arcane_tier: None,
+                enchanting: vec![],
+            },
                 GiftItem {
                     item_template_id: GRAND_SOUL_GEM,
                     quantity: 6,
-                },
+                arcane_tier: None,
+                enchanting: vec![],
+            },
             ],
             vec![],
         )),

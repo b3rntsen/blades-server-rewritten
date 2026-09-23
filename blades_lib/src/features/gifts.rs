@@ -87,8 +87,13 @@ pub fn build_gift_reward(
                         durability: repair_data
                             .max_durability(item.item_template_id, 0)
                             .unwrap_or(100.0),
-                        properties: ItemPropertiesAll::default(),
-                        arcane_tier: None,
+                        // An authored enchant (e.g. a dual-enchant arcane weapon)
+                        // is stamped on every instance; plain gear stays plain.
+                        properties: ItemPropertiesAll {
+                            enchanting: item.enchanting.clone(),
+                            ..ItemPropertiesAll::default()
+                        },
+                        arcane_tier: item.arcane_tier,
                     },
                 });
             }
@@ -252,11 +257,15 @@ mod tests {
                 GiftItem {
                     item_template_id: GEMS,
                     quantity: 50000,
-                },
+                arcane_tier: None,
+                enchanting: vec![],
+            },
                 GiftItem {
                     item_template_id: SIGIL,
                     quantity: 1000,
-                },
+                arcane_tier: None,
+                enchanting: vec![],
+            },
             ],
             chests: vec![],
             start_time: 1774584000,
@@ -282,6 +291,8 @@ mod tests {
             items: vec![GiftItem {
                 item_template_id: material,
                 quantity: 5,
+                arcane_tier: None,
+                enchanting: vec![],
             }],
             chests: vec![],
             start_time: 0,
@@ -341,6 +352,7 @@ mod report194_gear_instance_tests {
     use super::*;
     use crate::economy::GEMS;
     use crate::static_data::GiftItem;
+    use crate::user_data::ItemSingleProperty;
 
     const EBONY_MAIL: Uuid = Uuid::from_u128(0xdef810af_e9f5_4e23_9247_1edf391d82e1);
     const POTION: Uuid = Uuid::from_u128(0x11111111_2222_4333_8444_555555555555);
@@ -369,6 +381,74 @@ mod report194_gear_instance_tests {
         }
     }
 
+    const FIRE: Uuid = Uuid::from_u128(0xc40ed851_8777_4d09_b169_0223dae8f67d);
+    const FORTIFY: Uuid = Uuid::from_u128(0xbf107d7d_8777_4411_b07a_56819a58a709);
+    const RAVAGE: Uuid = Uuid::from_u128(0x7cdb7179_4cd4_466e_8b77_4caf2fddb268);
+
+    fn dual_enchant_line(quantity: u64) -> GiftItem {
+        GiftItem {
+            item_template_id: EBONY_MAIL,
+            quantity,
+            arcane_tier: Some(2),
+            enchanting: vec![
+                ItemSingleProperty { id: FIRE, tier: 10 },
+                ItemSingleProperty { id: FORTIFY, tier: 10 },
+                ItemSingleProperty { id: RAVAGE, tier: 10 },
+            ],
+        }
+    }
+
+    /// An authored enchant reaches every granted instance: primary first, the
+    /// arcane tier with it. Without this a gifted "dual enchant" weapon arrived
+    /// plain.
+    #[test]
+    fn an_authored_enchant_is_stamped_on_every_instance() {
+        let reward = build_gift_reward(&gift(vec![dual_enchant_line(2)]), &types(), &repair());
+        assert_eq!(reward.items.len(), 2);
+        for r in &reward.items {
+            assert_eq!(r.item.arcane_tier, Some(2));
+            let ids: Vec<Uuid> = r.item.properties.enchanting.iter().map(|p| p.id).collect();
+            assert_eq!(ids, vec![FIRE, FORTIFY, RAVAGE]);
+        }
+    }
+
+    /// CONTROL: a line with no authored enchant still grants plain gear.
+    #[test]
+    fn plain_gear_stays_plain() {
+        let reward = build_gift_reward(
+            &gift(vec![GiftItem { item_template_id: EBONY_MAIL, quantity: 1, arcane_tier: None, enchanting: vec![] }]),
+            &types(),
+            &repair(),
+        );
+        assert_eq!(reward.items[0].item.arcane_tier, None);
+        assert!(reward.items[0].item.properties.enchanting.is_empty());
+    }
+
+    /// The client is shown retail's line shape only; the database keeps the rest.
+    #[test]
+    fn the_client_never_sees_the_enchant_but_storage_keeps_it() {
+        let def = gift(vec![dual_enchant_line(1)]);
+        let shown = serde_json::to_value(def.for_client()).unwrap();
+        assert_eq!(
+            shown["items"][0],
+            serde_json::json!({"itemTemplateId": EBONY_MAIL, "quantity": 1}),
+            "extra keys on the wire could break the gift screen"
+        );
+        let stored = serde_json::to_value(&def.items).unwrap();
+        let back: Vec<GiftItem> = serde_json::from_value(stored).unwrap();
+        assert_eq!(back[0].arcane_tier, Some(2));
+        assert_eq!(back[0].enchanting.len(), 3);
+    }
+
+    /// Rows written before these fields existed still load.
+    #[test]
+    fn an_old_row_without_the_fields_still_loads() {
+        let back: Vec<GiftItem> =
+            serde_json::from_value(serde_json::json!([{"itemTemplateId": EBONY_MAIL, "quantity": 1}])).unwrap();
+        assert_eq!(back[0].arcane_tier, None);
+        assert!(back[0].enchanting.is_empty());
+    }
+
     /// THE BUG (#194). An authored Ebony Mail gift granted a STACKABLE — a chest
     /// armour with no instance id, no durability and no properties. In game it
     /// read as locked and broken, and repair, sell and salvage each failed,
@@ -376,7 +456,7 @@ mod report194_gear_instance_tests {
     #[test]
     fn gear_is_granted_as_an_instance_not_a_stackable() {
         let reward = build_gift_reward(
-            &gift(vec![GiftItem { item_template_id: EBONY_MAIL, quantity: 1 }]),
+            &gift(vec![GiftItem { item_template_id: EBONY_MAIL, quantity: 1, arcane_tier: None, enchanting: vec![] }]),
             &types(),
             &repair(),
         );
@@ -398,7 +478,7 @@ mod report194_gear_instance_tests {
     #[test]
     fn a_consumable_stays_stackable() {
         let reward = build_gift_reward(
-            &gift(vec![GiftItem { item_template_id: POTION, quantity: 5 }]),
+            &gift(vec![GiftItem { item_template_id: POTION, quantity: 5, arcane_tier: None, enchanting: vec![] }]),
             &types(),
             &repair(),
         );
@@ -411,7 +491,7 @@ mod report194_gear_instance_tests {
     #[test]
     fn a_currency_is_still_a_currency() {
         let reward = build_gift_reward(
-            &gift(vec![GiftItem { item_template_id: GEMS, quantity: 50_000 }]),
+            &gift(vec![GiftItem { item_template_id: GEMS, quantity: 50_000, arcane_tier: None, enchanting: vec![] }]),
             &types(),
             &repair(),
         );
@@ -425,7 +505,7 @@ mod report194_gear_instance_tests {
     #[test]
     fn an_unknown_template_is_left_alone() {
         let reward = build_gift_reward(
-            &gift(vec![GiftItem { item_template_id: UNKNOWN, quantity: 2 }]),
+            &gift(vec![GiftItem { item_template_id: UNKNOWN, quantity: 2, arcane_tier: None, enchanting: vec![] }]),
             &types(),
             &repair(),
         );
@@ -438,7 +518,7 @@ mod report194_gear_instance_tests {
     #[test]
     fn a_quantity_of_gear_is_that_many_instances() {
         let reward = build_gift_reward(
-            &gift(vec![GiftItem { item_template_id: EBONY_MAIL, quantity: 3 }]),
+            &gift(vec![GiftItem { item_template_id: EBONY_MAIL, quantity: 3, arcane_tier: None, enchanting: vec![] }]),
             &types(),
             &repair(),
         );

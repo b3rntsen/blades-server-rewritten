@@ -215,6 +215,21 @@ fn first_empty_gift(gifts: &[GiftPublishItem]) -> Option<Uuid> {
         .map(|g| g.global_gift_id)
 }
 
+/// A gift line whose authored enchant the game could never hold: an arcane tier
+/// other than 1 or 2 (retail has exactly those two), or an enchant tier outside
+/// the 1–10 every recipe uses.
+fn first_invalid_enchant(gifts: &[GiftPublishItem]) -> Option<Uuid> {
+    gifts
+        .iter()
+        .find(|g| {
+            g.items.iter().any(|i| {
+                i.arcane_tier.is_some_and(|t| !(1..=2).contains(&t))
+                    || i.enchanting.iter().any(|p| !(1..=10).contains(&p.tier))
+            })
+        })
+        .map(|g| g.global_gift_id)
+}
+
 /// The stored claim limit for an authored one.
 ///
 /// Clamped on the way IN as well as on the way out. `GiftOverrideRow::to_def`
@@ -262,6 +277,10 @@ pub async fn publish_gifts(
         log::warn!(
             "[gifts] refusing to publish {empty} with no items and no chests"
         );
+        return Err(bad(7, StatusCode::BAD_REQUEST));
+    }
+    if let Some(bad_gift) = first_invalid_enchant(&body.gifts) {
+        log::warn!("[gifts] refusing to publish {bad_gift}: arcane tier must be 1-2 and enchant tiers 1-10");
         return Err(bad(7, StatusCode::BAD_REQUEST));
     }
 
@@ -777,6 +796,8 @@ mod tests {
             items: JsonDbWrapper(vec![GiftItem {
                 item_template_id: GEMS,
                 quantity: 200,
+                arcane_tier: None,
+                enchanting: vec![],
             }]),
             chests: JsonDbWrapper(Vec::new()),
             start_time: 100,
