@@ -418,6 +418,43 @@ const LINK_DEVICE_BIND_SQL: &str = "UPDATE device_bindings AS d \
        AND COALESCE(source.data->'gp_deviceids', '[]'::jsonb) ? d.device_id \
        AND (d.user_id IS NULL OR d.user_id = $1)";
 
+/// Record a device id on an account that just PROVED it owns itself.
+///
+/// The secret-id path of `anon_log_in` is the client presenting the `userId` it
+/// was handed on an earlier launch — a credential. When that request also
+/// carries a real `deviceId`, remember it, so a later launch that has lost the
+/// stored secret (reinstall, cleared prefs) but still sends the same device id
+/// is recognised through `gp_deviceids` instead of minting a fresh account.
+///
+/// Measured 2026-09-23: 121 anon logins in a week minted a new account, and
+/// several players hold two to four same-named characters on throwaway users.
+/// Retail's client sent a device id on 26 of 26 captured `/auth/anon` calls.
+///
+/// Never takes an id another user already holds: an id on two accounts is the
+/// ambiguous case `anon_log_in` deliberately refuses to resolve (#105), so
+/// adding a second holder would silently turn a working device into one that
+/// mints on every launch.
+const REMEMBER_DEVICE_SQL: &str = "UPDATE users AS u \
+     SET data = jsonb_set(u.data, '{gp_deviceids}', \
+         COALESCE(u.data->'gp_deviceids', '[]'::jsonb) || to_jsonb($2::text)) \
+     WHERE u.id = $1 \
+       AND NOT (COALESCE(u.data->'gp_deviceids', '[]'::jsonb) ? $2) \
+       AND NOT EXISTS (SELECT 1 FROM users AS o \
+                       WHERE o.id <> $1 \
+                         AND COALESCE(o.data->'gp_deviceids', '[]'::jsonb) ? $2)";
+
+async fn remember_device_on_account(
+    conn: &mut diesel_async::AsyncPgConnection,
+    user_id: Uuid,
+    device_id: &str,
+) -> Result<usize, diesel::result::Error> {
+    diesel::sql_query(REMEMBER_DEVICE_SQL)
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .bind::<diesel::sql_types::Text, _>(device_id)
+        .execute(conn)
+        .await
+}
+
 async fn bind_linked_devices(
     conn: &mut diesel_async::AsyncPgConnection,
     source_user_id: Uuid,
@@ -816,7 +853,7 @@ async fn anon_log_in(
     // the first-run flow again. Never log the id itself at info — it is a stable
     // per-device identifier.
     log::info!(
-        "anon login: device identity = {} (client sent deviceId: {}, wg header: {})",
+        "anon login: device identity = {} (client sent deviceId: {}, wg header: {}, userId: {})",
         match (&info.0.device_id, &source_wg_ip) {
             (Some(_), _) => "client deviceId",
             (None, Some(_)) => "wg peer ip",
@@ -824,6 +861,10 @@ async fn anon_log_in(
         },
         if info.0.device_id.is_some() { "yes" } else { "null" },
         if source_wg_ip.is_some() { "present" } else { "absent" },
+        // Whether the client re-presented the secret it was handed last launch.
+        // "none … userId: absent" is a client that kept nothing; "userId:
+        // present" means the secret path below will recognise it regardless.
+        if info.0.user_id.is_some() { "present" } else { "absent" },
     );
     if let Some(device_id_val) = effective_device_id {
         let mut conn = app_state.db_pool.get().await.unwrap();
@@ -992,6 +1033,16 @@ async fn anon_log_in(
         } else {
             return Err(BladeApiError::new(StatusCode::NOT_FOUND, 3, 101)); // user not found
         };
+
+        // The client proved the account; teach it this device too, so losing the
+        // stored secret later does not cost the player their character.
+        if let Some(ref dev) = info.0.device_id {
+            match remember_device_on_account(&mut conn, user.id, dev).await {
+                Ok(1) => log::info!("anon login: remembered this device on user {}", user.id),
+                Ok(_) => {}
+                Err(e) => log::warn!("anon login: could not remember device on {}: {e}", user.id),
+            }
+        }
 
         //TODO: some actual form of authentification.
         let session = Arc::new(Session::new(
@@ -1844,4 +1895,124 @@ mod report185_link_choice_tests {
         assert_eq!(o.linked_holds, o.played_character);
     }
 
+}
+
+#[cfg(test)]
+mod anon_device_memory_tests {
+    use super::*;
+    use diesel_async::{AsyncConnection, AsyncPgConnection};
+
+    #[derive(diesel::QueryableByName)]
+    struct Devices {
+        #[diesel(sql_type = diesel::sql_types::Jsonb)]
+        devices: serde_json::Value,
+    }
+
+    async fn devices_of(conn: &mut AsyncPgConnection, id: Uuid) -> serde_json::Value {
+        diesel::sql_query("SELECT COALESCE(data->'gp_deviceids', '[]'::jsonb) AS devices FROM users WHERE id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .get_result::<Devices>(conn)
+            .await
+            .unwrap()
+            .devices
+    }
+
+    /// One throwaway schema with `users`, rolled back at the end.
+    async fn users_table() -> Option<AsyncPgConnection> {
+        let Some(url) = std::env::var("TEST_DATABASE_URL").ok() else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — device memory not verified");
+            return None;
+        };
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction().await.unwrap();
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        diesel::sql_query(format!("CREATE SCHEMA {schema}")).execute(&mut conn).await.unwrap();
+        diesel::sql_query(format!("SET LOCAL search_path TO {schema}")).execute(&mut conn).await.unwrap();
+        diesel::sql_query(
+            "CREATE TABLE users (id UUID PRIMARY KEY, secret_id UUID NOT NULL UNIQUE, data JSONB NOT NULL)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        Some(conn)
+    }
+
+    async fn add_user(conn: &mut AsyncPgConnection, devices: serde_json::Value) -> Uuid {
+        let id = Uuid::new_v4();
+        diesel::sql_query("INSERT INTO users (id, secret_id, data) VALUES ($1, $2, $3)")
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+            .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({ "gp_deviceids": devices }))
+            .execute(conn)
+            .await
+            .unwrap();
+        id
+    }
+
+    /// A login that proves the account (its secret) teaches it the device, so a
+    /// later launch that lost the secret is recognised instead of minting.
+    #[tokio::test]
+    async fn a_proven_login_remembers_its_device() {
+        let Some(mut conn) = users_table().await else { return };
+        let me = add_user(&mut conn, serde_json::json!([])).await;
+        assert_eq!(remember_device_on_account(&mut conn, me, "abc123").await.unwrap(), 1);
+        assert_eq!(devices_of(&mut conn, me).await, serde_json::json!(["abc123"]));
+    }
+
+    /// CONTROL: a device already on the account is not appended twice.
+    #[tokio::test]
+    async fn a_known_device_is_not_duplicated() {
+        let Some(mut conn) = users_table().await else { return };
+        let me = add_user(&mut conn, serde_json::json!(["abc123"])).await;
+        assert_eq!(remember_device_on_account(&mut conn, me, "abc123").await.unwrap(), 0);
+        assert_eq!(devices_of(&mut conn, me).await, serde_json::json!(["abc123"]));
+    }
+
+    /// CONTROL: never give a device a second holder. Two holders is the case
+    /// anon login refuses to resolve, so this would turn a working device into
+    /// one that mints on every launch.
+    #[tokio::test]
+    async fn a_device_held_by_someone_else_is_left_alone() {
+        let Some(mut conn) = users_table().await else { return };
+        let other = add_user(&mut conn, serde_json::json!(["abc123"])).await;
+        let me = add_user(&mut conn, serde_json::json!([])).await;
+        assert_eq!(remember_device_on_account(&mut conn, me, "abc123").await.unwrap(), 0);
+        assert_eq!(devices_of(&mut conn, me).await, serde_json::json!([]));
+        assert_eq!(devices_of(&mut conn, other).await, serde_json::json!(["abc123"]));
+    }
+
+    /// A user row with no `gp_deviceids` key at all still gets the device.
+    #[tokio::test]
+    async fn an_account_with_no_device_list_gets_one() {
+        let Some(mut conn) = users_table().await else { return };
+        let id = Uuid::new_v4();
+        diesel::sql_query("INSERT INTO users (id, secret_id, data) VALUES ($1, $2, '{}'::jsonb)")
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(remember_device_on_account(&mut conn, id, "abc123").await.unwrap(), 1);
+        assert_eq!(devices_of(&mut conn, id).await, serde_json::json!(["abc123"]));
+    }
+
+    /// The entry log says whether the client re-presented its secret, and the
+    /// secret path remembers the device — both cheap to delete by accident.
+    #[test]
+    fn the_secret_path_remembers_and_the_log_says_so() {
+        let src = include_str!("authentification.rs");
+        let code = src.split("\n#[cfg(test)]").next().expect("source has a body");
+        assert!(code.contains("wg header: {}, userId: {})"), "entry log must report userId presence");
+        let secret_path = code
+            .split("if let Some(private_user_id) = info.0.user_id")
+            .nth(1)
+            .expect("secret-id login path present");
+        let before_session = &secret_path[..secret_path.find("Session::new(").unwrap()];
+        assert!(
+            before_session.contains("remember_device_on_account("),
+            "the secret-id login must remember the device before completing"
+        );
+    }
 }
