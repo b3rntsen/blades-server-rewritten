@@ -13,7 +13,7 @@ use blades_lib::economy::{Price, RewardGrant};
 use blades_lib::features::challenges::ChallengeTemplate;
 use blades_lib::features::chests::ChestLootTables;
 use blades_lib::features::daily_reward::DailyRewardDef;
-use blades_lib::features::game_events::EventDef;
+use blades_lib::features::game_events::{EventDef, EventTheme, HALLOWEEN_THEME_QUESTS, MAX_THEME_DAYS};
 use blades_lib::static_data::{
     Announcement, AbyssStaticData, EventQuestsData, FreeProductIds, GiftDef, ItemModRecipe,
     QuestsDailyData, Recipe, RecipeCraftingTypes, ShopBundle, ShopData, SmithCraftables,
@@ -263,7 +263,6 @@ pub fn load(dir: &Path) -> StaticData {
         challenge_templates,
         daily_rewards,
         chest_loots,
-        game_events,
         salvage_recipes,
         shop_data,
         shop_bundles,
@@ -275,8 +274,188 @@ pub fn load(dir: &Path) -> StaticData {
         smith_craftables,
         quests_daily,
         event_quests,
+        // Optional: absent means no themed window, the calendar untouched.
+        game_event_theme: read_event_theme(&dir.join("event_theme.json"), &game_events),
+        game_events,
     }
 }
+
+/// The themed event window, from the optional `event_theme.json` beside
+/// `game_events.json`:
+///
+/// ```jsonc
+/// { "start": "2026-10-10",   // UTC: YYYY-MM-DD (midnight), RFC 3339, or unix secs
+///   "end":   "2026-10-31",   // exclusive
+///   "questIds": [ … ] }      // optional; omitted = HALLOWEEN_THEME_QUESTS
+/// ```
+///
+/// No file is the normal state and gives `None` — the untouched rotation. A file
+/// that is present but unusable (unparseable dates, end not after start, no id
+/// that names an event in the library) also gives `None`, with a `[static]`
+/// warning so `arena.sh static` shows it, never a failed startup. The window is
+/// one-off: it has to be written again for next year.
+fn read_event_theme(path: &Path, library: &[EventDef]) -> Option<EventTheme> {
+    let file = File::open(path).ok()?;
+    let raw: Value = match serde_json::from_reader(BufReader::new(file)) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("[static] invalid {path:?}: {e}; no themed window");
+            return None;
+        }
+    };
+    event_theme_from_value(&raw, library)
+}
+
+/// [`read_event_theme`] on an already-parsed value, so it can be tested.
+fn event_theme_from_value(raw: &Value, library: &[EventDef]) -> Option<EventTheme> {
+    let instant = |key: &str| match &raw[key] {
+        Value::Number(n) => n.as_i64(),
+        Value::String(s) => parse_utc(s.trim()),
+        _ => None,
+    };
+    let (Some(start_secs), Some(end_secs)) = (instant("start"), instant("end")) else {
+        warn!(
+            "[static] event_theme.json: cannot read start {} / end {}; no themed window",
+            raw["start"], raw["end"]
+        );
+        return None;
+    };
+    if end_secs <= start_secs {
+        warn!("[static] event_theme.json: end is not after start; no themed window");
+        return None;
+    }
+    let quest_ids = match raw.get("questIds").and_then(Value::as_array) {
+        None => HALLOWEEN_THEME_QUESTS.to_vec(),
+        Some(list) => list
+            .iter()
+            .filter_map(|v| {
+                let id = v.as_str().and_then(|s| Uuid::parse_str(s.trim()).ok());
+                if id.is_none() {
+                    warn!("[static] event_theme.json: {v} is not a uuid; skipped");
+                }
+                id
+            })
+            .collect(),
+    };
+    let theme = EventTheme {
+        start_secs,
+        end_secs,
+        quest_ids,
+    };
+    let days = theme.window_days();
+    if !(1..=MAX_THEME_DAYS).contains(&days) {
+        warn!(
+            "[static] event_theme.json: the window holds {days} UTC midnight(s), outside \
+             1..={MAX_THEME_DAYS}; no themed window"
+        );
+        return None;
+    }
+    let Some(plan) = theme.plan(library) else {
+        warn!("[static] event_theme.json: none of its events is in game_events.json; no themed window");
+        return None;
+    };
+    log::info!(
+        "[static] event_theme.json: {} .. {}, {} themed event(s), one every {} day(s)",
+        raw["start"],
+        raw["end"],
+        plan.themed_quest_ids().len(),
+        plan.cadence_days(),
+    );
+    Some(theme)
+}
+
+/// A UTC instant as `YYYY-MM-DD` (midnight), RFC 3339, or unix seconds.
+fn parse_utc(s: &str) -> Option<i64> {
+    if let Ok(secs) = s.parse::<i64>() {
+        return Some(secs);
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.timestamp());
+    }
+    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+        .ok()
+        .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp())
+}
+
+#[cfg(test)]
+mod event_theme_file {
+    use super::*;
+
+    fn dir() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static")
+    }
+
+    fn theme(raw: Value) -> Option<EventTheme> {
+        event_theme_from_value(&raw, &load(&dir()).game_events)
+    }
+
+    /// Nothing is armed by merging this: the committed static directory has no
+    /// `event_theme.json`, so the server loads the untouched calendar.
+    #[test]
+    fn the_committed_data_has_no_themed_window() {
+        assert!(!dir().join("event_theme.json").exists());
+        assert_eq!(load(&dir()).game_event_theme, None);
+    }
+
+    #[test]
+    fn a_date_pair_gives_the_halloween_set_by_default() {
+        let t = theme(json!({ "start": "2026-10-10", "end": "2026-10-31T00:00:00Z" }))
+            .expect("a theme");
+        assert_eq!(t.start_secs, 1_791_590_400, "2026-10-10 00:00 UTC");
+        assert_eq!(t.end_secs, 1_793_404_800, "2026-10-31 00:00 UTC");
+        assert_eq!(t.quest_ids, HALLOWEEN_THEME_QUESTS.to_vec());
+        // Unix seconds, as a number or a string, mean the same instants.
+        assert_eq!(theme(json!({ "start": 1_791_590_400, "end": "1793404800" })), Some(t));
+    }
+
+    /// Read from disk end to end, the way the server starts: a copy of the
+    /// committed directory with the file added.
+    #[test]
+    fn the_loader_picks_the_file_up() {
+        let tmp = std::env::temp_dir().join(format!("nb-theme-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::copy(dir().join("game_events.json"), tmp.join("game_events.json")).unwrap();
+        std::fs::write(
+            tmp.join("event_theme.json"),
+            r#"{ "start": "2026-10-10", "end": "2026-10-31" }"#,
+        )
+        .unwrap();
+        let sd = load(&tmp);
+        std::fs::remove_dir_all(&tmp).ok();
+        let t = sd.game_event_theme.expect("the file was read");
+        assert_eq!((t.start_secs, t.end_secs), (1_791_590_400, 1_793_404_800));
+    }
+
+    #[test]
+    fn an_explicit_list_replaces_the_default_and_bad_input_is_refused() {
+        let witch = "f116b952-9932-4b1a-b20d-246ca2945bb4";
+        let t = theme(json!({
+            "start": "2026-10-24", "end": "2026-11-01",
+            "questIds": [format!(" {witch} "), "not-a-uuid"]
+        }))
+        .expect("a theme");
+        assert_eq!(t.quest_ids, vec![Uuid::parse_str(witch).unwrap()]);
+
+        // Half a window, backwards, unparseable, or naming nothing we have.
+        assert_eq!(theme(json!({ "start": "2026-10-24" })), None);
+        assert_eq!(theme(json!({ "start": "2026-11-01", "end": "2026-10-24" })), None);
+        assert_eq!(theme(json!({ "start": "Halloween", "end": "2026-11-01" })), None);
+        // No UTC midnight inside it, or milliseconds typed for seconds.
+        assert_eq!(
+            theme(json!({ "start": "2026-10-24T05:00:00Z", "end": "2026-10-24T19:00:00Z" })),
+            None
+        );
+        assert_eq!(theme(json!({ "start": 1_791_590_400_000i64, "end": 1_793_404_800_000i64 })), None);
+        assert_eq!(
+            theme(json!({
+                "start": "2026-10-24", "end": "2026-11-01",
+                "questIds": ["00000000-0000-0000-0000-000000000001"]
+            })),
+            None
+        );
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

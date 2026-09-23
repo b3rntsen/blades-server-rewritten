@@ -3050,7 +3050,11 @@ pub(crate) mod event_quests {
         // the shared, capped answer the `/gameevents` feed also uses. Computing it
         // here independently is how a third event quest reached a client whose
         // quest screen retail never gave three.
-        game_events::open_instances(&static_data.game_events, now)
+        // …and with the themed window, for the same reason: a window the feed
+        // honoured and the quest rows ignored would advertise an event nobody
+        // could play.
+        let theme = static_data.game_event_theme.as_ref();
+        game_events::open_instances_themed(&static_data.game_events, theme, now)
             .into_iter()
             .filter_map(|(start, def)| {
                 build(def, start, static_data, game_data, character_id, player_level)
@@ -3066,13 +3070,15 @@ pub(crate) mod event_quests {
         player_level: i64,
         now: i64,
     ) -> Vec<QuestWithId> {
-        game_events::upcoming_events(&static_data.game_events, now, WARNING_LEAD_SECS)
+        let theme = static_data.game_event_theme.as_ref();
+        game_events::upcoming_events_themed(&static_data.game_events, theme, now, WARNING_LEAD_SECS)
             .into_iter()
             .filter_map(|e| {
-                let def = static_data
-                    .game_events
-                    .iter()
-                    .find(|d| d.quest_id == e.quest_id)?;
+                // By the instance id, not the quest: it names the exact def the
+                // feed chose, so the row's `gameEventInstanceId` matches it.
+                let def = static_data.game_events.iter().find(|d| {
+                    e.game_event_instance_id == format!("{}::{}", d.event_id, e.start_time_secs)
+                })?;
                 let m = build(
                     def,
                     e.start_time_secs,
@@ -4136,6 +4142,68 @@ mod event_quest_tests {
             assert!(matches!(m.quest.r#type, blades_lib::user_data::QuestType::GameEvent));
             let data = m.quest.game_event_quest_data.as_ref().expect("carries its instance");
             assert!(data.game_event_instance_id.contains("::"));
+        }
+    }
+
+    /// Under a themed window the quest rows follow the window exactly as the
+    /// `/gameevents` feed does: the same instances open and announced, every one
+    /// of them playable, and every Halloween event minted on two or more separate
+    /// windows (each a fresh row, so a fresh five-completion ladder).
+    #[test]
+    fn a_themed_window_mints_the_same_instances_the_feed_serves() {
+        use blades_lib::features::game_events::{
+            EventTheme, HALLOWEEN_THEME_QUESTS, WARNING_LEAD_SECS, active_events_themed,
+            upcoming_events_themed,
+        };
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let mut sd = static_data();
+        let gd = game_data();
+        sd.game_event_theme = Some(EventTheme {
+            start_secs: 1_791_590_400, // 2026-10-10 00:00 UTC
+            end_secs: 1_793_404_800,   // 2026-10-31 00:00 UTC
+            quest_ids: HALLOWEEN_THEME_QUESTS.to_vec(),
+        });
+        let theme = sd.game_event_theme.clone().unwrap();
+        let instance = |q: &blades_lib::user_data::Quest| {
+            q.game_event_quest_data
+                .as_ref()
+                .unwrap()
+                .game_event_instance_id
+                .clone()
+        };
+
+        let mut rows: BTreeMap<Uuid, BTreeSet<String>> = BTreeMap::new();
+        let mut now = theme.start_secs;
+        while now < theme.end_secs {
+            let feed: Vec<String> = active_events_themed(&sd.game_events, Some(&theme), now)
+                .into_iter()
+                .map(|e| e.game_event_instance_id)
+                .collect();
+            let minted = event_quests::mint(&sd, &gd, CHAR, 40, now);
+            let got: Vec<String> = minted.iter().map(|m| instance(&m.quest)).collect();
+            assert_eq!(got, feed, "t={now}: quest rows and feed disagree");
+            for m in &minted {
+                assert!(!m.quest.objective_statuses.is_empty(), "t={now}: no objectives");
+                assert!(m.dungeon.is_some(), "t={now}: no dungeon");
+                rows.entry(m.quest.gld_quest_id).or_default().insert(instance(&m.quest));
+            }
+
+            let soon: Vec<String> =
+                upcoming_events_themed(&sd.game_events, Some(&theme), now, WARNING_LEAD_SECS)
+                    .into_iter()
+                    .map(|e| e.game_event_instance_id)
+                    .collect();
+            let warned: Vec<String> = event_quests::upcoming(&sd, &gd, CHAR, 40, now)
+                .iter()
+                .map(|q| instance(&q.quest))
+                .collect();
+            assert_eq!(warned, soon, "t={now}: warning row and feed disagree");
+            now += 6 * 3_600;
+        }
+        for q in HALLOWEEN_THEME_QUESTS {
+            let n = rows.get(&q).map_or(0, |s| s.len());
+            assert!(n >= 2, "{q} minted on {n} window(s)");
         }
     }
 

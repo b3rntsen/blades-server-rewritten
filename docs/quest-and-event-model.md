@@ -104,6 +104,37 @@ Rather than guess, we send nothing: a wrong guess puts quests on a player's fini
 list that retail would not have. If someone finds the discriminator, the corpus query
 is in `script/extract_quest_data.py`.
 
+### Themed windows (ours, not retail's)
+
+Retail's rotation opens each event once per cycle (44 days here), so in a
+two- or three-week holiday season a themed event runs at most once. A themed
+window changes that for its dates only. It is configured by an optional
+`event_theme.json` in the static directory, read at startup:
+
+```jsonc
+{ "start": "2026-10-10",   // UTC: YYYY-MM-DD (midnight), RFC 3339, or unix secs
+  "end":   "2026-10-31",   // exclusive
+  "questIds": [ … ] }      // optional; omitted = the Halloween set
+```
+
+No file (the committed state) means no window. The Halloween set is
+`HALLOWEEN_THEME_QUESTS` in `blades_lib::features::game_events`, chosen from
+the events' own loc strings: EQ40 *Season of the Witch*, EQ01 *The Spectral
+Forest*, EQ16 *Wrath of the Undying*, EQ21 *The Lich's Tower* and EQ24
+*Death's Shadow*. EQ42 *The Long Night* is midwinter and not in it.
+
+Inside the window, every Nth day's opening is a themed event, where
+N = days / (2 × themed events), at least 1. On each themed day the event with
+the fewest openings so far is chosen, so each one opens at least twice. The other
+days keep the ordinary rotation in its usual order, with the themed events taken
+out. The shape does not change: one opening per UTC day, each open 172 800 s,
+so the feed always has 2 open and 1 upcoming, and no quest is listed twice. A
+themed event's own holiday instance (Season of the Witch's 24 Oct – 1 Nov) is
+hidden only while the window's openings are live (it shows as usual either side). Outside the window, and in any year the
+file does not name, the calendar is exactly what it was. Each re-opening is a
+new `gameEventInstanceId`, so it is a new quest row with a fresh five-milestone
+ladder (`EventCompletion::reset_if_before` keys off the themed window start).
+
 ---
 
 ## 4. Rewards
