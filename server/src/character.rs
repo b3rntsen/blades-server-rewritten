@@ -493,7 +493,7 @@ pub(crate) async fn ensure_starter_character(
 
 /// The name a server-provisioned starter character is given. Players rename in
 /// game; this only has to be recognisable as "we made this for you".
-const STARTER_NAME: &str = "Adventurer";
+pub(crate) const STARTER_NAME: &str = "Adventurer";
 
 /// Fill the three player-data blocks that the retail client dereferences while
 /// constructing the town scene.

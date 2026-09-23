@@ -536,6 +536,46 @@ fn keeps_the_played_character(selected: Option<&str>, credential_secret: Uuid) -
     }
 }
 
+/// Is this the starter we mint for an unrecognised device, still untouched?
+///
+/// A device that sends `deviceId: null` gets a brand-new account and a level 1
+/// "Adventurer" on every launch. If the player then links their real account and
+/// the picker's answer reads as "keep the one I am playing", that answer names
+/// the throwaway starter — and the swap would park their real character on the
+/// throwaway account. That is what happened to WolfWalker (L89) on 2026-09-23.
+///
+/// Structural rather than a size or XP threshold: the server gave it this name,
+/// and it has not left level 1. #185's own case (a real character replacing a
+/// default on the linked account) never matches, because the PLAYED side there
+/// is the real one.
+fn is_unplayed_starter(name: Option<&str>, level: i32) -> bool {
+    name == Some(crate::character::STARTER_NAME) && level <= 1
+}
+
+#[derive(diesel::QueryableByName)]
+struct NameLevel {
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    name: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    level: i32,
+}
+
+/// Name and level straight from the JSON, so an unusual character document
+/// cannot fail the link the way a strict deserialise would.
+async fn character_name_level(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+) -> Result<NameLevel, diesel::result::Error> {
+    diesel::sql_query(
+        "SELECT character->>'name' AS name, \
+                COALESCE((character->>'level')::int, 0) AS level \
+         FROM characters WHERE id = $1",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .get_result(conn)
+    .await
+}
+
 /// Hand the played character to the linked account, and park the account's
 /// previous character on the abandoned one.
 ///
@@ -592,6 +632,27 @@ async fn swap_character_ownership(
             .await?;
         return Ok((adopted, 0));
     };
+
+    // Never trade a real character for a starter nobody has played. Parking is
+    // recoverable, but only by hand: the player sees a level 1 and thinks the
+    // character is gone. Keeping the account's character is the safe answer.
+    let played_is_starter = {
+        let p = character_name_level(conn, played).await?;
+        is_unplayed_starter(p.name.as_deref(), p.level)
+    };
+    if played_is_starter {
+        let d = character_name_level(conn, displaced).await?;
+        if !is_unplayed_starter(d.name.as_deref(), d.level) {
+            log::warn!(
+                "account link (forced): refusing to park character {displaced} ({:?} L{}) of user \
+                 {linked_user_id} in favour of the unplayed starter {played} of user \
+                 {played_user_id}; the account keeps its character",
+                d.name,
+                d.level,
+            );
+            return Ok((0, 0));
+        }
+    }
 
     // Park B on a transaction-local user, freeing B before A moves into it.
     // The parking user is removed before commit, so neither it nor an
@@ -1571,17 +1632,51 @@ mod report185_link_choice_tests {
         assert!(keeps_the_played_character(Some(&CREDENTIAL.to_string()), row_id));
     }
 
+    /// WolfWalker, 2026-09-23: a device sent `deviceId: null`, was minted a fresh
+    /// "Adventurer", and the link then parked his level 89 on that throwaway.
+    #[test]
+    fn a_fresh_minted_starter_is_recognised() {
+        assert!(is_unplayed_starter(Some("Adventurer"), 1));
+        assert!(is_unplayed_starter(Some("Adventurer"), 0));
+    }
+
+    /// CONTROLS. A played character — even one still called "Adventurer" once
+    /// it has levelled, or any level 1 the player named — is never treated as a
+    /// throwaway. #185's default level 48 on the linked side is not one either.
+    #[test]
+    fn anything_played_or_named_is_not_a_starter() {
+        assert!(!is_unplayed_starter(Some("Adventurer"), 2));
+        assert!(!is_unplayed_starter(Some("Adventurer"), 48));
+        assert!(!is_unplayed_starter(Some("WolfWalker"), 1));
+        assert!(!is_unplayed_starter(Some("adventurer"), 1));
+        assert!(!is_unplayed_starter(None, 1));
+    }
+
     /// Exercise the production transaction against the real UNIQUE(user_id)
     /// shape. The original #335 implementation updated the played character
     /// directly to the occupied linked account, so Postgres rejected the first
     /// statement and the handler nevertheless returned success.
-    #[tokio::test]
-    async fn choosing_the_played_character_swaps_occupied_accounts_atomically() {
+    struct ForcedLinkOutcome {
+        result: (usize, (usize, usize)),
+        played_character: Uuid,
+        displaced_character: Uuid,
+        linked_holds: Uuid,
+        source_holds: Uuid,
+        users_left: usize,
+    }
+
+    /// Run the production transaction (`keep_played = true`) against the real
+    /// UNIQUE(user_id) shape, with the given character documents on each side.
+    /// `None` when no test database is configured.
+    async fn forced_link_scenario(
+        played_doc: serde_json::Value,
+        displaced_doc: serde_json::Value,
+    ) -> Option<ForcedLinkOutcome> {
         use diesel_async::{AsyncConnection, AsyncPgConnection};
 
         let Some(url) = std::env::var("TEST_DATABASE_URL").ok() else {
-            eprintln!("SKIP: TEST_DATABASE_URL unset — #185 ownership swap not verified");
-            return;
+            eprintln!("SKIP: TEST_DATABASE_URL unset — forced-link ownership swap not verified");
+            return None;
         };
         let mut conn = AsyncPgConnection::establish(&url)
             .await
@@ -1610,7 +1705,8 @@ mod report185_link_choice_tests {
         diesel::sql_query(
             "CREATE TABLE characters ( \
                  id UUID PRIMARY KEY, \
-                 user_id UUID NOT NULL UNIQUE REFERENCES users(id))",
+                 user_id UUID NOT NULL UNIQUE REFERENCES users(id), \
+                 character JSONB NOT NULL DEFAULT '{}')",
         )
         .execute(&mut conn)
         .await
@@ -1642,10 +1738,14 @@ mod report185_link_choice_tests {
                 .await
                 .unwrap();
         }
-        for (id, owner) in [(played_character, source), (displaced_character, linked)] {
-            diesel::sql_query("INSERT INTO characters (id, user_id) VALUES ($1, $2)")
+        for (id, owner, doc) in [
+            (played_character, source, played_doc),
+            (displaced_character, linked, displaced_doc),
+        ] {
+            diesel::sql_query("INSERT INTO characters (id, user_id, character) VALUES ($1, $2, $3)")
                 .bind::<diesel::sql_types::Uuid, _>(id)
                 .bind::<diesel::sql_types::Uuid, _>(owner)
+                .bind::<diesel::sql_types::Jsonb, _>(doc)
                 .execute(&mut conn)
                 .await
                 .unwrap();
@@ -1656,12 +1756,9 @@ mod report185_link_choice_tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            apply_forced_link_changes(&mut conn, source, linked, true)
-                .await
-                .unwrap(),
-            (1, (1, 1))
-        );
+        let result = apply_forced_link_changes(&mut conn, source, linked, true)
+            .await
+            .unwrap();
 
         #[derive(diesel::QueryableByName)]
         struct IdRow {
@@ -1677,16 +1774,74 @@ mod report185_link_choice_tests {
                 .id
         }
 
-        assert_eq!(character_for(&mut conn, linked).await, played_character);
-        assert_eq!(character_for(&mut conn, source).await, displaced_character);
-        assert_eq!(
-            diesel::sql_query("SELECT id FROM users")
-                .load::<IdRow>(&mut conn)
-                .await
-                .unwrap()
-                .len(),
-            2,
-            "the transaction-local parking user must be removed"
-        );
+        let linked_holds = character_for(&mut conn, linked).await;
+        let source_holds = character_for(&mut conn, source).await;
+        let users_left = diesel::sql_query("SELECT id FROM users")
+            .load::<IdRow>(&mut conn)
+            .await
+            .unwrap()
+            .len();
+        Some(ForcedLinkOutcome {
+            result,
+            played_character,
+            displaced_character,
+            linked_holds,
+            source_holds,
+            users_left,
+        })
     }
+
+    /// The original #335 implementation updated the played character directly
+    /// to the occupied linked account, so Postgres rejected the first statement
+    /// and the handler nevertheless returned success.
+    #[tokio::test]
+    async fn choosing_the_played_character_swaps_occupied_accounts_atomically() {
+        let Some(o) = forced_link_scenario(
+            serde_json::json!({"name": "LiquidOtacon", "level": 30}),
+            serde_json::json!({"name": "Adventurer", "level": 48}),
+        )
+        .await
+        else {
+            return;
+        };
+        assert_eq!(o.result, (1, (1, 1)));
+        assert_eq!(o.linked_holds, o.played_character);
+        assert_eq!(o.source_holds, o.displaced_character);
+        assert_eq!(o.users_left, 2, "the transaction-local parking user must be removed");
+    }
+
+    /// WolfWalker, 2026-09-23. The played side is the starter minted seconds
+    /// earlier for a device that sent no id; the linked account holds his real
+    /// level 89. The account must keep it.
+    #[tokio::test]
+    async fn a_fresh_starter_never_displaces_a_real_character() {
+        let Some(o) = forced_link_scenario(
+            serde_json::json!({"name": "Adventurer", "level": 1, "experience": 1}),
+            serde_json::json!({"name": "WolfWalker", "level": 89}),
+        )
+        .await
+        else {
+            return;
+        };
+        assert_eq!(o.result, (1, (0, 0)), "devices still rebind; no character moves");
+        assert_eq!(o.linked_holds, o.displaced_character, "the real character stays put");
+        assert_eq!(o.source_holds, o.played_character);
+        assert_eq!(o.users_left, 2);
+    }
+
+    /// CONTROL: two starters may swap as asked — nothing real is at stake.
+    #[tokio::test]
+    async fn two_starters_still_swap() {
+        let Some(o) = forced_link_scenario(
+            serde_json::json!({"name": "Adventurer", "level": 1}),
+            serde_json::json!({"name": "Adventurer", "level": 1}),
+        )
+        .await
+        else {
+            return;
+        };
+        assert_eq!(o.result, (1, (1, 1)));
+        assert_eq!(o.linked_holds, o.played_character);
+    }
+
 }
