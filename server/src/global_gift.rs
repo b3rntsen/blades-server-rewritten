@@ -194,7 +194,7 @@ pub async fn get_global_gift(
             global_gift: GiftView {
                 global_gift_id: gift_id,
                 claim_count,
-                global_gift_override: def,
+                global_gift_override: def.for_client(),
             },
         }));
     }
@@ -218,7 +218,7 @@ pub async fn get_global_gift(
         global_gift: GiftView {
             global_gift_id: gift_id,
             claim_count,
-            global_gift_override: def,
+            global_gift_override: def.for_client(),
         },
     }))
 }
