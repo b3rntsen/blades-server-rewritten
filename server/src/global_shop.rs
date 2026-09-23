@@ -86,8 +86,8 @@ const REPLAY_PERIOD: i64 = REPLAY_PERIOD_DAYS * 86_400;
 /// on. Hence [`REPLAY_PERIOD_DAYS`] = 42.
 ///
 /// Nothing is discarded. The 30 offers whose windows fall entirely inside the
-/// lead-in are carried forward one period into the dense region instead, so all 544
-/// dated offers and all 547 products remain reachable.
+/// lead-in are carried forward one period into the dense region instead. All 546
+/// valid products remain reachable; the one malformed Bethesda id is never served.
 ///
 /// Simulated over a full cycle, counting Sigil-priced offers per day:
 ///
@@ -110,9 +110,9 @@ const MAX_DATED_WINDOW: i64 = 60 * 86_400;
 ///
 /// WHY (tracker #18)
 ///
-/// The catalogue was already served — 547 offers, verbatim, exactly as retail sent
+/// The catalogue was already served — 547 rows, verbatim, exactly as retail sent
 /// them. But every window in it closed by 2026-07-06, so the client filtered all of
-/// them out and the shop was empty. Not "we serve nothing": we served 547 expired
+/// them out and the shop was empty. Not "we serve nothing": we served expired
 /// offers, which looks identical from inside the game and is a different bug.
 ///
 /// This shifts every window by a whole number of REPLAY_PERIODs — one constant
@@ -129,12 +129,18 @@ const MAX_DATED_WINDOW: i64 = 60 * 86_400;
 /// That is deliberate: those days predate the continuous Sigil schedule, while
 /// the overlapping tail contains both the complete daily shop and the Sigil shop.
 fn shift_to_now(overrides: &Value, now: i64) -> Value {
-    let Some(map) = overrides
-        .get("globalShopOverrides")
-        .and_then(|v| v.as_object())
+    let mut cleaned = overrides.clone();
+    let Some(map) = cleaned
+        .get_mut("globalShopOverrides")
+        .and_then(|v| v.as_object_mut())
     else {
-        return overrides.clone();
+        return cleaned;
     };
+
+    // Bethesda shipped one key ending in `p`, which is not a UUID. The purchase
+    // request is UUID-typed, so replaying that row advertises an offer no client
+    // can ever buy. Keep every real product and omit only malformed identifiers.
+    map.retain(|id, _| Uuid::parse_str(id).is_ok());
 
     // Anchor on the LATEST end in the corpus: the number of whole periods needed to
     // bring that past `now` is the shift for everything.
@@ -146,7 +152,7 @@ fn shift_to_now(overrides: &Value, now: i64) -> Value {
     if latest_end == 0 || latest_end >= now {
         // Still inside the original schedule — nothing to do. Also the path taken
         // by a corpus that has been refreshed with newer captures.
-        return overrides.clone();
+        return cleaned;
     }
     let periods = (now - latest_end).div_euclid(REPLAY_PERIOD) + 1;
     let shift = periods * REPLAY_PERIOD;
@@ -211,7 +217,7 @@ fn shift_to_now(overrides: &Value, now: i64) -> Value {
 /// [`shift_to_now`] anchors on the LATEST `activeEndDate` in the catalogue and does
 /// nothing at all when that anchor is already past `now`. Write an authored window
 /// for next week into `global_shop_overrides.json` and it becomes the latest end —
-/// so the shift switches off, and all 547 retail offers snap back to their real
+/// so the shift switches off, and all 546 valid retail offers snap back to their real
 /// (July 2026, expired) windows. Authoring one offer would empty the shop.
 ///
 /// Applied here instead, after the shift, an authored entry means exactly the dates
@@ -401,7 +407,7 @@ struct PurchaseResponse {
 ///   granting one from this file would hand the player a fabricated item that
 ///   looks as authoritative as a real one. Rolling them properly needs the
 ///   rarity -> loot-table model, which is a separate piece of work.
-/// * `ChestRoll` grants a chest rather than items. None of the 547 storefront
+/// * `ChestRoll` grants a chest rather than items. None of the 546 valid storefront
 ///   offers is one (all ten are IAP level offers), so wiring it here would be
 ///   untested code for a case that cannot arrive.
 /// * `Unclassified` contains a template the extractor could not place in a
@@ -557,10 +563,87 @@ fn grant_from_offer_contents(
     Some(reward)
 }
 
+/// A captured reward for this catalogue product, including a capture from an
+/// otherwise-identical replacement window.
+///
+/// Three one-gem promotions in the captured catalogue have a fresh product id
+/// but no APK bundle and no purchase response under that fresh id.  Each carries
+/// the same bare `purchaseTrackingId` and the same price as one earlier catalogue
+/// entry whose retail purchase response we did capture.  That shared id is the
+/// catalogue's own statement that the two windows are the same tracked product;
+/// it is stronger evidence than trying to infer a reward from the price or name.
+///
+/// Refuse ambiguity: an alias is used only when exactly one same-price sibling
+/// with the same tracking id has a captured grant.  A direct grant always wins.
+fn captured_grant_for_product(
+    static_data: &blades_lib::static_data::StaticData,
+    product_id: Uuid,
+) -> Option<&RewardGrant> {
+    if let Some(reward) = static_data.global_shop_grants.get(&product_id) {
+        return Some(reward);
+    }
+    // This is not a second way to reinterpret normal APK-authored products.
+    // Their bundle contents remain the fallback below; only a product absent
+    // from the APK can borrow its captured replacement-window sibling.
+    if static_data.global_shop_offer_contents.contains_key(&product_id) {
+        return None;
+    }
+
+    fn tracking_id(entry: &Value, product_id: Uuid) -> Option<Uuid> {
+        let mut found = None;
+        for limit in entry.get("maxPurchaseLimits")?.as_array()? {
+            let raw = limit.get("purchaseTrackingId")?.as_str()?;
+            if raw.contains("::") {
+                continue;
+            }
+            let Ok(id) = Uuid::parse_str(raw) else {
+                continue;
+            };
+            if id == product_id {
+                continue;
+            }
+            if found.is_some_and(|seen| seen != id) {
+                return None;
+            }
+            found = Some(id);
+        }
+        found
+    }
+
+    let catalogue = static_data
+        .global_shop_overrides
+        .get("globalShopOverrides")?
+        .as_object()?;
+    let product = catalogue.get(&product_id.to_string())?;
+    let tracked_as = tracking_id(product, product_id)?;
+    let price = product.get("prices")?;
+
+    let mut found = None;
+    for (candidate_raw, candidate) in catalogue {
+        let Ok(candidate_id) = Uuid::parse_str(candidate_raw) else {
+            continue;
+        };
+        if candidate_id == product_id
+            || candidate.get("prices") != Some(price)
+            || tracking_id(candidate, candidate_id) != Some(tracked_as)
+        {
+            continue;
+        }
+        let Some(reward) = static_data.global_shop_grants.get(&candidate_id) else {
+            continue;
+        };
+        if found.is_some() {
+            return None;
+        }
+        found = Some(reward);
+    }
+    found
+}
+
 /// The product's LIFETIME purchase cap, or `None` when it is unlimited.
 ///
 /// `maxPurchases` is the per-product total, and `0` means unlimited — 485 of the
-/// 547 catalogue entries are 0, and the other 62 carry 1, 3, 5, 10 or 20. That maps
+/// 546 valid catalogue entries are 0, and the other 61 carry 1, 3, 5, 10 or 20. That maps
 /// exactly onto `server_state.globalShopPurchases`, which counts purchases per
 /// product for the life of the character.
 ///
@@ -651,7 +734,7 @@ pub async fn purchase_global_shop(
     let character_id = path.into_inner();
     let body = body.into_inner();
 
-    // What this product grants. The captures cover 159 of the storefront's 547
+    // What this product grants. The captures cover 159 of the storefront's 546 valid
     // offers, because an offer's contents only ever appeared in a purchase
     // RESPONSE — so the other 388 used to 404 here, and the client answered that
     // by prompting the player to reconnect to Bethesda.
@@ -659,11 +742,10 @@ pub async fn purchase_global_shop(
     // A capture-derived grant always WINS: it is a recording of what retail
     // actually handed over, instance stats and all, where the fallback below
     // knows only templates and quantities.
-    let reward = match app_state
-        .static_data
-        .global_shop_grants
-        .get(&body.global_shop_product_id)
-    {
+    let reward = match captured_grant_for_product(
+        &app_state.static_data,
+        body.global_shop_product_id,
+    ) {
         Some(r) => r.clone(),
         None => grant_from_offer_contents(
             app_state
@@ -687,11 +769,11 @@ pub async fn purchase_global_shop(
             // to buy something in the shop, Blades won't start anymore" (#170),
             // matching the single purchase 404 in that day's log.
             //
-            // 365 of the 493 Sigil-priced products have no recoverable reward yet
-            // (#167). Hiding them instead was measured and is worse: it drops the
-            // served shop to a median of 4 offers a day, straight back to the
-            // near-empty shop of #141. So the offer stays visible and the REFUSAL
-            // becomes survivable.
+            // Every valid product in the current captured catalogue has a reward;
+            // this remains as the safe failure for a newer or malformed product.
+            // Hiding unknowns was measured and is worse: it can collapse the shop
+            // back to the near-empty state from #141. So the offer stays visible
+            // and the refusal remains survivable.
             //
             // The shape is the one the client already receives in ordinary play for
             // a price mismatch — 400 on this service — so it is a path known to be
@@ -1053,12 +1135,18 @@ mod replay_tests {
     ///
     /// Skipping the lead-in by DROPPING those offers would satisfy the test above
     /// while quietly removing 30 products from the game. They are carried forward a
-    /// period instead, so the served catalogue keeps every entry the file has.
+    /// period instead, so the served catalogue keeps every valid product. The one
+    /// malformed `…f9p` key is deliberately omitted because it cannot be bought.
     #[test]
     fn the_replay_still_serves_every_offer_in_the_catalogue() {
         let raw = catalog();
         let now = 1_783_000_000 + 400 * 86_400;
-        let before = raw["globalShopOverrides"].as_object().unwrap().len();
+        let raw_map = raw["globalShopOverrides"].as_object().unwrap();
+        let before = raw_map
+            .keys()
+            .filter(|id| Uuid::parse_str(id).is_ok())
+            .count();
+        assert_eq!(raw_map.len(), before + 1, "one malformed retail id is omitted");
         let after = shift_to_now(&raw, now)["globalShopOverrides"]
             .as_object()
             .unwrap()
@@ -1079,7 +1167,7 @@ mod replay_tests {
                 }
             }
         }
-        let total = raw["globalShopOverrides"].as_object().unwrap().len();
+        let total = before;
         assert!(
             seen.len() * 100 >= total * 90,
             "only {} of {total} offers are reachable across a full cycle",
@@ -1131,9 +1219,14 @@ mod replay_tests {
         let shifted = shift_to_now(&raw, now);
         let a = raw["globalShopOverrides"].as_object().unwrap();
         let b = shifted["globalShopOverrides"].as_object().unwrap();
-        assert_eq!(a.len(), b.len(), "no offer is dropped");
+        let valid = a.keys().filter(|id| Uuid::parse_str(id).is_ok()).count();
+        assert_eq!(b.len(), valid, "every valid offer survives the replay");
         let mut offsets = std::collections::HashSet::new();
         for (id, before) in a {
+            if Uuid::parse_str(id).is_err() {
+                assert!(b.get(id).is_none(), "a malformed id must not be advertised");
+                continue;
+            }
             let after = &b[id];
             offsets.insert(after["activeStartDate"].as_i64().unwrap() - before["activeStartDate"].as_i64().unwrap());
             assert_eq!(
@@ -1172,6 +1265,13 @@ mod replay_tests {
         let now = 1_783_000_000 + 500 * 86_400;
         let shifted = shift_to_now(&raw, now);
         for (id, before) in raw["globalShopOverrides"].as_object().unwrap() {
+            if Uuid::parse_str(id).is_err() {
+                assert!(
+                    shifted["globalShopOverrides"].get(id).is_none(),
+                    "a malformed id must not be advertised"
+                );
+                continue;
+            }
             let s0 = before["activeStartDate"].as_i64().unwrap();
             let s1 = shifted["globalShopOverrides"][id]["activeStartDate"].as_i64().unwrap();
             assert_eq!(s0 % 86_400, s1 % 86_400, "offer {id} changed its time of day");
@@ -1215,9 +1315,29 @@ mod replay_tests {
     /// the corpus with newer captures turns the shift off by itself.
     #[test]
     fn a_current_schedule_is_left_alone() {
-        let raw = catalog();
+        let mut raw = catalog();
+        raw["globalShopOverrides"]
+            .as_object_mut()
+            .unwrap()
+            .retain(|id, _| Uuid::parse_str(id).is_ok());
         let now = 1_780_000_000; // inside the captured range
         assert_eq!(shift_to_now(&raw, now), raw);
+    }
+
+    /// The raw capture contains Bethesda's `…f9p` typo. It is not a product id:
+    /// this server's purchase request cannot deserialize it into a UUID, so
+    /// advertising it would create an offer that necessarily 400s (#184).
+    #[test]
+    fn a_malformed_product_id_is_never_served() {
+        const BAD: &str = "53c6f124-3603-4100-ba9a-e2fe23969f7p";
+        let raw = catalog();
+        assert!(raw["globalShopOverrides"].get(BAD).is_some(), "fixture keeps the retail typo");
+        for now in [1_780_000_000, 1_783_000_000 + 400 * 86_400] {
+            assert!(
+                shift_to_now(&raw, now)["globalShopOverrides"].get(BAD).is_none(),
+                "the invalid id was served at {now}"
+            );
+        }
     }
 
     fn authored(id: &str, start: i64, end: i64) -> Value {
@@ -1319,57 +1439,59 @@ mod replay_tests {
         assert_eq!(apply_authored(shifted.clone(), &Value::Null), shifted);
     }
 
-    /// Every authored offer must have a reward definition, or buying it 404s and the
-    /// AN UNDELIVERABLE PRODUCT MUST NOT 404.
+    /// THE LAST THREE UNBUYABLE OFFERS (#184).
     ///
-    /// A 404 on this route makes the client prompt the player to reconnect to
-    /// Bethesda — the file says so above `purchase_global_shop`, and a player lived
-    /// it: one purchase 404 at 04:02, then "ever since I tried to buy something in
-    /// the shop, Blades won't start anymore" (#170).
-    ///
-    /// 365 of the 493 Sigil-priced products still have no recoverable reward
-    /// (#167), so until that lands a mis-click must be a harmless refusal rather
-    /// than a wedge.
-    ///
-    /// The alternative — hiding them — was measured and rejected: it drops the
-    /// served shop to a median of 4 Sigil offers a day, back to the near-empty shop
-    /// of #141. Full shop plus a survivable refusal beats thin shop.
+    /// They are later one-gem windows for three products already present in the
+    /// catalogue.  The new product ids have no APK bundle or captured purchase,
+    /// but retail gives each the same bare purchase-tracking id and the same price
+    /// as an earlier window whose response we did capture.  Resolve those exact
+    /// siblings, and assert that every one of the 546 valid served products now has a
+    /// reward.  This is deliberately corpus-wide: fixing only the reporter's next
+    /// failed item would leave two indistinguishable 400s behind.
     #[test]
-    fn an_undeliverable_product_is_refused_without_a_404() {
+    fn every_storefront_offer_is_deliverable() {
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
         let sd = crate::static_loader::load(&dir);
-
-        // Find a product the storefront serves that genuinely cannot be delivered —
-        // the population this test is about.
-        let undeliverable = sd
-            .global_shop_overrides["globalShopOverrides"]
+        let ids: Vec<_> = sd.global_shop_overrides["globalShopOverrides"]
             .as_object()
             .expect("an object")
             .keys()
-            .filter_map(|k| Uuid::parse_str(k).ok())
-            .find(|id| {
-                !sd.global_shop_grants.contains_key(id)
-                    && grant_from_offer_contents(sd.global_shop_offer_contents.get(id), &repair_data(), item_table(), 1).is_none()
-            });
-        let id = undeliverable.expect(
-            "the corpus must still contain undeliverable offers, or this test is moot",
-        );
+            // One Valentine's decoration row carries Bethesda's known `…f9p`
+            // typo and can never arrive in this UUID-typed purchase handler.
+            .filter_map(|raw| Uuid::parse_str(raw).ok())
+            .collect();
+        assert_eq!(ids.len(), 546, "the valid captured storefront population");
 
-        // The refusal the handler produces for that case.
-        let err = map_purchase_err(PurchaseError::InvalidPrice);
-        assert_eq!(
-            actix_web::ResponseError::status_code(&err),
-            StatusCode::BAD_REQUEST,
-            "product {id} must be refused with 400, never the 404 that bricks the client"
-        );
-
-        // CONTROL: 404 is still reachable for a product that genuinely does not
-        // exist, so this has not blanket-removed the not-found case.
-        assert_eq!(
-            actix_web::ResponseError::status_code(&map_purchase_err(PurchaseError::NoSuchProduct)),
-            StatusCode::NOT_FOUND,
-            "a genuinely unknown product should still be a 404"
-        );
+        let rd = repair_data();
+        let mut aliases = Vec::new();
+        for id in ids {
+            let captured = captured_grant_for_product(&sd, id);
+            if captured.is_some() && !sd.global_shop_grants.contains_key(&id) {
+                aliases.push(id);
+            }
+            assert!(
+                captured.is_some()
+                    || grant_from_offer_contents(
+                        sd.global_shop_offer_contents.get(&id),
+                        &rd,
+                        item_table(),
+                        1,
+                    )
+                    .is_some(),
+                "storefront product {id} still has no deliverable reward"
+            );
+        }
+        aliases.sort_unstable();
+        let mut expected: Vec<Uuid> = [
+            "0413eb45-6b3f-485f-907d-42f106e5e1a0",
+            "88589dc7-ee1c-4769-ae8e-9af96a155196",
+            "9440d12e-140f-47c5-8bb8-b099ff2acdb3",
+        ]
+        .into_iter()
+        .map(|raw| raw.parse().unwrap())
+        .collect();
+        expected.sort_unstable();
+        assert_eq!(aliases, expected, "only the three replacement windows alias a grant");
     }
 
     /// THE CAPS IN THE CATALOGUE WERE DECORATIVE.
@@ -1377,7 +1499,7 @@ mod replay_tests {
     /// Nothing ever read `maxPurchases`, so a product capped at a handful could be
     /// bought without limit. One player bought a capped product **109 times**.
     ///
-    /// 62 of the 547 catalogue entries carry a non-zero lifetime cap (1, 3, 5, 10 or
+    /// 61 of the 546 valid catalogue entries carry a non-zero lifetime cap (1, 3, 5, 10 or
     /// 20); the other 485 are 0, which means unlimited.
     #[test]
     fn the_catalogue_really_does_declare_lifetime_caps() {
