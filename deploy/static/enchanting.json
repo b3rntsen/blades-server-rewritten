@@ -13,6 +13,28 @@
    "property": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 99
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -25,6 +47,28 @@
    "property": "626121b7-708d-455f-b32f-38e5b68bb80c",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 6960
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 47
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -38,6 +82,28 @@
    "property": "80980773-a388-4f71-9ba5-ac69a7e307be",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 16560
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 44
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -50,6 +116,28 @@
    "property": "cc432e27-813c-4afa-a3df-d587cfd550d2",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 31800
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 89
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -63,6 +151,28 @@
    "property": "2b8fd511-80da-4128-81b1-bd7ab6023223",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 99
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -76,6 +186,28 @@
    "property": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 4640
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 31
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -90,6 +222,28 @@
    "property": "ef292fb2-27ad-4b47-9eb8-2f0ffbfd66c4",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 23400
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 52
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -102,6 +256,20 @@
    "property": "874f28f1-cdc3-4af5-af4e-4e4d0e2a4969",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 560
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 5
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -116,6 +284,28 @@
    "property": "cc432e27-813c-4afa-a3df-d587cfd550d2",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 2160
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 26
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -129,6 +319,28 @@
    "property": "2b253847-5061-4a07-acfe-fbdc3c702922",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 13800
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 56
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -141,6 +353,28 @@
    "property": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 23400
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 78
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -153,6 +387,28 @@
    "property": "848e02b4-32ae-4e1b-809c-83bca039542a",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 99
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -166,6 +422,24 @@
    "property": "9fdbb542-ff37-4199-93a3-d9444cca9090",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1040
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 15
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -178,6 +452,28 @@
    "property": "80980773-a388-4f71-9ba5-ac69a7e307be",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 6960
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 31
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -190,6 +486,28 @@
    "property": "94aa3774-cd7e-400c-9d17-a4652fb88a93",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 99
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -203,6 +521,28 @@
    "property": "38ca6ee2-1765-4122-a5e5-d036a7d31fe3",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 19500
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 65
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -215,6 +555,28 @@
    "property": "af1e56bf-1974-452c-aa70-36b2140cbb07",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 6960
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 47
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -229,6 +591,28 @@
    "property": "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 16560
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 44
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -243,6 +627,24 @@
    "property": "1691d3cf-4dec-4755-965a-ead0b451b052",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1040
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 9
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -255,6 +657,28 @@
    "property": "2b8fd511-80da-4128-81b1-bd7ab6023223",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 11040
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 57
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -268,6 +692,28 @@
    "property": "b64fa9d4-4f13-4bb4-9129-16df08e84757",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 5800
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 39
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -280,6 +726,28 @@
    "property": "94aa3774-cd7e-400c-9d17-a4652fb88a93",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 11040
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 57
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -293,6 +761,28 @@
    "property": "2b8fd511-80da-4128-81b1-bd7ab6023223",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 4080
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 36
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -306,6 +796,24 @@
    "property": "ef292fb2-27ad-4b47-9eb8-2f0ffbfd66c4",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1040
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 9
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -318,6 +826,28 @@
    "property": "17718cb7-fb8a-4fbc-adeb-c4cdbc37faf4",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 4080
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 24
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -330,6 +860,28 @@
    "property": "9fdbb542-ff37-4199-93a3-d9444cca9090",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 4080
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 36
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -342,6 +894,28 @@
    "property": "c40ed851-8777-4d09-b169-0223dae8f67d",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 2160
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 26
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -354,6 +928,20 @@
    "property": "d1e286a7-7c90-4e1b-aaaa-fa04b607e698",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 560
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 3
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -366,6 +954,28 @@
    "property": "b64fa9d4-4f13-4bb4-9129-16df08e84757",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1800
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 21
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -378,6 +988,28 @@
    "property": "17718cb7-fb8a-4fbc-adeb-c4cdbc37faf4",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 23400
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 52
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -390,6 +1022,28 @@
    "property": "874f28f1-cdc3-4af5-af4e-4e4d0e2a4969",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 16560
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 68
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -404,6 +1058,20 @@
    "property": "626121b7-708d-455f-b32f-38e5b68bb80c",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 560
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 5
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -417,6 +1085,28 @@
    "property": "80980773-a388-4f71-9ba5-ac69a7e307be",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 65
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -429,6 +1119,28 @@
    "property": "04228b59-5718-4b55-acb3-5557726a6df9",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 65
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -441,6 +1153,28 @@
    "property": "31dc0cd5-8f9c-4d0a-aec8-2052e72f58b2",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 3400
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 30
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -453,6 +1187,28 @@
    "property": "c40ed851-8777-4d09-b169-0223dae8f67d",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 16560
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 68
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -465,6 +1221,28 @@
    "property": "848e02b4-32ae-4e1b-809c-83bca039542a",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 31800
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 89
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -478,6 +1256,28 @@
    "property": "38ca6ee2-1765-4122-a5e5-d036a7d31fe3",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 9200
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 47
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -490,6 +1290,20 @@
    "property": "af1e56bf-1974-452c-aa70-36b2140cbb07",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 560
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 5
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -504,6 +1318,28 @@
    "property": "464bedb7-a631-43b6-a2df-f65f089d39da",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1440
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 16
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -518,6 +1354,28 @@
    "property": "38ca6ee2-1765-4122-a5e5-d036a7d31fe3",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 3400
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 30
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -530,6 +1388,28 @@
    "property": "5297713f-c60e-42fd-ade0-500daf0d632e",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 4640
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 31
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -544,6 +1424,28 @@
    "property": "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 99
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -556,6 +1458,28 @@
    "property": "ef292fb2-27ad-4b47-9eb8-2f0ffbfd66c4",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 4080
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 24
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -568,6 +1492,28 @@
    "property": "f8e9dec5-c6e7-4976-b24b-2155f1921692",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 26500
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 74
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -580,6 +1526,28 @@
    "property": "874f28f1-cdc3-4af5-af4e-4e4d0e2a4969",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 31800
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 89
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -594,6 +1562,28 @@
    "property": "4a50e3f9-eb0b-413d-8166-290eddeeac6a",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 6960
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 31
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -606,6 +1596,28 @@
    "property": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 11040
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 44
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -620,6 +1632,20 @@
    "property": "4a50e3f9-eb0b-413d-8166-290eddeeac6a",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 560
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 3
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -632,6 +1658,20 @@
    "property": "c40ed851-8777-4d09-b169-0223dae8f67d",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 560
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 5
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -644,6 +1684,20 @@
    "property": "f8e9dec5-c6e7-4976-b24b-2155f1921692",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 470
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 4
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -656,6 +1710,28 @@
    "property": "d1e286a7-7c90-4e1b-aaaa-fa04b607e698",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 6960
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 31
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -668,6 +1744,28 @@
    "property": "1691d3cf-4dec-4755-965a-ead0b451b052",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 11040
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 37
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -680,6 +1778,28 @@
    "property": "08ea75d0-5cf1-44a9-9816-d3c6740c4191",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 99
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -692,6 +1812,28 @@
    "property": "31dc0cd5-8f9c-4d0a-aec8-2052e72f58b2",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 9200
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 47
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -704,6 +1846,28 @@
    "property": "848e02b4-32ae-4e1b-809c-83bca039542a",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 16560
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 68
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -717,6 +1881,28 @@
    "property": "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 23400
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 78
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -729,6 +1915,28 @@
    "property": "23746263-41c1-4023-8859-41e698dcf49d",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 23400
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 78
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -742,6 +1950,28 @@
    "property": "848e02b4-32ae-4e1b-809c-83bca039542a",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 2160
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 26
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -755,6 +1985,28 @@
    "property": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 28000
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 65
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -769,6 +2021,28 @@
    "property": "f8e9dec5-c6e7-4976-b24b-2155f1921692",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 13800
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 56
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -781,6 +2055,28 @@
    "property": "cc432e27-813c-4afa-a3df-d587cfd550d2",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 6960
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 47
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -794,6 +2090,24 @@
    "property": "2b8fd511-80da-4128-81b1-bd7ab6023223",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1040
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 15
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -807,6 +2121,28 @@
    "property": "04228b59-5718-4b55-acb3-5557726a6df9",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 23400
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 52
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -819,6 +2155,24 @@
    "property": "dbc82d4d-3be1-4735-af21-316c54cfae55",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 700
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 9
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -833,6 +2187,28 @@
    "property": "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 11040
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 57
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -845,6 +2221,28 @@
    "property": "3335b921-b380-4144-8414-06832e29b011",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 2720
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 24
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -859,6 +2257,28 @@
    "property": "dbc82d4d-3be1-4735-af21-316c54cfae55",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 15600
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 52
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -873,6 +2293,24 @@
    "property": "94aa3774-cd7e-400c-9d17-a4652fb88a93",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1040
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 15
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -886,6 +2324,28 @@
    "property": "04228b59-5718-4b55-acb3-5557726a6df9",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 11040
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 37
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -898,6 +2358,28 @@
    "property": "08ea75d0-5cf1-44a9-9816-d3c6740c4191",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 4080
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 36
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -910,6 +2392,28 @@
    "property": "31dc0cd5-8f9c-4d0a-aec8-2052e72f58b2",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 19500
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 65
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -922,6 +2426,28 @@
    "property": "338ec948-d1b7-4390-8a88-ab6ac11841aa",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 19500
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 65
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -934,6 +2460,28 @@
    "property": "af1e56bf-1974-452c-aa70-36b2140cbb07",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 2160
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 26
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -948,6 +2496,28 @@
    "property": "9fdbb542-ff37-4199-93a3-d9444cca9090",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 23400
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 78
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -960,6 +2530,28 @@
    "property": "464bedb7-a631-43b6-a2df-f65f089d39da",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 11040
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 44
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -974,6 +2566,28 @@
    "property": "cc432e27-813c-4afa-a3df-d587cfd550d2",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 99
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -987,6 +2601,28 @@
    "property": "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 6960
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 31
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1001,6 +2637,28 @@
    "property": "af1e56bf-1974-452c-aa70-36b2140cbb07",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 16560
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 68
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1015,6 +2673,28 @@
    "property": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 6960
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 47
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1027,6 +2707,28 @@
    "property": "2b253847-5061-4a07-acfe-fbdc3c702922",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 5800
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 39
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -1039,6 +2741,20 @@
    "property": "cc432e27-813c-4afa-a3df-d587cfd550d2",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 560
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 5
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -1052,6 +2768,28 @@
    "property": "652d5ac9-3076-405b-a163-dde1a950fb26",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 11040
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 57
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -1065,6 +2803,28 @@
    "property": "5297713f-c60e-42fd-ade0-500daf0d632e",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 11040
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 44
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1079,6 +2839,28 @@
    "property": "5297713f-c60e-42fd-ade0-500daf0d632e",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 21200
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 59
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1093,6 +2875,28 @@
    "property": "e4d9f320-6a0d-4dd3-947a-9ab887e2a866",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 7360
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 37
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1107,6 +2911,28 @@
    "property": "d1e286a7-7c90-4e1b-aaaa-fa04b607e698",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 16560
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 44
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -1119,6 +2945,28 @@
    "property": "652d5ac9-3076-405b-a163-dde1a950fb26",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 4080
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 36
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -1132,6 +2980,28 @@
    "property": "366ce3d7-ac40-459b-b363-4565e3c5ce17",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 9200
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 47
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -1144,6 +3014,28 @@
    "property": "cc432e27-813c-4afa-a3df-d587cfd550d2",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 16560
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 68
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -1157,6 +3049,28 @@
    "property": "3335b921-b380-4144-8414-06832e29b011",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 7360
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 37
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1171,6 +3085,24 @@
    "property": "da0ebf22-6d7b-4504-bfc1-b78b674c7c5c",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 870
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 12
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1185,6 +3117,28 @@
    "property": "d1e286a7-7c90-4e1b-aaaa-fa04b607e698",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 2160
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 16
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -1197,6 +3151,28 @@
    "property": "5297713f-c60e-42fd-ade0-500daf0d632e",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1440
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 16
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1211,6 +3187,28 @@
    "property": "874f28f1-cdc3-4af5-af4e-4e4d0e2a4969",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 99
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1225,6 +3223,24 @@
    "property": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1040
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 15
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1237,6 +3253,24 @@
    "property": "31dc0cd5-8f9c-4d0a-aec8-2052e72f58b2",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 870
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 12
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -1249,6 +3283,28 @@
    "property": "dbc82d4d-3be1-4735-af21-316c54cfae55",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 28000
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 65
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1263,6 +3319,28 @@
    "property": "2b8fd511-80da-4128-81b1-bd7ab6023223",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 23400
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 78
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -1276,6 +3354,28 @@
    "property": "da0ebf22-6d7b-4504-bfc1-b78b674c7c5c",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 9200
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 47
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1290,6 +3390,28 @@
    "property": "f8e9dec5-c6e7-4976-b24b-2155f1921692",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 35000
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 82
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -1302,6 +3424,24 @@
    "property": "17718cb7-fb8a-4fbc-adeb-c4cdbc37faf4",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1040
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 9
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -1314,6 +3454,28 @@
    "property": "23746263-41c1-4023-8859-41e698dcf49d",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 11040
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 57
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -1327,6 +3489,28 @@
    "property": "b64fa9d4-4f13-4bb4-9129-16df08e84757",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 13800
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 56
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -1339,6 +3523,20 @@
    "property": "b64fa9d4-4f13-4bb4-9129-16df08e84757",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 470
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 4
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -1351,6 +3549,28 @@
    "property": "ef292fb2-27ad-4b47-9eb8-2f0ffbfd66c4",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 65
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -1363,6 +3583,28 @@
    "property": "464bedb7-a631-43b6-a2df-f65f089d39da",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 28000
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 65
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1377,6 +3619,20 @@
    "property": "80980773-a388-4f71-9ba5-ac69a7e307be",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 560
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 3
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -1389,6 +3645,28 @@
    "property": "e4d9f320-6a0d-4dd3-947a-9ab887e2a866",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 28000
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 65
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1403,6 +3681,28 @@
    "property": "874f28f1-cdc3-4af5-af4e-4e4d0e2a4969",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 6960
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 47
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1417,6 +3717,28 @@
    "property": "c40ed851-8777-4d09-b169-0223dae8f67d",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 6960
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 47
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1429,6 +3751,28 @@
    "property": "4a50e3f9-eb0b-413d-8166-290eddeeac6a",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 31800
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 59
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -1441,6 +3785,28 @@
    "property": "ef292fb2-27ad-4b47-9eb8-2f0ffbfd66c4",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 11040
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 37
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -1453,6 +3819,24 @@
    "property": "3335b921-b380-4144-8414-06832e29b011",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 700
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 9
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1467,6 +3851,28 @@
    "property": "23746263-41c1-4023-8859-41e698dcf49d",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 4080
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 36
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -1480,6 +3886,28 @@
    "property": "338ec948-d1b7-4390-8a88-ab6ac11841aa",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 9200
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 47
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -1492,6 +3920,28 @@
    "property": "652d5ac9-3076-405b-a163-dde1a950fb26",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 99
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -1505,6 +3955,28 @@
    "property": "9fdbb542-ff37-4199-93a3-d9444cca9090",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 11040
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 57
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1517,6 +3989,28 @@
    "property": "4a50e3f9-eb0b-413d-8166-290eddeeac6a",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 65
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -1529,6 +4023,28 @@
    "property": "d1e286a7-7c90-4e1b-aaaa-fa04b607e698",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 65
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -1541,6 +4057,24 @@
    "property": "e4d9f320-6a0d-4dd3-947a-9ab887e2a866",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 700
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 9
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1555,6 +4089,28 @@
    "property": "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 31800
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 59
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1569,6 +4125,28 @@
    "property": "38ca6ee2-1765-4122-a5e5-d036a7d31fe3",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 35000
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 82
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -1581,6 +4159,28 @@
    "property": "1691d3cf-4dec-4755-965a-ead0b451b052",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 4080
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 24
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -1593,6 +4193,28 @@
    "property": "af1e56bf-1974-452c-aa70-36b2140cbb07",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 99
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1607,6 +4229,28 @@
    "property": "08ea75d0-5cf1-44a9-9816-d3c6740c4191",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 23400
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 78
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1619,6 +4263,28 @@
    "property": "366ce3d7-ac40-459b-b363-4565e3c5ce17",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 3400
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 30
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -1631,6 +4297,24 @@
    "property": "04228b59-5718-4b55-acb3-5557726a6df9",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1040
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 9
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -1643,6 +4327,28 @@
    "property": "366ce3d7-ac40-459b-b363-4565e3c5ce17",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 19500
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 65
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -1655,6 +4361,28 @@
    "property": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 16560
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 68
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1667,6 +4395,28 @@
    "property": "94aa3774-cd7e-400c-9d17-a4652fb88a93",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 23400
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 78
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -1680,6 +4430,28 @@
    "property": "626121b7-708d-455f-b32f-38e5b68bb80c",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 99
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -1693,6 +4465,28 @@
    "property": "da0ebf22-6d7b-4504-bfc1-b78b674c7c5c",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 35000
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 82
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1707,6 +4501,28 @@
    "property": "04228b59-5718-4b55-acb3-5557726a6df9",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 4080
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 24
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -1719,6 +4535,28 @@
    "property": "e4d9f320-6a0d-4dd3-947a-9ab887e2a866",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 2720
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 24
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1733,6 +4571,28 @@
    "property": "b64fa9d4-4f13-4bb4-9129-16df08e84757",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 35000
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 82
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -1745,6 +4605,20 @@
    "property": "5297713f-c60e-42fd-ade0-500daf0d632e",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 380
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 3
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1759,6 +4633,28 @@
    "property": "1691d3cf-4dec-4755-965a-ead0b451b052",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 23400
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 52
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -1771,6 +4667,28 @@
    "property": "464bedb7-a631-43b6-a2df-f65f089d39da",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 21200
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 59
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1785,6 +4703,28 @@
    "property": "80980773-a388-4f71-9ba5-ac69a7e307be",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 2160
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 16
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -1797,6 +4737,28 @@
    "property": "874f28f1-cdc3-4af5-af4e-4e4d0e2a4969",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 2160
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 26
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1811,6 +4773,28 @@
    "property": "652d5ac9-3076-405b-a163-dde1a950fb26",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 23400
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 78
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -1824,6 +4808,28 @@
    "property": "338ec948-d1b7-4390-8a88-ab6ac11841aa",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 3400
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 30
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -1836,6 +4842,28 @@
    "property": "626121b7-708d-455f-b32f-38e5b68bb80c",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 31800
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 89
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -1849,6 +4877,28 @@
    "property": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 31800
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 89
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1861,6 +4911,24 @@
    "property": "366ce3d7-ac40-459b-b363-4565e3c5ce17",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 870
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 12
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -1873,6 +4941,28 @@
    "property": "17718cb7-fb8a-4fbc-adeb-c4cdbc37faf4",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 65
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -1885,6 +4975,28 @@
    "property": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 21200
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 59
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1899,6 +5011,28 @@
    "property": "626121b7-708d-455f-b32f-38e5b68bb80c",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 2160
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 26
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -1912,6 +5046,28 @@
    "property": "08ea75d0-5cf1-44a9-9816-d3c6740c4191",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 11040
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 57
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1924,6 +5080,28 @@
    "property": "9fdbb542-ff37-4199-93a3-d9444cca9090",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 99
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1936,6 +5114,28 @@
    "property": "17718cb7-fb8a-4fbc-adeb-c4cdbc37faf4",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 11040
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 37
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -1948,6 +5148,28 @@
    "property": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 11040
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 57
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1960,6 +5182,20 @@
    "property": "848e02b4-32ae-4e1b-809c-83bca039542a",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 560
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 5
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -1973,6 +5209,28 @@
    "property": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 4080
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 36
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -1985,6 +5243,28 @@
    "property": "dbc82d4d-3be1-4735-af21-316c54cfae55",
    "tier": 6,
    "durationMs": 3600000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 7360
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 37
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 1
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 2
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -1999,6 +5279,28 @@
    "property": "626121b7-708d-455f-b32f-38e5b68bb80c",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 16560
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 68
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -2012,6 +5314,24 @@
    "property": "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1040
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 15
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -2024,6 +5344,28 @@
    "property": "848e02b4-32ae-4e1b-809c-83bca039542a",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 6960
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 47
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -2037,6 +5379,28 @@
    "property": "31dc0cd5-8f9c-4d0a-aec8-2052e72f58b2",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 35000
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 82
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -2049,6 +5413,28 @@
    "property": "366ce3d7-ac40-459b-b363-4565e3c5ce17",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 35000
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 82
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -2061,6 +5447,28 @@
    "property": "80980773-a388-4f71-9ba5-ac69a7e307be",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 31800
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 59
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -2073,6 +5481,28 @@
    "property": "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 65
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -2087,6 +5517,28 @@
    "property": "dbc82d4d-3be1-4735-af21-316c54cfae55",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 2720
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 24
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -2101,6 +5553,28 @@
    "property": "c40ed851-8777-4d09-b169-0223dae8f67d",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 99
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -2113,6 +5587,28 @@
    "property": "5297713f-c60e-42fd-ade0-500daf0d632e",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 28000
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 65
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -2127,6 +5623,20 @@
    "property": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 380
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 3
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -2141,6 +5651,28 @@
    "property": "af1e56bf-1974-452c-aa70-36b2140cbb07",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 31800
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 89
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -2155,6 +5687,20 @@
    "property": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 560
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 5
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -2167,6 +5713,28 @@
    "property": "b64fa9d4-4f13-4bb4-9129-16df08e84757",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 26500
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 74
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -2179,6 +5747,28 @@
    "property": "e4d9f320-6a0d-4dd3-947a-9ab887e2a866",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 15600
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 52
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -2193,6 +5783,28 @@
    "property": "f8e9dec5-c6e7-4976-b24b-2155f1921692",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 5800
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 39
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -2205,6 +5817,28 @@
    "property": "94aa3774-cd7e-400c-9d17-a4652fb88a93",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 4080
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 36
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -2218,6 +5852,28 @@
    "property": "464bedb7-a631-43b6-a2df-f65f089d39da",
    "tier": 5,
    "durationMs": 3000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 4640
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 31
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 1
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 2
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -2232,6 +5888,28 @@
    "property": "139024a7-3965-4e90-a4c1-60e3d7ca3133",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 2160
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 26
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -2244,6 +5922,28 @@
    "property": "23746263-41c1-4023-8859-41e698dcf49d",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 99
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -2257,6 +5957,24 @@
    "property": "08ea75d0-5cf1-44a9-9816-d3c6740c4191",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1040
+    },
+    {
+     "templateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 15
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -2269,6 +5987,28 @@
    "property": "da0ebf22-6d7b-4504-bfc1-b78b674c7c5c",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 3400
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 30
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -2283,6 +6023,28 @@
    "property": "1691d3cf-4dec-4755-965a-ead0b451b052",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 65
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -2295,6 +6057,28 @@
    "property": "2b253847-5061-4a07-acfe-fbdc3c702922",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 35000
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 82
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -2307,6 +6091,28 @@
    "property": "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
    "tier": 4,
    "durationMs": 2400000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 4080
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 36
+    },
+    {
+     "templateId": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "quantity": 1
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 2
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -2319,6 +6125,28 @@
    "property": "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 42000
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 99
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -2331,6 +6159,28 @@
    "property": "4a50e3f9-eb0b-413d-8166-290eddeeac6a",
    "tier": 7,
    "durationMs": 4800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 16560
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 44
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 1
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 2
+    },
+    {
+     "templateId": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -2343,6 +6193,24 @@
    "property": "338ec948-d1b7-4390-8a88-ab6ac11841aa",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 870
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 12
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -2355,6 +6223,28 @@
    "property": "c40ed851-8777-4d09-b169-0223dae8f67d",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 31800
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 89
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -2367,6 +6257,28 @@
    "property": "2b253847-5061-4a07-acfe-fbdc3c702922",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1800
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 21
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -2379,6 +6291,28 @@
    "property": "d1e286a7-7c90-4e1b-aaaa-fa04b607e698",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 31800
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 59
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -2391,6 +6325,20 @@
    "property": "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 560
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 3
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -2405,6 +6353,28 @@
    "property": "3335b921-b380-4144-8414-06832e29b011",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 28000
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 65
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -2419,6 +6389,28 @@
    "property": "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 2160
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 16
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     2
    ],
@@ -2433,6 +6425,28 @@
    "property": "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1440
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 16
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -2447,6 +6461,28 @@
    "property": "338ec948-d1b7-4390-8a88-ab6ac11841aa",
    "tier": 10,
    "durationMs": 9000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 35000
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 82
+    },
+    {
+     "templateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 1
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 2
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -2459,6 +6495,20 @@
    "property": "464bedb7-a631-43b6-a2df-f65f089d39da",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 380
+    },
+    {
+     "templateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 3
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -2473,6 +6523,24 @@
    "property": "23746263-41c1-4023-8859-41e698dcf49d",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1040
+    },
+    {
+     "templateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 15
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -2486,6 +6554,28 @@
    "property": "3335b921-b380-4144-8414-06832e29b011",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 15600
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 52
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -2500,6 +6590,24 @@
    "property": "38ca6ee2-1765-4122-a5e5-d036a7d31fe3",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 870
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 12
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -2512,6 +6620,28 @@
    "property": "4a50e3f9-eb0b-413d-8166-290eddeeac6a",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 2160
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 16
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     8
@@ -2524,6 +6654,28 @@
    "property": "f8e9dec5-c6e7-4976-b24b-2155f1921692",
    "tier": 3,
    "durationMs": 1800000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1800
+    },
+    {
+     "templateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 21
+    },
+    {
+     "templateId": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "quantity": 1
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 2
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -2536,6 +6688,28 @@
    "property": "da0ebf22-6d7b-4504-bfc1-b78b674c7c5c",
    "tier": 8,
    "durationMs": 6000000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 19500
+    },
+    {
+     "templateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 65
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 1
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 2
+    },
+    {
+     "templateId": "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     1,
@@ -2550,6 +6724,24 @@
    "property": "652d5ac9-3076-405b-a163-dde1a950fb26",
    "tier": 2,
    "durationMs": 1200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 1040
+    },
+    {
+     "templateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 15
+    },
+    {
+     "templateId": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "quantity": 1
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 2
+    }
+   ],
    "filterTypes": [],
    "filterSlots": [
     4,
@@ -2563,6 +6755,20 @@
    "property": "2b253847-5061-4a07-acfe-fbdc3c702922",
    "tier": 1,
    "durationMs": 480000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 470
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 4
+    },
+    {
+     "templateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 1
+    }
+   ],
    "filterTypes": [
     9
    ],
@@ -2575,6 +6781,28 @@
    "property": "2b253847-5061-4a07-acfe-fbdc3c702922",
    "tier": 9,
    "durationMs": 7200000,
+   "inputs": [
+    {
+     "templateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 26500
+    },
+    {
+     "templateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 74
+    },
+    {
+     "templateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 1
+    },
+    {
+     "templateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 2
+    },
+    {
+     "templateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 4
+    }
+   ],
    "filterTypes": [
     9
    ],

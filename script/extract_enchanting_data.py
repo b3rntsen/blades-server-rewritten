@@ -131,11 +131,21 @@ def main():
         outs = r["_outputs"]
         if len(outs) != 1 or abs(outs[0]["_odds"] - 1.0) > 1e-6:
             sys.exit("recipe %s has a non-trivial output list; the model assumes one" % uid(r))
+        # `_inputs` is what starting the enchant costs: gold (a currency template) plus
+        # the soul gem and materials (stackable templates), in authored order.
+        inputs = []
+        for i in r.get("_inputs") or []:
+            tpl = uid(i.get("_itemTemplate"))
+            qty = int(i.get("_quantity") or 0)
+            if not tpl or qty <= 0:
+                sys.exit("recipe %s has an input without a template or quantity" % uid(r))
+            inputs.append({"templateId": tpl, "quantity": qty})
         recipes[uid(r)] = {
             "name": r["_name"]["_key"],
             "property": uid(outs[0]["_itemProperty"]),
             "tier": outs[0]["_tier"],
             "durationMs": int(round(r["_duration"] * 1000)),
+            "inputs": inputs,
             "filterTypes": r["_filterTypes"],
             "filterSlots": r["_filterSlots"],
             "filterWeaponClass": r["_filterWeaponClass"],

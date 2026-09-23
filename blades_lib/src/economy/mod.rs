@@ -338,6 +338,54 @@ pub fn consume_stackable(
     }
 }
 
+/// Pay a recipe's inputs — `(templateId, quantity)` pairs where a currency template
+/// comes out of the wallet and anything else is a stackable material out of the
+/// backpack — ALL OR NOTHING.
+///
+/// Every line is checked before anything moves, so an unaffordable cost leaves the
+/// wallet and the backpack exactly as they were: materials are verified first, then
+/// [`CompleteWallet::try_pay`] (itself verify-then-debit) takes the currencies, and
+/// only then are the materials consumed. A template listed twice is summed, so it
+/// cannot pass the check once per line and be over-consumed. Touched stacks are
+/// recorded in `tracker`; a stack consumed to zero shows up in the diff as removed.
+/// Does not bump `backpackVersion` — the handler bumps once per request.
+pub fn pay_inputs(
+    inputs: &[(Uuid, u64)],
+    wallet: &mut CompleteWallet,
+    inventory: &mut CompleteInventory,
+    tracker: &mut InventoryChangeTracker,
+) -> Result<(), EconomyError> {
+    let mut prices: Vec<Price> = Vec::new();
+    let mut materials: Vec<(Uuid, u64)> = Vec::new();
+    for &(template, quantity) in inputs {
+        if quantity == 0 {
+            continue;
+        }
+        if is_currency(template) {
+            match prices.iter_mut().find(|p| p.currency_id == template) {
+                Some(p) => p.quantity += quantity,
+                None => prices.push(Price::new(template, quantity)),
+            }
+        } else {
+            match materials.iter_mut().find(|m| m.0 == template) {
+                Some(m) => m.1 += quantity,
+                None => materials.push((template, quantity)),
+            }
+        }
+    }
+    for &(template, needed) in &materials {
+        let have = inventory.backpack.stackable_items.count(template);
+        if have < needed {
+            return Err(EconomyError::InsufficientStackable { template, needed, have });
+        }
+    }
+    wallet.try_pay(&prices)?;
+    for &(template, needed) in &materials {
+        consume_stackable(inventory, template, needed, tracker)?;
+    }
+    Ok(())
+}
+
 /// Grant a chest of the given tier/level into the treasury, returning its new id and
 /// marking it in `tracker` so the inventory diff carries it.
 pub fn grant_chest(
@@ -524,5 +572,32 @@ mod tests {
         assert_eq!(reward.currencies.get(&SIGIL), Some(&12));
         assert_eq!(reward.currencies.get(&GOLD), Some(&14000));
         assert_eq!(reward.character_xp, 700);
+    }
+
+    /// A template listed twice is summed before the check: 5 in the stack cannot pay
+    /// `3 + 3`, and nothing (gold included) moves. Control: `3 + 2` pays, draining it.
+    #[test]
+    fn pay_inputs_sums_repeated_lines_and_is_all_or_nothing() {
+        let mat = Uuid::from_u128(0x3A7);
+        let setup = || {
+            let mut inv = empty_inventory();
+            inv.backpack.stackable_items.add(mat, 5);
+            let mut w = CompleteWallet::default();
+            w.credit(GOLD, 100);
+            (inv, w)
+        };
+
+        let (mut inv, mut w) = setup();
+        let mut tracker = InventoryChangeTracker::default();
+        let err = pay_inputs(&[(GOLD, 10), (mat, 3), (mat, 3)], &mut w, &mut inv, &mut tracker);
+        assert_eq!(err, Err(EconomyError::InsufficientStackable { template: mat, needed: 6, have: 5 }));
+        assert_eq!((w.balance(GOLD), inv.backpack.stackable_items.count(mat)), (100, 5));
+        assert!(tracker.modified_backpack.stackable_items.is_empty());
+
+        let (mut inv, mut w) = setup();
+        let mut tracker = InventoryChangeTracker::default();
+        pay_inputs(&[(GOLD, 10), (mat, 3), (mat, 2)], &mut w, &mut inv, &mut tracker).unwrap();
+        assert_eq!((w.balance(GOLD), inv.backpack.stackable_items.count(mat)), (90, 0));
+        assert!(tracker.modified_backpack.stackable_items.contains(&mat));
     }
 }

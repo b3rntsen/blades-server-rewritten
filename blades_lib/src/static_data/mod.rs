@@ -220,6 +220,20 @@ pub struct EnchantRecipe {
     /// `_duration`, which matches all 19 captured enchant recipes' timers to within 2s.
     #[serde(default)]
     pub duration_ms: i64,
+    /// `_inputs` — what starting the enchant costs: gold plus the soul gem and
+    /// materials. Every one of the 202 recipes names gold; the rest are stackables.
+    /// Matches the captured retail deductions to the unit (29 back-to-back enchant
+    /// starts in the 2026-06-07 snapshot, gold and every material).
+    #[serde(default)]
+    pub inputs: Vec<RecipeInput>,
+}
+
+/// One `RecipeInput`: a template (a currency or a stackable material) and a count.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecipeInput {
+    pub template_id: Uuid,
+    pub quantity: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
