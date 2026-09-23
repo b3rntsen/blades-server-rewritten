@@ -15,7 +15,8 @@ use blades_lib::features::chests::ChestLootTables;
 use blades_lib::features::daily_reward::DailyRewardDef;
 use blades_lib::features::game_events::{EventDef, EventTheme, HALLOWEEN_THEME_QUESTS, MAX_THEME_DAYS};
 use blades_lib::static_data::{
-    Announcement, AbyssStaticData, EventQuestsData, FreeProductIds, GiftDef, ItemModRecipe,
+    Announcement, AbyssStaticData, EnchantingData, EventQuestsData, FreeProductIds, GiftDef,
+    ItemModRecipe,
     QuestsDailyData, Recipe, RecipeCraftingTypes, ShopBundle, ShopData, SmithCraftables,
     SmithCraftablesFile, StaticData,
 };
@@ -227,6 +228,8 @@ pub fn load(dir: &Path) -> StaticData {
     let recipes: HashMap<Uuid, Recipe> = read_json(&dir.join("recipes.json"));
     let item_mod_recipes: HashMap<Uuid, ItemModRecipe> =
         read_json(&dir.join("item_mod_recipes.json"));
+    // A missing file leaves enchanting on the captured-outcome fallback in craft.rs.
+    let enchanting: EnchantingData = read_json(&dir.join("enchanting.json"));
     // The APK-extracted recipe -> CraftingType table. A missing file degrades to an
     // empty map and the craft path keeps its captured-recipe / smith / alchemy fallback
     // chain — the same behaviour as before the table existed.
@@ -268,6 +271,7 @@ pub fn load(dir: &Path) -> StaticData {
         shop_bundles,
         recipes,
         item_mod_recipes,
+        enchanting,
         recipe_crafting_types,
         quest_rewards,
         abyss,
@@ -643,6 +647,10 @@ mod tests {
         assert!(!sd.shop_bundles.is_empty(), "shop_bundles.json");
         assert!(!sd.recipes.is_empty(), "recipes.json");
         assert!(!sd.item_mod_recipes.is_empty(), "item_mod_recipes.json");
+        assert_eq!(sd.enchanting.recipes.len(), 202, "enchanting.json recipes");
+        assert_eq!(sd.enchanting.secondary_tables.len(), 16, "enchanting.json tables");
+        assert_eq!(sd.enchanting.arcane_tier_count_odds.len(), 2, "enchanting.json arcane tiers");
+        assert!(!sd.enchanting.templates.is_empty(), "enchanting.json templates");
         // The APK-extracted recipe -> CraftingType table. Every recipe the client ships
         // is in here, so a craft job can always name a real bench instead of guessing.
         assert!(
