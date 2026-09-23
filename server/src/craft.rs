@@ -2,19 +2,22 @@
 //! (start a craft), `POST /crafts/{id}/finish` (collect results).
 //!
 //! ## Cost
-//! Recipe input costs are not in captures; this implementation is LENIENT — no
-//! materials or gold are charged on start, and the gems speed-up (`speedUp`) is
-//! accepted on finish but not charged.
-//! TODO: recipe input cost not captured; lenient.
+//! * **Enchant**: the recipe's `_inputs` from `enchanting.json` (gold, soul gem,
+//!   materials) are charged when the enchant STARTS, all or nothing; an unaffordable
+//!   enchant is refused with the economy 400 and nothing changes. See
+//!   [`charge_enchant_inputs`].
+//! * **Speed-up** (`speedUp` on finish): billed in gems from the shared skip-time curve.
+//! * **Plain craft and temper**: still LENIENT — no materials or gold are charged.
+//!   TODO: plain-craft and temper recipe inputs are not extracted yet.
 //!
 //! ## Temper / enchant
 //! A `POST /crafts` request that carries an `itemId` MODIFIES an existing backpack item
 //! rather than minting a new one: the item is pulled from the backpack into a timed job
 //! and re-added (mutated) by `/finish`. `temperingLevel > 0` tempers (sets the level,
-//! keeping existing enchants); otherwise it enchants — applying one of the recipe's
-//! observed `ENCHANTING` outcomes (`item_mod_recipes.json`), picked deterministically per
-//! item, whose `arcaneTier` is then stamped onto the item (retail's enchanted items
-//! carry the tier they end at; `Item::arcane_tier` holds it, absent staying absent).
+//! keeping existing enchants); otherwise it enchants — rolling retail's enchant from the
+//! APK tables in `enchanting.json` (see [`roll_enchant`]). The roll happens ONCE, when the
+//! job starts, and is stored in the job; `/finish` only collects it. The item keeps its
+//! own `arcaneTier` — that is a property of the item, not something enchanting sets.
 
 use std::{
     borrow::Cow,
@@ -29,11 +32,14 @@ use actix_web::{
 use blades_lib::economy::{RewardGrant, RewardItem, apply_reward, remove_backpack_item};
 use blades_lib::features::repair::RepairData;
 use blades_lib::server_state::CraftJob;
-use blades_lib::static_data::{CraftResultShape, ItemModRecipe};
+use blades_lib::static_data::{
+    CraftResultShape, EnchantRecipe, EnchantingData, ItemModRecipe, SecondaryEnchantTable,
+};
 use blades_lib::user_data::{
     CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
-    InventoryChangeTracker, Item, ItemPropertiesAll,
+    InventoryChangeTracker, Item, ItemPropertiesAll, ItemSingleProperty,
 };
+use rand::{Rng, RngExt};
 use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use serde::{Deserialize, Serialize};
@@ -467,10 +473,11 @@ struct CreateCraftResponse {
 ///   `temperingLevel` applied to produced items).
 /// - **temper / enchant** (`itemId` present): pull that item out of the backpack and
 ///   store the MUTATED item as the job's `results` — temper sets `temperingLevel`
-///   (keeping enchants), enchant applies one of the recipe's observed `ENCHANTING`
-///   outcomes (`item_mod_recipes.json`). `/finish` re-adds the mutated item.
+///   (keeping enchants), enchant rolls retail's enchant from `enchanting.json` (see
+///   [`roll_enchant`]), once, here, after charging the recipe's inputs (see
+///   [`charge_enchant_inputs`]). `/finish` re-adds the stored item.
 ///
-/// TODO: recipe input cost not captured; lenient (no materials/gold charged).
+/// TODO: plain-craft and temper inputs are not charged yet (lenient).
 #[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/crafts")]
 pub async fn create_craft(
     session: SessionLookedUpMaybe,
@@ -484,194 +491,239 @@ pub async fn create_craft(
     let req = body.into_inner();
     let globals = app_state.get_ref().clone();
 
+    let mut conn = app_state.db_pool.get().await.unwrap();
+
+    conn.transaction(move |conn| {
+        async move {
+            start_craft(conn, &globals.static_data, &globals.repair_data, user_id, character_id, req)
+                .await
+                .map(Json)
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// The whole of `POST /crafts` minus the session and the transaction, so tests can
+/// drive it against a real database. Returns before [`write_back`] on every refusal,
+/// so a refused start persists nothing (and the handler's transaction rolls back).
+async fn start_craft(
+    conn: &mut diesel_async::AsyncPgConnection,
+    static_data: &blades_lib::static_data::StaticData,
+    repair_data: &RepairData,
+    user_id: Uuid,
+    character_id: Uuid,
+    req: CreateCraftRequest,
+) -> Result<CreateCraftResponse, BladeApiError> {
     // A plain craft (no itemId) looks up `recipes.json`; a temper/enchant (itemId
     // present) modifies an existing item and uses `item_mod_recipes.json`. The captured
     // recipe set is PARTIAL, so an unknown plain-craft recipe must NOT 404 — that crashed
     // the client mid-craft (user repro: "craft a potion → error + game restarted").
-    // Unknown recipe → lenient empty job (handled in the transaction below).
+    // Unknown recipe → lenient empty job (handled below).
     let plain_recipe = if req.item_id.is_none() {
-        globals.static_data.recipes.get(&req.recipe_id).cloned()
+        static_data.recipes.get(&req.recipe_id).cloned()
     } else {
         None
     };
-    let mod_recipe = globals.static_data.item_mod_recipes.get(&req.recipe_id).cloned();
+    let mod_recipe = static_data.item_mod_recipes.get(&req.recipe_id).cloned();
 
     let recipe_id = req.recipe_id;
     let building_id = req.building_id;
     let tempering_level: u64 = req.tempering_level;
     let item_id = req.item_id;
 
-    let mut conn = app_state.db_pool.get().await.unwrap();
+    let mut entry = load_owned(conn, character_id, user_id).await?;
+    let mut tracker = InventoryChangeTracker::default();
 
-    conn.transaction(move |mut conn| {
-        async move {
-            let mut entry = load_owned(&mut conn, character_id, user_id).await?;
-            let mut tracker = InventoryChangeTracker::default();
-
-            let (results, crafting_type_id, duration_ms) = if let Some(item_id) = item_id {
-                // ── temper / enchant: modify an existing backpack item ──
-                let existing =
-                    remove_backpack_item(&mut entry.inventory.0, item_id, &mut tracker)
-                        .map_err(BladeApiError::from_economy)?;
-                let mutated = apply_item_mod(&existing, tempering_level, mod_recipe.as_ref(), item_id);
-                entry.inventory.0.backpack_version += 1;
-                let reward_item = RewardItem { id: item_id, item: mutated };
-                let results = serde_json::json!({ "items": [reward_item] });
-                // crafting_type_id MUST be the universal temper/enchant CraftingType, never the
-                // recipe id. item_mod_recipes.json is a tiny subset of the real recipes
-                // (retail has one recipe per item per level); for an unknown recipe we
-                // previously fell back to recipe_id, which the client cannot map to a
-                // CraftingStation → the temper UI spun forever. EVERY real on-device
-                // temper recipe is outside our captured 23 (verified against the
-                // arena-mitm transcript). Derive the type from temperingLevel; keep the
-                // captured duration when the recipe is known, else 0.
-                //
-                // Both branches fixed this independently and identically (e5659c9 on
-                // main, f73f425 here) — same two UUIDs, same rule. Keeping this side
-                // because the logic lives in a named helper with its own test rather
-                // than inline, so there is one place for it to be wrong.
-                let crafting_type_id = item_mod_crafting_type(tempering_level);
-                let duration_ms = mod_recipe.as_ref().map(|m| m.duration_ms).unwrap_or(0);
-                (results, crafting_type_id, duration_ms)
-            } else {
-                // ── plain craft: mint from the recipe; unknown recipe → derive a valid
-                //    crafting_type_id + a well-formed result (never 404, never echo
-                //    recipe_id — both crash/freeze the client mid-craft) ──
-                match &plain_recipe {
-                    Some(recipe) => {
-                        // Mint fresh, unique item ids now (the recipe's are shared
-                        // placeholders); finish preserves whatever id is stored.
-                        let results = remint_result_item_ids(
-                            apply_tempering_to_results(&recipe.results, tempering_level),
+    let (results, crafting_type_id, duration_ms) = if let Some(item_id) = item_id {
+        // ── temper / enchant: modify an existing backpack item ──
+        let existing =
+            remove_backpack_item(&mut entry.inventory.0, item_id, &mut tracker)
+                .map_err(BladeApiError::from_economy)?;
+        // An enchant is PAID here, before the roll: an unaffordable one is refused
+        // with nothing rolled, stored or debited. A temper charges nothing (as before).
+        charge_enchant_inputs(
+            tempering_level,
+            recipe_id,
+            &static_data.enchanting,
+            &mut entry.wallet.0,
+            &mut entry.inventory.0,
+            &mut tracker,
+        )?;
+        // The enchant is rolled HERE, once, and stored in the job's results;
+        // `/finish` only collects what is stored, so re-requesting it cannot
+        // re-roll (and a second `/finish` 404s — the job is gone).
+        let mutated = apply_item_mod(
+            &existing,
+            tempering_level,
+            recipe_id,
+            mod_recipe.as_ref(),
+            &static_data.enchanting,
+            &mut rand::rng(),
+        );
+        entry.inventory.0.backpack_version += 1;
+        let reward_item = RewardItem { id: item_id, item: mutated };
+        let results = serde_json::json!({ "items": [reward_item] });
+        // crafting_type_id MUST be the universal temper/enchant CraftingType, never the
+        // recipe id. item_mod_recipes.json is a tiny subset of the real recipes
+        // (retail has one recipe per item per level); for an unknown recipe we
+        // previously fell back to recipe_id, which the client cannot map to a
+        // CraftingStation → the temper UI spun forever. EVERY real on-device
+        // temper recipe is outside our captured 23 (verified against the
+        // arena-mitm transcript). Derive the type from temperingLevel; keep the
+        // captured duration when the recipe is known, else 0.
+        //
+        // Both branches fixed this independently and identically (e5659c9 on
+        // main, f73f425 here) — same two UUIDs, same rule. Keeping this side
+        // because the logic lives in a named helper with its own test rather
+        // than inline, so there is one place for it to be wrong.
+        let crafting_type_id = item_mod_crafting_type(tempering_level);
+        let duration_ms = mod_recipe
+            .as_ref()
+            .map(|m| m.duration_ms)
+            .or_else(|| {
+                (tempering_level == 0)
+                    .then(|| static_data.enchanting.recipes.get(&recipe_id))
+                    .flatten()
+                    .map(|r| r.duration_ms)
+            })
+            .unwrap_or(0);
+        (results, crafting_type_id, duration_ms)
+    } else {
+        // ── plain craft: mint from the recipe; unknown recipe → derive a valid
+        //    crafting_type_id + a well-formed result (never 404, never echo
+        //    recipe_id — both crash/freeze the client mid-craft) ──
+        match &plain_recipe {
+            Some(recipe) => {
+                // Mint fresh, unique item ids now (the recipe's are shared
+                // placeholders); finish preserves whatever id is stored.
+                let results = remint_result_item_ids(
+                    apply_tempering_to_results(&recipe.results, tempering_level),
+                );
+                (results, recipe.crafting_type_id, recipe.duration_ms)
+            }
+            None => {
+                // A smith (Forge) craft resolves to a REAL craftable: the client's
+                // RecipeManager gates the list by forge level and sends its own
+                // recipeId; recipes.json captured only ~4 smithing recipes, so most
+                // forge crafts land here. Mint the REAL item at its gradeIndex (a
+                // proper instanced backpack item, like a known recipe) and ALWAYS
+                // report the Smithing craftingTypeId — never the recipe id (echoing
+                // recipe_id hangs the client, fix e5659c9).
+                if let Some(craftable) =
+                    static_data.smith_craftables.resolve(&recipe_id)
+                {
+                    // Prefer the APK's per-recipe answer; the Smithing constant
+                    // stays as the fallback for a craftable resolved by template
+                    // id (which is not a recipe id and so is not in the table).
+                    let crafting_type_id =
+                        apk_crafting_type(&recipe_id, static_data)
+                            .unwrap_or_else(|| smithing_crafting_type(static_data));
+                    let results = mint_smith_craftable(craftable, tempering_level);
+                    (results, crafting_type_id, craftable.duration_ms)
+                } else {
+                    // The APK says what this recipe makes. 898 recipes
+                    // declare an output template — 617 Smithing, 141
+                    // DecorationCrafting, 140 Alchemy — and every one of
+                    // those templates is a real item. That covers the
+                    // crafts that were falling through to the refusal
+                    // below, including the Steel Longsword and the
+                    // decoration that broke two players' saves.
+                    if let Some(out) =
+                        blades_lib::features::recipe_outputs::output_for(&recipe_id)
+                    {
+                        let crafting_type_id = out
+                            .crafting_type_id
+                            .or_else(|| apk_crafting_type(&recipe_id, static_data))
+                            .unwrap_or_else(|| {
+                                derive_plain_craft_type(building_id, static_data)
+                            });
+                        let results = mint_recipe_output(
+                            &CraftJob {
+                                id: Uuid::nil(),
+                                recipe_id,
+                                building_id,
+                                crafting_type_id,
+                                completed_at_ms: 0,
+                                results: serde_json::json!({}),
+                            },
+                            out.output_item_template_id,
+                            crafting_type_id,
+                            static_data,
+                            repair_data,
                         );
-                        (results, recipe.crafting_type_id, recipe.duration_ms)
-                    }
-                    None => {
-                        // A smith (Forge) craft resolves to a REAL craftable: the client's
-                        // RecipeManager gates the list by forge level and sends its own
-                        // recipeId; recipes.json captured only ~4 smithing recipes, so most
-                        // forge crafts land here. Mint the REAL item at its gradeIndex (a
-                        // proper instanced backpack item, like a known recipe) and ALWAYS
-                        // report the Smithing craftingTypeId — never the recipe id (echoing
-                        // recipe_id hangs the client, fix e5659c9).
-                        if let Some(craftable) =
-                            globals.static_data.smith_craftables.resolve(&recipe_id)
-                        {
-                            // Prefer the APK's per-recipe answer; the Smithing constant
-                            // stays as the fallback for a craftable resolved by template
-                            // id (which is not a recipe id and so is not in the table).
-                            let crafting_type_id =
-                                apk_crafting_type(&recipe_id, &globals.static_data)
-                                    .unwrap_or_else(|| smithing_crafting_type(&globals.static_data));
-                            let results = mint_smith_craftable(craftable, tempering_level);
-                            (results, crafting_type_id, craftable.duration_ms)
-                        } else {
-                            // The APK says what this recipe makes. 898 recipes
-                            // declare an output template — 617 Smithing, 141
-                            // DecorationCrafting, 140 Alchemy — and every one of
-                            // those templates is a real item. That covers the
-                            // crafts that were falling through to the refusal
-                            // below, including the Steel Longsword and the
-                            // decoration that broke two players' saves.
-                            if let Some(out) =
-                                blades_lib::features::recipe_outputs::output_for(&recipe_id)
-                            {
-                                let crafting_type_id = out
-                                    .crafting_type_id
-                                    .or_else(|| apk_crafting_type(&recipe_id, &globals.static_data))
-                                    .unwrap_or_else(|| {
-                                        derive_plain_craft_type(building_id, &globals.static_data)
-                                    });
-                                let results = mint_recipe_output(
-                                    &CraftJob {
-                                        id: Uuid::nil(),
-                                        recipe_id,
-                                        building_id,
-                                        crafting_type_id,
-                                        completed_at_ms: 0,
-                                        results: serde_json::json!({}),
-                                    },
-                                    out.output_item_template_id,
-                                    crafting_type_id,
-                                    &globals.static_data,
-                                    &globals.repair_data,
-                                );
-                                (results, crafting_type_id, 0)
-                            } else {
-                            // Not a smith craftable, and not in the APK recipe table.
-                            // REFUSE. There is no honest output for a recipe we never
-                            // captured, and every alternative has now been tried:
-                            //
-                            //   * the recipe id as a stackable -- what this used to do.
-                            //     A recipe id is not an item template; five characters
-                            //     on production were carrying one and two could not
-                            //     load the game at all (#176, #179, #180).
-                            //   * nothing (`{}`) -- breaks the codebase's own invariant
-                            //     that a completed craft yields a real grant, asserted
-                            //     by three separate tests, and `{}` is exactly the shape
-                            //     the repair path treats as broken.
-                            //   * the name-seed mapped to a real template -- only 239 of
-                            //     2,590 `Items.Name.*` seeds resolve to exactly one item,
-                            //     and three of the four ids seen on production resolve to
-                            //     none. It would guess wrong more often than right.
-                            //
-                            // So the craft does not start. 400 with the price-mismatch
-                            // shape is a path the client is known to handle -- it is what
-                            // an undeliverable shop product returns, shipped for #170 and
-                            // live since, replacing a 404 that bricked the client.
-                            //
-                            // The player loses nothing: materials are not charged here
-                            // (see the TODO at the top of this module), and a craft that
-                            // never starts is recoverable in a way an unloadable save is
-                            // not.
-                            log::warn!(
-                                "[craft] refusing recipe {recipe_id}: not in recipes.json, \
-                                 smith_craftables or the APK table, and there is no honest \
-                                 output for it. Capture the recipe to enable it."
-                            );
-                            return Err(BladeApiError::new(
-                                StatusCode::BAD_REQUEST,
-                                20001,
-                                3,
-                            ));
-                            }
-                        }
+                        (results, crafting_type_id, 0)
+                    } else {
+                    // Not a smith craftable, and not in the APK recipe table.
+                    // REFUSE. There is no honest output for a recipe we never
+                    // captured, and every alternative has now been tried:
+                    //
+                    //   * the recipe id as a stackable -- what this used to do.
+                    //     A recipe id is not an item template; five characters
+                    //     on production were carrying one and two could not
+                    //     load the game at all (#176, #179, #180).
+                    //   * nothing (`{}`) -- breaks the codebase's own invariant
+                    //     that a completed craft yields a real grant, asserted
+                    //     by three separate tests, and `{}` is exactly the shape
+                    //     the repair path treats as broken.
+                    //   * the name-seed mapped to a real template -- only 239 of
+                    //     2,590 `Items.Name.*` seeds resolve to exactly one item,
+                    //     and three of the four ids seen on production resolve to
+                    //     none. It would guess wrong more often than right.
+                    //
+                    // So the craft does not start. 400 with the price-mismatch
+                    // shape is a path the client is known to handle -- it is what
+                    // an undeliverable shop product returns, shipped for #170 and
+                    // live since, replacing a 404 that bricked the client.
+                    //
+                    // The player loses nothing: materials are not charged here
+                    // (see the TODO at the top of this module), and a craft that
+                    // never starts is recoverable in a way an unloadable save is
+                    // not.
+                    log::warn!(
+                        "[craft] refusing recipe {recipe_id}: not in recipes.json, \
+                         smith_craftables or the APK table, and there is no honest \
+                         output for it. Capture the recipe to enable it."
+                    );
+                    return Err(BladeApiError::new(
+                        StatusCode::BAD_REQUEST,
+                        20001,
+                        3,
+                    ));
                     }
                 }
-            };
-
-            let completed_at_ms = now_ms() + duration_ms;
-            let job = CraftJob {
-                id: Uuid::new_v4(),
-                recipe_id,
-                building_id,
-                crafting_type_id,
-                completed_at_ms,
-                results,
-            };
-            entry.server_state.0.craft_jobs.push(job.clone());
-
-            let craft_wire = serde_json::to_value(CraftJobWire::from_job(
-                &job,
-                user_id,
-                character_id,
-                &globals.static_data,
-                &globals.repair_data,
-            ))
-            .unwrap_or(Value::Null);
-            let inventory = entry.inventory.0.generate_client_update(&tracker);
-            let wallet = entry.wallet.0.clone();
-            write_back(&mut conn, entry).await?;
-
-            Ok::<_, BladeApiError>(Json(CreateCraftResponse {
-                craft: craft_wire,
-                inventory,
-                wallet,
-            }))
+            }
         }
-        .scope_boxed()
+    };
+
+    let completed_at_ms = now_ms() + duration_ms;
+    let job = CraftJob {
+        id: Uuid::new_v4(),
+        recipe_id,
+        building_id,
+        crafting_type_id,
+        completed_at_ms,
+        results,
+    };
+    entry.server_state.0.craft_jobs.push(job.clone());
+
+    let craft_wire = serde_json::to_value(CraftJobWire::from_job(
+        &job,
+        user_id,
+        character_id,
+        static_data,
+        repair_data,
+    ))
+    .unwrap_or(Value::Null);
+    let inventory = entry.inventory.0.generate_client_update(&tracker);
+    let wallet = entry.wallet.0.clone();
+    write_back(conn, entry).await?;
+
+    Ok(CreateCraftResponse {
+        craft: craft_wire,
+        inventory,
+        wallet,
     })
-    .await
 }
 
 // ── POST /crafts/{id}/finish ──────────────────────────────────────────────────
@@ -720,69 +772,100 @@ pub async fn finish_craft(
     let globals = app_state.get_ref().clone();
     let mut conn = app_state.db_pool.get().await.unwrap();
 
-    conn.transaction(move |mut conn| {
+    conn.transaction(move |conn| {
         async move {
-            let mut entry = load_owned(&mut conn, character_id, user_id).await?;
-
-            // Find and remove the job.
-            let job_pos = entry
-                .server_state
-                .0
-                .craft_jobs
-                .iter()
-                .position(|j| j.id == craft_id)
-                .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 5))?;
-            let job = entry.server_state.0.craft_jobs.remove(job_pos);
-
-            // Bill the speed-up from the job's own stored `completedAt` — never from
-            // anything the client sent. A job whose timer already elapsed is free
-            // (the player is just collecting), so a client that sets `speedUp` on a
-            // finished craft is not overcharged.
-            charge_craft_speed_up(
-                speed_up,
+            collect_craft(
+                conn,
+                &globals.static_data,
+                &globals.repair_data,
                 globals.skip_time_costs.as_ref(),
-                job.completed_at_ms,
-                now_ms(),
-                &mut entry.wallet.0,
-            )?;
-
-            // Build a RewardGrant from the job's results, re-minting item ids. Repair
-            // first, for the same reason `GET /crafts` does: a pre-fix job stored
-            // `results: {}`, so collecting it granted nothing and left the player with a
-            // permanently uncollectable craft.
-            let (_, repaired_results) = repaired_craft_fields(&job, &globals.static_data, &globals.repair_data);
-            let reward = reward_from_results(&repaired_results);
-
-            let mut tracker = InventoryChangeTracker::default();
-            apply_reward(
-                &reward,
-                &mut entry.wallet.0,
-                &mut entry.inventory.0,
-                &mut entry.character.0,
-                &mut tracker,
-            );
-            if !reward.stackable_items.is_empty() || !reward.items.is_empty() {
-                entry.inventory.0.backpack_version += 1;
-            }
-
-            let character = entry.character.0.clone();
-            let inventory = entry.inventory.0.generate_client_update(&tracker);
-            let wallet = entry.wallet.0.clone();
-            write_back(&mut conn, entry).await?;
-
-            Ok::<_, BladeApiError>(Json(FinishCraftResponse {
-                character: CompleteCharacterWithIdWithoutData { id: character_id, character },
-                reward,
-                wallet,
-                inventory,
-            }))
+                user_id,
+                character_id,
+                craft_id,
+                speed_up,
+            )
+            .await
+            .map(Json)
         }
         .scope_boxed()
     })
     .await
 }
 
+/// The whole of `POST /crafts/{id}/finish` minus the session and the transaction, so
+/// tests can drive it against a real database. It never charges an enchant's inputs —
+/// those were paid at start — only an optional speed-up.
+#[allow(clippy::too_many_arguments)]
+async fn collect_craft(
+    conn: &mut diesel_async::AsyncPgConnection,
+    static_data: &blades_lib::static_data::StaticData,
+    repair_data: &RepairData,
+    skip_time_costs: Option<&blades_lib::economy::skip_time::SkipTimeCostTable>,
+    user_id: Uuid,
+    character_id: Uuid,
+    craft_id: Uuid,
+    speed_up: bool,
+) -> Result<FinishCraftResponse, BladeApiError> {
+    let mut entry = load_owned(conn, character_id, user_id).await?;
+
+    let job = take_craft_job(&mut entry.server_state.0.craft_jobs, craft_id)?;
+
+    // Bill the speed-up from the job's own stored `completedAt` — never from
+    // anything the client sent. A job whose timer already elapsed is free
+    // (the player is just collecting), so a client that sets `speedUp` on a
+    // finished craft is not overcharged.
+    charge_craft_speed_up(
+        speed_up,
+        skip_time_costs,
+        job.completed_at_ms,
+        now_ms(),
+        &mut entry.wallet.0,
+    )?;
+
+    // Build a RewardGrant from the job's results, re-minting item ids. Repair
+    // first, for the same reason `GET /crafts` does: a pre-fix job stored
+    // `results: {}`, so collecting it granted nothing and left the player with a
+    // permanently uncollectable craft.
+    let (_, repaired_results) = repaired_craft_fields(&job, static_data, repair_data);
+    let reward = reward_from_results(&repaired_results);
+
+    let mut tracker = InventoryChangeTracker::default();
+    apply_reward(
+        &reward,
+        &mut entry.wallet.0,
+        &mut entry.inventory.0,
+        &mut entry.character.0,
+        &mut tracker,
+    );
+    if !reward.stackable_items.is_empty() || !reward.items.is_empty() {
+        entry.inventory.0.backpack_version += 1;
+    }
+
+    let character = entry.character.0.clone();
+    let inventory = entry.inventory.0.generate_client_update(&tracker);
+    let wallet = entry.wallet.0.clone();
+    write_back(conn, entry).await?;
+
+    Ok(FinishCraftResponse {
+        character: CompleteCharacterWithIdWithoutData { id: character_id, character },
+        reward,
+        wallet,
+        inventory,
+    })
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Remove and return the job `/finish` is collecting; 404 when there is none. Removing
+/// it is what makes a collected craft (and its rolled enchant) impossible to collect or
+/// re-roll a second time.
+fn take_craft_job(jobs: &mut Vec<CraftJob>, craft_id: Uuid) -> Result<CraftJob, BladeApiError> {
+    let pos = jobs
+        .iter()
+        .position(|j| j.id == craft_id)
+        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 5))?;
+    Ok(jobs.remove(pos))
+}
 
 /// Bill a craft speed-up against the wallet — the whole billed path minus the
 /// database, so tests exercise exactly what the handler runs.
@@ -807,6 +890,55 @@ fn charge_craft_speed_up(
     }
     blades_lib::economy::skip_time::charge_skip_time(table, completed_at_ms - now, wallet)
         .map_err(BladeApiError::from_economy)
+}
+
+/// Charge an enchant's recipe `_inputs` (gold + soul gem + materials, from
+/// `enchanting.json`) when it STARTS — the point retail took them: every captured
+/// retail enchant-start response already carries the reduced gold balance and material
+/// stacks. Returns what was charged.
+///
+/// * `tempering_level > 0` (a temper) → charges nothing; tempering is unchanged.
+/// * an enchant recipe that `enchanting.json` lacks (the captured-outcome fallback, or
+///   a box whose static set predates the file) → charges nothing and logs it: there is
+///   no cost to charge, and refusing would break an enchant that works today.
+/// * short of any input → the shared economy 400 (`9001`/1 for gold, `9001`/4 for a
+///   material — the same mapping the craft speed-up uses) and NOTHING is debited
+///   ([`blades_lib::economy::pay_inputs`] is all-or-nothing).
+///
+/// `gemsPayment` (retail's "spend gems on the missing resources") is not honoured:
+/// the price of a missing resource in gems is not modelled yet, so a player who is
+/// short is refused rather than charged a guessed gem price.
+fn charge_enchant_inputs(
+    tempering_level: u64,
+    recipe_id: Uuid,
+    enchanting: &EnchantingData,
+    wallet: &mut CompleteWallet,
+    inventory: &mut blades_lib::user_data::CompleteInventory,
+    tracker: &mut InventoryChangeTracker,
+) -> Result<Vec<(Uuid, u64)>, BladeApiError> {
+    if tempering_level > 0 {
+        return Ok(Vec::new());
+    }
+    let Some(recipe) = enchanting.recipes.get(&recipe_id) else {
+        log::warn!(
+            "[craft] enchant recipe {recipe_id} is not in enchanting.json: starting it \
+             WITHOUT charging gold or materials (captured-outcome fallback)"
+        );
+        return Ok(Vec::new());
+    };
+    if recipe.inputs.is_empty() {
+        // Every shipped recipe has inputs; an empty list means an enchanting.json
+        // older than the `inputs` field. Say so rather than enchant for free silently.
+        log::warn!(
+            "[craft] enchant recipe {recipe_id} has no inputs in enchanting.json: \
+             starting it WITHOUT charging (re-run script/extract_enchanting_data.py)"
+        );
+    }
+    let inputs: Vec<(Uuid, u64)> =
+        recipe.inputs.iter().map(|i| (i.template_id, i.quantity)).collect();
+    blades_lib::economy::pay_inputs(&inputs, wallet, inventory, tracker)
+        .map_err(BladeApiError::from_economy)?;
+    Ok(inputs)
 }
 
 /// Repair a STORED craft job on the way out to the client.
@@ -1285,33 +1417,106 @@ fn remint_result_item_ids(mut results: Value) -> Value {
 ///
 /// - `tempering_level > 0` → **temper**: set `temperingLevel`, keeping everything else
 ///   (including existing enchants — matches the captured temper response).
-/// - otherwise → **enchant**: replace `properties.enchanting` with one of the recipe's
-///   observed `ENCHANTING` outcomes, picked deterministically by `item_id` (retail rolls
-///   randomly from a pool; we pick a real observed outcome). With no recipe / no
-///   outcomes the item is returned unchanged (lenient).
-fn apply_item_mod(
+/// - otherwise → **enchant**: replace `properties.enchanting` with a fresh roll
+///   ([`roll_enchant`]) when the APK knows the recipe; else with a uniformly random one
+///   of the recipe's captured outcomes; else leave the item unchanged (lenient).
+///
+/// The item's `arcaneTier` is never changed. It is a property of the item that the
+/// enchant READS (it fixes the secondary count), not one it writes: three captured
+/// shields went in without an arcane tier and came out without one, including the one
+/// that rolled two secondaries, and unenchanted items in retail inventories already
+/// carry `arcaneTier: 2`. Stamping a captured outcome's tier (what this used to do)
+/// turned a plain item arcane whenever the outcome it drew came from an arcane one.
+fn apply_item_mod<R: Rng + ?Sized>(
     existing: &Item,
     tempering_level: u64,
-    recipe: Option<&ItemModRecipe>,
-    item_id: Uuid,
+    recipe_id: Uuid,
+    captured: Option<&ItemModRecipe>,
+    enchanting: &EnchantingData,
+    rng: &mut R,
 ) -> Item {
     let mut item = existing.clone();
     if tempering_level > 0 {
         item.tempering_level = tempering_level;
         return item;
     }
-    if let Some(rec) = recipe {
-        if !rec.outcomes.is_empty() {
-            let idx = (item_id.as_u128() % rec.outcomes.len() as u128) as usize;
-            item.properties.enchanting = rec.outcomes[idx].enchanting.clone();
-            // The captured outcome carries the arcane tier the item ENDS at, and it was
-            // parsed into `EnchantOutcome::arcane_tier` all along — there was simply no
-            // field on `Item` to assign it to, so every enchant produced an item retail
-            // would have stamped with an arcaneTier and we returned without one.
-            item.arcane_tier = rec.outcomes[idx].arcane_tier;
-        }
+    if let Some(recipe) = enchanting.recipes.get(&recipe_id) {
+        item.properties.enchanting = roll_enchant(
+            rng,
+            recipe,
+            enchanting.table_for(&item.item_template_id),
+            item.arcane_tier,
+            enchanting,
+        );
+    } else if let Some(rec) = captured.filter(|r| !r.outcomes.is_empty()) {
+        let idx = rng.random_range(0..rec.outcomes.len());
+        item.properties.enchanting = rec.outcomes[idx].enchanting.clone();
     }
     item
+}
+
+/// Retail's enchant roll, from the client's own tables (`enchanting.json`):
+///
+/// 1. the recipe's primary property at the recipe's tier (83/83 captured outcomes);
+/// 2. a secondary COUNT drawn from the item's `ArcaneTier` odds when it has one
+///    (tier 1 → exactly 1, tier 2 → exactly 2; 34/34 captured arcane-2 enchants had 2,
+///    which the non-arcane odds would produce with probability 0.15^34), else from the
+///    item type's `SecondaryEnchantmentEffectData` odds (weapons: 0.60 / 0.25 / 0.15);
+/// 3. that many secondaries, each a weighted draw WITHOUT replacement from the table's
+///    pool (no captured item ever repeats one: 0 of 34, where drawing with replacement
+///    repeats one about 15% of the time), each at the primary's tier (every captured
+///    secondary matches it).
+///
+/// An item whose template has no table gets the primary alone.
+fn roll_enchant<R: Rng + ?Sized>(
+    rng: &mut R,
+    recipe: &EnchantRecipe,
+    table: Option<&SecondaryEnchantTable>,
+    arcane_tier: Option<u64>,
+    enchanting: &EnchantingData,
+) -> Vec<ItemSingleProperty> {
+    let mut out = vec![ItemSingleProperty { id: recipe.property, tier: recipe.tier }];
+    let Some(table) = table else { return out };
+    let count_odds = arcane_tier
+        .and_then(|t| enchanting.arcane_tier_count_odds.get(&t))
+        .unwrap_or(&table.count_odds);
+    let count = weighted_index(rng, count_odds).unwrap_or(0);
+    let mut pool: Vec<(Uuid, f64)> = table
+        .properties
+        .iter()
+        .filter(|p| p.weight > 0.0 && p.id != recipe.property)
+        .map(|p| (p.id, p.weight))
+        .collect();
+    for _ in 0..count {
+        let weights: Vec<f64> = pool.iter().map(|p| p.1).collect();
+        let Some(i) = weighted_index(rng, &weights) else { break };
+        let (id, _) = pool.remove(i);
+        out.push(ItemSingleProperty { id, tier: recipe.tier });
+    }
+    out
+}
+
+/// Index drawn in proportion to `weights` (non-positive weights never win); `None` when
+/// nothing has positive weight.
+fn weighted_index<R: Rng + ?Sized>(rng: &mut R, weights: &[f64]) -> Option<usize> {
+    let total: f64 = weights.iter().filter(|w| **w > 0.0).sum();
+    if total <= 0.0 {
+        return None;
+    }
+    let mut x = rng.random::<f64>() * total;
+    let mut last = None;
+    for (i, &w) in weights.iter().enumerate() {
+        if w <= 0.0 {
+            continue;
+        }
+        if x < w {
+            return Some(i);
+        }
+        x -= w;
+        last = Some(i);
+    }
+    // Only reachable through float rounding at the very top of the range.
+    last
 }
 
 /// Build a `RewardGrant` from a craft job's stored `results` value. Instanced items
@@ -1446,46 +1651,75 @@ mod tests {
         }
     }
 
+    use rand::{SeedableRng, rngs::StdRng};
+    use std::collections::HashMap;
+
+    const ANY_RECIPE: Uuid = Uuid::from_u128(0x5EC1);
+
+    fn seeded(seed: u64) -> StdRng {
+        StdRng::seed_from_u64(seed)
+    }
+
+    /// Only the APK tables, read once (not the whole deploy dir).
+    fn deploy_enchanting() -> &'static EnchantingData {
+        static E: std::sync::OnceLock<EnchantingData> = std::sync::OnceLock::new();
+        E.get_or_init(|| {
+            let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../deploy/static/enchanting.json");
+            serde_json::from_slice(&std::fs::read(p).expect("enchanting.json")).expect("parses")
+        })
+    }
+
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+
+    const MADNESS_BATTLEAXE: &str = "80344fa2-2c4a-4ef3-a5e3-7533b712a740";
+    /// `Enchant.Recipe.DamageMagickaT10`, the recipe of all 34 captured arcane-2 jobs.
+    const MAGICKA_DAMAGE_T10: &str = "e0d48d1a-8d8e-4c76-bfeb-970d80f9b838";
+
+    fn madness_battleaxe(arcane_tier: Option<u64>) -> Item {
+        Item {
+            item_template_id: uuid(MADNESS_BATTLEAXE),
+            tempering_level: 10,
+            durability: 325.0,
+            grade: None,
+            arcane_tier,
+            properties: ItemPropertiesAll::default(),
+        }
+    }
+
     #[test]
     fn temper_sets_level_and_keeps_enchants() {
         let existing = item_with(0, vec![prop(1), prop(2)]);
-        let out = apply_item_mod(&existing, 10, None, Uuid::from_u128(0x99));
+        let out = apply_item_mod(&existing, 10, ANY_RECIPE, None, deploy_enchanting(), &mut seeded(1));
         assert_eq!(out.tempering_level, 10);
         assert_eq!(out.properties.enchanting.len(), 2, "existing enchants preserved");
         assert_eq!(out.durability, 300.0);
         assert_eq!(out.item_template_id, existing.item_template_id);
     }
 
+    /// The captured-outcome fallback (a recipe the APK tables lack) still applies an
+    /// outcome and keeps tempering — and never copies the outcome's arcane tier onto
+    /// the item: arcane is the item's own, and a plain item stays plain.
     #[test]
-    fn enchant_applies_outcome_and_keeps_tempering() {
-        let existing = item_with(5, vec![]);
+    fn enchant_fallback_applies_outcome_and_keeps_the_items_own_arcane_tier() {
         let recipe = enchant_recipe(vec![EnchantOutcome {
             enchanting: vec![prop(0xAA), prop(0xBB), prop(0xCC)],
             arcane_tier: Some(2),
         }]);
-        let out = apply_item_mod(&existing, 0, Some(&recipe), Uuid::from_u128(0x7));
+        let none = EnchantingData::default();
+        let plain = item_with(5, vec![]);
+        let out = apply_item_mod(&plain, 0, ANY_RECIPE, Some(&recipe), &none, &mut seeded(1));
         assert_eq!(out.properties.enchanting.len(), 3, "enchants applied from outcome");
         assert_eq!(out.tempering_level, 5, "tempering preserved on enchant");
-        // The outcome's arcane tier must land ON THE ITEM. This fixture already declared
-        // `arcane_tier: Some(2)` before the field existed on `Item`, so the value was
-        // parsed out of `item_mod_recipes.json` and then dropped: retail stamps an
-        // enchanted item with the tier it ends at, and we returned it bare.
-        assert_eq!(out.arcane_tier, Some(2), "enchant must stamp the outcome's arcaneTier");
-    }
-
-    /// An enchant outcome with NO arcane tier must leave the item without one, rather
-    /// than defaulting it to 0 — `arcaneTier: 0` is a value retail never sent.
-    #[test]
-    fn enchant_without_an_arcane_tier_leaves_the_item_bare() {
-        let existing = item_with(5, vec![]);
-        let recipe = enchant_recipe(vec![EnchantOutcome {
-            enchanting: vec![prop(0xAA)],
-            arcane_tier: None,
-        }]);
-        let out = apply_item_mod(&existing, 0, Some(&recipe), Uuid::from_u128(0x7));
-        assert_eq!(out.arcane_tier, None);
+        assert_eq!(out.arcane_tier, None, "a plain item must not turn arcane");
         let j = serde_json::to_string(&out).unwrap();
         assert!(!j.contains("arcaneTier"), "absent arcane tier must be omitted: {j}");
+
+        let arcane = Item { arcane_tier: Some(1), ..item_with(5, vec![]) };
+        let out = apply_item_mod(&arcane, 0, ANY_RECIPE, Some(&recipe), &none, &mut seeded(1));
+        assert_eq!(out.arcane_tier, Some(1), "the item's own tier survives");
     }
 
     /// `reward_from_results` hand-rolls an `Item` out of the stored results `Value`, so it
@@ -1521,29 +1755,195 @@ mod tests {
         assert_eq!(bare.items[0].item.arcane_tier, None);
     }
 
+    /// The old pick was `item_id % outcomes.len()`: one item, one enchant, forever. The
+    /// same item must now reach every outcome, and the seed alone must decide which.
     #[test]
-    fn enchant_pick_is_deterministic_per_item() {
+    fn enchant_fallback_pick_is_random_not_a_function_of_the_item() {
         let recipe = enchant_recipe(vec![
             EnchantOutcome { enchanting: vec![prop(1)], arcane_tier: None },
             EnchantOutcome { enchanting: vec![prop(2), prop(3)], arcane_tier: None },
         ]);
+        let none = EnchantingData::default();
         let existing = item_with(0, vec![]);
-        // idx = item_id % 2 → id 0 picks outcome 0 (len 1), id 1 picks outcome 1 (len 2)
-        let a = apply_item_mod(&existing, 0, Some(&recipe), Uuid::from_u128(0));
-        let b = apply_item_mod(&existing, 0, Some(&recipe), Uuid::from_u128(1));
-        assert_eq!(a.properties.enchanting.len(), 1);
-        assert_eq!(b.properties.enchanting.len(), 2);
-        // same id → same outcome (deterministic, no state)
-        let a2 = apply_item_mod(&existing, 0, Some(&recipe), Uuid::from_u128(0));
-        assert_eq!(a2.properties.enchanting.len(), 1);
+        let mut rng = seeded(7);
+        let lens: std::collections::HashSet<usize> = (0..64)
+            .map(|_| {
+                apply_item_mod(&existing, 0, ANY_RECIPE, Some(&recipe), &none, &mut rng)
+                    .properties
+                    .enchanting
+                    .len()
+            })
+            .collect();
+        assert_eq!(lens.len(), 2, "one item must reach both outcomes: {lens:?}");
+        // Control: the same seed reproduces the same roll.
+        let a = apply_item_mod(&existing, 0, ANY_RECIPE, Some(&recipe), &none, &mut seeded(3));
+        let b = apply_item_mod(&existing, 0, ANY_RECIPE, Some(&recipe), &none, &mut seeded(3));
+        assert_eq!(a.properties.enchanting, b.properties.enchanting);
     }
 
     #[test]
     fn enchant_without_recipe_is_lenient_noop() {
         let existing = item_with(3, vec![prop(1)]);
-        let out = apply_item_mod(&existing, 0, None, Uuid::from_u128(0x5));
+        let out = apply_item_mod(&existing, 0, ANY_RECIPE, None, deploy_enchanting(), &mut seeded(1));
         assert_eq!(out.tempering_level, 3);
         assert_eq!(out.properties.enchanting.len(), 1, "unchanged when no recipe");
+    }
+
+    /// Roll `n` enchants of a Madness Battleaxe with the Magicka Damage T10 recipe.
+    fn roll_battleaxe(n: usize, arcane_tier: Option<u64>, seed: u64) -> Vec<Vec<ItemSingleProperty>> {
+        let e = deploy_enchanting();
+        let item = madness_battleaxe(arcane_tier);
+        let mut rng = seeded(seed);
+        (0..n)
+            .map(|_| {
+                apply_item_mod(&item, 0, uuid(MAGICKA_DAMAGE_T10), None, e, &mut rng)
+                    .properties
+                    .enchanting
+            })
+            .collect()
+    }
+
+    /// The owner's question, answered by the code: a non-arcane Madness Battleaxe gets
+    /// 0 / 1 / 2 secondaries at 60% / 25% / 15% (`SecondaryEnchantmentEffectData` for
+    /// Weapon/Battleaxe). 20,000 seeded rolls; the tolerance is ~5 standard errors, so
+    /// a correct roll does not flake and a wrong table (any other weapon-agnostic odds
+    /// in the file: 0.5/0.3/0.2, 0.3/0.4/0.3, …) fails.
+    #[test]
+    fn madness_battleaxe_secondary_count_matches_retail_odds() {
+        let n = 20_000;
+        let rolls = roll_battleaxe(n, None, 42);
+        let mut counts = [0usize; 3];
+        for r in &rolls {
+            counts[r.len() - 1] += 1;
+        }
+        for (k, want) in [(0, 0.60), (1, 0.25), (2, 0.15)] {
+            let got = counts[k] as f64 / n as f64;
+            let se = (want * (1.0 - want) / n as f64).sqrt();
+            assert!(
+                (got - want).abs() < 5.0 * se,
+                "P({k} secondaries) = {got:.4}, retail {want} (counts {counts:?})"
+            );
+        }
+    }
+
+    /// Every roll: primary first at the recipe's property and tier, secondaries from the
+    /// battleaxe pool, all distinct, all at the primary's tier; the 0.18-weight
+    /// "Fortify <status>" group lands as often as weighted-without-replacement says
+    /// (P(in a 2-draw) = 0.353 each vs 0.147 for the 0.07 group). Control: a uniform
+    /// pick would put each at 0.25, which the tolerance rejects.
+    #[test]
+    fn madness_battleaxe_secondaries_are_weighted_distinct_and_at_the_primary_tier() {
+        let e = deploy_enchanting();
+        let recipe = &e.recipes[&uuid(MAGICKA_DAMAGE_T10)];
+        let table = e.table_for(&uuid(MADNESS_BATTLEAXE)).expect("battleaxe table");
+        let weight: HashMap<Uuid, f64> =
+            table.properties.iter().filter(|p| p.weight > 0.0).map(|p| (p.id, p.weight)).collect();
+        let rolls = roll_battleaxe(20_000, Some(2), 9);
+        let mut hits: HashMap<Uuid, usize> = HashMap::new();
+        for r in &rolls {
+            assert_eq!(r[0], ItemSingleProperty { id: recipe.property, tier: 10 });
+            assert_eq!(r.len(), 3, "arcane tier 2 guarantees two secondaries");
+            let secs: std::collections::HashSet<Uuid> = r[1..].iter().map(|p| p.id).collect();
+            assert_eq!(secs.len(), 2, "secondaries never repeat: {r:?}");
+            for p in &r[1..] {
+                assert!(weight.contains_key(&p.id), "{} is not in the battleaxe pool", p.id);
+                assert_eq!(p.tier, recipe.tier, "a secondary takes the primary's tier");
+                *hits.entry(p.id).or_default() += 1;
+            }
+        }
+        for (id, w) in &weight {
+            let want = if *w > 0.1 { 0.353 } else { 0.147 };
+            let got = hits.get(id).copied().unwrap_or(0) as f64 / rolls.len() as f64;
+            assert!((got - want).abs() < 0.02, "{id}: in {got:.3} of 2-draws, want {want}");
+        }
+    }
+
+    #[test]
+    fn arcane_tier_fixes_the_secondary_count() {
+        for (tier, want) in [(1, 1), (2, 2)] {
+            for r in roll_battleaxe(2_000, Some(tier), tier) {
+                assert_eq!(r.len() - 1, want, "arcane tier {tier}: {r:?}");
+            }
+        }
+        // An arcane tier the catalog does not know falls back to the item's table.
+        let lens: std::collections::HashSet<usize> =
+            roll_battleaxe(500, Some(7), 5).iter().map(|r| r.len()).collect();
+        assert_eq!(lens.len(), 3, "unknown arcane tier uses the table odds: {lens:?}");
+    }
+
+    /// Identity check against every captured retail enchant in `item_mod_recipes.json`
+    /// (83 outcomes, 19 recipes): each is an outcome this roll can produce.
+    #[test]
+    fn every_captured_enchant_outcome_is_producible_by_the_roll() {
+        let e = deploy_enchanting();
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let captured: HashMap<Uuid, ItemModRecipe> =
+            serde_json::from_slice(&std::fs::read(dir.join("item_mod_recipes.json")).unwrap()).unwrap();
+        let any_pool: std::collections::HashSet<Uuid> = e
+            .secondary_tables
+            .iter()
+            .flat_map(|t| t.properties.iter().filter(|p| p.weight > 0.0).map(|p| p.id))
+            .collect();
+        let mut checked = 0;
+        for (id, rec) in captured.iter().filter(|(_, r)| r.kind == "enchant") {
+            let apk = e.recipes.get(id).unwrap_or_else(|| panic!("captured recipe {id} not in the APK"));
+            for o in &rec.outcomes {
+                let (primary, secs) = o.enchanting.split_first().expect("non-empty");
+                assert_eq!((primary.id, primary.tier), (apk.property, apk.tier), "{id}");
+                assert!(secs.len() <= 2, "{id}: {} secondaries", secs.len());
+                let distinct: std::collections::HashSet<Uuid> = secs.iter().map(|p| p.id).collect();
+                assert_eq!(distinct.len(), secs.len(), "{id}: repeated secondary");
+                for s in secs {
+                    assert!(any_pool.contains(&s.id), "{id}: secondary {} in no pool", s.id);
+                    assert_eq!(s.tier, apk.tier, "{id}: secondary tier");
+                }
+                if let Some(t) = o.arcane_tier {
+                    assert!(e.arcane_tier_count_odds[&t][secs.len()] > 0.0, "{id}: arcane {t}");
+                }
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 83);
+    }
+
+    /// Start → store → finish, through the same functions the handlers call: the roll is
+    /// made once at start and stored; finish grants exactly the stored item; a second
+    /// finish finds no job (404) and so cannot re-roll; and the `GET /crafts` repair pass
+    /// leaves the stored enchant untouched.
+    #[test]
+    fn enchant_is_rolled_once_and_finish_cannot_reroll() {
+        let e = deploy_enchanting();
+        let item_id = Uuid::new_v4();
+        let rolled = apply_item_mod(
+            &madness_battleaxe(Some(2)),
+            0,
+            uuid(MAGICKA_DAMAGE_T10),
+            None,
+            e,
+            &mut seeded(11),
+        );
+        let results = serde_json::json!({ "items": [RewardItem { id: item_id, item: rolled.clone() }] });
+        let job = CraftJob {
+            id: Uuid::new_v4(),
+            recipe_id: uuid(MAGICKA_DAMAGE_T10),
+            building_id: Uuid::nil(),
+            crafting_type_id: item_mod_crafting_type(0),
+            completed_at_ms: 0,
+            results,
+        };
+        let sd = static_data_from_deploy();
+        let (_, repaired) = repaired_craft_fields(&job, &sd, repair_data_from_deploy());
+        assert_eq!(*repaired, job.results, "GET /crafts must not touch a stored enchant");
+
+        let mut jobs = vec![job.clone()];
+        let taken = take_craft_job(&mut jobs, job.id).expect("first finish");
+        let reward = reward_from_results(&taken.results);
+        assert_eq!(reward.items.len(), 1);
+        assert_eq!(reward.items[0].id, item_id, "the original item id comes back");
+        assert_eq!(reward.items[0].item.properties.enchanting, rolled.properties.enchanting);
+        assert_eq!(reward.items[0].item.arcane_tier, Some(2));
+        let again = take_craft_job(&mut jobs, job.id);
+        assert!(again.is_err(), "a second finish must 404, not re-grant or re-roll");
     }
 
     #[test]
@@ -3146,6 +3546,367 @@ mod tests {
         );
         assert_eq!(w.balance(GEMS), 1_000);
     }
+    // ─────────────────────────────────────────────────────────────────────────
+    // Paying for an enchant: the recipe's `_inputs`, charged at start.
+    //
+    // The expected numbers are NOT read back from enchanting.json — they are what
+    // retail took, measured from consecutive captured enchant-start responses of
+    // `Enchant.Recipe.DamageMagickaT10` (snapshot 2026-06-07, capture ids
+    // 41558 → 41561 and 27 more pairs): −42 000 gold, −99 / −1 / −2 / −4 of the four
+    // stackables. A wrong extraction therefore fails here, not just a wrong charge.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    use blades_lib::economy::GOLD;
+    use blades_lib::user_data::{Backpack, CompleteInventory, Loadout, Treasury};
+
+    const MAT_99: &str = "9687d83c-aa7b-4cf3-a69f-0bba8204fa61";
+    const MAT_1: &str = "d94bab85-53d5-4c9c-a637-acd94fc66c98";
+    const MAT_2: &str = "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb";
+    const MAT_4: &str = "68d7941e-8c8d-47bf-9f66-becb058f1817";
+    /// A stack the recipe does not use — it must come through untouched.
+    const BYSTANDER: &str = "55e82826-2d68-469c-8870-753665ca62cd";
+    const RETAIL_MAGICKA_T10_GOLD: u64 = 42_000;
+
+    fn purse(gold: u64) -> CompleteWallet {
+        let mut w = CompleteWallet::default();
+        w.credit(GOLD, gold);
+        w.credit(GEMS, 500);
+        w
+    }
+
+    /// Enough of every Magicka T10 input, with `MAT_1` and `MAT_4` at exactly what the
+    /// recipe needs so the charge drains them (retail then lists them as removed).
+    fn enchanter_inventory(item_id: Uuid, item: Item, short_by_one: Option<&str>) -> CompleteInventory {
+        let mut inv = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: Loadout::default(),
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        for (t, n) in [(MAT_99, 150), (MAT_1, 1), (MAT_2, 10), (MAT_4, 4), (BYSTANDER, 7)] {
+            let n = if short_by_one == Some(t) { n - 1 } else { n };
+            inv.backpack.stackable_items.add(uuid(t), n);
+        }
+        inv.backpack.items.0.insert(item_id, item);
+        inv
+    }
+
+    fn counts(inv: &CompleteInventory) -> Vec<(Uuid, u64)> {
+        let mut v: Vec<_> = inv.backpack.stackable_items.counts().collect();
+        v.sort();
+        v
+    }
+
+    fn stacks(pairs: &[(&str, u64)]) -> Vec<(Uuid, u64)> {
+        let mut v: Vec<_> = pairs.iter().map(|(t, n)| (uuid(t), *n)).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn an_enchant_start_charges_exactly_what_retail_charged() {
+        let item_id = Uuid::new_v4();
+        let mut wallet = purse(50_000);
+        let mut inv = enchanter_inventory(item_id, madness_battleaxe(Some(2)), None);
+        let mut tracker = InventoryChangeTracker::default();
+
+        let charged = charge_enchant_inputs(
+            0,
+            uuid(MAGICKA_DAMAGE_T10),
+            deploy_enchanting(),
+            &mut wallet,
+            &mut inv,
+            &mut tracker,
+        )
+        .expect("affordable");
+
+        assert_eq!(
+            charged,
+            vec![
+                (GOLD, RETAIL_MAGICKA_T10_GOLD),
+                (uuid(MAT_99), 99),
+                (uuid(MAT_1), 1),
+                (uuid(MAT_2), 2),
+                (uuid(MAT_4), 4),
+            ]
+        );
+        assert_eq!(wallet.balance(GOLD), 50_000 - RETAIL_MAGICKA_T10_GOLD);
+        assert_eq!(wallet.balance(GEMS), 500, "gems are not an input");
+        assert_eq!(counts(&inv), stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)]));
+
+        // The client diff has retail's shape: a partly-used stack at its new count, a
+        // drained one under `removedStackableItems` (capture 41606 drained 68d7941e the
+        // same way), and the bystander not mentioned at all.
+        let diff = serde_json::to_value(inv.generate_client_update(&tracker)).unwrap();
+        let bp = &diff["backpack"];
+        let mut listed: Vec<(String, u64)> = bp["stackableItems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| (s["itemTemplateId"].as_str().unwrap().to_string(), s["count"].as_u64().unwrap()))
+            .collect();
+        listed.sort();
+        assert_eq!(listed, vec![(MAT_99.to_string(), 51), (MAT_2.to_string(), 8)]);
+        let mut removed: Vec<&str> =
+            bp["removedStackableItems"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        removed.sort();
+        assert_eq!(removed, vec![MAT_4, MAT_1]);
+    }
+
+    #[test]
+    fn an_unaffordable_enchant_is_refused_and_nothing_is_debited() {
+        let item_id = Uuid::new_v4();
+        // One gold short, materials plentiful → the economy 400 for gold.
+        let mut wallet = purse(RETAIL_MAGICKA_T10_GOLD - 1);
+        let mut inv = enchanter_inventory(item_id, madness_battleaxe(None), None);
+        let before = (serde_json::to_value(&wallet).unwrap(), counts(&inv));
+        let mut tracker = InventoryChangeTracker::default();
+        let err = charge_enchant_inputs(0, uuid(MAGICKA_DAMAGE_T10), deploy_enchanting(), &mut wallet, &mut inv, &mut tracker)
+            .expect_err("one gold short");
+        assert_eq!(err.to_string(), "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 1 }");
+        assert_eq!((serde_json::to_value(&wallet).unwrap(), counts(&inv)), before);
+        assert!(tracker.modified_backpack.stackable_items.is_empty());
+
+        // One of a material short, gold plentiful → the economy 400 for a material,
+        // and the gold is NOT taken either (all or nothing).
+        let mut wallet = purse(1_000_000);
+        let mut inv = enchanter_inventory(item_id, madness_battleaxe(None), Some(MAT_4));
+        let before = (serde_json::to_value(&wallet).unwrap(), counts(&inv));
+        let mut tracker = InventoryChangeTracker::default();
+        let err = charge_enchant_inputs(0, uuid(MAGICKA_DAMAGE_T10), deploy_enchanting(), &mut wallet, &mut inv, &mut tracker)
+            .expect_err("one material short");
+        assert_eq!(err.to_string(), "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 4 }");
+        assert_eq!((serde_json::to_value(&wallet).unwrap(), counts(&inv)), before);
+        assert!(tracker.modified_backpack.stackable_items.is_empty());
+
+        // Control: exactly the price is enough — the refusal above is the price.
+        let mut wallet = purse(RETAIL_MAGICKA_T10_GOLD);
+        let mut inv = enchanter_inventory(item_id, madness_battleaxe(None), None);
+        charge_enchant_inputs(0, uuid(MAGICKA_DAMAGE_T10), deploy_enchanting(), &mut wallet, &mut inv, &mut InventoryChangeTracker::default())
+            .expect("exactly affordable");
+        assert_eq!(wallet.balance(GOLD), 0);
+    }
+
+    #[test]
+    fn a_temper_and_an_unlisted_enchant_charge_nothing() {
+        let item_id = Uuid::new_v4();
+        for (tempering_level, recipe) in [(10, uuid(MAGICKA_DAMAGE_T10)), (0, ANY_RECIPE)] {
+            let mut wallet = purse(50_000);
+            let mut inv = enchanter_inventory(item_id, madness_battleaxe(None), None);
+            let before = (serde_json::to_value(&wallet).unwrap(), counts(&inv));
+            let mut tracker = InventoryChangeTracker::default();
+            let charged = charge_enchant_inputs(tempering_level, recipe, deploy_enchanting(), &mut wallet, &mut inv, &mut tracker)
+                .expect("never refused");
+            assert!(charged.is_empty(), "temper {tempering_level} / {recipe}");
+            assert_eq!((serde_json::to_value(&wallet).unwrap(), counts(&inv)), before);
+        }
+        // Control: the fallback case really is absent from the table, and the charged
+        // case really is present — otherwise the loop above proves nothing.
+        assert!(!deploy_enchanting().recipes.contains_key(&ANY_RECIPE));
+        assert!(!deploy_enchanting().recipes[&uuid(MAGICKA_DAMAGE_T10)].inputs.is_empty());
+    }
+
+    /// Every one of the 202 recipes has a gold input and at least one material, so no
+    /// recipe the client offers can start for free once the table is deployed.
+    #[test]
+    fn every_enchant_recipe_costs_gold_and_materials() {
+        let e = deploy_enchanting();
+        assert_eq!(e.recipes.len(), 202);
+        for (id, r) in &e.recipes {
+            let gold = r.inputs.iter().filter(|i| i.template_id == GOLD).count();
+            let mats = r.inputs.iter().filter(|i| !blades_lib::economy::is_currency(i.template_id)).count();
+            assert_eq!(gold, 1, "{id}: exactly one gold line");
+            assert!(mats >= 2, "{id}: soul gem + at least one material");
+            assert!(r.inputs.iter().all(|i| i.quantity > 0), "{id}");
+        }
+    }
+
+    /// The handlers' own start/finish bodies, against a real Postgres. They SKIP
+    /// without TEST_DATABASE_URL (CI provides one) rather than failing.
+    mod enchant_payment_db {
+        use super::*;
+        use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+
+        const SCHEMA: &str = "CREATE TABLE characters ( \
+             id UUID PRIMARY KEY, \
+             user_id UUID NOT NULL, \
+             character JSONB NOT NULL, \
+             data JSONB NOT NULL, \
+             inventory JSONB NOT NULL, \
+             wallet JSONB NOT NULL, \
+             town JSONB, \
+             server_state JSONB NOT NULL, \
+             source_alt_uuid UUID)";
+
+        async fn fixture() -> Option<AsyncPgConnection> {
+            let url = std::env::var("TEST_DATABASE_URL").ok()?;
+            let mut conn = AsyncPgConnection::establish(&url)
+                .await
+                .expect("TEST_DATABASE_URL is set but unreachable");
+            conn.begin_test_transaction().await.expect("test transaction");
+            let schema = format!("t{}", Uuid::new_v4().simple());
+            diesel::sql_query(format!("CREATE SCHEMA {schema}")).execute(&mut conn).await.unwrap();
+            diesel::sql_query(format!("SET LOCAL search_path TO {schema}")).execute(&mut conn).await.unwrap();
+            diesel::sql_query(SCHEMA).execute(&mut conn).await.unwrap();
+            Some(conn)
+        }
+
+        macro_rules! db {
+            () => {
+                match fixture().await {
+                    Some(c) => c,
+                    None => {
+                        eprintln!("SKIP: TEST_DATABASE_URL unset — enchant payment NOT verified");
+                        return;
+                    }
+                }
+            };
+        }
+
+        struct Seeded {
+            character_id: Uuid,
+            user_id: Uuid,
+            item_id: Uuid,
+        }
+
+        async fn seed(conn: &mut AsyncPgConnection, gold: u64) -> Seeded {
+            let (character_id, user_id, item_id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+            let inv = enchanter_inventory(item_id, madness_battleaxe(Some(2)), None);
+            diesel::sql_query(
+                "INSERT INTO characters (id, user_id, character, data, inventory, wallet, town, server_state) \
+                 VALUES ($1, $2, $3::jsonb, '{}'::jsonb, $4::jsonb, $5::jsonb, NULL, '{}'::jsonb)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(character_id)
+            .bind::<diesel::sql_types::Uuid, _>(user_id)
+            .bind::<diesel::sql_types::Text, _>(
+                serde_json::to_string(&blades_lib::user_data::CompleteCharacter::default()).unwrap(),
+            )
+            .bind::<diesel::sql_types::Text, _>(serde_json::to_string(&inv).unwrap())
+            .bind::<diesel::sql_types::Text, _>(serde_json::to_string(&purse(gold)).unwrap())
+            .execute(conn)
+            .await
+            .unwrap();
+            Seeded { character_id, user_id, item_id }
+        }
+
+        fn request(item_id: Uuid, tempering_level: u64) -> CreateCraftRequest {
+            serde_json::from_value(serde_json::json!({
+                "recipeId": MAGICKA_DAMAGE_T10,
+                "itemId": item_id,
+                "buildingId": "561e3e1f-d941-40e2-899d-d11f125cd9ef",
+                "temperingLevel": tempering_level,
+                "gemsPayment": false,
+                "batchSize": 1
+            }))
+            .unwrap()
+        }
+
+        async fn stored(conn: &mut AsyncPgConnection, s: &Seeded) -> CharacterDbEntryEconomy {
+            load_owned(conn, s.character_id, s.user_id).await.expect("row")
+        }
+
+        fn gold_of(e: &CharacterDbEntryEconomy) -> u64 {
+            e.wallet.0.balance(GOLD)
+        }
+
+        #[tokio::test]
+        async fn start_charges_once_and_neither_finish_charges_again() {
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+            let s = seed(&mut conn, 100_000).await;
+
+            let resp = start_craft(&mut conn, &sd, rd, s.user_id, s.character_id, request(s.item_id, 0))
+                .await
+                .expect("affordable enchant starts");
+            // The response carries the charged wallet and the material diff.
+            assert_eq!(resp.wallet.balance(GOLD), 100_000 - RETAIL_MAGICKA_T10_GOLD);
+            let inv = serde_json::to_value(&resp.inventory).unwrap();
+            let removed = inv["backpack"]["removedStackableItems"].as_array().unwrap().len();
+            let listed = inv["backpack"]["stackableItems"].as_array().unwrap().len();
+            assert_eq!((listed, removed), (2, 2), "{inv}");
+            assert!(inv["backpack"]["removedItems"].as_array().unwrap().contains(&serde_json::json!(s.item_id)));
+
+            let row = stored(&mut conn, &s).await;
+            assert_eq!(gold_of(&row), 100_000 - RETAIL_MAGICKA_T10_GOLD);
+            assert_eq!(counts(&row.inventory.0), stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)]));
+            assert_eq!(row.server_state.0.craft_jobs.len(), 1);
+            let craft_id = row.server_state.0.craft_jobs[0].id;
+
+            let fin = collect_craft(&mut conn, &sd, rd, None, s.user_id, s.character_id, craft_id, false)
+                .await
+                .expect("first finish");
+            assert_eq!(fin.reward.items.len(), 1);
+            assert_eq!(fin.reward.items[0].id, s.item_id);
+            let row = stored(&mut conn, &s).await;
+            assert_eq!(gold_of(&row), 100_000 - RETAIL_MAGICKA_T10_GOLD, "finish charges nothing");
+            assert_eq!(counts(&row.inventory.0), stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)]));
+            let enchanted = &row.inventory.0.backpack.items.0[&s.item_id];
+            assert_eq!(enchanted.properties.enchanting.len(), 3, "arcane 2 = primary + 2");
+
+            let again = collect_craft(&mut conn, &sd, rd, None, s.user_id, s.character_id, craft_id, false).await;
+            assert_eq!(
+                again.err().map(|e| e.to_string()).as_deref(),
+                Some("BladeApiError { http_status_code: 404, service_id: 20000, error_code: 5 }")
+            );
+            let row = stored(&mut conn, &s).await;
+            assert_eq!(gold_of(&row), 100_000 - RETAIL_MAGICKA_T10_GOLD, "a second finish charges nothing");
+            assert_eq!(counts(&row.inventory.0), stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)]));
+        }
+
+        #[tokio::test]
+        async fn an_unaffordable_start_leaves_no_job_no_roll_and_no_debit() {
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+            let s = seed(&mut conn, RETAIL_MAGICKA_T10_GOLD - 1).await;
+            let before = stored(&mut conn, &s).await;
+
+            let err = start_craft(&mut conn, &sd, rd, s.user_id, s.character_id, request(s.item_id, 0))
+                .await
+                .err()
+                .expect("one gold short is refused");
+            assert_eq!(err.to_string(), "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 1 }");
+
+            let after = stored(&mut conn, &s).await;
+            assert_eq!(gold_of(&after), RETAIL_MAGICKA_T10_GOLD - 1);
+            assert_eq!(counts(&after.inventory.0), counts(&before.inventory.0));
+            assert!(after.server_state.0.craft_jobs.is_empty(), "no job");
+            let item = &after.inventory.0.backpack.items.0[&s.item_id];
+            assert!(item.properties.enchanting.is_empty(), "no roll: the item is still in the backpack, unenchanted");
+            assert_eq!(after.inventory.0.backpack_version, before.inventory.0.backpack_version);
+
+            // Control: the same character with one more gold starts fine.
+            let s2 = seed(&mut conn, RETAIL_MAGICKA_T10_GOLD).await;
+            start_craft(&mut conn, &sd, rd, s2.user_id, s2.character_id, request(s2.item_id, 0))
+                .await
+                .expect("exactly affordable");
+            assert_eq!(gold_of(&stored(&mut conn, &s2).await), 0);
+        }
+
+        #[tokio::test]
+        async fn a_temper_start_is_unchanged_and_charges_nothing() {
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+            let s = seed(&mut conn, 100_000).await;
+            let before = stored(&mut conn, &s).await;
+
+            start_craft(&mut conn, &sd, rd, s.user_id, s.character_id, request(s.item_id, 10))
+                .await
+                .expect("temper starts");
+            let after = stored(&mut conn, &s).await;
+            assert_eq!(gold_of(&after), 100_000);
+            assert_eq!(counts(&after.inventory.0), counts(&before.inventory.0));
+            assert_eq!(after.server_state.0.craft_jobs.len(), 1);
+            let job = &after.server_state.0.craft_jobs[0];
+            assert_eq!(job.crafting_type_id, item_mod_crafting_type(10));
+            assert_eq!(job.results["items"][0]["temperingLevel"], 10);
+        }
+    }
+
 }
 
 

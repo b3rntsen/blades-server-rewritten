@@ -169,16 +169,17 @@ pub struct Recipe {
 }
 
 /// One observed enchant outcome — the `ENCHANTING` property set a recipe applied to an
-/// item (+ the item's resulting `arcaneTier`). Retail rolls a random set from a pool;
-/// we keep every distinct observed outcome and the server picks one deterministically.
+/// item (+ the item's resulting `arcaneTier`). Only the fallback for a recipe missing
+/// from `enchanting.json`, which rolls the real thing; the server then picks one of
+/// these uniformly at random.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnchantOutcome {
     #[serde(default)]
     pub enchanting: Vec<ItemSingleProperty>,
-    /// Arcane tier the item ends at, applied to [`crate::user_data::Item::arcane_tier`]
-    /// by the enchant branch of `apply_item_mod`. `None` leaves the item without one —
-    /// retail omits the key rather than sending `arcaneTier: 0`.
+    /// Arcane tier the captured item carried. Informational: enchanting never changes
+    /// an item's arcane tier (it READS it to fix the secondary count), so the server
+    /// does not copy this onto the item.
     #[serde(default)]
     pub arcane_tier: Option<u64>,
 }
@@ -199,6 +200,80 @@ pub struct ItemModRecipe {
     /// Observed enchant outcomes (enchant recipes only; empty for temper).
     #[serde(default)]
     pub outcomes: Vec<EnchantOutcome>,
+}
+
+/// Retail's enchanting tables, extracted from the APK into `enchanting.json` by
+/// `script/extract_enchanting_data.py`. An enchant is the recipe's primary property
+/// at the recipe's tier, plus 0–2 secondary properties: how many comes from the item's
+/// arcane tier when it has one, from its type's [`SecondaryEnchantTable`] otherwise,
+/// and each one is a weighted draw without replacement from that table's pool.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnchantingData {
+    /// `EnchantingRecipeList` — all 202 enchant recipes the client offers.
+    #[serde(default)]
+    pub recipes: HashMap<Uuid, EnchantRecipe>,
+    /// `SecondaryEnchantmentEffectDataList` — one table per item type/weapon type/slot.
+    #[serde(default)]
+    pub secondary_tables: Vec<SecondaryEnchantTable>,
+    /// `ArcaneTier._oddsOfAdditionalEnchantment` by tier: P(0), P(1), P(2) secondaries.
+    /// Replaces the table's odds for an arcane item (tier 1 = exactly 1, tier 2 = 2).
+    #[serde(default)]
+    pub arcane_tier_count_odds: HashMap<u64, Vec<f64>>,
+    /// `itemTemplateId` -> index into `secondary_tables`, precomputed from the
+    /// template's type, weapon type and equipment slot.
+    #[serde(default)]
+    pub templates: HashMap<Uuid, usize>,
+}
+
+impl EnchantingData {
+    pub fn table_for(&self, item_template_id: &Uuid) -> Option<&SecondaryEnchantTable> {
+        self.templates
+            .get(item_template_id)
+            .and_then(|&i| self.secondary_tables.get(i))
+    }
+}
+
+/// One enchant recipe's single output: the primary property and its tier.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnchantRecipe {
+    pub property: Uuid,
+    pub tier: u64,
+    /// `_duration`, which matches all 19 captured enchant recipes' timers to within 2s.
+    #[serde(default)]
+    pub duration_ms: i64,
+    /// `_inputs` — what starting the enchant costs: gold plus the soul gem and
+    /// materials. Every one of the 202 recipes names gold; the rest are stackables.
+    /// Matches the captured retail deductions to the unit (29 back-to-back enchant
+    /// starts in the 2026-06-07 snapshot, gold and every material).
+    #[serde(default)]
+    pub inputs: Vec<RecipeInput>,
+}
+
+/// One `RecipeInput`: a template (a currency or a stackable material) and a count.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecipeInput {
+    pub template_id: Uuid,
+    pub quantity: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecondaryEnchantTable {
+    /// P(0), P(1), P(2) secondary properties for a non-arcane item.
+    #[serde(default)]
+    pub count_odds: Vec<f64>,
+    #[serde(default)]
+    pub properties: Vec<WeightedProperty>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeightedProperty {
+    pub id: Uuid,
+    pub weight: f64,
 }
 
 /// One fixed floor entry for the abyss (floors 1–24, captured from prod).
@@ -1241,6 +1316,8 @@ pub struct StaticData {
     /// Temper/enchant recipes keyed by `recipeId` — the `POST /crafts` requests that
     /// carry an `itemId` and modify an existing item (vs `recipes`, which mint a new one).
     pub item_mod_recipes: HashMap<Uuid, ItemModRecipe>,
+    /// APK-extracted enchant recipes and secondary-enchantment odds (`enchanting.json`).
+    pub enchanting: EnchantingData,
     /// APK-extracted `recipeId -> CraftingType` (`recipe_crafting_types.json`). The
     /// authoritative answer to "which bench does this recipe belong to", covering every
     /// recipe the client ships — not just the captured ones.
