@@ -713,6 +713,45 @@ impl DamageModel for RetailDamageModel {
 /// magnitudes, and it is a shipped constant rather than a fitted one.
 pub const CHANNEL_TICK_INTERVAL_SECS: f32 = super::gamedata::combat_params::GLOBAL_PVP_TICK_INTERVAL;
 
+/// The interval between ticks of continuous gear damage (Ebony Mail, Rimelink).
+///
+/// Retail computes it as `rate x deltaTime` (`CombatManager.ApplyContinuousDamage`,
+/// libil2cpp `0x1BD3864`: `damage += sum(callbacks) * _cachedDeltaTime`), so the
+/// interval sets the tick SIZE, never the damage per second. The PvP delta is the
+/// shipped `GLOBAL_PVP_TICK_INTERVAL`. Retail's AreaEffect (7) frames arrive at that
+/// rate: s167's first Poison Cloud burst carries 19 unique ticks in about 4 s.
+pub const CONTINUOUS_AREA_TICK_SECS: f32 = combat_params::GLOBAL_PVP_TICK_INTERVAL;
+
+/// One tick of continuous gear damage from `attacker`'s gear onto `target`:
+/// `rate_per_sec x CONTINUOUS_AREA_TICK_SECS` of `ty`, as `DamageSource::AreaEffect`
+/// on `ActiveSide::None`, through the defender's mitigation only (see [`mitigate`]).
+///
+/// The flat resistance rating is charged at `CONTINUOUS_AREA_TICK_SECS` per tick, so
+/// one second of the effect pays the rating once. Charging the whole rating on each
+/// 0.2 s tick would cut every tick to the 95% floor for any defender with a few points
+/// of resistance. That is the per-tick behaviour the channel captures ruled out for
+/// `ContinuousSpell` (see `resistance_scale_for`). No capture shows this effect, so
+/// that is an inference.
+pub fn resolve_continuous_area_tick(
+    attacker: &Loadout,
+    target: &Fighter,
+    ty: DamageType,
+    rate_per_sec: f32,
+    now: Instant,
+) -> ResolvedDamage {
+    let mut components = vec![(ty, rate_per_sec * CONTINUOUS_AREA_TICK_SECS)];
+    mitigate(
+        attacker,
+        target,
+        DamageSource::AreaEffect,
+        ActiveSide::None,
+        ActiveSide::Middle,
+        &mut components,
+        now,
+        CONTINUOUS_AREA_TICK_SECS,
+    )
+}
+
 /// How many ticks a channelled cast of `ability_uuid` at `ability_level` delivers,
 /// or `None` when the ability is not channelled (no `_damagePerSecond`).
 ///
@@ -837,7 +876,6 @@ fn finish_resolved(
     // channel pays the resistance ONCE. See `resistance_scale_for`.
     resistance_scale: f32,
 ) -> ResolvedDamage {
-    let mut hit_flags = flags::SHOW_DAMAGE | flags::HAS_ATTACKER;
     // A channelled spell IS continuous damage, so the shipped
     // CONTINUOUS_DAMAGE_RESISTANCE_EFFECTIVENESS (0.75) applies to it too. Only
     // `StatusEffect` used to qualify, which left `ContinuousSpell` paying full
@@ -910,9 +948,51 @@ fn finish_resolved(
         }
     }
 
+    mitigate(
+        attacker,
+        target,
+        source,
+        active_side,
+        active_side,
+        components,
+        now,
+        resistance_scale,
+    )
+}
+
+/// Steps 1-2 of [`finish_resolved`] — the DEFENDER's side of a hit: block →
+/// mirrored drain → resistance/weakness → total. No attacker bonus is added here.
+///
+/// Split out for continuous gear damage (Ebony Mail), which retail sends through the
+/// defender's mitigation and nothing else: `CombatManager.ResolveContinuousAreaEffectDamage`
+/// (libil2cpp `0x1BD34C4`) calls `target.ResolveDamageTaken(source, list, AreaEffect,
+/// unblockable: false, NotSimulated)` then `ApplyDamage(..., ActiveSide.None)`, and
+/// never `ResolveDamageBonuses`, the path the Fortify gear and Augmented perks ride.
+///
+/// `block_side` is the side the block test sees and `active_side` the one written to
+/// the wire. They differ only for that damage: it carries `ActiveSide.None`, which
+/// [`block_outcome`] reads as "cannot be blocked", while retail passes
+/// `unblockable = false`.
+#[allow(clippy::too_many_arguments)]
+fn mitigate(
+    attacker: &Loadout,
+    target: &Fighter,
+    source: DamageSource,
+    active_side: ActiveSide,
+    block_side: ActiveSide,
+    components: &mut Vec<(DamageType, f32)>,
+    now: Instant,
+    resistance_scale: f32,
+) -> ResolvedDamage {
+    let mut hit_flags = flags::SHOW_DAMAGE | flags::HAS_ATTACKER;
+    let continuous = matches!(
+        source,
+        DamageSource::StatusEffect | DamageSource::ContinuousSpell
+    );
+
     // 1) BLOCK — a fraction from the defender's Block Rating. NOT de-rated against
     //    continuous damage (`continuousDamageBlockingEffectiveness == 1`).
-    let block = block_outcome(target, attacker, active_side, now);
+    let block = block_outcome(target, attacker, block_side, now);
     hit_flags |= block.flag;
     // Kept for effects that ride the SWING rather than a component (Ravage). Read on
     // the physical track, which is what a weapon swing is.

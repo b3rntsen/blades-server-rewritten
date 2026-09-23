@@ -226,14 +226,7 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         // new is modelled here; the properties simply arrive. A property whose logic
         // has no arm yet still falls through `apply_enchant`'s `_ => {}` exactly as
         // before, so this cannot switch on anything unmodelled by accident.
-        for (property_uuid, tier) in gamedata::mandatory_properties(&template) {
-            // The generated table stores the uuid as a string; `apply_enchant` keys on
-            // `Uuid`. A malformed one is skipped rather than panicking — a bad row in a
-            // 37k-line generated file must not take the arena down.
-            if let Ok(id) = uuid::Uuid::parse_str(property_uuid) {
-                apply_enchant(&mut lo, &id, *tier);
-            }
-        }
+        apply_template_properties(&mut lo, &template);
 
         // --- enchantments, dispatched on the family's LOGIC CLASS (Phase 3.6/3.7) ---
         for prop in &eq.item.properties.enchanting {
@@ -466,7 +459,57 @@ fn apply_enchant(lo: &mut Loadout, id: &Uuid, tier: u8) {
         "FortifyShockPropertyLogic" => push_fortify(lo, DamageType::Shock, magnitude),
         "FortifyPoisonPropertyLogic" => push_fortify(lo, DamageType::Poison, magnitude),
 
+        // ---- continuous gear damage: Ebony Mail, Rimelink ---------------------
+        // Damage the wearer's opponent takes every tick, swing or no swing. The
+        // generated tier table carries 0.0 for these (tier 0 is their only tier), so
+        // `magnitude` is useless here; the rate comes from the logic asset itself.
+        // `ContinuousTemplarDamagePropertyLogic` is left out on purpose: its filter is
+        // an undead enemy group with no actor types, so it can never match a player.
+        "ContinuousPoisonDamagePropertyLogic" | "ContinuousFrostDamagePropertyLogic" => {
+            if let Some(entry) = continuous_damage_rate(family.logic) {
+                lo.continuous_damage.push(entry);
+            }
+        }
+
         _ => {}
+    }
+}
+
+/// Apply an item TEMPLATE's `mandatory_properties` (where every artifact effect
+/// lives) through [`apply_enchant`].
+pub(crate) fn apply_template_properties(lo: &mut Loadout, template: &str) {
+    for (property_uuid, tier) in gamedata::mandatory_properties(template) {
+        // The generated table stores the uuid as a string; `apply_enchant` keys on
+        // `Uuid`. A malformed one is skipped rather than panicking — a bad row in a
+        // 37k-line generated file must not take the arena down.
+        if let Ok(id) = uuid::Uuid::parse_str(property_uuid) {
+            apply_enchant(lo, &id, *tier);
+        }
+    }
+}
+
+/// The damage type and shipped PER-SECOND rate of a `ContinuousDamagePropertyLogic`
+/// asset, or `None` for any other logic.
+///
+/// Source: `ItemPropertyList` → the asset's `ContinuousDamageStaticData`, dumped to
+/// `reference/game-defs/property_logic_static.json` in blades-capture:
+///
+/// | asset                                | `_damageTypes` | `_xValueByTier` |
+/// |--------------------------------------|----------------|-----------------|
+/// | `ContinuousPoisonDamagePropertyLogic` | `[7]` Poison   | `[9.4]`         |
+/// | `ContinuousFrostDamagePropertyLogic`  | `[5]` Frost    | `[7.93]`        |
+///
+/// Both have `_damageSource = 7` (AreaEffect), `_propertyType = 4` and
+/// `_damageEnemyGroup._actorTypes = [0 Enemy, 1 Player]`. The item text reads the same
+/// value: `Artifact.Effect.ContinuousPoisonDamage` = "Does {0} poison damage per
+/// second." `GetRawXValue` scales the tier value by the item only for
+/// `_propertyType == 2` (libil2cpp `0x24D0AE4`), so a type-4 property is the flat
+/// 9.4 at every item level.
+pub(crate) fn continuous_damage_rate(logic: &str) -> Option<(DamageType, f32)> {
+    match logic {
+        "ContinuousPoisonDamagePropertyLogic" => Some((DamageType::Poison, 9.4)),
+        "ContinuousFrostDamagePropertyLogic" => Some((DamageType::Frost, 7.93)),
+        _ => None,
     }
 }
 
@@ -1524,6 +1567,69 @@ mod two_handed_tests {
             lo.armor_piercing_rating > 0.0,
             "Dragon's Blight must pierce armour, got {}",
             lo.armor_piercing_rating
+        );
+    }
+
+    /// Ebony Mail's "Does {0} poison damage per second." must reach the loadout as a
+    /// continuous 9.4/s poison. Its template carries four properties: Fortify Poison
+    /// t6, Physical Opportunist t6, Continuous Poison Damage t0 and the smoke VFX t0.
+    /// The continuous one used to fall through `apply_enchant`'s `_ => {}`.
+    #[test]
+    fn ebony_mail_delivers_its_continuous_poison() {
+        const EBONY_MAIL: &str = "def810af-e9f5-4e23-9247-1edf391d82e1";
+        let mut lo = Loadout::default();
+        for (id, tier) in super::super::gamedata::mandatory_properties(EBONY_MAIL) {
+            if let Ok(u) = uuid::Uuid::parse_str(id) {
+                super::apply_enchant(&mut lo, &u, *tier);
+            }
+        }
+        assert_eq!(lo.continuous_damage, vec![(DamageType::Poison, 9.4)]);
+        // The other properties still arrive: this adds an arm and removes none.
+        assert!(
+            lo.opportunist_physical > 0.0,
+            "Physical Opportunist must still load"
+        );
+    }
+
+    /// Controls. Rimelink carries the frost version of the same logic class. The
+    /// Templar asset can never match a player, and no ordinary item or other artifact
+    /// may pick up continuous damage from this arm.
+    #[test]
+    fn continuous_damage_is_limited_to_its_two_assets() {
+        const RIMELINK_FAMILY: &str = "59144365-ceb5-47a0-8f48-6eceecb15d2c";
+        const TEMPLAR_FAMILY: &str = "52f60d1a-c6e4-405a-9420-7212ba228e3c";
+        let mut lo = Loadout::default();
+        super::apply_enchant(&mut lo, &uuid::Uuid::parse_str(RIMELINK_FAMILY).unwrap(), 0);
+        assert_eq!(lo.continuous_damage, vec![(DamageType::Frost, 7.93)]);
+
+        let mut lo = Loadout::default();
+        super::apply_enchant(&mut lo, &uuid::Uuid::parse_str(TEMPLAR_FAMILY).unwrap(), 0);
+        assert!(
+            lo.continuous_damage.is_empty(),
+            "Templar only hits undead enemies"
+        );
+
+        let carriers: Vec<&str> = super::super::gamedata::ARMORS
+            .iter()
+            .map(|a| a.uuid)
+            .chain(super::super::gamedata::WEAPONS.iter().map(|w| w.uuid))
+            .filter(|t| {
+                let mut lo = Loadout::default();
+                for (id, tier) in super::super::gamedata::mandatory_properties(t) {
+                    if let Ok(u) = uuid::Uuid::parse_str(id) {
+                        super::apply_enchant(&mut lo, &u, *tier);
+                    }
+                }
+                !lo.continuous_damage.is_empty()
+            })
+            .collect();
+        assert_eq!(
+            carriers,
+            vec![
+                "def810af-e9f5-4e23-9247-1edf391d82e1",
+                "8a69bdb2-d179-4f2d-984a-322f9397aedf"
+            ],
+            "only Ebony Mail and Rimelink carry continuous damage"
         );
     }
 
