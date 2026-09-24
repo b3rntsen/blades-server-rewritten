@@ -8,8 +8,9 @@ use actix_web::{
 use blades_lib::game_data::GameData;
 use blades_lib::util::dungeon::generate_for_dungeon;
 use blades_lib::user_data::{
-    B64EncodedData, CompleteCharacterWithIdWithoutData, DungeonGeneratedData, DungeonState,
-    DungeonStatus, InventoryChangeTracker, Quest,
+    B64EncodedData, CompleteCharacterWithIdWithoutData, DungeonGeneratedData,
+    DungeonGeneratedDataWithId, DungeonState, DungeonStatus, ObjectiveStatus, Quest, QuestStatus,
+    QuestWithId,
 };
 use diesel;
 use diesel::{
@@ -19,15 +20,14 @@ use diesel::{
 };
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt, AsyncPgConnection};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use uuid::Uuid;
 use crate::{
-    event_quests::{EventCompletion, apply_event_rewards},
+    event_quests::{EventCompletion, EventQuestData},
     BladeApiError, ServerGlobal,
     json_db::JsonDbWrapper,
-    models::{QuestDbEntry, QuestDbEntryDungeonStateAndInitialState},
+    models::{QuestDbEntry, QuestDbEntryDungeonStateAndInitialState, QuestDbEntryInfo},
     quest::jobs_gen,
-    session::{Session, SessionLookedUpMaybe},
+    session::SessionLookedUpMaybe,
     util::check_permission_for_character_and_get_it,
 };
 use rand;
@@ -162,15 +162,66 @@ struct EnterDungeonResponse {
     dungeon_status: DungeonStatus,
 }
 
-/// `{"character": …}` — the exact envelope retail's exit returns.
+/// Retail's exit body: `{"restart": bool}`.
 ///
-/// NOT `CompleteCharacterWithIdAndData`: retail's body carries the character's own
-/// fields and `id`, and NO `data` key. Verified against the smallest captured
-/// response (982 B), which ends `…"nameValidated":true}}` with nothing after the
-/// character object.
+/// 215 of 215 distinct captured exits carry exactly that one key, 4 of them `true`.
+/// We never read it, so a player who died and chose to restart was answered as if
+/// they had walked out: the attempt was cleared (and, on an event, a tier was paid),
+/// the client got no `dungeonStatus` to restart with, and its follow-up resume
+/// `enter` found nothing and 400'd — "the quest spins and won't start again".
+///
+/// Parsed leniently: a missing or unreadable body is an ordinary exit. Rejecting it
+/// would strand exactly the player an exit exists to release.
+#[derive(Deserialize, Default, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct ExitDungeonRequest {
+    #[serde(default)]
+    restart: bool,
+}
+
+impl ExitDungeonRequest {
+    fn parse(body: &[u8]) -> Self {
+        serde_json::from_slice(body).unwrap_or_default()
+    }
+}
+
+/// What retail's exit returns. Every shape carries `character`, with
+/// `currentQuestDungeon: null`; the rest depends on how the attempt stands (see
+/// [`exit_quest_dungeon`]).
+///
+/// `character` is NOT `CompleteCharacterWithIdAndData`: retail's body carries the
+/// character's own fields and `id`, and NO `data` key. Verified against the smallest
+/// captured response (982 B), which ends `…"nameValidated":true}}` with nothing after
+/// the character object.
 #[derive(Serialize)]
-struct ExitDungeonResponse {
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ExitDungeonResponse {
+    /// The attempt that is still alive: after a restart, or after leaving one that
+    /// was never completed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dungeon_status: Option<DungeonStatus>,
     character: CompleteCharacterWithIdWithoutData,
+    /// A finished event attempt: the instance's data for its next run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dungeon_generated_data_list: Option<Vec<DungeonGeneratedDataWithId>>,
+    /// A finished event attempt with tiers left: the instance, reset for its next run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    game_event_quest: Option<QuestWithId>,
+    /// A finished event attempt that used the last tier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    game_event_quest_finished: Option<QuestWithId>,
+}
+
+impl ExitDungeonResponse {
+    fn character_only(character: CompleteCharacterWithIdWithoutData) -> Self {
+        Self {
+            dungeon_status: None,
+            character,
+            dungeon_generated_data_list: None,
+            game_event_quest: None,
+            game_event_quest_finished: None,
+        }
+    }
 }
 
 /// Leave the current quest dungeon.
@@ -180,13 +231,28 @@ struct ExitDungeonResponse {
 /// answered — 592 retail 200s exist for this route in the capture DB (982 B to
 /// 60 KB) against our own 404s.
 ///
-/// Retail's response is the character with **`currentQuestDungeon: null`** — exit
-/// clears the active dungeon and hands the updated character back, which is what
-/// lets the client leave the dungeon UI. So both halves of the state have to go in
-/// one transaction: the character's `current_quest_dungeon`, and the quest row's
-/// `dungeon_state`. Clearing one without the other strands the player — the client
-/// would think it had left while the server still held a live dungeon, or the
-/// reverse.
+/// **Whether the attempt ends depends on whether it was COMPLETED**, i.e. whether
+/// `/complete` answered for it, not on the exit alone. The 215 distinct retail
+/// exits split without exception:
+///
+/// | attempt | `restart` | n | response | afterwards |
+/// |---|---|---|---|---|
+/// | completed | false | 127 | `{character, dungeonGeneratedDataList, gameEventQuest}` | event run ended |
+/// | completed | false | 28 | `{character, gameEventQuestFinished}` | event exhausted |
+/// | completed | false | 53 | `{character}` | ordinary run ended |
+/// | not completed | false | 3 | `{character, dungeonStatus}` | attempt KEPT |
+/// | not completed | true | 4 | `{character, dungeonStatus}` | attempt KEPT, restarted |
+///
+/// and every one of the 7 captured resume `enter`s (no `dungeonInstance`) follows
+/// one of those 7 kept attempts, 7/7 answered 200. Clearing every attempt on exit
+/// — what this did — is why a restart after death came back to a 400.
+///
+/// Nothing is paid here. Rewards arrive on `/complete` (217/217 captured responses
+/// carry `reward`) and never on exit (0/216).
+///
+/// Every shape clears the character's `current_quest_dungeon`, in the same
+/// transaction as the attempt's own row, so the client and the server cannot
+/// disagree about whether the player is still inside.
 ///
 /// Idempotent on purpose: exiting a dungeon that is already gone returns the
 /// character rather than erroring. The client retries this on a dropped connection,
@@ -196,11 +262,14 @@ struct ExitDungeonResponse {
 )]
 pub async fn exit_quest_dungeon(
     path: web::Path<(Uuid, Uuid)>,
+    body: web::Bytes,
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
 ) -> Result<Json<ExitDungeonResponse>, BladeApiError> {
     let session = session.get_session_or_error()?;
     let (char_id, quest_id) = path.into_inner();
+    let restart = ExitDungeonRequest::parse(&body).restart;
+    let globals = app_state.get_ref().clone();
     let mut conn = app_state.db_pool.get().await?;
 
     check_permission_for_character_and_get_it(&mut conn, &session.session, char_id).await?;
@@ -226,71 +295,134 @@ pub async fn exit_quest_dungeon(
 
     // Now check if this is an event quest by looking up the template
     let is_event = app_state.event_quests.templates.contains_key(&gld_quest_id);
+    let now = chrono::Utc::now().timestamp();
 
-    if is_event {
-        // Clear event dungeon state instead
-        // Both ids: the TEMPLATE keys the event tables, the INSTANCE keys the
-        // client's completedQuests mirror. See `handle_event_dungeon_exit`.
-        return handle_event_dungeon_exit(&mut conn, char_id, gld_quest_id, quest_id, &app_state)
-            .await;
-    }
-
-    conn.transaction(move |mut conn| {
+    conn.transaction(move |conn| {
         async move {
-            // 1. Clear the quest's dungeon state, if it still holds one.
-            {
-                use crate::schema::quests::dsl::*;
-                // BOTH halves of the primary key. `quests.id` alone is NOT unique:
-                // an ordinary story quest is stored under the template id, so every
-                // character on that quest has a row with the same `id`, and exiting
-                // filtered on `id` would clear every one of those players' dungeons.
-                let owner = character_id;
-                diesel::update(quests.filter(id.eq(&quest_id).and(character_id.eq(&owner))))
-                    .set(dungeon_state.eq(None::<serde_json::Value>))
-                    .execute(&mut conn)
-                    .await?;
+            if is_event {
+                // Both ids: the TEMPLATE keys the event tables, the INSTANCE keys the
+                // quest row and the client's completedQuests mirror.
+                event_dungeon_exit(
+                    conn,
+                    &globals.static_data,
+                    char_id,
+                    gld_quest_id,
+                    quest_id,
+                    restart,
+                    now,
+                )
+                .await
+            } else {
+                quest_dungeon_exit(conn, char_id, quest_id, restart).await
             }
-
-            // 2. Clear the character's pointer to it and read the row back, so the
-            //    response is the state we just committed rather than a copy made
-            //    before the write.
-            let updated = {
-                use crate::schema::characters::dsl::*;
-                // Only the `character` column: this handler touches one field of
-                // it, and selecting a wider model would pull the whole save for no
-                // reason. `for_update` so a concurrent write cannot interleave
-                // between the read and the clear.
-                let mut current: JsonDbWrapper<blades_lib::user_data::CompleteCharacter> =
-                    characters
-                        .filter(id.eq(char_id))
-                        .select(character)
-                        .for_update()
-                        .load(&mut conn)
-                        .await?
-                        .into_iter()
-                        .next()
-                        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 3))?;
-
-                current.0.current_quest_dungeon = serde_json::Value::Null;
-
-                diesel::update(characters)
-                    .filter(id.eq(char_id))
-                    .set(character.eq(&current))
-                    .execute(&mut conn)
-                    .await?;
-                current
-            };
-
-            Ok::<_, BladeApiError>(Json(ExitDungeonResponse {
-                character: CompleteCharacterWithIdWithoutData {
-                    id: char_id,
-                    character: updated.0,
-                },
-            }))
         }
         .scope_boxed()
     })
     .await
+    .map(Json)
+}
+
+/// Retail's restart: the same run from the top.
+///
+/// Measured on the 4 captured restarts against the last `update` before each: the
+/// `seed` is unchanged 4/4 (the follow-up resume `enter` carries it too), the
+/// `currentState` is unchanged 4/4, `reviveCount` is 0 4/4, and every enemy that
+/// had been killed is standing again (2/2 — the other two had no enemy entries),
+/// its entry and loot roll kept. Chests are left collected: no capture shows a
+/// chest across a restart, and a chest that could be looted again after every
+/// restart would be a free loop.
+fn restarted_status(mut status: DungeonStatus) -> DungeonStatus {
+    status.revive_count = 0;
+    for enemy in status.enemy_status.values_mut() {
+        enemy.killed = false;
+    }
+    status
+}
+
+/// Clear the character's pointer to its dungeon and hand the saved character back.
+///
+/// Only the `character` column: this touches one field of it, and selecting a wider
+/// model would pull the whole save for no reason. `for_update` so a concurrent write
+/// cannot interleave between the read and the clear. The response is the state just
+/// committed rather than a copy made before the write.
+async fn release_current_dungeon(
+    conn: &mut AsyncPgConnection,
+    char_id: Uuid,
+) -> Result<CompleteCharacterWithIdWithoutData, BladeApiError> {
+    use crate::schema::characters::dsl::*;
+    let mut current: JsonDbWrapper<blades_lib::user_data::CompleteCharacter> = characters
+        .filter(id.eq(char_id))
+        .select(character)
+        .for_update()
+        .load(conn)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 3))?;
+
+    current.0.current_quest_dungeon = serde_json::Value::Null;
+
+    diesel::update(characters)
+        .filter(id.eq(char_id))
+        .set(character.eq(&current))
+        .execute(conn)
+        .await?;
+    Ok(CompleteCharacterWithIdWithoutData {
+        id: char_id,
+        character: current.0,
+    })
+}
+
+/// The ordinary (story quest, town job) half of [`exit_quest_dungeon`].
+async fn quest_dungeon_exit(
+    conn: &mut AsyncPgConnection,
+    char_id: Uuid,
+    quest_id: Uuid,
+    restart: bool,
+) -> Result<ExitDungeonResponse, BladeApiError> {
+    use crate::schema::quests::dsl as q;
+    // BOTH halves of the primary key. `quests.id` alone is NOT unique: an ordinary
+    // story quest is stored under the template id, so every character on that quest
+    // has a row with the same `id`, and exiting filtered on `id` would touch every
+    // one of those players' dungeons.
+    let row = q::quests
+        .filter(q::id.eq(quest_id).and(q::character_id.eq(char_id)))
+        .select(QuestDbEntry::as_select())
+        .for_update()
+        .load(conn)
+        .await?
+        .into_iter()
+        .next();
+    let completed = row.as_ref().is_some_and(|r| r.info.0.completed);
+
+    let kept = match row.and_then(|r| r.dungeon_state) {
+        Some(state) if restart || !completed => {
+            let mut state = state.0;
+            if restart {
+                state.dungeon_status = restarted_status(state.dungeon_status);
+                diesel::update(
+                    q::quests.filter(q::id.eq(quest_id).and(q::character_id.eq(char_id))),
+                )
+                .set(q::dungeon_state.eq(Some(JsonDbWrapper(state.clone()))))
+                .execute(conn)
+                .await?;
+            }
+            Some(state.dungeon_status)
+        }
+        _ => {
+            diesel::update(q::quests.filter(q::id.eq(quest_id).and(q::character_id.eq(char_id))))
+                .set(q::dungeon_state.eq(None::<serde_json::Value>))
+                .execute(conn)
+                .await?;
+            None
+        }
+    };
+
+    let character = release_current_dungeon(conn, char_id).await?;
+    Ok(ExitDungeonResponse {
+        dungeon_status: kept,
+        ..ExitDungeonResponse::character_only(character)
+    })
 }
 
 /// Which dungeon the client should load for a run of `quest_id`.
@@ -373,27 +505,17 @@ pub(crate) fn event_dungeon_data(
     Ok((dungeon_uuid, generated_data))
 }
 
-/// `quest_id` is the event TEMPLATE (`gldQuestId`); `instance_quest_id` is the
-/// player's own row id from the URL. They are never equal on an event quest — 1271
-/// of 1271 captured event rows have `questId != gldQuestId` — and they key
-/// different things, which is the whole of report #166.
-/// When the CURRENT window of the event behind `quest_id` opened.
+/// When the window of the event behind `quest_id` that is open at `now` began,
+/// against the same themed calendar the feed serves.
 ///
 /// `event_completions` has no window column, so this is what tells a stale
 /// lifetime count from a live one — see `EventCompletion::reset_if_before`.
 /// `None` when the event has no active instance right now, in which case the
 /// stored count is left alone rather than guessed at.
-fn current_event_window_start(
-    app_state: &ServerGlobal,
-    quest_id: Uuid,
-) -> Option<chrono::NaiveDateTime> {
-    event_window_start_at(&app_state.static_data, quest_id, chrono::Utc::now().timestamp())
-}
-
-/// [`current_event_window_start`] at a given instant, against the same themed
-/// calendar the feed serves. A themed window re-opens an event days after its
-/// last opening; reading the untouched calendar here would miss that new window
-/// and carry the old window's completions into it.
+///
+/// Themed, not the untouched calendar: a themed window re-opens an event days after
+/// its last opening, and reading the untouched calendar here would miss that new
+/// window and carry the old window's completions into it.
 fn event_window_start_at(
     sd: &blades_lib::static_data::StaticData,
     quest_id: Uuid,
@@ -410,200 +532,210 @@ fn event_window_start_at(
     .map(|dt| dt.naive_utc())
 }
 
-async fn handle_event_dungeon_exit(
+/// The player's completion counter for event TEMPLATE `template_id`, with any count
+/// left over from a PREVIOUS window of that event already dropped.
+///
+/// The only way to get an [`EventCompletion`]: every path that reads the count must
+/// reset it first, and routing them all through here is what makes that a property
+/// of the code rather than of each caller's memory
+/// (`every_completion_counter_goes_through_the_window_reset` pins it).
+///
+/// Why it matters, from the times it was missed: the counter is a LIFETIME total
+/// against per-window tiers. The path that decides WHICH TIER pays once read a row
+/// still carrying a finished window's count, so the payout came back `None`, the
+/// increment gated on a payout was skipped, and the stale number was what the
+/// client's `completedQuests` mirror was told. Rewards stopped, the counter stopped,
+/// and the tick never appeared — "event tiers are not progressing, they are not
+/// getting checkmarked" (#166). A player can reach any of these paths with a stale
+/// row whenever the window rolls between entering and completing.
+pub(crate) async fn event_completion_in_window(
     conn: &mut AsyncPgConnection,
+    sd: &blades_lib::static_data::StaticData,
     char_id: Uuid,
-    quest_id: Uuid,
-    instance_quest_id: Uuid,
-    app_state: &ServerGlobal,	
-) -> Result<Json<ExitDungeonResponse>, BladeApiError> {
-    use crate::schema::event_dungeons::dsl::*;
-
-    let event_template = app_state.event_quests.templates.get(&quest_id)
-        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
-
-    // Get character data
-    let mut character_data = {
-        use crate::schema::characters::dsl::*;
-        characters
-            .filter(id.eq(char_id))
-            .select(crate::models::CharacterDbEntryCharacterWalletInventory::as_select())
-            .for_update()
-            .first::<crate::models::CharacterDbEntryCharacterWalletInventory>(conn)
-            .await?
-    };
-
-    let mut completion = EventCompletion::get_or_create(conn, char_id, quest_id).await?;
-    // Drop a count left over from a PREVIOUS window before reading it, exactly as
-    // `enter_event_dungeon` does.
-    //
-    // Only the enter path reset, and that is not enough: this is the path that
-    // decides WHICH TIER pays and what the client's checkmarks are told. A row
-    // still carrying a finished window's count reads as exhausted here, so
-    // `payout_for_completion` returns None, the increment below is skipped
-    // because it is gated on a payout, and the stale number is what gets mirrored
-    // into `completedQuests`. Rewards stop, the counter stops, and the tick never
-    // appears — "event tiers are not progressing, they are not getting
-    // checkmarked" (#166).
-    //
-    // A player can reach this with a stale row whenever the window rolls between
-    // entering and exiting, and for any entry that did not go through the enter
-    // path's reset.
-    if let Some(window_start) = current_event_window_start(app_state, quest_id) {
+    template_id: Uuid,
+    now: i64,
+) -> Result<EventCompletion, BladeApiError> {
+    let mut completion = EventCompletion::get_or_create(conn, char_id, template_id).await?;
+    if let Some(window_start) = event_window_start_at(sd, template_id, now) {
         completion.reset_if_before(conn, window_start).await?;
     }
-    let completion_index = completion.completion_count as usize;
-    let tier_count = event_template.rewards.len();
+    Ok(completion)
+}
 
-    // The reward model, verbatim from the data's own _meta (capture-derived and
-    // checked against 93 retail instances / 300+ completions):
-    //
-    //   "The Nth completion of an event-quest instance pays rewards[N];
-    //    the last one pays rewards[last] + finalReward."
-    //
-    // So finalReward is a BONUS ON the final tier, not a tier of its own, and
-    // there is nothing to pay once the tiers are exhausted. Paying finalReward
-    // by itself on every later exit made the event farmable without limit
-    // (tracker #98: "I can do it over and over").
-    let payout = event_template.payout_for_completion(completion_index);
-    if payout.is_none() {
-        // Event finished. Deliberately NOT an error: the player still has to be
-        // able to walk out of the dungeon. They just leave with nothing.
-        log::info!(
-            "event exit: character {} has completed all {} tiers of event quest {} - no reward",
-            char_id,
-            tier_count,
-            quest_id
-        );
+/// Put an event instance back to how its next run starts.
+///
+/// Retail's exit after a completed run hands the instance back with
+/// `completed: false` and every objective `{"status":"Active","progress":0.0,
+/// "completed":false}` — 155/155 completed event exits. `completed` is also what
+/// `/complete` uses as its once-per-run guard, so an instance left `true` would
+/// make every later run's `/complete` a replay that pays nothing.
+fn reset_event_instance_for_next_run(info: &mut Quest) {
+    info.completed = false;
+    for status in info.objective_statuses.values_mut() {
+        *status = ObjectiveStatus {
+            status: QuestStatus::Active,
+            progress: 0.0,
+            completed: false,
+        };
     }
+}
 
-    let mut wallet = std::mem::take(&mut character_data.wallet.0);
-    let mut inventory_modification_tracker = InventoryChangeTracker::default();
+/// The event half of [`exit_quest_dungeon`].
+///
+/// `template_id` is the event TEMPLATE (`gldQuestId`); `instance_id` is the player's
+/// own row id from the URL. They are never equal on an event quest — 1271 of 1271
+/// captured event rows have `questId != gldQuestId` — and they key different
+/// things, which is the whole of report #166: the template keys `event_dungeons`
+/// and `event_completions`, the instance keys the quest row.
+///
+/// This used to clear the attempt and PAY the next tier on every exit. Dying paid,
+/// and entering and walking out five times paid all five tiers without playing.
+/// The milestone is now paid by `/complete`, exactly as retail pays it; see
+/// `quest::complete_quest_in_tx`.
+pub(crate) async fn event_dungeon_exit(
+    conn: &mut AsyncPgConnection,
+    sd: &blades_lib::static_data::StaticData,
+    char_id: Uuid,
+    template_id: Uuid,
+    instance_id: Uuid,
+    restart: bool,
+    now: i64,
+) -> Result<ExitDungeonResponse, BladeApiError> {
+    let owner = char_id;
+    let template = template_id;
 
-    if let Some(rewards) = payout.as_ref() {
-        // Report #183: "events upon completion give negative value of sigils".
-        // Nothing on the server had a negative balance, and the completion table
-        // stores only a count — so there was no way to see what a completion
-        // actually paid, and the container's log is discarded every time the
-        // image is replaced. Two restarts on deploy day lost the evidence for a
-        // ticket that was waiting on exactly that. This records the payout at the
-        // moment it is granted, so the next report is answerable from the log
-        // instead of from a request to the reporter.
-        //
-        // The currency ids are logged raw: this is a diagnostic, and resolving
-        // them to names here would need the item table in a hot path for no gain.
-        log::info!(
-            "event exit: character {} tier {}/{} of event quest {} pays xp={} townXp={} currencies={:?}",
-            char_id,
-            completion_index + 1,
-            tier_count,
-            quest_id,
-            rewards.character_xp.unwrap_or(0),
-            rewards.town_xp.unwrap_or(0),
-            rewards.currencies,
-        );
-        apply_event_rewards(
-            rewards,
-            &mut character_data,
-            &mut wallet,
-            &mut inventory_modification_tracker,
-        )?;
-    }
-
-    character_data.wallet.0 = wallet;
-
-    // Advance only when a tier was actually consumed. Incrementing on a finished
-    // event would run the counter up forever and desync the completedQuests
-    // mirror written just below from the number of tiers that exist.
-    if payout.is_some() {
-        completion.increment_completion(conn).await?;
-    }
-
-    // Mirror the completion into the character's completedQuests JSON — this is
-    // what the client's tier checkmarks read. `increment_completion` only updates
-    // the separate event_completions table, which gates rewards server-side but is
-    // invisible to that UI.
-    //
-    // KEYED BY THE INSTANCE ID, NOT THE TEMPLATE (report #166).
-    //
-    // This used to write the `gldQuestId`, on the stated belief that it was "what
-    // the client's quest-list checkboxes actually read". The captured retail
-    // corpus says otherwise. Across 773 recorded `/quests` bodies:
-    //
-    //     event gldQuestIds appearing as a completedQuests key    0 / 39
-    //     event INSTANCE questIds appearing as a key            110 / 1071
-    //
-    // and the control that explains why this survived so long: for an ordinary
-    // quest `questId == gldQuestId`, so both readings score 71/71 and the bug is
-    // invisible there. Only event quests distinguish them.
-    //
-    // The value is the tier counter: over 185 samples it takes values 1-5, and
-    // every one of those rows has exactly 5 tiers.
-    //
-    // So rewards paid, `event_completions` advanced, and the client was told none
-    // of it — "event tiers are not progressing, they are not getting checkmarked".
-    if !character_data.character.0.completed_quests.is_object() {
-        character_data.character.0.completed_quests = json!({});
-    }
-    character_data
-        .character
-        .0
-        .completed_quests
-        .as_object_mut()
-        .unwrap()
-        .insert(
-            instance_quest_id.to_string(),
-            json!(completion.completion_count),
-    );
-
-    // Save the character data:
-    {
-        use crate::schema::characters;
-        diesel::update(characters::table)
-            .filter(characters::id.eq(char_id))
-            .set(character_data)
-            .execute(conn)
-            .await?;
-    }
-
-    // Clear the event dungeon state
-    diesel::update(event_dungeons)
-        .filter(character_id.eq(char_id))
-        .filter(dungeon_id.eq(quest_id))
-        .set(dungeon_state.eq(None::<serde_json::Value>))
-        .execute(conn)
-        .await?;
-    
-    // Read the character back
-    let updated = {
-        use crate::schema::characters::dsl::*;
-        let mut current: JsonDbWrapper<blades_lib::user_data::CompleteCharacter> = 
-        characters
-            .filter(id.eq(char_id))
-            .select(character)
+    let attempt = {
+        use crate::schema::event_dungeons::dsl::*;
+        event_dungeons
+            .filter(character_id.eq(owner))
+            .filter(dungeon_id.eq(template))
+            .select(EventDungeonEntryInfo::as_select())
             .for_update()
             .load(conn)
             .await?
             .into_iter()
             .next()
-            .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 3))?;
-        
-        current.0.current_quest_dungeon = serde_json::Value::Null;
+    };
 
-        diesel::update(characters)
-            .filter(id.eq(char_id))
-            .set(character.eq(&current))
+    let quest_row = {
+        use crate::schema::quests::dsl as q;
+        q::quests
+            .filter(q::id.eq(instance_id).and(q::character_id.eq(owner)))
+            .select(QuestDbEntry::as_select())
+            .for_update()
+            .load(conn)
+            .await?
+            .into_iter()
+            .next()
+    };
+    let completed = quest_row.as_ref().is_some_and(|r| r.info.0.completed);
+
+    // The attempt lives on: a restart, or walking out of a run that was never
+    // completed. Nothing is paid either way.
+    if restart || !completed {
+        let kept = match attempt.and_then(|a| a.dungeon_state.map(|state| (a.id, state))) {
+            Some((row_id, value)) => {
+                let mut state: DungeonState = serde_json::from_value(value)
+                    .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3))?;
+                if restart {
+                    state.dungeon_status = restarted_status(state.dungeon_status);
+                    let state_json = serde_json::to_value(&state).map_err(|_| {
+                        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3)
+                    })?;
+                    use crate::schema::event_dungeons::dsl::*;
+                    diesel::update(event_dungeons.filter(id.eq(row_id)))
+                        .set(dungeon_state.eq(Some(state_json)))
+                        .execute(conn)
+                        .await?;
+                }
+                Some(state.dungeon_status)
+            }
+            None => None,
+        };
+        log::info!(
+            "event exit: character {} {} event quest {} (restart={}) — attempt {}, nothing paid",
+            char_id,
+            if completed {
+                "restarted a completed run of"
+            } else {
+                "left an unfinished run of"
+            },
+            template_id,
+            restart,
+            if kept.is_some() {
+                "kept"
+            } else {
+                "already gone"
+            },
+        );
+        let character = release_current_dungeon(conn, char_id).await?;
+        return Ok(ExitDungeonResponse {
+            dungeon_status: kept,
+            ..ExitDungeonResponse::character_only(character)
+        });
+    }
+
+    // A completed run: end the attempt and set the instance up for its next run.
+    {
+        use crate::schema::event_dungeons::dsl::*;
+        diesel::update(event_dungeons)
+            .filter(character_id.eq(owner))
+            .filter(dungeon_id.eq(template))
+            .set(dungeon_state.eq(None::<serde_json::Value>))
             .execute(conn)
             .await?;
-        current
+    }
+    let mut row = quest_row.expect("`completed` is only true for a loaded row");
+    reset_event_instance_for_next_run(&mut row.info.0);
+    {
+        use crate::schema::quests::dsl as q;
+        diesel::update(q::quests.filter(q::id.eq(instance_id).and(q::character_id.eq(owner))))
+            .set(QuestDbEntryInfo {
+                info: JsonDbWrapper(row.info.0.clone()),
+            })
+            .execute(conn)
+            .await?;
+    }
+
+    // Finished or not is read off the counter `/complete` just advanced: retail's
+    // `gameEventQuestFinished` carries exactly 5 (56/56), a live `gameEventQuest` 1-4.
+    let completion = event_completion_in_window(conn, sd, char_id, template_id, now).await?;
+    let milestones = sd
+        .event_quests
+        .templates
+        .get(&template_id)
+        .map_or(0, |t| t.milestone_count());
+    let exhausted = completion.completion_count as usize >= milestones;
+    log::info!(
+        "event exit: character {} finished a run of event quest {} ({}/{} tiers) — attempt ended",
+        char_id,
+        template_id,
+        completion.completion_count,
+        milestones,
+    );
+
+    let character = release_current_dungeon(conn, char_id).await?;
+    let quest = QuestWithId {
+        quest_id: instance_id,
+        quest: row.info.0,
     };
-    
-    Ok(Json(ExitDungeonResponse {
-        character: CompleteCharacterWithIdWithoutData {
-            id: char_id,
-            character: updated.0,
-        },
-    }))
+    Ok(if exhausted {
+        ExitDungeonResponse {
+            game_event_quest_finished: Some(quest),
+            ..ExitDungeonResponse::character_only(character)
+        }
+    } else {
+        ExitDungeonResponse {
+            dungeon_generated_data_list: row.generated_data.0.map(|inner| {
+                vec![DungeonGeneratedDataWithId {
+                    quest_id: instance_id,
+                    inner,
+                }]
+            }),
+            game_event_quest: Some(quest),
+            ..ExitDungeonResponse::character_only(character)
+        }
+    })
 }
 
 #[post(
@@ -642,21 +774,27 @@ pub async fn enter_quest_dungeon(
         .parse()
         .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2))?;
 
+    let _ = check_permission_for_character_and_get_it(
+        &mut conn,
+        validated_session,
+        character_id_normal,
+    )
+    .await?;
+
     if app_state.event_quests.templates.contains_key(&gld_quest_id) {
         return handle_event_dungeon_entry(
             &mut conn,
-            &app_state,
+            &app_state.game_data,
+            &app_state.event_quests,
+            &app_state.static_data,
             character_id_normal,
             gld_quest_id,
+            quest_id,
             body,
-            validated_session,
+            chrono::Utc::now().timestamp(),
         )
         .await;
     }
-
-    let _ =
-        check_permission_for_character_and_get_it(&mut conn, validated_session, character_id_normal)
-            .await?;
 
     conn.transaction(move |mut conn| {
         async move {
@@ -688,12 +826,45 @@ pub async fn enter_quest_dungeon(
                 None => return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 20002, 2)),
             };
 
-            if let Some(dungeon_instance) = body.dungeon_instance {
+            let fresh_instance = match body.dungeon_instance {
                 // first time entering
-                if quest.dungeon_state.is_some() {
-                    return Err(BladeApiError::new(StatusCode::CONFLICT, 20003, 1));
+                Some(instance) => {
+                    if quest.dungeon_state.is_some() {
+                        return Err(BladeApiError::new(StatusCode::CONFLICT, 20003, 1));
+                    }
+                    Some(instance)
                 }
+                None if quest.dungeon_state.is_some() => None,
+                // A resume with nothing to resume. Retail never answered a resume
+                // with an error (7/7 captured resumes 200, each after an exit that
+                // kept its attempt), and this server stranded players here by
+                // clearing attempts on every exit: the client still holds its save
+                // and asks to resume, and a 400 spins it for good. Start the run
+                // again from the dungeon the row was last entered with. A quest
+                // already completed stays refused — there is no run left to play.
+                None => {
+                    use crate::schema::quests::dsl::*;
+                    let stored: Option<JsonDbWrapper<B64EncodedData>> = if quest.info.0.completed {
+                        None
+                    } else {
+                        quests
+                            .filter(id.eq(quest_id).and(character_id.eq(character_id_normal)))
+                            .select(initial_state)
+                            .first(&mut conn)
+                            .await?
+                    };
+                    let Some(stored) = stored else {
+                        return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 20004, 2));
+                    };
+                    log::info!(
+                        "enter: character {character_id_normal} resumed quest {quest_id} with no \
+                         live attempt — starting a fresh one from its stored dungeonInstance"
+                    );
+                    Some(stored.0)
+                }
+            };
 
+            if let Some(dungeon_instance) = fresh_instance {
 
                 // `level` is the dungeon's own power and `seed` its generation
                 // seed. Both were the constants `1` and `54321` — so every dungeon
@@ -1155,16 +1326,23 @@ mod dungeon_settings_resolution {
     }
 }
 
+/// The event half of [`enter_quest_dungeon`]. `quest_id` is the TEMPLATE,
+/// `instance_quest_id` the player's own quest row; the caller has already checked
+/// that the session owns `character_id`.
+#[allow(clippy::too_many_arguments)]
 async fn handle_event_dungeon_entry(
     conn: &mut AsyncPgConnection,
-    app_state: &ServerGlobal,
+    game_data: &GameData,
+    event_quests: &EventQuestData,
+    sd: &blades_lib::static_data::StaticData,
     character_id: Uuid,
     quest_id: Uuid,
+    instance_quest_id: Uuid,
     body: EnterDungeonRequest,
-    session: &Session,
+    now: i64,
 ) -> Result<Json<EnterDungeonResponse>, BladeApiError> {
     // Get the event quest template
-    let event_template = app_state.event_quests.templates.get(&quest_id)
+    let event_template = event_quests.templates.get(&quest_id)
         .ok_or_else(|| {
             log::error!("[event_dungeon] Quest {} not found in templates", quest_id);
             BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2)
@@ -1179,36 +1357,23 @@ async fn handle_event_dungeon_entry(
 
     // The event quest template points to the dungeon the client loads. The quest UUID
     // itself is only the key used by the quest and event-dungeon endpoints.
-    let (dungeon_uuid, dungeon_data) = event_dungeon_data(&app_state.game_data, quest_id)?;
+    let (dungeon_uuid, dungeon_data) = event_dungeon_data(game_data, quest_id)?;
     let enemy_level = 1;
     let max_entries = 1;
 
     log::info!("[event_dungeon] Processing event quest {} with event_id {}", quest_id, actual_event_id);
 
-    // Get or create completion record, then drop any count left over from a
-    // PREVIOUS window of this event. Without this the counter is a lifetime total
-    // against per-window tiers, so finishing an event locks the player out of it
-    // for ever. See `EventCompletion::reset_if_before`.
-    let mut completion = EventCompletion::get_or_create(conn, character_id, quest_id).await?;
-    if let Some(window_start) = current_event_window_start(app_state, quest_id) {
-        completion.reset_if_before(conn, window_start).await?;
-    }
+    // The completion record, with any count left over from a PREVIOUS window of this
+    // event already dropped. Without that the counter is a lifetime total against
+    // per-window tiers, so finishing an event locks the player out of it for ever.
+    let completion = event_completion_in_window(conn, sd, character_id, quest_id, now).await?;
     let completion_count = completion.completion_count as usize;
 
-    // Check if character has already completed all tiers
-    let total_rewards = event_template.rewards.len();
-    let has_final_reward = event_template.final_reward.is_some();
-    let max_completions = if has_final_reward { total_rewards } else { total_rewards };
-    
-    if completion_count >= max_completions {
-        return Err(BladeApiError::new(
-            StatusCode::FORBIDDEN,
-            20001,
-            1, // Already completed all event tiers
-        ));
-    }
-
-    let _ = check_permission_for_character_and_get_it(&mut *conn, session, character_id).await?;
+    // Has the character already completed all tiers? Only a NEW attempt is refused
+    // on this: a live one (say, restarted after the last tier's `/complete`) must
+    // still be resumable, or the player is stuck inside a run they cannot re-enter.
+    let max_completions = event_template.rewards.len();
+    let event_finished = completion_count >= max_completions;
 
     let dungeon_id_clone = quest_id;
     // Same reason as `dungeon_id_clone`: inside `use event_dungeons::dsl::*` the bare
@@ -1238,6 +1403,7 @@ async fn handle_event_dungeon_entry(
 
             let current_entries = existing_entry.as_ref().map(|e| e.entry_count).unwrap_or(0);
             let existing_row_id = existing_entry.as_ref().map(|e| e.id);
+            let stored_instance = existing_entry.as_ref().and_then(|e| e.initial_state.clone());
 
             // Check expiration (use None for event quests since they don't expire)
             if let Some(entry) = &existing_entry {
@@ -1294,17 +1460,67 @@ async fn handle_event_dungeon_entry(
                     }));
                 }
 
-                // Existing row but dungeon_state is NULL — the player exited (or never
-                // finished) that attempt and is retrying. Retries are unlimited by
-                // design: only `completion_count >= max_completions`, checked above
-                // before this transaction even starts, is allowed to block `enter`.
-                // Fall through to start a new attempt, reusing this row's id.
+                // Existing row but dungeon_state is NULL — the player finished that
+                // attempt and is starting the next run. Runs are unlimited by design:
+                // only `completion_count >= max_completions` is allowed to block a new
+                // attempt. Fall through, reusing this row's id.
+            }
+
+            if event_finished {
+                return Err(BladeApiError::new(
+                    StatusCode::FORBIDDEN,
+                    20001,
+                    1, // Already completed all event tiers
+                ));
             }
 
             // Starting a new attempt — either no prior row at all, or the prior one
-            // was exited/failed and the player is retrying the same tier.
-            let dungeon_instance = body.dungeon_instance
-                .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, 20002, 2))?;
+            // was finished and the player is on the next tier.
+            let dungeon_instance = match body.dungeon_instance {
+                Some(instance) => instance,
+                // A resume with nothing to resume. Retail never answered a resume
+                // with an error (7/7 captured resumes 200, each after an exit that
+                // kept its attempt). This server did, by clearing the attempt on every
+                // exit: the owner died in "Golden Madness", restarted, and his resume
+                // came back 400 with the quest spinning for good (2026-09-24). Rows
+                // stranded that way still hold the dungeon they were entered with, so
+                // start the run again from it.
+                None => {
+                    let stored = stored_instance
+                        .and_then(|v| serde_json::from_value::<B64EncodedData>(v).ok())
+                        .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, 20002, 2))?;
+                    log::info!(
+                        "[event_dungeon] character {owner_id} resumed event quest {dungeon_id_clone} \
+                         with no live attempt — starting a fresh one from its stored dungeonInstance"
+                    );
+                    stored
+                }
+            };
+
+            // A new run of the instance starts from scratch. Retail's exit resets the
+            // instance after every completed run, and so does ours now; this catches
+            // rows left `completed` by the old exit, which never reset them, so that
+            // the run's `/complete` is not mistaken for a replay and left unpaid.
+            {
+                use crate::schema::quests::dsl as q;
+                let row = q::quests
+                    .filter(q::id.eq(instance_quest_id).and(q::character_id.eq(owner_id)))
+                    .select(QuestDbEntry::as_select())
+                    .for_update()
+                    .load(&mut conn)
+                    .await?
+                    .into_iter()
+                    .next();
+                if let Some(mut row) = row.filter(|r| r.info.0.completed) {
+                    reset_event_instance_for_next_run(&mut row.info.0);
+                    diesel::update(
+                        q::quests.filter(q::id.eq(instance_quest_id).and(q::character_id.eq(owner_id))),
+                    )
+                    .set(QuestDbEntryInfo { info: row.info })
+                    .execute(&mut conn)
+                    .await?;
+                }
+            }
 
             let enemy_level_i64 = enemy_level as i64;
 
@@ -1385,30 +1601,64 @@ async fn handle_event_dungeon_entry(
 
 #[cfg(test)]
 mod event_window_reset_tests {
-    /// Both event-dungeon paths must drop a previous window's count before they
-    /// read it.
+    /// Every path that reads an event completion count must drop a previous
+    /// window's count first — so there is exactly ONE way to get the counter, and it
+    /// resets.
     ///
     /// A source assertion rather than a handler test, for the same reason
-    /// `every_anon_login_exit_provisions_a_character` is one: the handlers need a
-    /// database and a session, and the bug is precisely that ONE of the two paths
-    /// forgot the call. Counting them is what the compiler cannot do.
+    /// `every_anon_login_exit_provisions_a_character` is one: the bug it guards is
+    /// precisely that ONE path forgot the call. Counting them is what the compiler
+    /// cannot do.
     ///
-    /// The exit path is the one that decides which tier pays and what the
-    /// client's checkmarks are told, so a stale count there stops rewards, stops
-    /// the counter and never ticks the box (#166). Adding a third path that reads
-    /// `completion_count` without resetting first is exactly how this regresses.
+    /// `/complete` is the path that decides which tier pays and what the client's
+    /// checkmarks are told, so a stale count there stops rewards, stops the counter
+    /// and never ticks the box (#166). Adding a path that loads the counter directly
+    /// is exactly how this regresses.
     #[test]
-    fn every_path_that_reads_a_completion_count_resets_the_window_first() {
-        let src = include_str!("dungeon.rs");
+    fn every_completion_counter_goes_through_the_window_reset() {
+        let strip = |src: &str| -> String {
+            src.lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let dungeon = strip(include_str!("dungeon.rs"));
+        let quest = strip(include_str!("quest.rs"));
+        let dungeon_update = strip(include_str!("dungeon_update.rs"));
 
-        let readers = src.matches("completion.completion_count as usize").count();
-        let resets = src.matches("completion.reset_if_before(conn, window_start).await?").count();
-        assert!(readers > 0, "the completion count must still be read somewhere");
+        // Spelled out at runtime so this test's own text does not match.
+        let direct = format!("EventCompletion::{}(", "get_or_create");
+        let direct_uses: usize = [&dungeon, &quest, &dungeon_update]
+            .iter()
+            .map(|s| s.matches(direct.as_str()).count())
+            .sum();
         assert_eq!(
-            resets, readers,
-            "{readers} path(s) read a stored completion count but only {resets} reset the \
-             window first; a stale count makes an event pay nothing and never tick"
+            direct_uses, 1,
+            "only `event_completion_in_window` may load the counter"
         );
+
+        let helper_at = dungeon
+            .find("async fn event_completion_in_window(")
+            .expect("the helper exists");
+        let helper = &dungeon[helper_at..];
+        let helper = &helper[..helper.find("\n}\n").expect("helper body ends")];
+        assert!(
+            helper.contains(direct.as_str()),
+            "the one direct load is the helper's"
+        );
+        assert!(
+            helper.contains("completion.reset_if_before(conn, window_start).await?"),
+            "the helper must reset a previous window's count before handing it out"
+        );
+
+        // The readers: the enter gate, the exit, and `/complete`.
+        let helper_calls = format!("{}(", "event_completion_in_window");
+        let definition = format!("fn {helper_calls}");
+        let calls = |src: &str| {
+            src.matches(helper_calls.as_str()).count() - src.matches(definition.as_str()).count()
+        };
+        assert!(calls(&dungeon) >= 2, "enter and exit");
+        assert!(calls(&quest) >= 1, "/complete");
     }
 }
 
@@ -1493,5 +1743,712 @@ mod dungeon_status_is_derived {
              hardcoded — the client shows `level` and scales to it:\n  {}",
             offenders.join("\n  ")
         );
+    }
+}
+
+/// The exit body is read, and read leniently.
+#[cfg(test)]
+mod exit_request_parsing {
+    use super::ExitDungeonRequest;
+
+    #[test]
+    fn the_retail_body_is_read() {
+        assert!(ExitDungeonRequest::parse(br#"{"restart":true}"#).restart);
+        assert!(!ExitDungeonRequest::parse(br#"{"restart":false}"#).restart);
+    }
+
+    /// A body we cannot read is an ordinary exit, never a rejection.
+    #[test]
+    fn a_missing_or_unreadable_body_is_an_ordinary_exit() {
+        for body in [&b""[..], b"{}", b"not json", br#"{"restart":"yes"}"#] {
+            assert_eq!(
+                ExitDungeonRequest::parse(body),
+                ExitDungeonRequest::default()
+            );
+        }
+    }
+}
+
+/// A Sigil event run end to end against a real Postgres: enter, restart, die, leave,
+/// `/complete`, replay, exit, and the next run — through the handlers' own bodies.
+///
+/// They SKIP without TEST_DATABASE_URL (CI provides one) rather than failing. The
+/// event tables come from their real migration, not a copy.
+#[cfg(test)]
+mod event_run_lifecycle_db {
+    use super::*;
+    use actix_web::ResponseError;
+    use blades_lib::static_data::StaticData;
+    use blades_lib::user_data::{Backpack, CompleteInventory, CompleteWallet, Loadout, Treasury};
+    use diesel_async::{AsyncConnection, AsyncPgConnection, SimpleAsyncConnection};
+    use serde_json::{Value, json};
+    use std::sync::OnceLock;
+
+    /// 2026-05-03 00:00 UTC — inside the corpus's own event calendar.
+    const NOW: i64 = 1_777_852_800;
+
+    const TABLES: &str = "\
+        CREATE TABLE characters ( \
+            id UUID PRIMARY KEY, user_id UUID NOT NULL, character JSONB NOT NULL, \
+            data JSONB NOT NULL, inventory JSONB NOT NULL, wallet JSONB NOT NULL, \
+            town JSONB, server_state JSONB NOT NULL, source_alt_uuid UUID); \
+        CREATE TABLE quests ( \
+            id UUID NOT NULL, character_id UUID NOT NULL REFERENCES characters(id), \
+            info JSONB NOT NULL, generated_data JSONB NOT NULL, dungeon_state JSONB, \
+            initial_state JSONB, PRIMARY KEY (id, character_id));";
+    const EVENT_TABLES: &str =
+        include_str!("../../migrations/2026-09-04-000000-0000_add_event_quest_tables/up.sql");
+
+    struct World {
+        sd: StaticData,
+        gd: GameData,
+        events: EventQuestData,
+    }
+
+    fn world() -> &'static World {
+        static WORLD: OnceLock<World> = OnceLock::new();
+        WORLD.get_or_init(|| {
+            let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+            let read = |f: &str| std::fs::read_to_string(dir.join(f)).expect(f);
+            World {
+                sd: crate::static_loader::load(&dir),
+                gd: serde_json::from_str(&read("parsed.json")).expect("parsed.json"),
+                events: EventQuestData::from_json(
+                    &serde_json::from_str(&read("event_quests.json")).expect("event_quests.json"),
+                ),
+            }
+        })
+    }
+
+    async fn fixture() -> Option<AsyncPgConnection> {
+        let url = std::env::var("TEST_DATABASE_URL").ok()?;
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction()
+            .await
+            .expect("test transaction");
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        conn.batch_execute(&format!(
+            "CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema};"
+        ))
+        .await
+        .unwrap();
+        conn.batch_execute(TABLES).await.unwrap();
+        conn.batch_execute(EVENT_TABLES).await.unwrap();
+        Some(conn)
+    }
+
+    macro_rules! db {
+        () => {
+            match fixture().await {
+                Some(c) => c,
+                None => {
+                    eprintln!("SKIP: TEST_DATABASE_URL unset — event run lifecycle NOT verified");
+                    return;
+                }
+            }
+        };
+    }
+
+    struct Player {
+        user: Uuid,
+        character: Uuid,
+        instance: Uuid,
+        template: Uuid,
+    }
+
+    /// A character holding one real minted event instance, stored the way `/quests`
+    /// stores it.
+    async fn seed(conn: &mut AsyncPgConnection) -> Player {
+        let w = world();
+        let (user, character) = (Uuid::new_v4(), Uuid::new_v4());
+        let minted = crate::quest::event_quests::mint(&w.sd, &w.gd, character, 40, NOW)
+            .into_iter()
+            .next()
+            .expect("the committed calendar opens an event at NOW");
+        assert!(
+            !minted.quest.objective_statuses.is_empty(),
+            "an event instance has objectives to reset"
+        );
+        let inventory = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: Loadout::default(),
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        diesel::sql_query(
+            "INSERT INTO characters (id, user_id, character, data, inventory, wallet, town, server_state) \
+             VALUES ($1, $2, $3::jsonb, '{}'::jsonb, $4::jsonb, $5::jsonb, NULL, '{}'::jsonb)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(character)
+        .bind::<diesel::sql_types::Uuid, _>(user)
+        .bind::<diesel::sql_types::Text, _>(
+            serde_json::to_string(&blades_lib::user_data::CompleteCharacter::default()).unwrap(),
+        )
+        .bind::<diesel::sql_types::Text, _>(serde_json::to_string(&inventory).unwrap())
+        .bind::<diesel::sql_types::Text, _>(
+            serde_json::to_string(&CompleteWallet::default()).unwrap(),
+        )
+        .execute(conn)
+        .await
+        .unwrap();
+        diesel::sql_query(
+            "INSERT INTO quests (id, character_id, info, generated_data) \
+             VALUES ($1, $2, $3::jsonb, $4::jsonb)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(minted.quest_id)
+        .bind::<diesel::sql_types::Uuid, _>(character)
+        .bind::<diesel::sql_types::Text, _>(serde_json::to_string(&minted.quest).unwrap())
+        .bind::<diesel::sql_types::Text, _>(serde_json::to_string(&minted.dungeon).unwrap())
+        .execute(conn)
+        .await
+        .unwrap();
+        Player {
+            user,
+            character,
+            instance: minted.quest_id,
+            template: minted.quest.gld_quest_id,
+        }
+    }
+
+    fn b64(s: &str) -> B64EncodedData {
+        B64EncodedData { b64: s.to_string() }
+    }
+
+    async fn enter(
+        conn: &mut AsyncPgConnection,
+        p: &Player,
+        dungeon_instance: Option<&str>,
+    ) -> Result<DungeonStatus, BladeApiError> {
+        let w = world();
+        handle_event_dungeon_entry(
+            conn,
+            &w.gd,
+            &w.events,
+            &w.sd,
+            p.character,
+            p.template,
+            p.instance,
+            EnterDungeonRequest {
+                dungeon_instance: dungeon_instance.map(b64),
+                current_state: b64("SAVE-AT-ENTRY"),
+            },
+            NOW,
+        )
+        .await
+        .map(|r| r.0.dungeon_status)
+    }
+
+    async fn exit(conn: &mut AsyncPgConnection, p: &Player, restart: bool) -> Value {
+        let r = event_dungeon_exit(
+            conn,
+            &world().sd,
+            p.character,
+            p.template,
+            p.instance,
+            restart,
+            NOW,
+        )
+        .await
+        .expect("exit is never refused");
+        serde_json::to_value(r).unwrap()
+    }
+
+    async fn complete(conn: &mut AsyncPgConnection, p: &Player) -> Value {
+        let r = crate::quest::complete_quest_in_tx(
+            conn,
+            &world().sd,
+            p.user,
+            p.character,
+            p.instance,
+            NOW,
+        )
+        .await
+        .expect("/complete answers");
+        serde_json::to_value(r).unwrap()
+    }
+
+    #[derive(diesel::QueryableByName)]
+    struct JsonCol {
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
+        v: Option<Value>,
+    }
+
+    async fn json_of(conn: &mut AsyncPgConnection, sql: &str, a: Uuid, b: Uuid) -> Option<Value> {
+        diesel::sql_query(sql)
+            .bind::<diesel::sql_types::Uuid, _>(a)
+            .bind::<diesel::sql_types::Uuid, _>(b)
+            .get_results::<JsonCol>(conn)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .and_then(|r| r.v)
+    }
+
+    /// The live attempt, if any.
+    async fn attempt(conn: &mut AsyncPgConnection, p: &Player) -> Option<Value> {
+        json_of(
+            conn,
+            "SELECT dungeon_state AS v FROM event_dungeons WHERE character_id = $1 AND dungeon_id = $2",
+            p.character,
+            p.template,
+        )
+        .await
+    }
+
+    async fn quest_info(conn: &mut AsyncPgConnection, p: &Player) -> Value {
+        json_of(
+            conn,
+            "SELECT info AS v FROM quests WHERE id = $1 AND character_id = $2",
+            p.instance,
+            p.character,
+        )
+        .await
+        .expect("the instance row")
+    }
+
+    /// `(experience, wallet)` — everything a payout could touch that matters here.
+    async fn purse(conn: &mut AsyncPgConnection, p: &Player) -> (u64, Value) {
+        let ch = json_of(
+            conn,
+            "SELECT character AS v FROM characters WHERE id = $1 AND id = $2",
+            p.character,
+            p.character,
+        )
+        .await
+        .unwrap();
+        let wallet = json_of(
+            conn,
+            "SELECT wallet AS v FROM characters WHERE id = $1 AND id = $2",
+            p.character,
+            p.character,
+        )
+        .await
+        .unwrap();
+        (ch["experience"].as_u64().unwrap_or(0), wallet)
+    }
+
+    async fn completions(conn: &mut AsyncPgConnection, p: &Player) -> i32 {
+        #[derive(diesel::QueryableByName)]
+        struct N {
+            #[diesel(sql_type = diesel::sql_types::Integer)]
+            n: i32,
+        }
+        diesel::sql_query(
+            "SELECT completion_count AS n FROM event_completions WHERE character_id = $1 AND event_id = $2",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(p.character)
+        .bind::<diesel::sql_types::Uuid, _>(p.template)
+        .get_results::<N>(conn)
+        .await
+        .unwrap()
+        .into_iter().next()
+        .map_or(0, |r| r.n)
+    }
+
+    /// Overwrite the live attempt's status, as a run in progress would have it.
+    async fn mid_run(conn: &mut AsyncPgConnection, p: &Player, revives: u64, killed_enemy: &str) {
+        let mut state = attempt(conn, p).await.expect("a live attempt");
+        state["dungeonStatus"]["reviveCount"] = json!(revives);
+        state["dungeonStatus"]["currentState"] = json!({"b64": "SAVE-MID-RUN"});
+        let mut enemies = serde_json::Map::new();
+        enemies.insert(
+            format!("{killed_enemy}-2-0"),
+            json!({
+                "spawnGroupId": killed_enemy, "xpReward": 257, "killed": true,
+                "time": 1_778_314_742_807u64,
+                "loot": {"currencies": {"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 304}}
+            }),
+        );
+        state["dungeonStatus"]["enemyStatus"] = Value::Object(enemies);
+        diesel::sql_query(
+            "UPDATE event_dungeons SET dungeon_state = $3 WHERE character_id = $1 AND dungeon_id = $2",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(p.character)
+        .bind::<diesel::sql_types::Uuid, _>(p.template)
+        .bind::<diesel::sql_types::Jsonb, _>(state)
+        .execute(conn)
+        .await
+        .unwrap();
+    }
+
+    fn keys(v: &Value) -> Vec<String> {
+        let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+        k.sort();
+        k
+    }
+
+    const ENEMY: &str = "045ad56d-b171-4ae5-a661-27e4b409faeb";
+
+    /// Retail's restart: the attempt lives on, from the top, and nothing is paid.
+    #[tokio::test]
+    async fn a_restart_keeps_the_attempt_resets_it_and_pays_nothing() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        let entered = enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("fresh enter");
+        mid_run(&mut conn, &p, 2, ENEMY).await;
+        // CONTROL: the run really is mid-way, so a reset below is observable.
+        let before = attempt(&mut conn, &p).await.unwrap();
+        assert_eq!(before["dungeonStatus"]["reviveCount"], json!(2));
+        assert_eq!(
+            before["dungeonStatus"]["enemyStatus"][format!("{ENEMY}-2-0")]["killed"],
+            json!(true)
+        );
+        let paid_before = purse(&mut conn, &p).await;
+
+        let out = exit(&mut conn, &p, true).await;
+
+        assert_eq!(
+            keys(&out),
+            ["character", "dungeonStatus"],
+            "retail's restart shape"
+        );
+        let status = &out["dungeonStatus"];
+        assert_eq!(
+            status["seed"],
+            json!(entered.seed),
+            "same run: seed unchanged"
+        );
+        assert_eq!(status["reviveCount"], json!(0));
+        assert_eq!(
+            status["enemyStatus"][format!("{ENEMY}-2-0")]["killed"],
+            json!(false)
+        );
+        assert_eq!(status["currentState"]["b64"], json!("SAVE-MID-RUN"));
+        assert!(out["character"]["currentQuestDungeon"].is_null());
+
+        let kept = attempt(&mut conn, &p).await.expect("the attempt is KEPT");
+        assert_eq!(
+            kept["dungeonStatus"]["reviveCount"],
+            json!(0),
+            "and the reset is stored"
+        );
+        assert_eq!(completions(&mut conn, &p).await, 0, "no tier consumed");
+        assert_eq!(purse(&mut conn, &p).await, paid_before, "nothing paid");
+    }
+
+    /// Dying and walking out — any exit with no `/complete` behind it — pays nothing,
+    /// however many times it is repeated. The old exit paid a tier every time, so
+    /// five walk-outs emptied the event.
+    #[tokio::test]
+    async fn an_exit_without_complete_pays_nothing_however_often() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        let paid_before = purse(&mut conn, &p).await;
+        enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("fresh enter");
+
+        for (i, restart) in [false, true, false, false, true, false]
+            .into_iter()
+            .enumerate()
+        {
+            let out = exit(&mut conn, &p, restart).await;
+            assert!(
+                out.get("dungeonStatus").is_some(),
+                "exit {i}: the attempt is kept"
+            );
+            assert!(
+                out.get("gameEventQuest").is_none(),
+                "exit {i}: the run did not end"
+            );
+            enter(&mut conn, &p, None).await.expect("and resumes");
+        }
+        assert_eq!(completions(&mut conn, &p).await, 0);
+        assert_eq!(
+            purse(&mut conn, &p).await,
+            paid_before,
+            "six exits, nothing paid"
+        );
+        assert_eq!(quest_info(&mut conn, &p).await["completed"], json!(false));
+    }
+
+    /// The owner's sequence from 2026-09-24: enter, die, restart, resume. The resume
+    /// arrives without `dungeonInstance` and must find the attempt.
+    #[tokio::test]
+    async fn enter_restart_resume_succeeds() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        let entered = enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("fresh enter");
+        mid_run(&mut conn, &p, 1, ENEMY).await;
+        exit(&mut conn, &p, true).await;
+
+        let resumed = enter(&mut conn, &p, None)
+            .await
+            .expect("the resume after a restart");
+        assert_eq!(resumed.seed, entered.seed, "it is the same run");
+        assert_eq!(resumed.revive_count, 0);
+    }
+
+    /// A resume that finds NO live attempt — rows the old exit stranded — starts the
+    /// run again from the stored dungeon instead of 400ing. The control: with no row
+    /// at all there is nothing to start from, and it is still refused.
+    #[tokio::test]
+    async fn a_resume_with_no_live_attempt_starts_a_fresh_one_from_the_stored_dungeon() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+
+        // CONTROL first: never entered, so no stored dungeon.
+        let err = enter(&mut conn, &p, None)
+            .await
+            .expect_err("nothing to resume or start");
+        assert_eq!(err.status_code().as_u16(), 400);
+
+        let entered = enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("fresh enter");
+        // What the old exit left behind: dungeon_state NULL, entry_count 1.
+        diesel::sql_query("UPDATE event_dungeons SET dungeon_state = NULL WHERE character_id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(p.character)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        let healed = enter(&mut conn, &p, None).await.expect("no longer a 400");
+        assert_eq!(healed.revive_count, 0);
+        assert!(
+            attempt(&mut conn, &p).await.is_some(),
+            "a live attempt again"
+        );
+        let _ = entered;
+    }
+
+    /// The whole ladder. Each real completion pays exactly its own tier, once, on
+    /// `/complete`; a replayed `/complete` pays nothing; the exit that follows pays
+    /// nothing and sets the instance up for its next run; the last tier ends the event.
+    #[tokio::test]
+    async fn complete_pays_each_tier_exactly_once_and_exit_pays_nothing() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        let tmpl = world()
+            .sd
+            .event_quests
+            .templates
+            .get(&p.template)
+            .expect("template");
+        let tiers = tmpl.milestone_count();
+        assert!(tiers >= 2, "a ladder, or this proves nothing");
+        let quest: Quest = serde_json::from_value(quest_info(&mut conn, &p).await).unwrap();
+
+        let mut paid = Vec::new();
+        for n in 0..tiers {
+            enter(&mut conn, &p, Some("INSTANCE"))
+                .await
+                .unwrap_or_else(|e| panic!("run {n}: {e}"));
+
+            let (xp0, _) = purse(&mut conn, &p).await;
+            let first = complete(&mut conn, &p).await;
+            let want = crate::quest::event_milestone_reward(&world().sd, p.instance, &quest, n)
+                .expect("a tier left");
+            assert_eq!(
+                first["reward"],
+                serde_json::to_value(&want).unwrap(),
+                "run {n} pays tier {n}"
+            );
+            assert!(
+                want.character_xp > 0,
+                "tier {n} carries xp, so the xp check below bites"
+            );
+            let (xp1, wallet1) = purse(&mut conn, &p).await;
+            assert_eq!(
+                xp1,
+                xp0 + want.character_xp,
+                "run {n}: paid into the character"
+            );
+            assert_eq!(completions(&mut conn, &p).await as usize, n + 1);
+            assert_eq!(
+                first["character"]["completedQuests"][p.instance.to_string()],
+                json!(n + 1),
+                "the checkmark mirror is the tier counter"
+            );
+
+            let replay = complete(&mut conn, &p).await;
+            assert_eq!(
+                serde_json::from_value::<blades_lib::economy::RewardGrant>(
+                    replay["reward"].clone()
+                )
+                .unwrap()
+                .is_empty(),
+                true,
+                "run {n}: a replayed /complete pays nothing"
+            );
+            assert_eq!(completions(&mut conn, &p).await as usize, n + 1);
+
+            let out = exit(&mut conn, &p, false).await;
+            assert_eq!(
+                purse(&mut conn, &p).await,
+                (xp1, wallet1),
+                "run {n}: exit pays nothing"
+            );
+            assert!(
+                attempt(&mut conn, &p).await.is_none(),
+                "run {n}: a completed run ends"
+            );
+            assert!(out.get("dungeonStatus").is_none());
+            let info = quest_info(&mut conn, &p).await;
+            assert_eq!(
+                info["completed"],
+                json!(false),
+                "run {n}: reset for the next run"
+            );
+            assert!(
+                info["objectiveStatuses"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .all(|s| s == &json!({"status": "Active", "progress": 0.0, "completed": false})),
+                "run {n}: objectives reset"
+            );
+            if n + 1 < tiers {
+                assert_eq!(
+                    keys(&out),
+                    ["character", "dungeonGeneratedDataList", "gameEventQuest"]
+                );
+                assert_eq!(out["gameEventQuest"]["questId"], json!(p.instance));
+            } else {
+                assert_eq!(
+                    keys(&out),
+                    ["character", "gameEventQuestFinished"],
+                    "the last tier"
+                );
+            }
+            paid.push(first["reward"].clone());
+        }
+        assert_ne!(paid[0], paid[1], "successive runs pay successive tiers");
+
+        let err = enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect_err("event finished");
+        assert_eq!(err.status_code().as_u16(), 403);
+    }
+
+    /// The old exit never reset an instance, so rows are sitting on production with
+    /// `completed: true`. Left alone, every later run's `/complete` would read as a
+    /// replay and pay nothing; the next fresh run resets it instead.
+    #[tokio::test]
+    async fn a_row_left_completed_by_the_old_exit_pays_on_its_next_run() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        diesel::sql_query(
+            "UPDATE quests SET info = jsonb_set(info, '{completed}', 'true') WHERE id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(p.instance)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+        enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("fresh enter");
+        let out = complete(&mut conn, &p).await;
+        let reward: blades_lib::economy::RewardGrant =
+            serde_json::from_value(out["reward"].clone()).unwrap();
+        assert!(!reward.is_empty(), "the run pays its tier");
+        assert_eq!(completions(&mut conn, &p).await, 1);
+    }
+
+    // ------------------------------------------------------------ ordinary quests
+
+    /// An ordinary quest row with a live attempt, `completed` as given.
+    async fn ordinary(conn: &mut AsyncPgConnection, completed: bool) -> (Uuid, Uuid) {
+        let p = seed(conn).await;
+        let quest_id = Uuid::new_v4();
+        let mut info = quest_info(conn, &p).await;
+        info["type"] = json!("NORMAL");
+        info["completed"] = json!(completed);
+        let mut enemies = serde_json::Map::new();
+        enemies.insert(
+            format!("{ENEMY}-0-0"),
+            json!({"spawnGroupId": ENEMY, "xpReward": 1, "killed": true, "time": 1, "loot": {}}),
+        );
+        let state = json!({"dungeonStatus": {
+            "dungeonSettingsIds": [Uuid::new_v4()], "reviveCount": 2, "level": 20,
+            "seed": 578299371, "currentState": {"b64": "SAVE"}, "algorithmVersion": 1,
+            "version": 1, "enemyStatus": Value::Object(enemies)
+        }});
+        diesel::sql_query(
+            "INSERT INTO quests (id, character_id, info, generated_data, dungeon_state, initial_state) \
+             VALUES ($1, $2, $3, 'null'::jsonb, $4, '{\"b64\":\"INSTANCE\"}'::jsonb)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(quest_id)
+        .bind::<diesel::sql_types::Uuid, _>(p.character)
+        .bind::<diesel::sql_types::Jsonb, _>(info)
+        .bind::<diesel::sql_types::Jsonb, _>(state)
+        .execute(conn)
+        .await
+        .unwrap();
+        (p.character, quest_id)
+    }
+
+    async fn ordinary_state(conn: &mut AsyncPgConnection, (c, q): (Uuid, Uuid)) -> Option<Value> {
+        json_of(
+            conn,
+            "SELECT dungeon_state AS v FROM quests WHERE id = $2 AND character_id = $1",
+            c,
+            q,
+        )
+        .await
+    }
+
+    /// The same restart gap existed on story quests and jobs.
+    #[tokio::test]
+    async fn an_ordinary_restart_keeps_and_resets_the_attempt() {
+        let mut conn = db!();
+        let row = ordinary(&mut conn, false).await;
+        let out = serde_json::to_value(
+            quest_dungeon_exit(&mut conn, row.0, row.1, true)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(keys(&out), ["character", "dungeonStatus"]);
+        assert_eq!(out["dungeonStatus"]["seed"], json!(578299371));
+        assert_eq!(out["dungeonStatus"]["reviveCount"], json!(0));
+        let kept = ordinary_state(&mut conn, row).await.expect("kept");
+        assert_eq!(kept["dungeonStatus"]["reviveCount"], json!(0));
+        assert_eq!(
+            kept["dungeonStatus"]["enemyStatus"][format!("{ENEMY}-0-0")]["killed"],
+            json!(false)
+        );
+    }
+
+    /// Walking out of an unfinished story dungeon keeps it (retail: 3/3), and a
+    /// completed one ends — the control that the kept case is not "never clear".
+    #[tokio::test]
+    async fn an_ordinary_exit_ends_the_attempt_only_when_completed() {
+        let mut conn = db!();
+        let unfinished = ordinary(&mut conn, false).await;
+        let out = serde_json::to_value(
+            quest_dungeon_exit(&mut conn, unfinished.0, unfinished.1, false)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(keys(&out), ["character", "dungeonStatus"]);
+        assert_eq!(
+            out["dungeonStatus"]["reviveCount"],
+            json!(2),
+            "left, not restarted"
+        );
+        assert!(ordinary_state(&mut conn, unfinished).await.is_some());
+
+        let finished = ordinary(&mut conn, true).await;
+        let out = serde_json::to_value(
+            quest_dungeon_exit(&mut conn, finished.0, finished.1, false)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(keys(&out), ["character"], "retail's completed-exit shape");
+        assert!(ordinary_state(&mut conn, finished).await.is_none());
+        assert!(out["character"]["currentQuestDungeon"].is_null());
     }
 }
