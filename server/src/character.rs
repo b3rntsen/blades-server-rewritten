@@ -520,7 +520,7 @@ fn make_bootstrap_data_loadable(data: &mut CompleteCharacterData, name: &str) ->
         changed = true;
     }
     if !dialog_is_loadable(&data.dialog) {
-        data.dialog = json!({ "Flags": [] });
+        data.dialog = default_starter_dialog();
         changed = true;
     }
     changed
@@ -537,7 +537,60 @@ fn dialog_is_loadable(value: &Value) -> bool {
     value
         .as_object()
         .and_then(|object| object.get("Flags"))
-        .is_some_and(Value::is_array)
+        .and_then(Value::as_array)
+        .is_some_and(|flags| !flags.is_empty())
+}
+
+/// The ten dialogue flags on the captured retail level-1 control.
+///
+/// `CharacterCreated` is the decisive one: our APK has the FTUE/character
+/// creation screen patched out, so an empty `Flags` array leaves the client in
+/// its pre-created state after every HTTP bootstrap request has returned 200.
+/// Production report #155 reproduced that exact stop four times after the
+/// earlier bootstrap repair had shipped. The old test only checked that
+/// `Flags` was an array, and therefore blessed `[]`; retail's level-1 response
+/// carries this complete block instead.
+fn default_starter_dialog() -> Value {
+    json!({
+        "Flags": [
+            dialog_flag("", "3cf19595-318c-49f9-96bc-6983de1de057", 6),
+            dialog_flag("", "5af81f45-bef2-40cd-bcee-83e067e76d16", 2),
+            dialog_flag("", "6f5cfa1a-d0b7-4ab3-a6bd-d7d07ed1451b", 1),
+            dialog_flag("", "506427dc-ce4e-4ff0-829c-cf5f53f5a485", 999),
+            dialog_flag("", "dc46fecd-7188-4571-8faf-ea3223b1100f", 999),
+            dialog_flag(
+                "310b56e9-32d0-4192-ba38-ede2cc0ccaee",
+                "089620b6-d333-413f-a6d2-61a5b757a8d1",
+                1,
+            ),
+            dialog_flag(
+                "ed58597c-91e8-4650-af6d-05dd0c1ac77a",
+                "facaade5-eff9-4879-b2e9-f4d050be8ba2",
+                0,
+            ),
+            dialog_flag(
+                "ed58597c-91e8-4650-af6d-05dd0c1ac77a",
+                "089620b6-d333-413f-a6d2-61a5b757a8d1",
+                1,
+            ),
+            dialog_flag(
+                "ed58597c-91e8-4650-af6d-05dd0c1ac77a",
+                "fc0f9e21-952a-470a-b034-bdf55a712d93",
+                1,
+            ),
+            // blades_uid.json: CharacterCreated
+            dialog_flag("", "ec0dff68-add1-439f-9ce6-bf45155decd7", 1),
+        ]
+    })
+}
+
+fn dialog_flag(npc_uid: &str, flag_id: &str, value: i32) -> Value {
+    json!({
+        "NpcUid": { "_t": "String", "_v": npc_uid },
+        "QuestUid": { "_t": "String", "_v": "" },
+        "FlagId": { "_t": "String", "_v": flag_id },
+        "Value": { "_t": "Int32", "_v": value }
+    })
 }
 
 /// A captured, known-loadable 48-key appearance template. The source identity
@@ -634,7 +687,27 @@ mod starter_character_tests {
             data.new_flags["LootAlgorithmVersion"],
             json!({ "_t": "Int32", "_v": 4 })
         );
-        assert_eq!(data.dialog, json!({ "Flags": [] }));
+        let flags = data.dialog["Flags"].as_array().unwrap();
+        assert_eq!(flags.len(), 10, "retail's level-1 bootstrap has ten flags");
+        assert!(
+            flags.iter().any(|flag| {
+                flag["FlagId"]["_v"] == "ec0dff68-add1-439f-9ce6-bf45155decd7"
+                    && flag["Value"]["_v"] == 1
+            }),
+            "the FTUE-patched client must be told that its character exists"
+        );
+    }
+
+    #[test]
+    fn an_empty_dialog_array_is_the_broken_spinner_shape_and_gets_repaired() {
+        let mut data = CompleteCharacterData {
+            customization: default_starter_customization(STARTER_NAME),
+            new_flags: default_starter_new_flags(),
+            dialog: json!({ "Flags": [] }),
+        };
+
+        assert!(make_bootstrap_data_loadable(&mut data, STARTER_NAME));
+        assert_eq!(data.dialog["Flags"].as_array().unwrap().len(), 10);
     }
 
     #[test]
