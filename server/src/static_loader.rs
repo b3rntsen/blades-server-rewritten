@@ -393,12 +393,15 @@ mod event_theme_file {
         event_theme_from_value(&raw, &load(&dir()).game_events)
     }
 
-    /// Nothing is armed by merging this: the committed static directory has no
-    /// `event_theme.json`, so the server loads the untouched calendar.
+    /// The committed window is exactly the one armed on the box for Halloween 2026
+    /// (5 October – 1 November, end exclusive 2 November), with the default set.
+    /// Changing the file must be a deliberate edit to this test too.
     #[test]
-    fn the_committed_data_has_no_themed_window() {
-        assert!(!dir().join("event_theme.json").exists());
-        assert_eq!(load(&dir()).game_event_theme, None);
+    fn the_committed_window_is_halloween_2026() {
+        let t = load(&dir()).game_event_theme.expect("event_theme.json is committed");
+        assert_eq!(t.start_secs, 1_791_158_400, "2026-10-05 00:00 UTC");
+        assert_eq!(t.end_secs, 1_793_577_600, "2026-11-02 00:00 UTC");
+        assert_eq!(t.quest_ids, HALLOWEEN_THEME_QUESTS.to_vec());
     }
 
     #[test]
