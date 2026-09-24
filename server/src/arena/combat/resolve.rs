@@ -3638,6 +3638,123 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
     out
 }
 
+/// Deliver continuous gear damage: Ebony Mail's poison, Rimelink's frost.
+///
+/// Before this, the property's arm in `apply_enchant` did not exist, so the effect
+/// fell through `_ => {}`. Ebony Mail's "Does {0} poison damage per second" did
+/// nothing in the arena.
+///
+/// Retail's shape, from the client (libil2cpp RVAs):
+/// * `ContinuousDamageBonusInstance.Register` (`0x1D4AC18`) adds `GetContinuousDamage`
+///   to the WEARER's `ContinuousAreaEffectDamageSource` list. The effect needs no hit
+///   and no range check. It runs against the actor the wearer is fighting.
+/// * `CombatManager.ResolveContinuousDamage` (`0x1BD3428`) returns early unless the
+///   target is alive. `ResolveContinuousAreaEffectDamage` (`0x1BD34C4`) then builds
+///   `sum(rates) x deltaTime` (`ApplyContinuousDamage`, `0x1BD3864`), and if the sum is
+///   above 0 runs `target.ResolveDamageTaken(wearer, list, AreaEffect, unblockable:
+///   false)` and `ApplyDamage(..., AreaEffect, ActiveSide.None)`.
+/// * `GetContinuousDamage` (`0x1D4B3C0`) returns the rate only when the damage type is
+///   in `_damageTypes`, the target passes `_damageEnemyGroup`, `_requiredArmor` is
+///   worn and the target is not the wearer. Otherwise it returns 0.
+///   `ActorFilterComponent.Contains` (`0x1D4B4F8`) maps a PlayerActor to `Player (1)`,
+///   which is in Ebony Mail's `[Enemy, Player]`. The retail PvP server's combatants
+///   are `ServerActor : PlayerActor`.
+///
+/// Health is integral, so the fractional part of each tick is carried to the next
+/// (`Fighter::continuous_carry`). The wire frame reports the exact tick. The first
+/// tick lands one interval after the round goes live, and the schedule advances from
+/// the SCHEDULED instant, as `apply_channel_ticks` does.
+fn apply_continuous_area_damage(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
+    let mut out = Vec::new();
+    let interval = Duration::from_secs_f32(super::damage::CONTINUOUS_AREA_TICK_SECS);
+    for wearer in 0..combat.fighters.len() {
+        if combat.fighters[wearer].loadout.continuous_damage.is_empty() {
+            continue;
+        }
+        if matches!(combat.phase, FlowState::RoundEnd | FlowState::NextState) {
+            break;
+        }
+        let Some(due) = combat.fighters[wearer].continuous_next_tick_at else {
+            combat.fighters[wearer].continuous_next_tick_at = Some(now + interval);
+            continue;
+        };
+        if now < due {
+            continue;
+        }
+        // Advance from the scheduled instant. After a long stall (a paused tick loop),
+        // rebase instead of bursting a backlog of ticks all at once.
+        let next = due + interval;
+        combat.fighters[wearer].continuous_next_tick_at = Some(if next + interval < now {
+            now + interval
+        } else {
+            next
+        });
+
+        let Some(target) = combat.opponent_of(wearer) else {
+            continue;
+        };
+        if target == wearer
+            || combat.fighters[wearer].is_dead()
+            || combat.fighters[target].is_dead()
+        {
+            continue;
+        }
+
+        let entries = combat.fighters[wearer].loadout.continuous_damage.clone();
+        for (ty, rate) in entries {
+            let resolved = super::damage::resolve_continuous_area_tick(
+                &combat.fighters[wearer].loadout,
+                &combat.fighters[target],
+                ty,
+                rate,
+                now,
+            );
+            if resolved.total <= 0.0 {
+                continue;
+            }
+            let owed = combat.fighters[wearer].continuous_carry + resolved.total;
+            let whole = owed.floor();
+            combat.fighters[wearer].continuous_carry = owed - whole;
+            let hp_before = combat.fighters[target].health;
+            combat.fighters[target].take_damage_at(whole as u32, now);
+            // Rimelink's frost mirrors onto stamina like any frost damage ("to Health
+            // and Stamina"), so the bars in the frame below are post-drain.
+            combat.fighters[target].drain_mirrored_pools(&resolved.components);
+            let msg = {
+                let hit = &combat.fighters[target];
+                let wearing = &combat.fighters[wearer];
+                messages::receive_damage(
+                    hit.net_object_id,
+                    NetObjectType::Avatar as u8,
+                    hit.packed_stats(),
+                    wearing.packed_stats(),
+                    resolved.source,
+                    resolved.flags,
+                    resolved.total,
+                    0,
+                    ActiveSide::None,
+                    resolved.most_resisted,
+                    &resolved.components,
+                )
+            };
+            debug!(
+                "combat event: gsid={} attacker_slot={wearer} target_slot={target} source=AreaEffect element={ty:?} damage={:.3} hp={hp_before}->{}",
+                combat.game_session_id,
+                resolved.total,
+                combat.fighters[target].health,
+            );
+            for v in 0..combat.fighters.len() {
+                out.push((v, msg.clone()));
+            }
+            if combat.fighters[target].is_dead() {
+                out.extend(on_round_ending_death(combat, wearer, now));
+                return out;
+            }
+        }
+    }
+    out
+}
+
 /// op51 `ChangeCombatStatusEffect` with `apply = false` for every status that has
 /// just lapsed, to both viewers.
 ///
@@ -4696,6 +4813,7 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
     out.extend(apply_dot_ticks(combat, now));
     out.extend(emit_status_removals(combat, now));
     out.extend(apply_channel_ticks(combat, now));
+    out.extend(apply_continuous_area_damage(combat, now));
     if matches!(combat.phase, FlowState::RoundEnd | FlowState::NextState) {
         // A DoT killing blow just ended the round — no bot swings this tick.
         return out;
@@ -10582,5 +10700,235 @@ mod report_31_high_block_stun {
                 "IceSpike staggers on damage alone (bits {bits:#06b})",
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod continuous_area_tests {
+    //! Ebony Mail: "Does {0} poison damage per second." Before this, the property
+    //! reached `apply_enchant` and fell through `_ => {}`, so the arena ignored it.
+    use std::time::{Duration, Instant};
+
+    use super::super::loadout::apply_template_properties;
+    use super::super::state::{DamageSource, DamageType, FlowState, MatchCombat};
+    use super::messages;
+
+    const EBONY_MAIL: &str = "def810af-e9f5-4e23-9247-1edf391d82e1";
+    const TICK: f32 = super::super::damage::CONTINUOUS_AREA_TICK_SECS;
+
+    fn live() -> (MatchCombat, Instant) {
+        let now = Instant::now();
+        (super::tests::make_live_combat(now), now)
+    }
+
+    fn wear_ebony_mail(combat: &mut MatchCombat, slot: usize) {
+        apply_template_properties(&mut combat.fighters[slot].loadout, EBONY_MAIL);
+    }
+
+    /// Step `on_tick` at the tick interval for `secs` seconds after `start`.
+    fn run(combat: &mut MatchCombat, start: Instant, secs: f32) -> Vec<(usize, Vec<u8>)> {
+        let steps = (secs / TICK).round() as u32;
+        let interval = Duration::from_secs_f32(TICK);
+        let mut out = Vec::new();
+        for i in 1..=steps {
+            out.extend(super::on_tick(combat, start + interval * i, false));
+        }
+        out
+    }
+
+    /// `(damaged obj, source, active side, total, components)` for every op50 sent
+    /// to viewer 0.
+    fn op50s(out: &[(usize, Vec<u8>)]) -> Vec<(i64, u8, u8, f32, Vec<(u8, f32)>)> {
+        let float = |nd: &arena_proto::NetDataParse, k: u8| match nd.get(k) {
+            Some(arena_proto::NetDataValue::Float(v)) => *v,
+            _ => f32::NAN,
+        };
+        out.iter()
+            .filter(|(v, f)| *v == 0 && messages::user_message_gmid(f) == Some(50))
+            .map(|(_, f)| {
+                let nd = arena_proto::parse_netdata(&f[2..]);
+                let n = nd.int(12).unwrap_or(0) as u8;
+                let comps = (0..n)
+                    .map(|k| {
+                        (
+                            nd.int(13 + 2 * k).unwrap_or(0) as u8,
+                            float(&nd, 14 + 2 * k),
+                        )
+                    })
+                    .collect();
+                (
+                    nd.int(0).unwrap_or(-1),
+                    nd.int(6).unwrap_or(0) as u8,
+                    nd.int(10).unwrap_or(0) as u8,
+                    float(&nd, 8),
+                    comps,
+                )
+            })
+            .collect()
+    }
+
+    fn area_effect(out: &[(usize, Vec<u8>)]) -> Vec<(i64, u8, u8, f32, Vec<(u8, f32)>)> {
+        op50s(out)
+            .into_iter()
+            .filter(|m| m.1 == DamageSource::AreaEffect as u8)
+            .collect()
+    }
+
+    /// THE REPORTED QUESTION. Five seconds in the mail costs the opponent 5 x 9.4 = 47
+    /// health, in 25 ticks of 1.88 poison on the retail wire shape: AreaEffect (7),
+    /// ActiveSide None (0), one Poison component.
+    ///
+    /// The wearer's own template also carries Fortify Poison t6, and the tick is still
+    /// 1.88. Retail's path never runs the attacker's damage bonuses.
+    #[test]
+    fn ebony_mail_poisons_the_opponent_at_9_4_per_second() {
+        let (mut combat, now) = live();
+        wear_ebony_mail(&mut combat, 0);
+        assert!(
+            combat.fighters[0]
+                .loadout
+                .element_fortify
+                .iter()
+                .any(|(t, v)| *t == DamageType::Poison && *v > 0.0),
+            "precondition: the real template carries Fortify Poison"
+        );
+        let target_obj = combat.fighters[1].net_object_id as i64;
+        let hp0 = combat.fighters[1].health;
+
+        // 26 steps: the first schedules, the next 25 each deliver one tick.
+        let out = run(&mut combat, now, 26.0 * TICK);
+        let ticks = area_effect(&out);
+        assert_eq!(ticks.len(), 25, "one tick per {TICK}s over 5s");
+        for (obj, _, side, total, comps) in &ticks {
+            assert_eq!(*obj, target_obj, "the OPPONENT takes it, never the wearer");
+            assert_eq!(*side, 0, "retail passes ActiveSide.None");
+            assert_eq!(comps.len(), 1);
+            assert_eq!(comps[0].0, DamageType::Poison as u8);
+            assert!(
+                (total - 9.4 * TICK).abs() < 1e-4,
+                "tick = 9.4/s x {TICK}s, got {total}"
+            );
+        }
+        let lost = hp0 - combat.fighters[1].health;
+        assert!(
+            (46..=47).contains(&lost),
+            "5s at 9.4/s = 47 HP, lost {lost}"
+        );
+        assert_eq!(
+            combat.fighters[0].health, combat.fighters[0].max_health,
+            "the wearer is untouched"
+        );
+    }
+
+    /// CONTROL: the same run without the mail emits no AreaEffect frame and costs
+    /// nothing, so the damage above comes from the property alone.
+    #[test]
+    fn control_without_the_mail_nothing_ticks() {
+        let (mut combat, now) = live();
+        let hp0 = combat.fighters[1].health;
+        let out = run(&mut combat, now, 26.0 * TICK);
+        assert!(area_effect(&out).is_empty());
+        assert_eq!(combat.fighters[1].health, hp0);
+    }
+
+    /// The effect keeps killing to the end, then ends the round and stops.
+    #[test]
+    fn it_can_kill_and_stops_once_the_opponent_is_dead() {
+        let (mut combat, now) = live();
+        wear_ebony_mail(&mut combat, 0);
+        combat.fighters[1].health = 3;
+        let out = run(&mut combat, now, 20.0 * TICK);
+        let ticks = area_effect(&out);
+        // 1.88 + 1.88 = 3.76 -> 3 whole HP after the second tick.
+        assert_eq!(ticks.len(), 2, "no tick after the killing one");
+        assert!(combat.fighters[1].is_dead());
+        assert!(
+            !matches!(combat.phase, FlowState::StateTimeout),
+            "the death ended the round"
+        );
+    }
+
+    /// A dead wearer's mail does nothing.
+    #[test]
+    fn a_dead_wearer_deals_nothing() {
+        let (mut combat, now) = live();
+        wear_ebony_mail(&mut combat, 0);
+        combat.fighters[0].health = 0;
+        let hp0 = combat.fighters[1].health;
+        let out = run(&mut combat, now, 10.0 * TICK);
+        assert!(area_effect(&out).is_empty());
+        assert_eq!(combat.fighters[1].health, hp0);
+    }
+
+    /// Poison resistance is subtracted at the tick's share of a second, so a small
+    /// rating trims the tick rather than zeroing it. A large one hits the shipped 95%
+    /// cap, the same as any other hit.
+    #[test]
+    fn resistance_is_charged_per_second_and_capped() {
+        for (rating, want) in [
+            (2.0_f32, 9.4 * TICK - 2.0 * TICK),
+            (500.0, 9.4 * TICK * 0.05),
+        ] {
+            let (mut combat, now) = live();
+            wear_ebony_mail(&mut combat, 0);
+            combat.fighters[1].loadout.resistances = vec![(DamageType::Poison, rating)];
+            let out = run(&mut combat, now, 3.0 * TICK);
+            let ticks = area_effect(&out);
+            assert!(!ticks.is_empty());
+            for (_, _, _, total, _) in ticks {
+                assert!(
+                    (total - want).abs() < 1e-3,
+                    "rating {rating}: want {want}, got {total}"
+                );
+            }
+        }
+    }
+
+    /// Retail passes `unblockable = false`, so a raised guard cuts the tick as it cuts
+    /// any elemental hit, even though the frame carries `ActiveSide.None`. Control: the
+    /// same defender with the guard down takes the full 1.88.
+    #[test]
+    fn a_raised_guard_blocks_it_like_any_elemental_hit() {
+        use super::super::damage::{flags, resolve_continuous_area_tick};
+        use super::super::loadout::starter;
+        use super::super::state::{ActorStateType, Fighter};
+        let now = Instant::now();
+        let mut d = Fighter::new(1, 2, starter(), now);
+        let open = resolve_continuous_area_tick(&starter(), &d, DamageType::Poison, 9.4, now);
+        assert!((open.total - 9.4 * TICK).abs() < 1e-4);
+        assert_eq!(
+            open.flags & (flags::WAS_LATE_BLOCKING | flags::WAS_OPTIMAL_BLOCKING),
+            0
+        );
+
+        d.loadout.block_rating = 400.0;
+        d.set_actor_state(ActorStateType::Blocking, now);
+        d.last_block_dropped_at = Some(now);
+        d.block_raised_at = Some(now);
+        d.blocking_until = Some(now + Duration::from_secs(5));
+        let blocked = resolve_continuous_area_tick(&starter(), &d, DamageType::Poison, 9.4, now);
+        assert!(
+            blocked.total < open.total,
+            "{} !< {}",
+            blocked.total,
+            open.total
+        );
+        assert_ne!(blocked.flags & flags::WAS_LATE_BLOCKING, 0);
+        assert_eq!(
+            blocked.active_side as u8, 0,
+            "the wire still says ActiveSide.None"
+        );
+    }
+
+    /// A new round starts its schedule again, one interval after it goes live.
+    #[test]
+    fn a_round_reset_restarts_the_schedule() {
+        let (mut combat, now) = live();
+        wear_ebony_mail(&mut combat, 0);
+        run(&mut combat, now, 5.0 * TICK);
+        assert!(combat.fighters[0].continuous_next_tick_at.is_some());
+        combat.reset_fighters_for_next_round(now);
+        assert_eq!(combat.fighters[0].continuous_next_tick_at, None);
+        assert_eq!(combat.fighters[0].continuous_carry, 0.0);
     }
 }

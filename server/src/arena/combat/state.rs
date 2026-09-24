@@ -906,6 +906,12 @@ pub struct Loadout {
     /// followed a blocked 54.3 and again a blocked 23.8. It is the wearer's gear
     /// hitting back, not a block-punish.
     pub revenge: Vec<(DamageType, f32)>,
+    /// Gear that damages the wearer's OPPONENT continuously, whether or not anyone
+    /// swings: `ContinuousPoisonDamagePropertyLogic` (Ebony Mail) and
+    /// `ContinuousFrostDamagePropertyLogic` (Rimelink). Each entry is a damage type
+    /// and its shipped rate in damage PER SECOND (`_xValueByTier`); the tick delivers
+    /// `rate x CONTINUOUS_AREA_TICK_SECS`. See `resolve::apply_continuous_area_damage`.
+    pub continuous_damage: Vec<(DamageType, f32)>,
     /// `Weapon`/`Shield` `Ravage{Stamina,Magicka,Health}` — the flat amount this hit
     /// takes off the victim's **maximum** pool ("Reduces target's maximum Stamina by
     /// {0}"), per landed swing. Distinct from the drain families, which take the
@@ -1430,6 +1436,14 @@ pub struct Fighter {
     /// [`CONSUMABLES_PER_ROUND`] (1). Reset by `reset_fighters_for_next_round`.
     /// [Phase 4.3]
     pub consumables_used: u32,
+    /// When this fighter's continuous gear damage (`loadout.continuous_damage`) next
+    /// ticks. `None` until the round is live; cleared at every round reset so a new
+    /// round's first tick lands one interval after it starts.
+    pub continuous_next_tick_at: Option<Instant>,
+    /// Fractional damage the continuous tick owes but has not yet taken. Health is
+    /// integral, and an Ebony Mail tick is 1.88: rounding each one would bill 2.0
+    /// (10/s against the 9.4/s the item text states), truncating would bill 1.0.
+    pub continuous_carry: f32,
     /// The consumable item UUID this fighter has equipped, as declared by its own
     /// `EquipAbilitiesAndConsumables` (56) upload (`{4:String consumableUuid ·
     /// 5:Int charges}`). It is the ONLY source of the UUID the server must echo in
@@ -1656,6 +1670,8 @@ impl Fighter {
             staggered_until: None,
             announced_statuses: Vec::new(),
             consumables_used: 0,
+            continuous_next_tick_at: None,
+            continuous_carry: 0.0,
             equipped_consumable: None,
             pending_restore: None,
             paralyze_secs: paralyze_duration_secs(1),
@@ -2831,6 +2847,8 @@ impl MatchCombat {
             // noise at best and could clear a fresh apply at worst.
             f.announced_statuses.clear();
             f.consumables_used = 0; // consumablesPerRound is PER ROUND [Phase 4.3]
+            f.continuous_next_tick_at = None;
+            f.continuous_carry = 0.0;
         }
         // These schedules belong to the MATCH rather than either Fighter, but their
         // contents are still per-round. Leaving them alive lets an old Frostbite
