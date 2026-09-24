@@ -1256,23 +1256,51 @@ mod report99_quest_reward_tests {
     }
 }
 
-/// What completing `quest_id` pays, and the bookkeeping that goes with it.
+/// What completing an EVENT quest pays on its `completion`-th completion, or `None`
+/// once the instance is exhausted.
 ///
-/// Two populations, and telling them apart is the whole point:
+/// An event quest is repeatable and pays a MILESTONE: the Nth completion pays
+/// `rewards[N]`, and the last one additionally pays `finalReward` — a bonus ON the
+/// final tier, not a tier of its own. Measured across 93 retail instances — 91/93
+/// first completions, 67/68 second, 59/60 third, 56/57 fourth, and all 54 observed
+/// fifth completions paid the last tier merged with `finalReward`. Past the last
+/// milestone there is nothing left to pay; paying `finalReward` by itself on every
+/// later run made the event farmable without limit (tracker #98).
 ///
-/// * **An ordinary quest** pays a fixed amount from `quest_rewards.json`. That table
-///   is keyed by the TEMPLATE id, so the lookup goes through `gldQuestId` first and
-///   only falls back to the row id. It used to be the other way round, against a
-///   table keyed by whatever id happened to be in the captured URL — which for an
-///   event quest is a per-character instance, so 78 of its 148 keys belonged to
-///   instances that will never exist again and every event quest paid nothing.
+/// The count comes from the caller — `event_completions`, read through
+/// `dungeon::event_completion_in_window` — so this stays a pure function.
+pub(crate) fn event_milestone_reward(
+    static_data: &blades_lib::static_data::StaticData,
+    quest_id: Uuid,
+    quest: &blades_lib::user_data::Quest,
+    completion: usize,
+) -> Option<RewardGrant> {
+    let Some(tmpl) = static_data.event_quests.templates.get(&quest.gld_quest_id) else {
+        log::warn!(
+            "[quest] event quest {quest_id} (template {}) has no entry in \
+             event_quests.json — paying nothing",
+            quest.gld_quest_id
+        );
+        return None;
+    };
+    let mut reward = tmpl.payout(completion)?;
+    if completion + 1 == tmpl.milestone_count() {
+        if let Some(final_reward) = &tmpl.final_reward {
+            merge_reward(&mut reward, final_reward);
+        }
+    }
+    Some(reward)
+}
+
+/// What completing ordinary quest `quest_id` pays.
 ///
-/// * **An event quest** is repeatable and pays a MILESTONE: the Nth completion pays
-///   `rewards[N]`, and the last one additionally pays `finalReward`. Measured across
-///   93 retail instances — 91/93 first completions, 67/68 second, 59/60 third, 56/57
-///   fourth, and all 54 observed fifth completions paid the last tier merged with
-///   `finalReward`. Past the last milestone the instance is exhausted and pays
-///   nothing.
+/// An ordinary quest pays a fixed amount from `quest_rewards.json`. That table is
+/// keyed by the TEMPLATE id, so the lookup goes through `gldQuestId` first and only
+/// falls back to the row id. It used to be the other way round, against a table
+/// keyed by whatever id happened to be in the captured URL — which for an event quest
+/// is a per-character instance, so 78 of its 148 keys belonged to instances that will
+/// never exist again and every event quest paid nothing. Event quests are paid by
+/// [`event_milestone_reward`] instead.
 ///
 /// A quest with no captured reward pays an empty grant and is logged. No number is
 /// synthesised for it: observed `characterXp` spreads over 200–900 with no rule that
@@ -1283,34 +1311,7 @@ fn resolve_completion_reward(
     static_data: &blades_lib::static_data::StaticData,
     quest_id: Uuid,
     quest: &blades_lib::user_data::Quest,
-    server_state: &mut blades_lib::server_state::ServerState,
 ) -> RewardGrant {
-    if matches!(quest.r#type, blades_lib::user_data::QuestType::GameEvent) {
-        let Some(tmpl) = static_data.event_quests.templates.get(&quest.gld_quest_id) else {
-            log::warn!(
-                "[quest] event quest {quest_id} (template {}) has no entry in \
-                 event_quests.json — paying nothing",
-                quest.gld_quest_id
-            );
-            return RewardGrant::default();
-        };
-        let completion = *server_state
-            .event_quest_completions
-            .entry(quest_id)
-            .or_insert(0) as usize;
-        let Some(mut reward) = tmpl.payout(completion) else {
-            return RewardGrant::default(); // instance exhausted
-        };
-        if completion + 1 == tmpl.milestone_count() {
-            if let Some(final_reward) = &tmpl.final_reward {
-                merge_reward(&mut reward, final_reward);
-            }
-        }
-        server_state
-            .event_quest_completions
-            .insert(quest_id, completion as u32 + 1);
-        return reward;
-    }
 
     // A town job pays what its own jobSetup declared. Its sentinel gldQuestId is in
     // neither reward table, so before this branch existed every job completion fell
@@ -1377,7 +1378,7 @@ fn merge_reward(into: &mut RewardGrant, extra: &RewardGrant) {
 /// `reward` is lenient: unknown quest → empty reward (all zeros / empty maps).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CompleteQuestResponse {
+pub(crate) struct CompleteQuestResponse {
     reward: RewardGrant,
     inventory: CompleteInventoryUpdate,
     wallet: CompleteWallet,
@@ -1391,6 +1392,9 @@ struct CompleteQuestResponse {
 /// one prod character reached a completion count of 4 on a quest the APK permits once.
 /// A row that is already `completed` is therefore an idempotency record, not permission
 /// to pay and count the quest a second time.
+///
+/// An event instance is completed once per RUN: the exit that ends a completed run
+/// sets it back to `false` (`dungeon::event_dungeon_exit`), as retail's does.
 fn mark_quest_completed_once(info: &mut blades_lib::user_data::Quest) -> bool {
     if info.completed {
         return false;
@@ -1412,156 +1416,229 @@ pub async fn complete_quest(
     let (character_id, quest_id) = path.into_inner();
     let globals = app_state.get_ref().clone();
     let mut conn = app_state.db_pool.get().await.unwrap();
+    let now = chrono::Utc::now().timestamp();
 
-    conn.transaction(move |mut conn| {
+    conn.transaction(move |conn| {
         async move {
-            // Load the economy row (character + wallet + inventory) under a row lock.
-            let mut entry = {
-                use crate::schema::characters;
-                characters::table
-                    .filter(characters::id.eq(character_id))
-                    .filter(characters::user_id.eq(user_id))
-                    .select(CharacterDbEntryEconomy::as_select())
-                    .for_no_key_update()
-                    .load(&mut conn)
-                    .await?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
-            };
-
-            // Load the quest row. Its completed flag is also our idempotency record.
-            let mut quest_entry = {
-                use crate::schema::quests;
-                quests::table
-                    .filter(quests::id.eq(quest_id))
-                    .filter(quests::character_id.eq(character_id))
-                    .select(QuestDbEntry::as_select())
-                    .for_no_key_update()
-                    .load(&mut conn)
-                    .await?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20001, 1))?
-            };
-
-            // A replayed `/complete` answers with the same shape and an empty reward:
-            // the row already holds the completion, so nothing is paid or counted twice.
-            if !mark_quest_completed_once(&mut quest_entry.info.0) {
-                let tracker = InventoryChangeTracker::default();
-                return Ok::<_, BladeApiError>(Json(CompleteQuestResponse {
-                    reward: RewardGrant::default(),
-                    inventory: entry.inventory.0.generate_client_update(&tracker),
-                    wallet: entry.wallet.0.clone(),
-                    character: CompleteCharacterWithIdWithoutData {
-                        id: character_id,
-                        character: entry.character.0.clone(),
-                    },
-                }));
-            }
-
-            // Update the character's completedQuests JSON.
-            //
-            // The key is the quest's OWN id for an event, and its template id
-            // otherwise. For an ordinary quest the two are equal, so this is a
-            // no-op there — which is exactly why keying everything by
-            // `gldQuestId` looked correct: the captured corpus scores 71/71 for
-            // both readings on ordinary quests, and 0/39 vs 110/1071 on events.
-            // See `dungeon::handle_event_dungeon_exit` for the full measurement.
-            // Report #166.
-            if !entry.character.0.completed_quests.is_object() {
-                entry.character.0.completed_quests = json!({});
-            }
-
-            let completed_quests = entry
-                .character
-                .0
-                .completed_quests
-                .as_object_mut()
-                .unwrap();
-
-            let key = completed_quests_key(&quest_entry.info.0, quest_id);
-
-            let current_count = completed_quests
-                .get(&key)
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-
-            completed_quests.insert(
-                key,
-                json!(current_count + 1),
-            );
-
-            let reward = resolve_completion_reward(
+            complete_quest_in_tx(
+                conn,
                 &globals.static_data,
+                user_id,
+                character_id,
                 quest_id,
-                &quest_entry.info.0,
-                &mut entry.server_state.0,
-            );
-
-            let mut tracker = InventoryChangeTracker::default();
-            apply_reward(
-                &reward,
-                &mut entry.wallet.0,
-                &mut entry.inventory.0,
-                &mut entry.character.0,
-                &mut tracker,
-            );
-            if !reward.stackable_items.is_empty() || !reward.items.is_empty() {
-                entry.inventory.0.backpack_version += 1;
-            }
-            if !reward.chests.is_empty() {
-                for chest in &reward.chests {
-                    grant_chest(
-                        &mut entry.inventory.0,
-                        chest.tier,
-                        chest.level,
-                        &mut tracker,
-                    );
-                }
-                entry.inventory.0.treasury_version += 1;
-            }
-
-            let inventory = entry.inventory.0.generate_client_update(&tracker);
-            let wallet = entry.wallet.0.clone();
-            let character = entry.character.0.clone();
-
-            // Write the completed quest flag back.
-            {
-                use crate::schema::quests;
-                diesel::update(quests::table)
-                    .filter(quests::id.eq(quest_id))
-                    .filter(quests::character_id.eq(character_id))
-                    .set(QuestDbEntryInfo {
-                        info: quest_entry.info,
-                    })
-                    .execute(&mut conn)
-                    .await?;
-            }
-
-            // Write the economy (wallet + inventory + character XP) back.
-            {
-                use crate::schema::characters;
-                diesel::update(characters::table)
-                    .filter(characters::id.eq(entry.id))
-                    .set(entry)
-                    .execute(&mut conn)
-                    .await?;
-            }
-
-            Ok::<_, BladeApiError>(Json(CompleteQuestResponse {
-                reward,
-                inventory,
-                wallet,
-                character: CompleteCharacterWithIdWithoutData {
-                    id: character_id,
-                    character,
-                },
-            }))
+                now,
+            )
+            .await
         }
         .scope_boxed()
     })
     .await
+    .map(Json)
+}
+
+/// The body of [`complete_quest`], inside its transaction.
+///
+/// **Event milestones are paid here, and only here.** Retail pays them on
+/// `/complete` — 217/217 captured responses carry `reward` — and never on the
+/// dungeon exit, 0/216. This server paid them on EXIT, so dying paid, walking in
+/// and out paid all five tiers without playing, and a first completion paid twice:
+/// once here from a second counter in `server_state`, once more on the way out.
+/// Now there is one counter, `event_completions`, advanced once per completed run.
+pub(crate) async fn complete_quest_in_tx(
+    conn: &mut diesel_async::AsyncPgConnection,
+    static_data: &blades_lib::static_data::StaticData,
+    user_id: Uuid,
+    character_id: Uuid,
+    quest_id: Uuid,
+    now: i64,
+) -> Result<CompleteQuestResponse, BladeApiError> {
+    // Load the economy row (character + wallet + inventory) under a row lock.
+    let mut entry = {
+        use crate::schema::characters;
+        characters::table
+            .filter(characters::id.eq(character_id))
+            .filter(characters::user_id.eq(user_id))
+            .select(CharacterDbEntryEconomy::as_select())
+            .for_no_key_update()
+            .load(conn)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
+    };
+
+    // Load the quest row. Its completed flag is also our idempotency record.
+    let mut quest_entry = {
+        use crate::schema::quests;
+        quests::table
+            .filter(quests::id.eq(quest_id))
+            .filter(quests::character_id.eq(character_id))
+            .select(QuestDbEntry::as_select())
+            .for_no_key_update()
+            .load(conn)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20001, 1))?
+    };
+
+    // A replayed `/complete` answers with the same shape and an empty reward:
+    // the row already holds the completion, so nothing is paid or counted twice.
+    if !mark_quest_completed_once(&mut quest_entry.info.0) {
+        let tracker = InventoryChangeTracker::default();
+        return Ok(CompleteQuestResponse {
+            reward: RewardGrant::default(),
+            inventory: entry.inventory.0.generate_client_update(&tracker),
+            wallet: entry.wallet.0.clone(),
+            character: CompleteCharacterWithIdWithoutData {
+                id: character_id,
+                character: entry.character.0.clone(),
+            },
+        });
+    }
+
+    if !entry.character.0.completed_quests.is_object() {
+        entry.character.0.completed_quests = json!({});
+    }
+    // The key is the quest's OWN id for an event, and its template id otherwise —
+    // see `completed_quests_key` for the measurement (report #166).
+    let key = completed_quests_key(&quest_entry.info.0, quest_id);
+
+    let is_event = matches!(
+        quest_entry.info.0.r#type,
+        blades_lib::user_data::QuestType::GameEvent
+    );
+    let (reward, completed_count) = if is_event {
+        let template_id = quest_entry.info.0.gld_quest_id;
+        let mut completion = crate::dungeon::event_completion_in_window(
+            conn,
+            static_data,
+            character_id,
+            template_id,
+            now,
+        )
+        .await?;
+        let tier = completion.completion_count as usize;
+        let milestones = static_data
+            .event_quests
+            .templates
+            .get(&template_id)
+            .map_or(0, |t| t.milestone_count());
+        match event_milestone_reward(static_data, quest_id, &quest_entry.info.0, tier) {
+            Some(reward) => {
+                completion.increment_completion(conn).await?;
+                // Report #183: "events upon completion give negative value of
+                // sigils". The completion table stores only a count, so there was no
+                // way to see what a completion actually paid, and the container's log
+                // is discarded every time the image is replaced. This records the
+                // payout at the moment it is granted, so the next report is
+                // answerable from the log instead of from a request to the reporter.
+                // Currency ids are logged raw: resolving them to names would need
+                // the item table in a hot path for no gain.
+                log::info!(
+                    "event complete: character {} tier {}/{} of event quest {} pays xp={} \
+                     townXp={} currencies={:?}",
+                    character_id,
+                    tier + 1,
+                    milestones,
+                    template_id,
+                    reward.character_xp,
+                    reward.town_xp,
+                    reward.currencies,
+                );
+                (reward, completion.completion_count as u64)
+            }
+            None => {
+                log::info!(
+                    "event complete: character {} has completed all {} tiers of event quest \
+                     {} - no reward",
+                    character_id,
+                    milestones,
+                    template_id
+                );
+                (RewardGrant::default(), completion.completion_count as u64)
+            }
+        }
+    } else {
+        let current_count = entry.character.0.completed_quests[&key]
+            .as_u64()
+            .unwrap_or(0);
+        (
+            resolve_completion_reward(static_data, quest_id, &quest_entry.info.0),
+            current_count + 1,
+        )
+    };
+
+    // Mirror the completion into `completedQuests` — what the client's tier
+    // checkmarks read. For an event it is the tier counter itself, so the two cannot
+    // drift: 1-5 over 185 retail samples, every one of those rows carrying 5 tiers.
+    entry
+        .character
+        .0
+        .completed_quests
+        .as_object_mut()
+        .unwrap()
+        .insert(key, json!(completed_count));
+
+    let mut tracker = InventoryChangeTracker::default();
+    apply_reward(
+        &reward,
+        &mut entry.wallet.0,
+        &mut entry.inventory.0,
+        &mut entry.character.0,
+        &mut tracker,
+    );
+    if !reward.stackable_items.is_empty() || !reward.items.is_empty() {
+        entry.inventory.0.backpack_version += 1;
+    }
+    if !reward.chests.is_empty() {
+        for chest in &reward.chests {
+            grant_chest(
+                &mut entry.inventory.0,
+                chest.tier,
+                chest.level,
+                &mut tracker,
+            );
+        }
+        entry.inventory.0.treasury_version += 1;
+    }
+
+    let inventory = entry.inventory.0.generate_client_update(&tracker);
+    let wallet = entry.wallet.0.clone();
+    let character = entry.character.0.clone();
+
+    // Write the completed quest flag back.
+    {
+        use crate::schema::quests;
+        diesel::update(quests::table)
+            .filter(quests::id.eq(quest_id))
+            .filter(quests::character_id.eq(character_id))
+            .set(QuestDbEntryInfo {
+                info: quest_entry.info,
+            })
+            .execute(conn)
+            .await?;
+    }
+
+    // Write the economy (wallet + inventory + character XP) back.
+    {
+        use crate::schema::characters;
+        diesel::update(characters::table)
+            .filter(characters::id.eq(entry.id))
+            .set(entry)
+            .execute(conn)
+            .await?;
+    }
+
+    Ok(CompleteQuestResponse {
+        reward,
+        inventory,
+        wallet,
+        character: CompleteCharacterWithIdWithoutData {
+            id: character_id,
+            character,
+        },
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -4297,11 +4374,10 @@ mod event_quest_tests {
             .templates
             .get(&m.quest.gld_quest_id)
             .expect("template shipped");
-        let mut state = blades_lib::server_state::ServerState::default();
 
         let mut paid = Vec::new();
-        for _ in 0..6 {
-            paid.push(resolve_completion_reward(&sd, m.quest_id, &m.quest, &mut state));
+        for n in 0..6 {
+            paid.push(event_milestone_reward(&sd, m.quest_id, &m.quest, n).unwrap_or_default());
         }
         for tier in 0..5 {
             assert!(!paid[tier].is_empty(), "milestone {tier} must pay something");
@@ -4327,7 +4403,6 @@ mod event_quest_tests {
                 "the last milestone must include the finalReward's {n} of {id}, got {got}"
             );
         }
-        assert_eq!(state.event_quest_completions.get(&m.quest_id), Some(&5));
     }
 
     /// An ordinary quest resolves its reward through `gldQuestId`, and every quest
@@ -4336,7 +4411,6 @@ mod event_quest_tests {
     fn an_ordinary_quest_pays_from_the_template_keyed_table() {
         let sd = static_data();
         let gd = game_data();
-        let mut state = blades_lib::server_state::ServerState::default();
         let mut paid = 0;
         for gld in gd.quests.keys() {
             if !sd.quest_rewards.contains_key(gld) {
@@ -4347,7 +4421,7 @@ mod event_quest_tests {
             // The ROW id is deliberately not the template id, so a lookup that keys on
             // the row id instead of gldQuestId finds nothing and pays zero.
             let row_id = Uuid::from_u128(0xF00D);
-            let reward = resolve_completion_reward(&sd, row_id, &q, &mut state);
+            let reward = resolve_completion_reward(&sd, row_id, &q);
             assert!(!reward.is_empty(), "quest {gld} is covered but paid nothing");
             paid += 1;
         }
@@ -4477,11 +4551,10 @@ mod report92_job_completion_reward_tests {
     fn every_job_on_the_board_pays_on_completion() {
         let sd = static_data();
         let gd = game_data();
-        let mut state = blades_lib::server_state::ServerState::default();
         let jobs = board();
         for job in &jobs {
             let row = jobs_gen::job_quest_db_entry(job, CHAR, &gd, &crate::quest::shipped_scaling()).expect("job row");
-            let paid = resolve_completion_reward(&sd, row.id, &row.info.0, &mut state);
+            let paid = resolve_completion_reward(&sd, row.id, &row.info.0);
             let declared = jobs_gen::job_completion_reward(job);
             assert!(
                 !paid.is_empty(),
@@ -4511,7 +4584,7 @@ mod report92_job_completion_reward_tests {
         }))
         .expect("fixture quest");
         story.job_reward = None;
-        let reward = resolve_completion_reward(&sd, Uuid::from_u128(0xF00D), &story, &mut state);
+        let reward = resolve_completion_reward(&sd, Uuid::from_u128(0xF00D), &story);
         assert!(!reward.is_empty(), "the story-quest control must still pay");
     }
 
@@ -4522,7 +4595,6 @@ mod report92_job_completion_reward_tests {
     #[test]
     fn a_job_row_from_before_this_field_still_pays_xp() {
         let sd = static_data();
-        let mut state = blades_lib::server_state::ServerState::default();
         let legacy: Quest = serde_json::from_value(json!({
             "version": 0, "type": "NORMAL", "objectiveStatuses": {},
             "difficultyLevel": 75, "seed": 0,
@@ -4531,7 +4603,7 @@ mod report92_job_completion_reward_tests {
         .expect("a pre-field row must still deserialize");
         assert!(legacy.job_reward.is_none(), "the fixture is the legacy shape");
 
-        let reward = resolve_completion_reward(&sd, Uuid::from_u128(1), &legacy, &mut state);
+        let reward = resolve_completion_reward(&sd, Uuid::from_u128(1), &legacy);
         // From the SHIPPED table, not `QuestLevelScaling::default()`. The default is
         // empty and answers with the last-resort `100 * level` formula, so asserting
         // against it would have this test agree with exactly the bug that let the job

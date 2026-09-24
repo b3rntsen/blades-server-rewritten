@@ -130,11 +130,11 @@ pub struct ServerState {
     /// How many times each event-quest INSTANCE has been completed, keyed by the
     /// per-character instance quest id.
     ///
-    /// An event quest is repeatable: the Nth completion pays the Nth milestone from
-    /// `event_quests.json`, so the count is what selects the payout. It lives here
-    /// rather than on the quest row because it must not appear on the wire — retail
-    /// sends no such field and the quest body is serialized straight to the client.
-    /// `#[serde(default)]` so rows written before this field deserialize cleanly.
+    /// RETIRED — no longer read or written. It was a second event-completion counter
+    /// beside the server's `event_completions` table, advanced by `/complete` while
+    /// the dungeon exit advanced the table, so a first completion paid twice. The
+    /// table is the one counter now. Kept only so stored rows that carry it still
+    /// deserialize (`#[serde(default)]` covers rows written before it existed).
     #[serde(default)]
     pub event_quest_completions: HashMap<Uuid, u32>,
     /// Arena trophy thresholds whose fixed promotion-loot entries have been

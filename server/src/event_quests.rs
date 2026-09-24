@@ -7,11 +7,7 @@ use diesel_async::AsyncPgConnection;
 use diesel_async::RunQueryDsl;
 use actix_web::http::StatusCode;
 
-use crate::{
-    BladeApiError,
-    models::CharacterDbEntryCharacterWalletInventory,
-};
-use blades_lib::user_data::{CompleteWallet, InventoryChangeTracker};
+use crate::BladeApiError;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EventQuestMeta {
@@ -352,44 +348,6 @@ impl EventCompletion {
         
         Ok(())
     }
-}
-
-pub fn apply_event_rewards(
-    rewards: &EventQuestReward,
-    character_data: &mut CharacterDbEntryCharacterWalletInventory,
-    wallet: &mut CompleteWallet,
-    inventory_modification_tracker: &mut InventoryChangeTracker,
-) -> Result<(), BladeApiError> {
-    use blades_lib::economy::{apply_reward, RewardGrant};
-    
-    let mut reward_grant = RewardGrant::default();
-
-    // Add XP
-    if let Some(xp) = rewards.character_xp {
-        character_data.character.0.experience += xp;
-    }
-    
-    // Apply stackable items
-    for (item_id, count) in &rewards.stackable_items {
-        reward_grant.stackable_items.insert(*item_id, *count);
-    }
-    
-    // Apply currencies
-    for (currency_id, amount) in &rewards.currencies {
-        reward_grant.currencies.insert(*currency_id, *amount);
-    }
-
-    if !reward_grant.currencies.is_empty() || !reward_grant.stackable_items.is_empty() {
-        apply_reward(
-            &reward_grant,
-            wallet,
-            &mut character_data.inventory.0,
-            &mut character_data.character.0,
-            inventory_modification_tracker,
-        );
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]
