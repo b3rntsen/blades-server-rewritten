@@ -3553,6 +3553,14 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
         .collect();
 
     for i in due {
+        // A tick below can end the round, and `on_round_ended` clears every channel.
+        // The indices in `due` then point into a list that is gone; indexing it
+        // panicked the arena thread and restarted the whole server mid-match
+        // (resolve.rs:3628, 2026-09-24 12:36, a Wall of Fire kill). Nothing is owed
+        // after a round boundary, so stop.
+        if i >= combat.channels.len() {
+            break;
+        }
         let (caster, target, uuid, level, magicka_full_at_cast) = {
             let c = &combat.channels[i];
             (
@@ -3591,6 +3599,10 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
             now,
         );
         out.extend(emit_damage(combat, caster, target, &resolved, now));
+        if i >= combat.channels.len() {
+            // This tick ended the round (see the guard at the top of the loop).
+            break;
+        }
 
         // **CONSUMING INFERNO'S UPKEEP.** `_staminaCostPerSecond` (51.81) and
         // `_healthCostPerSecond` (31.11) are what the spell costs its CASTER for
@@ -6692,6 +6704,25 @@ mod tests {
             (pierced - unresisted).abs() < 1.0,
             "EDIR equal to the defender's rating should fully cancel it: {pierced:.1} vs \
              {unresisted:.1} unresisted"
+        );
+    }
+
+    #[test]
+    fn a_channel_tick_that_ends_the_round_does_not_crash_the_server() {
+        // 2026-09-24 12:36: a Wall of Fire tick killed its target, the round ended,
+        // `on_round_ended` cleared the channel list, and the loop then indexed the
+        // channel it had just ticked — index out of bounds, arena restarted.
+        let now = Instant::now();
+        let mut combat = make_prod_scale_combat(now);
+        let _ = cast_frostbite(&mut combat, now);
+        assert!(!combat.channels.is_empty(), "control: the cast opened a channel");
+        let target = combat.channels[0].target_slot;
+        combat.fighters[target].health = 1;
+        let due = combat.channels[0].next_tick_at;
+        let _ = super::apply_channel_ticks(&mut combat, due);
+        assert!(
+            combat.channels.is_empty() || combat.fighters[target].is_dead(),
+            "the killing tick must end the channel without panicking"
         );
     }
 
