@@ -772,6 +772,26 @@ pub async fn enter_quest_dungeon(
 /// These run against the committed `deploy/static` corpus — the same data the
 /// server loads — and against real minted event quests, not hand-written ids.
 #[cfg(test)]
+mod event_dungeon_shadowing_guard {
+    /// A filter that compares a column with itself matches every row. This shape hid
+    /// behind `use …::dsl::*` in the event-dungeon entry and let one player's enter
+    /// resume another player's attempt.
+    #[test]
+    fn no_filter_compares_a_column_with_itself() {
+        let src = include_str!("dungeon.rs");
+        let code: String = src
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for col in ["character_id", "event_id", "dungeon_id", "user_id", "quest_id"] {
+            let needle = format!("{col}.eq({col})");
+            assert!(!code.contains(&needle), "self-comparing filter `{needle}` matches every row");
+        }
+    }
+}
+
+#[cfg(test)]
 mod dungeon_settings_resolution {
     use super::*;
     use actix_web::ResponseError;
@@ -1191,6 +1211,13 @@ async fn handle_event_dungeon_entry(
     let _ = check_permission_for_character_and_get_it(&mut *conn, session, character_id).await?;
 
     let dungeon_id_clone = quest_id;
+    // Same reason as `dungeon_id_clone`: inside `use event_dungeons::dsl::*` the bare
+    // name `character_id` is the COLUMN, so the filter written against it compared
+    // the column with itself and matched EVERY player's row. Entering a
+    // Sigil event then "resumed" whichever player's live attempt came first, answered
+    // 200, and never created this player's row — so their first update 404'd
+    // (400-20000-2 in game, 2026-09-24, on the first spell cast).
+    let owner_id = character_id;
 
     conn.transaction(|mut conn| {
         async move {
@@ -1198,7 +1225,7 @@ async fn handle_event_dungeon_entry(
                 use crate::schema::event_dungeons::dsl::*;
 
                 event_dungeons::table()
-                    .filter(character_id.eq(character_id))
+                    .filter(character_id.eq(owner_id))
                     .filter(event_id.eq(actual_event_id))
                     .filter(dungeon_id.eq(dungeon_id_clone))
                     .select(EventDungeonEntryInfo::as_select())
