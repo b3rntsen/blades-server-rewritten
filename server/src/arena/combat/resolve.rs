@@ -100,6 +100,39 @@ fn charge_swing_factor(
         .map(|swing| 1.0 + swing)
 }
 
+/// How far the client's charge clock may run BEHIND the server's measurement and
+/// still be believed. Packet jitter only ever makes the server's DOWN→UP gap differ
+/// from the client's own clock; retail's shortest captured charge→swing gap (215 ms)
+/// sits 18 ms under Light's `MinDamageTime`, so a server-only gate drops real swings.
+const CLIENT_CHARGE_MAX_BEHIND_SECS: f32 = 0.25;
+/// How far the client's clock may run AHEAD of the server's. Small on purpose: this
+/// is the direction a cheat would push it (a longer claimed hold).
+const CLIENT_CHARGE_MAX_AHEAD_SECS: f32 = 0.10;
+
+/// The hold the charge gates are judged on.
+///
+/// op46's charge float is `AttackChargeState._chargeTime`, the client's own clock
+/// since its Charging state began (`PvpAvatar$$PlayerCombatInputActivateRpc@0x17900ec`,
+/// combat-spec 02 §2.1). That is the clock the client's `IsAttackPossible` and
+/// `GetDamageFactor` read, so it is used when it is plausible: within
+/// `[server - 0.25 s, server + 0.10 s]` of the server's own DOWN→UP measurement.
+/// Outside that band, or absent, or non-positive (the client never entered
+/// Charging, e.g. the server's gmid 45 had not reached it yet), the server's
+/// measurement is used. The band bounds what a lying client can gain to 0.1 s.
+fn judged_hold_secs(server_secs: f32, client_secs: Option<f32>) -> f32 {
+    match client_secs {
+        Some(c)
+            if c.is_finite()
+                && c > 0.0
+                && c >= server_secs - CLIENT_CHARGE_MAX_BEHIND_SECS
+                && c <= server_secs + CLIENT_CHARGE_MAX_AHEAD_SECS =>
+        {
+            c
+        }
+        _ => server_secs,
+    }
+}
+
 /// A release before `MinDamageTime`: `PlayerChargingState$$OnLateUpdate@0x1d73fe4`
 /// calls `PlayerActorState$$AttackFailed@0x1d5a710` and changes to Idle. No swing, no
 /// damage, and Idle's `OnEnter` resets the combo (02 R1, X2). Tracker #228: "a brief
@@ -249,8 +282,8 @@ const SIDE_CLASSIFY_X_MIDPOINT: f32 = 0.5;
 const SIDE_CLASSIFY_SAMPLE_TTL: Duration = Duration::from_millis(500);
 
 /// **[Class 3 calibration]** Tolerance for the server-vs-client charge cross-check.
-/// A divergence beyond this is logged (possible cheat / clock skew / packet loss);
-/// it never changes the damage, which always uses the server measurement.
+/// A divergence beyond this is logged (possible cheat / clock skew / packet loss).
+/// The gates use the client value only inside the narrower `judged_hold_secs` band.
 const CHARGE_CROSS_CHECK_TOLERANCE_SECS: f32 = 0.35;
 
 // NetData propIds — gmid 47 `PlayerCombatInputPosition`.
@@ -314,8 +347,8 @@ struct PointerSample {
 struct InputActivate {
     /// `true` = button DOWN (press), `false` = button UP (release/commit).
     held: bool,
-    /// Client-reported hold duration in seconds (telemetry only — see
-    /// [`state::Fighter::last_client_charge`]).
+    /// Client-reported `_chargeTime` in seconds. The charge gates use it when it is
+    /// within [`judged_hold_secs`]'s band of the server's own measurement.
     client_charge: Option<f32>,
     /// The client's `_isWithinBlockZone` flag.
     block_zone: Option<bool>,
@@ -426,7 +459,7 @@ fn charge_cross_check(slot: usize, server_secs: f32, client_secs: Option<f32>) {
         info!(
             "combat: slot {slot} charge cross-check DIVERGED — server {server_secs:.3}s vs \
              client-reported {client:.3}s (Δ{delta:.3}s > {CHARGE_CROSS_CHECK_TOLERANCE_SECS}s). \
-             Server measurement is authoritative; client value is telemetry only."
+             Outside the accepted band, the server measurement is used."
         );
     } else {
         debug!(
@@ -929,13 +962,14 @@ pub fn on_c2s_input(
             );
             return Vec::new();
         }
-        let hold_secs = combat.fighters[sender]
+        let server_hold = combat.fighters[sender]
             .charge_press_at
             .map(|t| now.saturating_duration_since(t).as_secs_f32())
             .unwrap_or(0.0);
         combat.fighters[sender].charge_press_at = None;
-        // Server measurement is authoritative; the client's number is only compared.
-        charge_cross_check(sender, hold_secs, act.client_charge);
+        charge_cross_check(sender, server_hold, act.client_charge);
+        // The client's own charge clock, when it is plausible (see `judged_hold_secs`).
+        let hold_secs = judged_hold_secs(server_hold, act.client_charge);
         let Some(swing_factor) = charge_swing_factor(&combat.fighters[sender], hold_secs, now)
         else {
             fail_attack(combat, sender, hold_secs, now);
@@ -8101,10 +8135,10 @@ mod phase4_tests {
         assert_eq!(classified_side_for(&combat.fighters[0], now), None);
     }
 
-    /// **The charge timer is SERVER-measured, never client-claimed.** A client that
-    /// reports a full 2.8 s charge on an instantaneous tap gets no crit: the damage
-    /// is identical to an honest uncharged swing. The client value is kept only as
-    /// telemetry.
+    /// **A client claim cannot buy a charge.** The client's `_chargeTime` is believed
+    /// only within 0.10 s ahead of the server's measurement (`judged_hold_secs`), so a
+    /// client that reports a 2.8 s charge on an instantaneous tap gets exactly what an
+    /// honest tap gets. The claim is still recorded as telemetry.
     #[test]
     fn client_claimed_charge_cannot_buy_a_crit() {
         let now = Instant::now();
@@ -12561,5 +12595,49 @@ mod crit_charge_combo_tests {
         free.fighters[0].set_actor_state(ActorStateType::Charging, now);
         on_c2s_input(&mut free, 0, &up, now + Duration::from_millis(100));
         assert_eq!(free.fighters[0].actor_state(), ActorStateType::Idle, "control: AttackFailed");
+    }
+
+    /// Coordinator review: the gates read the client's own charge clock (02 §2.1),
+    /// so arrival jitter cannot drop a real swing. The client says 0.24 s (past Light's
+    /// 0.233 s `MinDamageTime`); the server saw the UP only 0.21 s after the DOWN.
+    /// That must swing. Controls: the same 0.21 s with no client value fails (the
+    /// server clock alone), and a client claim outside the band is ignored.
+    #[test]
+    fn a_jittered_release_is_judged_on_the_client_clock() {
+        let run = |server: f32, client: f32| {
+            let now = Instant::now();
+            let mut c = fight(now, Weight::Light, 200.0);
+            let release = now + Duration::from_secs_f32(server);
+            let before = c.fighters[1].health;
+            on_c2s_input(&mut c, 0, &make_pos_frame(RIGHT, 0.5, 0.0), now);
+            on_c2s_input(&mut c, 0, &make_act_frame(true, 0.0, false), now);
+            on_c2s_input(&mut c, 0, &make_act_frame(false, client, false), release);
+            land_due_hits(&mut c, release + FOLLOW_THROUGH_DELAY + Duration::from_millis(1));
+            before - c.fighters[1].health
+        };
+        assert_eq!(run(0.21, 0.24), 200, "client 0.24 s, server 0.21 s: a swing");
+        assert_eq!(run(0.21, 0.0), 0, "control: no client clock, server 0.21 s → AttackFailed");
+        // The plateau reads the same clock: client 0.33 s is a crit although the
+        // server saw 0.30 s.
+        assert_eq!(run(0.30, 0.33), 265, "client on the plateau → crit");
+        // The clamp. A client claiming 0.34 s (a crit) when the server saw 0.20 s is
+        // 0.14 s ahead, past the 0.10 s band: ignored, judged on 0.20 s → no swing.
+        assert_eq!(run(0.20, 0.34), 0, "claim 0.14 s ahead of the server is ignored");
+        // …and one far BEHIND (0.25 s under) is ignored too: server 0.60 s, client
+        // 0.34 s would be a crit, the server's 0.60 s is not.
+        assert_eq!(run(0.60, 0.34), 200, "claim 0.26 s behind is ignored");
+        // Inside the band on the ahead side it is believed: server 0.26, client 0.34.
+        assert_eq!(run(0.26, 0.34), 265, "0.08 s ahead is within the band");
+    }
+
+    #[test]
+    fn the_client_charge_band_is_bounded() {
+        assert_eq!(judged_hold_secs(0.21, Some(0.24)), 0.24);
+        assert_eq!(judged_hold_secs(0.21, None), 0.21);
+        assert_eq!(judged_hold_secs(0.21, Some(0.0)), 0.21);
+        assert_eq!(judged_hold_secs(0.21, Some(f32::NAN)), 0.21);
+        assert_eq!(judged_hold_secs(0.20, Some(0.31)), 0.20, "0.11 ahead");
+        assert_eq!(judged_hold_secs(0.50, Some(0.24)), 0.50, "0.26 behind");
+        assert_eq!(judged_hold_secs(0.50, Some(0.26)), 0.26, "0.24 behind");
     }
 }
