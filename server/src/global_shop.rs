@@ -16,10 +16,12 @@ use actix_web::{
     post,
     web::{self, Json},
 };
-use blades_lib::economy::{Price, RewardGrant, apply_reward};
+use blades_lib::economy::{Price, RewardGrant, apply_reward, grant_chest};
 use blades_lib::features::global_shop::{self, PurchaseEntry, PurchaseError};
 use blades_lib::static_data::{OfferContents, OfferContentsKind};
-use blades_lib::user_data::{CompleteInventoryUpdate, CompleteWallet, InventoryChangeTracker};
+use blades_lib::user_data::{
+    CompleteInventory, CompleteInventoryUpdate, CompleteWallet, InventoryChangeTracker,
+};
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use serde::{Deserialize, Serialize};
@@ -35,6 +37,32 @@ use crate::{
 
 /// Out-of-band service id for global-shop error envelopes (not a real Blades id).
 const SHOP_SERVICE_ID: u64 = 9004;
+
+/// Put shop chests in the treasury and make the response describe those exact
+/// persisted chests.
+///
+/// The only captured-shop chest grant was hand-authored (there is no retail
+/// purchase response for it): it carried no id and froze the chest at the level
+/// of the first reporter who needed the old 404 fixed. Returning that template
+/// beside an inventory diff with a newly assigned id leaves the client holding
+/// two different descriptions of the purchase. Other dynamic chest sources
+/// (Abyss, Arena and gifts) level chests to the recipient, so do that here too.
+fn grant_shop_chests(
+    reward: &mut RewardGrant,
+    inventory: &mut CompleteInventory,
+    character_level: u64,
+    tracker: &mut InventoryChangeTracker,
+) {
+    if reward.chests.is_empty() {
+        return;
+    }
+    for chest in &mut reward.chests {
+        chest.level = character_level;
+        let id = grant_chest(inventory, chest.tier, chest.level, tracker);
+        chest.id = Some(id);
+    }
+    inventory.treasury_version += 1;
+}
 
 fn map_purchase_err(e: PurchaseError) -> BladeApiError {
     match e {
@@ -914,7 +942,7 @@ pub async fn purchase_global_shop(
             // the transaction do we know who is buying and how many times they have
             // bought before. The purchase count is the nonce, so buying the same
             // bundle twice in a row cannot return the same thing.
-            let reward = {
+            let mut reward = {
                 let bought_before = entry
                     .server_state
                     .0
@@ -946,17 +974,12 @@ pub async fn purchase_global_shop(
             // backpack), so grant each one here — mirrors quest.rs / daily_reward.rs. A
             // chest product with NO grants entry 404'd → the client prompted to reconnect
             // to Bethesda; a chest reward that never lands would be a silent no-op.
-            if !reward.chests.is_empty() {
-                for chest in &reward.chests {
-                    blades_lib::economy::grant_chest(
-                        &mut entry.inventory.0,
-                        chest.tier,
-                        chest.level,
-                        &mut tracker,
-                    );
-                }
-                entry.inventory.0.treasury_version += 1;
-            }
+            grant_shop_chests(
+                &mut reward,
+                &mut entry.inventory.0,
+                u64::from(entry.character.0.level),
+                &mut tracker,
+            );
             *entry
                 .server_state
                 .0
@@ -1000,6 +1023,65 @@ pub async fn purchase_global_shop(
     .await
 }
 
+#[cfg(test)]
+mod shop_chest_tests {
+    use super::*;
+    use blades_lib::{
+        economy::RewardChest,
+        user_data::{Backpack, Loadout, Treasury},
+    };
+
+    fn empty_inventory() -> CompleteInventory {
+        CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: Loadout::default(),
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 6,
+        }
+    }
+
+    /// Tracker #216: buying the hand-authored Legendary Chest returned a reward
+    /// with no id and level 42, while the inventory diff independently assigned
+    /// an id. The client froze before it could send `/chests/{id}/collect`.
+    #[test]
+    fn purchased_chest_response_matches_the_persisted_treasury_chest() {
+        let mut reward = RewardGrant {
+            chests: vec![RewardChest {
+                id: None,
+                tier: 5,
+                level: 42,
+            }],
+            ..RewardGrant::default()
+        };
+        let mut inventory = empty_inventory();
+        let mut tracker = InventoryChangeTracker::default();
+
+        grant_shop_chests(&mut reward, &mut inventory, 48, &mut tracker);
+
+        let returned = &reward.chests[0];
+        let persisted = &inventory.treasury.chests()[0];
+        let update = inventory.generate_client_update(&tracker);
+        assert_eq!(returned.id.as_deref(), Some(persisted.id.as_str()));
+        assert_eq!(returned.level, 48, "shop chests scale to their buyer");
+        assert_eq!(persisted.level, 48);
+        assert_eq!(update.treasury.chests[0].id, persisted.id);
+        assert_eq!(inventory.treasury_version, 7);
+    }
+
+    #[test]
+    fn a_non_chest_purchase_does_not_change_the_treasury_version() {
+        let mut reward = RewardGrant::default();
+        let mut inventory = empty_inventory();
+        let mut tracker = InventoryChangeTracker::default();
+
+        grant_shop_chests(&mut reward, &mut inventory, 48, &mut tracker);
+
+        assert_eq!(inventory.treasury_version, 6);
+        assert!(inventory.treasury.chests().is_empty());
+    }
+}
 
 /// The shipped template table, for the entries whose bucket the extractor left
 /// `unknown`. Read from the same file the server loads. File-scope so every test
