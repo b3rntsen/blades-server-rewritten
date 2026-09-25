@@ -1264,6 +1264,7 @@ mod human_priority_tests {
             solo_fallback_secs: 4,
             debug_ghost_user_id: None,
             bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
@@ -1838,7 +1839,7 @@ mod human_priority_tests {
 
         // Empty arena → the fast deadline.
         assert_eq!(
-            fallback_deadline(&config, &reg, since, 0, 0, None, Instant::now()).0,
+            fallback_deadline(&config, &reg, since, 0, 0, false, None, Instant::now()).0,
             since + Duration::from_secs(4),
             "nobody else is playing, so a lone player must not be made to wait"
         );
@@ -1854,7 +1855,7 @@ mod human_priority_tests {
         let peer: std::net::SocketAddr = "10.0.0.1:5000".parse().unwrap();
         assert!(reg.admit(peer, psid, &[7u8; 32]).is_some());
         assert_eq!(
-            fallback_deadline(&config, &reg, since, 0, 0, None, Instant::now()).0,
+            fallback_deadline(&config, &reg, since, 0, 0, false, None, Instant::now()).0,
             since + Duration::from_secs(230),
             "somebody is mid-match — hold the queue open for them"
         );
@@ -1863,7 +1864,7 @@ mod human_priority_tests {
         // whoever is waiting.
         reg.remove(&peer);
         assert_eq!(
-            fallback_deadline(&config, &reg, since, 0, 0, None, Instant::now()).0,
+            fallback_deadline(&config, &reg, since, 0, 0, false, None, Instant::now()).0,
             since + Duration::from_secs(4),
             "the delay must collapse when the arena empties"
         );
@@ -1878,6 +1879,74 @@ mod human_priority_tests {
         // process env (which races other tests in the same binary).
         assert_eq!(cfg().busy_fallback_secs, 230);
         assert!(cfg().busy_fallback_secs > cfg().solo_fallback_secs);
+    }
+
+    /// CRE-HARNESS-BOT: a user on `ArenaConfig::immediate_bot_users` (env
+    /// `ARENA_IMMEDIATE_BOT_USERS`) must get the bot the instant their ticket is
+    /// looked at — no human wait at all, regardless of what else is going on in the
+    /// arena. This is the scripted test-harness account's exemption, so 60-100
+    /// automated arena runs are not each paying up to `recent_fallback_secs` (or
+    /// `busy_fallback_secs` while a human is mid-match) waiting for an opponent that
+    /// will never show up.
+    #[test]
+    fn immediate_bot_users_get_zero_wait() {
+        let harness_user = Uuid::new_v4();
+        let mut config = cfg();
+        config.immediate_bot_users = vec![harness_user];
+        assert!(is_immediate_bot_user(&config, harness_user));
+
+        let reg = MatchRegistry::new(4);
+        let since = Instant::now();
+        let (deadline, _tier) =
+            fallback_deadline(&config, &reg, since, 0, 0, true, None, Instant::now());
+        assert_eq!(
+            deadline, since,
+            "an exempt user must get the bot with zero wait"
+        );
+    }
+
+    /// The control: a normal (non-exempt) user must keep paying exactly the
+    /// ordinary configured wait, even while somebody else is on the exemption
+    /// list. The per-user exemption must never leak into anyone else's timing.
+    #[test]
+    fn non_exempt_users_keep_the_configured_wait() {
+        let normal_user = Uuid::new_v4();
+        let mut config = cfg();
+        config.immediate_bot_users = vec![Uuid::new_v4()]; // somebody ELSE is exempt
+        assert!(!is_immediate_bot_user(&config, normal_user));
+
+        let reg = MatchRegistry::new(4);
+        let since = Instant::now();
+        let (deadline, _tier) =
+            fallback_deadline(&config, &reg, since, 0, 0, false, None, Instant::now());
+        assert_eq!(
+            deadline,
+            since + Duration::from_secs(config.solo_fallback_secs),
+            "a normal user's wait must be untouched by someone else's exemption"
+        );
+    }
+
+    /// An empty exemption list (the default, and what every deployment has today)
+    /// must reproduce today's behaviour byte-for-byte. This is what makes the
+    /// change safe to ship: nobody is exempt until the owner deliberately adds a
+    /// UUID to `ARENA_IMMEDIATE_BOT_USERS`.
+    #[test]
+    fn empty_exemption_list_changes_nothing() {
+        let config = cfg();
+        assert!(
+            config.immediate_bot_users.is_empty(),
+            "the default roster is empty"
+        );
+        let anyone = Uuid::new_v4();
+        assert!(!is_immediate_bot_user(&config, anyone));
+
+        let reg = MatchRegistry::new(4);
+        let since = Instant::now();
+        assert_eq!(
+            fallback_deadline(&config, &reg, since, 0, 0, false, None, Instant::now()).0,
+            since + Duration::from_secs(config.solo_fallback_secs),
+            "an empty exemption list must reproduce today's ordinary solo-fallback wait"
+        );
     }
 }
 
@@ -1928,6 +1997,7 @@ mod bot_pick_tests {
             solo_fallback_secs: 15,
             debug_ghost_user_id: None,
             bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
@@ -3149,6 +3219,16 @@ fn fallback_tier(others_live: usize, others_recent: usize, others_waiting: usize
     }
 }
 
+/// Is `user_id` on the harness/test-account exemption roster
+/// (`ArenaConfig::immediate_bot_users`, env `ARENA_IMMEDIATE_BOT_USERS`)?
+///
+/// A one-line seam so [`fallback_deadline`]'s exemption path is driven by the same
+/// lookup the loop actually performs, rather than a hand-set `bool` in a test that
+/// could silently drift from what production does.
+fn is_immediate_bot_user(config: &ArenaConfig, user_id: Uuid) -> bool {
+    config.immediate_bot_users.contains(&user_id)
+}
+
 /// When a ticket that started waiting at `since` may fall back to a bot.
 ///
 /// The seam that READS the arena's state. Split from [`fallback_delay`] so a test can
@@ -3161,9 +3241,29 @@ fn fallback_deadline(
     since: Instant,
     recent: usize,
     waiting_others: usize,
+    immediate: bool,
     prev: Option<(Instant, u8)>,
     now: Instant,
 ) -> (Instant, u8) {
+    // Harness/test-account exemption (`ArenaConfig::immediate_bot_users`, env
+    // `ARENA_IMMEDIATE_BOT_USERS`). Checked before anything else and ignores
+    // `registry`/`recent`/`waiting_others` on purpose: a scripted harness run has no
+    // real human to wait for, so it gets the bot the instant its ticket is looked at.
+    // `IMMEDIATE_TIER` is a sentinel above every real tier purely so the "log only on
+    // change" comparison below still works; nothing else reads its value. This branch
+    // is only ever taken for a UUID on the exemption list — empty (the default) means
+    // it is never taken and every other player's wait is exactly as before.
+    const IMMEDIATE_TIER: u8 = u8::MAX;
+    if immediate {
+        if prev.map(|(_, t)| t) != Some(IMMEDIATE_TIER) {
+            log::info!(
+                "matchmaker: fallback tier -> immediate (harness-exempt user, \
+                 ARENA_IMMEDIATE_BOT_USERS) — bot with no wait"
+            );
+        }
+        return (since, IMMEDIATE_TIER);
+    }
+
     let live = registry.live_human_count();
     let delay = fallback_delay(config, live, recent, waiting_others);
     let tier = tier_rank(live, recent, waiting_others);
@@ -3275,12 +3375,16 @@ async fn matchmaker_loop(
             let others_live = registry.live_human_count();
             let now = Instant::now();
             let tid = oldest_tid.expect("waiting is non-empty");
+            let immediate = oldest_user
+                .map(|u| is_immediate_bot_user(&config, u))
+                .unwrap_or(false);
             let (floor, tier) = fallback_deadline(
                 &config,
                 &registry,
                 since,
                 recent,
                 waiting_others,
+                immediate,
                 floors.get(&tid).copied(),
                 now,
             );
@@ -4082,6 +4186,7 @@ mod tests {
             solo_fallback_secs: 15,
             debug_ghost_user_id: None,
             bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
@@ -4191,6 +4296,7 @@ mod tests {
             solo_fallback_secs: 15,
             debug_ghost_user_id: None,
             bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
@@ -4274,6 +4380,7 @@ mod tests {
             solo_fallback_secs: 600, // long fallback — the Failed must arrive BEFORE it
             debug_ghost_user_id: None,
             bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
@@ -4368,6 +4475,7 @@ mod tests {
             solo_fallback_secs: 1,
             debug_ghost_user_id: None,
             bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
@@ -4427,6 +4535,7 @@ mod tests {
             solo_fallback_secs: 3,
             debug_ghost_user_id: None,
             bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
@@ -4514,6 +4623,7 @@ mod tests {
             solo_fallback_secs: 1,
             debug_ghost_user_id: None,
             bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
             busy_fallback_secs: 230,
             recent_fallback_secs: 6,
             recent_window_secs: 300,
@@ -4589,6 +4699,7 @@ mod tests {
             solo_fallback_secs: 1,
             debug_ghost_user_id: None,
             bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
@@ -4650,6 +4761,7 @@ mod tests {
             solo_fallback_secs: 1,
             debug_ghost_user_id: None,
             bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
@@ -4754,6 +4866,7 @@ mod tests {
             solo_fallback_secs: 1,
             debug_ghost_user_id: None,
             bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
@@ -4820,6 +4933,7 @@ mod tests {
             solo_fallback_secs: 1,
             debug_ghost_user_id: None,
             bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,

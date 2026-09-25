@@ -114,6 +114,19 @@ pub struct ArenaConfig {
     /// human-vs-AI matches: 81, 110, 78, 110, 84 s), so two players trading fights stay
     /// "recent" to each other across the whole cycle.
     pub recent_window_secs: u64,
+    /// Roster of arena `users.id` UUIDs that skip the human-pairing wait entirely and
+    /// get a bot immediately (env `ARENA_IMMEDIATE_BOT_USERS`, comma-separated,
+    /// default empty).
+    ///
+    /// For the scripted arena test harness: each run would otherwise pay up to
+    /// `recent_fallback_secs` (30 s), and up to `busy_fallback_secs` (230 s) while a
+    /// human is mid-match, waiting for a human opponent that never shows up. Bumping
+    /// those numbers down would shrink the pairing window for REAL players just to
+    /// make a bot script faster — the wrong trade. This is a per-user exemption
+    /// instead: only a UUID on this list is affected, so `solo_fallback_secs`,
+    /// `busy_fallback_secs` and `recent_fallback_secs` are unchanged for everyone
+    /// else. Empty (the default) ⇒ no behaviour change at all.
+    pub immediate_bot_users: Vec<Uuid>,
 }
 
 impl ArenaConfig {
@@ -146,6 +159,16 @@ impl ArenaConfig {
             // Production solo-bot roster (comma-separated user_id UUIDs). Empty → any
             // random COMPLETE character in the DB is used as the bot.
             bot_user_ids: env::var("ARENA_BOT_USER_IDS")
+                .ok()
+                .map(|s| {
+                    s.split(',')
+                        .filter_map(|p| Uuid::parse_str(p.trim()).ok())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            // Harness exemption roster (comma-separated user_id UUIDs). Empty by
+            // default → no change to matchmaking timing for anyone.
+            immediate_bot_users: env::var("ARENA_IMMEDIATE_BOT_USERS")
                 .ok()
                 .map(|s| {
                     s.split(',')
