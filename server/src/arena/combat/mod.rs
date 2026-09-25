@@ -47,6 +47,7 @@ pub mod trace;
 pub mod damage;
 pub mod engine;
 pub mod gamedata;
+pub mod block_temper;
 pub mod input;
 pub mod loadout;
 pub mod messages;

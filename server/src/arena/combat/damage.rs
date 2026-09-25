@@ -8,9 +8,9 @@
 //! physical[type]  = (weaponBase(item, tempering) − armorCut) × comboFactor(depth)
 //! elemental[type] = enchantDamage(family, tier) × elementAmp(conditioning)
 //!                   (+ Frost→Stamina / Shock→Magicka mirrored drain)
-//! block           = a FRACTION from the defender's Block Rating (phys 1.0 /
-//!                   elem 0.6666667); a connected OPTIMAL block additionally
-//!                   negates physical outright
+//! block           = a FLAT budget per category, factor · R · 0.1 split by share,
+//!                   5 % floor per component (PvP factors: phys 1.6 / elem 0.82);
+//!                   an OPTIMAL block uses R × (1 + OptimalBlockBoost)
 //! resistance      = a FLAT subtraction from the defender's Resistance Rating
 //! totalDamage     = Σ components of HEALTH-affecting types (Slashing..Poison)
 //! ```
@@ -24,7 +24,7 @@
 //! | enchant drain | *always* an equal **Magicka** drain | `frostDamageToStaminaDamage` / `shockDamageToMagickaDamage` only |
 //! | armor | *not modelled* | `tables::armor_reduction` (Phase 3.3) |
 //! | resistance | a flat loadout number | a **Resistance Rating** (Phase 3.4) |
-//! | block | fixed `÷1.6` / `÷1.23` | `tables::block_reduction` from the item Block Rating (Phase 3.5) |
+//! | block | fixed `÷1.6` / `÷1.23` | [`BlockOutcome::apply`]: a flat budget from the blocking item's rating (03-D1) |
 //!
 //! ## Where armor is applied (data-derived, and it is NOT where the RE doc says)
 //!
@@ -57,17 +57,26 @@ pub struct ResolvedDamage {
     pub negated: bool,
     /// HP the negation healed back to the DEFENDER (Absorb only).
     pub heal: f32,
-    /// This hit's PHYSICAL block factor (1.0 unblocked, 0.0 on a connected optimal
-    /// block, in between when late). Carried so the caller can scale effects that
-    /// ride the swing rather than a damage component — Ravage is the one that does.
+    /// The share of this hit's PHYSICAL damage the block let through: post-block over
+    /// pre-block physical total (1.0 unblocked, or with no physical component).
+    /// Carried so the caller can scale effects that ride the swing rather than a
+    /// damage component — Ravage is the one that does.
     pub block_physical: f32,
+    /// True when the defender's guard took this hit (the block stage ran). The wire
+    /// flags cannot say this: a low block carries no bit at all (03 §2.7), and bit 3
+    /// is defender state, set even on an unblockable frame.
+    pub blocked: bool,
 }
 
 /// Damage flags (`ReceiveDamage` propId 7 bitfield).
 pub mod flags {
     pub const SHOW_DAMAGE: u8 = 0b0001;
     pub const HAS_ATTACKER: u8 = 0b0010;
+    /// The guard was pressed but its startup had not finished, so the hit was NOT
+    /// mitigated (`CombatHUDHelper$$WasPlayerLateBlockingAttack@0x201c828`). The arena
+    /// guard has no startup, so the server never sets it; a low block is not "late".
     pub const WAS_LATE_BLOCKING: u8 = 0b0100;
+    /// The defender's `IsOptimalBlocking` STATE, on every frame addressed to it.
     pub const WAS_OPTIMAL_BLOCKING: u8 = 0b1000;
 }
 
@@ -143,70 +152,108 @@ pub fn element_amp(recent_element_damage: f32, condition_threshold: f32) -> f32 
     1.0 + (ELEMENT_AMP_MAX - 1.0) * frac
 }
 
-/// The per-CATEGORY block outcome.
+/// The block applied to one hit.
 ///
-/// * a connected **OPTIMAL** block: physical **negated** (the parry — the s506
-///   per-hit ground truth: Slashing 113.82 → 0.77 across 27 connected blocks,
-///   mean 1.17), elemental reduced by the defender's Block Rating read at the
-///   optimal weight (`optimalBlockBoost × 2` — uesp "high block").
-/// * a **LATE** block (guard held > `BLOCK_OPTIMAL_TIME` 2.0 s, OR re-raised inside
-///   `postOptimalBlockResetTime` 1.4 s): both categories take the plain Block-Rating
-///   reduction.
+/// A block removes a **flat budget** per damage category, `factor · R · 0.1`,
+/// split over the category's components by share, with a 5 % floor per component
+/// ([`tables::block_cut`]). There is no ×0 and no fixed fraction: an optimal block
+/// doubles `R` (for a boost of 1.0), and a big enough budget drives a component to
+/// its floor. That is what the s506 "optimal zeroes physical" captures were — the
+/// budget exceeding the hit, then armor taking most of the 5 % that was left
+/// (03 V1). `Actor$$ResolveBlocking@0x1c54284`, `b__1@0x1fd06f0`.
 ///
-/// **Phase 3.5:** this replaces the hardcoded `÷1.6` / `÷1.23` divisors with
-/// [`tables::block_reduction`]. The old constants remain below only as the
-/// documented `PvpDefaultSettings` values they came from.
+/// In PvP the category factors are physical **1.6** and elemental **0.82**
+/// ([`tables::pvp_block_rating_factor`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BlockOutcome {
-    pub flag: u8,
     pub optimal: bool,
     pub blocking: bool,
-    /// Block Rating in effect for this hit (already optimal-weighted).
+    /// `R` for this hit before piercing: the blocking item's rating, boosted when
+    /// optimal, plus the flat Block Reduction enchants ([`Fighter::block_rating`]).
     pub rating: f32,
-    /// Attacker's flat block piercing, subtracted from `rating` in
-    /// [`BlockOutcome::factor_for`] — physical and elemental respectively.
+    /// Attacker's flat block piercing, subtracted from `R` in
+    /// [`BlockOutcome::rating_for`] — physical and elemental respectively. The client
+    /// subtracts it from the already-boosted `R` for every blocked component, so it
+    /// weakens an optimal block exactly as much as a low one (03 V2).
     pub block_piercing: f32,
     pub elem_block_piercing: f32,
-    /// `ElementalProtection` perk — added to `rating` for ELEMENTAL damage only,
-    /// and only when the block is made with a shield. Zero for an unperked or
-    /// shieldless defender, which makes the elemental branch of `factor_for`
-    /// byte-identical to what it was before the perk existed.
+    /// `ElementalProtection` perk — added to `R` for ELEMENTAL damage only, after the
+    /// optimal boost, and only when the block is made with a shield (10 §3; capture
+    /// T1: a weapon-blocker with the perk matches only without it). Zero for an
+    /// unperked or shieldless defender.
     pub elem_rating_bonus: f32,
 }
 
-/// The dump's `PvpDefaultSettings` LATE-block divisors, kept for provenance. The
-/// live model derives its reduction from the Block Rating instead.
-pub const PHYSICAL_BLOCK_MULTIPLIER: f32 = 1.6;
-pub const ELEMENTAL_BLOCK_MULTIPLIER: f32 = 1.23;
+/// The dump's `PvpDefaultSettings` values, kept as aliases of the live factors'
+/// inputs: they multiply the block-rating FACTOR (03 V3), they are not divisors.
+pub const PHYSICAL_BLOCK_MULTIPLIER: f32 = tables::PVP_PHYSICAL_BLOCK_MULTIPLIER;
+pub const ELEMENTAL_BLOCK_MULTIPLIER: f32 = tables::PVP_ELEMENTAL_BLOCK_MULTIPLIER;
 
 impl BlockOutcome {
-    /// The per-component damage multiplier for `ty` under this block outcome.
-    /// `continuous` marks DoT damage — note that
-    /// `continuousDamageBlockingEffectiveness == 1`, so blocking is at FULL
-    /// effectiveness against DoT (correction 1), unlike absorb/fortify/resistance.
-    pub fn factor_for(&self, ty: DamageType) -> f32 {
+    const NONE: BlockOutcome = BlockOutcome {
+        optimal: false,
+        blocking: false,
+        rating: 0.0,
+        block_piercing: 0.0,
+        elem_block_piercing: 0.0,
+        elem_rating_bonus: 0.0,
+    };
+
+    /// `R` for a component of this category: the additives, then
+    /// `max(0, R − attacker piercing)` (`b__1@0x1fd06f0` 0x1fd08f0–0x1fd09c4).
+    pub fn rating_for(&self, physical: bool) -> f32 {
+        if physical {
+            (self.rating - self.block_piercing).max(0.0)
+        } else {
+            (self.rating + self.elem_rating_bonus - self.elem_block_piercing).max(0.0)
+        }
+    }
+
+    /// Apply the block to `components` in place.
+    ///
+    /// * physical and elemental health components take [`tables::block_cut`] against
+    ///   their own category's pre-block total;
+    /// * a **Stamina or Magicka** component is set to 0 outright
+    ///   (0x1fd0790–0x1fd0824 zeroes non-health damage). The Frost→Stamina /
+    ///   Shock→Magicka mirror is not in the list yet — it is derived afterwards from
+    ///   the element's post-block value ([`append_mirrored_drains`]) — so it still
+    ///   lands, as it does in the client;
+    /// * `periodic` (ContinuousSpell 8 / ContinuousAttack 10): `R` is scaled by the
+    ///   tick interval × `continuousDamageBlockingEffectiveness` (1.0) after piercing
+    ///   (0x1fd09d0–0x1fd0a40). The client code reads `_globalTickInterval` (0.1);
+    ///   capture test T2 showed the retail server substituting the 0.2 s PvP tick in
+    ///   the periodic resistance scale, so the PvP tick is used here too. INFERRED:
+    ///   T2 measured the resistance path, not the block path.
+    pub fn apply(&self, components: &mut [(DamageType, f32)], periodic: bool) {
         if !self.blocking {
-            return 1.0;
+            return;
         }
-        if is_physical(ty) {
-            if self.optimal {
-                // The connected optimal block negates physical outright.
-                return 0.0;
-            }
-            // Block piercing cuts the rating, exactly as armor piercing cuts armor.
-            let pierced = (self.rating - self.block_piercing).max(0.0);
-            return 1.0 - tables::block_reduction(pierced, true);
+        let total = |pick: fn(DamageType) -> bool, cs: &[(DamageType, f32)]| -> f32 {
+            cs.iter().filter(|(t, v)| pick(*t) && *v > 0.0).map(|(_, v)| *v).sum()
+        };
+        let phys_total = total(is_physical, components);
+        let elem_total = total(is_elemental, components);
+        let scale = if periodic {
+            combat_params::GLOBAL_PVP_TICK_INTERVAL
+                * combat_params::CONTINUOUS_DAMAGE_BLOCKING_EFFECTIVENESS
+        } else {
+            1.0
+        };
+        let phys_r = self.rating_for(true) * scale;
+        let elem_r = self.rating_for(false) * scale;
+        for (ty, v) in components.iter_mut() {
+            *v = match *ty {
+                DamageType::Stamina | DamageType::Magicka => 0.0,
+                t if is_physical(t) => {
+                    tables::block_cut(*v, phys_total, phys_r, tables::pvp_block_rating_factor(true))
+                }
+                t if is_elemental(t) => {
+                    tables::block_cut(*v, elem_total, elem_r, tables::pvp_block_rating_factor(false))
+                }
+                // Raw Health / None: not a category the block budget covers.
+                _ => *v,
+            };
         }
-        if is_elemental(ty) {
-            let pierced =
-                (self.rating + self.elem_rating_bonus - self.elem_block_piercing).max(0.0);
-            return 1.0 - tables::block_reduction(pierced, false);
-        }
-        // Stamina/Magicka drains and raw Health are not blocked. This stays at 1.0
-        // ON PURPOSE for the drains: they are derived in [`append_mirrored_drains`]
-        // from the element's ALREADY-blocked value, so the reduction is baked in and
-        // applying the factor here as well would mitigate the drain twice.
-        1.0
     }
 }
 
@@ -230,17 +277,8 @@ impl BlockOutcome {
 /// direction: `PlayerCombatInputActivateMessage` (`dump.cs:589516-589526`) carries only
 /// `_held`, `_clientChargeTime`, `_isWithinBlockZone`.
 ///
-/// `attacker` supplies the flat block-piercing ratings. **Additive:** they are 0.0 on
-/// every loadout unless an ability sets them, so a hit with no piercing produces the
-/// same numbers as before this parameter existed — which the s506 block differentials
-/// prove.
-///
-/// STATED LIMIT: piercing reduces the RATING, so it weakens a LATE block. A connected
-/// OPTIMAL block still negates physical outright (`factor_for` returns 0.0 before the
-/// rating is consulted) — that zero is capture-pinned by
-/// `roundtrip_s506_damage::s506_optimal_block_negates_physical_halves_elemental`.
-/// Whether retail lets block piercing through an optimal block is NOT pinned by any
-/// capture we hold, so this leaves the pinned behaviour alone rather than guessing.
+/// `attacker` supplies the flat block-piercing ratings (0.0 unless an ability sets
+/// them).
 pub fn block_outcome(
     target: &Fighter,
     attacker: &Loadout,
@@ -248,27 +286,17 @@ pub fn block_outcome(
     now: Instant,
 ) -> BlockOutcome {
     use super::state::ActorStateType;
-    let none = BlockOutcome {
-        flag: 0,
-        optimal: false,
-        blocking: false,
-        rating: 0.0,
-        block_piercing: 0.0,
-        elem_block_piercing: 0.0,
-        elem_rating_bonus: 0.0,
-    };
     if target.actor_state() != ActorStateType::Blocking || active_side == ActiveSide::None {
-        return none;
+        return BlockOutcome::NONE;
     }
     let Some(phase) = target.block_phase(now) else {
-        return none;
+        return BlockOutcome::NONE;
     };
     // Timing only — see the note above. `target.blocking_side` is deliberately NOT
     // consulted: it is the wire-visible facing of the guard animation
     // (`PlayerBlockingState.Parameters.ActiveSide`), not a hit-test.
     let optimal = matches!(phase, BlockPhase::Optimal);
     BlockOutcome {
-        flag: if optimal { flags::WAS_OPTIMAL_BLOCKING } else { flags::WAS_LATE_BLOCKING },
         optimal,
         blocking: true,
         rating: target.block_rating(optimal),
@@ -859,7 +887,7 @@ fn append_mirrored_drains(components: &mut Vec<(DamageType, f32)>) {
 }
 
 /// Apply the post-roll mitigation pipeline and assemble the [`ResolvedDamage`]:
-///   block (a FRACTION, per category) → resistance (a FLAT rating subtraction) →
+///   block (a FLAT budget, per category) → resistance (a FLAT rating subtraction) →
 ///   weakness (a FLAT rating increase) → Σ health = total.
 ///
 /// Negation pools (Ward/Absorb/Dodge) are drained later by `resolve::emit_damage`
@@ -970,9 +998,10 @@ fn finish_resolved(
 /// never `ResolveDamageBonuses`, the path the Fortify gear and Augmented perks ride.
 ///
 /// `block_side` is the side the block test sees and `active_side` the one written to
-/// the wire. They differ only for that damage: it carries `ActiveSide.None`, which
-/// [`block_outcome`] reads as "cannot be blocked", while retail passes
-/// `unblockable = false`.
+/// the wire. They differ only for that damage: it carries `ActiveSide.None`. Retail
+/// passes `unblockable = false` for it, but that does not make it blockable —
+/// `Damage$$IsBlockable` has no bit for AreaEffect (7), and [`source_is_blockable`]
+/// keeps it out of the block stage.
 #[allow(clippy::too_many_arguments)]
 fn mitigate(
     attacker: &Loadout,
@@ -990,16 +1019,42 @@ fn mitigate(
         DamageSource::StatusEffect | DamageSource::ContinuousSpell
     );
 
-    // 1) BLOCK — a fraction from the defender's Block Rating. NOT de-rated against
-    //    continuous damage (`continuousDamageBlockingEffectiveness == 1`).
-    let block = block_outcome(target, attacker, block_side, now);
-    hit_flags |= block.flag;
-    // Kept for effects that ride the SWING rather than a component (Ravage). Read on
-    // the physical track, which is what a weapon swing is.
-    let block_physical = block.factor_for(DamageType::Slashing);
-    for (ty, v) in components.iter_mut() {
-        *v *= block.factor_for(*ty);
-    }
+    // Bit 3 is the defender's `IsOptimalBlocking`, for every source (03-D19). Bit 2
+    // (`WAS_LATE_BLOCKING`) is never set: in the client it marks a hit that landed
+    // before the guard's startup finished, and the arena opponent's guard has no
+    // startup (`PvpOpponentActor$$get_TimeToBlock@0x1963c98` returns 0 under
+    // `InstantShieldBlock`). A LOW block is an ordinary block with no flag (03-D5).
+    hit_flags |= target.optimal_block_flag(now);
+
+    // 1) BLOCK — a flat per-category budget from the defender's Block Rating
+    //    (`BlockOutcome::apply`). Only blockable sources reach it
+    //    (`Damage$$IsBlockable@0x1bd4cc8`): an AreaEffect (7) tick is never blocked.
+    let block = if source_is_blockable(source) {
+        block_outcome(target, attacker, block_side, now)
+    } else {
+        BlockOutcome::NONE
+    };
+    let phys_before: f32 = components
+        .iter()
+        .filter(|(t, v)| is_physical(*t) && *v > 0.0)
+        .map(|(_, v)| *v)
+        .sum();
+    block.apply(
+        components,
+        matches!(source, DamageSource::ContinuousSpell | DamageSource::ContinuousAttack),
+    );
+    // Kept for effects that ride the SWING rather than a component (Ravage): the
+    // share of the physical track the block let through.
+    let block_physical = if block.blocking && phys_before > 0.0 {
+        let after: f32 = components
+            .iter()
+            .filter(|(t, v)| is_physical(*t) && *v > 0.0)
+            .map(|(_, v)| *v)
+            .sum();
+        after / phys_before
+    } else {
+        1.0
+    };
 
     // 1.5) MIRRORED STAT DRAIN — Frost→Stamina / Shock→Magicka, 1:1 with the
     //      element's **post-block** value. This lands HERE, after step 1, because
@@ -1056,7 +1111,25 @@ fn mitigate(
         negated: false,
         heal: 0.0,
         block_physical,
+        blocked: block.blocking,
     }
+}
+
+/// `Damage$$IsBlockable@0x1bd4cc8`: the mask `0x90e` (Attack 1, Spell 2,
+/// WeaponManeuver 3, ShieldManeuver 11) plus ContinuousSpell 8, EchoWeapon 9 and
+/// ContinuousAttack 10. StatusEffect 4, Trap 5, Revenge 6 and AreaEffect 7 are
+/// never blocked.
+pub fn source_is_blockable(source: DamageSource) -> bool {
+    matches!(
+        source,
+        DamageSource::Attack
+            | DamageSource::Spell
+            | DamageSource::WeaponManeuver
+            | DamageSource::ContinuousSpell
+            | DamageSource::EchoWeapon
+            | DamageSource::ContinuousAttack
+            | DamageSource::ShieldManeuver
+    )
 }
 
 /// Minimum resisted fraction for an element to be reported as `mostResisted`
@@ -1374,47 +1447,293 @@ mod tests {
         assert!((s.total - comp(&s, DamageType::Slashing) - comp(&s, DamageType::Shock)).abs() < 1e-3);
     }
 
-    /// BLOCK (Phase 3.5): the reduction is a FRACTION from the defender's Block
-    /// Rating; a connected optimal block negates physical outright.
-    #[test]
-    fn block_is_rating_driven() {
-        let m = RetailDamageModel;
-        let lo = poison_dagger();
-        let now = Instant::now();
-        let open = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-
-        // A shield-bearing defender: Ebony Shield 330 + Dragonbone Dagger 49.5.
+    /// A defender guarding with `item` at `tempering`, the guard raised at `now`
+    /// (optimal) — or inside the post-release cooldown when `low` (a low block).
+    fn guarding(
+        now: Instant,
+        shield: Option<(&str, u64)>,
+        weapon: Option<(&str, u64)>,
+        low: bool,
+    ) -> Fighter {
         let mut def = target();
-        def.loadout.block_rating = 330.0 + 49.5;
-        def.loadout.shield_optimal_block_boost = 1.0;
+        if let Some((u, t)) = weapon {
+            let w = gamedata::weapon(u).expect("weapon template");
+            def.loadout.weapon_optimal_block_boost = w.optimal_block_boost;
+            def.loadout.block_rating = loadout::blocking_item_rating(u, w.block_base, t);
+        }
+        if let Some((u, t)) = shield {
+            let sh = gamedata::shield(u).expect("shield template");
+            def.loadout.has_shield = true;
+            def.loadout.shield_optimal_block_boost = sh.optimal_block_boost;
+            def.loadout.block_rating = loadout::blocking_item_rating(u, sh.block_base, t);
+        }
         def.set_actor_state(ActorStateType::Blocking, now);
-        def.blocking_side = ActiveSide::Right;
+        def.blocking_side = ActiveSide::Middle;
         def.block_raised_at = Some(now);
-        def.blocking_until = Some(now + Duration::from_secs(2));
+        def.blocking_until = Some(now + Duration::from_secs(8));
+        if low {
+            // Released 0.1 s before this raise: inside the 0.8 s cooldown, so the
+            // latch says no optimal for this whole guard.
+            def.last_block_dropped_at = Some(now - Duration::from_millis(100));
+        }
+        def
+    }
 
+    /// Blocking-item templates behind the capture-test T1 fixtures
+    /// (blades-capture `docs/combat-spec/capture-tests.md` §1).
+    const LEATHER_SHIELD_247: &str = "aa4ffedf-ad74-4aa1-bd82-18a041100f79"; // T10 → 360
+    const DAEDRIC_SHIELD_300: &str = "fc5ef036-e045-4920-b95f-b32067b00163"; // T10 → 450
+    const EBONY_SHIELD_330: &str = "1d248608-7347-4122-8b42-840b6304c203"; // untempered 330
+    const IRON_WARHAMMER_148: &str = "905ee635-200e-445a-89de-db5ecbb17989"; // T10 → 216
+    const DEATHSTING: &str = "28000fc8-4208-4036-90d4-5e698b680d96"; // untempered 147
+
+    fn apply(block: &BlockOutcome, comps: &[(DamageType, f32)]) -> Vec<(DamageType, f32)> {
+        let mut c = comps.to_vec();
+        block.apply(&mut c, false);
+        c
+    }
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 0.01
+    }
+
+    /// The T1 golden cuts, each one a hit observed on the retail corpus to the cent,
+    /// with the prediction from `factor · R · 0.1` (PvP factors 1.6 / 0.82).
+    #[test]
+    fn t1_golden_block_cuts() {
+        let now = Instant::now();
+        let none = Loadout::default();
+        let cut = |def: &Fighter, ty: DamageType| {
+            let b = block_outcome(def, &none, ActiveSide::Right, now);
+            let d = 1000.0;
+            d - apply(&b, &[(ty, d)])[0].1
+        };
+
+        // Elven etc., Leather/Hide Shield T10 (R0 360), optimal, physical: 115.20.
+        let leather = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, false);
+        assert_eq!(leather.loadout.block_rating, 360.0);
+        assert!(close(cut(&leather, DamageType::Slashing), 115.20));
+        // Tristan, Daedric Shield T10 (R0 450): low 72.00, optimal 144.00.
+        let daedric_low = guarding(now, Some((DAEDRIC_SHIELD_300, 10)), None, true);
+        let daedric_opt = guarding(now, Some((DAEDRIC_SHIELD_300, 10)), None, false);
+        assert!(close(cut(&daedric_low, DamageType::Cleaving), 72.00));
+        assert!(close(cut(&daedric_opt, DamageType::Cleaving), 144.00));
+        // Morgoth, Iron Warhammer T10 (R0 216, a WEAPON block), optimal:
+        // physical 69.12 and poison 35.42.
+        let mut morgoth = guarding(now, None, Some((IRON_WARHAMMER_148, 10)), false);
+        assert_eq!(morgoth.loadout.block_rating, 216.0);
+        // He carries Elemental Protection r1 — and matches only WITHOUT it, because
+        // the perk needs a shield (10 §3).
+        morgoth.loadout.perks.elemental_block_rating = 32.5;
+        assert!(close(cut(&morgoth, DamageType::Bashing), 69.12));
+        assert!(close(cut(&morgoth, DamageType::Poison), 35.42));
+        // Ava, Deathsting (R0 147, weapon), low, fire: 12.05.
+        let ava = guarding(now, None, Some((DEATHSTING, 0)), true);
+        assert!(close(cut(&ava, DamageType::Fire), 12.05));
+        // Galadriel etc., R0 360 shield + EP rank 6 (117.5), optimal, elemental:
+        // (720 + 117.5) · 0.082 = 68.68 — EP adds AFTER the doubling.
+        let mut gal = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, false);
+        gal.loadout.perks.elemental_block_rating = 117.5;
+        assert!(close(cut(&gal, DamageType::Frost), 68.675));
+        // Black Betty, same shield + EP 117.5, LOW, poison: (360 + 117.5) · 0.082 =
+        // 39.155 at the block stage. (The observed 33.28 is that × Redguard 0.85,
+        // which is applied later in the client and is PR-14's, not modelled here.)
+        let mut betty = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, true);
+        betty.loadout.perks.elemental_block_rating = 117.5;
+        assert!(close(cut(&betty, DamageType::Poison), 39.155));
+        assert!(close(cut(&betty, DamageType::Poison) * 0.85, 33.28));
+    }
+
+    /// 03-D1 / M-block-shape: the SAME guard takes the SAME amount off a 50, 150 or
+    /// 450 hit — the old fraction took more off a bigger hit. Ebony Shield (330),
+    /// low block, 200 Slashing: 330 · 1.6 · 0.1 = 52.8 → 147.2.
+    #[test]
+    fn a_block_is_a_constant_cut_not_a_fraction() {
+        let now = Instant::now();
+        let def = guarding(now, Some((EBONY_SHIELD_330, 0)), None, true);
+        let b = block_outcome(&def, &Loadout::default(), ActiveSide::Right, now);
+        assert!(b.blocking && !b.optimal);
+        assert!(close(apply(&b, &[(DamageType::Slashing, 200.0)])[0].1, 147.2));
+        for d in [150.0_f32, 450.0] {
+            assert!(close(d - apply(&b, &[(DamageType::Slashing, d)])[0].1, 52.8), "d={d}");
+        }
+        // 50 is under the budget: the 5 % floor holds it at 2.5, never 0.
+        assert!(close(apply(&b, &[(DamageType::Slashing, 50.0)])[0].1, 2.5));
+        // Control: an unguarded defender takes the hit unchanged.
+        let open = block_outcome(&target(), &Loadout::default(), ActiveSide::Right, now);
+        assert!(!open.blocking);
+        assert_eq!(apply(&open, &[(DamageType::Slashing, 200.0)])[0].1, 200.0);
+    }
+
+    /// The owner's match (gsid 45149845, 2026-09-25): every physical hit into an
+    /// optimal block did exactly 0.0. There is no ×0: the same hit keeps what the
+    /// budget leaves. Poison dagger (Slashing 144 + Poison 137.32, both from shipped
+    /// data) into a Leather Shield T10 (R 720 optimal): 144 − 115.2 = 28.8 and
+    /// 137.32 − 59.04 = 78.28.
+    #[test]
+    fn an_optimal_block_does_not_zero_physical() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let lo = poison_dagger();
+        let open = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        assert!(close(comp(&open, DamageType::Slashing), 144.0));
+        assert!(close(comp(&open, DamageType::Poison), 137.32));
+        assert!(!open.blocked);
+
+        let def = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, false);
         let opt = m.resolve_attack(&lo, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-        assert!(opt.flags & flags::WAS_OPTIMAL_BLOCKING != 0);
-        assert_eq!(comp(&opt, DamageType::Slashing), 0.0, "connected optimal block negates physical");
-        // Elemental takes the rating reduction at the optimal (×2) weight.
-        let expect_elem = comp(&open, DamageType::Poison) * (1.0 - tables::block_reduction(759.0, false));
-        assert!(
-            (comp(&opt, DamageType::Poison) - expect_elem).abs() < 0.5,
-            "elem {} vs {}",
-            comp(&opt, DamageType::Poison),
-            expect_elem
-        );
+        assert!(opt.blocked);
+        assert_ne!(opt.flags & flags::WAS_OPTIMAL_BLOCKING, 0);
+        assert!(close(comp(&opt, DamageType::Slashing), 28.8), "{:?}", opt.components);
+        assert!(close(comp(&opt, DamageType::Poison), 78.28), "{:?}", opt.components);
+        assert!(close(opt.block_physical, 28.8 / 144.0));
 
-        // LATE: the plain (un-doubled) rating applies to BOTH categories.
-        // Forced by TIMING, not by a side mismatch — tracker #31 removed the side gate
-        // (high/low is a phase, never a direction), so this re-raises the guard inside
-        // the `OPTIMAL_BLOCK_RECOVERY_SECS` cooldown, which is a real way to be LATE.
-        let mut late_t = def.clone();
-        late_t.last_block_dropped_at = Some(now);
-        let late = m.resolve_attack(&lo, &late_t, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-        assert!(late.flags & flags::WAS_LATE_BLOCKING != 0);
-        let expect_phys = comp(&open, DamageType::Slashing) * (1.0 - tables::block_reduction(379.5, true));
-        assert!((comp(&late, DamageType::Slashing) - expect_phys).abs() < 0.5);
-        assert!(comp(&late, DamageType::Slashing) > 0.0, "a late block does NOT negate");
+        // The same guard, low: 144 − 57.6 and 137.32 − 29.52; no wire flag at all.
+        let low_def = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, true);
+        let low = m.resolve_attack(&lo, &low_def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        assert!(low.blocked);
+        assert_eq!(low.flags & (flags::WAS_OPTIMAL_BLOCKING | flags::WAS_LATE_BLOCKING), 0);
+        assert!(close(comp(&low, DamageType::Slashing), 86.4));
+        assert!(close(comp(&low, DamageType::Poison), 107.8));
+    }
+
+    /// A block sets a Stamina or Magicka component to 0 outright
+    /// (`b__1@0x1fd06f0` 0x1fd0790). The Frost→Stamina mirror still lands, equal to
+    /// the post-block Frost, because it is derived afterwards.
+    #[test]
+    fn a_block_zeroes_stamina_and_magicka_but_the_mirror_still_lands() {
+        let now = Instant::now();
+        let def = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, false);
+        let b = block_outcome(&def, &Loadout::default(), ActiveSide::Right, now);
+        let out = apply(&b, &[(DamageType::Magicka, 255.83), (DamageType::Stamina, 40.0)]);
+        assert_eq!(out, vec![(DamageType::Magicka, 0.0), (DamageType::Stamina, 0.0)]);
+        // Control: unblocked, they pass.
+        let open = block_outcome(&target(), &Loadout::default(), ActiveSide::Right, now);
+        assert_eq!(apply(&open, &[(DamageType::Magicka, 255.83)])[0].1, 255.83);
+
+        let mut frost = poison_dagger();
+        frost.enchants = vec![(DamageType::Frost, 10)];
+        let r = RetailDamageModel.resolve_attack(&frost, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        assert!(comp(&r, DamageType::Frost) > 0.0);
+        assert_eq!(comp(&r, DamageType::Stamina), comp(&r, DamageType::Frost));
+    }
+
+    /// Block piercing is subtracted from the BOOSTED R — an optimal block is not
+    /// immune to it (03 V2). R 720 − Skullcrusher's 60 = 660 → 105.6 physical.
+    /// Elemental piercing touches only the elemental R.
+    #[test]
+    fn block_piercing_comes_off_the_boosted_rating() {
+        let now = Instant::now();
+        let def = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, false);
+        let mut pierce = Loadout::default();
+        pierce.block_piercing_rating = 60.0;
+        let b = block_outcome(&def, &pierce, ActiveSide::Right, now);
+        assert!(b.optimal);
+        assert!(close(1000.0 - apply(&b, &[(DamageType::Slashing, 1000.0)])[0].1, 105.6));
+        assert!(close(1000.0 - apply(&b, &[(DamageType::Fire, 1000.0)])[0].1, 59.04));
+        // Piercing can never make the rating negative.
+        pierce.block_piercing_rating = 10_000.0;
+        let b = block_outcome(&def, &pierce, ActiveSide::Right, now);
+        assert_eq!(apply(&b, &[(DamageType::Slashing, 200.0)])[0].1, 200.0);
+    }
+
+    /// The budget is shared by SHARE within a category, and each category has its
+    /// own. Two physical components 100 + 300 against the 115.2 budget lose 28.8 and
+    /// 86.4; an elemental component beside them draws on the elemental budget only.
+    #[test]
+    fn the_budget_is_split_by_share_within_its_category() {
+        let now = Instant::now();
+        let def = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, false);
+        let b = block_outcome(&def, &Loadout::default(), ActiveSide::Right, now);
+        let out = apply(
+            &b,
+            &[(DamageType::Slashing, 100.0), (DamageType::Bashing, 300.0), (DamageType::Fire, 200.0)],
+        );
+        assert!(close(out[0].1, 71.2));
+        assert!(close(out[1].1, 213.6));
+        assert!(close(out[2].1, 200.0 - 59.04));
+    }
+
+    /// 03-D18: the optimal boost is `×(1 + boost)` of the blocking item — the Pestle
+    /// ships 0.5 (×1.5), the Initial Dagger 2.0 (×3). The fork used `max(boost, 1) ×
+    /// 2`. Control: a boost of 1.0 is ×2 either way.
+    #[test]
+    fn the_optimal_boost_is_one_plus_the_items_own_boost() {
+        let now = Instant::now();
+        let pestle = guarding(now, None, Some(("12bc6bad-15df-4fa1-8335-22fbb4eb8d9f", 0)), false);
+        assert_eq!(pestle.loadout.block_rating, 5.0);
+        assert!(close(pestle.block_rating(true), 7.5));
+        let initial = guarding(now, None, Some(("d0386ef9-9e0f-47a8-b091-976def4d63b2", 0)), false);
+        assert!(close(initial.block_rating(true), 15.0));
+        let steel = guarding(now, None, Some(("68577fab-83f5-4bd1-983c-f396963ac14b", 0)), false);
+        assert_eq!(steel.block_rating(false), 116.0, "ceil(115.5)");
+        assert_eq!(steel.block_rating(true), 232.0);
+        // Block Reduction enchants add AFTER the boost, so they are not doubled.
+        let mut enchanted = steel.clone();
+        enchanted.loadout.block_rating_bonus = 50.0;
+        assert_eq!(enchanted.block_rating(true), 282.0);
+    }
+
+    /// Optimal eligibility is LATCHED when the guard goes up
+    /// (`ChangeToBlockingState@0x1d5beec`). Drop at t0, raise at t0+0.5 (inside the
+    /// 0.8 s cooldown), hit at t0+1.0 (past it): the client says LOW for the whole
+    /// guard; the fork used to re-check at the hit and say optimal. Control: a raise
+    /// at t0+0.9 is optimal.
+    #[test]
+    fn optimal_eligibility_is_latched_at_the_raise() {
+        let t0 = Instant::now();
+        let mut def = guarding(t0, Some((EBONY_SHIELD_330, 0)), None, false);
+        def.last_block_dropped_at = Some(t0);
+        def.block_raised_at = Some(t0 + Duration::from_millis(500));
+        let hit_at = t0 + Duration::from_millis(1000);
+        assert_eq!(def.block_phase(hit_at), Some(BlockPhase::Late));
+        assert_eq!(def.optimal_block_flag(hit_at), 0);
+        def.block_raised_at = Some(t0 + Duration::from_millis(900));
+        assert_eq!(def.block_phase(hit_at), Some(BlockPhase::Optimal));
+        assert_eq!(def.optimal_block_flag(hit_at), flags::WAS_OPTIMAL_BLOCKING);
+    }
+
+    /// 03-D5: bit 2 means "the guard was not up yet"; a guard HELD for 3 s and hit
+    /// is a low block with flags & 0x4 == 0 (and no bit 3 either).
+    #[test]
+    fn a_held_guard_never_sends_the_late_bit() {
+        let now = Instant::now();
+        let def = guarding(now, Some((EBONY_SHIELD_330, 0)), None, false);
+        let at = now + Duration::from_secs(3);
+        let r = RetailDamageModel.resolve_attack(&poison_dagger(), &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, at);
+        assert!(r.blocked);
+        assert_eq!(r.flags & flags::WAS_LATE_BLOCKING, 0);
+        assert_eq!(r.flags & flags::WAS_OPTIMAL_BLOCKING, 0);
+    }
+
+    /// `Damage$$IsBlockable@0x1bd4cc8`: an AreaEffect (7) tick is never blocked, but
+    /// bit 3 is still the defender's state on its frame (03-D19).
+    #[test]
+    fn an_area_effect_tick_is_not_blocked_but_carries_the_optimal_bit() {
+        let now = Instant::now();
+        let def = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, false);
+        let tick = resolve_continuous_area_tick(&Loadout::default(), &def, DamageType::Poison, 20.0, now);
+        assert!(!tick.blocked);
+        assert!(close(comp(&tick, DamageType::Poison), 20.0 * CONTINUOUS_AREA_TICK_SECS));
+        assert_ne!(tick.flags & flags::WAS_OPTIMAL_BLOCKING, 0);
+        // Control: the same tick on an unguarded defender, same value, no bit.
+        let open = resolve_continuous_area_tick(&Loadout::default(), &target(), DamageType::Poison, 20.0, now);
+        assert_eq!(comp(&open, DamageType::Poison), comp(&tick, DamageType::Poison));
+        assert_eq!(open.flags & flags::WAS_OPTIMAL_BLOCKING, 0);
+    }
+
+    /// A channelled (ContinuousSpell) tick is blocked with `R` scaled by the 0.2 s
+    /// PvP tick (INFERRED from capture T2, see `BlockOutcome::apply`), so a full
+    /// 15-tick channel loses ~3× one hit's budget rather than 15×.
+    #[test]
+    fn a_periodic_tick_is_blocked_at_the_tick_scaled_rating() {
+        let now = Instant::now();
+        let def = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, false);
+        let b = block_outcome(&def, &Loadout::default(), ActiveSide::Middle, now);
+        let mut c = vec![(DamageType::Frost, 40.0_f32)];
+        b.apply(&mut c, true);
+        // 720 · 0.2 · 0.82 · 0.1 = 11.808
+        assert!(close(40.0 - c[0].1, 11.808), "{c:?}");
     }
 
     /// RESISTANCE (Phase 3.4): a Resistance Rating is a flat subtraction; the
@@ -1607,32 +1926,32 @@ mod tests {
         assert!((comp(&par, DamageType::Poison) - 88.7).abs() < 0.01);
     }
 
-    /// Blocking is at FULL effectiveness against continuous (DoT) damage —
-    /// `continuousDamageBlockingEffectiveness == 1` (correction 1) — while
-    /// resistance IS de-rated to 0.75.
+    /// `continuousDamageBlockingEffectiveness == 1`, while resistance IS de-rated to
+    /// 0.75 for continuous damage. And a StatusEffect (4) DoT is never blocked at all
+    /// (`Damage$$IsBlockable@0x1bd4cc8`): it keeps 137.32 − 0.75 × 40 = 107.32 into a
+    /// raised guard, where the direct hit loses the block budget and the full 40.
     #[test]
-    fn blocking_is_not_derated_vs_dot_but_resistance_is() {
+    fn a_status_effect_dot_is_not_blocked_and_its_resistance_is_derated() {
         assert_eq!(combat_params::CONTINUOUS_DAMAGE_BLOCKING_EFFECTIVENESS, 1.0);
         assert_eq!(combat_params::CONTINUOUS_DAMAGE_RESISTANCE_EFFECTIVENESS, 0.75);
         let m = RetailDamageModel;
         let now = Instant::now();
         let mut tgt = target();
         tgt.loadout.resistances = vec![(DamageType::Poison, 40.0)];
-        tgt.loadout.block_rating = 379.5;
+        tgt.loadout.has_shield = true;
+        tgt.loadout.block_rating = 360.0;
+        tgt.loadout.shield_optimal_block_boost = 1.0;
         tgt.set_actor_state(ActorStateType::Blocking, now);
         tgt.blocking_side = ActiveSide::Right;
         tgt.block_raised_at = Some(now);
         tgt.blocking_until = Some(now + Duration::from_secs(2));
         let dot = m.resolve_attack(&poison_dagger(), &tgt, DamageSource::StatusEffect, ActiveSide::Right, 1.0, 0, now);
         let hit = m.resolve_attack(&poison_dagger(), &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-        // Same block factor, but the DoT keeps MORE damage because its resistance
-        // is de-rated (0.75 × 40 = 30 instead of 40).
-        assert!(
-            comp(&dot, DamageType::Poison) > comp(&hit, DamageType::Poison),
-            "DoT {} should exceed the direct hit {} (resistance de-rated, block not)",
-            comp(&dot, DamageType::Poison),
-            comp(&hit, DamageType::Poison)
-        );
+        assert!(!dot.blocked);
+        assert!((comp(&dot, DamageType::Poison) - 107.32).abs() < 0.01);
+        assert!(hit.blocked);
+        // 137.32 − 59.04 (optimal elemental budget) − 40 = 38.28.
+        assert!((comp(&hit, DamageType::Poison) - 38.28).abs() < 0.01);
     }
 
     // -----------------------------------------------------------------------
@@ -1656,7 +1975,9 @@ mod tests {
 
         for swing in [ActiveSide::Left, ActiveSide::Right, ActiveSide::Middle] {
             let mut def = target();
-            def.loadout.block_rating = 379.5;
+            def.loadout.has_shield = true;
+            def.loadout.shield_optimal_block_boost = 1.0;
+            def.loadout.block_rating = 360.0;
             def.set_actor_state(ActorStateType::Blocking, now);
             // Exactly what `resolve.rs` sets on both block-raise paths.
             def.blocking_side = ActiveSide::Middle;
@@ -1664,15 +1985,15 @@ mod tests {
             def.blocking_until = Some(now + Duration::from_secs(2));
 
             let r = m.resolve_attack(&lo, &def, DamageSource::Attack, swing, 1.0, 0, now);
+            let open = m.resolve_attack(&lo, &target(), DamageSource::Attack, swing, 1.0, 0, now);
             assert!(
                 r.flags & flags::WAS_OPTIMAL_BLOCKING != 0,
                 "{swing:?}: a Middle guard inside BLOCK_OPTIMAL_TIME must block HIGH",
             );
-            assert_eq!(
-                comp(&r, DamageType::Slashing),
-                0.0,
-                "{swing:?}: a high block negates physical",
-            );
+            // The optimal budget 360 · 2 · 1.6 · 0.1 = 115.2 comes off, not a ×0
+            // (a Left/Right swing: 144 → 28.8).
+            let cut = comp(&open, DamageType::Slashing) - comp(&r, DamageType::Slashing);
+            assert!((cut - 115.2).abs() < 0.01, "{swing:?}: cut {cut}");
         }
     }
 
@@ -1685,7 +2006,9 @@ mod tests {
         let lo = poison_dagger();
         let now = Instant::now();
         let mut def = target();
-        def.loadout.block_rating = 379.5;
+        def.loadout.has_shield = true;
+        def.loadout.shield_optimal_block_boost = 1.0;
+        def.loadout.block_rating = 360.0;
         def.set_actor_state(ActorStateType::Blocking, now);
         def.blocking_side = ActiveSide::Middle;
         def.block_raised_at = Some(now);
@@ -1705,11 +2028,10 @@ mod tests {
             0,
             late_at,
         );
-        assert!(held.flags & flags::WAS_LATE_BLOCKING != 0, "held too long → LOW");
-        assert!(
-            comp(&held, DamageType::Slashing) > 0.0,
-            "a low block only reduces, it does not negate",
-        );
+        // LOW: still a block, at ×1 R, and with NO wire flag (03-D5).
+        assert!(held.blocked, "held too long → LOW, still blocked");
+        assert_eq!(held.flags & (flags::WAS_LATE_BLOCKING | flags::WAS_OPTIMAL_BLOCKING), 0);
+        assert!((comp(&held, DamageType::Slashing) - 86.4).abs() < 0.01, "144 − 57.6");
     }
 }
 

@@ -18,7 +18,7 @@
 //! * the **capture-pinned combo ramp** ([`LIGHT_COMBO_RAMP`]) — a wire
 //!   measurement, not an asset value;
 //! * the **rating→reduction** helpers ([`armor_reduction`],
-//!   [`resistance_reduction`], [`block_reduction`], [`weakness_increase`]),
+//!   [`resistance_reduction`], [`block_cut`], [`weakness_increase`]),
 //!   which apply the shipped `CombatParameters` factors;
 //! * the **tempering axis** ([`QUALITY_BONUS`] / [`tempering_bonus`]) — the
 //!   shipped `WeaponTemplateList` carries only the *quality-0* cell (verified:
@@ -238,15 +238,30 @@ pub fn tempering_bonus_in_hand(weight: Weight, tempering_level: u64, two_handed:
 /// literal flat damage subtraction, which is exactly how the enemy assets read
 /// (`Nascent Flame Atronach` `resistances.Fire = 65.28`).
 ///
-/// Block is different: `maximumBlockReduction`/`minimumBlockReduction` bound a
-/// **fraction**, so a Block Rating is scaled into 0..1. `BLOCK_RATING_SCALE`
-/// is the percentage-point divisor that puts real shield ratings (150–330) in a
-/// sane band instead of saturating instantly. [Class 3: bridge constant]
-pub const BLOCK_RATING_SCALE: f32 = 100.0;
+/// Block has the same flat shape — see [`block_cut`].
+///
+/// `PvpClientManager.PhysicalBlockMultiplier` (`+0x144`), set to 1.6 in
+/// `PvpClientManager$$Initialize@0x1adac7c` (0x1adaf38–0x1adaf54).
+pub const PVP_PHYSICAL_BLOCK_MULTIPLIER: f32 = 1.6;
+/// `PvpClientManager.ElementalBlockMultiplier` (`+0x148`), 1.23.
+pub const PVP_ELEMENTAL_BLOCK_MULTIPLIER: f32 = 1.23;
 
-/// A connected **optimal** block reads the rating at double weight.
-/// [uesp: "blockRating/10 (low block) / blockRating/5 (high block — 2×)"]
-pub const OPTIMAL_BLOCK_RATING_MULTIPLIER: f32 = 2.0;
+/// The PvP block-rating FACTOR for a damage category:
+/// `PvpPlayerActor$$GetBlockRatingFactor@0x1a32348` multiplies the shipped
+/// `_physicalBlockRatingFactor` (1.0) / `_elementalBlockRatingFactor` (0.6666667) by
+/// the two `PvpClientManager` multipliers — physical **1.6**, elemental **0.82**.
+///
+/// These are the factors the retail arena server used. Capture test T1
+/// (blades-capture `docs/combat-spec/capture-tests.md` §1): of 128 clean physical and
+/// 72 clean elemental blocked hits, 19 and 30 sit within 1 % of the PvP value and 0
+/// of either within 1 % of the PvE one; the mean factors are 1.5988 and 0.8231.
+pub fn pvp_block_rating_factor(physical: bool) -> f32 {
+    if physical {
+        combat_params::PHYSICAL_BLOCK_RATING_FACTOR * PVP_PHYSICAL_BLOCK_MULTIPLIER
+    } else {
+        combat_params::ELEMENTAL_BLOCK_RATING_FACTOR * PVP_ELEMENTAL_BLOCK_MULTIPLIER
+    }
+}
 
 /// Physical damage removed by an Armor Rating: a FLAT
 /// `rating × reductionPerArmorRating`, capped so armor can never remove more than
@@ -305,29 +320,31 @@ pub fn weakness_increase(
     (net * eff).min(incoming * combat_params::MAXIMUM_WEAKNESS_EFFECT)
 }
 
-/// The FRACTION of a hit a Block Rating removes.
+/// One component's value after a block: a FLAT cut, not a fraction.
 ///
-/// `clamp(rating / BLOCK_RATING_SCALE × reductionPerBlockRating × categoryFactor,
-/// minimumBlockReduction, maximumBlockReduction)` with `categoryFactor` =
-/// `physicalBlockRatingFactor` (1.0) or `elementalBlockRatingFactor` (0.6666667).
+/// ```text
+/// cut = factor · (d / D_category) · R · reductionPerBlockRating (0.1)
+/// d'  = max(d · (1 − maximumBlockReduction 0.95), d − cut)
+/// ```
 ///
-/// **Blocking is NOT de-rated against continuous damage** —
-/// `continuousDamageBlockingEffectiveness == 1`, unlike absorb / fortify /
-/// resistance / revenge / weakness which are all 0.75. [Phase 3.5, correction 1]
-pub fn block_reduction(block_rating: f32, physical: bool) -> f32 {
-    if block_rating <= 0.0 {
-        return combat_params::MINIMUM_BLOCK_REDUCTION;
+/// `DisplayClass305_0$$<ResolveBlocking>b__1@0x1fd06f0` (the final `Max` at
+/// 0x1fd0bf8–0x1fd0c38). `share = d / D_category` spreads ONE budget of
+/// `factor · R · 0.1` over the category's components, so the block removes the same
+/// amount from a 50 hit as from a 450 one until the 5 % floor bites. `rating` is
+/// the per-hit `R` after the optimal boost, the additives and piercing.
+///
+/// The fork used to take a FRACTION, `clamp(R / 100 · 0.1 · factor)`, so the cut
+/// grew with the hit; that is 03-D1 / M-block-shape.
+pub fn block_cut(d: f32, category_total: f32, rating: f32, factor: f32) -> f32 {
+    if d <= 0.0 {
+        return 0.0;
     }
-    let factor = if physical {
-        combat_params::PHYSICAL_BLOCK_RATING_FACTOR
-    } else {
-        combat_params::ELEMENTAL_BLOCK_RATING_FACTOR
-    };
-    let raw = block_rating / BLOCK_RATING_SCALE * combat_params::REDUCTION_PER_BLOCK_RATING * factor;
-    raw.clamp(
-        combat_params::MINIMUM_BLOCK_REDUCTION,
-        combat_params::MAXIMUM_BLOCK_REDUCTION,
-    )
+    if rating <= 0.0 || category_total <= 0.0 {
+        return d;
+    }
+    let share = d / category_total;
+    let cut = factor * share * rating * combat_params::REDUCTION_PER_BLOCK_RATING;
+    (d - cut).max(d * (1.0 - combat_params::MAXIMUM_BLOCK_REDUCTION))
 }
 
 // ---------------------------------------------------------------------------
@@ -521,19 +538,30 @@ mod tests {
         assert!((resistance_reduction(10.0, 1000.0, false) - 9.5).abs() < 1e-3);
     }
 
-    /// Block is a FRACTION, and it is **not** de-rated against continuous damage
-    /// (`continuousDamageBlockingEffectiveness == 1`).
+    /// Block is a FLAT per-category budget with a 5 % floor per component (03 §2.5,
+    /// `b__1@0x1fd06f0`). Expected values are hand arithmetic from the spec.
     #[test]
-    fn block_is_a_fraction_with_elemental_two_thirds_of_physical() {
-        let rating = 750.0;
-        let phys = block_reduction(rating, true);
-        let elem = block_reduction(rating, false);
-        assert!((phys - 0.75).abs() < 1e-4, "phys {phys}");
-        assert!((elem - 0.5).abs() < 1e-4, "elem {elem}");
-        assert!((elem / phys - combat_params::ELEMENTAL_BLOCK_RATING_FACTOR).abs() < 1e-4);
-        // Caps.
-        assert!((block_reduction(100_000.0, true) - combat_params::MAXIMUM_BLOCK_REDUCTION).abs() < 1e-6);
-        assert_eq!(block_reduction(0.0, true), combat_params::MINIMUM_BLOCK_REDUCTION);
+    fn block_is_a_flat_budget_not_a_fraction() {
+        let phys = pvp_block_rating_factor(true);
+        let elem = pvp_block_rating_factor(false);
+        assert!((phys - 1.6).abs() < 1e-6, "PvP physical factor {phys}");
+        assert!((elem - 0.82).abs() < 1e-6, "PvP elemental factor {elem}");
+
+        // Ebony Shield (R 330), low block: the physical budget is 330·1.6·0.1 = 52.8,
+        // the SAME for a 50, 150 or 450 hit until the 5 % floor bites.
+        for (d, want) in [(150.0_f32, 97.2_f32), (450.0, 397.2), (200.0, 147.2)] {
+            let got = block_cut(d, d, 330.0, phys);
+            assert!((got - want).abs() < 1e-3, "d={d}: got {got}, want {want}");
+        }
+        // 50 − 52.8 is below the 5 % floor, so 2.5 remains.
+        assert!((block_cut(50.0, 50.0, 330.0, phys) - 2.5).abs() < 1e-4);
+        // The budget is split by share: two physical components of 100 and 300 lose
+        // 13.2 and 39.6 (52.8 × ¼, × ¾).
+        assert!((block_cut(100.0, 400.0, 330.0, phys) - 86.8).abs() < 1e-3);
+        assert!((block_cut(300.0, 400.0, 330.0, phys) - 260.4).abs() < 1e-3);
+        // Control: no rating, no cut; a non-positive component stays at 0.
+        assert_eq!(block_cut(200.0, 200.0, 0.0, phys), 200.0);
+        assert_eq!(block_cut(0.0, 200.0, 330.0, phys), 0.0);
         assert_eq!(
             combat_params::CONTINUOUS_DAMAGE_BLOCKING_EFFECTIVENESS,
             1.0,

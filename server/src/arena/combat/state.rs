@@ -542,9 +542,13 @@ const PVP_BASE_STAGGER_DURATION: f32 = 2.5;
 /// The block phase for a defending fighter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockPhase {
-    /// Guard just raised — within `BLOCK_OPTIMAL_TIME_SECS` (phys ×0, elem ×0.5).
+    /// Guard within `BLOCK_OPTIMAL_TIME_SECS` of going up, raised outside the
+    /// post-release cooldown: the block uses `R × (1 + OptimalBlockBoost)`.
     Optimal,
-    /// Guard held too long — after `BLOCK_OPTIMAL_TIME_SECS` (phys ÷1.6, elem ÷1.23).
+    /// A LOW block: held past the optimal window, or raised inside the cooldown. An
+    /// ordinary block at `×1 R` that carries NO wire flag. (The name predates the
+    /// client read; the client's "late block" is a different thing, a hit that lands
+    /// before the guard's startup finishes and is not mitigated at all — 03 §2.7.)
     Late,
 }
 
@@ -962,10 +966,18 @@ pub struct Loadout {
     /// `tables::armor_reduction` (`rating × reductionPerArmorRating`, capped at
     /// `maximumArmorReduction`). 0.0 for a fighter with no resolvable armor.
     pub armor_rating: f32,
-    /// Summed **Block Rating** contributed by the equipped weapon + shield
-    /// (`blockBase`). Feeds `tables::block_reduction`.
+    /// The **blocking item's** rating `R0`: the shield if one is equipped, otherwise
+    /// the weapon — never the two summed (`InventoryUtility$$GetEquippedBlockingItem
+    /// @0x1e61f50`). It is the item's temper-level block value when tempered, else its
+    /// `blockBase`, ceiled (`get_EquippedBlockRating@0x1c54420`). See
+    /// [`crate::arena::combat::loadout::blocking_item_rating`].
     pub block_rating: f32,
-    /// The shield's `optimalBlockBoost` (1.0 when no shield / unresolved).
+    /// Flat Block Reduction enchant rating. It adds to `R` AFTER the optimal boost
+    /// (`Actor$$ResolveBlocking@0x1c54284` boosts the equipped rating only, then the
+    /// `BlockRatingMethod` sources add). Type-agnostic for now; the per-type split is
+    /// a separate gap (03-D11).
+    pub block_rating_bonus: f32,
+    /// The shield's `optimalBlockBoost` as shipped (1.0 on all 51 shields).
     pub shield_optimal_block_boost: f32,
     /// **Elemental Resistance Piercing RATING** (not a fraction) contributed by the
     /// attacker's enchants — subtracted from the defender's resistance rating before
@@ -990,7 +1002,8 @@ pub struct Loadout {
     /// The caster's Paralyze ability rank (0 = not equipped) — selects the shipped
     /// `_damageToCauseParalyze` / `_duration` row. [Phase 3.9]
     pub paralyze_rank: u8,
-    /// The equipped WEAPON's `optimalBlockBoost` (1.0 when unresolved).
+    /// The equipped WEAPON's `optimalBlockBoost` as shipped (1.0 on 363 of 370
+    /// weapons; 0.5, 0.0 and 2.0 on the rest).
     pub weapon_optimal_block_boost: f32,
 
     // --- Defensive / offensive enchant-derived fields (status-resistance-spec §2.5) ---
@@ -1013,6 +1026,17 @@ pub struct Loadout {
 }
 
 impl Loadout {
+    /// The blocking item's `OptimalBlockBoost`: the shield's when a shield is
+    /// equipped, otherwise the weapon's (`InventoryUtility$$GetEquippedBlockingItem
+    /// @0x1e61f50`; `get_OptimalBlockBoost@0x1c5b8d8`).
+    pub fn blocking_item_boost(&self) -> f32 {
+        if self.has_shield {
+            self.shield_optimal_block_boost
+        } else {
+            self.weapon_optimal_block_boost
+        }
+    }
+
     /// Commit-to-commit swing cadence (Phase 3.12): the equipped template's own
     /// `attackDelay + recoveryToComboTime`, floored at `globalMinimumAttackDelay`; the
     /// weight-class fallback when no template resolved.
@@ -1878,21 +1902,19 @@ impl Fighter {
         now.saturating_duration_since(self.state_entered).as_secs_f32()
     }
 
-    /// This fighter's live **Block Rating** while guarding (Phase 3.5): the summed
-    /// weapon + shield `blockBase`, multiplied by `optimalBlockBoost` and the UESP
-    /// high-block ×2 when the guard is in its OPTIMAL phase.
+    /// This fighter's live **Block Rating** `R` while guarding, before piercing:
+    /// the blocking item's `R0`, times `(1 + OptimalBlockBoost)` of THAT item on an
+    /// optimal block, plus the flat Block Reduction enchants.
+    ///
+    /// `Actor$$ResolveBlocking@0x1c54284` (0x1c5433c/0x1c54358) computes
+    /// `R = R0 + R0 × boost`, i.e. `×(1 + boost)`: ×2 for the boost of 1.0 that every
+    /// shield and 363 of 370 weapons ship, ×1.5 / ×1 / ×3 for the other seven weapons.
+    /// The additive `BlockRatingMethod` sources come after the boost, so they are not
+    /// doubled.
     pub fn block_rating(&self, optimal: bool) -> f32 {
-        use super::tables;
-        let base = self.loadout.block_rating;
-        if !optimal {
-            return base;
-        }
-        let boost = self
-            .loadout
-            .shield_optimal_block_boost
-            .max(self.loadout.weapon_optimal_block_boost)
-            .max(1.0);
-        base * boost * tables::OPTIMAL_BLOCK_RATING_MULTIPLIER
+        let r0 = self.loadout.block_rating;
+        let boosted = if optimal { r0 * (1.0 + self.loadout.blocking_item_boost()) } else { r0 };
+        boosted + self.loadout.block_rating_bonus
     }
 
     /// True iff this fighter is currently staggered. [Phase 3.13]
@@ -2187,11 +2209,20 @@ impl Fighter {
         up
     }
 
-    /// The current OPTIMAL/LATE block phase for `now`, given the dump.cs constants:
-    /// - OPTIMAL iff the guard has been up for < `BLOCK_OPTIMAL_TIME_SECS` **and**
-    ///   the last block was dropped more than `OPTIMAL_BLOCK_RECOVERY_SECS` ago (or
-    ///   was never dropped — first block of the match is always OPTIMAL);
-    /// - LATE otherwise (held too long, or re-raised inside the recovery window).
+    /// The current OPTIMAL/LATE (low) block phase for `now`:
+    /// - OPTIMAL iff the guard has been up for < `BLOCK_OPTIMAL_TIME_SECS` **and** it
+    ///   was raised at least `OPTIMAL_BLOCK_RECOVERY_SECS` after the previous release
+    ///   (or there was none — the first guard of the match is always eligible);
+    /// - LATE (a low block) otherwise.
+    ///
+    /// **Eligibility is latched at the press, not re-checked at the hit.**
+    /// `PlayerActorState$$ChangeToBlockingState@0x1d5beec` stores
+    /// `OptimalBlockAllowed = !_optimalBlockTimeCooldownEnabled` (`@0x1c4ef1c`) into
+    /// the state's parameters when the guard goes up, and
+    /// `PlayerBlockingState$$get_IsOptimalBlocking@0x1d7288c` reads only that latch
+    /// and the window. So a guard raised 0.5 s after a release stays LOW for its whole
+    /// life, even when the hit lands after the 0.8 s cooldown has run out. The latch is
+    /// derived from the raise and release instants, which is the same fact.
     ///
     /// Returns `None` when the guard is not up.
     pub fn block_phase(&self, now: Instant) -> Option<BlockPhase> {
@@ -2200,15 +2231,28 @@ impl Fighter {
         if !matches!(self.blocking_until, Some(until) if now < until) {
             return None;
         }
-        let held_secs = now.duration_since(raised).as_secs_f32();
+        let held_secs = now.saturating_duration_since(raised).as_secs_f32();
         if held_secs >= BLOCK_OPTIMAL_TIME_SECS {
             return Some(BlockPhase::Late);
         }
-        // Within the 2s optimal window: check recovery cooldown.
-        let in_recovery = self.last_block_dropped_at
-            .map(|t| now.duration_since(t).as_secs_f32() < OPTIMAL_BLOCK_RECOVERY_SECS)
-            .unwrap_or(false);
-        Some(if in_recovery { BlockPhase::Late } else { BlockPhase::Optimal })
+        let optimal_allowed = self.last_block_dropped_at.is_none_or(|dropped| {
+            raised.saturating_duration_since(dropped).as_secs_f32() >= OPTIMAL_BLOCK_RECOVERY_SECS
+        });
+        Some(if optimal_allowed { BlockPhase::Optimal } else { BlockPhase::Late })
+    }
+
+    /// The `ReceiveDamage` bit 3 (`wasOptimalBlocking`) for a frame addressed to this
+    /// fighter. It is DEFENDER STATE, read for every source — DoT ticks included —
+    /// not a verdict on the hit: `CombatManager$$ApplyDamage@0x1bd2770` passes
+    /// `target.IsOptimalBlocking` to `ReceiveDamage` (0x1bd2a24–0x1bd2a58).
+    pub fn optimal_block_flag(&self, now: Instant) -> u8 {
+        let optimal = self.actor_state() == ActorStateType::Blocking
+            && self.block_phase(now) == Some(BlockPhase::Optimal);
+        if optimal {
+            crate::arena::combat::damage::flags::WAS_OPTIMAL_BLOCKING
+        } else {
+            0
+        }
     }
 
     /// Return the sum of transient Resist-Elements resistances for `ty` (non-expired
