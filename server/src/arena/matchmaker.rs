@@ -4458,6 +4458,75 @@ mod tests {
         );
     }
 
+    /// CRE-SOAK — `ARENA_IMMEDIATE_BOT_USERS` through the REAL matchmaker actor, not
+    /// the `fallback_deadline` helper: an exempt ticket reaches the bot fallback at
+    /// once, and the same ticket from a user who is NOT on the list does not, with a
+    /// 600 s solo fallback so the timer itself can never fire inside the test.
+    ///
+    /// DB-less, the bot fallback has no character to field and answers `Failed` (the
+    /// unrenderable-bot guard), so `Failed` arriving is the observable proof that the
+    /// loop took the solo-fallback branch. Returns whether it arrived within `window`.
+    async fn bot_fallback_fires_within(roster: Vec<Uuid>, user: Uuid, window: Duration) -> bool {
+        let registry = MatchRegistry::new(4);
+        let config = ArenaConfig {
+            public_advertise_host: None,
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 4,
+            max_queued_players: 64,
+            solo_fallback_secs: 600,
+            debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
+            immediate_bot_users: roster,
+            busy_fallback_secs: 600,
+            recent_fallback_secs: 600,
+            recent_window_secs: 300,
+        };
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
+        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+        let (rms, mut recv) = unbounded_channel();
+        let ticket_id = Uuid::new_v4();
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
+            expected_udp_ip: None,
+            ticket_id,
+            user_id: user,
+            character_id: None,
+            rms: RmsHandle::Direct(rms),
+            skill: None,
+        }))
+        .unwrap();
+        let deadline = tokio::time::Instant::now() + window;
+        loop {
+            match tokio::time::timeout_at(deadline, recv.recv()).await {
+                Ok(Some(MatchmakingMessage::Failed { ticket_id: t })) => {
+                    assert_eq!(t, ticket_id);
+                    return true;
+                }
+                Ok(Some(_)) => {} // Searching / PotentialMatch
+                _ => return false,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_exempt_user_reaches_the_bot_fallback_through_the_real_loop() {
+        let harness = Uuid::new_v4();
+        assert!(
+            bot_fallback_fires_within(vec![harness], harness, Duration::from_millis(1500)).await,
+            "an ARENA_IMMEDIATE_BOT_USERS ticket must hit the bot fallback at once, not after 600 s"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_user_not_on_the_roster_keeps_the_ordinary_wait_through_the_real_loop() {
+        let harness = Uuid::new_v4();
+        let someone = Uuid::new_v4();
+        // Somebody else is exempt, and the roster is empty: neither shortens this wait.
+        assert!(!bot_fallback_fires_within(vec![harness], someone, Duration::from_millis(1500)).await);
+        assert!(!bot_fallback_fires_within(Vec::new(), someone, Duration::from_millis(1500)).await);
+    }
+
     /// A waiting ticket whose client has gone (its RMS feed closed — cancelled, timed
     /// out + retried, or disconnected) must NOT be bot-matched on the solo-fallback
     /// timer (nor paired against). Before the liveness fix it lingered in `waiting`, so
