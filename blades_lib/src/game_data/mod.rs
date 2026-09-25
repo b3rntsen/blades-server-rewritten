@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use uuid::Uuid;
 
+pub mod newblades_content;
+
 #[derive(Deserialize)]
 pub struct EmptyStruct {}
 
