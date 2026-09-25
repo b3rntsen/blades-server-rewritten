@@ -2246,6 +2246,17 @@ pub(super) fn land_due_impacts(combat: &mut MatchCombat, now: Instant) -> Vec<(u
         if p.sender >= combat.fighters.len() || p.target >= combat.fighters.len() {
             continue;
         }
+        // The same rule `land_due_hits` and `land_due_echoes` apply. `due` was taken
+        // out of the queue before this loop, so `on_round_ended` clearing
+        // `pending_impacts` cannot stop a second impact due on the SAME tick: without
+        // this it landed from a dead caster into a finished round, killed the
+        // survivor and ended the round again (CRE-SOAK, `round_ends_once_tests`).
+        if !matches!(combat.phase, FlowState::StateTimeout) {
+            continue;
+        }
+        if combat.fighters[p.target].is_dead() || combat.fighters[p.sender].is_dead() {
+            continue;
+        }
         out.extend(apply_ability_impact(
             combat, p.sender, p.target, &p.ability_uuid, p.level, p.tag,
             p.magicka_full_at_cast, now,
@@ -3122,11 +3133,15 @@ fn emit_damage(
         now,
     ));
 
-    if combat.fighters[target_slot].is_dead() {
-        out.extend(on_round_ending_death(combat, attacker_slot, now));
-    }
-    if combat.fighters[attacker_slot].is_dead() {
-        out.extend(on_round_ending_death(combat, target_slot, now));
+    // ONE round end, however many fighters this hit left dead. Both dead (the target
+    // died and Reflecting Bash / Revenge killed the attacker) is a double KO, which
+    // `on_round_ended` detects from the pools itself; calling it once per corpse
+    // recorded the round twice and sent two results (CRE-SOAK).
+    let target_dead = combat.fighters[target_slot].is_dead();
+    let attacker_dead = combat.fighters[attacker_slot].is_dead();
+    if target_dead || attacker_dead {
+        let winner = if target_dead { attacker_slot } else { target_slot };
+        out.extend(on_round_ending_death(combat, winner, now));
     }
     out
 }
@@ -10983,5 +10998,148 @@ mod continuous_area_tests {
         combat.reset_fighters_for_next_round(now);
         assert_eq!(combat.fighters[0].continuous_next_tick_at, None);
         assert_eq!(combat.fighters[0].continuous_carry, 0.0);
+    }
+}
+
+/// CRE-SOAK: a round ends ONCE.
+///
+/// Found by the whole-match soak (`engine::soak_tests`, bot-vs-bot, seed
+/// 0x305edec27c61db36): both fighters' maneuver impacts fell due on the same tick.
+/// The first killed its target and ended the match; `land_due_impacts` had already
+/// taken the second out of the queue and landed it anyway — from a DEAD caster, into
+/// a finished round — which killed the survivor and ran `on_round_ended` twice more
+/// (once per dead fighter in `emit_damage`). The result: `round_winners` [0,1,0,1,0]
+/// (op48 announcing five rounds), three op29 death frames, and `combat.winner`
+/// flipped 0 → 1 → 0, i.e. the match could be awarded to the player who died first.
+/// `land_due_hits` and `land_due_echoes` already refuse to land outside the live
+/// round; `land_due_impacts` did not.
+#[cfg(test)]
+mod round_ends_once_tests {
+    use super::*;
+    use super::super::loadout::starter;
+    use super::super::state::{Fighter, FlowState, MatchCombat, PendingHit, PendingImpact};
+
+    const POWER_ATTACK: &str = "ce6b63e9-9f18-49c4-aee0-51f7985f9892";
+
+    fn live(now: Instant) -> MatchCombat {
+        let mut c = MatchCombat::new(2, 2, now);
+        for slot in 0..2 {
+            let obj = c.alloc_net_object_id();
+            c.fighters.push(Fighter::new(slot, obj, starter(), now));
+        }
+        c.match_net_object_id = c.alloc_net_object_id();
+        c.phase = FlowState::StateTimeout;
+        c.round = 1;
+        c
+    }
+
+    fn impact(sender: usize, due: Instant) -> PendingImpact {
+        PendingImpact {
+            sender,
+            target: 1 - sender,
+            ability_uuid: POWER_ATTACK.to_string(),
+            level: 1,
+            tag: super::super::state::AbilityTag::Maneuver,
+            magicka_full_at_cast: false,
+            due,
+        }
+    }
+
+    fn op48_count(out: &[(usize, Vec<u8>)]) -> usize {
+        out.iter()
+            .filter(|(v, b)| {
+                *v == 0
+                    && b.len() > 2
+                    && b[1] == 0x36
+                    && arena_proto::parse_netdata(&b[2..]).int(3) == Some(48)
+            })
+            .count()
+    }
+
+    /// Two lethal impacts due on one tick: the first ends the round, the second must
+    /// not land. Round 1 (non-final): one winner recorded, one op48, survivor alive.
+    #[test]
+    fn a_second_impact_on_the_killing_tick_does_not_land() {
+        let now = Instant::now();
+        let mut c = live(now);
+        c.fighters[0].health = 1;
+        c.fighters[1].health = 1;
+        c.pending_impacts.push(impact(0, now));
+        c.pending_impacts.push(impact(1, now));
+
+        let out = land_due_impacts(&mut c, now + Duration::from_millis(1));
+
+        assert_eq!(c.round_winners, vec![0], "the round ended once, won by slot 0");
+        assert_eq!(c.rounds_won, [1, 0]);
+        assert_eq!(c.phase, FlowState::NextState);
+        assert!(!c.fighters[0].is_dead(), "slot 1's impact landed after the round ended");
+        assert_eq!(op48_count(&out), 1, "exactly one round result to each viewer");
+    }
+
+    /// The match-ending variant: the winner must stay the fighter who got the kill.
+    #[test]
+    fn the_match_winner_cannot_flip_on_a_trailing_impact() {
+        let now = Instant::now();
+        let mut c = live(now);
+        c.round = 3;
+        c.rounds_won = [1, 1];
+        c.round_winners = vec![0, 1];
+        c.fighters[0].health = 1;
+        c.fighters[1].health = 1;
+        c.pending_impacts.push(impact(0, now));
+        c.pending_impacts.push(impact(1, now));
+
+        let out = land_due_impacts(&mut c, now + Duration::from_millis(1));
+
+        assert_eq!(c.winner, Some(0), "slot 0 killed first and won the match");
+        assert_eq!(c.round_winners, vec![0, 1, 0], "three rounds, not five");
+        assert_eq!(c.rounds_won, [2, 1]);
+        assert_eq!(c.phase, FlowState::RoundEnd);
+        assert_eq!(op48_count(&out), 1);
+    }
+
+    /// Control: impacts still land in a live round (the guard is not "never land").
+    #[test]
+    fn a_single_due_impact_still_lands_in_a_live_round() {
+        let now = Instant::now();
+        let mut c = live(now);
+        let before = c.fighters[1].health;
+        c.pending_impacts.push(impact(0, now));
+        land_due_impacts(&mut c, now + Duration::from_millis(1));
+        assert!(c.fighters[1].health < before, "the maneuver impact must land");
+        assert_eq!(c.phase, FlowState::StateTimeout);
+    }
+
+    /// One hit that leaves BOTH fighters dead (the target dies, and Reflecting Bash
+    /// sends enough back to kill the attacker) is ONE round end — a double KO —
+    /// not two. `emit_damage` used to call `on_round_ending_death` once per corpse.
+    #[test]
+    fn a_hit_that_kills_both_fighters_ends_the_round_once() {
+        let now = Instant::now();
+        let mut c = live(now);
+        c.fighters[0].health = 1;
+        c.fighters[1].health = 1;
+        c.fighters[1].reflect_until = Some(now + Duration::from_secs(5));
+        c.fighters[1].reflect_remaining = 10_000.0;
+        c.pending_hits.push(PendingHit {
+            sender: 0,
+            target: 1,
+            side: super::super::state::ActiveSide::Right,
+            swing_factor: 1.0,
+            combo_count: 0,
+            due: now,
+        });
+
+        let out = land_due_hits(&mut c, now + Duration::from_millis(1));
+
+        assert!(c.fighters[0].is_dead() && c.fighters[1].is_dead(), "fixture: both must die");
+        assert_eq!(c.rounds_won, [0, 0], "a double KO scores nothing");
+        assert_eq!(
+            c.round_winners.len(),
+            1,
+            "one round end, not one per corpse: {:?}",
+            c.round_winners
+        );
+        assert_eq!(op48_count(&out), 1);
     }
 }

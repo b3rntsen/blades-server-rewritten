@@ -273,6 +273,9 @@ fn two_fighter_combat(now: Instant) -> MatchCombat {
         c.fighters.push(f);
     }
     c.match_net_object_id = c.alloc_net_object_id();
+    // A LIVE round: impacts only land while the round is running (the engine's tick
+    // never lands one outside it, and `land_due_impacts` now refuses to as well).
+    c.phase = super::state::FlowState::StateTimeout;
     c
 }
 
