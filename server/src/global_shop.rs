@@ -742,10 +742,19 @@ pub async fn purchase_global_shop(
     // A capture-derived grant always WINS: it is a recording of what retail
     // actually handed over, instance stats and all, where the fallback below
     // knows only templates and quantities.
+    //
+    // A randomised bundle is rolled inside the transaction below, so its recorded
+    // grant (if any) is never what the player gets. Checked FIRST because the
+    // store chests at full price had either an invented grant — one treasury
+    // chest, which froze the client's store opening sequence and paid a single
+    // fixed tier-5 bundle (#215/#216) — or none at all, which refused the sale.
+    let randomised =
+        blades_lib::features::store_bundles::is_randomised_bundle(&body.global_shop_product_id);
     let reward = match captured_grant_for_product(
         &app_state.static_data,
         body.global_shop_product_id,
     ) {
+        _ if randomised => RewardGrant::default(),
         Some(r) => r.clone(),
         None => grant_from_offer_contents(
             app_state

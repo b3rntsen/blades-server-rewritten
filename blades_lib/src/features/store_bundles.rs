@@ -103,19 +103,54 @@ fn mix(mut x: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// The three store chests at their normal gem price, each paired with the 1-gem
+/// shutdown-promotion window that retail sold the SAME chest under (#215/#216).
+///
+/// The catalogue says so itself: every promo entry's bare `purchaseTrackingId`
+/// is the base product (`global_shop_overrides.json`), and the base prices are
+/// Rare 250 / Epic 750 / Legendary 2500 gems. Retail's purchases were captured
+/// only under the promo ids — 4,697 Legendary, 405 Epic, 355 Rare — so the base
+/// ids had no corpus of their own. Legendary fell through to an invented grant
+/// (one tier-5 treasury chest), which froze the client's store opening sequence
+/// and paid every buyer the same single tier-5 bundle; Rare and Epic had no
+/// grant at all and were refused. Retail answered a chest purchase with the
+/// rolled contents in `reward` and no treasury chest, which is what the promo
+/// corpus holds.
+const STORE_CHEST_ALIASES: [(Uuid, Uuid); 3] = [
+    // Legendary (2500 gems) -> its promo window.
+    (
+        Uuid::from_u128(0x1275d959_bbe5_460d_8f6a_1c31106a8eb2),
+        Uuid::from_u128(0x11102495_fde7_4e77_b6c4_d13b9303f1f5),
+    ),
+    // Epic (750 gems).
+    (
+        Uuid::from_u128(0x7bf00a9c_6a08_4b55_a60d_53915baa38a3),
+        Uuid::from_u128(0x9e4dc391_422e_4b25_ba90_faab39e0769f),
+    ),
+    // Rare (250 gems).
+    (
+        Uuid::from_u128(0x0e224ca0_1506_490f_884a_8871ffe6399b),
+        Uuid::from_u128(0x11b322d2_1b5e_4e90_bb41_a8d90ca9548b),
+    ),
+];
+
+/// The mined product that backs `product_id`: its own, else its promo twin's.
+fn corpus_product(product_id: &Uuid) -> Option<&'static Product> {
+    let mined_as = STORE_CHEST_ALIASES
+        .iter()
+        .find(|(base, _)| base == product_id)
+        .map_or(product_id, |(_, promo)| promo);
+    corpus().products.iter().find(|p| &p.product_id == mined_as)
+}
+
 /// Whether this product is one the server must roll rather than replay.
 pub fn is_randomised_bundle(product_id: &Uuid) -> bool {
-    corpus().products.iter().any(|p| &p.product_id == product_id)
+    corpus_product(product_id).is_some()
 }
 
 /// How many retail purchases back this product, for tests and diagnostics.
 pub fn bundle_observations(product_id: &Uuid) -> u64 {
-    corpus()
-        .products
-        .iter()
-        .find(|p| &p.product_id == product_id)
-        .map(|p| p.observations)
-        .unwrap_or(0)
+    corpus_product(product_id).map(|p| p.observations).unwrap_or(0)
 }
 
 /// Roll one purchase of a randomised bundle for a buyer at `buyer_level`.
@@ -127,10 +162,7 @@ pub fn bundle_observations(product_id: &Uuid) -> u64 {
 /// `None` when the product is not a randomised bundle, which leaves every other
 /// product on the existing recorded-grant path.
 pub fn roll_bundle(product_id: &Uuid, buyer_level: u64, nonce: u64) -> Option<RewardGrant> {
-    let product = corpus()
-        .products
-        .iter()
-        .find(|p| &p.product_id == product_id)?;
+    let product = corpus_product(product_id)?;
 
     // The band containing the buyer's level, else the nearest one — a level above
     // or below everything retail was observed at clamps rather than falling back
@@ -217,6 +249,34 @@ mod tests {
             !is_randomised_bundle(&"6ec8f67f-2cef-41aa-a7fc-f46237ae809c".parse().unwrap()),
             "a FIXED product must stay on the recorded-grant path"
         );
+    }
+
+    /// #215/#216: the chests at their normal gem price roll from the promo
+    /// window retail sold them under, so they vary and never grant a treasury
+    /// chest (the invented grant that froze the store and paid one fixed bundle).
+    #[test]
+    fn the_store_chests_at_full_price_roll_from_their_promo_corpus() {
+        for (base, promo, observations) in [
+            ("1275d959-bbe5-460d-8f6a-1c31106a8eb2", BIG, 4697),
+            ("7bf00a9c-6a08-4b55-a60d-53915baa38a3", "9e4dc391-422e-4b25-ba90-faab39e0769f", 405),
+            ("0e224ca0-1506-490f-884a-8871ffe6399b", "11b322d2-1b5e-4e90-bb41-a8d90ca9548b", 355),
+        ] {
+            let base: Uuid = base.parse().unwrap();
+            assert!(is_randomised_bundle(&base), "{base} must roll");
+            assert_eq!(bundle_observations(&base), observations, "{base} corpus");
+            assert_eq!(bundle_observations(&promo.parse().unwrap()), observations);
+            let mut seen = std::collections::HashSet::new();
+            for nonce in 0..40u64 {
+                let g = roll_bundle(&base, 48, nonce).expect("a store chest must roll");
+                assert!(g.chests.is_empty(), "a bought chest is opened, not stored");
+                assert!(
+                    !g.currencies.is_empty() || !g.stackable_items.is_empty() || !g.items.is_empty(),
+                    "{base} rolled an empty chest"
+                );
+                seen.insert((gold_of(&g), g.stackable_items.values().sum::<u64>(), g.items.len()));
+            }
+            assert!(seen.len() > 5, "{base}: 40 purchases gave {} distinct rewards", seen.len());
+        }
     }
 
     /// THE BUG: every purchase returned the same thing.
