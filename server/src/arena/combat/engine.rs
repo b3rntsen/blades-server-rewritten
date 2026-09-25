@@ -4681,9 +4681,19 @@ pub(in crate::arena::combat) mod tests {
         // shield actually appears (report #5 — this used to assert no s2c at all).
         let out = m.on_c2s(1, &block, t0);
         assert!(!out.is_empty(), "a block input must relay the blocking state");
+        // …plus the Blocking (1) status op51 retail sends with it.
+        let is_blocking_status = |f: &[u8]| {
+            let nd = arena_proto::parse_netdata(&f[2..]);
+            nd.int(3) == Some(51) && nd.int(5) == Some(1)
+        };
         assert!(
-            out.iter().all(|(_, f)| messages::is_player_blocking_state_change(f)),
-            "a block emits only the gmid-41 relay, never damage"
+            out.iter()
+                .all(|(_, f)| messages::is_player_blocking_state_change(f) || is_blocking_status(f)),
+            "a block emits only the gmid-41 relay and the Blocking status, never damage"
+        );
+        assert!(
+            out.iter().any(|(_, f)| is_blocking_status(f)),
+            "the guard coming up must announce the Blocking status"
         );
         assert_eq!(m.fighter_health(1), full, "the block itself deals no damage");
 

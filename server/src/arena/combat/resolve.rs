@@ -1240,7 +1240,18 @@ fn stun_the_blocked_attacker(
         return out;
     }
     let secs = BASE_STAGGER_DURATION_SECS;
-    combat.fighters[attacker_slot].apply_stagger_for(now, secs);
+    // Held Powerful Block weakness, read BEFORE the stagger refreshes anything.
+    let weakness_held = combat.fighters[attacker_slot].has_staggered_weakness(now);
+    // A refused stagger (Reckless Fury, paralysis) has no Staggered status, so
+    // `CombatManager$$ApplyDamage@0x1bd2770` fires no `CausedStagger` hook: no op51(3),
+    // and no Powerful Block `StaggeredWeakness` either.
+    if !combat.fighters[attacker_slot].apply_stagger_for(now, secs) {
+        debug!(
+            "combat: slot {attacker_slot} high-blocked by slot {blocker_slot} but cannot \
+             be staggered (Reckless Fury or paralysed) — no stun"
+        );
+        return out;
+    }
     let obj = combat.fighters[attacker_slot].net_object_id;
     info!(
         "combat: slot {attacker_slot} STUNNED {secs:.2}s — its weapon attack was \
@@ -1262,8 +1273,12 @@ fn stun_the_blocked_attacker(
     // control over 36 samples shows exactly +0.0 when the holder is the one dealing).
     // It ships NO duration of its own — every captured op51 carries 0.0 — and is
     // removed with the Staggered that produced it.
+    //
+    // It never stacks and never refreshes: `PowerfulBlockBonusInstance$$CausedStagger
+    // @0x1d51214` returns early when the attacker already has StaggeredWeakness (10),
+    // so the first magnitude sticks and no second apply is sent.
     let weakness = combat.fighters[blocker_slot].loadout.powerful_block;
-    if weakness > 0.0 {
+    if weakness > 0.0 && !weakness_held {
         combat.fighters[attacker_slot].weakness_rating = weakness;
         info!(
             "combat: slot {attacker_slot} takes STAGGERED WEAKNESS +{weakness:.2} from \
@@ -1819,6 +1834,8 @@ fn apply_ability_impact(
     // in `apply_shipped_effects` needs to know whether the target blocked. 0 for arms
     // that deal no damage — a cast that never touched the target was not blocked.
     let mut block_flags = 0u8;
+    let target_absorbing =
+        target_slot < combat.fighters.len() && combat.fighters[target_slot].has_absorb(now);
     match tag {
         AbilityTag::Ward => out.extend(apply_ward(combat, sender, level, now)),
         AbilityTag::Absorb => out.extend(apply_absorb(combat, sender, level, now)),
@@ -2050,7 +2067,7 @@ fn apply_ability_impact(
                     .map(|(_, v)| *v)
                     .sum();
                 out.extend(try_paralyze(
-                    combat, sender, target_slot, level, cast_poison, now,
+                    combat, sender, target_slot, level, cast_poison, target_absorbing, now,
                 ));
             }
             // `_damageToCauseStagger` used to be handled HERE, inside this arm. It is
@@ -2065,7 +2082,7 @@ fn apply_ability_impact(
     // and do nothing because these fields were read by no code.
     out.extend(apply_shipped_effects(
         combat, sender, target_slot, ability_uuid, level, last_hit_total, block_flags,
-        now,
+        target_absorbing, now,
     ));
     out
 }
@@ -2382,6 +2399,10 @@ fn apply_shipped_effects(
     // The `damage::flags` block bits this cast produced on the target. Guardbreaker
     // stuns only when the target DID block; Staggering Bash only when it did NOT.
     block_flags: u8,
+    // Did the target hold an Absorb shield when this cast's hit began? Read BEFORE
+    // the hit, because the hit itself may drain the pool: the client's `Absorb`
+    // status survives until the step's next `Update`, so the proc still sees it.
+    target_absorbing: bool,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
     use super::state::{DamageNegationSource, NegationPool, StatusEffectType};
@@ -2684,11 +2705,36 @@ fn apply_shipped_effects(
     // state (all 29 members read), so the fog — and a burning opponent staying visible
     // through it — is rendered client-side off `Blind` (8). The server sends the
     // status with the ability's duration and tracks that lifetime for removal/cures.
+    //
+    // Strictly greater, and never through an Absorb shield:
+    // `AbilityApplyPoisonSpellDamage$$OnDamage@0x1e8ebb0` (`fcmp; b.le`, then
+    // `!HasStatus(Absorb 17)`).
     if let Some(threshold) = r.damage_to_cause_blind() {
-        if last_hit_total >= threshold
+        let qualifies = last_hit_total > threshold
+            && !target_absorbing
             && target_slot < viewers
-            && !combat.fighters[target_slot].is_dead()
-        {
+            && !combat.fighters[target_slot].is_dead();
+        // Already Blind: refresh the server's timer and send nothing. A PvP client
+        // adds a SECOND instance for a repeated apply (`PvpAvatar$$AddStatusEffect
+        // @0x17933ac` -> `ForceAddStatusEffect`, whose replace path goes through the
+        // no-op `PvpPlayerActor$$RemoveStatusEffect@0x1a32aa8`), and the one remove we
+        // send later clears only one of them, so the fog would never lift.
+        let refreshed = qualifies && {
+            let expires = now + Duration::from_secs_f32(r.duration().unwrap_or(0.0).max(0.0));
+            match combat.fighters[target_slot]
+                .effects
+                .iter_mut()
+                .find(|e| e.effect == StatusEffectType::Blind && now < e.expires_at)
+            {
+                Some(e) => {
+                    e.expires_at = e.expires_at.max(expires);
+                    debug!("combat: slot {target_slot} already Blind — timer refreshed, no re-send");
+                    true
+                }
+                None => false,
+            }
+        };
+        if qualifies && !refreshed {
             let secs = r.duration().unwrap_or(0.0);
             let obj = combat.fighters[target_slot].net_object_id;
             info!(
@@ -2776,8 +2822,13 @@ fn apply_shipped_effects(
         _ => true,
     };
     if let Some(threshold) = r.damage_to_cause_stagger() {
+        // Strictly greater, and never through an Absorb shield — Ice Spike
+        // (`AbilityApplyIceSpikeDamage$$OnDamage@0x1e8ea14`), Staggering Bash
+        // (`AbilityDoStaggeringBash$$ApplyAdditionalEffects@0x1e9a038`) and
+        // Guardbreaker (`AbilityDoGuardbreaker$$ApplyAdditionalEffects@0x1e956bc`).
         if last_hit_total > 0.0
-            && last_hit_total >= threshold
+            && last_hit_total > threshold
+            && !target_absorbing
             && block_condition_met
             && target_slot < viewers
             && !combat.fighters[target_slot].is_dead()
@@ -2788,17 +2839,19 @@ fn apply_shipped_effects(
             let secs = r
                 .stun_duration()
                 .unwrap_or(super::state::BASE_STAGGER_DURATION_SECS);
-            combat.fighters[target_slot].apply_stagger_for(now, secs);
-            let obj = combat.fighters[target_slot].net_object_id;
-            info!(
-                "combat: slot {target_slot} STAGGERED {secs:.2}s \
-                 (hit {last_hit_total:.1} >= {threshold:.1}, {ability_uuid})"
-            );
-            let frame = messages::change_combat_status_effect(
-                obj, true, StatusEffectType::Staggered, secs,
-            );
-            for v in 0..viewers {
-                out.push((v, frame.clone()));
+            // A refused stagger (Fury, paralysis) is not announced.
+            if combat.fighters[target_slot].apply_stagger_for(now, secs) {
+                let obj = combat.fighters[target_slot].net_object_id;
+                info!(
+                    "combat: slot {target_slot} STAGGERED {secs:.2}s \
+                     (hit {last_hit_total:.1} > {threshold:.1}, {ability_uuid})"
+                );
+                let frame = messages::change_combat_status_effect(
+                    obj, true, StatusEffectType::Staggered, secs,
+                );
+                for v in 0..viewers {
+                    out.push((v, frame.clone()));
+                }
             }
         }
     }
@@ -2810,6 +2863,13 @@ fn apply_shipped_effects(
             f.set_actor_state(ActorStateType::Paralyzed, now);
             f.clear_scheduled_states();
             f.blocking_until = None;
+            // Frozen (5) is announced with the paralysis, but nothing tracked it, so its
+            // op51 remove was never sent and the PvP client kept FlashFreeze's local
+            // Slow and Stamina-regen block for the rest of the round (08 §8). Paralyzed
+            // is removed by `reconcile_paralysis`; Frozen now lapses at the same instant.
+            f.status_timers.retain(|(st, _)| *st != StatusEffectType::Frozen);
+            f.status_timers
+                .push((StatusEffectType::Frozen, now + Duration::from_secs_f32(secs)));
             let obj = f.net_object_id;
             info!("combat: slot {target_slot} FROZEN + PARALYZED {secs:.2}s ({ability_uuid})");
             for st in [StatusEffectType::Frozen, StatusEffectType::Paralyzed] {
@@ -2840,6 +2900,7 @@ fn try_paralyze(
     target_slot: usize,
     rank: u8,
     cast_poison: f32,
+    target_absorbing: bool,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
     use super::state::{ActorStateType, StatusEffectType};
@@ -2849,8 +2910,11 @@ fn try_paralyze(
     {
         return out;
     }
+    // Strictly greater, and never through an Absorb shield:
+    // `AbilityApplyPoisonSpellDamage$$OnDamage@0x1e8ebb0` (`fcmp s0, s1; b.le`, then
+    // `!HasStatus(Absorb 17)`).
     let threshold = super::state::paralyze_damage_threshold(rank);
-    if cast_poison < threshold {
+    if cast_poison <= threshold || target_absorbing {
         return out;
     }
     let secs = super::state::paralyze_duration_secs(rank);
@@ -4065,6 +4129,10 @@ fn apply_resist_elements(
         combat.fighters[caster_slot]
             .transient_resistances
             .push((dmg_ty, resist_amount, expires));
+        // So the lapsed-status diff sends this resistance's op51 remove.
+        let timers = &mut combat.fighters[caster_slot].status_timers;
+        timers.retain(|(st, _)| *st != effect_ty);
+        timers.push((effect_ty, expires));
         let frame =
             messages::change_combat_status_effect(target_obj, true, effect_ty, resist_duration);
         for slot in 0..combat.fighters.len() {
@@ -4654,7 +4722,26 @@ pub fn drain_state_changes_for(
             combat.fighters[slot].active_manual_attack = None;
         }
     }
-    let _ = now;
+    // The Blocking (1) status, after the actor-state frames so the op41 that raises
+    // the shield (or the op39 that lowers it) goes out first, the order retail uses
+    // for a state and its status. Synced here, at the seam every c2s and every tick
+    // passes, because a guard is raised and dropped on many paths.
+    for slot in 0..viewers {
+        if matches!(only, Some(s) if s != slot) {
+            continue;
+        }
+        if let Some(up) = combat.fighters[slot].sync_blocking_status(now) {
+            let obj = combat.fighters[slot].net_object_id;
+            debug!("combat: slot {slot} Blocking status → {}", if up { "apply" } else { "remove" });
+            // Retail's Blocking applies carry duration 0 (651 of 651, status spec §5.3).
+            let frame = messages::change_combat_status_effect(
+                obj, up, super::state::StatusEffectType::Blocking, 0.0,
+            );
+            for viewer in 0..viewers {
+                out.push((viewer, frame.clone()));
+            }
+        }
+    }
     out
 }
 
@@ -5123,21 +5210,36 @@ mod tests {
         // of every on_c2s/on_tick. It is what raises the shield on screen; this test
         // used to assert zero frames anywhere, which is what kept the shield down
         // (report #5).
+        //
+        // Each viewer gets the gmid-41 relay and then the Blocking (1) status op51:
+        // retail sends both (736 Blocking applies in s615+s616), state frame first.
         let out = drain_state_changes(&mut combat, now);
         assert_eq!(
             out.len(),
-            combat.fighters.len(),
-            "block must relay PlayerBlockingStateChange to every viewer, got {} frame(s)",
+            2 * combat.fighters.len(),
+            "block must relay PlayerBlockingStateChange + op51(Blocking) to every viewer, \
+             got {} frame(s)",
             out.len()
         );
-        for (_, f) in &out {
+        let (relay, status) = out.split_at(combat.fighters.len());
+        for (_, f) in relay {
             let nd = arena_proto::parse_netdata(&f[2..]);
             assert_eq!(
                 nd.int(3),
                 Some(41),
-                "the only frame a block emits is the gmid-41 relay — never damage"
+                "the state relay comes first — never damage"
             );
             assert_eq!(nd.int(6), Some(1), "prop6 = ActorStateType::Blocking");
+        }
+        for (_, f) in status {
+            let nd = arena_proto::parse_netdata(&f[2..]);
+            assert_eq!(nd.int(3), Some(51), "then the status op51");
+            assert_eq!(nd.int(5), Some(1), "StatusEffectType::Blocking");
+            assert_eq!(
+                nd.props.get(&4),
+                Some(&arena_proto::NetDataValue::Bool(true)),
+                "an apply"
+            );
         }
         // And the fighter should now be in the Blocking state.
         assert_eq!(
@@ -8221,7 +8323,7 @@ mod shipped_effects_tests {
     fn a_dodge_pool_expires_after_its_authored_second() {
         let now = Instant::now();
         let mut c = combat2(now);
-        apply_shipped_effects(&mut c, 0, 1, uuid_of("DodgingStrike"), 1, 500.0, 0, now);
+        apply_shipped_effects(&mut c, 0, 1, uuid_of("DodgingStrike"), 1, 500.0, 0, false, now);
         let pool = c.fighters[0].negation_pools.first().expect("a dodge pool").clone();
         assert!(
             pool.expires_at <= now + Duration::from_secs_f32(1.05),
@@ -8259,7 +8361,7 @@ mod shipped_effects_tests {
     fn indomitable_smash_grants_its_authored_resistance() {
         let now = Instant::now();
         let mut c = combat2(now);
-        apply_shipped_effects(&mut c, 0, 1, uuid_of("IndomitableSmash"), 1, 500.0, 0, now);
+        apply_shipped_effects(&mut c, 0, 1, uuid_of("IndomitableSmash"), 1, 500.0, 0, false, now);
         let total: f32 = c.fighters[0].transient_all_resistance.iter().map(|(v, _)| *v).sum();
         assert!(total >= 250.0, "expected the authored 250 flat resistance, got {total}");
     }
@@ -8272,7 +8374,7 @@ mod shipped_effects_tests {
     fn frostbite_grants_its_authored_physical_resistance_to_the_caster() {
         let now = Instant::now();
         let mut c = combat2(now);
-        apply_shipped_effects(&mut c, 0, 1, uuid_of("Frostbite"), 1, 500.0, 0, now);
+        apply_shipped_effects(&mut c, 0, 1, uuid_of("Frostbite"), 1, 500.0, 0, false, now);
         use super::super::state::DamageType;
         for ty in [DamageType::Slashing, DamageType::Cleaving, DamageType::Bashing] {
             let got: f32 = c.fighters[0]
@@ -8300,7 +8402,7 @@ mod shipped_effects_tests {
     fn magicka_surge_grants_regen_then_a_blackout() {
         let now = Instant::now();
         let mut c = combat2(now);
-        apply_shipped_effects(&mut c, 0, 1, uuid_of("MagickaSurge"), 1, 500.0, 0, now);
+        apply_shipped_effects(&mut c, 0, 1, uuid_of("MagickaSurge"), 1, 500.0, 0, false, now);
         let f = &c.fighters[0];
         assert!(f.magicka_surge_bonus > 0.0, "a regen bonus was granted");
         let surge_end = f.magicka_surge_until.expect("surge window");
@@ -8366,7 +8468,7 @@ mod shipped_effects_tests {
     fn a_blizzard_armor_does_not_absorb_fire() {
         let now = Instant::now();
         let mut c = combat2(now);
-        apply_shipped_effects(&mut c, 0, 1, uuid_of("BlizzardArmor"), 1, 500.0, 0, now);
+        apply_shipped_effects(&mut c, 0, 1, uuid_of("BlizzardArmor"), 1, 500.0, 0, false, now);
         let pool = c.fighters[0].negation_pools.first().expect("a shield pool");
         assert!(
             pool.bypass_types.contains(&(super::super::state::DamageType::Fire as i32)),
@@ -8387,7 +8489,7 @@ mod shipped_effects_tests {
         let now = Instant::now();
         let mut c = combat2(now);
         let u = uuid_of("DodgingStrike");
-        let out = apply_shipped_effects(&mut c, 0, 1, u, 1, 500.0, 0, now);
+        let out = apply_shipped_effects(&mut c, 0, 1, u, 1, 500.0, 0, false, now);
         let pools = &c.fighters[0].negation_pools;
         assert_eq!(pools.len(), 1, "one dodge pool");
         assert_eq!(pools[0].source, DamageNegationSource::Dodge);
@@ -8411,7 +8513,7 @@ mod shipped_effects_tests {
         let now = Instant::now();
         let mut c = combat2(now);
         let u = uuid_of("DodgingStrike");
-        let out = apply_shipped_effects(&mut c, 0, 1, u, 1, 500.0, 0, now);
+        let out = apply_shipped_effects(&mut c, 0, 1, u, 1, 500.0, 0, false, now);
 
         // op51 layout: propId 4 apply, 5 status, 6 duration (messages.rs).
         let durations: Vec<f32> = out
@@ -8446,7 +8548,7 @@ mod shipped_effects_tests {
         let now = Instant::now();
         let mut c = combat2(now);
         let u = uuid_of("DodgingStrike");
-        apply_shipped_effects(&mut c, 0, 1, u, 1, 500.0, 0, now);
+        apply_shipped_effects(&mut c, 0, 1, u, 1, 500.0, 0, false, now);
         let pool = &c.fighters[0].negation_pools[0];
 
         // Alive just inside the window, gone just outside it.
@@ -8474,7 +8576,7 @@ mod shipped_effects_tests {
         let now = Instant::now();
         let mut c = combat2(now);
         let u = uuid_of("DodgingStrike");
-        apply_shipped_effects(&mut c, 0, 1, u, 1, 500.0, 0, now);
+        apply_shipped_effects(&mut c, 0, 1, u, 1, 500.0, 0, false, now);
 
         // A tick inside the window records the dodge as announced, and takes
         // nothing back — the dodge is still up.
@@ -8501,7 +8603,7 @@ mod shipped_effects_tests {
         let now = Instant::now();
         let mut c = combat2(now);
         let u = uuid_of("DodgingStrike");
-        apply_shipped_effects(&mut c, 0, 1, u, 1, 500.0, 0, now);
+        apply_shipped_effects(&mut c, 0, 1, u, 1, 500.0, 0, false, now);
         emit_status_removals(&mut c, now);
 
         // A hit far bigger than the pool drains it outright.
@@ -8529,7 +8631,7 @@ mod shipped_effects_tests {
     fn a_shield_pool_is_never_announced_as_a_dodge() {
         let now = Instant::now();
         let mut c = combat2(now);
-        apply_shipped_effects(&mut c, 0, 1, uuid_of("FirestormArmor"), 1, 500.0, 0, now);
+        apply_shipped_effects(&mut c, 0, 1, uuid_of("FirestormArmor"), 1, 500.0, 0, false, now);
         assert!(
             c.fighters[0].negation_pools.iter().any(|p| p.source != DamageNegationSource::Dodge),
             "the fixture must actually hold a non-dodge pool, or this proves nothing"
@@ -8568,7 +8670,7 @@ mod shipped_effects_tests {
         let now = Instant::now();
         for name in ["FirestormArmor", "BlizzardArmor", "TempestArmor"] {
             let mut c = combat2(now);
-            let out = apply_shipped_effects(&mut c, 0, 1, uuid_of(name), 1, 500.0, 0, now);
+            let out = apply_shipped_effects(&mut c, 0, 1, uuid_of(name), 1, 500.0, 0, false, now);
             assert_eq!(c.fighters[0].negation_pools.len(), 1, "{name}: a shield pool");
             assert!(c.fighters[0].negation_pools[0].remaining >= 100.0, "{name}: shipped ~116");
             assert_eq!(out.len(), 2, "{name}: emits its now-known status id");
@@ -8595,7 +8697,7 @@ mod shipped_effects_tests {
             // A cast_poison well above even the top rank's threshold: these tests are
             // about the DURATION of the lock, not about what arms it.
             c.fighters[1].record_element_damage(DamageType::Poison, 500.0, now);
-            let out = try_paralyze(&mut c, 0, 1, rank, 1_000.0, now);
+            let out = try_paralyze(&mut c, 0, 1, rank, 1_000.0, false, now);
             assert!(!out.is_empty(), "rank {rank} did not paralyse — the test would be vacuous");
             assert!(c.fighters[1].is_paralyzed(), "rank {rank} target not locked");
             c.fighters[1].paralyze_secs
@@ -8619,7 +8721,7 @@ mod shipped_effects_tests {
         let now = Instant::now();
         let mut c = combat2(now);
         c.fighters[1].record_element_damage(DamageType::Poison, 500.0, now);
-        try_paralyze(&mut c, 0, 1, 12, 1_000.0, now);
+        try_paralyze(&mut c, 0, 1, 12, 1_000.0, false, now);
 
         // 2.5 s in: rank 1's window has long lapsed, rank 12's has not.
         reconcile_paralysis(&mut c.fighters[1], now + Duration::from_millis(2500));
@@ -8681,7 +8783,7 @@ mod shipped_effects_tests {
         c.fighters[1].paralyze_secs = 99.0;
         c.fighters[1].record_element_damage(DamageType::Poison, 500.0, now);
 
-        try_paralyze(&mut c, 0, 1, 1, 1_000.0, now);
+        try_paralyze(&mut c, 0, 1, 1, 1_000.0, false, now);
         assert!(
             (c.fighters[1].paralyze_secs - 2.0).abs() < 0.001,
             "rank 1 must set its OWN 2.0s, not keep the stale 99.0"
@@ -8702,7 +8804,7 @@ mod shipped_effects_tests {
         // The victim is already poisoned — the window is way over any threshold.
         c.fighters[1].record_element_damage(DamageType::Poison, 500.0, now);
         // …but THIS cast was fully negated, so it delivered nothing.
-        try_paralyze(&mut c, 0, 1, 1, 0.0, now);
+        try_paralyze(&mut c, 0, 1, 1, 0.0, false, now);
         assert!(
             !c.fighters[1].is_paralyzed(),
             "a cast that dealt no poison must not paralyse, however poisoned the target is"
@@ -8719,10 +8821,10 @@ mod shipped_effects_tests {
         let mut c = combat2(now);
         c.fighters[1].record_element_damage(DamageType::Poison, 500.0, now);
         let threshold = super::super::state::paralyze_damage_threshold(1);
-        try_paralyze(&mut c, 0, 1, 1, threshold - 1.0, now);
+        try_paralyze(&mut c, 0, 1, 1, threshold - 1.0, false, now);
         assert!(!c.fighters[1].is_paralyzed(), "under its own threshold: no lock");
         // …and one point over it does land, so the test cannot pass vacuously.
-        try_paralyze(&mut c, 0, 1, 1, threshold + 1.0, now);
+        try_paralyze(&mut c, 0, 1, 1, threshold + 1.0, false, now);
         assert!(c.fighters[1].is_paralyzed(), "over its own threshold: locked");
     }
 
@@ -8731,7 +8833,7 @@ mod shipped_effects_tests {
     fn flashfreeze_locks_the_target_for_its_shipped_duration() {
         let now = Instant::now();
         let mut c = combat2(now);
-        let out = apply_shipped_effects(&mut c, 0, 1, uuid_of("FlashFreeze"), 1, 500.0, 0, now);
+        let out = apply_shipped_effects(&mut c, 0, 1, uuid_of("FlashFreeze"), 1, 500.0, 0, false, now);
         assert!(c.fighters[1].is_paralyzed(), "the TARGET is locked");
         assert!(!c.fighters[0].is_paralyzed(), "the caster is not");
         assert!(c.fighters[1].paralyze_secs >= 2.0, "the rank's own duration, not the default");
@@ -8767,7 +8869,7 @@ mod shipped_effects_tests {
         let u = uuid_of("Blind");
         // A big hit → blinded.
         let mut c = combat2(now);
-        let out = apply_shipped_effects(&mut c, 0, 1, u, 1, 9_999.0, 0, now);
+        let out = apply_shipped_effects(&mut c, 0, 1, u, 1, 9_999.0, 0, false, now);
         let blind = out.iter().filter(|(_, f)| {
             let nd = arena_proto::parse_netdata(&f[2..]);
             nd.int(3) == Some(51) && nd.int(5) == Some(8)
@@ -8804,7 +8906,7 @@ mod shipped_effects_tests {
         // A hit of zero → no blind. A threshold effect must not fire on a cast that
         // did not land.
         let mut c2 = combat2(now);
-        let out2 = apply_shipped_effects(&mut c2, 0, 1, u, 1, 0.0, 0, now);
+        let out2 = apply_shipped_effects(&mut c2, 0, 1, u, 1, 0.0, 0, false, now);
         assert!(
             !out2.iter().any(|(_, f)| {
                 let nd = arena_proto::parse_netdata(&f[2..]);
@@ -8852,7 +8954,7 @@ mod shipped_effects_tests {
         let now = Instant::now();
         let mut c = combat2(now);
         let blind = uuid_of("Blind");
-        apply_shipped_effects(&mut c, 0, 1, blind, 1, 500.0, 0, now);
+        apply_shipped_effects(&mut c, 0, 1, blind, 1, 500.0, 0, false, now);
         assert!(emit_status_removals(&mut c, now).is_empty());
 
         let indomitable_smash = uuid_of("IndomitableSmash");
@@ -9008,7 +9110,7 @@ mod shipped_effects_tests {
         let now = Instant::now();
         for name in ["FirestormArmor", "BlizzardArmor", "TempestArmor"] {
             let mut c = combat2(now);
-            let out = apply_shipped_effects(&mut c, 0, 1, uuid_of(name), 1, 0.0, 0, now);
+            let out = apply_shipped_effects(&mut c, 0, 1, uuid_of(name), 1, 0.0, 0, false, now);
             let n = out.iter().filter(|(_, f)| {
                 let nd = arena_proto::parse_netdata(&f[2..]);
                 nd.int(3) == Some(51) && nd.int(5) == Some(16)
@@ -9022,7 +9124,7 @@ mod shipped_effects_tests {
     fn a_plain_damage_spell_gains_nothing() {
         let now = Instant::now();
         let mut c = combat2(now);
-        let out = apply_shipped_effects(&mut c, 0, 1, uuid_of("Fireball"), 1, 500.0, 0, now);
+        let out = apply_shipped_effects(&mut c, 0, 1, uuid_of("Fireball"), 1, 500.0, 0, false, now);
         assert!(c.fighters[0].negation_pools.is_empty());
         assert!(!c.fighters[1].is_paralyzed());
         assert!(out.is_empty());
@@ -9110,7 +9212,7 @@ mod shipped_effects_tests {
                 .and_then(|r| r.stun_duration())
                 .unwrap_or_else(|| panic!("{name} R1 ships _stunDuration"));
 
-            let out = apply_shipped_effects(&mut c, 0, 1, u, 1, threshold, block_flags, now);
+            let out = apply_shipped_effects(&mut c, 0, 1, u, 1, threshold + 1.0, block_flags, false, now);
             assert!(c.fighters[1].is_staggered(now), "{name}: the TARGET is staggered");
             assert!(!c.fighters[0].is_staggered(now), "{name}: the caster is not");
             assert_eq!(
@@ -9149,12 +9251,20 @@ mod shipped_effects_tests {
 
         let now = Instant::now();
         let mut hard = combat2(now);
-        let out = apply_shipped_effects(&mut hard, 0, 1, u, 1, threshold, 0, now);
-        assert!(hard.fighters[1].is_staggered(now), "a hit at the threshold staggers");
+        let out = apply_shipped_effects(&mut hard, 0, 1, u, 1, threshold + 0.1, 0, false, now);
+        assert!(hard.fighters[1].is_staggered(now), "a hit over the threshold staggers");
         assert_eq!(status_frames(&out, StatusEffectType::Staggered), hard.fighters.len());
 
+        // EXACTLY at the threshold does not: the client's test is strictly greater
+        // (`AbilityApplyIceSpikeDamage$$OnDamage@0x1e8ea14`, "more than {1} damage").
+        // This used to assert the opposite.
+        let mut at = combat2(now);
+        let out = apply_shipped_effects(&mut at, 0, 1, u, 1, threshold, 0, false, now);
+        assert!(!at.fighters[1].is_staggered(now), "a hit AT the threshold does not stagger");
+        assert_eq!(status_frames(&out, StatusEffectType::Staggered), 0);
+
         let mut soft = combat2(now);
-        let out = apply_shipped_effects(&mut soft, 0, 1, u, 1, threshold - 0.1, 0, now);
+        let out = apply_shipped_effects(&mut soft, 0, 1, u, 1, threshold - 0.1, 0, false, now);
         assert!(!soft.fighters[1].is_staggered(now), "a hit under the threshold does not");
         assert_eq!(status_frames(&out, StatusEffectType::Staggered), 0);
     }
@@ -9167,7 +9277,7 @@ mod shipped_effects_tests {
     fn a_cast_that_dealt_no_damage_cannot_stagger() {
         let now = Instant::now();
         let mut c = combat2(now);
-        let out = apply_shipped_effects(&mut c, 0, 1, uuid_of("StaggeringBash"), 1, 0.0, 0, now);
+        let out = apply_shipped_effects(&mut c, 0, 1, uuid_of("StaggeringBash"), 1, 0.0, 0, false, now);
         assert!(!c.fighters[1].is_staggered(now), "no damage → no stagger");
         assert_eq!(status_frames(&out, super::super::state::StatusEffectType::Staggered), 0);
     }
@@ -9297,7 +9407,7 @@ mod shipped_effects_tests {
         let now = Instant::now();
         let mut c = combat2(now);
         c.fighters[1].health = 0;
-        let out = apply_shipped_effects(&mut c, 0, 1, uuid_of("StaggeringBash"), 1, 500.0, 0, now);
+        let out = apply_shipped_effects(&mut c, 0, 1, uuid_of("StaggeringBash"), 1, 500.0, 0, false, now);
         assert!(!c.fighters[1].is_staggered(now));
         assert_eq!(status_frames(&out, super::super::state::StatusEffectType::Staggered), 0);
     }
@@ -9788,7 +9898,7 @@ mod report_31_high_block_stun {
             500.0,
             now,
         );
-        let _ = super::try_paralyze(&mut c, 0, 1, 12, 1_000.0, now);
+        let _ = super::try_paralyze(&mut c, 0, 1, 12, 1_000.0, false, now);
         assert!(c.fighters[1].is_paralyzed());
 
         super::on_tick(&mut c, now + Duration::from_millis(10), false);
@@ -9825,7 +9935,7 @@ mod report_31_high_block_stun {
             500.0,
             now + Duration::from_millis(5),
         );
-        let _ = super::try_paralyze(&mut c, 0, 1, 12, 1_000.0, now + Duration::from_millis(5));
+        let _ = super::try_paralyze(&mut c, 0, 1, 12, 1_000.0, false, now + Duration::from_millis(5));
         assert!(c.fighters[1].is_paralyzed());
         assert_eq!(c.pending_hits.len(), 1, "paralysis must retain a committed hit");
 
@@ -10657,7 +10767,7 @@ mod report_31_high_block_stun {
                 rank.get(super::super::gamedata::AbilityField::CooldownIncrease)
             })
             .expect("Harrying Bash R1 ships _cooldownIncrease");
-        super::apply_shipped_effects(&mut c, 0, 1, harrying, 1, 500.0, 0, now);
+        super::apply_shipped_effects(&mut c, 0, 1, harrying, 1, 500.0, 0, false, now);
 
         assert_eq!(
             c.fighters[1].cooldowns.get(spell),
@@ -10691,7 +10801,7 @@ mod report_31_high_block_stun {
         ] {
             let now = Instant::now();
             let mut c = combat(now, 2);
-            let out = super::apply_shipped_effects(&mut c, 0, 1, u, 1, threshold, bits, now);
+            let out = super::apply_shipped_effects(&mut c, 0, 1, u, 1, threshold + 1.0, bits, false, now);
             assert_eq!(
                 c.fighters[1].is_staggered(now),
                 want,
@@ -10721,7 +10831,7 @@ mod report_31_high_block_stun {
         ] {
             let now = Instant::now();
             let mut c = combat(now, 2);
-            let out = super::apply_shipped_effects(&mut c, 0, 1, u, 1, threshold, bits, now);
+            let out = super::apply_shipped_effects(&mut c, 0, 1, u, 1, threshold + 1.0, bits, false, now);
             assert_eq!(
                 c.fighters[1].is_staggered(now),
                 want,
@@ -10762,7 +10872,7 @@ mod report_31_high_block_stun {
         for bits in [0u8, flags::WAS_LATE_BLOCKING, flags::WAS_OPTIMAL_BLOCKING] {
             let now = Instant::now();
             let mut c = combat(now, 2);
-            super::apply_shipped_effects(&mut c, 0, 1, u, 1, threshold, bits, now);
+            super::apply_shipped_effects(&mut c, 0, 1, u, 1, threshold + 1.0, bits, false, now);
             assert!(
                 c.fighters[1].is_staggered(now),
                 "IceSpike staggers on damage alone (bits {bits:#06b})",
@@ -11141,5 +11251,442 @@ mod round_ends_once_tests {
             c.round_winners
         );
         assert_eq!(op48_count(&out), 1);
+    }
+}
+
+/// PR-02 (gap register M-status-removes, M-absorb-gate, 08-D10, 03-D9, 03-D10).
+///
+/// A PvP client ends a status ONLY on the server's op51 remove
+/// (`PvpPlayerActor$$RemoveStatusEffect@0x1a32aa8` removes only on `force`), so
+/// every status we apply must get a remove at the end of its lifetime. Expected
+/// lifetimes are the spec's shipped rank-1 values (combat-spec ch05/06/08), not
+/// read back from the code under test.
+#[cfg(test)]
+mod status_removals_tests {
+    use super::*;
+    use super::super::loadout;
+    use super::super::state::{ActorStateType, DamageType, Fighter, StatusEffectType};
+
+    fn combat2(now: Instant) -> MatchCombat {
+        let mut c = MatchCombat::new(2, 2, now);
+        for slot in 0..2 {
+            let obj = c.alloc_net_object_id();
+            c.fighters.push(Fighter::new(slot, obj, loadout::starter(), now));
+        }
+        c.phase = FlowState::StateTimeout;
+        c
+    }
+
+    fn uuid_of(editor: &str) -> &'static str {
+        super::super::gamedata::ABILITIES
+            .iter()
+            .find(|a| a.editor_name == editor)
+            .map(|a| a.uuid)
+            .unwrap_or_else(|| panic!("{editor} missing from the shipped table"))
+    }
+
+    /// op51 frames in `out` for `status` with `apply` (true) or remove (false).
+    fn op51(out: &[(usize, Vec<u8>)], status: StatusEffectType, apply: bool) -> usize {
+        out.iter()
+            .filter(|(_, f)| {
+                if f.len() <= 2 || f[1] != 0x36 {
+                    return false;
+                }
+                let nd = arena_proto::parse_netdata(&f[2..]);
+                nd.int(3) == Some(51)
+                    && nd.int(5) == Some(status as u16 as i64)
+                    && nd.props.get(&4) == Some(&arena_proto::NetDataValue::Bool(apply))
+            })
+            .count()
+    }
+
+    fn at(now: Instant, secs: f32) -> Instant {
+        now + Duration::from_secs_f32(secs)
+    }
+
+    /// Seed the diff while the status is live, then assert no remove just before
+    /// `lifetime` and one remove per viewer just after it.
+    fn assert_removed_at(
+        c: &mut MatchCombat,
+        now: Instant,
+        status: StatusEffectType,
+        lifetime: f32,
+    ) {
+        assert!(emit_status_removals(c, now).is_empty(), "{status:?}: fresh, nothing lapsed");
+        let before = emit_status_removals(c, at(now, lifetime - 0.1));
+        assert_eq!(op51(&before, status, false), 0, "{status:?}: still live at {lifetime}-0.1 s");
+        let after = emit_status_removals(c, at(now, lifetime + 0.1));
+        assert_eq!(
+            op51(&after, status, false),
+            c.fighters.len(),
+            "{status:?}: one op51 remove per viewer after {lifetime} s"
+        );
+        let again = emit_status_removals(c, at(now, lifetime + 0.2));
+        assert_eq!(op51(&again, status, false), 0, "{status:?}: removed once, not twice");
+    }
+
+    // ---- M-status-removes: every timed buff gets its remove -----------------
+
+    /// Ward rank 1: `_wardDuration` 3 s (ch06 §4.1).
+    #[test]
+    fn ward_is_removed_when_its_duration_ends() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let out = apply_ward(&mut c, 0, 1, now);
+        assert_eq!(op51(&out, StatusEffectType::Ward, true), 2);
+        assert_removed_at(&mut c, now, StatusEffectType::Ward, 3.0);
+    }
+
+    /// `AbilityDoWard$$Update@0x1e9aea0` also completes when the pool breaks, and
+    /// `Cleanup` removes status 15 — ch06 §7's suggested test "op51 remove when a
+    /// Ward breaks".
+    #[test]
+    fn ward_is_removed_when_its_pool_breaks() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        apply_ward(&mut c, 0, 1, now);
+        assert!(emit_status_removals(&mut c, now).is_empty());
+        let mut hit = vec![(DamageType::Fire, 10_000.0)];
+        c.fighters[0].apply_negation_pools(&mut hit);
+        let out = emit_status_removals(&mut c, at(now, 0.5));
+        assert_eq!(op51(&out, StatusEffectType::Ward, false), 2, "broken at 0.5 s, long before 3 s");
+    }
+
+    /// Absorb rank 1: `_duration` 1.5 s (ch06 §4.2). Retail: 26 applies, 21 removes.
+    #[test]
+    fn absorb_is_removed_when_its_duration_ends() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let out = apply_absorb(&mut c, 0, 1, now);
+        assert_eq!(op51(&out, StatusEffectType::Absorb, true), 2);
+        assert_removed_at(&mut c, now, StatusEffectType::Absorb, 1.5);
+    }
+
+    /// Resist Elements rank 1: `_resistanceDuration` 10 s, one status per element
+    /// 60-63 (ch06 §4.3). ch08's suggested test: four removes after the duration.
+    #[test]
+    fn resist_elements_removes_all_four_resistances() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let out = apply_resist_elements(&mut c, 0, 1, now);
+        let four = [
+            StatusEffectType::FireResistance,
+            StatusEffectType::FrostResistance,
+            StatusEffectType::ShockResistance,
+            StatusEffectType::PoisonResistance,
+        ];
+        for st in four {
+            assert_eq!(op51(&out, st, true), 2, "{st:?} applied");
+        }
+        assert!(emit_status_removals(&mut c, now).is_empty());
+        let before = emit_status_removals(&mut c, at(now, 9.9));
+        let after = emit_status_removals(&mut c, at(now, 10.1));
+        for st in four {
+            assert_eq!(op51(&before, st, false), 0, "{st:?} still live at 9.9 s");
+            assert_eq!(op51(&after, st, false), 2, "{st:?} removed after 10 s");
+        }
+    }
+
+    /// Reckless Fury: `duration` 5 s (ch05 §3.9). Its remove is what lets the
+    /// caster's client predict a guard again (`Actor$$get_CanBlock@0x1c5b9d4`).
+    /// ch05 D6's suggested test: advance 5.1 s, expect op51(11, remove) to both.
+    #[test]
+    fn reckless_fury_is_removed_when_it_ends() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let out = apply_reckless_fury(&mut c, 0, 1, now);
+        assert_eq!(op51(&out, StatusEffectType::RecklessFury, true), 2);
+        assert_removed_at(&mut c, now, StatusEffectType::RecklessFury, 5.0);
+    }
+
+    /// Wall of Fire: `_duration` 5 s (ch14 W5; `AbilityDoFirewall$$Cleanup
+    /// @0x1e9463c` removes status 13).
+    #[test]
+    fn wall_of_fire_is_removed_when_it_ends() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let out = apply_shipped_effects(&mut c, 0, 1, uuid_of("Firewall"), 1, 0.0, 0, false, now);
+        assert_eq!(op51(&out, StatusEffectType::Firewall, true), 2);
+        assert_removed_at(&mut c, now, StatusEffectType::Firewall, 5.0);
+    }
+
+    /// Storm armor has no timer; it ends when its shield breaks (`AbilityDoStormArmor
+    /// $$Update@0x1e9a3ac`). Control: it must NOT be removed while the shield holds.
+    #[test]
+    fn storm_armor_is_removed_when_its_shield_breaks() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let out =
+            apply_shipped_effects(&mut c, 0, 1, uuid_of("BlizzardArmor"), 1, 0.0, 0, false, now);
+        assert_eq!(op51(&out, StatusEffectType::ElementalStormArmor, true), 2);
+        assert!(emit_status_removals(&mut c, now).is_empty());
+        let held = emit_status_removals(&mut c, at(now, 60.0));
+        assert_eq!(
+            op51(&held, StatusEffectType::ElementalStormArmor, false),
+            0,
+            "no timer: an unbroken shield is still up after a minute"
+        );
+        for _ in 0..16 {
+            let mut hit = vec![(DamageType::Slashing, 1_000.0)];
+            c.fighters[0].apply_negation_pools(&mut hit);
+        }
+        let broken = emit_status_removals(&mut c, at(now, 61.0));
+        assert_eq!(op51(&broken, StatusEffectType::ElementalStormArmor, false), 2);
+    }
+
+    /// FlashFreeze sends Frozen (5) with the paralysis; ch08 §8: it was never
+    /// removed, leaving the client's local Slow and Stamina-regen block up.
+    #[test]
+    fn flash_freeze_frozen_is_removed_with_its_duration() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let u = uuid_of("FlashFreeze");
+        let secs = super::super::gamedata::ability_rank_clamped(u, 1)
+            .and_then(|r| r.freeze_duration().or_else(|| r.paralyze_duration()))
+            .expect("FlashFreeze R1 ships a freeze duration");
+        let out = apply_shipped_effects(&mut c, 0, 1, u, 1, 500.0, 0, false, now);
+        assert_eq!(op51(&out, StatusEffectType::Frozen, true), 2);
+        assert_removed_at(&mut c, now, StatusEffectType::Frozen, secs);
+    }
+
+    /// Blocking (1): applied when the guard comes up, removed when it drops —
+    /// retail 736 applies / 756 removes in s615+s616 (ch03 §7 suggested test).
+    #[test]
+    fn blocking_status_follows_the_guard() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let f = &mut c.fighters[0];
+        f.set_actor_state(ActorStateType::Blocking, now);
+        f.blocking_until = Some(now + Duration::from_secs(5));
+        f.block_raised_at = Some(now);
+        let up = drain_state_changes(&mut c, now);
+        assert_eq!(op51(&up, StatusEffectType::Blocking, true), 2, "guard up → apply");
+        assert_eq!(op51(&up, StatusEffectType::Blocking, false), 0);
+        // State frame first, then the status (retail's order for a state + its status).
+        let first_status = up.iter().position(|(_, f)| {
+            arena_proto::parse_netdata(&f[2..]).int(3) == Some(51)
+        });
+        let last_state = up.iter().rposition(|(_, f)| {
+            arena_proto::parse_netdata(&f[2..]).int(3) == Some(41)
+        });
+        assert!(last_state < first_status, "op41 before op51");
+
+        // Control: nothing changed, nothing sent.
+        let idle = drain_state_changes(&mut c, at(now, 0.5));
+        assert_eq!(op51(&idle, StatusEffectType::Blocking, true), 0);
+        assert_eq!(op51(&idle, StatusEffectType::Blocking, false), 0);
+        // The OPPONENT never blocked and is never announced.
+        assert!(!c.fighters[1].guard_up(now));
+
+        c.fighters[0].blocking_until = None;
+        c.fighters[0].reconcile_block(at(now, 1.0));
+        let down = drain_state_changes(&mut c, at(now, 1.0));
+        assert_eq!(op51(&down, StatusEffectType::Blocking, false), 2, "guard down → remove");
+        assert_eq!(op51(&down, StatusEffectType::Blocking, true), 0);
+    }
+
+    /// A stagger drops the guard, so the Blocking remove goes out with it.
+    #[test]
+    fn a_stagger_that_drops_the_guard_removes_blocking() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0].set_actor_state(ActorStateType::Blocking, now);
+        c.fighters[0].blocking_until = Some(now + Duration::from_secs(5));
+        drain_state_changes(&mut c, now);
+        assert!(c.fighters[0].apply_stagger_for(at(now, 0.2), 2.5));
+        let out = drain_state_changes(&mut c, at(now, 0.2));
+        assert_eq!(op51(&out, StatusEffectType::Blocking, false), 2);
+    }
+
+    // ---- 03-D9 / 08-D10: a refused stagger is not announced ------------------
+
+    /// ch03 §7: "Attacker under Reckless Fury is high-blocked. Expect no op51(3)
+    /// and no op51(10)." `CanBeStaggered` is false under Fury
+    /// (`Actor$$get_CanBeStaggered@0x1c5b9f4`), so `CausedStagger` never fires.
+    #[test]
+    fn high_blocking_a_fury_attacker_sends_no_stagger_and_no_weakness() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].loadout.powerful_block = 50.4;
+        apply_reckless_fury(&mut c, 0, 1, now);
+        let out = stun_the_blocked_attacker(&mut c, 0, 1, at(now, 1.0));
+        assert_eq!(op51(&out, StatusEffectType::Staggered, true), 0);
+        assert_eq!(op51(&out, StatusEffectType::StaggeredWeakness, true), 0);
+        assert!(!c.fighters[0].is_staggered(at(now, 1.0)));
+        assert_eq!(c.fighters[0].weakness_rating_against(DamageType::Slashing, at(now, 1.0)), 0.0);
+    }
+
+    /// The control: the same high block without Fury staggers and weakens.
+    #[test]
+    fn high_blocking_a_plain_attacker_still_staggers_and_weakens() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].loadout.powerful_block = 50.4;
+        let out = stun_the_blocked_attacker(&mut c, 0, 1, now);
+        assert_eq!(op51(&out, StatusEffectType::Staggered, true), 2);
+        assert_eq!(op51(&out, StatusEffectType::StaggeredWeakness, true), 2);
+        assert_eq!(c.fighters[0].weakness_rating_against(DamageType::Slashing, now), 50.4);
+    }
+
+    /// ch08 §4.2: "Paralyse, then high-block the victim's attack. The paralysis
+    /// continues and no op51(3) is sent." (`ActorParalyzedState$$CanTransitionTo
+    /// @0x1fd4c48` admits only Dead and EnemyNonLethal.)
+    #[test]
+    fn a_paralysed_attacker_cannot_be_staggered() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let par = try_paralyze(&mut c, 1, 0, 1, 1_000.0, false, now);
+        assert_eq!(op51(&par, StatusEffectType::Paralyzed, true), 2);
+        let out = stun_the_blocked_attacker(&mut c, 0, 1, at(now, 0.5));
+        assert_eq!(op51(&out, StatusEffectType::Staggered, true), 0);
+        assert!(c.fighters[0].is_paralyzed(), "the paralysis continues");
+        assert!(!c.fighters[0].is_staggered(at(now, 0.5)));
+    }
+
+    /// The same rule on the ability path: an Ice Spike over its threshold does not
+    /// stagger a paralysed target.
+    #[test]
+    fn an_ice_spike_does_not_stagger_a_paralysed_target() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        try_paralyze(&mut c, 0, 1, 1, 1_000.0, false, now);
+        let out =
+            apply_shipped_effects(&mut c, 0, 1, uuid_of("IceSpike"), 1, 10_000.0, 0, false, now);
+        assert_eq!(op51(&out, StatusEffectType::Staggered, true), 0);
+        assert!(c.fighters[1].is_paralyzed());
+    }
+
+    // ---- 03-D10: StaggeredWeakness is not re-applied while held ---------------
+
+    /// ch03 §7: "Two high blocks within one stagger, from blockers with different
+    /// Powerful Block tiers. The magnitude must stay at the first."
+    /// (`PowerfulBlockBonusInstance$$CausedStagger@0x1d51214` returns early.)
+    #[test]
+    fn a_second_powerful_block_does_not_overwrite_the_weakness() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].loadout.powerful_block = 50.4;
+        stun_the_blocked_attacker(&mut c, 0, 1, now);
+        c.fighters[1].loadout.powerful_block = 20.0;
+        let second = stun_the_blocked_attacker(&mut c, 0, 1, at(now, 0.5));
+        assert_eq!(op51(&second, StatusEffectType::StaggeredWeakness, true), 0, "no second apply");
+        assert_eq!(
+            c.fighters[0].weakness_rating_against(DamageType::Slashing, at(now, 0.5)),
+            50.4,
+            "the first magnitude sticks"
+        );
+    }
+
+    /// The weakness is removed with the stagger that produced it, and a later
+    /// plain stagger does not revive it.
+    #[test]
+    fn staggered_weakness_is_removed_with_the_stagger() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].loadout.powerful_block = 50.4;
+        stun_the_blocked_attacker(&mut c, 0, 1, now);
+        assert!(emit_status_removals(&mut c, now).is_empty());
+        let out = emit_status_removals(&mut c, at(now, 2.6));
+        assert_eq!(op51(&out, StatusEffectType::Staggered, false), 2);
+        assert_eq!(op51(&out, StatusEffectType::StaggeredWeakness, false), 2);
+
+        c.fighters[0].reconcile_stagger(at(now, 2.6));
+        assert!(c.fighters[0].apply_stagger_for(at(now, 3.0), 2.5));
+        assert!(
+            !c.fighters[0].has_staggered_weakness(at(now, 3.0)),
+            "a fresh plain stagger carries no weakness"
+        );
+    }
+
+    // ---- M-absorb-gate: strict > and no proc through Absorb ------------------
+
+    #[test]
+    fn absorb_blocks_the_blind_proc() {
+        let now = Instant::now();
+        let u = uuid_of("Blind");
+        let mut shielded = combat2(now);
+        apply_absorb(&mut shielded, 1, 1, now);
+        let absorbing = shielded.fighters[1].has_absorb(now);
+        assert!(absorbing);
+        let out = apply_shipped_effects(&mut shielded, 0, 1, u, 1, 9_999.0, 0, absorbing, now);
+        assert_eq!(op51(&out, StatusEffectType::Blind, true), 0, "no Blind through Absorb");
+
+        let mut control = combat2(now);
+        let out = apply_shipped_effects(&mut control, 0, 1, u, 1, 9_999.0, 0, false, now);
+        assert_eq!(op51(&out, StatusEffectType::Blind, true), 2, "control: Blind lands");
+    }
+
+    #[test]
+    fn absorb_blocks_the_paralyze_proc() {
+        let now = Instant::now();
+        let mut shielded = combat2(now);
+        try_paralyze(&mut shielded, 0, 1, 1, 1_000.0, true, now);
+        assert!(!shielded.fighters[1].is_paralyzed(), "no paralysis through Absorb");
+        let mut control = combat2(now);
+        try_paralyze(&mut control, 0, 1, 1, 1_000.0, false, now);
+        assert!(control.fighters[1].is_paralyzed(), "control: paralysis lands");
+    }
+
+    #[test]
+    fn absorb_blocks_ice_spike_and_staggering_bash_stuns() {
+        for name in ["IceSpike", "StaggeringBash"] {
+            let now = Instant::now();
+            let u = uuid_of(name);
+            let threshold = super::super::gamedata::ability_rank_clamped(u, 1)
+                .and_then(|r| r.damage_to_cause_stagger())
+                .unwrap();
+            let mut shielded = combat2(now);
+            let out = apply_shipped_effects(&mut shielded, 0, 1, u, 1, threshold + 1.0, 0, true, now);
+            assert_eq!(op51(&out, StatusEffectType::Staggered, true), 0, "{name}: no stun through Absorb");
+            let mut control = combat2(now);
+            let out = apply_shipped_effects(&mut control, 0, 1, u, 1, threshold + 1.0, 0, false, now);
+            assert_eq!(op51(&out, StatusEffectType::Staggered, true), 2, "{name}: control stuns");
+        }
+    }
+
+    /// Strictly greater (`fcmp s0, s1; b.le`): Poison exactly at the threshold
+    /// does not paralyse. ch08 §4.1's suggested test.
+    #[test]
+    fn poison_exactly_at_the_paralyze_threshold_does_not_paralyse() {
+        let now = Instant::now();
+        let threshold = super::super::state::paralyze_damage_threshold(1);
+        let mut c = combat2(now);
+        try_paralyze(&mut c, 0, 1, 1, threshold, false, now);
+        assert!(!c.fighters[1].is_paralyzed());
+    }
+
+    #[test]
+    fn a_hit_exactly_at_the_blind_threshold_does_not_blind() {
+        let now = Instant::now();
+        let u = uuid_of("Blind");
+        let threshold = super::super::gamedata::ability_rank_clamped(u, 1)
+            .and_then(|r| r.damage_to_cause_blind())
+            .expect("Blind R1 ships _damageToCauseBlind");
+        let mut c = combat2(now);
+        let out = apply_shipped_effects(&mut c, 0, 1, u, 1, threshold, 0, false, now);
+        assert_eq!(op51(&out, StatusEffectType::Blind, true), 0);
+        let out = apply_shipped_effects(&mut c, 0, 1, u, 1, threshold + 0.1, 0, false, now);
+        assert_eq!(op51(&out, StatusEffectType::Blind, true), 2, "control: just over lands");
+    }
+
+    /// Blind while already Blind: no second apply (the PvP client would stack a
+    /// second instance that our single remove never clears); the timer is
+    /// refreshed so the one remove lands at the later end.
+    #[test]
+    fn a_second_blind_refreshes_instead_of_re_sending() {
+        let now = Instant::now();
+        let u = uuid_of("Blind");
+        let secs = super::super::gamedata::ability_rank_clamped(u, 1)
+            .and_then(|r| r.duration())
+            .expect("Blind R1 ships a duration");
+        let mut c = combat2(now);
+        apply_shipped_effects(&mut c, 0, 1, u, 1, 9_999.0, 0, false, now);
+        assert!(emit_status_removals(&mut c, now).is_empty());
+        let again = apply_shipped_effects(&mut c, 0, 1, u, 1, 9_999.0, 0, false, at(now, 1.0));
+        assert_eq!(op51(&again, StatusEffectType::Blind, true), 0, "no re-send while Blind");
+        let mid = emit_status_removals(&mut c, at(now, secs + 0.1));
+        assert_eq!(op51(&mid, StatusEffectType::Blind, false), 0, "refreshed: still Blind");
+        let end = emit_status_removals(&mut c, at(now, secs + 1.1));
+        assert_eq!(op51(&end, StatusEffectType::Blind, false), 2, "one remove at the refreshed end");
     }
 }
