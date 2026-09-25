@@ -54,6 +54,7 @@ pub fn starter() -> Loadout {
         lo.has_shield = true;
         lo.block_rating += sh.block_base;
         lo.shield_optimal_block_boost = sh.optimal_block_boost.max(1.0);
+        lo.shield_damage = sh.damage_base;
     }
     match gamedata::weapon(STARTER_WEAPON) {
         Some(w) => install_weapon(&mut lo, w, STARTER_TEMPERING),
@@ -205,6 +206,7 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
             lo.has_shield = true;
             lo.block_rating += s.block_base;
             lo.shield_optimal_block_boost = lo.shield_optimal_block_boost.max(s.optimal_block_boost);
+            lo.shield_damage = lo.shield_damage.max(s.damage_base);
         }
 
         // --- jewellery GRADING affixes: +N ranks to a named ability ------------
@@ -1527,8 +1529,13 @@ mod tests {
         install_weapon(&mut lo, w, 10);
         assert!((lo.swing_interval().as_secs_f32() - 0.333333).abs() < 1e-4);
         assert!((lo.neutral_interval().as_secs_f32() - 0.633333).abs() < 1e-4);
-        assert!((lo.critical_hold_secs() - 0.116667).abs() < 1e-4);
-        assert!((lo.critical_damage_factor() - 1.325).abs() < 1e-4);
+        // The dagger's charge plateau is (0.315, 0.350] s and pays maxF 0.325
+        // (combat-spec 02 §2.3); its combo factor is the shipped 0.54 (02 §4.2).
+        let cp = lo.charge_params();
+        assert!((cp.plateau_start_time(1.0) - 0.315).abs() < 1e-3);
+        assert!((cp.decay_start_time(1.0) - 0.350).abs() < 1e-3);
+        assert!((cp.max_damage_factor - 0.325).abs() < 1e-4);
+        assert!((cp.combo_damage_factor - 0.54).abs() < 1e-4);
         assert!((lo.block_rating - 49.5).abs() < 1e-3);
         // Untempered = the shipped quality-0 cell exactly.
         assert!((profile_base(&weapon_profile(w, 0)) - 99.0).abs() < 1e-3);

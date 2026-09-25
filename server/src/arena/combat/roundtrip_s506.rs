@@ -924,7 +924,9 @@ fn drive_live_fight_gmids() -> Vec<(u64, i64)> {
     for i in 0..1200u64 {
         let now = live + step * i as u32;
         // Slot 0 presses and releases every 400 ms (past the swing cooldown), so the
-        // full AutoAttack → FollowThrough → Recovery → Idle walk runs repeatedly.
+        // full AutoAttack → FollowThrough → Recovery → Idle walk runs repeatedly. Each
+        // press is held 250 ms: a release before the weapon's `MinDamageTime` is not a
+        // swing at all (combat-spec 02 X2).
         if i % 40 == 0 {
             for (_, f) in m.on_c2s(0, &act_frame(true), now) {
                 if let Some(g) = gmid_of(&f) {
@@ -932,7 +934,7 @@ fn drive_live_fight_gmids() -> Vec<(u64, i64)> {
                 }
             }
         }
-        if i % 40 == 5 {
+        if i % 40 == 25 {
             for (_, f) in m.on_c2s(0, &act_frame(false), now) {
                 if let Some(g) = gmid_of(&f) {
                     log.push((i, g));

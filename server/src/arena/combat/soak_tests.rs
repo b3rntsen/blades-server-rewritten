@@ -408,7 +408,11 @@ fn human_input(m: &MatchInstance, slot: usize, rng: &mut Rng) -> Option<Vec<u8>>
                 return None;
             }
             Some(match rng.below(10) {
-                0..=3 => vec![0x84, 0x36], // swing (the engine tests' swing frame)
+                0..=2 => vec![0x84, 0x36], // swing (the engine tests' swing frame)
+                // An attack PRESS: the next release (5) commits it after a random hold,
+                // so the soak also drives the charge clock (a tap below MinDamageTime
+                // fails, a hold on the plateau crits, combat-spec 02 X1/X2).
+                3 => c2s_zone(true, false),
                 4 => c2s_zone(true, true),  // raise guard
                 5 => c2s_zone(false, false), // release
                 _ => {

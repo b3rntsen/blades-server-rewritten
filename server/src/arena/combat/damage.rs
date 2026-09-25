@@ -5,7 +5,8 @@
 //! against the captured `ReceiveDamage` frames (s293 / s506):
 //!
 //! ```text
-//! physical[type]  = (weaponBase(item, tempering) − armorCut) × comboFactor(depth)
+//! physical[type]  = (weaponBase(item, tempering) − armorCut) × (1 + f)
+//!                   f = [combo ≥ 1]·comboDamageFactor + swing   (attack_type_multiplier)
 //! elemental[type] = enchantDamage(family, tier) × elementAmp(conditioning)
 //!                   (+ Frost→Stamina / Shock→Magicka mirrored drain)
 //! block           = a FRACTION from the defender's Block Rating (phys 1.0 /
@@ -118,14 +119,32 @@ pub fn mirrored_drain(ty: DamageType) -> Option<(DamageType, f32)> {
     }
 }
 
-/// The physical-swing multiplier for a hit (`docs/arena-combat-reproduction-spec.md`
-/// §4.2). Normal swings are **Left/Right** and combo-driven; **`Middle` is the
-/// maneuver/charged-crit lane**.
-fn swing_multiplier(weight: tables::Weight, combo_count: u32, active_side: ActiveSide) -> f32 {
-    match active_side {
-        ActiveSide::Middle => weight.crit_combo().0,
-        ActiveSide::Left | ActiveSide::Right => tables::combo_factor(weight, combo_count),
-        ActiveSide::None => 1.0,
+/// The attack-type factor `f` of a hit, as `1 + f`:
+/// `CombatManager$$CalculateAttackTypeFactor@0x1bd3df0`.
+///
+/// ```text
+/// f = [comboCount >= 1] * comboDamageFactor     (Attack and WeaponManeuver)
+///   + swing                                     (Attack only)
+/// ```
+///
+/// It is applied once, in the physical bonus pass, as `x(1 + f + ...)` (combat-spec
+/// 01 step C/D3). The two terms ADD. A Shield bash (source 11) gets neither, and a
+/// maneuver gets no swing term: the `swing = 1.0` that `ResolveManeuverDamage` passes
+/// is never read (05 §2.6).
+///
+/// `swing_factor` is `1 + swing`, where `swing` is the charge plateau's
+/// `maxDamageFactor` or 0 (see `ChargeParams::swing_factor`).
+pub fn attack_type_multiplier(
+    source: DamageSource,
+    combo_damage_factor: f32,
+    combo_count: u32,
+    swing_factor: f32,
+) -> f32 {
+    let combo = if combo_count >= 1 { combo_damage_factor } else { 0.0 };
+    match source {
+        DamageSource::Attack => 1.0 + combo + (swing_factor - 1.0),
+        DamageSource::WeaponManeuver => 1.0 + combo,
+        _ => 1.0,
     }
 }
 
@@ -346,6 +365,7 @@ impl RetailDamageModel {
     fn physical_base_after_armor(
         attacker: &Loadout,
         target: &Fighter,
+        source: DamageSource,
         now: Instant,
     ) -> Vec<(DamageType, f32)> {
         let armor_rating = (target.loadout.armor_rating - attacker.armor_piercing_rating).max(0.0);
@@ -355,7 +375,15 @@ impl RetailDamageModel {
         // and mitigated with it — a perk should not be a hole in the armour model.
         // Applied to the FIRST physical component only: the perk is "+{0} Damage
         // with <class> weapons", one bonus per swing, not one per damage type.
-        let mut weapon_bonus = attacker.perks.weapon_bonus(attacker.weapon.weight);
+        //
+        // Not on a shield bash: the class perks are weapon-based bonuses, and
+        // `Damage$$IsWeaponBased@0x1bd3e6c` is false for source 11.
+        let bash = source == DamageSource::ShieldManeuver;
+        let mut weapon_bonus = if bash {
+            0.0
+        } else {
+            attacker.perks.weapon_bonus(attacker.weapon.weight)
+        };
 
         // PDOC — `Opportunist Physical`, "Increases physical damage by {0} against
         // targets suffering a condition". Added HERE, to the base, so the combo and
@@ -376,14 +404,19 @@ impl RetailDamageModel {
         // `weapon_bonus`: it rides on the weapon's damage, so it is added before armour
         // and mitigated with it. One bonus per swing, first physical component only.
         //
-        // Maneuvers land on Middle, which resets the combo, so unlike PDOC this is not
-        // multiplied by a combo ramp — it is worth its face value, which is what the
-        // authored numbers (Power Attack 75.33, Skullcrusher 100.09) read as.
+        // It is multiplied by the maneuver's attack-type factor like the rest of the
+        // physical total (05 §2.6: `(weapon + bonus*g) * (1 + [combo>=1]*comboDF)`).
         let mut maneuver_bonus = attacker.maneuver_bonus_damage.max(0.0);
 
-        attacker
-            .weapon
-            .base_by_type
+        // A shield bash hits with the SHIELD, not the weapon: `ResolveManeuverDamage
+        // @0x1bd2d88` takes `owner.ShieldDamage` for source 11, and
+        // `ManeuverParameters$$DistributeBonusDamage@0x1a21844` folds every physical
+        // type into one Bashing entry plus the bonus (combat-spec 03 §5.1, 05 §2.5).
+        let shield_base = [(DamageType::Bashing, attacker.shield_damage.max(0.0))];
+        let base_list: &[(DamageType, f32)] =
+            if bash { &shield_base } else { &attacker.weapon.base_by_type };
+
+        base_list
             .iter()
             .map(|(ty, base)| {
                 let mut base = *base;
@@ -413,45 +446,32 @@ impl RetailDamageModel {
     fn swing_components(
         attacker: &Loadout,
         target: &Fighter,
-        active_side: ActiveSide,
+        source: DamageSource,
         swing_factor: f32,
         combo_count: u32,
         now: Instant,
     ) -> Vec<(DamageType, f32)> {
-        let weight = attacker.weapon.weight.unwrap_or(tables::Weight::Light);
-        // COMBO AND CHARGE DO NOT COMPOUND. They used to be multiplied, so a deep
-        // chain delivered at full charge was scaled twice — light ×4.12 × ×1.325 =
-        // ×5.459, versatile ×2.441 × ×1.625, heavy ×1.979 × ×1.987.
-        //
-        // The retail corpus shows no trace of that product. A pairwise-ratio test
-        // over every fighter's own distinct damage values (n = 5,678, 0.025-wide
-        // bins) finds no spike at any of the three charge factors, with the
-        // neighbouring bins as controls: 1.300=146, 1.325=163, 1.350=147 — i.e. the
-        // charge ratio is no more common than its neighbours; and 1.950=69,
-        // 1.975=85, 2.000=60. Retail damage piles against ONE ceiling, not the
-        // product of two.
-        //
-        // `max` keeps both mechanics intact where they act alone — a charged opener
-        // is still a charged opener, an uncharged deep chain still ramps — and only
-        // removes the double-count. This matters on most swings, not a few: the
-        // charge threshold is the weapon's backswing time (0.117 / 0.200 / 0.250 s)
-        // against a measured median hold of 0.317 s, so full charge is the norm.
-        //
-        // The exclusion is COMBO-specific. A Middle swing is scaled by the weight's
-        // CRIT factor, not by a combo chain, and the recorded s506 Middle maneuvers
-        // (up to 274.51 ≈ 113.82 × 1.325 × 1.8) do show crit and charge compounding
-        // — `s506_middle_maneuver_lands_in_recorded_band` fails if that product is
-        // removed. So crit × charge stays; only combo × charge goes.
-        let scale = match active_side {
-            ActiveSide::Left | ActiveSide::Right => {
-                swing_multiplier(weight, combo_count, active_side).max(swing_factor)
-            }
-            _ => swing_multiplier(weight, combo_count, active_side) * swing_factor,
-        };
+        // The attack-type factor (combat-spec 01 step C, 02 §4.2). The shipped
+        // `_comboDamageFactor` and the charge plateau ADD to one multiplier. This
+        // replaces two fitted rules: `max(combo, charge)` on Left/Right and
+        // `crit x charge` on Middle. On a standard Light weapon the multiplier is now
+        // 1.0 fresh, 1.54 chained, 1.325 crit and 1.865 both (02 §7).
+        let scale = attack_type_multiplier(
+            source,
+            attacker.charge_params().combo_damage_factor,
+            combo_count,
+            swing_factor,
+        );
 
         let mut components: Vec<(DamageType, f32)> = Vec::new();
-        for (ty, base) in Self::physical_base_after_armor(attacker, target, now) {
+        for (ty, base) in Self::physical_base_after_armor(attacker, target, source, now) {
             components.push((ty, base * scale));
+        }
+        // A shield bash carries no weapon enchantment damage: the enchant tracks are
+        // weapon-based (`Damage$$IsWeaponBased@0x1bd3e6c` excludes source 11), and
+        // the weapon's alchemy poison does not ride a bash either (05 §3.11).
+        if source == DamageSource::ShieldManeuver {
+            return components;
         }
         // Enchant tracks: independent of the physical combo roll (capture-validated,
         // §4.3). The magnitude is the family's own shipped curve value.
@@ -565,7 +585,7 @@ impl DamageModel for RetailDamageModel {
         now: Instant,
     ) -> ResolvedDamage {
         let mut components =
-            Self::swing_components(attacker, target, active_side, swing_factor, combo_count, now);
+            Self::swing_components(attacker, target, source, swing_factor, combo_count, now);
         finish_resolved(attacker, target, source, active_side, &mut components, now, 1.0)
     }
 
@@ -1276,6 +1296,43 @@ mod tests {
         rd.components.iter().filter(|(t, _)| *t == ty).map(|(_, v)| *v).sum()
     }
 
+    /// 01 D3 / 02 X3: the attack-type factor is ONE sum, `1 + [combo>=1]*comboDF +
+    /// swing`, over combo in {0, 1} and swing in {0, 0.1625, 0.325} at AR 0. The
+    /// dagger ships comboDF 0.54 and its 144 tempered base is unarmored here, so the
+    /// Slashing component must be `144 * (1 + 0.54c + s)` exactly. The fork used to
+    /// take `max(combo, charge)`, which is 1.99 at every chained cell.
+    ///
+    /// Controls: a maneuver takes the combo but never the swing, a shield bash takes
+    /// neither (05 §2.6), and the enchant track takes none of it (01 D4).
+    #[test]
+    fn combo_and_charge_add_into_one_factor() {
+        let m = RetailDamageModel;
+        let lo = poison_dagger();
+        let now = Instant::now();
+        let fresh_poison = comp(
+            &m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now),
+            DamageType::Poison,
+        );
+        for c in [0u32, 1] {
+            for swing in [0.0f32, 0.1625, 0.325] {
+                let rd = m.resolve_attack(
+                    &lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0 + swing, c, now,
+                );
+                let want = 144.0 * (1.0 + 0.54 * c as f32 + swing);
+                let got = comp(&rd, DamageType::Slashing);
+                assert!((got - want).abs() < 0.05, "combo {c}, swing {swing}: {got} != {want}");
+                assert!((comp(&rd, DamageType::Poison) - fresh_poison).abs() < 1e-3);
+
+                let man = m.resolve_attack(
+                    &lo, &target(), DamageSource::WeaponManeuver, ActiveSide::Middle, 1.0 + swing, c, now,
+                );
+                let want = 144.0 * (1.0 + 0.54 * c as f32);
+                let got = comp(&man, DamageType::Slashing);
+                assert!((got - want).abs() < 0.05, "maneuver, combo {c}, swing {swing}: {got} != {want}");
+            }
+        }
+    }
+
     #[test]
     fn combo_ramp_drives_physical_not_enchant() {
         let m = RetailDamageModel;
@@ -1287,19 +1344,12 @@ mod tests {
 
         // Un-armored: the raw tempered base of 144.0.
         assert!((comp(&c0, DamageType::Slashing) - 144.0).abs() < 0.5);
+        // One step of the dagger's shipped `_comboDamageFactor` 0.54 (02 §4.2): the
+        // chained swing is ×1.54 and a deeper one is no more.
+        assert!((comp(&c1, DamageType::Slashing) - 144.0 * 1.54).abs() < 0.5);
         assert!(
-            (comp(&c1, DamageType::Slashing)
-                - 144.0 * super::tables::combo_factor(super::tables::Weight::Light, 1))
-            .abs()
-                < 0.5
-        );
-        assert!(
-            (comp(&c4, DamageType::Slashing)
-                - 144.0 * super::tables::combo_factor(super::tables::Weight::Light, 4))
-            .abs()
-                < 1.0,
-            "depth-4 physical follows the ramp table rather than a literal, so a \
-             recalibration cannot leave this test asserting a stale constant"
+            (comp(&c4, DamageType::Slashing) - 144.0 * 1.54).abs() < 0.5,
+            "depth 4 is the same one step as depth 1"
         );
         // The enchant track is combo-independent.
         assert!((comp(&c0, DamageType::Poison) - comp(&c1, DamageType::Poison)).abs() < 1e-3);
@@ -1324,10 +1374,12 @@ mod tests {
             DamageType::Slashing,
         );
         assert!((c0 - 113.82).abs() < 0.05, "144 − 30.18 = 113.82, got {c0}");
-        let step = super::tables::combo_factor(super::tables::Weight::Light, 1);
+        // Armor is still cut before the attack-type factor in this engine (01 D1 is
+        // PR-03), so the chained hit stays exactly x(1 + 0.54) of the fresh one.
+        let step = 1.54;
         assert!(
             (c1 / c0 - step).abs() < 1e-3,
-            "the ramp stays proportional to the table's own factor {step}, got {}",
+            "the chained hit is x{step} of the fresh one, got {}",
             c1 / c0
         );
         // Armor does NOT touch the elemental track.
@@ -1561,7 +1613,7 @@ mod tests {
         let health_sum: f32 = rd.components.iter().filter(|(t, _)| is_health_type(*t)).map(|(_, v)| *v).sum();
         assert!((rd.total - health_sum).abs() < 1e-3);
         // The total is the exact Σ of components — no clamp scaling anywhere.
-        let expect = 144.0 * tables::combo_factor(Weight::Light, 4) + 137.32;
+        let expect = 144.0 * 1.54 + 137.32;
         assert!((rd.total - expect).abs() < 1.0, "unclamped total {} != {expect}", rd.total);
     }
 
