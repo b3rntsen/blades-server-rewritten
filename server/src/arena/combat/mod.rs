@@ -49,6 +49,7 @@ pub mod engine;
 pub mod gamedata;
 pub mod block_temper;
 pub mod input;
+pub mod interrupts;
 pub mod loadout;
 pub mod messages;
 pub mod perks;

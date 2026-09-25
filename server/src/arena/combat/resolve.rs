@@ -838,7 +838,25 @@ pub fn on_c2s_input(
             debug!("combat: slot {sender} input ignored — staggered");
             return Vec::new();
         }
-        info!("combat: slot {sender} acts THROUGH a stagger (Recovery Strikes / dodge)");
+        info!("combat: slot {sender} acts THROUGH a stagger (Quick-tagged ability)");
+    }
+    // THE MANEUVER LOCK (05-D5). Until `OnManeuverEnded` the caster is in the client's
+    // `Maneuver` state, which admits no Blocking, Charging or attack
+    // (`ActorManeuverState$$CanTransitionTo@0x1d55814`), so a guard or swing input
+    // arriving mid-maneuver starts nothing. Ability casts are not state-gated for a
+    // human beyond paralysis and stagger (07-D7 is bots-only; see
+    // `resolve_ability_cast`).
+    // A RELEASE still goes through: it starts nothing, and dropping a guard release
+    // would leave the server holding a guard the player has let go of.
+    if combat.fighters[sender].maneuver_active(now)
+        && input::parse_execute_ability(user_data).is_none()
+        && !matches!(parse_input_activate(user_data), Some(act) if !act.held && act.block_zone == Some(true))
+    {
+        let f = &mut combat.fighters[sender];
+        f.charge_press_at = None;
+        f.pending_manual_attack = None;
+        debug!("combat: slot {sender} input ignored — maneuver in progress");
+        return Vec::new();
     }
 
     // `PlayerCombatInputActivate` (gmid 46) on the 0x36 carrier — the discrete
@@ -1037,64 +1055,39 @@ fn is_shield_bash(ability_uuid: &str, level: u8) -> bool {
             .is_some_and(|r| r.block_duration().is_some_and(|v| v > 0.0))
 }
 
-/// `Recovery Strikes` — the one maneuver the shipped data says may be performed
-/// while staggered. Pinned by uuid because that is what arrives on the wire; the
-/// test `the_recovery_strikes_uuid_still_names_recovery_strikes` checks the uuid
-/// against the shipped ability table, so a data change cannot silently unhook it.
+/// `Recovery Strikes`, used by the staggered-input tests. The gate itself now keys on
+/// the Quick tag (`performable_while_staggered`).
+#[cfg(test)]
 const RECOVERY_STRIKES_UUID: &str = "e08f95de-85bb-4829-ba7e-cf45bc6fb422";
-
-fn is_recovery_strikes(ability_uuid: &str) -> bool {
-    ability_uuid.eq_ignore_ascii_case(RECOVERY_STRIKES_UUID)
-}
 
 /// May this ability be performed while STAGGERED?
 ///
-/// Two families, and only two.
+/// Exactly the **Quick**-tagged ones (tag 7). `Actor$$CanCast@0x1c58f54` skips its
+/// state gate for a Quick ability unless the caster is paralysed (combat-spec 07 §2,
+/// 07-D2), so the client sends these from a stagger and retail answered them:
+/// Recovery Strikes, the four dodges, and also Ward, Absorb, Thunderstorm, Wall of
+/// Fire, Magicka Surge, Echo Weapon and Blizzard Armor.
 ///
-/// **Recovery Strikes** says so itself —
-/// `Ability.Maneuver.RecoveryStrikes.Description`: *"These Quick Strikes can be
-/// performed at any time, except when Paralyzed."* It is the only ability in the
-/// shipped description corpus that carries that sentence.
-///
-/// **The dodges** say nothing, so this one is measured. Counting every ability
-/// execution (gmid 37/38) that falls inside a `Staggered` (3) op51 apply→remove
-/// window, over 11 retail sessions:
+/// Measured over 46 deduplicated retail sessions (s2c op38 inside a `Staggered` op51
+/// apply→remove window, against the count expected if casts ignored the stagger):
 ///
 /// ```text
-///   RecoveryStrikes    64 while staggered / 221 free   22.5%   (documented)
-///   DodgingStrike      50 / 218                        18.7%
-///   AdrenalineDodge    44 / 314                        12.3%
-///   ---------------------------------------------------------
-///   QuickStrikes        0 / 294                         0.0%
-///   LightningBolt       0 / 219                         0.0%
-///   HarryingBash        0 / 213                         0.0%
-///   Ward                0 / 70                          0.0%
+///   Quick      Ward 14 (8.2 expected) · Absorb 12 (6.2) · Firewall 8 (2.5)
+///              Thunderstorm 4 (1.4) · RecoveryStrikes 54 · DodgingStrike 18
+///              AdrenalineDodge 25 · RenewingDodge 9 · FocusingDodge 4
+///   not Quick  0 of ~90 expected: LightningBolt, QuickStrikes, IceSpike, Fireball,
+///              StaggeringBash, HarryingBash, Guardbreaker, PiercingStrikes, ResistElements
 /// ```
 ///
-/// The zeros are the point: comparably-sampled abilities are never once executed
-/// inside a stun window, so this is a real distinction and not a measurement floor.
-/// Note it does NOT follow the maneuver/spell split — QuickStrikes and HarryingBash
-/// are maneuvers and score zero.
+/// The client DOES send the non-Quick requests while staggered (88 op37s, many
+/// mid-window) and retail never answered one, so the server-side refusal stays.
 ///
-/// The obvious confound is a lagging `Staggered` remove making post-stun uses look
-/// mid-stun. Measuring WHERE in the window each use falls rules that out: 30 % of
-/// DodgingStrike's stunned uses sit in the FIRST HALF of the stun, earlier than
-/// Recovery Strikes' own 14 %. The method self-checks too — StaggeringBash, the
-/// ability that CAUSES a stagger, lands at median position 0.10, i.e. right at the
-/// window's start, exactly where it must.
-///
-/// Keyed on the shipped dodge field rather than a uuid list, so all four dodge
-/// maneuvers are covered and a data change cannot leave one behind.
-///
-/// Reported by Taheen (#113), who said dodges free you from a stun the way Recovery
-/// Strikes does. He was right.
+/// This replaces the earlier "Recovery Strikes and the dodges only" rule, which rested
+/// on an 11-session count that pooled op37 with op38 and counted duplicated rows; its
+/// Ward 0/70 was a sampling artefact (about 1.6 in-window uses were expected there).
+/// Reported by Taheen (#113, dodges) and #228 (spells doing nothing at full magicka).
 fn performable_while_staggered(ability_uuid: &str) -> bool {
-    if is_recovery_strikes(ability_uuid) {
-        return true;
-    }
-    super::gamedata::ability_rank_clamped(ability_uuid, 1)
-        .and_then(|r| r.maximum_damage_dodged())
-        .is_some_and(|cap| cap > 0.0)
+    super::interrupts::is_quick(ability_uuid)
 }
 
 /// A weapon auto-attack (committed swing), throttled per attacker.
@@ -1441,6 +1434,19 @@ pub(super) fn resolve_ability_cast(
     ea: &input::ExecuteAbility,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
+    // `Actor.CanCast`'s state gate, for BOTS only (07-D7). A bot has no client, and
+    // without this it cast under Reckless Fury ("stops them from … using skills"),
+    // mid-swing and mid-maneuver. Humans keep only the measured paralysis and stagger
+    // gates in `on_c2s_input`: the server's view of a human's swing and maneuver
+    // phases can lag the client's, and a refusal there is silent.
+    if sender >= combat.expected_peers {
+        if let Some(reason) =
+            super::interrupts::cast_refusal(&combat.fighters[sender], &ea.ability_uuid, now)
+        {
+            debug!("combat: bot slot {sender} ability {} refused ({reason:?})", ea.ability_uuid);
+            return Vec::new();
+        }
+    }
     // Cooldown gate (per ability instance).
     if let Some(&until) = combat.fighters[sender].cooldowns.get(&ea.ability_uuid) {
         if now < until {
@@ -1558,11 +1564,74 @@ pub(super) fn resolve_ability_cast(
     let magicka_full_at_cast =
         super::perks::magicka_full_for_maximum_power(&combat.fighters[sender]);
 
-    // Resource gate passed → commit: set cooldown and deduct the cost.
-    combat
-        .fighters[sender]
-        .cooldowns
-        .insert(ea.ability_uuid.clone(), now + ability_cooldown(&ea.ability_uuid, level));
+    // Resource gate passed → commit. First settle any stagger still unprocessed, so
+    // it cannot be mistaken for an interrupt of the execution recorded below.
+    let mut out = super::interrupts::process_interrupts(combat, now);
+
+    // A weapon maneuver's authored timing for the caster's weapon (05 §2.2).
+    let maneuver_timing = (tag == AbilityTag::Maneuver)
+        .then(|| {
+            let weapon = super::interrupts::timing_weapon(&combat.fighters[sender]);
+            super::interrupts::maneuver_timing(&ea.ability_uuid, level, weapon)
+        })
+        .flatten();
+
+    // WHEN THE COOLDOWN STARTS (M-cooldown-start). `BeginAbilityExecution@0x1c59930`
+    // loads the full cooldown with its timer stopped; it runs from the spell's
+    // `AbilityBeginCooldown` step, the end of a channel, `OnManeuverEnded`, or the end
+    // of Magicka Surge (07 §5.4). It used to run from the cast, so a bot recast early
+    // (Magicka Surge every 10 s instead of 20 s). An interrupt restarts it from the
+    // interrupt (`interrupts::process_interrupts`).
+    let cooldown = ability_cooldown(&ea.ability_uuid, level);
+    let cooldown_start = super::interrupts::cooldown_start_offset(
+        &ea.ability_uuid,
+        level,
+        maneuver_timing.map(|t| t.end),
+    );
+    combat.fighters[sender].cooldowns.insert(
+        ea.ability_uuid.clone(),
+        now + Duration::from_secs_f32(cooldown_start) + cooldown,
+    );
+
+    // THE INTERRUPTIBLE PHASE (06-D1, 05-D5): a spell's wind-up or channel, or a
+    // maneuver up to `OnManeuverEnded`. A stagger or paralysis inside it cancels the
+    // cast's pending impact or channel and sends op59.
+    if tag == AbilityTag::Maneuver {
+        // `ChangeManeuverInProgress@0x1d55a54`: a new maneuver replaces a running one.
+        if combat.fighters[sender].maneuver_active(now) {
+            out.extend(super::interrupts::replace_running_maneuver(combat, sender, now));
+        }
+        // Entering `Maneuver` ends a guard or a charge (a Quick maneuver can be cast
+        // from either). Without this a human who cast a dodge from a raised guard kept
+        // the guard server-side, and a charge's `Charging` state let a later release
+        // commit a 0 s swing. A bash raises its own guard just below.
+        let f = &mut combat.fighters[sender];
+        f.charge_press_at = None;
+        f.pending_manual_attack = None;
+        f.bot_swing_at = None;
+        if f.actor_state() == ActorStateType::Blocking {
+            f.blocking_until = None;
+            f.reconcile_block(now);
+        }
+        if f.actor_state() == ActorStateType::Charging {
+            f.set_actor_state(ActorStateType::Idle, now);
+        }
+    }
+    let interruptible_secs = match maneuver_timing {
+        Some(t) => t.end,
+        None if tag == AbilityTag::Maneuver => 0.0,
+        None => super::interrupts::spell_interruptible_secs(&ea.ability_uuid, level),
+    };
+    super::interrupts::begin_execution(
+        &mut combat.fighters[sender],
+        super::state::Execution {
+            ability_uuid: ea.ability_uuid.clone(),
+            started_at: now,
+            until: now + Duration::from_secs_f32(interruptible_secs.max(0.0)),
+            cooldown,
+            is_maneuver: tag == AbilityTag::Maneuver,
+        },
+    );
 
     // COMBO across a cast (02 R5/R9). A spell leaves Recovery for Channeling, and
     // `PlayerRecoveryState$$OnExit@0x1d75714` resets the combo on every exit except
@@ -1609,7 +1678,6 @@ pub(super) fn resolve_ability_cast(
         Vec::new()
     };
 
-    let mut out = Vec::new();
     // PerformExecuteAbility (38) echo to both — the cast confirmation/visual.
     let perform = messages::perform_execute_ability(user_data, ea.role_offset);
     out.push((sender, perform.clone()));
@@ -1800,7 +1868,26 @@ pub(super) fn resolve_ability_cast(
         }
     }
 
-    let delay = ability_impact_delay(&ea.ability_uuid, level);
+    // A MANEUVER'S HIT LANDS AT ITS AUTHORED TIME (05-D5). The retail server queued
+    // each `OnManeuverApplyDamage` time from execution begin and resolved the hit when
+    // it passed (`ManeuverServerImplementation$$HandleExecutionUpdate@0x1e97764`); we
+    // resolved it inline at the cast, so there was nothing a stagger could interrupt.
+    // The first authored hit carries the maneuver's one resolved hit here; the rest of
+    // a multi-hit family (Quick Strikes' second strike) is 05-D3's business.
+    // A shield bash keeps its `_blockDuration` guard phase (03), and Reckless Fury
+    // ships no hit, so both stay on `ability_impact_delay`.
+    let delay = match maneuver_timing.and_then(|t| t.impacts.first().copied()) {
+        Some(first) if ability_impact_delay(&ea.ability_uuid, level).is_zero() => {
+            Duration::from_secs_f32(first)
+        }
+        _ => ability_impact_delay(&ea.ability_uuid, level),
+    };
+    // What a maneuver does to its own caster starts with the execution, not with the
+    // hit: the dodge window (04-DG1: from BeginExecution), Indomitable Smash's cure
+    // and resistance. Applied now so the later hit does not move them.
+    if tag == AbilityTag::Maneuver {
+        out.extend(apply_caster_begin_effects(combat, sender, &ea.ability_uuid, level, now));
+    }
     if delay.is_zero() {
         out.extend(apply_ability_impact(
             combat, sender, target_slot, &ea.ability_uuid, level, tag,
@@ -1819,6 +1906,7 @@ pub(super) fn resolve_ability_cast(
             tag,
             magicka_full_at_cast,
             due: now + delay,
+            cast_at: now,
         });
     }
     out
@@ -2189,6 +2277,7 @@ fn apply_ability_impact(
                     magicka_full_at_cast,
                     next_tick_at: now + Duration::from_secs_f32(interval),
                     interval_secs: interval,
+                    cast_at: now,
                 });
                 info!(
                     "combat: slot {sender} THUNDERSTORM {n_bolts} bolts, one every \
@@ -2209,6 +2298,10 @@ fn apply_ability_impact(
                         next_tick_at: now
                             + Duration::from_secs_f32(super::damage::CHANNEL_TICK_INTERVAL_SECS),
                         interval_secs: super::damage::CHANNEL_TICK_INTERVAL_SECS,
+                        // The impact instant. For Frostbite and Consuming Inferno, the
+                        // only interruptible channels, that is the cast itself: they
+                        // ship no wind-up, so they land inline.
+                        cast_at: now,
                     });
                 }
             }
@@ -2239,9 +2332,12 @@ fn apply_ability_impact(
     // Whatever DEFENSIVE or CONTROL fields this rank ships, applied from the data
     // rather than from the ability's name. Seven abilities used to spend a resource
     // and do nothing because these fields were read by no code.
-    out.extend(apply_shipped_effects(
+    //
+    // A maneuver's caster-side effects already ran at the cast
+    // (`apply_caster_begin_effects` in `resolve_ability_cast`).
+    out.extend(apply_shipped_effects_phased(
         combat, sender, target_slot, ability_uuid, level, last_hit_total, target_blocked,
-        target_absorbing, now,
+        target_absorbing, tag != AbilityTag::Maneuver, now,
     ));
     out
 }
@@ -2411,24 +2507,24 @@ fn land_due_echoes(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
 
 /// Deliver casts whose wind-up has elapsed. Mirrors [`land_due_hits`].
 pub(super) fn land_due_impacts(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
-    if combat.pending_impacts.is_empty() {
-        return Vec::new();
-    }
-    let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut combat.pending_impacts)
-        .into_iter()
-        .partition(|p| now >= p.due);
-    combat.pending_impacts = waiting;
-
     let mut out = Vec::new();
-    for p in due {
+    // One impact at a time, interrupts first: an impact that lands can stagger or
+    // paralyse a caster whose own impact is due in the same tick, and that one must
+    // then not land (06-D1). Queue order is kept.
+    loop {
+        out.extend(super::interrupts::process_interrupts(combat, now));
+        let Some(i) = combat.pending_impacts.iter().position(|p| now >= p.due) else {
+            break;
+        };
+        let p = combat.pending_impacts.remove(i);
         if p.sender >= combat.fighters.len() || p.target >= combat.fighters.len() {
             continue;
         }
-        // The same rule `land_due_hits` and `land_due_echoes` apply. `due` was taken
-        // out of the queue before this loop, so `on_round_ended` clearing
-        // `pending_impacts` cannot stop a second impact due on the SAME tick: without
-        // this it landed from a dead caster into a finished round, killed the
-        // survivor and ended the round again (CRE-SOAK, `round_ends_once_tests`).
+        // The same rule `land_due_hits` and `land_due_echoes` apply. An impact landed
+        // earlier in this loop can end the round (`on_round_ended` then clears the
+        // queue); without this a stale impact landed from a dead caster into a
+        // finished round, killed the survivor and ended the round again (CRE-SOAK,
+        // `round_ends_once_tests`).
         if !matches!(combat.phase, FlowState::StateTimeout) {
             continue;
         }
@@ -2566,6 +2662,24 @@ fn apply_shipped_effects(
     target_absorbing: bool,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
+    apply_shipped_effects_phased(
+        combat, caster, target_slot, ability_uuid, level, last_hit_total, target_blocked,
+        target_absorbing, true, now,
+    )
+}
+
+/// The effects a rank ships for its CASTER that begin with the execution rather than
+/// with a hit: the cures, `_bonusResistance` and the dodge window. For a spell they
+/// run with the rest at impact, as before; a maneuver runs them at the cast, because
+/// its hit now lands at the authored time (05-D5) and the dodge window runs from
+/// `BeginExecution` (04-DG1).
+fn apply_caster_begin_effects(
+    combat: &mut MatchCombat,
+    caster: usize,
+    ability_uuid: &str,
+    level: u8,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
     use super::state::{DamageNegationSource, NegationPool, StatusEffectType};
     let mut out = Vec::new();
     let Some(r) = super::gamedata::ability_rank_clamped(ability_uuid, level.max(1) as u16) else {
@@ -2580,6 +2694,108 @@ fn apply_shipped_effects(
     // [`apply_status_cures`]. Runs first so the cast's own new statuses, applied
     // below, cannot be cured by the same cast.
     out.extend(apply_status_cures(combat, caster, ability_uuid, level, now));
+
+    // `_bonusResistance` — a FLAT all-damage resistance granted to the CASTER.
+    // Indomitable Smash ships 250 at rank 1 and it was read by nobody, so the
+    // maneuver cured conditions and then did nothing else defensively.
+    //
+    // Lifetime: the ability ships no duration of its own, so it rides the same
+    // `ABILITY_USE_MIN_WINDOW_SECS` window the Combat Focus / Willpower perks use for
+    // a cast — the committed-animation window. That is a modelling choice, not an
+    // authored number, and is called out here rather than buried.
+    if let Some(bonus) = r.get(super::gamedata::AbilityField::BonusResistance) {
+        if bonus > 0.0 && caster < viewers {
+            let window = super::perks::ABILITY_USE_MIN_WINDOW_SECS;
+            let expires = now + Duration::from_secs_f32(window);
+            combat.fighters[caster]
+                .transient_all_resistance
+                .push((bonus, expires));
+            info!(
+                "combat: slot {caster} bonus resistance +{bonus:.1} for {window:.2}s ({ability_uuid})"
+            );
+        }
+    }
+
+    if let Some(cap) = r.maximum_damage_dodged() {
+        if cap > 0.0 && caster < viewers {
+            // `_dodgeDuration` is authored at **1.0 s** on all four dodge maneuvers
+            // and was ignored: the pool was given the 3600 s "until consumed"
+            // placeholder, so a Dodging Strike stayed armed for an hour and ate a hit
+            // a round or more later. It is a one-second reactive window, not a
+            // banked shield.
+            let dodge_secs = r
+                .get(super::gamedata::AbilityField::DodgeDuration)
+                .filter(|v| *v > 0.0);
+            let expires = match dodge_secs {
+                Some(secs) => now + Duration::from_secs_f32(secs),
+                None => until_consumed,
+            };
+            combat.fighters[caster].negation_pools.push(NegationPool {
+                source: DamageNegationSource::Dodge,
+                remaining: cap,
+                expires_at: expires,
+                // Adrenaline / Renewing / Focusing Dodge pay out only if the dodge
+                // actually connects. Absent fields are 0, i.e. a plain Dodging Strike.
+                on_absorb_restore: (
+                    r.get(super::gamedata::AbilityField::MaximumHealthRestored).unwrap_or(0.0),
+                    r.get(super::gamedata::AbilityField::MaximumMagickaRestored).unwrap_or(0.0),
+                    r.get(super::gamedata::AbilityField::MaximumCooldownReduction).unwrap_or(0.0),
+                ),
+                bypass_types: &[],
+                restoration_factor: 0.0,
+                absorb_fraction: 1.0,
+                elemental_only: false,
+                consumes_overflow: false,
+            });
+            let obj = combat.fighters[caster].net_object_id;
+            info!("combat: slot {caster} dodge pool +{cap:.1} ({ability_uuid})");
+            // The apply carries the dodge's own duration, not 0.
+            //
+            // Retail is unambiguous: of 405 captured `Dodging` (12) op51 frames,
+            // all 204 APPLIES carry duration 1.0 and all 201 REMOVES carry -0.0.
+            // We sent 0.0 on the apply, so the client was told the dodge lasts no
+            // time — and since we never send the remove either, its indicator has
+            // nothing to clear on.
+            //
+            // `expires` above already bounds the pool server-side; this is the
+            // client being told the same thing.
+            let announced = dodge_secs.unwrap_or(0.0);
+            let frame = messages::change_combat_status_effect(
+                obj, true, StatusEffectType::Dodging, announced,
+            );
+            for v in 0..viewers {
+                out.push((v, frame.clone()));
+            }
+        }
+    }
+    out
+}
+
+fn apply_shipped_effects_phased(
+    combat: &mut MatchCombat,
+    caster: usize,
+    target_slot: usize,
+    ability_uuid: &str,
+    level: u8,
+    last_hit_total: f32,
+    target_blocked: bool,
+    target_absorbing: bool,
+    // Run [`apply_caster_begin_effects`] too (false when the cast already did).
+    include_begin: bool,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    use super::state::{DamageNegationSource, NegationPool, StatusEffectType};
+    let mut out = Vec::new();
+    let Some(r) = super::gamedata::ability_rank_clamped(ability_uuid, level.max(1) as u16) else {
+        return out;
+    };
+    let viewers = combat.fighters.len();
+    // No shipped duration → until consumed. Round reset clears the pools.
+    let until_consumed = now + Duration::from_secs(3600);
+
+    if include_begin {
+        out.extend(apply_caster_begin_effects(combat, caster, ability_uuid, level, now));
+    }
 
     // Harrying Bash's `_cooldownIncrease` applies to every active target skill,
     // whether magicka- or stamina-powered. It extends an existing deadline, or
@@ -2716,27 +2932,6 @@ fn apply_shipped_effects(
         }
     }
 
-    // `_bonusResistance` — a FLAT all-damage resistance granted to the CASTER.
-    // Indomitable Smash ships 250 at rank 1 and it was read by nobody, so the
-    // maneuver cured conditions and then did nothing else defensively.
-    //
-    // Lifetime: the ability ships no duration of its own, so it rides the same
-    // `ABILITY_USE_MIN_WINDOW_SECS` window the Combat Focus / Willpower perks use for
-    // a cast — the committed-animation window. That is a modelling choice, not an
-    // authored number, and is called out here rather than buried.
-    if let Some(bonus) = r.get(super::gamedata::AbilityField::BonusResistance) {
-        if bonus > 0.0 && caster < viewers {
-            let window = super::perks::ABILITY_USE_MIN_WINDOW_SECS;
-            let expires = now + Duration::from_secs_f32(window);
-            combat.fighters[caster]
-                .transient_all_resistance
-                .push((bonus, expires));
-            info!(
-                "combat: slot {caster} bonus resistance +{bonus:.1} for {window:.2}s ({ability_uuid})"
-            );
-        }
-    }
-
     // `_resistanceBonus` + `_resistTypes` — a resistance to SPECIFIC damage types for
     // the caster. Frostbite ships 13.13 against resistTypes [1,2,3] (the three
     // physical tracks) while it channels, and both fields were unread: the spell did
@@ -2774,59 +2969,6 @@ fn apply_shipped_effects(
                 "combat: slot {caster} resistance +{bonus:.1} on {applied} type(s) for \
                  {secs:.2}s ({ability_uuid})"
             );
-        }
-    }
-
-    if let Some(cap) = r.maximum_damage_dodged() {
-        if cap > 0.0 && caster < viewers {
-            // `_dodgeDuration` is authored at **1.0 s** on all four dodge maneuvers
-            // and was ignored: the pool was given the 3600 s "until consumed"
-            // placeholder, so a Dodging Strike stayed armed for an hour and ate a hit
-            // a round or more later. It is a one-second reactive window, not a
-            // banked shield.
-            let dodge_secs = r
-                .get(super::gamedata::AbilityField::DodgeDuration)
-                .filter(|v| *v > 0.0);
-            let expires = match dodge_secs {
-                Some(secs) => now + Duration::from_secs_f32(secs),
-                None => until_consumed,
-            };
-            combat.fighters[caster].negation_pools.push(NegationPool {
-                source: DamageNegationSource::Dodge,
-                remaining: cap,
-                expires_at: expires,
-                // Adrenaline / Renewing / Focusing Dodge pay out only if the dodge
-                // actually connects. Absent fields are 0, i.e. a plain Dodging Strike.
-                on_absorb_restore: (
-                    r.get(super::gamedata::AbilityField::MaximumHealthRestored).unwrap_or(0.0),
-                    r.get(super::gamedata::AbilityField::MaximumMagickaRestored).unwrap_or(0.0),
-                    r.get(super::gamedata::AbilityField::MaximumCooldownReduction).unwrap_or(0.0),
-                ),
-                bypass_types: &[],
-                restoration_factor: 0.0,
-                absorb_fraction: 1.0,
-                elemental_only: false,
-                consumes_overflow: false,
-            });
-            let obj = combat.fighters[caster].net_object_id;
-            info!("combat: slot {caster} dodge pool +{cap:.1} ({ability_uuid})");
-            // The apply carries the dodge's own duration, not 0.
-            //
-            // Retail is unambiguous: of 405 captured `Dodging` (12) op51 frames,
-            // all 204 APPLIES carry duration 1.0 and all 201 REMOVES carry -0.0.
-            // We sent 0.0 on the apply, so the client was told the dodge lasts no
-            // time — and since we never send the remove either, its indicator has
-            // nothing to clear on.
-            //
-            // `expires` above already bounds the pool server-side; this is the
-            // client being told the same thing.
-            let announced = dodge_secs.unwrap_or(0.0);
-            let frame = messages::change_combat_status_effect(
-                obj, true, StatusEffectType::Dodging, announced,
-            );
-            for v in 0..viewers {
-                out.push((v, frame.clone()));
-            }
         }
     }
 
@@ -3831,8 +3973,9 @@ fn reconcile_paralysis(f: &mut super::state::Fighter, now: Instant) {
 /// are recomputed against the target's state at that instant rather than frozen at
 /// cast time.
 ///
-/// A channel ends early when its target dies or leaves — there is no separate
-/// "release" input modelled, so a cast always runs its full `channelMaxLength`.
+/// A channel ends early when its target dies or leaves, or when its caster is
+/// staggered or paralysed (`interrupts::process_interrupts`, 06-D1). There is no
+/// separate "release" input modelled.
 fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
     let mut out = Vec::new();
     if combat.channels.is_empty() {
@@ -3855,6 +3998,12 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
         // after a round boundary, so stop.
         if i >= combat.channels.len() {
             break;
+        }
+        // A stagger or paralysis ends Frostbite / Consuming Inferno (06-D1). It sets
+        // `remaining_ticks` to 0 in place, so the indices in `due` stay valid.
+        out.extend(super::interrupts::process_interrupts(combat, now));
+        if combat.channels[i].remaining_ticks == 0 {
+            continue;
         }
         let (caster, target, uuid, level, magicka_full_at_cast) = {
             let c = &combat.channels[i];
@@ -4401,6 +4550,9 @@ fn on_round_ended(
     combat.pending_impacts.clear();
     for (slot, fighter) in combat.fighters.iter_mut().enumerate() {
         fighter.clear_scheduled_states();
+        // Nothing is left to interrupt, and a maneuver lock must not outlive it.
+        fighter.executions.clear();
+        fighter.interrupt_pending = None;
         if !ended_by_death || slot != loser {
             fighter.force_actor_state(ActorStateType::Idle, now);
         }
@@ -4835,7 +4987,10 @@ pub fn drain_state_changes_for(
     only: Option<usize>,
 ) -> Vec<(usize, Vec<u8>)> {
     let viewers = combat.fighters.len();
-    let mut out = Vec::new();
+    // op59 for any cast a stagger or paralysis just interrupted, BEFORE the state
+    // frame: retail's order is damage → op59 → op39 → op51 in all 83 captured
+    // selfInterrupt=false frames (06-D1).
+    let mut out = super::interrupts::process_interrupts(combat, now);
     for slot in 0..viewers {
         if matches!(only, Some(s) if s != slot) {
             continue;
@@ -5094,6 +5249,25 @@ fn bot_lower_guard(f: &mut super::state::Fighter, now: Instant) {
 /// that for no gain.
 ///
 /// `Perk` is skipped because a perk is passive and never activates.
+/// [`bot_next_ability`] restricted to what the bot can cast NOW: off cooldown and
+/// through `Actor.CanCast`'s gate (07-D7). Choosing among ready abilities keeps a
+/// long cooldown (Magicka Surge's now runs after its 10 s surge) from starving the
+/// rest of the loadout, and a refused pick from dropping and re-raising the bot's
+/// guard every tick.
+pub(super) fn bot_next_ready_ability(f: &super::state::Fighter, now: Instant) -> Option<String> {
+    f.loadout
+        .abilities
+        .iter()
+        .filter(|a| a.tag != super::state::AbilityTag::Perk)
+        .enumerate()
+        .filter(|(_, a)| f.cooldowns.get(&a.instance_uuid).is_none_or(|&until| now >= until))
+        .filter(|(_, a)| {
+            super::interrupts::cast_refusal_after_guard(f, &a.instance_uuid, now).is_none()
+        })
+        .min_by_key(|(i, a)| (*f.bot_cast_counts.get(&a.instance_uuid).unwrap_or(&0), *i))
+        .map(|(_, a)| a.instance_uuid.clone())
+}
+
 fn bot_next_ability(f: &super::state::Fighter) -> Option<String> {
     f.loadout
         .abilities
@@ -5235,7 +5409,7 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
                 .map(|t| now.duration_since(t) >= BOT_CAST_COOLDOWN)
                 .unwrap_or(true);
         if cast_ready && combat.fighters[bot].bot_swing_at.is_none() {
-            if let Some(uuid) = bot_next_ability(&combat.fighters[bot]) {
+            if let Some(uuid) = bot_next_ready_ability(&combat.fighters[bot], now) {
                 // Go through the SAME path a human cast takes — synthesise the frame a
                 // client would have sent rather than maintain a second cast
                 // implementation that could drift. `resolve_ability_cast` still applies
@@ -5262,6 +5436,12 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
                     }
                 }
             }
+        }
+
+        // Mid-maneuver the bot can neither swing nor guard: the Maneuver state admits
+        // neither until `OnManeuverEnded` (05-D5), the same lock a human's input meets.
+        if combat.fighters[bot].maneuver_active(now) {
+            continue;
         }
 
         // A bot swings in TWO steps, because retail's swing is two steps.
@@ -6578,12 +6758,17 @@ mod tests {
     /// The spell/ability cooldown gate: a second cast of the SAME ability before its
     /// authoritative cooldown elapses is rejected (no `PerformExecuteAbility` echo);
     /// after the cooldown it fires again. (Fireball = 3540 ms.)
+    ///
+    /// The cooldown runs from Fireball's `AbilityBeginCooldown` step, which follows its
+    /// 0.9 s channel (`FireballAbility$$GetExecutionSteps@0x1b0f020`; 07 §5.4), so the
+    /// recast opens 0.9 + 3.54 = 4.44 s after the cast, not 3.54 s (M-cooldown-start).
     #[test]
     fn ability_cast_is_cooldown_gated() {
         let now = Instant::now();
         let mut combat = make_live_combat(now);
         let fireball = "d07a8d30-9a1c-49b0-866d-97a8aa1534cf";
         let cd = ability_cooldown(fireball, 1); // shipped FireballRank1._cooldown = 3.54 s
+        let channel = Duration::from_millis(900); // FireballRank1._channelDuration
         let frame = make_ability_frame(combat.fighters[0].net_object_id, fireball);
 
         let out1 = on_c2s_input(&mut combat, 0, &frame, now);
@@ -6593,7 +6778,14 @@ mod tests {
         let out2 = on_c2s_input(&mut combat, 0, &frame, too_soon);
         assert!(out2.is_empty(), "a re-cast before the ability cooldown elapses is rejected");
 
-        let after = now + cd + Duration::from_millis(1);
+        // Past the bare cooldown but not past channel + cooldown: still refused.
+        let from_cast = now + cd + Duration::from_millis(1);
+        assert!(
+            on_c2s_input(&mut combat, 0, &frame, from_cast).is_empty(),
+            "the cooldown starts after the 0.9 s channel, not at the cast",
+        );
+
+        let after = now + channel + cd + Duration::from_millis(1);
         let out3 = on_c2s_input(&mut combat, 0, &frame, after);
         assert!(!out3.is_empty(), "the ability fires again once its cooldown elapses");
     }
@@ -6826,6 +7018,9 @@ mod tests {
 
         let mut out = on_c2s_input(&mut combat, 0, &frame, now);
         out.extend(land(&mut combat, now));
+        // The hit lands at Quick Strikes' first authored `OnManeuverApplyDamage`,
+        // 0.195 s in (05-D5), not at the cast.
+        out.extend(super::land_due_impacts(&mut combat, now + Duration::from_millis(200)));
 
         let hits = damage_frames(&out);
         assert!(!hits.is_empty(), "the maneuver must land a damage frame at all");
@@ -8721,6 +8916,7 @@ mod shipped_effects_tests {
             magicka_full_at_cast: false,
             next_tick_at: now,
             interval_secs: super::super::damage::CHANNEL_TICK_INTERVAL_SECS,
+            cast_at: now,
         });
         let _ = super::apply_channel_ticks(&mut c, now);
         assert!(c.fighters[0].stamina < stam0, "stamina must drain: {stam0} -> {}", c.fighters[0].stamina);
@@ -9681,11 +9877,12 @@ mod shipped_effects_tests {
         let now = Instant::now();
         let at = now + Duration::from_millis(100);
 
-        // Abilities measured at 0 uses inside a stun window across 11 retail
-        // sessions are still refused: QuickStrikes 0/294, LightningBolt 0/219,
-        // Ward 0/70. QuickStrikes in particular is a MANEUVER, so this also pins
-        // that the rule is not "maneuvers pass, spells do not".
-        for name in ["QuickStrikes", "LightningBolt", "Ward"] {
+        // Non-Quick abilities stay refused: retail answered none of them inside a stun
+        // window across 46 sessions (0 op38 against ~90 expected), although clients
+        // did send the requests. QuickStrikes in particular is a MANEUVER, so this
+        // also pins that the rule is not "maneuvers pass, spells do not". (Ward used
+        // to be on this list; it is Quick-tagged, see the test below.)
+        for name in ["QuickStrikes", "LightningBolt", "IceSpike", "Fireball", "Guardbreaker"] {
             let mut c = combat2(now);
             c.fighters[0].apply_stagger_for(now, 2.5);
             let obj = c.fighters[0].net_object_id;
@@ -9711,6 +9908,53 @@ mod shipped_effects_tests {
             on_c2s_input(&mut c2, 0, &[0xBE, 0x36], at).is_empty(),
             "a stagger must still block a plain swing"
         );
+    }
+
+    /// 07-D2: a QUICK-tagged spell is castable while staggered, and refused while
+    /// paralysed (`Actor$$CanCast@0x1c58f54`: `quick && !paralyzed` skips the state
+    /// gate). The fork dropped these silently, which is part of #228's "spells do
+    /// nothing despite full magicka". Retail answered Ward 14, Absorb 12, Wall of Fire 8
+    /// and Thunderstorm 4 times inside stagger windows over 46 sessions.
+    #[test]
+    fn a_quick_spell_is_cast_through_a_stagger_but_not_through_a_paralysis() {
+        let now = Instant::now();
+        let at = now + Duration::from_millis(100);
+        let op38 = |out: &[(usize, Vec<u8>)]| {
+            out.iter().filter(|(_, f)| messages::user_message_gmid(f) == Some(38)).count()
+        };
+        for name in [
+            "Ward", "Absorb", "Thunderstorm", "Firewall", "MagickaSurge", "EchoWeapon",
+            "BlizzardArmor",
+        ] {
+            let obj_frame = |c: &MatchCombat| {
+                messages::request_execute_ability(c.fighters[0].net_object_id, uuid_of(name))
+            };
+
+            let mut staggered = combat2(now);
+            // Magicka Surge costs 425; the starter pool is smaller.
+            staggered.fighters[0].max_magicka = 5_000;
+            staggered.fighters[0].magicka = 5_000;
+            staggered.fighters[0].apply_stagger_for(now, 2.5);
+            let frame = obj_frame(&staggered);
+            let out = on_c2s_input(&mut staggered, 0, &frame, at);
+            assert_eq!(op38(&out), 2, "{name}: staggered, the cast must be echoed to both");
+            assert!(
+                staggered.fighters[0].is_staggered(at),
+                "{name}: a Quick spell is cast THROUGH the stagger; it does not end it",
+            );
+
+            let mut paralysed = combat2(now);
+            paralysed.fighters[0].max_magicka = 5_000;
+            paralysed.fighters[0].magicka = 5_000;
+            paralysed.fighters[0].paralyze_secs = 2.5;
+            paralysed.fighters[0].set_actor_state(ActorStateType::Paralyzed, now);
+            assert!(paralysed.fighters[0].is_paralyzed());
+            let frame = obj_frame(&paralysed);
+            assert!(
+                on_c2s_input(&mut paralysed, 0, &frame, at).is_empty(),
+                "{name}: paralysed, the cast must be refused",
+            );
+        }
     }
 
     /// The uuid the gate pins must still be Recovery Strikes in the shipped table, so
@@ -10684,12 +10928,18 @@ mod report_31_high_block_stun {
 
         let at = now + super::ROUND_START_ENGAGE_DELAY + Duration::from_millis(10);
         super::on_tick(&mut c, at, false); // queue the required first swing
-        super::on_tick(&mut c, at + super::BOT_CHARGE_WINDUP + Duration::from_millis(1), false);
-        let out = super::on_tick(
-            &mut c,
-            at + super::BOT_CHARGE_WINDUP + Duration::from_millis(2),
-            false,
+        let swung = at + super::BOT_CHARGE_WINDUP + Duration::from_millis(1);
+        super::on_tick(&mut c, swung, false);
+        // Mid-swing the bot may not cast: `Actor.CanCast` refuses a non-Quick cast
+        // before the swing's recovery passes its combo point (07-D7). This test used
+        // to cast 1 ms after the swing.
+        super::on_tick(&mut c, swung + Duration::from_millis(1), false);
+        assert!(
+            c.fighters[1].bot_last_cast.is_none(),
+            "a bot must not cast in the middle of its own swing",
         );
+        let neutral = c.fighters[1].loadout.neutral_interval();
+        let out = super::on_tick(&mut c, swung + neutral + Duration::from_millis(10), false);
 
         assert!(!out.is_empty(), "the tick must produce frames");
         assert!(
@@ -10911,6 +11161,7 @@ mod report_31_high_block_stun {
             next_tick_at: t0 + Duration::from_millis(200),
             magicka_full_at_cast: true,
                     interval_secs: crate::arena::combat::damage::CHANNEL_TICK_INTERVAL_SECS,
+            cast_at: t0,
         });
         c.pending_hits.push(PendingHit {
             sender: 0,
@@ -10927,6 +11178,7 @@ mod report_31_high_block_stun {
             tag: AbilityTag::Paralyze,
             due: t0 + Duration::from_millis(1500),
                     magicka_full_at_cast: false,
+            cast_at: t0,
         });
 
         c.reset_fighters_for_next_round(t0 + Duration::from_secs(1));
@@ -11522,6 +11774,7 @@ mod round_ends_once_tests {
             tag: super::super::state::AbilityTag::Maneuver,
             magicka_full_at_cast: false,
             due,
+            cast_at: due,
         }
     }
 
