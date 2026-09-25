@@ -706,6 +706,21 @@ async fn swap_character_ownership(
     // then loads its own character, and switching between characters stays a
     // deliberate choice made on the site.
     let d = character_name_level(conn, displaced).await?;
+    // #348: never trade a real character for a starter nobody has played.
+    let played_is_starter = {
+        let p = character_name_level(conn, played).await?;
+        is_unplayed_starter(p.name.as_deref(), p.level)
+    };
+    if played_is_starter && !is_unplayed_starter(d.name.as_deref(), d.level) {
+        log::warn!(
+            "account link (forced): refusing to park character {displaced} ({:?} L{}) of user \
+             {linked_user_id} in favour of the unplayed starter {played} of user \
+             {played_user_id}; the account keeps its character",
+            d.name,
+            d.level,
+        );
+        return Ok((0, 0));
+    }
     if !forced_link_may_park(played_user_id, linked_user_id, d.name.as_deref(), d.level) {
         log::warn!(
             "account link (forced): refusing to park character {displaced} ({:?} L{}) of user \
