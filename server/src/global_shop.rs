@@ -483,7 +483,21 @@ fn grant_from_offer_contents(
             // A tier the corpus has never seen is still refused rather than
             // handed over ungraded: that is the case the old refusal was right
             // about.
-            let rolled_grading = if entry.grading.is_empty() && entry.arcane_tier > 0 {
+            //
+            // ONLY JEWELLERY IS GRADED (#220). Of the 280 distinct arcane
+            // instances in the retail captures, all 150 graded ones are rings or
+            // necklaces (item types 10/11) with no durability, and all 130
+            // weapons, armour and shields carry durability and no grade. Rolling
+            // a grade onto an arcane axe did worse than invent a stat: a graded
+            // `Item` serializes without `durability` (retail never sent both),
+            // so the client read the brand-new axe as broken, and a repair could
+            // not fix it because the restored durability was dropped again on
+            // the way out.
+            let wears = !blades_lib::economy::template_skips_durability(
+                entry.item_template_id,
+                items,
+            );
+            let rolled_grading = if !wears && entry.grading.is_empty() && entry.arcane_tier > 0 {
                 Some(blades_lib::features::sigil_grades::roll_grading(
                     entry.arcane_tier,
                     roll_nonce,
@@ -497,10 +511,7 @@ fn grant_from_offer_contents(
             // offers ungrantable (#184). Everything that DOES wear out is still
             // refused when the table cannot price it, because there the missing
             // entry really is a gap and the alternative is inventing a number.
-            let durability = if blades_lib::economy::template_skips_durability(
-                entry.item_template_id,
-                items,
-            ) {
+            let durability = if !wears {
                 0.0
             } else {
                 repair_data.max_durability(entry.item_template_id, entry.tempering_level)?
@@ -539,7 +550,8 @@ fn grant_from_offer_contents(
                         item_template_id: entry.item_template_id,
                         tempering_level: entry.tempering_level,
                         durability,
-                        grade: (grade > 0).then_some(grade),
+                        // Never on gear that wears — see `wears` above.
+                        grade: (!wears && grade > 0).then_some(grade),
                         arcane_tier: (entry.arcane_tier > 0).then_some(entry.arcane_tier),
                         properties: properties.clone(),
                     },
@@ -1924,8 +1936,14 @@ mod offer_contents_fallback {
     const CLAY: Uuid = Uuid::from_u128(0x42d91529_c88b_4c5b_815b_b55508b4e7ef);
     const SWORD: Uuid = Uuid::from_u128(0x0000_0001);
     /// SigilShop_Armor_ChitinGauntlets_Arcane02 — a REAL arcane offer template
-    /// with a durability row, so a refusal here can only be about the grade.
+    /// with a durability row. Gear: it wears, so it is never graded (#220).
     const ARCANE_GAUNTLETS: Uuid = Uuid::from_u128(0x208d05ed_74bf_4fef_b5e1_ed407d52432f);
+    /// Ebony Faerite Ring (item type 10) — jewellery, the only kind retail graded.
+    const EBONY_FAERITE_RING: Uuid = Uuid::from_u128(0x240eb001_fe3e_4899_b0cc_dd87cb8a72b6);
+    /// Dragonbone Hand Axe, and the real Sigil-shop offer that sells it arcane
+    /// (tier 2, temper 0, no authored grading). Tracker #220's axe.
+    const DRAGONBONE_HAND_AXE: Uuid = Uuid::from_u128(0x1d6c0fb1_50e2_401f_939e_b8860d9fe026);
+    const ARCANE_HAND_AXE_OFFER: Uuid = Uuid::from_u128(0x0b685d94_3bd2_45a5_ab5b_3c0fd6bfd9c1);
 
     fn entry(id: Uuid, qty: u64, bucket: &str) -> OfferContentEntry {
         OfferContentEntry {
@@ -2019,10 +2037,10 @@ mod offer_contents_fallback {
             kind: OfferContentsKind::NeedsRoll,
             town_xp: 0,
             contents: vec![OfferContentEntry {
-                // A real arcane template with a durability row. GOLD has none,
-                // so the old fixture was refused for the missing durability as
-                // much as for the missing grade — it could not tell them apart.
-                item_template_id: ARCANE_GAUNTLETS,
+                // Jewellery, because only jewellery is graded. This fixture used
+                // to be ARCANE_GAUNTLETS, which is how rolling a grade onto gear
+                // (#220) came to be asserted as correct.
+                item_template_id: EBONY_FAERITE_RING,
                 quantity: 1,
                 bucket: "items".into(),
                 tempering_level: 0,
@@ -2075,6 +2093,97 @@ mod offer_contents_fallback {
         // (Only reaches the durability lookup; a template with no durability row is
         // still refused, which is asserted separately.)
         let _ = grant_from_offer_contents(Some(&graded), &repair_data(), item_table(), 1);
+    }
+
+    /// TRACKER #220: "new purchase axe says it needs repair … press repair but it
+    /// stays". The Sigil-shop arcane Dragonbone Hand Axe was handed out with a
+    /// rolled `grade`, and a graded item serializes without `durability`, so the
+    /// client saw a never-used axe at 0 condition and every repair was dropped
+    /// on the way back out.
+    ///
+    /// Retail: all 130 arcane weapons/armour/shields in the captures carry
+    /// durability and no grade. So across many purchases the axe must never be
+    /// graded, must be at full condition for its temper (162.5 at temper 0),
+    /// and that durability must reach the wire.
+    #[test]
+    fn arcane_gear_is_never_graded_and_ships_its_durability() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let sd = crate::static_loader::load(&dir);
+        let offer = sd
+            .global_shop_offer_contents
+            .get(&ARCANE_HAND_AXE_OFFER)
+            .expect("the arcane hand axe offer is in the static data");
+        let rd = repair_data();
+        let full = rd.max_durability(DRAGONBONE_HAND_AXE, 0).expect("axe durability row");
+        assert_eq!(full, 162.5, "the APK's temper-0 max for the Dragonbone Hand Axe");
+
+        for nonce in 0..200u64 {
+            let r = grant_from_offer_contents(Some(offer), &rd, item_table(), nonce)
+                .expect("the arcane axe offer is grantable");
+            assert_eq!(r.items.len(), 1);
+            let item = &r.items[0].item;
+            assert_eq!(item.item_template_id, DRAGONBONE_HAND_AXE);
+            assert_eq!(item.arcane_tier, Some(2));
+            assert_eq!(item.grade, None, "nonce {nonce}: an arcane axe was graded");
+            assert!(item.properties.grading.is_empty(), "nonce {nonce}: GRADING on an axe");
+            assert_eq!(item.durability, full, "a new axe must be at full condition");
+
+            let wire = serde_json::to_value(item).unwrap();
+            assert_eq!(wire.get("durability").and_then(|v| v.as_f64()), Some(full));
+            assert_eq!(wire.get("temperingLevel").and_then(|v| v.as_u64()), Some(0));
+            assert!(wire.get("grade").is_none());
+            assert!(!rd.needs_repair(item), "a brand-new axe must not need repair");
+        }
+
+        // The same holds for arcane ARMOUR (the gauntlets the grade-roll test used
+        // to use), so this is about wearable gear, not about axes.
+        let gauntlets = OfferContents {
+            kind: OfferContentsKind::NeedsRoll,
+            town_xp: 0,
+            contents: vec![OfferContentEntry {
+                item_template_id: ARCANE_GAUNTLETS,
+                quantity: 1,
+                bucket: "items".into(),
+                tempering_level: 0,
+                arcane_tier: 2,
+                enchanting: Vec::new(),
+                grading: Vec::new(),
+            }],
+        };
+        for nonce in 0..200u64 {
+            let r = grant_from_offer_contents(Some(&gauntlets), &rd, item_table(), nonce).unwrap();
+            assert_eq!(r.items[0].item.grade, None, "nonce {nonce}: arcane gauntlets were graded");
+        }
+    }
+
+    /// CONTROL for the test above: arcane JEWELLERY is still graded, so the fix
+    /// is scoped to gear that wears and has not simply switched the roll off.
+    #[test]
+    fn arcane_jewellery_is_still_graded() {
+        let ring = OfferContents {
+            kind: OfferContentsKind::NeedsRoll,
+            town_xp: 0,
+            contents: vec![OfferContentEntry {
+                item_template_id: EBONY_FAERITE_RING,
+                quantity: 1,
+                bucket: "items".into(),
+                tempering_level: 0,
+                arcane_tier: 2,
+                enchanting: Vec::new(),
+                grading: Vec::new(),
+            }],
+        };
+        let graded = (0..200u64)
+            .filter(|&n| {
+                grant_from_offer_contents(Some(&ring), &repair_data(), item_table(), n)
+                    .unwrap()
+                    .items[0]
+                    .item
+                    .grade
+                    .is_some()
+            })
+            .count();
+        assert!(graded > 0, "no arcane ring came out graded");
     }
 
     /// The refusals that REMAIN.
