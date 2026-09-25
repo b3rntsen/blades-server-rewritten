@@ -1114,6 +1114,9 @@ pub struct ActiveChannel {
     /// is authored — and it is per-channel because a hardcoded global tick turned
     /// Thunderstorm into a single immediate hit.
     pub interval_secs: f32,
+    /// When the cast that started this channel was accepted; matches
+    /// [`Execution::started_at`] for the two interruptible channels.
+    pub cast_at: Instant,
 }
 
 // ---------------------------------------------------------------------------
@@ -1492,6 +1495,38 @@ pub struct Fighter {
     /// How long the CURRENT paralysis lasts (the casting rank's shipped `_duration`);
     /// read by `resolve::reconcile_paralysis`. [Phase 3.9]
     pub paralyze_secs: f32,
+    /// When this fighter last entered `Staggered` or `Paralyzed`, until
+    /// [`super::interrupts::process_interrupts`] has cancelled whatever that
+    /// interrupted. Set at the single state seam ([`Self::force_actor_state`]) and by
+    /// a re-stagger, so no stagger or paralysis path can forget it.
+    pub interrupt_pending: Option<Instant>,
+    /// Casts whose interruptible phase is still running: a spell's `AbilityChannel`
+    /// wind-up, a channelled spell, or a weapon maneuver up to `OnManeuverEnded`.
+    /// See [`Execution`].
+    pub executions: Vec<Execution>,
+}
+
+/// One cast in its interruptible phase.
+///
+/// The client ends a spell's channel or wind-up, and a maneuver, when the actor leaves
+/// `Channeling` / `Maneuver` for `Staggered` or `Paralyzed`
+/// (`ChannelingState$$EndChanneling@0x1a52578`, `ActorManeuverState$$OnExit@0x1d556b0`):
+/// `RequestInterruptAbility` → `AbilityExecutor$$ForceStop@0x1e9ba28` runs every step's
+/// cleanup and drops the rest, so no damage step runs and the cooldown starts at the
+/// interrupt (`AbilityExecutor$$Interrupt@0x1e9b94c` → `EndExecution`). In PvP the
+/// server drives that with op59 `InterruptAbility` (combat-spec 06 §1.8, 07 §5.5).
+#[derive(Debug, Clone)]
+pub struct Execution {
+    pub ability_uuid: String,
+    /// The instant the cast was accepted (op38). Pending impacts and channels carry
+    /// the same instant as `cast_at`, which is how they are matched to this record.
+    pub started_at: Instant,
+    /// End of the interruptible phase: the channel's end, or `OnManeuverEnded`.
+    pub until: Instant,
+    /// The rank's full cooldown, which starts when the execution ends.
+    pub cooldown: std::time::Duration,
+    /// A weapon maneuver (the caster is in `Maneuver`), not a spell.
+    pub is_maneuver: bool,
 }
 
 /// A damage-negation pool (Ward/Absorb/Dodge) on a fighter — a quantity of
@@ -1710,7 +1745,22 @@ impl Fighter {
             equipped_consumable: None,
             pending_restore: None,
             paralyze_secs: paralyze_duration_secs(1),
+            interrupt_pending: None,
+            executions: Vec::new(),
         }
+    }
+
+    /// Is a weapon maneuver still executing (before its `OnManeuverEnded`)? While it
+    /// is, the caster is in the client's `Maneuver` state, which admits no Blocking,
+    /// Charging or attack (`ActorManeuverState$$CanTransitionTo@0x1d55814`).
+    pub fn maneuver_active(&self, now: Instant) -> bool {
+        self.executions.iter().any(|e| e.is_maneuver && now < e.until)
+    }
+
+    /// Is an op53 cast pose still standing, i.e. is the client showing this actor in
+    /// `Channeling`? `Actor$$CanCast@0x1c58f54` lets a cast through from Channeling.
+    pub fn in_channel_pose(&self, now: Instant) -> bool {
+        matches!(self.channel_pose, Some((until, at)) if at == self.transitions_total && now < until)
     }
 
     /// This fighter's current actor state. The only way to read the private field.
@@ -1742,6 +1792,11 @@ impl Fighter {
     pub fn force_actor_state(&mut self, next: ActorStateType, now: Instant) {
         let from = self.actor_state;
         let time_in_previous = self.time_in_state(now);
+        // Entering Staggered or Paralyzed interrupts a channel, a spell wind-up or a
+        // maneuver (see [`Execution`]). Keep the earliest unprocessed instant.
+        if matches!(next, ActorStateType::Staggered | ActorStateType::Paralyzed) {
+            self.interrupt_pending.get_or_insert(now);
+        }
         self.actor_state = next;
         self.state_entered = now;
         // The ring already contains the state being ENTERED — capture-pinned: the
@@ -1958,6 +2013,10 @@ impl Fighter {
         }
         self.staggered_until =
             Some(now + std::time::Duration::from_secs_f32(secs.max(0.05)));
+        // A re-stagger does not change the state, so the seam in `force_actor_state`
+        // does not see it; it still interrupts a maneuver started from the first
+        // stagger (Recovery Strikes, a dodge).
+        self.interrupt_pending.get_or_insert(now);
         self.set_actor_state(ActorStateType::Staggered, now);
         // A stagger overrides whatever swing was in flight: drop its queued
         // follow-through/recovery/idle, which would otherwise fire mid-stagger and
@@ -2803,6 +2862,9 @@ pub struct PendingImpact {
     /// magicka cost was deducted) — the order the client uses.
     pub magicka_full_at_cast: bool,
     pub due: Instant,
+    /// When the cast was accepted; matches [`Execution::started_at`], so an
+    /// interrupt of that execution drops this impact.
+    pub cast_at: Instant,
 }
 
 /// An **Echo Weapon** echo waiting to land: a flat follow-up hit `_weaponDelay`
@@ -3055,6 +3117,8 @@ impl MatchCombat {
             f.transient_all_resistance.clear();
             f.maneuver_state_until = None;
             f.staggered_until = None;
+            f.interrupt_pending = None;
+            f.executions.clear();
             // A new round starts with nothing announced: the client resets its own
             // effect layer, so replaying removes for last round's statuses would be
             // noise at best and could clear a fresh apply at worst.
