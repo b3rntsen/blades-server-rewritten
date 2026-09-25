@@ -3374,6 +3374,84 @@ pub(in crate::arena::combat) mod tests {
         );
     }
 
+    /// **12-D5 / #227 — a round-1 death must be SHOWN.** The client displays a death
+    /// only from op29, and `PvpAvatar$$CheckShouldForceServerState@0x1792864` skips a
+    /// state message whose history indices it already holds. The fork used to drain a
+    /// 39 Idle (history `…, Dead, Idle`) for the loser AHEAD of op29, so op29 was a
+    /// no-op and the defeated opponent never fell in rounds 1 and 2 (combat-spec 12
+    /// §7.2). Expected, from the spec: op29 precedes any 39 for the loser, and the
+    /// loser gets no 39 Idle until the round reset (no client code revives it:
+    /// `PvpAvatar$$EndRound@0x17848c0`).
+    #[test]
+    fn a_non_final_round_death_sends_op29_first_and_no_idle_until_the_reset() {
+        let (mut m, t0) = live_inst(2);
+        let (death, t) = swing_until_death(&mut m, 0, t0);
+        assert_ne!(m.phase(), FlowState::RoundEnd, "fixture: round 1 is not the final round");
+        let loser_obj = m.combat.fighters[1].net_object_id as i64;
+        let winner_obj = m.combat.fighters[0].net_object_id as i64;
+        const STATE_FAMILY: [i64; 12] = [29, 39, 40, 41, 42, 43, 44, 45, 52, 53, 58, 73];
+        let state_frame = |b: &[u8]| -> Option<(i64, i64, Option<i64>)> {
+            if b.len() <= 2 || b[1] != 0x36 {
+                return None;
+            }
+            let nd = arena_proto::parse_netdata(&b[2..]);
+            let g = nd.int(3)?;
+            STATE_FAMILY.contains(&g).then(|| (nd.int(0).unwrap_or(-1), g, nd.int(6)))
+        };
+
+        for viewer in 0..2 {
+            let loser: Vec<i64> = death
+                .iter()
+                .filter(|(v, _)| *v == viewer)
+                .filter_map(|(_, b)| state_frame(b))
+                .filter(|(obj, _, _)| *obj == loser_obj)
+                .map(|(_, g, _)| g)
+                .collect();
+            assert_eq!(
+                loser.first(),
+                Some(&29),
+                "viewer {viewer}: op29 must be the loser's first state frame, got {loser:?}"
+            );
+            assert!(
+                !loser.contains(&39),
+                "viewer {viewer}: no 39 for the loser in the death burst, got {loser:?}"
+            );
+            // Control: the WINNER is still returned to Idle at the round end.
+            assert!(
+                death.iter().filter(|(v, _)| *v == viewer).filter_map(|(_, b)| state_frame(b)).any(
+                    |(obj, g, s)| obj == winner_obj && g == 39 && s == Some(ActorStateType::Idle as i64)
+                ),
+                "viewer {viewer}: the winner's round-end 39 Idle must still go out"
+            );
+        }
+
+        // The break: the loser stays Dead until the round reset re-opens round 2.
+        let mut loser_idle_before_reset = 0;
+        let mut loser_idle_at_reset = 0;
+        let step = Duration::from_millis(100);
+        for i in 1..=600u32 {
+            let out = m.on_tick(2, t + step * i);
+            let live_now = m.phase() == FlowState::StateTimeout;
+            for (_, b) in &out {
+                if let Some((obj, 39, Some(s))) = state_frame(b) {
+                    if obj == loser_obj && s == ActorStateType::Idle as i64 {
+                        if live_now {
+                            loser_idle_at_reset += 1;
+                        } else {
+                            loser_idle_before_reset += 1;
+                        }
+                    }
+                }
+            }
+            if live_now {
+                break;
+            }
+        }
+        assert_eq!(m.phase(), FlowState::StateTimeout, "round 2 must re-open");
+        assert_eq!(loser_idle_before_reset, 0, "the loser must not be revived during the break");
+        assert_eq!(loser_idle_at_reset, 2, "the round reset revives the loser for both viewers");
+    }
+
     /// **Report #24, cross-PR guard — the inter-round op65 names the opponent's REAL
     /// stats at propId 5, not the placeholder.**
     ///

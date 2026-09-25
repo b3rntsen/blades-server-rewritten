@@ -1508,8 +1508,9 @@ pub(super) fn resolve_ability_cast(
     // Abilities that ship no `_channelDuration` (e.g. `4be1d681…`) send 0.0. See the
     // note on `messages::player_channeling_state_change`: the float's exact retail
     // semantics are NOT pinned by the captures (the captured values are not the shipped
-    // `_channelDuration`), and the unmodelled propId-7 blob is deliberately omitted
-    // rather than fabricated.
+    // `_channelDuration`). propId 7 is the caster's state history with Channeling as
+    // its newest entry; without it the client's `Deserialize` throws and the frame is
+    // dropped (12-D1).
     //
     // op53 is for CHANNELLED casts only — a maneuver never gets one. Measured over
     // 60 decrypted sessions, scanning every coalesced `0xBE` rather than one message
@@ -1588,13 +1589,24 @@ pub(super) fn resolve_ability_cast(
                 // The wire float stays `_channelDuration` (0.0 when absent), exactly
                 // as before — only WHETHER the frame is sent has changed.
                 let channel_secs = r.channel_duration().unwrap_or(0.0);
+                // How long the client holds Channeling: an `AbilityChannel` step's
+                // `_duration` is `_channelDuration` (`AbilityChannel$$Update@0x1e8f8a8`);
+                // Frostbite and Consuming Inferno channel for `_channelMaxLength`
+                // (combat-spec 06 §1.2, §3.1-3.2).
+                let pose_secs = if channel_secs > 0.0 {
+                    channel_secs
+                } else {
+                    r.get(super::gamedata::AbilityField::ChannelMaxLength).unwrap_or(0.0)
+                };
+                let state_blob = combat.fighters[sender]
+                    .begin_channel_pose(now + Duration::from_secs_f32(pose_secs.max(0.0)));
                 messages::player_channeling_state_change(
                     combat.fighters[sender].net_object_id,
                     combat.fighters[sender].packed_stats(),
                     combat.fighters[target_slot].packed_stats(),
                     channel_secs,
                     &ea.ability_uuid,
-                    None, // propId 7: unmodelled in the corpus — omitted, never invented
+                    &state_blob,
                 )
             })
     };
@@ -2451,6 +2463,16 @@ fn apply_shipped_effects(
                 "combat: slot {target_slot} skill cooldowns +{secs:.2}s on {} active skill(s) via {ability_uuid}",
                 abilities.len(),
             );
+            // Tell the victim's client. `PvpPlayerActor$$ModifyCooldowns@0x1a32ad0` is
+            // a no-op, so op83 → `Actor$$ForceModifyCooldowns@0x1c5a0dc` is the only way
+            // its HUD learns of the delay; without it the icons stayed ready and every
+            // tap hit the cooldown gate in silence (07-D1 / 13-D3, #227). Retail: all 63
+            // captured op83 frames go to the harried player, name that player's own
+            // avatar, and carry exactly the rank's `_cooldownIncrease`.
+            out.push((
+                target_slot,
+                messages::modify_ability_cooldowns(combat.fighters[target_slot].net_object_id, secs),
+            ));
         }
     }
 
@@ -2994,6 +3016,16 @@ fn emit_damage(
             "combat: slot {target_slot} dodge cut {:.1}s off its cooldowns",
             neg.restore_cooldown_secs
         );
+        // Focusing Dodge's refund reaches the dodger's HUD only as op83 with a negative
+        // amount: `AbilityDoFocusingDodge$$OnDodge@0x1e95050` calls `ModifyCooldowns`,
+        // which the PvP player actor ignores (`@0x1a32ad0`) (04-DG8 / 07-D8).
+        out.push((
+            target_slot,
+            messages::modify_ability_cooldowns(
+                combat.fighters[target_slot].net_object_id,
+                -neg.restore_cooldown_secs,
+            ),
+        ));
     }
 
     if neg.negated {
@@ -4243,6 +4275,13 @@ fn on_round_ended(
             .get(loser)
             .map(|f| (f.packed_state_history(), f.time_in_state(now)))
             .unwrap_or_default();
+        // op29 carries the same Dead-tailed history the queued transition does, so
+        // drop that transition: drained, it would reach the client as a 39 Dead
+        // ahead of op29 and make op29 a no-op (`CheckShouldForceServerState@0x1792864`
+        // returns false once the indices agree), losing the kneel/ragdoll parameters.
+        if let Some(f) = combat.fighters.get_mut(loser) {
+            let _ = f.take_state_changes();
+        }
         Some(messages::player_dead(
             loser_obj,
             loser_stats,
@@ -4325,7 +4364,10 @@ fn on_round_ended(
         // confining it to round start — 856 gmid-39 frames sit among the 277 gmid-79
         // state changes in session 615 — so an Idle inside the walk is the shape the
         // client already expects.
-        combat.reset_actor_animations(now);
+        //
+        // The LOSER of a death is exempt: it stays Dead, and its op29 below must be the
+        // first state frame the clients see for it (12-D5).
+        combat.reset_actor_animations_except(now, ended_by_death.then_some(loser));
         out.extend(drain_state_changes(combat, now));
         info!(
             "combat: round-ending {} (round {}) → winner slot {winner} (obj {winner_obj}), loser slot {loser} \
@@ -11688,5 +11730,260 @@ mod status_removals_tests {
         assert_eq!(op51(&mid, StatusEffectType::Blind, false), 0, "refreshed: still Blind");
         let end = emit_status_removals(&mut c, at(now, secs + 1.1));
         assert_eq!(op51(&end, StatusEffectType::Blind, false), 2, "one remove at the refreshed end");
+    }
+}
+
+/// PR-01 of the combat-spec gap register: the op53 / op83 wire fixes (12-D1, 12-D2,
+/// M-harrying-op83, M-focusing-dodge-op83). Tracker #227 / #113. Expected values come
+/// from the spec chapters and the shipped ability table, never from the code under test.
+#[cfg(test)]
+mod op53_op83_wire_tests {
+    use super::*;
+    use super::super::loadout::starter;
+    use super::super::state::{
+        ActiveSide, EquippedAbility, Fighter, FlowState, MatchCombat, PendingHit,
+    };
+
+    const FIREBALL: &str = "d07a8d30-9a1c-49b0-866d-97a8aa1534cf";
+
+    fn live(now: Instant) -> MatchCombat {
+        let mut c = MatchCombat::new(2, 2, now);
+        for slot in 0..2 {
+            let obj = c.alloc_net_object_id();
+            c.fighters.push(Fighter::new(slot, obj, starter(), now));
+        }
+        c.match_net_object_id = c.alloc_net_object_id();
+        c.phase = FlowState::StateTimeout;
+        c.round = 1;
+        c
+    }
+
+    fn uuid_of(editor: &str) -> &'static str {
+        super::super::gamedata::ABILITIES
+            .iter()
+            .find(|a| a.editor_name == editor)
+            .map(|a| a.uuid)
+            .unwrap_or_else(|| panic!("{editor} missing from the shipped table"))
+    }
+
+    /// Cast `uuid` (rank 1) from slot 0 at slot 1 through the real op37 path.
+    fn cast(c: &mut MatchCombat, uuid: &str, now: Instant) -> Vec<(usize, Vec<u8>)> {
+        let tag = super::super::loadout::ability_tag_for_template(uuid);
+        c.fighters[0].loadout.abilities.push(EquippedAbility {
+            instance_uuid: uuid.to_string(),
+            level: 1,
+            tag,
+        });
+        let frame = messages::request_execute_ability(c.fighters[0].net_object_id, uuid);
+        let ea = input::parse_execute_ability(&frame).expect("synthesised op37 must parse");
+        resolve_ability_cast(c, 0, 1, &frame, &ea, now)
+    }
+
+    fn nd(f: &[u8]) -> arena_proto::NetDataParse {
+        arena_proto::parse_netdata(&f[2..])
+    }
+
+    /// `(viewer, propId 0, propId 4 float)` of every op83 in `out`.
+    fn op83s(out: &[(usize, Vec<u8>)]) -> Vec<(usize, i64, f32)> {
+        out.iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(83))
+            .map(|(v, f)| {
+                let n = nd(f);
+                let secs = match n.props.get(&4) {
+                    Some(arena_proto::NetDataValue::Float(x)) => *x,
+                    other => panic!("op83 propId 4 must be a float, got {other:?}"),
+                };
+                (*v, n.int(0).unwrap_or(-1), secs)
+            })
+            .collect()
+    }
+
+    /// Viewers of every 39 Idle naming `obj`.
+    fn idle_39_viewers(out: &[(usize, Vec<u8>)], obj: i32) -> Vec<usize> {
+        out.iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(39))
+            .filter(|(_, f)| {
+                let n = nd(f);
+                n.int(0) == Some(obj as i64) && n.int(6) == Some(ActorStateType::Idle as i64)
+            })
+            .map(|(v, _)| *v)
+            .collect()
+    }
+
+    fn tick(c: &mut MatchCombat, t: Instant) -> Vec<(usize, Vec<u8>)> {
+        let mut out = on_tick(c, t, false);
+        out.extend(drain_state_changes(c, t));
+        out
+    }
+
+    /// 12-D1: a Fireball's op53 goes to both viewers carrying propId 7, a history ring
+    /// whose newest entry is Channeling (4) and which is the caster's live ring.
+    #[test]
+    fn a_spell_cast_op53_carries_the_casters_channeling_history() {
+        let now = Instant::now();
+        let mut c = live(now);
+        let out = cast(&mut c, FIREBALL, now);
+        let op53: Vec<_> = out
+            .iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(53))
+            .collect();
+        assert_eq!(op53.len(), 2, "op53 to both viewers");
+        for (_, f) in op53 {
+            match nd(f).props.get(&7) {
+                Some(arena_proto::NetDataValue::ByteArray(b)) => {
+                    assert!(b.len() >= 3);
+                    assert_eq!(b[0] as usize, b.len() - 3, "count matches the entries");
+                    assert_eq!(b.last().copied(), Some(4), "tail = Channeling");
+                    assert_eq!(b.as_slice(), c.fighters[0].packed_state_history().as_slice(), "the caster's own ring");
+                }
+                other => panic!("op53 propId 7 missing or wrong type: {other:?}"),
+            }
+        }
+        // Control: the logical state is untouched (op58-style presentational record).
+        assert_eq!(c.fighters[0].actor_state(), ActorStateType::Idle);
+    }
+
+    /// 12-D2: the opponent's client leaves Channeling only on a state message
+    /// (`PvpOpponentActor$$TryChangeState@0x1964cc8` refuses local changes), so at the
+    /// channel's end — Fireball's shipped `_channelDuration` 0.9 s (06 §1.2) — both
+    /// viewers get a 39 Idle for the caster, and not before.
+    #[test]
+    fn a_channel_end_sends_idle_for_the_caster_to_both_viewers() {
+        let r = super::super::gamedata::ability_rank_clamped(FIREBALL, 1).unwrap();
+        assert_eq!(r.channel_duration(), Some(0.9), "spec 06: Fireball channels 0.9 s");
+        let now = Instant::now();
+        let mut c = live(now);
+        let caster = c.fighters[0].net_object_id;
+        let _ = cast(&mut c, FIREBALL, now);
+        let _ = drain_state_changes(&mut c, now);
+
+        let early = tick(&mut c, now + Duration::from_millis(850));
+        assert!(idle_39_viewers(&early, caster).is_empty(), "no Idle before the channel ends");
+
+        let end = tick(&mut c, now + Duration::from_millis(910));
+        let mut viewers = idle_39_viewers(&end, caster);
+        viewers.sort();
+        assert_eq!(viewers, vec![0, 1], "one 39 Idle per viewer at the channel's end");
+        let later = tick(&mut c, now + Duration::from_millis(1500));
+        assert!(idle_39_viewers(&later, caster).is_empty(), "sent once");
+    }
+
+    /// 12-D2 for the two channels without a windup: Frostbite holds Channeling for its
+    /// `_channelMaxLength` 3 s (06 §3.1).
+    #[test]
+    fn a_frostbite_channel_ends_at_its_channel_max_length() {
+        let frostbite = uuid_of("Frostbite");
+        let r = super::super::gamedata::ability_rank_clamped(frostbite, 1).unwrap();
+        assert_eq!(
+            r.get(super::super::gamedata::AbilityField::ChannelMaxLength),
+            Some(3.0),
+            "spec 06 §3.1: Frostbite channels for 3 s"
+        );
+        let now = Instant::now();
+        let mut c = live(now);
+        let caster = c.fighters[0].net_object_id;
+        let _ = cast(&mut c, frostbite, now);
+        let _ = drain_state_changes(&mut c, now);
+        c.fighters[0].reconcile_scheduled_states(now + Duration::from_millis(2900));
+        assert!(idle_39_viewers(&drain_state_changes(&mut c, now), caster).is_empty());
+        c.fighters[0].reconcile_scheduled_states(now + Duration::from_millis(3010));
+        assert_eq!(idle_39_viewers(&drain_state_changes(&mut c, now), caster).len(), 2);
+    }
+
+    /// Control for 12-D2: a later state change already took the client out of
+    /// Channeling, so the channel's end must not add a spurious Idle on top.
+    #[test]
+    fn a_state_change_after_op53_cancels_the_channel_end_idle() {
+        let now = Instant::now();
+        let mut c = live(now);
+        let caster = c.fighters[0].net_object_id;
+        let _ = cast(&mut c, FIREBALL, now);
+        let _ = drain_state_changes(&mut c, now);
+        let t = now + Duration::from_millis(100);
+        c.fighters[0].apply_stagger_for(t, 3.0);
+        let _ = drain_state_changes(&mut c, t);
+        c.fighters[0].reconcile_scheduled_states(now + Duration::from_millis(1000));
+        let out = drain_state_changes(&mut c, now + Duration::from_millis(1000));
+        assert!(idle_39_viewers(&out, caster).is_empty(), "stagger ended the pose: {out:?}");
+        assert_eq!(c.fighters[0].actor_state(), ActorStateType::Staggered);
+    }
+
+    /// M-harrying-op83 (07-D1, 13-D3): the victim's client learns of the delay only
+    /// from op83. Expected: exactly one op83, to the victim alone, naming the victim's
+    /// avatar and carrying rank 1's shipped `_cooldownIncrease` 2.5 s — a value the
+    /// retail captures carry.
+    #[test]
+    fn a_harrying_bash_sends_op83_to_the_victim() {
+        let harrying = uuid_of("HarryingBash");
+        let r = super::super::gamedata::ability_rank_clamped(harrying, 1).unwrap();
+        assert_eq!(r.get(super::super::gamedata::AbilityField::CooldownIncrease), Some(2.5));
+        let now = Instant::now();
+        let mut c = live(now);
+        let victim = c.fighters[1].net_object_id as i64;
+        let mut out = cast(&mut c, harrying, now);
+        for ms in (10..=2000).step_by(10) {
+            out.extend(tick(&mut c, now + Duration::from_millis(ms)));
+        }
+        assert_eq!(op83s(&out), vec![(1, victim, 2.5)], "one op83, victim only, +2.5 s");
+    }
+
+    /// Control: a bash that does not harry sends no op83.
+    #[test]
+    fn a_shield_bash_sends_no_op83() {
+        let now = Instant::now();
+        let mut c = live(now);
+        let mut out = cast(&mut c, uuid_of("ShieldBash"), now);
+        for ms in (10..=2000).step_by(10) {
+            out.extend(tick(&mut c, now + Duration::from_millis(ms)));
+        }
+        assert!(
+            out.iter().any(|(_, f)| messages::user_message_gmid(f) == Some(58)),
+            "fixture: the bash must be cast"
+        );
+        assert!(op83s(&out).is_empty());
+    }
+
+    fn swing_into(c: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
+        c.pending_hits.push(PendingHit {
+            sender: 1,
+            target: 0,
+            side: ActiveSide::Right,
+            swing_factor: 1.0,
+            combo_count: 0,
+            due: now,
+        });
+        land_due_hits(c, now + Duration::from_millis(1))
+    }
+
+    /// M-focusing-dodge-op83 (04-DG8, 07-D8): a connected Focusing Dodge's refund
+    /// reaches the dodger only as op83 with a NEGATIVE amount. Its magnitude here is the
+    /// server's current flat payout, rank 1's shipped `_maximumCooldownReduction`.
+    #[test]
+    fn a_connected_focusing_dodge_sends_a_negative_op83_to_the_dodger() {
+        let focusing = uuid_of("FocusingDodge");
+        let cut = super::super::gamedata::ability_rank_clamped(focusing, 1)
+            .and_then(|r| r.get(super::super::gamedata::AbilityField::MaximumCooldownReduction))
+            .expect("Focusing Dodge ships a cooldown reduction");
+        assert!(cut > 0.0);
+        let now = Instant::now();
+        let mut c = live(now);
+        let dodger = c.fighters[0].net_object_id as i64;
+        let _ = apply_shipped_effects(&mut c, 0, 1, focusing, 1, 0.0, 0, false, now);
+        let out = swing_into(&mut c, now);
+        assert_eq!(op83s(&out), vec![(0, dodger, -cut)], "one op83 to the dodger, -cut");
+    }
+
+    /// Control: a plain Dodging Strike ships no cooldown reduction and sends no op83.
+    #[test]
+    fn a_connected_dodging_strike_sends_no_op83() {
+        let now = Instant::now();
+        let mut c = live(now);
+        let _ = apply_shipped_effects(&mut c, 0, 1, uuid_of("DodgingStrike"), 1, 0.0, 0, false, now);
+        let out = swing_into(&mut c, now);
+        assert!(
+            out.iter().any(|(_, f)| matches!(messages::user_message_gmid(f), Some(50) | Some(66))),
+            "fixture: the swing must resolve"
+        );
+        assert!(op83s(&out).is_empty());
     }
 }
