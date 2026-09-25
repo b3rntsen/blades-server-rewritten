@@ -94,6 +94,16 @@ static FLOOR_PILE_SIZES_RAW: &str = include_str!("../floor_pile_sizes.json");
 // one. A spawn absent from this file keeps exactly the tables it had.
 static SPAWN_LOOT_TABLES_RAW: &str = include_str!("../spawn_loot_tables.json");
 
+// The same floor-loot results, banded by the ENEMY LEVEL of the dungeon they were
+// rolled for. `interactable_loot.json` pools every level, so a level-2 pile could
+// draw what retail only ever rolled at level 80: every new player got an Ebony
+// Ingot in the tutorial (tracker #8), where retail rolled that table 954 times at
+// levels 1-10 and never once produced one (its first is at level 42).
+//
+// Only tables with enough observations for two bands are here; the rest are
+// still drawn pooled. Built by `script/mine_interactable_loot_by_level.py`.
+static INTERACTABLE_LOOT_BY_LEVEL_RAW: &str = include_str!("../interactable_loot_by_level.json");
+
 #[derive(Deserialize)]
 struct ChestTierCorpus {
     chests: HashMap<Uuid, ChestSpawnDefinition>,
@@ -171,6 +181,30 @@ fn tables_for_spawn(spawn_id: &Uuid, from_interactable: &[Uuid]) -> Vec<Uuid> {
     out
 }
 
+fn interactable_loot_by_level() -> &'static serde_json::Value {
+    static TABLE: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        // Malformed degrades to "no level-keyed tables": every table is drawn
+        // pooled, which is the behaviour that preceded this file.
+        serde_json::from_str(INTERACTABLE_LOOT_BY_LEVEL_RAW)
+            .unwrap_or_else(|_| serde_json::json!({ "tables": {} }))
+    })
+}
+
+/// The results one floor table draws from at `enemy_level`: its level band when
+/// retail was observed often enough to band it, otherwise the pooled table.
+fn interactable_table_results(table_id: &Uuid, enemy_level: i64) -> Option<&'static Vec<serde_json::Value>> {
+    let key = table_id.to_string();
+    if let Some(entry) = interactable_loot_by_level()["tables"].get(&key) {
+        return enemy_table_results(entry, enemy_level);
+    }
+    interactable_loot()
+        .get("tables")
+        .and_then(|t| t.get(&key))
+        .and_then(|e| e.get("results"))
+        .and_then(|r| r.as_array())
+}
+
 fn interactable_loot() -> &'static serde_json::Value {
     static TABLE: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
     TABLE.get_or_init(|| {
@@ -212,19 +246,18 @@ fn loot_seed(dungeon_uuid: &Uuid, spawn_id: &Uuid, table_id: &Uuid, result_index
 ///
 /// The empty result is one of the drawn outcomes (68,081 of them), so a barrel
 /// that gives nothing stays as common as retail made it.
+///
+/// `enemy_level` picks the level band where the table has one (see
+/// `INTERACTABLE_LOOT_BY_LEVEL_RAW`); the seed does not depend on it.
 fn roll_loot_table(
     dungeon_uuid: &Uuid,
     spawn_id: &Uuid,
     table_id: &Uuid,
     result_index: usize,
+    enemy_level: i64,
 ) -> LootTableResult {
     let mut out = LootTableResult::default();
-    let Some(results) = interactable_loot()
-        .get("tables")
-        .and_then(|t| t.get(table_id.to_string()))
-        .and_then(|e| e.get("results"))
-        .and_then(|r| r.as_array())
-    else {
+    let Some(results) = interactable_table_results(table_id, enemy_level) else {
         // A table we never observed stays empty, exactly as before.
         return out;
     };
@@ -380,6 +413,8 @@ fn draw_weighted<'a>(rng: &mut LootRng, options: &'a [serde_json::Value]) -> Opt
 }
 
 /// The results to draw from for one table at one enemy level.
+///
+/// Shared by enemy loot and the level-banded floor loot, which use the same shape.
 ///
 /// `levelKeyed` is measured, not assumed, and only some tables carry it; for the
 /// rest `results` is pooled over every level and `byLevel` is null. The nearest
@@ -601,6 +636,7 @@ pub fn generate_for_dungeon(
                                         item_spawn_id,
                                         k,
                                         result_index,
+                                        enemy_level,
                                     ),
                                 )
                             })
@@ -723,7 +759,7 @@ mod interactable_loot_tests {
             let table_id: Uuid = tid.parse().unwrap();
             // several spawns, because one spawn may legitimately roll empty
             for s in 0..40u128 {
-                let got = roll_loot_table(&dungeon, &Uuid::from_u128(s), &table_id, 0);
+                let got = roll_loot_table(&dungeon, &Uuid::from_u128(s), &table_id, 0, 30);
                 checked += 1;
                 if !got.stackable_items.is_empty() {
                     produced += 1;
@@ -749,7 +785,7 @@ mod interactable_loot_tests {
         for tid in tables.keys() {
             let table_id: Uuid = tid.parse().unwrap();
             for s in 0..40u128 {
-                let got = roll_loot_table(&dungeon, &Uuid::from_u128(s), &table_id, 0);
+                let got = roll_loot_table(&dungeon, &Uuid::from_u128(s), &table_id, 0, 30);
                 total += 1;
                 if got.stackable_items.is_empty() && got.currencies.is_empty() {
                     empty += 1;
@@ -770,15 +806,15 @@ mod interactable_loot_tests {
         let tid: Uuid = tables.keys().next().unwrap().parse().unwrap();
         let d = Uuid::from_u128(7);
         let s = Uuid::from_u128(9);
-        let a = roll_loot_table(&d, &s, &tid, 0);
-        let b = roll_loot_table(&d, &s, &tid, 0);
+        let a = roll_loot_table(&d, &s, &tid, 0, 30);
+        let b = roll_loot_table(&d, &s, &tid, 0, 30);
         assert_eq!(a.stackable_items, b.stackable_items, "same barrel, different loot");
 
         // control: a DIFFERENT spawn should not be forced to match, or the
         // stability check above would hold trivially for everything.
         let mut differs = false;
         for other in 0..60u128 {
-            let c = roll_loot_table(&d, &Uuid::from_u128(other), &tid, 0);
+            let c = roll_loot_table(&d, &Uuid::from_u128(other), &tid, 0, 30);
             if c.stackable_items != a.stackable_items {
                 differs = true;
                 break;
@@ -808,7 +844,7 @@ mod interactable_loot_tests {
                 })
                 .collect();
             for s in 0..25u128 {
-                let got = roll_loot_table(&dungeon, &Uuid::from_u128(s), &table_id, 0);
+                let got = roll_loot_table(&dungeon, &Uuid::from_u128(s), &table_id, 0, 30);
                 for item in got.stackable_items.keys() {
                     assert!(
                         allowed.contains(&item.to_string()),
@@ -839,7 +875,7 @@ mod interactable_loot_tests {
         for tid in tables.keys() {
             let table_id: Uuid = tid.parse().unwrap();
             for s in 0..200u128 {
-                let got = roll_loot_table(&dungeon, &Uuid::from_u128(s), &table_id, 0);
+                let got = roll_loot_table(&dungeon, &Uuid::from_u128(s), &table_id, 0, 30);
                 let n = got.stackable_items.len();
                 biggest = biggest.max(n);
                 if n > 1 {
@@ -857,6 +893,112 @@ mod interactable_loot_tests {
         // Control: single-item results must still dominate, or we have swung too
         // far and made every barrel a jackpot.
         assert!(single > multi, "multi-item rolls ({multi}) outnumber single ({single})");
+    }
+}
+
+#[cfg(test)]
+mod floor_loot_level_tests {
+    use super::*;
+
+    const EBONY_INGOT: &str = "75112030-b248-49b0-9c70-0da8dea150d1";
+    /// The dungeon of the first story quest, 5ad30483 (the tutorial).
+    const TUTORIAL_DUNGEON: &str = "51470ac0-46eb-4790-8de1-d51d7c36908c";
+    /// The common materials table, and the tutorial pile that rolled Ebony.
+    const MATERIALS_TABLE: &str = "7ee92f4b-18e7-4d15-91c6-ed0436180b81";
+    const TUTORIAL_EBONY_PILE: &str = "a8e0681b-f6f3-4bfa-a38e-6ee7b8d4bbe8";
+
+    fn game_data() -> GameData {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+        let raw = std::fs::read_to_string(path).expect("read parsed.json");
+        serde_json::from_str(&raw).expect("parse game data")
+    }
+
+    fn ebony_piles(generated: &DungeonGeneratedData) -> Vec<Uuid> {
+        let ebony: Uuid = EBONY_INGOT.parse().unwrap();
+        let mut out: Vec<Uuid> = generated
+            .item_generated_data
+            .iter()
+            .filter(|(_, pile)| {
+                pile.iter().any(|r| {
+                    r.loot_table_loot
+                        .values()
+                        .any(|l| l.stackable_items.contains_key(&ebony))
+                })
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Tracker #8: every new player found an Ebony Ingot in the tutorial.
+    ///
+    /// The tutorial is generated at enemy level 2, and the pile `a8e0681b` drew
+    /// Ebony out of the materials table because that table was pooled over every
+    /// level. Both characters in the report have it in exactly that pile. Retail
+    /// rolled the materials table 954 times at levels 1-10 and produced no Ebony
+    /// at all; its lowest is level 42.
+    #[test]
+    fn the_tutorial_does_not_hand_a_level_two_player_ebony() {
+        let game_data = game_data();
+        let generated =
+            generate_for_dungeon(&game_data, &TUTORIAL_DUNGEON.parse().unwrap(), 2, 100)
+                .expect("the tutorial dungeon is in parsed.json");
+        assert!(
+            generated
+                .item_generated_data
+                .contains_key(&TUTORIAL_EBONY_PILE.parse().unwrap()),
+            "the pile from the report is still generated, so the test is looking at it"
+        );
+        assert_eq!(ebony_piles(&generated), Vec::<Uuid>::new(), "Ebony in a level-2 tutorial");
+    }
+
+    /// Not only the tutorial: no floor pile in any dungeon may roll Ebony below
+    /// level 31, the lowest level retail ever put it on a floor. The control is
+    /// the other end: at level 75 it must still be reachable somewhere, or the
+    /// banding has simply deleted Ebony and the first assertion is vacuous.
+    #[test]
+    fn floor_ebony_follows_the_level_retail_gave_it() {
+        let game_data = game_data();
+        let mut low = Vec::new();
+        let mut high = 0usize;
+        for dungeon in game_data.dungeons.keys() {
+            for level in [1, 2, 5, 10, 20] {
+                if let Some(g) = generate_for_dungeon(&game_data, dungeon, level, 100) {
+                    for pile in ebony_piles(&g) {
+                        low.push((*dungeon, level, pile));
+                    }
+                }
+            }
+            if let Some(g) = generate_for_dungeon(&game_data, dungeon, 75, 100) {
+                high += ebony_piles(&g).len();
+            }
+        }
+        assert!(low.is_empty(), "Ebony rolled on the floor below level 31: {low:?}");
+        assert!(high > 0, "no floor pile rolls Ebony even at level 75 -- the control failed");
+    }
+
+    /// The band is the level's, not the nearest pooled guess: the materials
+    /// table at level 2 draws only from results retail rolled at low level.
+    #[test]
+    fn a_banded_table_draws_from_its_level_band() {
+        let table: Uuid = MATERIALS_TABLE.parse().unwrap();
+        let low = interactable_table_results(&table, 2).expect("banded");
+        let pooled = interactable_loot()["tables"][MATERIALS_TABLE]["results"]
+            .as_array()
+            .expect("pooled");
+        assert!(!low.iter().any(|r| r.to_string().contains(EBONY_INGOT)));
+        assert!(
+            pooled.iter().any(|r| r.to_string().contains(EBONY_INGOT)),
+            "control: the pooled table does carry Ebony, which is the bug"
+        );
+        // A table too thin to band still draws pooled, as before.
+        let thin: Uuid = "b9240d3c-dffc-474b-a773-b7588bf9bb71".parse().unwrap();
+        assert!(interactable_loot_by_level()["tables"].get(thin.to_string()).is_none());
+        assert_eq!(
+            interactable_table_results(&thin, 2),
+            interactable_loot()["tables"][thin.to_string()]["results"].as_array()
+        );
     }
 }
 
@@ -1558,7 +1700,7 @@ mod spawn_table_tests {
             .loot_table_loot
             .get(&lumber)
             .expect("the interactable's own table is still rolled");
-        let direct = roll_loot_table(&dungeon, &spawn, &lumber, 0);
+        let direct = roll_loot_table(&dungeon, &spawn, &lumber, 0, 20);
         assert_eq!(
             serde_json::to_value(from_generation).unwrap(),
             serde_json::to_value(&direct).unwrap(),
