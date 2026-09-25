@@ -30,6 +30,9 @@ use uuid::Uuid;
 /// building construction and crafting, which retail priced from ONE asset.
 pub mod skip_time;
 
+/// Gem pricing for the MISSING part of a recipe's inputs (`gemsPayment: true`).
+pub mod missing_resources;
+
 use crate::user_data::{
     CompleteCharacter, CompleteInventory, CompleteWallet, InventoryChangeTracker, Item, WalletEntry,
 };

@@ -450,8 +450,10 @@ struct CreateCraftRequest {
     /// plain craft (which mints a new item).
     #[serde(default)]
     item_id: Option<Uuid>,
+    /// `true` when the player chose to spend gems on the inputs they are short of.
+    /// Honoured for an enchant (see [`charge_enchant_inputs`]); refusing it is what
+    /// restarted the client (#226).
     #[serde(default)]
-    #[allow(dead_code)]
     gems_payment: bool,
     #[serde(default)]
     #[allow(dead_code)]
@@ -549,6 +551,7 @@ async fn start_craft(
             &mut entry.wallet.0,
             &mut entry.inventory.0,
             &mut tracker,
+            req.gems_payment,
         )?;
         // The enchant is rolled HERE, once, and stored in the job's results;
         // `/finish` only collects what is stored, so re-requesting it cannot
@@ -905,9 +908,12 @@ fn charge_craft_speed_up(
 ///   material — the same mapping the craft speed-up uses) and NOTHING is debited
 ///   ([`blades_lib::economy::pay_inputs`] is all-or-nothing).
 ///
-/// `gemsPayment` (retail's "spend gems on the missing resources") is not honoured:
-/// the price of a missing resource in gems is not modelled yet, so a player who is
-/// short is refused rather than charged a guessed gem price.
+/// * `gems_payment` (retail's "spend gems on the missing resources") → what the player
+///   holds is used and only the shortfall is billed in gems, at the client's own
+///   price ([`blades_lib::economy::missing_resources`]); short of gems → `9001`/1 and
+///   nothing is debited. Refusing it outright — what this did before — sent the
+///   client a 400 for a purchase it had already priced and confirmed, and the client
+///   restarts on that (#226).
 fn charge_enchant_inputs(
     tempering_level: u64,
     recipe_id: Uuid,
@@ -915,6 +921,7 @@ fn charge_enchant_inputs(
     wallet: &mut CompleteWallet,
     inventory: &mut blades_lib::user_data::CompleteInventory,
     tracker: &mut InventoryChangeTracker,
+    gems_payment: bool,
 ) -> Result<Vec<(Uuid, u64)>, BladeApiError> {
     if tempering_level > 0 {
         return Ok(Vec::new());
@@ -936,8 +943,13 @@ fn charge_enchant_inputs(
     }
     let inputs: Vec<(Uuid, u64)> =
         recipe.inputs.iter().map(|i| (i.template_id, i.quantity)).collect();
-    blades_lib::economy::pay_inputs(&inputs, wallet, inventory, tracker)
-        .map_err(BladeApiError::from_economy)?;
+    if gems_payment {
+        blades_lib::economy::missing_resources::pay_inputs_with_gems(&inputs, wallet, inventory, tracker)
+            .map_err(BladeApiError::from_economy)?;
+    } else {
+        blades_lib::economy::pay_inputs(&inputs, wallet, inventory, tracker)
+            .map_err(BladeApiError::from_economy)?;
+    }
     Ok(inputs)
 }
 
@@ -3619,6 +3631,7 @@ mod tests {
             &mut wallet,
             &mut inv,
             &mut tracker,
+            false,
         )
         .expect("affordable");
 
@@ -3663,7 +3676,7 @@ mod tests {
         let mut inv = enchanter_inventory(item_id, madness_battleaxe(None), None);
         let before = (serde_json::to_value(&wallet).unwrap(), counts(&inv));
         let mut tracker = InventoryChangeTracker::default();
-        let err = charge_enchant_inputs(0, uuid(MAGICKA_DAMAGE_T10), deploy_enchanting(), &mut wallet, &mut inv, &mut tracker)
+        let err = charge_enchant_inputs(0, uuid(MAGICKA_DAMAGE_T10), deploy_enchanting(), &mut wallet, &mut inv, &mut tracker, false)
             .expect_err("one gold short");
         assert_eq!(err.to_string(), "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 1 }");
         assert_eq!((serde_json::to_value(&wallet).unwrap(), counts(&inv)), before);
@@ -3675,7 +3688,7 @@ mod tests {
         let mut inv = enchanter_inventory(item_id, madness_battleaxe(None), Some(MAT_4));
         let before = (serde_json::to_value(&wallet).unwrap(), counts(&inv));
         let mut tracker = InventoryChangeTracker::default();
-        let err = charge_enchant_inputs(0, uuid(MAGICKA_DAMAGE_T10), deploy_enchanting(), &mut wallet, &mut inv, &mut tracker)
+        let err = charge_enchant_inputs(0, uuid(MAGICKA_DAMAGE_T10), deploy_enchanting(), &mut wallet, &mut inv, &mut tracker, false)
             .expect_err("one material short");
         assert_eq!(err.to_string(), "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 4 }");
         assert_eq!((serde_json::to_value(&wallet).unwrap(), counts(&inv)), before);
@@ -3684,9 +3697,146 @@ mod tests {
         // Control: exactly the price is enough — the refusal above is the price.
         let mut wallet = purse(RETAIL_MAGICKA_T10_GOLD);
         let mut inv = enchanter_inventory(item_id, madness_battleaxe(None), None);
-        charge_enchant_inputs(0, uuid(MAGICKA_DAMAGE_T10), deploy_enchanting(), &mut wallet, &mut inv, &mut InventoryChangeTracker::default())
+        charge_enchant_inputs(0, uuid(MAGICKA_DAMAGE_T10), deploy_enchanting(), &mut wallet, &mut inv, &mut InventoryChangeTracker::default(), false)
             .expect("exactly affordable");
         assert_eq!(wallet.balance(GOLD), 0);
+    }
+
+    // ── #226: `gemsPayment: true` — spend gems on the missing inputs ──────────
+    //
+    // The client restarted after every gem-paid enchant that was short of a
+    // material: the server answered 400 9001/4 (prod, 2026-09-25 20:05:58 and
+    // 20:27:43). Retail answered 200, used what the player held and billed the
+    // shortfall in gems. The two retail gem-paid starts below are replayed from
+    // the 2026-06-07 snapshot, balances and stacks exactly as captured.
+
+    /// `Enchant.Recipe.ShieldStaminaDamageT10`: 35 000 gold, 82 Honeycomb, 1
+    /// Legendary + 2 Elder + 4 Grand soul gems.
+    const SHIELD_STAMINA_T10: &str = "a4dfdf4f-cf18-4be5-b706-91aadb0c1bea";
+    const HONEYCOMB: &str = "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50";
+    /// `Enchant.Recipe.FrostDamageT10` — the reporter's case: 99 Frost Salts.
+    const FROST_DAMAGE_T10: &str = "441ac895-b30f-46c0-9346-bd77bd267f6d";
+    const FROST_SALTS: &str = "05b4dd6b-796f-4088-a772-0e33ea3db976";
+
+    fn yaskrava(gold: u64, gems: u64, stacks: &[(&str, u64)]) -> (CompleteWallet, CompleteInventory) {
+        let mut w = CompleteWallet::default();
+        w.credit(GOLD, gold);
+        w.credit(GEMS, gems);
+        let mut inv = enchanter_inventory(Uuid::new_v4(), madness_battleaxe(None), None);
+        inv.backpack.stackable_items = Default::default();
+        for (t, n) in stacks {
+            inv.backpack.stackable_items.add(uuid(t), *n);
+        }
+        (w, inv)
+    }
+
+    /// The `inventory` + `wallet` a start answers with, as retail would list them.
+    fn diff_of(inv: &CompleteInventory, tracker: &InventoryChangeTracker) -> (Vec<(String, u64)>, Vec<String>) {
+        let diff = serde_json::to_value(inv.generate_client_update(tracker)).unwrap();
+        let bp = &diff["backpack"];
+        let mut listed: Vec<(String, u64)> = bp["stackableItems"]
+            .as_array()
+            .map(|a| a.iter().map(|s| (s["itemTemplateId"].as_str().unwrap().to_string(), s["count"].as_u64().unwrap())).collect())
+            .unwrap_or_default();
+        listed.sort();
+        let mut removed: Vec<String> = bp["removedStackableItems"]
+            .as_array()
+            .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect())
+            .unwrap_or_default();
+        removed.sort();
+        (listed, removed)
+    }
+
+    fn sorted(pairs: &[(&str, u64)]) -> Vec<(String, u64)> {
+        let mut v: Vec<_> = pairs.iter().map(|(t, n)| (t.to_string(), *n)).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn a_gem_paid_enchant_replays_retail_capture_59598() {
+        // Before: gold 26 533 (8 467 short), gems 14 897 (the 59596 finish).
+        let (mut w, mut inv) =
+            yaskrava(26_533, 14_897, &[(MAT_4, 8), (MAT_2, 5_013), (MAT_1, 1_297), (HONEYCOMB, 7_111)]);
+        let mut tracker = InventoryChangeTracker::default();
+        charge_enchant_inputs(0, uuid(SHIELD_STAMINA_T10), deploy_enchanting(), &mut w, &mut inv, &mut tracker, true)
+            .expect("retail answered 200");
+        // Retail's response: gold 0, gems 14 769, and these four stacks.
+        assert_eq!((w.balance(GOLD), w.balance(GEMS)), (0, 14_769));
+        let (listed, removed) = diff_of(&inv, &tracker);
+        assert_eq!(listed, sorted(&[(MAT_4, 4), (MAT_2, 5_011), (MAT_1, 1_296), (HONEYCOMB, 7_029)]));
+        assert!(removed.is_empty());
+        // Retail listed gold at 0 rather than dropping it; so does our wallet.
+        let wire = serde_json::to_value(&w).unwrap();
+        assert!(wire.as_array().unwrap().iter().any(|e| e["currencyId"] == GOLD.to_string() && e["balance"] == 0), "{wire}");
+    }
+
+    #[test]
+    fn a_gem_paid_enchant_replays_retail_capture_59601() {
+        // Before: gold 0 (35 000 short), gems 14 739 (the 59600 finish), 4 Grand soul gems.
+        let (mut w, mut inv) =
+            yaskrava(0, 14_739, &[(MAT_4, 4), (MAT_2, 5_011), (MAT_1, 1_296), (HONEYCOMB, 7_029)]);
+        let mut tracker = InventoryChangeTracker::default();
+        charge_enchant_inputs(0, uuid(SHIELD_STAMINA_T10), deploy_enchanting(), &mut w, &mut inv, &mut tracker, true)
+            .expect("retail answered 200");
+        assert_eq!((w.balance(GOLD), w.balance(GEMS)), (0, 14_214));
+        let (listed, removed) = diff_of(&inv, &tracker);
+        assert_eq!(listed, sorted(&[(MAT_2, 5_009), (MAT_1, 1_295), (HONEYCOMB, 6_947)]));
+        assert_eq!(removed, vec![MAT_4.to_string()], "retail: removedStackableItems [68d7941e]");
+    }
+
+    /// The reporter's case: plenty of gold, SHORT of Frost Salts, `gemsPayment: true`.
+    /// Before the fix this was the 400 9001/4 the client restarted on.
+    #[test]
+    fn a_gem_paid_enchant_short_of_frost_salts_starts_and_buys_the_rest() {
+        let held = [(FROST_SALTS, 40), (MAT_1, 3), (MAT_2, 9), (MAT_4, 10)];
+        let (mut w, mut inv) = yaskrava(15_503_434, 61_303, &held);
+        let mut tracker = InventoryChangeTracker::default();
+        charge_enchant_inputs(0, uuid(FROST_DAMAGE_T10), deploy_enchanting(), &mut w, &mut inv, &mut tracker, true)
+            .expect("gems buy the 59 missing Frost Salts");
+        // 59 salts × 5 gems (IngredientValueTable), everything else from stock.
+        assert_eq!(w.balance(GEMS), 61_303 - 59 * 5);
+        assert_eq!(w.balance(GOLD), 15_503_434 - 42_000);
+        let (listed, removed) = diff_of(&inv, &tracker);
+        assert_eq!(listed, sorted(&[(MAT_1, 2), (MAT_2, 7), (MAT_4, 6)]));
+        assert_eq!(removed, vec![FROST_SALTS.to_string()], "the held salts are all used");
+
+        // Control: the same player WITHOUT gemsPayment is still refused, and it is
+        // the material refusal — so the case above is the shortfall path.
+        let (mut w, mut inv) = yaskrava(15_503_434, 61_303, &held);
+        let err = charge_enchant_inputs(0, uuid(FROST_DAMAGE_T10), deploy_enchanting(), &mut w, &mut inv, &mut InventoryChangeTracker::default(), false)
+            .expect_err("short of salts, no gems offered");
+        assert_eq!(err.to_string(), "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 4 }");
+        assert_eq!(w.balance(GEMS), 61_303);
+    }
+
+    #[test]
+    fn a_gem_paid_enchant_without_the_gems_is_refused_and_nothing_moves() {
+        let held = [(FROST_SALTS, 40), (MAT_1, 3), (MAT_2, 9), (MAT_4, 10)];
+        let (mut w, mut inv) = yaskrava(100_000, 59 * 5 - 1, &held);
+        let before = (serde_json::to_value(&w).unwrap(), counts(&inv));
+        let mut tracker = InventoryChangeTracker::default();
+        let err = charge_enchant_inputs(0, uuid(FROST_DAMAGE_T10), deploy_enchanting(), &mut w, &mut inv, &mut tracker, true)
+            .expect_err("one gem short");
+        assert_eq!(err.to_string(), "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 1 }");
+        assert_eq!((serde_json::to_value(&w).unwrap(), counts(&inv)), before);
+        assert!(tracker.modified_backpack.stackable_items.is_empty());
+    }
+
+    /// `gemsPayment: true` with everything in hand costs no gems — identical to a
+    /// normal start (retail's client sends the flag only when something is short,
+    /// but a stale client view must not be billed for nothing).
+    #[test]
+    fn a_gem_paid_enchant_with_everything_held_charges_no_gems() {
+        for gems_payment in [false, true] {
+            let mut wallet = purse(50_000);
+            let mut inv = enchanter_inventory(Uuid::new_v4(), madness_battleaxe(None), None);
+            charge_enchant_inputs(0, uuid(MAGICKA_DAMAGE_T10), deploy_enchanting(), &mut wallet, &mut inv, &mut InventoryChangeTracker::default(), gems_payment)
+                .expect("affordable");
+            assert_eq!(wallet.balance(GEMS), 500, "gemsPayment={gems_payment}");
+            assert_eq!(wallet.balance(GOLD), 50_000 - RETAIL_MAGICKA_T10_GOLD);
+            assert_eq!(counts(&inv), stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)]));
+        }
     }
 
     #[test]
@@ -3697,7 +3847,7 @@ mod tests {
             let mut inv = enchanter_inventory(item_id, madness_battleaxe(None), None);
             let before = (serde_json::to_value(&wallet).unwrap(), counts(&inv));
             let mut tracker = InventoryChangeTracker::default();
-            let charged = charge_enchant_inputs(tempering_level, recipe, deploy_enchanting(), &mut wallet, &mut inv, &mut tracker)
+            let charged = charge_enchant_inputs(tempering_level, recipe, deploy_enchanting(), &mut wallet, &mut inv, &mut tracker, false)
                 .expect("never refused");
             assert!(charged.is_empty(), "temper {tempering_level} / {recipe}");
             assert_eq!((serde_json::to_value(&wallet).unwrap(), counts(&inv)), before);
@@ -3772,8 +3922,12 @@ mod tests {
         }
 
         async fn seed(conn: &mut AsyncPgConnection, gold: u64) -> Seeded {
+            seed_short(conn, gold, None).await
+        }
+
+        async fn seed_short(conn: &mut AsyncPgConnection, gold: u64, short_by_one: Option<&str>) -> Seeded {
             let (character_id, user_id, item_id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-            let inv = enchanter_inventory(item_id, madness_battleaxe(Some(2)), None);
+            let inv = enchanter_inventory(item_id, madness_battleaxe(Some(2)), short_by_one);
             diesel::sql_query(
                 "INSERT INTO characters (id, user_id, character, data, inventory, wallet, town, server_state) \
                  VALUES ($1, $2, $3::jsonb, '{}'::jsonb, $4::jsonb, $5::jsonb, NULL, '{}'::jsonb)",
@@ -3792,12 +3946,17 @@ mod tests {
         }
 
         fn request(item_id: Uuid, tempering_level: u64) -> CreateCraftRequest {
+            request_paying(item_id, tempering_level, false)
+        }
+
+        /// The body the client sends — retail's exact key set (captures 59598/59601).
+        fn request_paying(item_id: Uuid, tempering_level: u64, gems_payment: bool) -> CreateCraftRequest {
             serde_json::from_value(serde_json::json!({
                 "recipeId": MAGICKA_DAMAGE_T10,
                 "itemId": item_id,
                 "buildingId": "561e3e1f-d941-40e2-899d-d11f125cd9ef",
                 "temperingLevel": tempering_level,
-                "gemsPayment": false,
+                "gemsPayment": gems_payment,
                 "batchSize": 1
             }))
             .unwrap()
@@ -3884,6 +4043,49 @@ mod tests {
                 .await
                 .expect("exactly affordable");
             assert_eq!(gold_of(&stored(&mut conn, &s2).await), 0);
+        }
+
+        /// #226 end to end: a start short of one Grand soul gem with `gemsPayment:
+        /// true` answers 200, bills 16 gems (its IngredientValueTable price) and
+        /// leaves a job `/finish` can collect. Without the flag it is still the 400.
+        #[tokio::test]
+        async fn a_gem_paid_start_short_of_a_material_answers_200_and_bills_gems() {
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+
+            let refused = seed_short(&mut conn, 100_000, Some(MAT_4)).await;
+            let err = start_craft(&mut conn, &sd, rd, refused.user_id, refused.character_id, request(refused.item_id, 0))
+                .await
+                .err()
+                .expect("short, no gems offered");
+            assert_eq!(err.to_string(), "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 4 }");
+
+            let s = seed_short(&mut conn, 100_000, Some(MAT_4)).await;
+            let resp = start_craft(&mut conn, &sd, rd, s.user_id, s.character_id, request_paying(s.item_id, 0, true))
+                .await
+                .expect("gems buy the missing soul gem");
+            assert_eq!(resp.wallet.balance(GEMS), 500 - 16);
+            assert_eq!(resp.wallet.balance(GOLD), 100_000 - RETAIL_MAGICKA_T10_GOLD);
+            let inv = serde_json::to_value(&resp.inventory).unwrap();
+            let mut removed: Vec<&str> = inv["backpack"]["removedStackableItems"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap())
+                .collect();
+            removed.sort();
+            assert_eq!(removed, vec![MAT_4, MAT_1], "the 3 held Grand soul gems are used: {inv}");
+            assert_eq!(resp.craft["craftingTypeId"], "aaef180b-8ee7-474a-a7eb-0156aa5529ba", "{}", resp.craft);
+
+            let row = stored(&mut conn, &s).await;
+            assert_eq!(row.wallet.0.balance(GEMS), 500 - 16);
+            assert_eq!(row.server_state.0.craft_jobs.len(), 1);
+            let craft_id = row.server_state.0.craft_jobs[0].id;
+            collect_craft(&mut conn, &sd, rd, None, s.user_id, s.character_id, craft_id, false)
+                .await
+                .expect("the gem-paid job is collectable");
+            assert_eq!(stored(&mut conn, &s).await.wallet.0.balance(GEMS), 500 - 16, "finish bills nothing more");
         }
 
         #[tokio::test]
