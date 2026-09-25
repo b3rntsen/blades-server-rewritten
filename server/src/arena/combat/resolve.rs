@@ -1421,8 +1421,14 @@ pub(super) fn resolve_ability_cast(
     // for ANY spell with a magicka cost the perk could never fire. It was dead on
     // arrival, and both existing tests hand-built `CasterPerks { magicka_full: true }`
     // so neither could see it.
+    //
+    // "Full" is against the pool's FULL maximum, not the ravage-lowered ceiling:
+    // `BoundedPercent` reads the full `Maximum` (combat-spec ch. 11 §1.1), so
+    // Maximum Power is void while ravaged. This used to compare against the lowered
+    // `max_magicka` and override the ravage-aware `CasterPerks::of`, letting the perk
+    // fire at a ravaged ceiling.
     let magicka_full_at_cast =
-        combat.fighters[sender].magicka >= combat.fighters[sender].max_magicka;
+        super::perks::magicka_full_for_maximum_power(&combat.fighters[sender]);
 
     // Resource gate passed → commit: set cooldown and deduct the cost.
     combat
@@ -1601,30 +1607,41 @@ pub(super) fn resolve_ability_cast(
     // delivers it when the cast completes. Zero-delay abilities (maneuvers,
     // Frostbite, anything shipping no `channelDuration`) run inline exactly as
     // before, so this changes nothing for them.
-    // COMBAT FOCUS / WILLPOWER — resistance for as long as this cast is running.
-    // Granted at cast START, not at impact: the perks protect you *while* you are
-    // committed to the animation, which is precisely the window in which you cannot
-    // block. Both stack on a spell (one says "an ability", the other "a spell").
+    // COMBAT FOCUS / WILLPOWER — resistance while the caster is committed to the
+    // cast. Granted at cast START, not at impact.
+    //
+    // The two perks key off DIFFERENT actor states in the client:
+    //   * Combat Focus (`CombatFocusPerk$$GetResistanceBonus@0x1A5AA60`): the
+    //     `Maneuver` state, or the Reckless Fury status. NEVER a spell — spells run in
+    //     `Channeling`. It used to be granted on every cast, spells included.
+    //   * Willpower (`ConservationistPerk$$GetResistanceBonus@0x1A5D52C`): the
+    //     `Channeling` state, i.e. spells only.
+    // Combat Focus is read live off `maneuver_state_until` / Reckless Fury in
+    // `Fighter::transient_resistance_against`; Willpower still rides the
+    // transient list. The window is the same castingDelay + channel (>= 0.5 s)
+    // approximation of the state's length for both.
     {
-        let perks = &combat.fighters[sender].loadout.perks;
-        let is_spell = super::gamedata::ability(&ea.ability_uuid)
-            .map(|a| a.kind == super::gamedata::AbilityKind::Spell)
-            .unwrap_or(false);
-        let bonus =
-            perks.combat_focus + if is_spell { perks.conservationist } else { 0.0 };
-        if bonus > 0.0 {
-            let rank = super::gamedata::ability_rank_clamped(&ea.ability_uuid, level as u16);
-            let window = rank
-                .map(|r| {
-                    r.get(super::gamedata::AbilityField::CastingDelay).unwrap_or(0.0)
-                        + r.channel_duration().unwrap_or(0.0)
-                })
-                .unwrap_or(0.0)
-                .max(super::perks::ABILITY_USE_MIN_WINDOW_SECS);
-            let expires = now + Duration::from_secs_f32(window);
-            combat.fighters[sender]
-                .transient_all_resistance
-                .push((bonus, expires));
+        let kind = super::gamedata::ability(&ea.ability_uuid).map(|a| a.kind);
+        let window = super::gamedata::ability_rank_clamped(&ea.ability_uuid, level as u16)
+            .map(|r| {
+                r.get(super::gamedata::AbilityField::CastingDelay).unwrap_or(0.0)
+                    + r.channel_duration().unwrap_or(0.0)
+            })
+            .unwrap_or(0.0)
+            .max(super::perks::ABILITY_USE_MIN_WINDOW_SECS);
+        let expires = now + Duration::from_secs_f32(window);
+        let f = &mut combat.fighters[sender];
+        match kind {
+            Some(super::gamedata::AbilityKind::Maneuver) => {
+                f.maneuver_state_until = Some(f.maneuver_state_until.map_or(expires, |t| t.max(expires)));
+            }
+            Some(super::gamedata::AbilityKind::Spell) => {
+                let willpower = f.loadout.perks.conservationist;
+                if willpower > 0.0 {
+                    f.transient_all_resistance.push((willpower, expires));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1832,6 +1849,25 @@ fn apply_ability_impact(
         }
         AbilityTag::Maneuver => {
             let mut attacker_loadout = combat.fighters[sender].loadout.clone();
+            // METTLE applies to MANEUVERS — and only to the maneuver's own flat bonus.
+            // The client folds `1 + Σ EnhanceAbility` into
+            // `ManeuverParameters._effectivenessMultiplier` at `ExecuteAbility`, and
+            // the only damage consumers are `get_OneHandedMultiplier` /
+            // `get_TwoHandedMultiplier`, which `ResolveManeuverDamage@0x1BD2D88` hands
+            // to `DistributeBonusDamage@0x1A21844` as the grip factor on
+            // `_bonusDamage` (combat-spec ch. 07 §7). The weapon's base damage, the
+            // combo factor and mitigation are untouched — so it scales
+            // `bonusDamage × grip` here, not the resolved hit.
+            //
+            // It used to multiply the WHOLE post-mitigation hit (weapon + bonus):
+            // weapon 100, bonus 75, Mettle 0.45 gave 253.75 where the client gives
+            // 100 + 75 × 1.45 = 208.75.
+            let mettle = {
+                let f = &combat.fighters[sender];
+                f.loadout
+                    .perks
+                    .ability_multiplier(super::perks::fighter_health_is_critical(f))
+            };
             // §5 PIERCING. Both of these ratings are ALREADY consumed by the damage
             // pipeline — `armor_piercing_rating` is subtracted from the defender's armor
             // (`damage.rs`, the armor stage) and `elem_resist_piercing_rating` feeds
@@ -1872,7 +1908,10 @@ fn apply_ability_impact(
                 //   bashes/dodges 1.0 / 1.0
                 // Reckless Fury ships 0/0 because it is a buff that swings nothing.
                 attacker_loadout.maneuver_bonus_damage +=
-                    maneuver_bonus_damage(&r, !attacker_loadout.has_shield);
+                    maneuver_bonus_damage(&r, !attacker_loadout.has_shield) * mettle;
+                if mettle != 1.0 {
+                    debug!("combat: slot {sender} maneuver bonus scaled x{mettle:.2} by Mettle");
+                }
                 // Venom Strikes' `_poisonEffectIncrease` (0.08 → ×1.08 poison).
                 if let Some(inc) = r.get(super::gamedata::AbilityField::PoisonEffectIncrease) {
                     if inc > 0.0 {
@@ -1905,20 +1944,7 @@ fn apply_ability_impact(
             // `AbilityTag`), and `ShieldManeuver (11)` almost certainly belongs to
             // them — but 11 appears in **none** of the 168, so there is no measurement
             // behind it and it is deliberately not guessed here.
-            // METTLE applies to MANEUVERS — and only to maneuvers. A maneuver is
-            // resolved through `resolve_attack`, which takes a Loadout and no
-            // `CasterPerks`, so the perk had no way to reach it: it was being applied
-            // to spells (where the client applies nothing) and to nothing here (where
-            // the client applies it). Scale the resolved magnitude by
-            // `ability_multiplier`, which is the whole-ability effectiveness the
-            // client's `AbilityExecution._effectivenessMultiplier` expresses.
-            let mettle = {
-                let f = &combat.fighters[sender];
-                f.loadout
-                    .perks
-                    .ability_multiplier(super::perks::health_is_critical(f.health, f.max_health))
-            };
-            let mut resolved = RetailDamageModel.resolve_attack(
+            let resolved = RetailDamageModel.resolve_attack(
                 &attacker_loadout,
                 &combat.fighters[target_slot],
                 DamageSource::WeaponManeuver,
@@ -1927,13 +1953,6 @@ fn apply_ability_impact(
                 0,
                 now,
             );
-            if mettle != 1.0 {
-                for (_, v) in resolved.components.iter_mut() {
-                    *v *= mettle;
-                }
-                resolved.total *= mettle;
-                debug!("combat: slot {sender} maneuver scaled ×{mettle:.2} by Mettle");
-            }
             info!(
                 "combat: slot {sender} maneuver {} → weapon damage {:.1} (Middle)",
                 ability_uuid, resolved.total,
@@ -4384,7 +4403,10 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
             .iter()
             .any(|e| e.effect == StatusEffectType::BlockHealthRegen && now < e.expires_at);
         if !block_health && f.health < f.max_health && f.max_stamina > 0 {
-            let stamina_fraction = f.stamina as f32 / f.max_stamina as f32;
+            // `Stamina.BoundedPercent` — against the pool's FULL maximum, the same
+            // reading Maximum Power uses (ravage does not lower `Maximum`).
+            let stamina_fraction =
+                f.stamina as f32 / f.max_stamina.saturating_add(f.ravaged_stamina) as f32;
             let rate = f.loadout.perks.healing_surge_rate(stamina_fraction);
             // REGEN_TICK_INTERVAL is 1 s, so a per-second rate IS the per-tick
             // amount. Rounded, and not floored to a minimum of 1: an unperked

@@ -19,10 +19,13 @@ use super::gamedata::{self, AbilityField};
 use super::state::{DamageType, EquippedAbility};
 use super::tables::Weight;
 
-/// Fraction of MAX health at or below which health counts as "critical", gating
-/// [`PerkBonuses::mettle`]. Shipped as `combat_parameters.criticalHealthThreshold`
-/// = 35 (a percentage), so 0.35 here.
-pub const CRITICAL_HEALTH_THRESHOLD: f32 = 0.35;
+/// Fraction of the **un-multiplied** max health at or below which health counts as
+/// "critical", gating [`PerkBonuses::mettle`]. Shipped as
+/// `combat_parameters.criticalHealthThreshold` = 35 (a percentage), so 0.35 here.
+///
+/// The arena's ×3 health bar does NOT scale this window: see [`health_is_critical`].
+pub const CRITICAL_HEALTH_THRESHOLD: f32 =
+    super::gamedata::combat_params::CRITICAL_HEALTH_THRESHOLD / 100.0;
 
 /// Resolved perk bonuses for one fighter, computed once when the loadout is built.
 ///
@@ -47,10 +50,11 @@ pub struct PerkBonuses {
     /// `MaximumPower` — spells are this FRACTION more effective, but only when cast
     /// with magicka full. Ravage the caster's magicka and the perk is void.
     pub max_power: f32,
-    /// `Mettle` — abilities are this FRACTION more effective while health is at or
-    /// below [`CRITICAL_HEALTH_THRESHOLD`].
+    /// `Mettle` — a maneuver's flat bonus damage is this FRACTION larger while
+    /// health is critical (see [`health_is_critical`]).
     pub mettle: f32,
-    /// `CombatFocus` — added to Resistance against all damage while using an ability.
+    /// `CombatFocus` — added to Resistance against all damage while the fighter is
+    /// performing a MANEUVER or has Reckless Fury up. Never during a spell.
     pub combat_focus: f32,
     /// `Conservationist` ("Willpower") — added to Resistance against all damage
     /// while casting a spell.
@@ -62,7 +66,13 @@ pub struct PerkBonuses {
 }
 
 impl PerkBonuses {
-    /// Resolve every equipped perk into its bonus, at the rank the fighter has.
+    /// Resolve every perk in `abilities` into its bonus, at the rank given.
+    ///
+    /// For a real character the caller passes the LEARNED perks
+    /// ([`super::loadout`]'s `learned_perks`), not the six equip slots: the client
+    /// registers every learned perk (`LearnedAbilitiesHandler$$RegisterAbility`
+    /// @0x1A89724, iff `_abilityType == Perk`) and its ability menu has no perk slot
+    /// at all. Enemy-only perks (the three Atronach Powers) are skipped here too.
     ///
     /// `armor_set` is the outcome of the matched-set test the caller has already
     /// done over the four armour slots (see [`matched_armor_set`]); passing `false`
@@ -74,7 +84,7 @@ impl PerkBonuses {
             let Some(ability) = gamedata::ability(&a.instance_uuid) else {
                 continue;
             };
-            if ability.kind != gamedata::AbilityKind::Perk {
+            if ability.kind != gamedata::AbilityKind::Perk || ability.enemy_only {
                 continue;
             }
             // The rank the player actually owns. `ability_rank_clamped` pins a level
@@ -148,20 +158,20 @@ impl PerkBonuses {
 
     /// The Healing Surge rate at this stamina fraction.
     ///
-    /// The shipped description is *"Increases Health regeneration while Stamina is
-    /// high, by up to {0} per second"* — a ceiling ("up to") gated on a condition
-    /// ("while Stamina is high"), with neither the ramp nor the threshold shipped as
-    /// data. Modelled as a linear ramp from zero at
-    /// [`HEALING_SURGE_FLOOR`] to the full rate at full stamina, which is the
-    /// reading that satisfies both halves of the sentence. See the PR body: this is
-    /// the one perk whose SHAPE is an assumption rather than shipped data.
+    /// *"Increases Health regeneration while Stamina is high, by up to {0} per
+    /// second"*. The shape is read from the client, not assumed:
+    /// `HealingSurgePerk$$GetRegenerationBonus@0x1A7DFBC` returns
+    /// `_bonusValue × powf(Stamina.BoundedPercent, 7.0)` (`bl powf` at 0x1A7E06C
+    /// with `s1 = 7.0`) — a 7th-power curve with no floor. 100 % stamina pays 1.0×,
+    /// 90 % 0.48×, 75 % 0.13×, 50 % 0.008×.
+    ///
+    /// This replaces a linear ramp from 50 % that was a guess (it paid 0.50× at 75 %
+    /// stamina, nearly 4× the client).
     pub fn healing_surge_rate(&self, stamina_fraction: f32) -> f32 {
         if self.healing_surge <= 0.0 {
             return 0.0;
         }
-        let ramp = ((stamina_fraction - HEALING_SURGE_FLOOR) / (1.0 - HEALING_SURGE_FLOOR))
-            .clamp(0.0, 1.0);
-        self.healing_surge * ramp
+        self.healing_surge * stamina_fraction.clamp(0.0, 1.0).powi(7)
     }
 
     /// Multiplier on a spell's magnitude for this caster's state.
@@ -186,7 +196,12 @@ impl PerkBonuses {
         }
     }
 
-    /// Multiplier on a **maneuver's** magnitude — Mettle's actual scope.
+    /// Mettle's effectiveness multiplier for a **maneuver** — Mettle's actual scope.
+    ///
+    /// The client stores this as `ManeuverParameters._effectivenessMultiplier`, and
+    /// it multiplies only `_bonusDamage × grip` (`get_OneHandedMultiplier` /
+    /// `get_TwoHandedMultiplier` → `DistributeBonusDamage@0x1A21844`), never the
+    /// weapon's base damage. The caller applies it to the maneuver's flat bonus.
     ///
     /// Maximum Power is spell-only and never applies here.
     pub fn ability_multiplier(&self, health_critical: bool) -> f32 {
@@ -212,10 +227,6 @@ impl PerkBonuses {
 /// floor stands in for the attack animation, which is not shipped as data. It is an
 /// ASSUMPTION; see the PR body.
 pub const ABILITY_USE_MIN_WINDOW_SECS: f32 = 0.5;
-
-/// Stamina fraction below which Healing Surge contributes nothing. See
-/// [`PerkBonuses::healing_surge_rate`] — an assumption, not shipped data.
-pub const HEALING_SURGE_FLOOR: f32 = 0.5;
 
 /// `equipment_slot` codes for the four armour pieces Matching Set requires:
 /// 1 helmet, 3 armor, 4 gauntlets, 7 boots. Verified against all 254 shipped
@@ -318,8 +329,8 @@ impl<'a> CasterPerks<'a> {
             // the counter). Not measurable from captures — ravage is absent from the
             // wire entirely (docs/arena-ravage.md) — so this follows the owner's
             // reading, which the perk's own shipped text already agreed with.
-            magicka_full: f.magicka >= f.max_magicka.saturating_add(f.ravaged_magicka),
-            health_critical: health_is_critical(f.health, f.max_health),
+            magicka_full: magicka_full_for_maximum_power(f),
+            health_critical: fighter_health_is_critical(f),
             elem_resist_piercing: f.loadout.elem_resist_piercing,
             elem_resist_piercing_rating: f.loadout.elem_resist_piercing_rating,
             element_fortify: &f.loadout.element_fortify,
@@ -327,19 +338,61 @@ impl<'a> CasterPerks<'a> {
     }
 }
 
-/// Health at or below [`CRITICAL_HEALTH_THRESHOLD`] of maximum. Compared without
-/// dividing so a zero-max fighter cannot produce a NaN.
+/// Mettle's critical-health test, as the client computes it.
+///
+/// `Actor$$get_IsAtCriticalHealth@0x1C5C2BC`:
+/// `health.BoundedPercent × 100 ≤ criticalHealthThreshold / GetMultiplierForStat(Health)`.
+/// In the arena that multiplier is the PvP health multiplier
+/// (`PvpOpponentActor$$InitStats` → `SetMaximumHealthMultiplier`), i.e.
+/// [`ARENA_HEALTH_MULTIPLIER`](super::state::ARENA_HEALTH_MULTIPLIER). So
+/// "critical" is 35 % of the UN-multiplied maximum — ≈ 11.7 % of the tripled bar —
+/// not 35 % of the tripled bar, which opened Mettle's window at 3× the HP.
+///
+/// `max_health` is the pool's FULL maximum (the multiplied bar, ravage not
+/// subtracted), because `BoundedPercent` reads against the full `Maximum`.
+/// Compared without dividing by it so a zero-max fighter cannot produce a NaN.
 pub fn health_is_critical(health: u32, max_health: u32) -> bool {
-    max_health > 0 && (health as f32) <= max_health as f32 * CRITICAL_HEALTH_THRESHOLD
+    let multiplier = super::state::ARENA_HEALTH_MULTIPLIER.max(1) as f32;
+    max_health > 0
+        && (health as f32) * multiplier <= max_health as f32 * CRITICAL_HEALTH_THRESHOLD
+}
+
+/// [`health_is_critical`] for a fighter, against the pool's full maximum
+/// (`max_health + ravaged_health`).
+pub fn fighter_health_is_critical(f: &super::state::Fighter) -> bool {
+    health_is_critical(f.health, f.max_health.saturating_add(f.ravaged_health))
+}
+
+/// Maximum Power's condition: the magicka pool reads FULL.
+///
+/// `MaximumPowerPerk$$GetSpellBonus@0x1A22908` requires
+/// `Magicka.BoundedPercent ≥ 1.0`, and `BoundedPercent` is measured against the full
+/// `Maximum` while Ravage only raises `DestroyedPortion` and caps the value at
+/// `DamagedMaximum` (combat-spec ch. 11 §1.1, read). So a ravaged pool can never
+/// read full: the perk is void while ravaged.
+///
+/// This is the ONE place that condition lives. `resolve_ability_cast` used to
+/// compute its own `magicka >= max_magicka` against the ravage-LOWERED ceiling and
+/// override [`CasterPerks::of`], so the ravage-aware test here was dead for casts.
+pub fn magicka_full_for_maximum_power(f: &super::state::Fighter) -> bool {
+    f.magicka >= f.max_magicka.saturating_add(f.ravaged_magicka)
 }
 
 impl CasterPerks<'_> {
-    /// Magnitude multiplier for an ability of this kind, given the caster's state.
+    /// Magnitude multiplier on an ability's WHOLE base damage, given the caster's
+    /// state.
+    ///
+    /// Only Maximum Power scales a whole base, and only a spell's. Mettle is not
+    /// applied here: it scales a maneuver's flat `_bonusDamage × grip` alone
+    /// (combat-spec ch. 07 §7, D9), which `resolve.rs`'s maneuver arm folds into
+    /// `Loadout::maneuver_bonus_damage` before the hit resolves. Maneuvers do not
+    /// come through `resolve_ability` at all, so a non-spell here has no bonus term
+    /// for Mettle to scale.
     pub fn magnitude_multiplier(&self, is_spell: bool) -> f32 {
         if is_spell {
             self.perks.spell_multiplier(self.magicka_full, self.health_critical)
         } else {
-            self.perks.ability_multiplier(self.health_critical)
+            1.0
         }
     }
 }
@@ -438,17 +491,49 @@ mod tests {
         );
     }
 
+    /// `HealingSurgePerk$$GetRegenerationBonus@0x1A7DFBC`: `bonus × stamina^7`.
+    ///
+    /// Expected values are the client's curve evaluated by hand
+    /// (15.4 × 0.75^7 = 15.4 × 0.13348 = 2.0556; 15.4 × 0.5^7 = 15.4 / 128 = 0.1203),
+    /// not by calling the code under test.
     #[test]
-    fn healing_surge_ramps_with_stamina_and_is_zero_when_low() {
+    fn healing_surge_follows_the_clients_seventh_power_stamina_curve() {
         let p = PerkBonuses::resolve(&[perk(HEALING_SURGE, 8)], false);
         assert_eq!(p.healing_surge, 15.4);
         assert_eq!(p.healing_surge_rate(1.0), 15.4);
-        assert_eq!(p.healing_surge_rate(0.5), 0.0);
+        assert!((p.healing_surge_rate(0.75) - 2.0556).abs() < 1e-3);
+        // No floor: half stamina still pays a sliver (the old linear ramp paid 0 here
+        // and 7.7 at 75 %).
+        assert!((p.healing_surge_rate(0.5) - 0.1203).abs() < 1e-3);
+        assert!(p.healing_surge_rate(0.5) > 0.0);
         assert_eq!(p.healing_surge_rate(0.0), 0.0);
-        assert!((p.healing_surge_rate(0.75) - 7.7).abs() < 1e-4);
-        // Without the perk there is no regen contribution at any stamina.
+        // Out-of-range fractions clamp rather than extrapolate.
+        assert_eq!(p.healing_surge_rate(1.5), 15.4);
+        // Control: without the perk there is no regen contribution at any stamina.
         let none = PerkBonuses::default();
         assert_eq!(none.healing_surge_rate(1.0), 0.0);
+    }
+
+    /// `get_IsAtCriticalHealth@0x1C5C2BC`: `hp% x 100 <= 35 / healthMultiplier`.
+    /// On a tripled 3000-HP bar (1000 un-multiplied) critical is <= 350 HP, i.e.
+    /// 35 % of the un-multiplied 1000 — not <= 1050 (35 % of the tripled bar).
+    #[test]
+    fn critical_health_is_35_percent_of_the_unmultiplied_bar() {
+        assert_eq!(crate::arena::combat::state::ARENA_HEALTH_MULTIPLIER, 3, "fixture assumes x3");
+        assert!(health_is_critical(350, 3000));
+        assert!(!health_is_critical(351, 3000));
+        // The old gate: 1050 of 3000 counted as critical. It must not now.
+        assert!(!health_is_critical(1050, 3000));
+        assert!(!health_is_critical(0, 0), "a zero-max pool is never critical");
+    }
+
+    /// The Atronach Powers are `enemy_only` and must not resolve for a player even
+    /// if one appears in a learned map.
+    #[test]
+    fn enemy_only_perks_are_skipped() {
+        const FLAME_ATRONACH_POWER: &str = "9bc43c3d-4eb7-4d9c-b507-b3288f3b9ea1";
+        assert!(gamedata::ability(FLAME_ATRONACH_POWER).unwrap().enemy_only);
+        assert!(PerkBonuses::resolve(&[perk(FLAME_ATRONACH_POWER, 1)], true).is_empty());
     }
 
     #[test]
