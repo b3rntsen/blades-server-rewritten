@@ -1205,6 +1205,10 @@ pub struct Fighter {
     /// ones that have aged out of [`Self::state_history`]. The wire `firstIndex` is
     /// `transitions_total - state_history.len()`.
     transitions_total: u32,
+    /// A cast pose announced by op53 that the client will hold until a state message
+    /// ends it: `(when the channel ends, transitions_total right after op53 recorded
+    /// Channeling)`. See [`Self::begin_channel_pose`].
+    channel_pose: Option<(Instant, u32)>,
     pub state_entered: Instant,
     /// Slot of the implicit arena target (the opponent) for `RequestExecuteAbility`.
     pub arena_target: usize,
@@ -1669,6 +1673,7 @@ impl Fighter {
             scheduled_states: Vec::new(),
             state_history: VecDeque::new(),
             transitions_total: 0,
+            channel_pose: None,
             state_entered: now,
             arena_target: 1 - slot.min(1), // 2-player: the other slot
             blocking_side: ActiveSide::None,
@@ -1794,6 +1799,44 @@ impl Fighter {
         self.packed_state_history()
     }
 
+    /// Record the `Channeling` state op53 announces and remember when the channel ends.
+    /// Returns the history ring for op53's propId 7, whose newest entry is Channeling.
+    ///
+    /// The logical `actor_state` is left alone (as for op58), but the client is not:
+    /// op53 puts the caster in `PlayerChannelingState` on both clients, and the
+    /// opponent's copy never leaves it on its own — `PvpOpponentActor$$TryChangeState@0x1964cc8`
+    /// refuses every local change, and the cast animation ends only in
+    /// `ChannelingState$$EndChanneling@0x1a52578`, run from the state's exit. On the
+    /// caster's own client `AbilityChannel$$Cleanup@0x1e8faa4` goes to Idle after the
+    /// step's `_duration`. So the server owes both viewers a state change at that
+    /// instant ([`Self::reconcile_channel_pose`]; combat-spec 12 §5.2, 12-D2).
+    pub fn begin_channel_pose(&mut self, channel_ends_at: Instant) -> Vec<u8> {
+        let blob = self.record_presentational_state(ActorStateType::Channeling);
+        self.channel_pose = Some((channel_ends_at, self.transitions_total));
+        blob
+    }
+
+    /// End an op53 cast pose that is due. Re-asserts the logical state (Idle in
+    /// practice) so the drain sends a 39 to both viewers — but only when nothing has
+    /// entered a state since op53. Any later transition (a swing, a stagger, op58,
+    /// death, a round-end Idle) already took the client out of Channeling, and a
+    /// second message would be a spurious one.
+    pub fn reconcile_channel_pose(&mut self, now: Instant) {
+        let Some((until, recorded_at)) = self.channel_pose else {
+            return;
+        };
+        if self.transitions_total != recorded_at {
+            self.channel_pose = None;
+            return;
+        }
+        if now < until {
+            return;
+        }
+        self.channel_pose = None;
+        let logical = self.actor_state;
+        self.force_actor_state(logical, now);
+    }
+
     /// Take everything queued since the last drain, leaving the queue empty.
     pub fn take_state_changes(&mut self) -> Vec<StateTransition> {
         std::mem::take(&mut self.pending_state_changes)
@@ -1826,6 +1869,7 @@ impl Fighter {
             self.scheduled_states.remove(0);
             self.set_actor_state(state, now);
         }
+        self.reconcile_channel_pose(now);
     }
 
     /// Seconds spent in the current actor state — the `timeInState` float the
@@ -2925,14 +2969,34 @@ impl MatchCombat {
     /// the first strikes of the next round began", which is precisely where the
     /// combined reset used to fire.
     pub fn reset_actor_animations(&mut self, now: Instant) {
-        for f in &mut self.fighters {
-            f.pending_state_changes.clear();
+        self.reset_actor_animations_except(now, None);
+    }
+
+    /// As [`Self::reset_actor_animations`], leaving slot `keep` untouched.
+    ///
+    /// A non-final round's loser is that slot. The client shows a death only from
+    /// op29, and `PvpAvatar$$CheckShouldForceServerState@0x1792864` skips op29 once a
+    /// 39 carrying the same `…, Dead` indices has already been merged — so a 39 Idle
+    /// drained ahead of op29 hid the death in rounds 1 and 2 (combat-spec 12 §7.2,
+    /// 12-D5). No client code revives the dead actor between rounds either
+    /// (`PvpAvatar$$EndRound@0x17848c0`); the loser stays Dead until
+    /// [`Self::reset_fighters_for_next_round`] forces Idle at InRound.
+    pub fn reset_actor_animations_except(&mut self, now: Instant, keep: Option<usize>) {
+        for (slot, f) in self.fighters.iter_mut().enumerate() {
+            if keep == Some(slot) {
+                continue;
+            }
             f.scheduled_states.clear();
             f.pending_manual_attack = None;
             f.active_manual_attack = None;
+            f.channel_pose = None;
             if f.actor_state != ActorStateType::Idle {
+                f.pending_state_changes.clear();
                 f.set_actor_state(ActorStateType::Idle, now);
             }
+            // An actor already logically Idle keeps its queue. At a round end that
+            // queue holds the Idle `on_round_ended` forced to end an op53 cast pose;
+            // clearing it here discarded that Idle unsent in every non-final round.
         }
     }
 
@@ -2964,6 +3028,8 @@ impl MatchCombat {
             // restarts at 0 each round), so they reset with everything else.
             f.state_history.clear();
             f.transitions_total = 0;
+            // The pose key is a transition count, and the count restarts here.
+            f.channel_pose = None;
             f.force_actor_state(ActorStateType::Idle, now);
             f.blocking_side = ActiveSide::None;
             f.blocking_until = None;
