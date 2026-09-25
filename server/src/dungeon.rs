@@ -569,7 +569,7 @@ pub(crate) async fn event_completion_in_window(
 /// "completed":false}` — 155/155 completed event exits. `completed` is also what
 /// `/complete` uses as its once-per-run guard, so an instance left `true` would
 /// make every later run's `/complete` a replay that pays nothing.
-fn reset_event_instance_for_next_run(info: &mut Quest) {
+pub(crate) fn reset_event_instance_for_next_run(info: &mut Quest) {
     info.completed = false;
     for status in info.objective_statuses.values_mut() {
         *status = ObjectiveStatus {

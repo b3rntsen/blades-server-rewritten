@@ -779,6 +779,78 @@ pub async fn get_quests(
                     .await?
             };
 
+            // An event instance left `completed` between runs wedges the quest map.
+            //
+            // The exit before 2026-09-24 22:44 paid the next tier but never reset the
+            // instance, so a character that completed a sigil run and walked out kept
+            // a row reading `completed: true` with tiers still to play. `/dungeons/
+            // current/enter` repairs that — but the client never gets there: it builds
+            // QUESTS, JOBS and EVENTS from this response and spins on the entry, with
+            // nothing but 200s in the log (Flappety, 2026-09-25: 3 of 5 tiers paid,
+            // row still completed). Retail sends `completed: true` on an event only
+            // once every tier is done (2 of 332 captured entries, both at their last
+            // tier). So: no run in progress and tiers remaining => reset it here, the
+            // same way the exit does after a completed run.
+            for row in &mut quests {
+                if !matches!(row.info.0.r#type, blades_lib::user_data::QuestType::GameEvent)
+                    || !row.info.0.completed
+                {
+                    continue;
+                }
+                let template = row.info.0.gld_quest_id;
+                let run_in_progress = {
+                    use crate::schema::event_dungeons::dsl as ed;
+                    ed::event_dungeons
+                        .filter(ed::character_id.eq(character_id_var))
+                        .filter(ed::dungeon_id.eq(template))
+                        .filter(ed::dungeon_state.is_not_null())
+                        .count()
+                        .get_result::<i64>(&mut conn)
+                        .await?
+                        > 0
+                };
+                if run_in_progress {
+                    continue;
+                }
+                let done = crate::dungeon::event_completion_in_window(
+                    &mut conn,
+                    &globals.static_data,
+                    character_id_var,
+                    template,
+                    now as i64,
+                )
+                .await?
+                .completion_count as usize;
+                let tiers = globals
+                    .static_data
+                    .event_quests
+                    .templates
+                    .get(&template)
+                    .map_or(0, |t| t.milestone_count());
+                if !event_row_is_stale_completed(done, tiers) {
+                    continue;
+                }
+                crate::dungeon::reset_event_instance_for_next_run(&mut row.info.0);
+                use crate::schema::quests;
+                diesel::update(
+                    quests::table
+                        .filter(quests::id.eq(row.id))
+                        .filter(quests::character_id.eq(character_id_var)),
+                )
+                .set(quests::info.eq(JsonDbWrapper(row.info.0.clone())))
+                .execute(&mut conn)
+                .await?;
+                log::info!(
+                    "quests: reset stale completed event instance {} of {} for character {} \
+                     ({}/{} tiers done)",
+                    row.id,
+                    template,
+                    character_id_var,
+                    done,
+                    tiers
+                );
+            }
+
             // Rows accepted before capture-derived interactable loot shipped are
             // durable, so deploying the generator did not help those players. Repair
             // the stale item map on the ordinary /quests refresh that precedes play,
@@ -1395,6 +1467,32 @@ pub(crate) struct CompleteQuestResponse {
 ///
 /// An event instance is completed once per RUN: the exit that ends a completed run
 /// sets it back to `false` (`dungeon::event_dungeon_exit`), as retail's does.
+/// Whether an event instance marked `completed` is a leftover between runs rather
+/// than a finished event: tiers remain. An event with unknown tiers (0) is left as is.
+fn event_row_is_stale_completed(tiers_done: usize, tiers: usize) -> bool {
+    tiers > 0 && tiers_done < tiers
+}
+
+#[cfg(test)]
+mod stale_completed_event_row {
+    use super::event_row_is_stale_completed;
+
+    #[test]
+    fn a_completed_row_with_tiers_left_is_stale() {
+        // Flappety, 2026-09-25: 3 of 5 paid, row still completed -> quest map spun.
+        assert!(event_row_is_stale_completed(3, 5));
+        assert!(event_row_is_stale_completed(0, 5));
+    }
+
+    #[test]
+    fn a_fully_finished_event_keeps_its_completed_flag() {
+        // Retail's only `completed: true` event entries are at their last tier.
+        assert!(!event_row_is_stale_completed(5, 5));
+        assert!(!event_row_is_stale_completed(6, 5));
+        assert!(!event_row_is_stale_completed(0, 0), "unknown template: leave it");
+    }
+}
+
 fn mark_quest_completed_once(info: &mut blades_lib::user_data::Quest) -> bool {
     if info.completed {
         return false;
