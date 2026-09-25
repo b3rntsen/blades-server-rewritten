@@ -2386,10 +2386,11 @@ pub(crate) mod jobs_gen {
     // map to a single name, each shows twelve -- so it is rolled from that
     // template's observed set, which is what retail's own roll does.
     //
-    // Where an id is not in the table we emit an EMPTY list. That is not a
-    // degraded guess: retail shipped empty `dynamicElements` on 552 of those
-    // 2,149 jobs (26%), on live board entries indistinguishable from the rest,
-    // so an empty list is a shape retail itself produces.
+    // An EMPTY name list is not a safe fallback, whatever retail's corpus holds
+    // (the 2026-06-07 snapshot's 463 distinct jobs have none): every
+    // `UI.Jobs.Names.*` string has a placeholder and the client formats it
+    // unguarded, so an empty list wedges the quest map. `nameable` keeps the draws
+    // inside what this table can name.
     static JOB_LOCALIZATION_RAW: &str = include_str!("job_localization.json");
 
     fn job_localization() -> &'static Value {
@@ -2452,11 +2453,63 @@ pub(crate) mod jobs_gen {
         rng.pick(list)?.as_str().map(|s| s.to_string())
     }
 
+    /// Re-point a Defeat's primary family, or an Explore's dungeon template, at
+    /// one the localization table can name.
+    ///
+    /// Every `UI.Jobs.Names.*` string carries a `{n}` placeholder, and the client's
+    /// `Quest.BuildLocalizedQuestName` feeds it to `String.Format` unguarded. An
+    /// EMPTY name list therefore throws `FormatException` inside
+    /// `QuestMapMenuController.SetupQuestMap` (via
+    /// `QuestMapMarkerJobDetailsProvider.SetupForID`), and the whole quest map --
+    /// QUESTS, JOBS and EVENTS -- spins forever. That is what wedged every board
+    /// rolled at the 2026-09-25 05:00 reset that drew one of these ids.
+    ///
+    /// The draws come from pools harvested across every role an id played, so
+    /// they include ids retail never put in these slots. In the 463 distinct
+    /// retail jobs of the 2026-06-07 capture snapshot: 0 of 417 non-duel jobs had
+    /// a primary family outside the table (the seven outside it are the duelist
+    /// and critter families), and the five templates with no kit name are the
+    /// Arena templates, used by Duels (46/46) and by nothing else.
+    ///
+    /// The replacement is keyed on the job's own seed, so it is deterministic and
+    /// consumes no rng draw: every other value on the board stays what it was.
+    fn nameable<'a>(job_type: i64, dungeon: &'a str, prim_fam: &'a str, base_seed: u64)
+        -> (&'a str, &'a str)
+    {
+        let has_kit = |d: &str| {
+            let has_location = job_localization()["dungeons"][d]["locations"]
+                .as_array()
+                .is_some_and(|l| !l.is_empty());
+            kit_name(d).is_some() && has_location
+        };
+        let has_name = |f: &str| {
+            enemy_str(f, "name").is_some() && enemy_str(f, "plural").is_some()
+        };
+        let swap = |pool: &'a [&'a str], ok: &dyn Fn(&str) -> bool| -> Option<&'a str> {
+            let usable: Vec<&'a str> = pool.iter().copied().filter(|x| ok(x)).collect();
+            if usable.is_empty() {
+                None
+            } else {
+                Some(usable[(base_seed % usable.len() as u64) as usize])
+            }
+        };
+        match job_type {
+            0 if !has_name(prim_fam) => {
+                (dungeon, swap(ENEMY_FAMILIES, &has_name).unwrap_or(prim_fam))
+            }
+            1 if !has_kit(dungeon) => {
+                (swap(DUNGEON_TEMPLATES, &has_kit).unwrap_or(dungeon), prim_fam)
+            }
+            _ => (dungeon, prim_fam),
+        }
+    }
+
     /// `(nameElements, descriptionElements)` for one rolled job.
     ///
     /// Returns empty lists rather than partial ones: retail never sent a
-    /// half-filled list, and a name whose placeholders outnumber its elements is
-    /// worse than one the client renders unsubstituted.
+    /// half-filled list. But an empty NAME list is fatal to the quest map (see
+    /// [`nameable`]), so `roll_job` only reaches the empty arm through a table
+    /// that has lost its entries, and it logs when it does.
     fn dynamic_elements(rng: &mut Rng, job_type: i64, setup: &serde_json::Map<String, Value>)
         -> (Vec<Value>, Vec<Value>)
     {
@@ -2976,6 +3029,11 @@ pub(crate) mod jobs_gen {
         let prim_fam = rng.pick(ENEMY_FAMILIES).copied().unwrap_or("");
         let sec_fam = rng.pick(ENEMY_FAMILIES).copied().unwrap_or("");
         let boss_fam = rng.pick(ENEMY_FAMILIES).copied().unwrap_or(prim_fam);
+        // A Defeat names its primary enemy and an Explore names its dungeon kit, and
+        // both pools above hold ids retail never used there (see `nameable`). Swap
+        // such a draw for one that can be named, AFTER the draws so no other value
+        // on the board moves.
+        let (dungeon, prim_fam) = nameable(job_type, dungeon, prim_fam, base_seed);
 
         let primary_count = if job_type == 5 { 0 } else { rng.range_incl(3, 6) };
         let secondary_count = if job_type == 5 { 0 } else { rng.range_incl(2, 4) };
@@ -3047,6 +3105,13 @@ pub(crate) mod jobs_gen {
         // Drawn LAST so the rolls above keep the values they had before elements
         // existed — an extra rng draw earlier would silently reshuffle every job.
         let (name_elems, desc_elems) = dynamic_elements(&mut rng, job_type, &job_setup);
+        if name_elems.is_empty() {
+            log::error!(
+                "[jobs] {name_key} rolled with no name elements (jobType {job_type}, \
+                 dungeon {dungeon}, family {prim_fam}) -- the client cannot format it \
+                 and the quest map will spin"
+            );
+        }
         job_setup.insert(
             "questName".into(),
             json!({ "key": name_key, "dynamicElements": name_elems }),
@@ -5500,14 +5565,11 @@ mod job_dynamic_elements {
             .collect()
     }
 
-    /// The shape per jobType, exactly as retail sent it.
+    /// The shape per jobType, exactly as retail sent it, on every job.
     ///
-    /// An EMPTY list is a legitimate outcome, not a failure: retail itself sent
-    /// empty `dynamicElements` on 552 of the 2,149 captured jobs, and we emit
-    /// empty when the table has no value for a combination (an Explore job on an
-    /// Arena template has no observed `Kit_*_Name`; inventing one would render as
-    /// blank text in game). What must never happen is a HALF-filled list, where
-    /// the name has more placeholders than substitutions.
+    /// An EMPTY list used to be accepted here as a faithful fallback. It is not:
+    /// the client formats every job name unguarded, so an empty list throws and
+    /// the quest map spins (2026-09-25). A HALF-filled list is just as fatal.
     #[test]
     fn element_shapes_match_retail_per_job_type() {
         let jobs = board();
@@ -5532,7 +5594,7 @@ mod job_dynamic_elements {
 
             let (gn, gd) = (types(j, "questName"), types(j, "questDescription"));
             if gn.is_empty() && gd.is_empty() {
-                continue; // the faithful fallback
+                continue; // counted below: the ratio must be 100%
             }
             populated += 1;
             assert_eq!(gn, want_name, "jobType {jt} questName shape");
@@ -5546,13 +5608,14 @@ mod job_dynamic_elements {
             vec![0, 1, 3, 4, 5],
             "every retail jobType must be covered by the sample"
         );
-        let ratio = populated as f64 / jobs.len() as f64;
-        assert!(
-            ratio > 0.80,
-            "only {populated}/{} jobs carried elements ({:.0}%) — retail populated ~74%, \
-             so this build is dropping them",
+        // Every job, not most: an empty name list throws in the client's
+        // String.Format and wedges the whole quest map (`quest_map_wedge_2026_09_25`).
+        assert_eq!(
+            populated,
             jobs.len(),
-            ratio * 100.0
+            "{} of {} jobs carried no elements; each one spins the quest map",
+            jobs.len() - populated,
+            jobs.len()
         );
     }
 
@@ -5876,5 +5939,117 @@ mod story_quest_difficulty_repair {
     #[test]
     fn the_sentinel_is_minus_one() {
         assert_eq!(STORY_QUEST_DIFFICULTY_LEVEL, -1);
+    }
+}
+
+
+/// 2026-09-25: tapping QUESTS spun forever for every character tested.
+///
+/// The 05:00 UTC reset rolled boards whose Explore drew an Arena template (no kit
+/// name) or whose Defeat drew a critter/duelist family (no enemy name), and both
+/// came out with an empty `questName.dynamicElements`. Every `UI.Jobs.Names.*`
+/// string has a placeholder ("Imperial Survey: {0}", "The {0} Menace"), and the
+/// client's `Quest.BuildLocalizedQuestName` is a bare `String.Format`, so
+/// `QuestMapMenuController.SetupQuestMap` threw `FormatException` from
+/// `QuestMapMarkerJobDetailsProvider.SetupForID` on every refresh. Proven on the
+/// emulator: with only those two names defused by a frida patch the map opens.
+#[cfg(test)]
+mod quest_map_wedge_2026_09_25 {
+    use super::jobs_gen;
+    use serde_json::Value;
+    use uuid::Uuid;
+
+    /// 2026-09-25 06:00 UTC, an hour into the board that wedged.
+    const NOW: u64 = 1_790_312_400 + 3_600;
+    const HALLOWEEN_TEST: &str = "7c2ed7c5-b63a-4ad7-b860-f80bfb885353";
+    const FLAPPETY: &str = "30581f3e-75f5-41cf-a309-653f9802b56b";
+
+    fn pools() -> Value {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        serde_json::from_str(&std::fs::read_to_string(dir.join("job_pools.json")).unwrap())
+            .unwrap()
+    }
+
+    fn board(character: &str, now: u64) -> Vec<Value> {
+        let pools = pools();
+        let boundary = jobs_gen::current_reset_boundary(&pools, now);
+        jobs_gen::generate(&pools, Uuid::parse_str(character).unwrap(), 86, 0, boundary, now).0
+    }
+
+    fn job<'a>(jobs: &'a [Value], quest_id: &str) -> &'a Value {
+        jobs.iter()
+            .find(|j| j["questId"] == quest_id)
+            .unwrap_or_else(|| panic!("{quest_id} is not on the board: this is not prod's board"))
+    }
+
+    fn name_elements(j: &Value) -> usize {
+        j["jobSetup"]["questName"]["dynamicElements"].as_array().unwrap().len()
+    }
+
+    /// The exact jobs production served with an empty name, now named.
+    #[test]
+    fn the_jobs_that_wedged_production_carry_their_names() {
+        let ht = board(HALLOWEEN_TEST, NOW);
+        let fl = board(FLAPPETY, NOW);
+        for (jobs, id, key, want) in [
+            (&ht, "e51dda6b-b7e6-49a0-a3bf-c64347e9f917", "UI.Jobs.Names.Explore.005", 1),
+            (&ht, "f7a75fca-402b-4d90-81f6-030f92903363", "UI.Jobs.Names.Defeat.005", 3),
+            (&fl, "060a79b5-c3e2-49f7-b56e-52c769a1f39e", "UI.Jobs.Names.Defeat.011", 3),
+        ] {
+            let j = job(jobs, id);
+            // Control: the same questId AND name key means we are regenerating
+            // prod's board, where this job went out with `dynamicElements: []`.
+            assert_eq!(j["jobSetup"]["questName"]["key"], key, "{id}");
+            assert_eq!(name_elements(j), want, "{id} {key} must fill its placeholders");
+        }
+    }
+
+    /// The fix moves only the draws that could not be named. A job prod already
+    /// served with names keeps every one of them.
+    #[test]
+    fn jobs_that_were_already_named_do_not_move() {
+        let ht = board(HALLOWEEN_TEST, NOW);
+        let goblins = &job(&ht, "c916c4f0-0323-45ac-ada5-c3b01bf74d7e")["jobSetup"];
+        assert_eq!(goblins["primaryEnemyFamilyId"], "9137d218-6f05-4e8f-a5e5-1c63c61c95ca");
+        assert_eq!(goblins["dungeonTemplateId"], "dbfd45fe-8c8c-4c8d-83c6-9b4566afc788");
+        assert_eq!(
+            goblins["questName"]["dynamicElements"][0]["localizationValue"],
+            "Enemy.Name.Goblin.Wizard"
+        );
+        let lumber = &job(&ht, "87e29b6b-e4c7-4caa-afe2-60b24e9ea4aa")["jobSetup"];
+        assert_eq!(lumber["dungeonTemplateId"], "57d639c2-ec4c-4e6b-9995-ff6a7ef3e712");
+        assert_eq!(lumber["primaryEnemyFamilyId"], "3d932102-3b5c-42ba-b96a-35405752c5a3");
+        assert_eq!(lumber["questName"]["key"], "UI.Jobs.Names.Gather.008");
+    }
+
+    /// No board, for any character on any day, carries a job the client cannot
+    /// name. 300 characters x 60 days is ~100k jobs; before the fix roughly one
+    /// Defeat or Explore in three came out empty.
+    #[test]
+    fn no_board_ever_carries_an_unnameable_job() {
+        let pools = pools();
+        let (mut checked, mut defeat_or_explore) = (0usize, 0usize);
+        for c in 1..=300u128 {
+            let character = Uuid::from_u128(c * 0x9E37_79B9_7F4A_7C15);
+            for day in 0..60u64 {
+                let now = NOW + day * 86_400;
+                let boundary = jobs_gen::current_reset_boundary(&pools, now);
+                for j in jobs_gen::generate(&pools, character, 50, 0, boundary, now).0 {
+                    let jt = j["jobSetup"]["jobType"].as_i64().unwrap();
+                    if jt == 0 || jt == 1 {
+                        defeat_or_explore += 1;
+                    }
+                    assert!(
+                        name_elements(&j) > 0,
+                        "{} on day {day} for {character}: {} has no name elements",
+                        j["questId"],
+                        j["jobSetup"]["questName"]["key"]
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 50_000, "only {checked} jobs checked");
+        assert!(defeat_or_explore > checked / 4, "the sweep barely exercised Defeat/Explore");
     }
 }
