@@ -585,6 +585,28 @@ fn keeps_the_played_character(selected: Option<&str>, credential_secret: Uuid) -
 /// and it has not left level 1. #185's own case (a real character replacing a
 /// default on the linked account) never matches, because the PLAYED side there
 /// is the real one.
+/// Whether a forced link may move the linked account's character aside.
+///
+/// Always for an unplayed starter. For a REAL character only when the account the
+/// player was playing on is a device/anonymous account (a random v4 id), which is
+/// #185's case: the player's own throwaway, and "keep what I'm playing" is theirs
+/// to choose. Never when both accounts are Discord-owned (v5 ids, derived from the
+/// Discord id): that swap crosses two people's accounts, which is what happened
+/// between SpaceMunk and Huge Goober on 2026-09-25.
+fn forced_link_may_park(
+    played_user_id: Uuid,
+    linked_user_id: Uuid,
+    displaced_name: Option<&str>,
+    displaced_level: i32,
+) -> bool {
+    if is_unplayed_starter(displaced_name, displaced_level) {
+        return true;
+    }
+    let discord_owned = |id: Uuid| id.get_version_num() == 5;
+    !(discord_owned(played_user_id) && discord_owned(linked_user_id))
+}
+
+
 fn is_unplayed_starter(name: Option<&str>, level: i32) -> bool {
     name == Some(crate::character::STARTER_NAME) && level <= 1
 }
@@ -670,25 +692,44 @@ async fn swap_character_ownership(
         return Ok((adopted, 0));
     };
 
-    // Never trade a real character for a starter nobody has played. Parking is
-    // recoverable, but only by hand: the player sees a level 1 and thinks the
-    // character is gone. Keeping the account's character is the safe answer.
+    // Never park a REAL character, whatever was played. Only an unplayed
+    // starter on the linked account may be moved aside.
+    //
+    // The first guard (#348) only covered a starter being played: it stopped a
+    // throwaway level 1 displacing a level 89. It still let two real characters
+    // trade places, and that crossed two different people's accounts: on
+    // 2026-09-25 a player signed in as SpaceMunk linked Huge Goober's login, and
+    // Goober's LLoyd (L65) was parked on SpaceMunk while SpaceMunk's Adventurer
+    // moved onto Goober. When the linked account already has a real character,
+    // the safe answer is the same as #348's: both accounts keep what they have.
+    // The link itself still signs the player in to the linked account, which
+    // then loads its own character, and switching between characters stays a
+    // deliberate choice made on the site.
+    let d = character_name_level(conn, displaced).await?;
+    // #348: never trade a real character for a starter nobody has played.
     let played_is_starter = {
         let p = character_name_level(conn, played).await?;
         is_unplayed_starter(p.name.as_deref(), p.level)
     };
-    if played_is_starter {
-        let d = character_name_level(conn, displaced).await?;
-        if !is_unplayed_starter(d.name.as_deref(), d.level) {
-            log::warn!(
-                "account link (forced): refusing to park character {displaced} ({:?} L{}) of user \
-                 {linked_user_id} in favour of the unplayed starter {played} of user \
-                 {played_user_id}; the account keeps its character",
-                d.name,
-                d.level,
-            );
-            return Ok((0, 0));
-        }
+    if played_is_starter && !is_unplayed_starter(d.name.as_deref(), d.level) {
+        log::warn!(
+            "account link (forced): refusing to park character {displaced} ({:?} L{}) of user \
+             {linked_user_id} in favour of the unplayed starter {played} of user \
+             {played_user_id}; the account keeps its character",
+            d.name,
+            d.level,
+        );
+        return Ok((0, 0));
+    }
+    if !forced_link_may_park(played_user_id, linked_user_id, d.name.as_deref(), d.level) {
+        log::warn!(
+            "account link (forced): refusing to park character {displaced} ({:?} L{}) of user \
+             {linked_user_id} for character {played} of user {played_user_id}; both \
+             accounts keep their characters",
+            d.name,
+            d.level,
+        );
+        return Ok((0, 0));
     }
 
     // Park B on a transaction-local user, freeing B before A moves into it.
@@ -2014,5 +2055,34 @@ mod anon_device_memory_tests {
             before_session.contains("remember_device_on_account("),
             "the secret-id login must remember the device before completing"
         );
+    }
+}
+
+#[cfg(test)]
+mod forced_link_parking_rule {
+    use super::forced_link_may_park;
+    use uuid::Uuid;
+
+    const SPACEMUNK: Uuid = Uuid::from_u128(0x81a8f00f_abd5_5a92_a88b_12df24b451ba); // v5, Discord
+    const GOOBER: Uuid = Uuid::from_u128(0x9b33bf91_76ae_5870_99be_77ff49135bf5); // v5, Discord
+    const DEVICE: Uuid = Uuid::from_u128(0x5b2355cf_2b10_4a49_bd44_7a94dddceeba); // v4, anon
+
+    #[test]
+    fn two_discord_accounts_never_trade_real_characters() {
+        // 2026-09-25: Huge Goober's LLoyd (L65) was parked on SpaceMunk.
+        assert!(!forced_link_may_park(SPACEMUNK, GOOBER, Some("LLoyd"), 65));
+        assert!(!forced_link_may_park(GOOBER, SPACEMUNK, Some("Adventurer"), 48));
+    }
+
+    #[test]
+    fn a_device_account_may_still_keep_what_it_is_playing() {
+        // #185: the player's own throwaway links to their login and keeps the
+        // character they were playing; the old one is parked, recoverably.
+        assert!(forced_link_may_park(DEVICE, GOOBER, Some("LLoyd"), 65));
+    }
+
+    #[test]
+    fn an_unplayed_starter_may_always_be_moved_aside() {
+        assert!(forced_link_may_park(SPACEMUNK, GOOBER, Some("Adventurer"), 1));
     }
 }
