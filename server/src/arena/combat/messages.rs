@@ -1199,6 +1199,31 @@ pub fn match_post_round_info(
        corpus disproves. */
     conceded: bool,
 ) -> Vec<u8> {
+    let latest = round_results.last().map(|(w, l)| (w.as_str(), l.as_str()));
+    post_round_info(match_net_object_id, round_results, latest, match_id, is_match_ended, conceded)
+}
+
+/// op48 for a REPLAYED double KO (AUTHORED; no retail capture has one): the round
+/// happened but nobody won it. The cumulative array carries only the decided rounds,
+/// and the most-recent pair at 12/13 is empty, which is how the client represents a
+/// tied round (`MatchPostRoundInfoMessage$$IsTied@0x1cebbd0` = winner id and loser id
+/// both empty). The client's tally therefore stays equal to the server's score.
+pub fn match_post_tied_round_info(
+    match_net_object_id: i32,
+    decided_results: &[(String, String)],
+    match_id: &str,
+) -> Vec<u8> {
+    post_round_info(match_net_object_id, decided_results, Some(("", "")), match_id, false, false)
+}
+
+fn post_round_info(
+    match_net_object_id: i32,
+    round_results: &[(String, String)],
+    latest: Option<(&str, &str)>,
+    match_id: &str,
+    is_match_ended: bool,
+    conceded: bool,
+) -> Vec<u8> {
     // The client tallies the displayed score from this cumulative array, so every
     // completed round must be present, in order. Slots are (5,6), (7,8), (9,10) —
     // three, because the match is best-of-3 — and unused slots are empty strings.
@@ -1217,10 +1242,7 @@ pub fn match_post_round_info(
     let last_index = round_results.len().saturating_sub(1) as u8;
 
     // The most recent round's winner/loser is repeated at 12/13 in every capture.
-    let (latest_w, latest_l) = round_results
-        .last()
-        .map(|(w, l)| (w.as_str(), l.as_str()))
-        .unwrap_or(("", ""));
+    let (latest_w, latest_l) = latest.unwrap_or(("", ""));
 
     // MatchWinnerPlayerId names the OVERALL winner and is non-empty in exactly the
     // frames where IsMatchEnded is true (271 + 53 captured frames, no exceptions).

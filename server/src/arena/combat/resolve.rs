@@ -4540,7 +4540,26 @@ fn on_round_ended(
     now: Instant,
     ended_by_death: bool,
 ) -> Vec<(usize, Vec<u8>)> {
+    use super::state::{MATCH_ROUND_HARD_CAP, MAX_DOUBLE_KO_REPLAYS};
     let mut out = Vec::new();
+    // **Phase 3.14 — DOUBLE-KO.** Both fighters at 0 HP in the same resolution step.
+    // AUTHORED, not capture-derived — no recorded match ends this way, so this is a
+    // designed rule: the FIRST double KO of a match is replayed with no score; any
+    // later one is decided like a timed-out round, by `draw_tiebreak_winner` (both
+    // fractions are 0, so the lower `pvpTrophies`, then slot 0). A double KO that
+    // would reach `MATCH_ROUND_HARD_CAP` is never replayed either. Without the cap two
+    // phase-locked fighters replayed the identical round forever (CRE-SOAK seed
+    // 0x4d4e3b4e79f4ca03: a killing swing plus the victim's Frost Revenge, every round).
+    let double_ko = ended_by_death
+        && combat.round_outcome() == super::state::RoundOutcome::DoubleKo;
+    let replay = double_ko
+        && combat.double_ko_replays < MAX_DOUBLE_KO_REPLAYS
+        && combat.round_winners.len() + 1 < MATCH_ROUND_HARD_CAP;
+    let winner = if double_ko && !replay {
+        combat.draw_tiebreak_winner(super::engine::pvp_trophies(combat))
+    } else {
+        winner
+    };
     let loser = combat.opponent_of(winner).unwrap_or(winner);
     // Make the round boundary immediate and explicit. Old committed work may not
     // animate or land later, and op53 can leave a surviving caster visually
@@ -4557,17 +4576,41 @@ fn on_round_ended(
             fighter.force_actor_state(ActorStateType::Idle, now);
         }
     }
-    // **Phase 3.14 — DOUBLE-KO.** Both fighters at 0 HP in the same resolution step:
-    // nobody scores, the round is replayed. AUTHORED, not capture-derived — no
-    // recorded match ends this way, so this is a designed rule.
-    let double_ko = ended_by_death
-        && combat.round_outcome() == super::state::RoundOutcome::DoubleKo;
-    if double_ko {
+    if replay {
+        combat.double_ko_replays += 1;
         info!("combat: DOUBLE-KO — both fighters at 0 HP, round is replayed (no score)");
-    } else if winner < combat.rounds_won.len() {
-        combat.rounds_won[winner] += 1;
+    } else {
+        if double_ko {
+            info!(
+                "combat: DOUBLE-KO after {} replay(s) — decided by the draw tiebreak → slot {winner}",
+                combat.double_ko_replays,
+            );
+        }
+        if winner < combat.rounds_won.len() {
+            combat.rounds_won[winner] += 1;
+        }
     }
-    let match_won = combat.match_is_won();
+    // Record THIS round's outcome (`None` = the replayed tie). op48 is cumulative —
+    // the client tallies the score from the whole round-by-round list, so every
+    // decided round must be present in order (capture-pinned, 375 frames).
+    combat.round_winners.push((!replay).then_some(winner));
+    // The backstop: a match that has played `MATCH_ROUND_HARD_CAP` rounds ends now,
+    // on the round tally (a tie there goes to this round's winner). Unreachable while
+    // the replay cap holds; it exists so no future rule can loop a match forever.
+    let hard_capped = !combat.match_is_won() && combat.round_winners.len() >= MATCH_ROUND_HARD_CAP;
+    let match_won = combat.match_is_won() || hard_capped;
+    let match_winner = match combat.rounds_won {
+        _ if !hard_capped => winner,
+        [a, b] if a > b => 0,
+        [a, b] if b > a => 1,
+        _ => winner,
+    };
+    if hard_capped {
+        info!(
+            "combat: round cap {MATCH_ROUND_HARD_CAP} reached with score {:?} — the match ends, won by slot {match_winner}",
+            combat.rounds_won,
+        );
+    }
     let burst = if ended_by_death {
         "op29 + op79 RoundEnd + op48 + MatchState→PostRound(14)"
     } else {
@@ -4616,28 +4659,24 @@ fn on_round_ended(
     //    matchId = the gameSessionId (the Match net-object's propId9). Carries the ACTUAL
     //    round number (so the client scores THIS round, not a fixed round-3 frame) and
     //    `is_match_ended` = whether this death won the match (best-of-3). [bug-1 fix]
-    // Record THIS round's outcome, then send the cumulative array. op48 is
-    // cumulative — the client tallies the score from the whole round-by-round list,
-    // so every completed round must be present in order (capture-pinned, 375 frames).
-    combat.round_winners.push(winner);
-    let round_results: Vec<(String, String)> = combat
-        .round_winners
-        .iter()
-        .map(|&w| {
-            let l = 1 - w;
-            (
-                combat.fighters.get(w).map(|f| f.loadout.character_uuid.clone()).unwrap_or_default(),
-                combat.fighters.get(l).map(|f| f.loadout.character_uuid.clone()).unwrap_or_default(),
-            )
-        })
-        .collect();
-    let result_frame = messages::match_post_round_info(
-        combat.match_net_object_id,
-        &round_results,
-        &combat.game_session_id,
-        match_won,
-        false, // a death, not a concession
-    );
+    // Send the cumulative array of DECIDED rounds; a replayed tie goes out with empty
+    // ids (`messages::match_post_tied_round_info`).
+    let round_results = combat.decided_round_results();
+    let result_frame = if replay {
+        messages::match_post_tied_round_info(
+            combat.match_net_object_id,
+            &round_results,
+            &combat.game_session_id,
+        )
+    } else {
+        messages::match_post_round_info(
+            combat.match_net_object_id,
+            &round_results,
+            &combat.game_session_id,
+            match_won,
+            false, // a death, not a concession
+        )
+    };
     // 4) Match net-object → PostRound(14), timeout 3.0 (s506 obj 123 round end).
     let post_round_update = messages::update_match(
         combat.match_net_object_id,
@@ -4652,7 +4691,7 @@ fn on_round_ended(
 
     if match_won {
         // Final round → walk the terminal match-end states next.
-        combat.winner = Some(winner);
+        combat.winner = Some(match_winner);
         combat.matchend_step = 0;
         combat.phase = FlowState::RoundEnd;
         info!(
@@ -11802,7 +11841,7 @@ mod round_ends_once_tests {
 
         let out = land_due_impacts(&mut c, now + Duration::from_millis(1));
 
-        assert_eq!(c.round_winners, vec![0], "the round ended once, won by slot 0");
+        assert_eq!(c.round_winners, vec![Some(0)], "the round ended once, won by slot 0");
         assert_eq!(c.rounds_won, [1, 0]);
         assert_eq!(c.phase, FlowState::NextState);
         assert!(!c.fighters[0].is_dead(), "slot 1's impact landed after the round ended");
@@ -11816,7 +11855,7 @@ mod round_ends_once_tests {
         let mut c = live(now);
         c.round = 3;
         c.rounds_won = [1, 1];
-        c.round_winners = vec![0, 1];
+        c.round_winners = vec![Some(0), Some(1)];
         c.fighters[0].health = 1;
         c.fighters[1].health = 1;
         c.pending_impacts.push(impact(0, now));
@@ -11825,7 +11864,7 @@ mod round_ends_once_tests {
         let out = land_due_impacts(&mut c, now + Duration::from_millis(1));
 
         assert_eq!(c.winner, Some(0), "slot 0 killed first and won the match");
-        assert_eq!(c.round_winners, vec![0, 1, 0], "three rounds, not five");
+        assert_eq!(c.round_winners, vec![Some(0), Some(1), Some(0)], "three rounds, not five");
         assert_eq!(c.rounds_won, [2, 1]);
         assert_eq!(c.phase, FlowState::RoundEnd);
         assert_eq!(op48_count(&out), 1);
@@ -13239,5 +13278,165 @@ mod sprint1_integration_tests {
             (PA_CHAINED - LOW_PHYS_CUT).round() as u32,
             "the maneuver lands out of the swing's chain: 172.09 − 38.4 = 133.69",
         );
+    }
+}
+
+/// The double-KO replay cap and the match-level round cap (Sprint 1 integration,
+/// CRE-SOAK seed 0x4d4e3b4e79f4ca03). The rule is AUTHORED; the client side it has to
+/// agree with is read from the binary: a tied round is one whose winner and loser ids
+/// are both empty (`RoundInfo$$IsTied@0x2071a74`,
+/// `MatchPostRoundInfoMessage$$IsTied@0x1cebbd0`), and the per-player score is the
+/// count of round entries naming that player the winner
+/// (`MatchEndMatchMessage$$GetNumberOfRoundsWonBy@0x1cea200`).
+#[cfg(test)]
+mod double_ko_cap_tests {
+    use std::time::{Duration, Instant};
+
+    use super::super::loadout::starter;
+    use super::super::state::{Fighter, FlowState, MatchCombat, MATCH_ROUND_HARD_CAP};
+    use super::*;
+
+    const A: &str = "aaaaaaaa-0000-4000-8000-000000000001";
+    const B: &str = "bbbbbbbb-0000-4000-8000-000000000002";
+
+    fn live(now: Instant) -> MatchCombat {
+        let mut c = MatchCombat::new(2, 2, now);
+        for (slot, uuid) in [A, B].into_iter().enumerate() {
+            let obj = c.alloc_net_object_id();
+            let mut f = Fighter::new(slot, obj, starter(), now);
+            f.loadout.character_uuid = uuid.to_string();
+            c.fighters.push(f);
+        }
+        c.match_net_object_id = c.alloc_net_object_id();
+        c.phase = FlowState::StateTimeout;
+        c.phase_entered = now;
+        c.round = 1;
+        c
+    }
+
+    /// Kill both fighters and end the round as `emit_damage` does (the killing
+    /// attacker, slot 0, is passed as the provisional winner).
+    fn double_ko(c: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
+        c.fighters[0].take_damage(u32::MAX);
+        c.fighters[1].take_damage(u32::MAX);
+        assert_eq!(c.round_outcome(), super::super::state::RoundOutcome::DoubleKo);
+        on_round_ending_death(c, 0, now)
+    }
+
+    /// Viewer 0's op48, parsed.
+    fn op48(out: &[(usize, Vec<u8>)]) -> arena_proto::NetDataParse {
+        let frames: Vec<_> = out
+            .iter()
+            .filter(|(v, b)| {
+                *v == 0 && b.len() > 2 && b[1] == 0x36
+                    && arena_proto::parse_netdata(&b[2..]).int(3) == Some(48)
+            })
+            .map(|(_, b)| arena_proto::parse_netdata(&b[2..]))
+            .collect();
+        assert_eq!(frames.len(), 1, "one op48 per round end");
+        frames.into_iter().next().unwrap()
+    }
+
+    fn ended(nd: &arena_proto::NetDataParse) -> bool {
+        matches!(nd.get(15), Some(arena_proto::NetDataValue::Bool(true)))
+    }
+
+    /// Control: the FIRST double KO of a match is still replayed. Nobody scores, the
+    /// match loops to the next round, and op48 describes a tied round (empty ids at
+    /// 12/13) with no decided round in the array, so the client's tally stays 0-0.
+    #[test]
+    fn the_first_double_ko_is_replayed_as_a_tied_round() {
+        let now = Instant::now();
+        let mut c = live(now);
+        let out = double_ko(&mut c, now);
+        assert_eq!(c.rounds_won, [0, 0], "a replayed double KO scores nothing");
+        assert_eq!(c.round_winners, vec![None], "one round played, nobody won it");
+        assert_eq!(c.double_ko_replays, 1);
+        assert_eq!(c.phase, FlowState::NextState, "the match loops to a replay");
+        let nd = op48(&out);
+        assert_eq!(nd.string(12), Some(""), "tied: no latest winner");
+        assert_eq!(nd.string(13), Some(""), "tied: no latest loser");
+        assert_eq!(nd.string(5), Some(""), "no decided round in the array");
+        assert!(!ended(&nd));
+    }
+
+    /// The SECOND double KO is decided by `draw_tiebreak_winner`: both fractions are
+    /// 0, so the lower `pvpTrophies` wins it. It scores, and op48 carries it as a real
+    /// round. Control on the key: with the trophies swapped the other slot wins.
+    #[test]
+    fn a_second_double_ko_is_decided_by_the_draw_tiebreak() {
+        for (trophies, want) in [((900, 100), 1usize), ((100, 900), 0usize)] {
+            let now = Instant::now();
+            let mut c = live(now);
+            c.fighters[0].loadout.profile_character_json = format!("{{\"pvpTrophies\":{}}}", trophies.0);
+            c.fighters[1].loadout.profile_character_json = format!("{{\"pvpTrophies\":{}}}", trophies.1);
+            let _ = double_ko(&mut c, now);
+            c.reset_fighters_for_next_round(now + Duration::from_secs(10));
+            c.phase = FlowState::StateTimeout;
+            let out = double_ko(&mut c, now + Duration::from_secs(20));
+
+            let mut score = [0u8; 2];
+            score[want] = 1;
+            assert_eq!(c.rounds_won, score, "trophies {trophies:?}: the lower-trophy slot takes it");
+            assert_eq!(c.round_winners, vec![None, Some(want)]);
+            assert_eq!(c.double_ko_replays, 1, "no second replay");
+            let nd = op48(&out);
+            let (w, l) = if want == 0 { (A, B) } else { (B, A) };
+            assert_eq!(nd.string(5), Some(w), "the decided round is the array's first entry");
+            assert_eq!(nd.string(6), Some(l));
+            assert_eq!(nd.string(12), Some(w), "latest = the tiebreak winner");
+            assert_eq!(nd.int(11), Some(0), "one decided round");
+            assert!(!ended(&nd), "1-0 does not end a best-of-3");
+        }
+    }
+
+    /// A 1-1 match whose deciding round is a double KO, after the one replay was spent:
+    /// the tiebreak decides the MATCH, which ends 2-1 in `RoundEnd`, and op48 carries
+    /// the three decided rounds with IsMatchEnded.
+    #[test]
+    fn a_deciding_double_ko_after_the_replay_ends_the_match() {
+        let now = Instant::now();
+        let mut c = live(now);
+        c.round_winners = vec![Some(0), None, Some(1)];
+        c.rounds_won = [1, 1];
+        c.double_ko_replays = 1;
+        let out = double_ko(&mut c, now);
+        assert_eq!(c.rounds_won, [2, 1], "equal trophies → slot 0 by the tiebreak");
+        assert_eq!(c.phase, FlowState::RoundEnd, "the match is over");
+        assert_eq!(c.winner, Some(0));
+        let nd = op48(&out);
+        assert!(ended(&nd));
+        assert_eq!(nd.int(11), Some(2), "three decided rounds, the tie left out");
+        assert_eq!(
+            (nd.string(5), nd.string(7), nd.string(9)),
+            (Some(A), Some(B), Some(A)),
+            "the client's per-player count (2-1) equals rounds_won",
+        );
+        assert_eq!(nd.string(16), Some(A), "MatchWinnerPlayerId");
+    }
+
+    /// The backstop: even if the replay allowance were somehow unspent, a match that
+    /// reaches `MATCH_ROUND_HARD_CAP` (4) rounds never replays again and ends on the
+    /// tally. Control: one round short of the cap, the same double KO replays.
+    #[test]
+    fn the_match_round_cap_ends_the_match_whatever_the_replay_count() {
+        assert_eq!(MATCH_ROUND_HARD_CAP, 4, "best-of-3 plus one replay");
+        let now = Instant::now();
+        let mut c = live(now);
+        c.round_winners = vec![None; MATCH_ROUND_HARD_CAP - 1];
+        c.double_ko_replays = 0; // an unspent allowance, which the cap must override
+        let out = double_ko(&mut c, now);
+        assert_eq!(c.round_winners.len(), MATCH_ROUND_HARD_CAP);
+        assert_eq!(c.round_winners.last(), Some(&Some(0)), "decided, not replayed");
+        assert_eq!(c.phase, FlowState::RoundEnd, "the cap ends the match");
+        assert_eq!(c.winner, Some(0), "1-0 on the tally");
+        assert!(ended(&op48(&out)));
+
+        let mut c = live(now);
+        c.round_winners = vec![None; MATCH_ROUND_HARD_CAP - 2];
+        c.double_ko_replays = 0;
+        let _ = double_ko(&mut c, now);
+        assert_eq!(c.round_winners.last(), Some(&None), "control: below the cap it replays");
+        assert_eq!(c.phase, FlowState::NextState);
     }
 }

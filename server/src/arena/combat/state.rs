@@ -23,6 +23,19 @@ pub const ARENA_HEALTH_MULTIPLIER: u32 = 3;
 /// match; before that, a round-ending death loops to the next round.
 pub const ROUND_WINS_TO_WIN_MATCH: u8 = 2;
 
+/// How many double-KO rounds a match may REPLAY. **AUTHORED, not capture-derived**
+/// (no recorded match has a double KO). After one replay, the next double KO is
+/// decided by [`MatchCombat::draw_tiebreak_winner`] like a timed-out round. Uncapped,
+/// two phase-locked fighters whose killing blow and Revenge retaliation land in the
+/// same step replay the identical round forever (CRE-SOAK seed 0x4d4e3b4e79f4ca03).
+pub const MAX_DOUBLE_KO_REPLAYS: u8 = 1;
+
+/// Hard backstop on rounds played in one match: best-of-3 plus the replays above.
+/// With the replay cap a match cannot legitimately reach it undecided; if it ever
+/// does, the match ends on the round tally (see `resolve::on_round_ended`).
+pub const MATCH_ROUND_HARD_CAP: usize =
+    (2 * ROUND_WINS_TO_WIN_MATCH as usize - 1) + MAX_DOUBLE_KO_REPLAYS as usize;
+
 /// Base max-Health from the shipped `PlayerStatsData._playerStats._healthBase`.
 pub const HEALTH_BASE: u32 = 200;
 /// Health gained by each `_healthPoints` entry in the shipped per-level table.
@@ -2958,7 +2971,17 @@ pub struct MatchCombat {
     /// ORDER and the count both go on the wire. Capture-pinned: every one of the 375
     /// captured op48 frames fills (5,6),(7,8),(9,10) for rounds 1..N and sets
     /// propId 11 = N-1. See `messages::match_post_round_info`.
-    pub round_winners: Vec<usize>,
+    ///
+    /// `None` is a REPLAYED double KO: a round that happened but that nobody won. The
+    /// client models exactly that: `RoundInfo$$IsTied@0x2071a74` and
+    /// `MatchPostRoundInfoMessage$$IsTied@0x1cebbd0` are "winner id and loser id both
+    /// empty", and `MatchEndMatchMessage$$GetNumberOfRoundsWonBy@0x1cea200` counts
+    /// round entries whose winner id equals the player. So a tied round is sent with
+    /// empty ids and left out of the per-round arrays ([`Self::decided_round_results`]),
+    /// which keeps the client's tally equal to `rounds_won`.
+    pub round_winners: Vec<Option<usize>>,
+    /// Double-KO rounds replayed so far this match (capped by [`MAX_DOUBLE_KO_REPLAYS`]).
+    pub double_ko_replays: u8,
     /// When the current flow phase started (drives StateTimeout heartbeat /
     /// round timers from the tick).
     pub phase_entered: Instant,
@@ -3062,6 +3085,7 @@ impl MatchCombat {
             round: 0,
             rounds_won: [0; 2],
             round_winners: Vec::new(),
+            double_ko_replays: 0,
             phase_entered: now,
             winner: None,
             matchend_step: 0,
@@ -3079,6 +3103,20 @@ impl MatchCombat {
     /// s506 Match propId8) → first to `ROUND_WINS_TO_WIN_MATCH` wins.
     pub fn match_is_won(&self) -> bool {
         self.rounds_won.iter().any(|&w| w >= ROUND_WINS_TO_WIN_MATCH)
+    }
+
+    /// The `(winner uuid, loser uuid)` of every DECIDED round, in order: the per-round
+    /// array op48 and op49 carry. Replayed double KOs are left out (see
+    /// [`Self::round_winners`]), so the array has at most best-of-3 entries.
+    pub fn decided_round_results(&self) -> Vec<(String, String)> {
+        let uuid = |s: usize| {
+            self.fighters.get(s).map(|f| f.loadout.character_uuid.clone()).unwrap_or_default()
+        };
+        self.round_winners
+            .iter()
+            .flatten()
+            .map(|&w| (uuid(w), uuid(1 - w)))
+            .collect()
     }
 
     /// How a round ended. [Phase 3.14]
