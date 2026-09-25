@@ -199,6 +199,26 @@ pub struct ServerGlobal {
     pub dev_login_user_id: Option<uuid::Uuid>,
 }
 
+/// Say WHY a JSON body was rejected, then reject it exactly as actix would have.
+///
+/// A body that fails to deserialize is answered 400 by the `Json` extractor before
+/// any handler runs, so the handler's own logging never sees it. The access log
+/// then shows a bare `status=400` and nothing else, which is how the first
+/// quest's chest (tracker #8) cost a day: the reason, `invalid value: integer
+/// \`-1\`, expected u32`, was only ever in the response body. The response is
+/// unchanged; this only adds the line.
+fn log_rejected_json_body(
+    err: actix_web::error::JsonPayloadError,
+    req: &actix_web::HttpRequest,
+) -> actix_web::Error {
+    log::warn!(
+        "json body rejected: {} {} -- {err}",
+        req.method(),
+        req.path()
+    );
+    err.into()
+}
+
 #[main]
 async fn main() -> Result<()> {
     env_logger::init();
@@ -506,7 +526,11 @@ async fn main() -> Result<()> {
                     // by expanding inventory and quest state. 16 MiB is ~5x the
                     // largest payload actually observed, so it clears real characters
                     // with room to spare while still bounding an unbounded body.
-                    .app_data(JsonConfig::default().limit(16 * 1024 * 1024))
+                    .app_data(
+                        JsonConfig::default()
+                            .limit(16 * 1024 * 1024)
+                            .error_handler(log_rejected_json_body),
+                    )
                     .wrap_fn(|mut req, srv| {
                         let start_timestamp = SystemTime::now();
                         let is_from_blades_api =
@@ -803,5 +827,28 @@ mod cli_tests {
             unsafe { std::env::set_var("ARENA_DATABASE_URL", v) };
         }
         assert!(parsed.is_err(), "must not start without a connection string");
+    }
+}
+
+#[cfg(test)]
+mod json_rejection_tests {
+    use super::*;
+
+    /// The logging hook must not change what the client is told: a body serde
+    /// rejects is still a 400, with actix's own error.
+    #[test]
+    fn a_rejected_body_is_still_a_400() {
+        let serde_err = serde_json::from_str::<u32>("-1").unwrap_err();
+        let req = actix_web::test::TestRequest::post()
+            .uri("/blades.bgs.services/api/game/v1/public/characters/x/quests/y/dungeons/current/update")
+            .to_http_request();
+        let err = log_rejected_json_body(
+            actix_web::error::JsonPayloadError::Deserialize(serde_err),
+            &req,
+        );
+        assert_eq!(
+            err.as_response_error().status_code(),
+            actix_web::http::StatusCode::BAD_REQUEST
+        );
     }
 }

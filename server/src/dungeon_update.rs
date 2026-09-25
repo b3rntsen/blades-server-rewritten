@@ -185,8 +185,13 @@ struct ChestCollectedUpdate {
     pub spawn_group_id: Uuid,
     pub spawn_group_index: usize,
     /// Parsed for wire compatibility, never trusted over generated chest data.
+    ///
+    /// SIGNED, like `ChestGeneratedData::tier`: the client echoes the tier we
+    /// generated, and the tutorial's first chest is generated at -1 (as retail
+    /// generated it). This was a `u32`, so opening that chest failed the whole body
+    /// with a 400, and every retry of the batch failed with it (tracker #8).
     #[serde(rename = "tier")]
-    pub _tier: u32,
+    pub _tier: i64,
 }
 
 /// A `item_consumed` action: the player drank/ate a stackable inside the dungeon.
@@ -427,10 +432,13 @@ async fn handle_quest_dungeon_update(
                     .next()
                     .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
             };
-            let mut generated_data = quest_data
-                .generated_data
-                .0
-                .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2))?;
+            let mut generated_data = quest_data.generated_data.0.ok_or_else(|| {
+                log::warn!(
+                    "dungeon_update: 400 -- quest {quest_id} for character {character_id} \
+                     has no generated_data"
+                );
+                BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2)
+            })?;
 
             // THE CLIENT IS IN A DIFFERENT VERSION OF THIS DUNGEON THAN WE GENERATED.
             //
@@ -461,7 +469,13 @@ async fn handle_quest_dungeon_update(
             }
             let mut dungeon_state = quest_data
                 .dungeon_state
-                .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2))?
+                .ok_or_else(|| {
+                    log::warn!(
+                        "dungeon_update: 400 -- quest {quest_id} for character {character_id} \
+                         has no dungeon_state (not entered, or already exited)"
+                    );
+                    BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2)
+                })?
                 .0;
 
             let mut inventory_modification_tracker = InventoryChangeTracker::default();
@@ -581,7 +595,13 @@ async fn handle_event_dungeon_update(
             };
 
             let stored_generated_data: DungeonGeneratedData = serde_json::from_value(event_dungeon_data.generated_data)
-                .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2))?;
+                .map_err(|e| {
+                    log::warn!(
+                        "event dungeon_update: 400 -- stored generated_data for dungeon {dungeon_id} \
+                         / character {character_id} does not deserialize: {e}"
+                    );
+                    BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2)
+                })?;
             let generated_data = if stored_generated_data.enemy_generated_data.is_empty()
                 && stored_generated_data.item_generated_data.is_empty()
                 && stored_generated_data.chest_generated_data.is_empty()
@@ -654,7 +674,13 @@ async fn handle_event_dungeon_update(
             };
 
             let mut dungeon_state: DungeonState = serde_json::from_value(dungeon_state_value)
-                .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2))?;
+                .map_err(|e| {
+                    log::warn!(
+                        "event dungeon_update: 400 -- stored dungeon_state for dungeon {dungeon_id} \
+                         / character {character_id} does not deserialize: {e}"
+                    );
+                    BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2)
+                })?;
 
             let mut inventory_modification_tracker = InventoryChangeTracker::default();
 
@@ -1698,6 +1724,101 @@ mod tests {
             }
             other => panic!("chest pickup must not be dropped, got {other:?}"),
         }
+    }
+
+    /// Tracker #8: the first story quest's first chest 400'd every update after it.
+    ///
+    /// The tutorial dungeon (quest 5ad30483) has one chest spawn whose APK rarity is
+    /// -1 (`1d8b6737-…`). Since #288 we send that -1 in `chestGeneratedData`, as
+    /// retail did, and the client echoes it back as `"tier": -1` when the chest is
+    /// opened. The action read `tier` as a `u32`, so serde rejected the WHOLE body
+    /// and actix answered 400 before the handler ran. The client retries the same
+    /// batch, so every later update 400'd too and the game showed a lost connection.
+    ///
+    /// The bodies are retail's own, verbatim (capture session 28). Retail answered
+    /// every one of them 200. The two item pickups before the chest are the control:
+    /// they parsed before the fix as well, so a failure here is the chest and not the
+    /// fixture.
+    #[test]
+    fn retail_first_quest_updates_parse_including_the_tier_minus_one_chest() {
+        use blades_lib::user_data::CompleteInventory;
+
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/report_8_first_quest_updates.json"
+        ))
+        .expect("fixture parses");
+        let sequence = fixture["sequence"].as_array().expect("sequence");
+        assert_eq!(sequence.len(), 6, "fixture is the six captured bodies");
+
+        let mut requests = Vec::new();
+        for step in sequence {
+            let capture = step["captureId"].as_u64().unwrap();
+            assert_eq!(step["retailStatus"], 200, "retail accepted capture {capture}");
+            let req: DungeonUpdateRequest = serde_json::from_value(step["body"].clone())
+                .unwrap_or_else(|e| {
+                    panic!("retail capture {capture} (200 on retail) is rejected here: {e}")
+                });
+            requests.push((capture, req));
+        }
+
+        // The tutorial's chests exactly as our generator stores them (read off a
+        // live row for the character in tracker #8).
+        let generated: DungeonGeneratedData = serde_json::from_value(serde_json::json!({
+            "chestGeneratedData": {
+                "1b4d7912-4d83-4ec0-bef5-f29caba4360a": [{"tier": 1}],
+                "1d8b6737-114f-4aa6-a7ce-33543dee7082": [{"tier": -1}],
+                "3cf8739e-605b-4664-a4b6-5290f817b0d7": [{"tier": 1}],
+                "6de4b44d-1c48-4dbb-a06c-bae62c2be814": [{"tier": 1}]
+            },
+            "algorithmVersion": 1,
+            "version": 0
+        }))
+        .unwrap();
+        let mut state: DungeonState = serde_json::from_value(serde_json::json!({
+            "dungeonStatus": {
+                "dungeonSettingsIds": [], "reviveCount": 0, "level": 1, "seed": 0,
+                "currentState": {"b64": ""}, "algorithmVersion": 1, "version": 1
+            }
+        }))
+        .unwrap();
+        let mut character = CharacterDbEntryCharacterWalletInventory {
+            id: Uuid::nil(),
+            user_id: Uuid::nil(),
+            character: JsonDbWrapper(Default::default()),
+            data: JsonDbWrapper(Default::default()),
+            wallet: JsonDbWrapper(Default::default()),
+            inventory: JsonDbWrapper(CompleteInventory {
+                backpack: Default::default(),
+                loadout: Default::default(),
+                treasury: Default::default(),
+                overflow_treasury: Default::default(),
+                backpack_version: 1,
+                treasury_version: 0,
+            }),
+            server_state: JsonDbWrapper(Default::default()),
+        };
+        let mut wallet = CompleteWallet::default();
+
+        let mut chests_after = Vec::new();
+        for (capture, req) in &requests {
+            let mut tracker = InventoryChangeTracker::default();
+            process_dungeon_actions(&req.actions, &generated, &mut state, &mut character, &mut wallet, &mut tracker);
+            chests_after.push((*capture, character.inventory.0.treasury.chests().len()));
+        }
+
+        // Retail's treasury after these six: one chest from 4807, a second from 4816.
+        assert_eq!(
+            chests_after,
+            vec![(4804, 0), (4805, 0), (4807, 1), (4811, 1), (4813, 1), (4816, 2)],
+            "each chest opened in the tutorial must reach the treasury exactly once"
+        );
+        assert!(
+            state
+                .dungeon_status
+                .collected_chests
+                .contains("1d8b6737-114f-4aa6-a7ce-33543dee7082"),
+            "the tier -1 chest must be recorded as collected, so a retry cannot mint it again"
+        );
     }
 
     /// A collected chest must move `treasuryVersion`, or the client never sees it.
