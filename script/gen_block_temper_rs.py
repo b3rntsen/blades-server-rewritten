@@ -5,7 +5,7 @@ The tempered BLOCK value of every weapon and shield template, per tempering leve
 Same convention as `gamedata.rs` / `pvp_tuning.rs`: pure const tables, no build.rs,
 no runtime serde, the source hash embedded.
 
-    python3 script/gen_block_temper_rs.py [--tempering <path to tempering.json>]
+    python3 script/gen_block_temper_rs.py --tempering <blades-capture>/reference/game-defs/tempering.json
 
 `tempering.json` is extracted by blades-capture
 `reference/game-defs/extract/x_tempering.py` (ItemTemplate._temperProperties, per
@@ -17,7 +17,9 @@ Row indexing: row `i` is tempering level `i + 1`. The identity that pins it is t
 DAMAGE column: across the weapon templates, `levels[L-1].damage == base_damage +
 QUALITY_BONUS[L] x weight` for every L in 1..=10 on 325 of 332 templates, and the
 direct reading `levels[L]` holds on none. Row 0 is therefore tempering level 1, and
-an untempered item (level 0) uses the template's own `blockBase`.
+an untempered item (level 0) uses the template's own `blockBase`. (tempering.json's
+own `_meta` note says levels[0] is the untempered baseline; the data contradicts it:
+Daedric Shield levels[0] is 303 against blockBase 300.)
 """
 import argparse
 import hashlib
@@ -29,9 +31,6 @@ import struct
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GAMEDATA = os.path.join(ROOT, "server", "src", "arena", "combat", "gamedata.rs")
 OUT = os.path.join(ROOT, "server", "src", "arena", "combat", "block_temper.rs")
-DEFAULT_TEMPERING = os.path.expanduser(
-    "~/Projects/blades-capture/reference/game-defs/tempering.json"
-)
 
 
 def template_uuids(src, table):
@@ -58,7 +57,7 @@ def f32_lit(x):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tempering", default=DEFAULT_TEMPERING)
+    ap.add_argument("--tempering", required=True, help="blades-capture reference/game-defs/tempering.json")
     args = ap.parse_args()
 
     raw = open(args.tempering, "rb").read()

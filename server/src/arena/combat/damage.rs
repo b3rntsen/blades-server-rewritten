@@ -1931,7 +1931,7 @@ mod tests {
     /// (`Damage$$IsBlockable@0x1bd4cc8`): it keeps 137.32 − 0.75 × 40 = 107.32 into a
     /// raised guard, where the direct hit loses the block budget and the full 40.
     #[test]
-    fn blocking_is_not_derated_vs_dot_but_resistance_is() {
+    fn a_status_effect_dot_is_not_blocked_and_its_resistance_is_derated() {
         assert_eq!(combat_params::CONTINUOUS_DAMAGE_BLOCKING_EFFECTIVENESS, 1.0);
         assert_eq!(combat_params::CONTINUOUS_DAMAGE_RESISTANCE_EFFECTIVENESS, 0.75);
         let m = RetailDamageModel;

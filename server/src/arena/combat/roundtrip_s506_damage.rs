@@ -418,6 +418,25 @@ fn s506_optimal_block_is_a_flat_budget() {
     assert!((poison_of(&l) - (S506_POISON_BASE - 39.155)).abs() < 0.01, "got {:.2}", poison_of(&l));
 }
 
+/// The RETAIL anchor the fork cannot hit yet: seq 323's optimally blocked Slashing
+/// landed at **0.77**. In the client the block runs before armour, so the 5 % floor
+/// is 5 % of the pre-armour 144 (7.2) and armour then takes most of it. The fork
+/// cuts armour from the base first (01-D1), so it lands the floor of the post-armour
+/// 113.82 instead (5.69). Un-ignore when PR-03 moves armour after block.
+#[test]
+#[ignore = "PR-03 (01-D1): needs armour after block"]
+fn s506_optimal_block_physical_matches_the_recorded_0_77() {
+    let m = RetailDamageModel;
+    let now = Instant::now();
+    let mut def = blank();
+    def.set_actor_state(ActorStateType::Blocking, now);
+    def.blocking_side = ActiveSide::Right;
+    def.block_raised_at = Some(now);
+    def.blocking_until = Some(now + std::time::Duration::from_secs(2));
+    let b = m.resolve_attack(&flappety_dagger(), &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+    assert!((slash_of(&b) - 0.77).abs() < 0.05, "got {:.2}", slash_of(&b));
+}
+
 // ---------------------------------------------------------------------------
 // (D) No 25 % clamp (§4.5) + the round/match HP arithmetic (the seq-342 kill).
 // ---------------------------------------------------------------------------
