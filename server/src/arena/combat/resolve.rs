@@ -1421,8 +1421,14 @@ pub(super) fn resolve_ability_cast(
     // for ANY spell with a magicka cost the perk could never fire. It was dead on
     // arrival, and both existing tests hand-built `CasterPerks { magicka_full: true }`
     // so neither could see it.
+    //
+    // "Full" is against the pool's FULL maximum, not the ravage-lowered ceiling:
+    // `BoundedPercent` reads the full `Maximum` (combat-spec ch. 11 §1.1), so
+    // Maximum Power is void while ravaged. This used to compare against the lowered
+    // `max_magicka` and override the ravage-aware `CasterPerks::of`, letting the perk
+    // fire at a ravaged ceiling.
     let magicka_full_at_cast =
-        combat.fighters[sender].magicka >= combat.fighters[sender].max_magicka;
+        super::perks::magicka_full_for_maximum_power(&combat.fighters[sender]);
 
     // Resource gate passed → commit: set cooldown and deduct the cost.
     combat
@@ -1601,30 +1607,41 @@ pub(super) fn resolve_ability_cast(
     // delivers it when the cast completes. Zero-delay abilities (maneuvers,
     // Frostbite, anything shipping no `channelDuration`) run inline exactly as
     // before, so this changes nothing for them.
-    // COMBAT FOCUS / WILLPOWER — resistance for as long as this cast is running.
-    // Granted at cast START, not at impact: the perks protect you *while* you are
-    // committed to the animation, which is precisely the window in which you cannot
-    // block. Both stack on a spell (one says "an ability", the other "a spell").
+    // COMBAT FOCUS / WILLPOWER — resistance while the caster is committed to the
+    // cast. Granted at cast START, not at impact.
+    //
+    // The two perks key off DIFFERENT actor states in the client:
+    //   * Combat Focus (`CombatFocusPerk$$GetResistanceBonus@0x1A5AA60`): the
+    //     `Maneuver` state, or the Reckless Fury status. NEVER a spell — spells run in
+    //     `Channeling`. It used to be granted on every cast, spells included.
+    //   * Willpower (`ConservationistPerk$$GetResistanceBonus@0x1A5D52C`): the
+    //     `Channeling` state, i.e. spells only.
+    // Combat Focus is read live off `maneuver_state_until` / Reckless Fury in
+    // `Fighter::transient_resistance_against`; Willpower still rides the
+    // transient list. The window is the same castingDelay + channel (>= 0.5 s)
+    // approximation of the state's length for both.
     {
-        let perks = &combat.fighters[sender].loadout.perks;
-        let is_spell = super::gamedata::ability(&ea.ability_uuid)
-            .map(|a| a.kind == super::gamedata::AbilityKind::Spell)
-            .unwrap_or(false);
-        let bonus =
-            perks.combat_focus + if is_spell { perks.conservationist } else { 0.0 };
-        if bonus > 0.0 {
-            let rank = super::gamedata::ability_rank_clamped(&ea.ability_uuid, level as u16);
-            let window = rank
-                .map(|r| {
-                    r.get(super::gamedata::AbilityField::CastingDelay).unwrap_or(0.0)
-                        + r.channel_duration().unwrap_or(0.0)
-                })
-                .unwrap_or(0.0)
-                .max(super::perks::ABILITY_USE_MIN_WINDOW_SECS);
-            let expires = now + Duration::from_secs_f32(window);
-            combat.fighters[sender]
-                .transient_all_resistance
-                .push((bonus, expires));
+        let kind = super::gamedata::ability(&ea.ability_uuid).map(|a| a.kind);
+        let window = super::gamedata::ability_rank_clamped(&ea.ability_uuid, level as u16)
+            .map(|r| {
+                r.get(super::gamedata::AbilityField::CastingDelay).unwrap_or(0.0)
+                    + r.channel_duration().unwrap_or(0.0)
+            })
+            .unwrap_or(0.0)
+            .max(super::perks::ABILITY_USE_MIN_WINDOW_SECS);
+        let expires = now + Duration::from_secs_f32(window);
+        let f = &mut combat.fighters[sender];
+        match kind {
+            Some(super::gamedata::AbilityKind::Maneuver) => {
+                f.maneuver_state_until = Some(f.maneuver_state_until.map_or(expires, |t| t.max(expires)));
+            }
+            Some(super::gamedata::AbilityKind::Spell) => {
+                let willpower = f.loadout.perks.conservationist;
+                if willpower > 0.0 {
+                    f.transient_all_resistance.push((willpower, expires));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1832,6 +1849,25 @@ fn apply_ability_impact(
         }
         AbilityTag::Maneuver => {
             let mut attacker_loadout = combat.fighters[sender].loadout.clone();
+            // METTLE applies to MANEUVERS — and only to the maneuver's own flat bonus.
+            // The client folds `1 + Σ EnhanceAbility` into
+            // `ManeuverParameters._effectivenessMultiplier` at `ExecuteAbility`, and
+            // the only damage consumers are `get_OneHandedMultiplier` /
+            // `get_TwoHandedMultiplier`, which `ResolveManeuverDamage@0x1BD2D88` hands
+            // to `DistributeBonusDamage@0x1A21844` as the grip factor on
+            // `_bonusDamage` (combat-spec ch. 07 §7). The weapon's base damage, the
+            // combo factor and mitigation are untouched — so it scales
+            // `bonusDamage × grip` here, not the resolved hit.
+            //
+            // It used to multiply the WHOLE post-mitigation hit (weapon + bonus):
+            // weapon 100, bonus 75, Mettle 0.45 gave 253.75 where the client gives
+            // 100 + 75 × 1.45 = 208.75.
+            let mettle = {
+                let f = &combat.fighters[sender];
+                f.loadout
+                    .perks
+                    .ability_multiplier(super::perks::fighter_health_is_critical(f))
+            };
             // §5 PIERCING. Both of these ratings are ALREADY consumed by the damage
             // pipeline — `armor_piercing_rating` is subtracted from the defender's armor
             // (`damage.rs`, the armor stage) and `elem_resist_piercing_rating` feeds
@@ -1872,7 +1908,10 @@ fn apply_ability_impact(
                 //   bashes/dodges 1.0 / 1.0
                 // Reckless Fury ships 0/0 because it is a buff that swings nothing.
                 attacker_loadout.maneuver_bonus_damage +=
-                    maneuver_bonus_damage(&r, !attacker_loadout.has_shield);
+                    maneuver_bonus_damage(&r, !attacker_loadout.has_shield) * mettle;
+                if mettle != 1.0 {
+                    debug!("combat: slot {sender} maneuver bonus scaled x{mettle:.2} by Mettle");
+                }
                 // Venom Strikes' `_poisonEffectIncrease` (0.08 → ×1.08 poison).
                 if let Some(inc) = r.get(super::gamedata::AbilityField::PoisonEffectIncrease) {
                     if inc > 0.0 {
@@ -1905,20 +1944,7 @@ fn apply_ability_impact(
             // `AbilityTag`), and `ShieldManeuver (11)` almost certainly belongs to
             // them — but 11 appears in **none** of the 168, so there is no measurement
             // behind it and it is deliberately not guessed here.
-            // METTLE applies to MANEUVERS — and only to maneuvers. A maneuver is
-            // resolved through `resolve_attack`, which takes a Loadout and no
-            // `CasterPerks`, so the perk had no way to reach it: it was being applied
-            // to spells (where the client applies nothing) and to nothing here (where
-            // the client applies it). Scale the resolved magnitude by
-            // `ability_multiplier`, which is the whole-ability effectiveness the
-            // client's `AbilityExecution._effectivenessMultiplier` expresses.
-            let mettle = {
-                let f = &combat.fighters[sender];
-                f.loadout
-                    .perks
-                    .ability_multiplier(super::perks::health_is_critical(f.health, f.max_health))
-            };
-            let mut resolved = RetailDamageModel.resolve_attack(
+            let resolved = RetailDamageModel.resolve_attack(
                 &attacker_loadout,
                 &combat.fighters[target_slot],
                 DamageSource::WeaponManeuver,
@@ -1927,13 +1953,6 @@ fn apply_ability_impact(
                 0,
                 now,
             );
-            if mettle != 1.0 {
-                for (_, v) in resolved.components.iter_mut() {
-                    *v *= mettle;
-                }
-                resolved.total *= mettle;
-                debug!("combat: slot {sender} maneuver scaled ×{mettle:.2} by Mettle");
-            }
             info!(
                 "combat: slot {sender} maneuver {} → weapon damage {:.1} (Middle)",
                 ability_uuid, resolved.total,
@@ -2225,6 +2244,17 @@ pub(super) fn land_due_impacts(combat: &mut MatchCombat, now: Instant) -> Vec<(u
     let mut out = Vec::new();
     for p in due {
         if p.sender >= combat.fighters.len() || p.target >= combat.fighters.len() {
+            continue;
+        }
+        // The same rule `land_due_hits` and `land_due_echoes` apply. `due` was taken
+        // out of the queue before this loop, so `on_round_ended` clearing
+        // `pending_impacts` cannot stop a second impact due on the SAME tick: without
+        // this it landed from a dead caster into a finished round, killed the
+        // survivor and ended the round again (CRE-SOAK, `round_ends_once_tests`).
+        if !matches!(combat.phase, FlowState::StateTimeout) {
+            continue;
+        }
+        if combat.fighters[p.target].is_dead() || combat.fighters[p.sender].is_dead() {
             continue;
         }
         out.extend(apply_ability_impact(
@@ -3103,11 +3133,15 @@ fn emit_damage(
         now,
     ));
 
-    if combat.fighters[target_slot].is_dead() {
-        out.extend(on_round_ending_death(combat, attacker_slot, now));
-    }
-    if combat.fighters[attacker_slot].is_dead() {
-        out.extend(on_round_ending_death(combat, target_slot, now));
+    // ONE round end, however many fighters this hit left dead. Both dead (the target
+    // died and Reflecting Bash / Revenge killed the attacker) is a double KO, which
+    // `on_round_ended` detects from the pools itself; calling it once per corpse
+    // recorded the round twice and sent two results (CRE-SOAK).
+    let target_dead = combat.fighters[target_slot].is_dead();
+    let attacker_dead = combat.fighters[attacker_slot].is_dead();
+    if target_dead || attacker_dead {
+        let winner = if target_dead { attacker_slot } else { target_slot };
+        out.extend(on_round_ending_death(combat, winner, now));
     }
     out
 }
@@ -4384,7 +4418,10 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
             .iter()
             .any(|e| e.effect == StatusEffectType::BlockHealthRegen && now < e.expires_at);
         if !block_health && f.health < f.max_health && f.max_stamina > 0 {
-            let stamina_fraction = f.stamina as f32 / f.max_stamina as f32;
+            // `Stamina.BoundedPercent` — against the pool's FULL maximum, the same
+            // reading Maximum Power uses (ravage does not lower `Maximum`).
+            let stamina_fraction =
+                f.stamina as f32 / f.max_stamina.saturating_add(f.ravaged_stamina) as f32;
             let rate = f.loadout.perks.healing_surge_rate(stamina_fraction);
             // REGEN_TICK_INTERVAL is 1 s, so a per-second rate IS the per-tick
             // amount. Rounded, and not floored to a minimum of 1: an unperked
@@ -10961,5 +10998,148 @@ mod continuous_area_tests {
         combat.reset_fighters_for_next_round(now);
         assert_eq!(combat.fighters[0].continuous_next_tick_at, None);
         assert_eq!(combat.fighters[0].continuous_carry, 0.0);
+    }
+}
+
+/// CRE-SOAK: a round ends ONCE.
+///
+/// Found by the whole-match soak (`engine::soak_tests`, bot-vs-bot, seed
+/// 0x305edec27c61db36): both fighters' maneuver impacts fell due on the same tick.
+/// The first killed its target and ended the match; `land_due_impacts` had already
+/// taken the second out of the queue and landed it anyway — from a DEAD caster, into
+/// a finished round — which killed the survivor and ran `on_round_ended` twice more
+/// (once per dead fighter in `emit_damage`). The result: `round_winners` [0,1,0,1,0]
+/// (op48 announcing five rounds), three op29 death frames, and `combat.winner`
+/// flipped 0 → 1 → 0, i.e. the match could be awarded to the player who died first.
+/// `land_due_hits` and `land_due_echoes` already refuse to land outside the live
+/// round; `land_due_impacts` did not.
+#[cfg(test)]
+mod round_ends_once_tests {
+    use super::*;
+    use super::super::loadout::starter;
+    use super::super::state::{Fighter, FlowState, MatchCombat, PendingHit, PendingImpact};
+
+    const POWER_ATTACK: &str = "ce6b63e9-9f18-49c4-aee0-51f7985f9892";
+
+    fn live(now: Instant) -> MatchCombat {
+        let mut c = MatchCombat::new(2, 2, now);
+        for slot in 0..2 {
+            let obj = c.alloc_net_object_id();
+            c.fighters.push(Fighter::new(slot, obj, starter(), now));
+        }
+        c.match_net_object_id = c.alloc_net_object_id();
+        c.phase = FlowState::StateTimeout;
+        c.round = 1;
+        c
+    }
+
+    fn impact(sender: usize, due: Instant) -> PendingImpact {
+        PendingImpact {
+            sender,
+            target: 1 - sender,
+            ability_uuid: POWER_ATTACK.to_string(),
+            level: 1,
+            tag: super::super::state::AbilityTag::Maneuver,
+            magicka_full_at_cast: false,
+            due,
+        }
+    }
+
+    fn op48_count(out: &[(usize, Vec<u8>)]) -> usize {
+        out.iter()
+            .filter(|(v, b)| {
+                *v == 0
+                    && b.len() > 2
+                    && b[1] == 0x36
+                    && arena_proto::parse_netdata(&b[2..]).int(3) == Some(48)
+            })
+            .count()
+    }
+
+    /// Two lethal impacts due on one tick: the first ends the round, the second must
+    /// not land. Round 1 (non-final): one winner recorded, one op48, survivor alive.
+    #[test]
+    fn a_second_impact_on_the_killing_tick_does_not_land() {
+        let now = Instant::now();
+        let mut c = live(now);
+        c.fighters[0].health = 1;
+        c.fighters[1].health = 1;
+        c.pending_impacts.push(impact(0, now));
+        c.pending_impacts.push(impact(1, now));
+
+        let out = land_due_impacts(&mut c, now + Duration::from_millis(1));
+
+        assert_eq!(c.round_winners, vec![0], "the round ended once, won by slot 0");
+        assert_eq!(c.rounds_won, [1, 0]);
+        assert_eq!(c.phase, FlowState::NextState);
+        assert!(!c.fighters[0].is_dead(), "slot 1's impact landed after the round ended");
+        assert_eq!(op48_count(&out), 1, "exactly one round result to each viewer");
+    }
+
+    /// The match-ending variant: the winner must stay the fighter who got the kill.
+    #[test]
+    fn the_match_winner_cannot_flip_on_a_trailing_impact() {
+        let now = Instant::now();
+        let mut c = live(now);
+        c.round = 3;
+        c.rounds_won = [1, 1];
+        c.round_winners = vec![0, 1];
+        c.fighters[0].health = 1;
+        c.fighters[1].health = 1;
+        c.pending_impacts.push(impact(0, now));
+        c.pending_impacts.push(impact(1, now));
+
+        let out = land_due_impacts(&mut c, now + Duration::from_millis(1));
+
+        assert_eq!(c.winner, Some(0), "slot 0 killed first and won the match");
+        assert_eq!(c.round_winners, vec![0, 1, 0], "three rounds, not five");
+        assert_eq!(c.rounds_won, [2, 1]);
+        assert_eq!(c.phase, FlowState::RoundEnd);
+        assert_eq!(op48_count(&out), 1);
+    }
+
+    /// Control: impacts still land in a live round (the guard is not "never land").
+    #[test]
+    fn a_single_due_impact_still_lands_in_a_live_round() {
+        let now = Instant::now();
+        let mut c = live(now);
+        let before = c.fighters[1].health;
+        c.pending_impacts.push(impact(0, now));
+        land_due_impacts(&mut c, now + Duration::from_millis(1));
+        assert!(c.fighters[1].health < before, "the maneuver impact must land");
+        assert_eq!(c.phase, FlowState::StateTimeout);
+    }
+
+    /// One hit that leaves BOTH fighters dead (the target dies, and Reflecting Bash
+    /// sends enough back to kill the attacker) is ONE round end — a double KO —
+    /// not two. `emit_damage` used to call `on_round_ending_death` once per corpse.
+    #[test]
+    fn a_hit_that_kills_both_fighters_ends_the_round_once() {
+        let now = Instant::now();
+        let mut c = live(now);
+        c.fighters[0].health = 1;
+        c.fighters[1].health = 1;
+        c.fighters[1].reflect_until = Some(now + Duration::from_secs(5));
+        c.fighters[1].reflect_remaining = 10_000.0;
+        c.pending_hits.push(PendingHit {
+            sender: 0,
+            target: 1,
+            side: super::super::state::ActiveSide::Right,
+            swing_factor: 1.0,
+            combo_count: 0,
+            due: now,
+        });
+
+        let out = land_due_hits(&mut c, now + Duration::from_millis(1));
+
+        assert!(c.fighters[0].is_dead() && c.fighters[1].is_dead(), "fixture: both must die");
+        assert_eq!(c.rounds_won, [0, 0], "a double KO scores nothing");
+        assert_eq!(
+            c.round_winners.len(),
+            1,
+            "one round end, not one per corpse: {:?}",
+            c.round_winners
+        );
+        assert_eq!(op48_count(&out), 1);
     }
 }

@@ -261,12 +261,44 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
     // Additive across slots (the same ring in both hands gives +5+5), clamped to the
     // ability's own `maximum_level`.
     apply_grade_bonuses(&mut lo.abilities, &grade_bonus);
-    // Perks resolve HERE, after grading, so a perk raised by jewellery pays out
-    // at the raised rank exactly as a damage ability does.
+
+    // PERKS come from the LEARNED abilities, not the equip slots.
+    //
+    // The client registers every learned perk (`LearnedAbilitiesHandler$$
+    // RegisterAbility@0x1A89724` tail-calls `ApplyPerkBonuses` iff `_abilityType ==
+    // Perk`, for every member of the persisted `Abilities` node), and its ability
+    // menu has six slots — spells 0-2, maneuvers 3-5 — and no perk slot. We read
+    // perks from `equippedAbilities` only, so on prod (2026-09-25) 0 of 73 characters
+    // with equip slots had a perk there while 67 had learned perks: NO real character
+    // got any perk in the arena.
+    //
+    // Rank per `PlayerActor$$GetHighestAvailableRank@0x1868F8C`:
+    // `min(_maximumLevel, learnedRank + Σ gear bonus ranks)` — the same
+    // `apply_grade_bonuses` the equipped abilities use, after grading, so a perk
+    // raised by jewellery pays out at the raised rank.
+    let mut learned = learned_perks(&character.abilities);
+    apply_grade_bonuses(&mut learned, &grade_bonus);
     lo.perks = super::perks::PerkBonuses::resolve(
-        &lo.abilities,
+        &learned,
         super::perks::matched_armor_set(&armor_pieces),
     );
+    if !learned.is_empty() {
+        // One line per fighter per match: the only evidence on prod that perks are
+        // reaching the arena at all (the defect this replaces was silent).
+        log::info!(
+            "loadout: {} learned perk(s): {}",
+            learned.len(),
+            learned
+                .iter()
+                .map(|a| format!(
+                    "{}@{}",
+                    gamedata::ability(&a.instance_uuid).map(|x| x.editor_name).unwrap_or("?"),
+                    a.level
+                ))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
     // Matching Set is a static gear property once the set test has passed, so it
     // folds straight into the rating rather than being re-checked per hit.
     lo.armor_rating += lo.perks.matching_set_armor;
@@ -860,6 +892,38 @@ pub fn ability_tag_for_template(uuid_str: &str) -> AbilityTag {
             }
         },
     }
+}
+
+/// Every player PERK in the learned `abilities` map (`{abilityUuid: level}`), at
+/// its learned rank clamped to `[1, maximum_level]`.
+///
+/// Skipped: non-perks (spells and maneuvers are cast from the equip slots, not
+/// from here), enemy-only perks, unknown uuids, and a level of 0 or a non-integer
+/// level (the client never persists rank 0 — `GetAbilityByRank(0)` would index
+/// `_abilityRankData[-1]` and throw — so such an entry is not a learned perk).
+fn learned_perks(learned: &Value) -> Vec<EquippedAbility> {
+    let Some(map) = learned.as_object() else {
+        return Vec::new();
+    };
+    let mut out: Vec<EquippedAbility> = map
+        .iter()
+        .filter_map(|(uuid, level)| {
+            let a = gamedata::ability(uuid)?;
+            if a.kind != gamedata::AbilityKind::Perk || a.enemy_only {
+                return None;
+            }
+            let level = level.as_u64().filter(|l| *l > 0)?;
+            let cap = u64::from(a.maximum_level.min(u16::from(u8::MAX)));
+            Some(EquippedAbility {
+                instance_uuid: uuid.clone(),
+                level: level.min(cap).max(1) as u8,
+                tag: AbilityTag::Perk,
+            })
+        })
+        .collect();
+    // Deterministic order, whatever the JSON map's iteration order.
+    out.sort_by(|a, b| a.instance_uuid.cmp(&b.instance_uuid));
+    out
 }
 
 /// `equippedAbilities` is `{slot: uuid}` — take the VALUES (the ability instance
@@ -1736,5 +1800,188 @@ mod two_handed_tests {
             "if the starter weapon ever ships differing figures this becomes an \
              ordering guard, and the note above is then out of date",
         );
+    }
+}
+
+
+/// D4 (combat-spec ch. 07 / ch. 10 §0.1): perks come from the LEARNED abilities.
+#[cfg(test)]
+mod learned_perk_tests {
+    use super::*;
+    use blades_lib::user_data::{
+        Backpack, Item, ItemPropertiesAll, ItemSingleProperty, SingleEquippedItem, Treasury,
+    };
+    use serde_json::json;
+
+    const SCOUT: &str = "11ebd583-fc0c-44f0-8dbf-5c7207526064";
+    /// `ScoutBonusRanks` — a Necklace grading affix that raises Scout.
+    const SCOUT_BONUS_RANKS: &str = "33f0477b-704c-48a3-a4f1-6ab1a9a1916b";
+
+    fn inventory(items: Vec<Item>) -> CompleteInventory {
+        let mut lo = blades_lib::user_data::Loadout::default();
+        for (i, item) in items.into_iter().enumerate() {
+            let slot = Uuid::from_u128(1000 + i as u128);
+            lo.equipped_items.0.insert(
+                slot,
+                SingleEquippedItem { id: Uuid::from_u128(2000 + i as u128), slot, item },
+            );
+        }
+        CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: lo,
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        }
+    }
+
+    fn character(equipped: Value, learned: Value) -> CompleteCharacter {
+        CompleteCharacter {
+            level: 50,
+            equipped_abilities: equipped,
+            abilities: learned,
+            ..Default::default()
+        }
+    }
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    /// A REAL prod row (`characters.character`, read-only SELECT, 2026-09-25): the
+    /// `equippedAbilities` object keyed "0".."5" holds three spells and three
+    /// maneuvers, and every perk the character owns is only in the learned
+    /// `abilities` map. Before the fix this character resolved NO perk at all.
+    ///
+    /// Expected magnitudes are literals from the shipped rank tables
+    /// (`abilities_full.json ranks[].bonusValue`), not values computed by the code
+    /// under test.
+    #[test]
+    fn a_prod_shaped_character_gets_its_learned_perks() {
+        let equipped = json!({
+            "0": "c4b48518-e847-4f3d-81a2-2856bdb4ed98",
+            "1": "91078132-ef5c-492a-97f2-ac69be5140a8",
+            "2": "65ede044-d68a-4b2b-8f0c-02075ad133cc",
+            "3": "be56c560-a4ba-47ad-8513-f24c342ca594",
+            "4": "e685e88f-34e7-4fdc-bacd-618763078d65",
+            "5": "7f78d342-f346-4210-9f62-01a540687bb3"
+        });
+        let learned = json!({
+            "09aa3390-8f42-4cd5-a88c-5c94d5e1dd29": 2,
+            "11ebd583-fc0c-44f0-8dbf-5c7207526064": 1,
+            "1e7f0dd6-6015-4f65-b811-3246e407e330": 1,
+            "3dcb91c5-2279-4003-b6a6-53eac6fb86c8": 1,
+            "3f575c09-ca6d-40a8-977b-b2c5d44d1b5c": 1,
+            "4be1d681-c35d-4540-b255-c2910ac80664": 1,
+            "4e760726-b012-4b25-bc92-0cd6312d6601": 1,
+            "64a6a981-0dc8-4fc1-b043-a75d052b00f5": 1,
+            "65ede044-d68a-4b2b-8f0c-02075ad133cc": 1,
+            "66faf7c6-426c-4689-99e6-ccdd25b9bc11": 1,
+            "69ffa3fd-deb7-4824-bab6-ac6450f19676": 1,
+            "780b82d1-a371-4454-baea-e18389f315e5": 1,
+            "788aa75e-4796-4d57-bbab-b1b901623f16": 1,
+            "7f0c9202-2130-4376-aa17-890c25040e7b": 7,
+            "7f78d342-f346-4210-9f62-01a540687bb3": 1,
+            "91078132-ef5c-492a-97f2-ac69be5140a8": 3,
+            "a901ed60-c546-484c-aec3-0b221847360e": 3,
+            "be56c560-a4ba-47ad-8513-f24c342ca594": 1,
+            "c4b48518-e847-4f3d-81a2-2856bdb4ed98": 1,
+            "ce6b63e9-9f18-49c4-aee0-51f7985f9892": 1,
+            "cfee0b02-6d91-4d34-869c-a7e54329060d": 1,
+            "d6d7ad89-0c41-410f-8a19-c4850ab9fe4f": 1,
+            "e0b549c8-a686-49d4-a800-4661fff73e1d": 1,
+            "e685e88f-34e7-4fdc-bacd-618763078d65": 1,
+            "f9a2373b-a84f-4716-90ce-165baa2dd6ed": 1
+        });
+        let lo = from_character(&character(equipped, learned), &inventory(vec![]));
+
+        // Control: the equip slots genuinely hold no perk, so the old source
+        // (`lo.abilities`) resolves to nothing — this is the prod defect.
+        assert_eq!(lo.abilities.len(), 6);
+        assert!(lo.abilities.iter().all(|a| a.tag != AbilityTag::Perk));
+        assert!(super::super::perks::PerkBonuses::resolve(&lo.abilities, true).is_empty());
+
+        let p = &lo.perks;
+        assert!(close(p.healing_surge, 9.6), "HealingSurge r2 = 9.6, got {}", p.healing_surge);
+        assert!(close(p.weapon_bonus(Some(tables::Weight::Light)), 3.43), "Scout r1");
+        assert!(close(p.weapon_bonus(Some(tables::Weight::Versatile)), 4.22), "Armsman r1");
+        assert!(close(p.weapon_bonus(Some(tables::Weight::Heavy)), 6.74), "Barbarian r1");
+        assert!(close(p.element_bonus(DamageType::Poison), 9.0), "AugmentedPoison r1");
+        assert!(close(p.elemental_block_rating, 32.5), "ElementalProtection r1");
+        assert!(close(p.enchantment_synergy, 0.07), "EnchantmentSynergy r1");
+        assert!(close(p.mettle, 0.20), "Mettle r1");
+        assert!(close(p.combat_focus, 8.78), "CombatFocus r1");
+        // Matching Set is learned but this fixture wears no armour, so it pays 0.
+        assert_eq!(p.matching_set_armor, 0.0);
+        // Not learned by this character: must stay zero.
+        assert_eq!(p.max_power, 0.0, "MaximumPower is not in the learned map");
+        assert_eq!(p.conservationist, 0.0, "Conservationist is not in the learned map");
+    }
+
+    /// Control for the test above: a perk that is NOT learned does not resolve,
+    /// even when its uuid sits in an equip slot (the client registers perks from
+    /// the learned set only) — and a learned level of 0 is not a learned perk.
+    #[test]
+    fn an_unlearned_perk_does_not_resolve() {
+        // Scout in an equip slot, but absent from the learned map.
+        let lo = from_character(
+            &character(json!({ "0": SCOUT }), json!({ gamedata::ids::FIREBALL: 3 })),
+            &inventory(vec![]),
+        );
+        assert!(lo.perks.is_empty(), "an equipped-but-unlearned perk must not pay: {:?}", lo.perks);
+
+        // Scout "learned" at level 0.
+        let lo = from_character(&character(Value::Null, json!({ SCOUT: 0 })), &inventory(vec![]));
+        assert!(lo.perks.is_empty(), "level 0 is not learned: {:?}", lo.perks);
+
+        // No learned map at all.
+        let lo = from_character(&character(Value::Null, Value::Null), &inventory(vec![]));
+        assert!(lo.perks.is_empty());
+
+        // And the positive case with the same fixture shape, so the two tests above
+        // cannot pass by resolving nothing for every input.
+        let lo = from_character(&character(Value::Null, json!({ SCOUT: 1 })), &inventory(vec![]));
+        assert!(close(lo.perks.weapon_bonus(Some(tables::Weight::Light)), 3.43));
+    }
+
+    /// `GetHighestAvailableRank`: `min(_maximumLevel, learnedRank + Σ bonus ranks)`.
+    /// Scout learned at 5 plus a tier-2 `ScoutBonusRanks` necklace (+5) pays the
+    /// rank-10 value (13.06); without the necklace it pays rank 5 (8.52).
+    #[test]
+    fn a_gear_bonus_rank_raises_a_learned_perk() {
+        let necklace = Item {
+            item_template_id: Uuid::from_u128(9),
+            tempering_level: 0,
+            durability: 75.0,
+            grade: None,
+            arcane_tier: None,
+            properties: ItemPropertiesAll {
+                enchanting: vec![],
+                grading: vec![ItemSingleProperty {
+                    id: Uuid::parse_str(SCOUT_BONUS_RANKS).unwrap(),
+                    tier: 2,
+                }],
+            },
+        };
+        let ch = character(Value::Null, json!({ SCOUT: 5 }));
+
+        let bare = from_character(&ch, &inventory(vec![]));
+        assert!(close(bare.perks.weapon_bonus(Some(tables::Weight::Light)), 8.52), "Scout r5");
+
+        let raised = from_character(&ch, &inventory(vec![necklace]));
+        assert!(
+            close(raised.perks.weapon_bonus(Some(tables::Weight::Light)), 13.06),
+            "Scout r5 + 5 bonus ranks = r10 = 13.06, got {}",
+            raised.perks.weapon_bonus(Some(tables::Weight::Light)),
+        );
+    }
+
+    /// The learned rank is clamped to the perk's shipped `maximum_level` (Scout 11).
+    #[test]
+    fn a_learned_rank_above_the_maximum_is_clamped() {
+        let got = learned_perks(&json!({ SCOUT: 250 }));
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].level, 11);
     }
 }

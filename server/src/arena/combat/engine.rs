@@ -5052,3 +5052,10 @@ mod void_for_a_player_who_never_arrived {
         assert!(!void_ai_match_result(true, false));
     }
 }
+
+/// CRE-SOAK: whole-match soak against prod-derived characters. A child of this
+/// module so it drives `MatchInstance` exactly as the registry does while still
+/// reading its private state for the invariants.
+#[cfg(test)]
+#[path = "soak_tests.rs"]
+pub(crate) mod soak_tests;

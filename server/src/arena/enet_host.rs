@@ -1154,6 +1154,168 @@ mod tests {
             "the second H2H match reaches a live, damageable round"
         );
     }
+
+    /// CRE-SOAK over the REAL transport: full solo-vs-bot matches, start to finish,
+    /// through a rusty_enet server host + a rusty_enet client on loopback UDP, the
+    /// registry's X25519 key exchange, ChaCha20 per-peer sealing and the retail channel
+    /// map — the whole server-side path a phone's match takes, minus HTTP
+    /// matchmaking. Loadouts are the soak's prod-derived and edge fixtures (perks
+    /// resolved from the learned map). The client swings and casts its fixture's
+    /// abilities whenever the round is live.
+    ///
+    /// Per match: every received packet decrypts to the 0xBE marker; the op55
+    /// MatchState stream reaches `DisconnectingPlayersAfterMatch`; the op49 victory
+    /// card (the ~40 KB, many-fragment frame of report #163) is reassembled and
+    /// received; the server retires the match and the client sees the graceful
+    /// `disconnect_later`; all inside the engine-timer bound.
+    #[test]
+    fn soak_full_matches_over_real_enet_and_chacha() {
+        use crate::arena::combat::engine::soak_tests::{fixture_loadouts, soak_match_bound};
+        use crate::arena::combat::state::{AbilityTag, MatchState};
+
+        let fx = fixture_loadouts();
+        let step = Duration::from_millis(50);
+        let bound = soak_match_bound(step) + Duration::from_secs(10);
+        // Player fixture × bot fixture, spread over the prod sample and every edge build.
+        let pairs: Vec<(usize, usize)> =
+            (0..12).map(|i| ((i * 7) % fx.len(), (30 + i) % fx.len())).collect();
+        let mut summary = Vec::new();
+
+        for (k, &(pa, pb)) in pairs.iter().enumerate() {
+            let registry = MatchRegistry::new(4);
+            assert!(registry.allocate_with_bots(
+                &[format!("soak-{k}")],
+                vec![fx[pa].1.clone(), fx[pb].1.clone()],
+                Uuid::new_v4(),
+                1,
+            ));
+            let server_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+            let server_addr = server_sock.local_addr().unwrap();
+            let mut server = Host::new(
+                BladesEnetSocket::new(server_sock),
+                HostSettings { peer_limit: 4, ..Default::default() },
+            )
+            .unwrap();
+            let mut peer_at = HashMap::new();
+            let mut c = Client::connect(server_addr);
+            for _ in 0..2000 {
+                while pump(&mut server, &registry, &mut peer_at) {}
+                server.flush();
+                c.drain();
+                if c.connected {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(c.connected, "match {k}: ENet connect");
+            let (sk, pk) = gen_keypair();
+            c.send_plain(&hs_c2s(&pk));
+            for _ in 0..2000 {
+                while pump(&mut server, &registry, &mut peer_at) {}
+                server.flush();
+                c.drain();
+                if !c.inbox.is_empty() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let reply = c.inbox.first().expect("key exchange reply").clone();
+            let (mut spk, mut nonce) = ([0u8; 32], [0u8; 8]);
+            spk.copy_from_slice(&reply[14..46]);
+            nonce.copy_from_slice(&reply[47..55]);
+            c.crypto = Some(CryptoCtx { key: x25519_shared(&sk, &spk), nonce });
+            c.inbox.clear();
+
+            let casts: Vec<String> = fx[pa]
+                .1
+                .abilities
+                .iter()
+                .filter(|a| a.tag != AbilityTag::Perk)
+                .map(|a| a.instance_uuid.clone())
+                .collect();
+            let t0 = std::time::Instant::now();
+            let mut vnow = t0;
+            let mut rng: u64 = 0x5eed_0000 + k as u64;
+            let mut states: Vec<u8> = Vec::new();
+            let (mut victory_card, mut damage, mut retired) = (false, 0usize, false);
+            loop {
+                while pump(&mut server, &registry, &mut peer_at) {}
+                vnow += step;
+                for (addr, channel, bytes) in registry.tick_matches(vnow) {
+                    send_to(&mut server, &peer_at, &addr, channel, &bytes);
+                }
+                for addr in registry.take_finished_peers() {
+                    if let Some(&pid) = peer_at.get(&addr) {
+                        server.peer_mut(pid).disconnect_later(0);
+                    }
+                    retired = true;
+                }
+                server.flush();
+                c.drain();
+                for m in c.inbox.drain(..) {
+                    assert_eq!(m.first(), Some(&0xBE), "match {k}: a packet did not decrypt");
+                    let nd = arena_proto::parse_netdata(&m[2..]);
+                    if m[1] == 0x35 {
+                        if let Some(s) = nd.int(5) {
+                            if states.last() != Some(&(s as u8)) {
+                                states.push(s as u8);
+                            }
+                        }
+                    }
+                    if m[1] == 0x36 {
+                        match nd.int(3) {
+                            Some(49) => victory_card = true,
+                            Some(50) => damage += 1,
+                            _ => {}
+                        }
+                    }
+                }
+                let live = states.last() == Some(&(MatchState::InRound as u8));
+                if live && c.connected {
+                    rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    match (rng >> 33) % 12 {
+                        0 | 1 => c.send_enc(0x84, 0x36),
+                        2 if !casts.is_empty() => {
+                            let uuid = &casts[((rng >> 40) as usize) % casts.len()];
+                            c.send_enc_payload(&crate::arena::combat::messages::request_execute_ability(
+                                564, uuid,
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+                if c.disconnected {
+                    break;
+                }
+                assert!(
+                    vnow.duration_since(t0) < bound,
+                    "match {k} ({} vs {}) did not finish within {bound:?}; states {states:?}",
+                    fx[pa].0,
+                    fx[pb].0
+                );
+            }
+            assert!(retired, "match {k}: the registry retired the finished match");
+            assert_eq!(registry.active_count(), 0, "match {k}: slot released");
+            assert_eq!(
+                states.last(),
+                Some(&(MatchState::DisconnectingPlayersAfterMatch as u8)),
+                "match {k}: {states:?}"
+            );
+            assert!(victory_card, "match {k}: the op49 victory card never arrived over ENet");
+            assert!(damage > 0, "match {k}: no damage frame reached the client");
+            summary.push(format!(
+                "{} vs {}: {:?} sim, {} damage frames, states {:?}",
+                fx[pa].0,
+                fx[pb].0,
+                vnow.duration_since(t0),
+                damage,
+                states
+            ));
+        }
+        for s in &summary {
+            eprintln!("CRE-SOAK enet: {s}");
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1330,10 +1330,20 @@ pub struct Fighter {
     /// per rank from `ResistElementsAbility._resistanceDuration` (10 s at rank 1).
     pub transient_resistances: Vec<(DamageType, f32, Instant)>, // (type, flat_amount, expires_at)
     /// Resistance against EVERY damage type, as (flat_amount, expires_at).
-    /// Combat Focus and Willpower grant this for the duration of a cast; unlike
-    /// `transient_resistances` it is not keyed by type, because the shipped text
-    /// is "Resistance to all damage".
+    /// Willpower grants this for the duration of a spell cast (and Indomitable
+    /// Smash's `_bonusResistance` rides it); unlike `transient_resistances` it is
+    /// not keyed by type, because the shipped text is "Resistance to all damage".
+    /// Combat Focus is NOT pushed here — see [`Fighter::combat_focus_active`].
     pub transient_all_resistance: Vec<(f32, Instant)>,
+    /// The fighter is in the client's `Maneuver` actor state until this instant.
+    ///
+    /// The resolver does not move its logical `actor_state` into `Maneuver` (op58
+    /// only records it presentationally), so this carries the one fact a perk
+    /// needs: Combat Focus pays out while the actor is in the Maneuver state
+    /// (`CombatFocusPerk$$GetResistanceBonus@0x1A5AA60`). Set when a maneuver cast
+    /// is accepted, for the same castingDelay + channel (>= 0.5 s) window the fork
+    /// has always used to approximate the maneuver's animation.
+    pub maneuver_state_until: Option<Instant>,
     /// While set and in the future this fighter is STAGGERED
     /// (`CombatParameters.baseStaggerDuration` 1.5 s): inputs are dropped, exactly
     /// like `Paralyzed`, and the actor-state is `Staggered`. [Phase 3.13]
@@ -1619,6 +1629,7 @@ impl Fighter {
             no_magicka_regen_until: None,
             reckless_fury_until: None,
             reckless_fury_bonus: 0.0,
+            maneuver_state_until: None,
             player_net_object_id: 0, // assigned by MatchInstance::new
             ability_net_object_id: 0, // assigned by MatchInstance::new
             health: max_health,
@@ -2040,14 +2051,25 @@ impl Fighter {
     /// Return the sum of transient Resist-Elements resistances for `ty` (non-expired
     /// only). Called by the damage pipeline to add to loadout resistances. [§4.3]
     pub fn transient_resistance_against(&self, ty: DamageType, now: Instant) -> f32 {
-        // The all-types band (Combat Focus / Willpower) applies to every type, so it
-        // is summed in here rather than at each call site.
+        // The all-types band (Willpower, Indomitable Smash) applies to every type, so
+        // it is summed in here rather than at each call site.
         let all: f32 = self
             .transient_all_resistance
             .iter()
             .filter(|(_, exp)| now < *exp)
             .map(|(v, _)| *v)
             .sum();
+        // COMBAT FOCUS. `CombatFocusPerk$$GetResistanceBonus@0x1A5AA60` returns 0 for
+        // `DamageType.None`, otherwise `_bonusValue` iff the actor is in the
+        // `Maneuver` state OR has the Reckless Fury status (11). Never while casting a
+        // spell (spells run in `Channeling`). It is ONE additive source, so
+        // overlapping maneuvers do not stack it.
+        let focus = if ty != DamageType::None && self.combat_focus_active(now) {
+            self.loadout.perks.combat_focus
+        } else {
+            0.0
+        };
+        let all = all + focus;
         let per_type: f32 = self
             .transient_resistances
             .iter()
@@ -2070,6 +2092,11 @@ impl Fighter {
     /// Is Reckless Fury active right now?
     pub fn has_reckless_fury(&self, now: Instant) -> bool {
         self.reckless_fury_until.is_some_and(|t| now < t)
+    }
+
+    /// Combat Focus's condition: in the Maneuver state, or Reckless Fury is up.
+    pub fn combat_focus_active(&self, now: Instant) -> bool {
+        self.maneuver_state_until.is_some_and(|t| now < t) || self.has_reckless_fury(now)
     }
 
     /// Apply `amount` raw damage to health, clamped at 0, and bump the stats seq.
@@ -2841,6 +2868,7 @@ impl MatchCombat {
             f.negation_pools.clear();
             f.transient_resistances.clear();
             f.transient_all_resistance.clear();
+            f.maneuver_state_until = None;
             f.staggered_until = None;
             // A new round starts with nothing announced: the client resets its own
             // effect layer, so replaying removes for last round's statuses would be
