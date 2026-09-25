@@ -38,7 +38,7 @@ use super::state::{
     health_for_level, paralyze_damage_threshold, ActiveSide, ActorStateType, DamageSource,
     DamageType, Fighter, Loadout, ARENA_HEALTH_MULTIPLIER,
 };
-use super::tables::{combo_factor, Weight};
+use super::tables::Weight;
 
 // ---------------------------------------------------------------------------
 // s506 ground truth (docs/arena-combat-reproduction-spec.md §2a/§3/§4).
@@ -77,10 +77,22 @@ const S506_TEMPERING: u64 = 10;
 /// The chain is also NOT Flappety's: `netObjectId` on all four events is the VICTIM,
 /// and it is Flappety's. Blank dealt these hits with gear that is not in our data. See
 /// the note on `LIGHT_COMBO_RAMP`.
+///
+/// **Only the fresh row is reproduced now.** The chained 165.07 (×1.4502) was dealt by
+/// a VERSATILE weapon against armour the client cuts AFTER the multiplier (combat-spec
+/// 01 D1). This fixture's stand-in is a LIGHT dagger, and this engine still cuts armour
+/// first (PR-03). The fitted `combo_factor(Versatile, 1)` = 1.44 made the stand-in hit
+/// 165 anyway, but that constant was fitted to chains like this one, and the client's
+/// shipped `_comboDamageFactor` (0.54 / 0.25 / 0.186) replaces it. So the row is kept
+/// as a recording, not as an assertion.
 const S506_COMBO_RAMP: &[(u32, f32)] = &[
     (0, 113.82), // seq 27/277/488 — fresh (combo reset), no statuses
-    (1, 165.07), // seq 37/287 — first chained swing, no statuses (×1.4502)
 ];
+/// seq 37/287 — the first chained swing, no statuses (×1.4502). See above for why it
+/// is not asserted.
+const S506_CHAINED_RECORDED: f32 = 165.07;
+/// The stand-in dagger's shipped `_comboDamageFactor` (`items.json`, 02 §4.2).
+const DAGGER_COMBO_DF: f32 = 0.54;
 
 /// The §2a recorded `Middle` WeaponManeuver Slashing band (seq 88/106/337).
 const S506_MANEUVER_SLASH: &[f32] = &[201.37, 274.51, 186.98];
@@ -266,9 +278,7 @@ fn s506_combo_ramp_reproduces_recorded_slashing() {
         assert!(
             (got - recorded).abs() <= tol,
             "DIVERGENCE (COMBO §4.2): combo {count} Slashing modeled {got:.2} vs s506 recorded \
-             {recorded:.2} (tol ±{tol:.2}). combo_factor(Light,{count})={:.3}, tempered base 144.0, \
-             armor cut {:.2}.",
-            combo_factor(Weight::Versatile, count),
+             {recorded:.2} (tol ±{tol:.2}). Tempered base 144.0, armor cut {:.2}.",
             super::tables::armor_reduction(144.0, blank_armor_rating()),
         );
     }
@@ -276,50 +286,47 @@ fn s506_combo_ramp_reproduces_recorded_slashing() {
     let c0 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now));
     let c1 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Left, 1.0, 1, now));
     assert!((c0 - 113.82).abs() < 0.05, "combo-0 anchor {c0:.2} != recorded 113.82");
-    let step = super::tables::combo_factor(Weight::Versatile, 1);
+    // One step of the dagger's shipped `_comboDamageFactor`, added to 1 (02 §4.2).
+    let step = 1.0 + DAGGER_COMBO_DF;
     assert!(
-        (c1 - 113.82 * step).abs() < 1.5,
-        "combo-1 anchor {c1:.2} should be the combo-0 base x the Versatile factor \
-         {step} (recorded 165.07)"
+        (c1 - 113.82 * step).abs() < 0.05,
+        "combo-1 {c1:.2} should be the combo-0 base x (1 + 0.54)"
     );
     let c9 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 9, now));
     assert!(
-        (c9 - 113.82 * super::tables::combo_factor(Weight::Versatile, 9)).abs() < 1.0,
-        "a deep combo is capped at the ramp's own ceiling, got {c9:.1}"
+        (c9 - c1).abs() < 0.05,
+        "the combo is ONE step: depth 9 {c9:.2} must equal depth 1 {c1:.2}"
     );
-    // The ramp is exactly proportional to the post-armor base — the reason armor is
-    // applied BEFORE the swing factor (see `damage.rs` module doc).
-    // The attacker was VERSATILE (Serpentstrike) — see the fixture note. The recorded
-    // first step is 1.451, twice and identically, and the Versatile population median
-    // is 1.443.
-    let want = super::tables::combo_factor(Weight::Versatile, 1);
-    assert!(
-        (c1 / c0 - want).abs() < 0.05,
-        "recorded first step {} should match the Versatile factor {want}",
-        c1 / c0
-    );
+    let _ = S506_CHAINED_RECORDED;
 }
 
+/// The recorded s506 Middle maneuvers (201.37 / 274.51 / 186.98) all sit above a plain
+/// fresh swing, which is what a maneuver's own `bonusDamage` makes them.
+///
+/// This test used to prove the recording fitted a "crit x charge" band, resolving a
+/// maneuver as a charged swing. The client does not do that: a maneuver's hit is
+/// `(weapon + bonus*grip) * (1 + [combo>=1]*comboDF)` with no swing term
+/// (`CalculateAttackTypeFactor@0x1bd3df0`, combat-spec 05 §2.6). Which maneuver each
+/// recording was is not known, so the band cannot pin a bonus. What it can pin is that
+/// the charge factor never reaches a maneuver.
 #[test]
 fn s506_middle_maneuver_lands_in_recorded_band() {
     let m = RetailDamageModel;
     let lo = flappety_dagger();
-    let modeled: Vec<f32> = [1.0, 1.5, 1.8]
-        .iter()
-        .map(|&sf| {
-            slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Middle, sf, 0, Instant::now()))
-        })
-        .collect();
-    let lo_m = *modeled.iter().min_by(|a, b| a.total_cmp(b)).unwrap();
-    let hi_m = *modeled.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
+    let now = Instant::now();
+    let fresh = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now));
     for &rec in S506_MANEUVER_SLASH {
-        assert!(
-            rec >= lo_m * 0.85 && rec <= hi_m * 1.15,
-            "DIVERGENCE (MANEUVER §4.2): recorded Middle maneuver {rec:.1} outside the modeled \
-             charged band [{lo_m:.1}, {hi_m:.1}] (Light crit ×{:.3} × swing_factor).",
-            Weight::Versatile.crit_combo().0,
-        );
+        assert!(rec > fresh, "recorded maneuver {rec:.1} must exceed a plain swing {fresh:.1}");
     }
+    let plain = slash_of(&m.resolve_attack(
+        &lo, &blank(), DamageSource::WeaponManeuver, ActiveSide::Middle, 1.0, 0, now,
+    ));
+    let charged = slash_of(&m.resolve_attack(
+        &lo, &blank(), DamageSource::WeaponManeuver, ActiveSide::Middle, 1.8, 0, now,
+    ));
+    assert!((plain - fresh).abs() < 0.05, "a bonus-less maneuver is the weapon hit");
+    assert!((charged - plain).abs() < 0.05, "a maneuver takes no swing factor");
+    let _ = Weight::Versatile;
 }
 
 // ---------------------------------------------------------------------------
@@ -517,7 +524,8 @@ fn s506_full_chain_through_engine_reproduces_ramp_and_resets_on_block() {
     let mut last_slash = 0.0;
     for step in 0..5u32 {
         let side = if step % 2 == 0 { ActiveSide::Right } else { ActiveSide::Left };
-        let depth = attacker.register_combo_swing(side);
+        let depth = attacker.begin_combo_swing(side);
+        attacker.increment_combo(); // the hit connects
         assert_eq!(depth, step, "alternating swings increment the combo each step");
         let rd = m.resolve_attack(&lo, &blank(), DamageSource::Attack, side, 1.0, depth, Instant::now());
         let s = slash_of(&rd);
@@ -537,12 +545,12 @@ fn s506_full_chain_through_engine_reproduces_ramp_and_resets_on_block() {
          {S506_SLASH_BASE:.1}"
     );
     assert!(
-        last_slash <= S506_SLASH_BASE * super::tables::combo_factor(Weight::Versatile, 9) + 1.0,
-        "…and must not exceed the ramp ceiling"
+        last_slash <= S506_SLASH_BASE * (1.0 + DAGGER_COMBO_DF) + 1.0,
+        "…and must not exceed the one combo step"
     );
 
     attacker.reset_combo();
-    let depth_after = attacker.register_combo_swing(ActiveSide::Right);
+    let depth_after = attacker.begin_combo_swing(ActiveSide::Right);
     assert_eq!(depth_after, 0);
     let fresh = slash_of(&m.resolve_attack(
         &lo,
@@ -570,15 +578,18 @@ fn s506_anchor_report() {
     rows.push(("combo-0 Slashing", slash_of(&c0), 113.82));
     rows.push(("combo-0 Poison", poison_of(&c0), 137.32));
     let c1 = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Left, 1.0, 1, now);
-    rows.push(("combo-1 Slashing", slash_of(&c1), 165.07));
+    // The recorded 165.07 is not an anchor this stand-in can reproduce (see
+    // `S506_COMBO_RAMP`); the row reports the model against its own formula.
+    println!("  combo-1 Slashing: model {:.2}, recorded {S506_CHAINED_RECORDED:.2} (Versatile, not asserted)", slash_of(&c1));
+    rows.push(("combo-1 Slashing (model)", slash_of(&c1), 113.82 * (1.0 + DAGGER_COMBO_DF)));
     let c4 = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 4, now);
     // combo-4 has no recorded counterpart: the old 469.30 row is a
-    // StaggeredWeakness-amplified combo-2 event. Reported against the ramp table so
-    // the row still shows the modelled value without implying a recording.
+    // StaggeredWeakness-amplified combo-2 event. Reported against the one-step
+    // formula so the row still shows the modelled value without implying a recording.
     rows.push((
         "combo-4 Slashing (no recorded counterpart)",
         slash_of(&c4),
-        113.82 * super::tables::combo_factor(Weight::Versatile, 9),
+        113.82 * (1.0 + DAGGER_COMBO_DF),
     ));
 
     let mut def = blank();
@@ -606,7 +617,7 @@ fn s506_anchor_report() {
     rows.push((
         "deep-combo Slashing",
         slash_of(&big),
-        113.82 * super::tables::combo_factor(Weight::Versatile, 9),
+        113.82 * (1.0 + DAGGER_COMBO_DF),
     ));
 
     println!("\n  s506 anchor    | emitted  | recorded | delta");

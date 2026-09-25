@@ -8,7 +8,7 @@
 //! 0 HP ends the match (`PlayerDeadStateChange` + the op48/op49 result burst).
 //!
 //! Combat fidelity now wired (`docs/arena-{combat-reproduction,status-resistance}-spec.md`):
-//! a per-fighter **COMBO ramp** (auto-swings alternate Left/Right → `combo_factor`), the
+//! a per-fighter **COMBO** (alternating Left/Right hits add `_comboDamageFactor`), the
 //! **block** (a flat per-category budget from the blocking item's rating, `damage::BlockOutcome`),
 //! **resistance** (flat per-type, elem-piercing) + `most_resisted`, **negation pools**
 //! (Ward/Absorb → op66 `DamageNegated` + Absorb heal), and **status conditioning** (a
@@ -69,39 +69,92 @@ fn swing_cooldown_for(fighter: &super::state::Fighter, now: Instant) -> Duration
     )
 }
 
-/// Server-measured hold duration threshold for a FULL charge (Critical state).
+/// The swing factor of a release after `hold_secs` of server-measured charge, as
+/// `1 + swing`, or `None` when the release comes before `MinDamageTime` and is not a
+/// swing at all (combat-spec 02 §2.2-§2.4, X1/X2).
 ///
-/// **APPROXIMATE — VIDEO-CALIBRATED** (≈1.2 s): from s293 video ground-truth
-/// (`/tmp/arena-video-groundtruth.md` §3) the charge circle fills in ~1–1.5 s
-/// (e.g. t=46→47 partial→full, t=54→55 partial→full). The exact game-data value
-/// is `WeaponTemplate.MinDamageTime` (the CDN-hosted `PlayerCombatAbilitySettings`
-/// ScriptableObjects, not yet captured). Refine when CDN WeaponTemplate data is
-/// available; the threshold is also the `AttackChargeState.PreCritical → Critical`
-/// state transition in `dump.cs TypeDefIndex 13116`.
+/// The client's charge clock is a step function for a player
+/// (`AttackChargeState$$GetDamageFactor@0x1a4ecb8`,
+/// `PlayerActor$$get_ShouldLerpDamageFactor@0x1862e18` = false). `maxDamageFactor`
+/// is paid only on a 35 ms plateau, `(MaxDamageTime, DecayStartTime]`: Light
+/// (0.315, 0.350] s, Balanced (0.465, 0.500], Heavy (0.615, 0.650]. Before and after
+/// it the swing gets `minDamageFactor` (0 on every standard weapon).
 ///
-/// **CALIBRATION FLAG RESOLVED.** The flag asked for `MinDamageTime`/`MaxDamageTime`
-/// from the CDN WeaponTemplate assets. They are in hand, and 1.2 s was far too long:
-/// across 246 real swings the hold-at-release distribution is median **0.317 s**,
-/// p90 0.47-0.60 s, **maximum 1.73 s**. At a 1.2 s threshold a critical hit was very
-/// nearly unreachable, which is why nobody has ever reported landing one.
+/// This corrects the rule it replaces, which was also wrong. That rule critted every
+/// hold of `backswingTime` (0.117 / 0.2 / 0.25 s) or longer with no upper bound, so
+/// nearly every real swing critted: the measured median hold is 0.317 s. The 1.2 s
+/// "video-calibrated" threshold before it was wrong the other way.
 ///
-/// The real full-charge point is `WeaponTemplate._backswingTime`, the input to
-/// `AttackChargeState::DetermineState(chargeTime)` (`dump.cs` TypeDefIndex 13115):
-/// damage ramps from `minDamageFactor` (0) to `maxDamageFactor` over the backswing,
-/// holds for `_maxDamageTime` (0.035 s), then decays. 363 of 368 shipped weapon
-/// entries collapse onto three signatures — Light 0.1167 s, Versatile 0.2 s, Heavy
-/// 0.25 s. It also explains the 0.32 s clustering: players hold just past the sweet
-/// spot, exactly as the ramp rewards.
-///
-/// The extractor now retains the fields, so both the threshold and the multiplier
-/// are read from the exact equipped template. The weight values survive only inside
-/// `Loadout` as a fallback for old/unresolved items.
-fn critical_hold_secs(fighter: &super::state::Fighter) -> f32 {
-    fighter.loadout.critical_hold_secs()
+/// `s` is the weapon-speed multiplier. Frost keeps this engine's existing `/0.75`
+/// scaling here; the client's `x1.75` (02 X9) is a separate fix.
+fn charge_swing_factor(
+    fighter: &super::state::Fighter,
+    hold_secs: f32,
+    now: Instant,
+) -> Option<f32> {
+    let s = 1.0 / combat_speed_multiplier(fighter, now);
+    fighter
+        .loadout
+        .charge_params()
+        .swing_factor(hold_secs, s)
+        .map(|swing| 1.0 + swing)
 }
 
-fn critical_hold_secs_for(fighter: &super::state::Fighter, now: Instant) -> f32 {
-    critical_hold_secs(fighter) / combat_speed_multiplier(fighter, now)
+/// How far the client's charge clock may run BEHIND the server's measurement and
+/// still be believed. Packet jitter only ever makes the server's DOWN→UP gap differ
+/// from the client's own clock; retail's shortest captured charge→swing gap (215 ms)
+/// sits 18 ms under Light's `MinDamageTime`, so a server-only gate drops real swings.
+const CLIENT_CHARGE_MAX_BEHIND_SECS: f32 = 0.25;
+/// How far the client's clock may run AHEAD of the server's. Small on purpose: this
+/// is the direction a cheat would push it (a longer claimed hold).
+const CLIENT_CHARGE_MAX_AHEAD_SECS: f32 = 0.10;
+
+/// The hold the charge gates are judged on.
+///
+/// op46's charge float is `AttackChargeState._chargeTime`, the client's own clock
+/// since its Charging state began (`PvpAvatar$$PlayerCombatInputActivateRpc@0x17900ec`,
+/// combat-spec 02 §2.1). That is the clock the client's `IsAttackPossible` and
+/// `GetDamageFactor` read, so it is used when it is plausible: within
+/// `[server - 0.25 s, server + 0.10 s]` of the server's own DOWN→UP measurement.
+/// Outside that band, or absent, or non-positive (the client never entered
+/// Charging, e.g. the server's gmid 45 had not reached it yet), the server's
+/// measurement is used. The band bounds what a lying client can gain to 0.1 s.
+fn judged_hold_secs(server_secs: f32, client_secs: Option<f32>) -> f32 {
+    match client_secs {
+        Some(c)
+            if c.is_finite()
+                && c > 0.0
+                && c >= server_secs - CLIENT_CHARGE_MAX_BEHIND_SECS
+                && c <= server_secs + CLIENT_CHARGE_MAX_AHEAD_SECS =>
+        {
+            c
+        }
+        _ => server_secs,
+    }
+}
+
+/// A release before `MinDamageTime`: `PlayerChargingState$$OnLateUpdate@0x1d73fe4`
+/// calls `PlayerActorState$$AttackFailed@0x1d5a710` and changes to Idle. No swing, no
+/// damage, and Idle's `OnEnter` resets the combo (02 R1, X2). Tracker #228: "a brief
+/// tap still gives a full swing".
+fn fail_attack(combat: &mut MatchCombat, sender: usize, hold_secs: f32, now: Instant) {
+    let f = &mut combat.fighters[sender];
+    f.charge_began_at = None;
+    f.charge_side = None;
+    f.pending_manual_attack = None;
+    f.reset_combo();
+    f.set_actor_state(ActorStateType::Idle, now);
+    info!(
+        "combat attack_input: gsid={} input=player slot={sender} actor={} outcome=attack_failed hold_ms={:.1} min_ms={:.1}",
+        combat.game_session_id,
+        combat.fighters[sender].loadout.display_name,
+        hold_secs * 1000.0,
+        combat.fighters[sender]
+            .loadout
+            .charge_params()
+            .min_damage_time(1.0 / combat_speed_multiplier(&combat.fighters[sender], now))
+            * 1000.0,
+    );
 }
 
 /// Fallback ability cooldown for abilities without authoritative game-data.
@@ -229,8 +282,8 @@ const SIDE_CLASSIFY_X_MIDPOINT: f32 = 0.5;
 const SIDE_CLASSIFY_SAMPLE_TTL: Duration = Duration::from_millis(500);
 
 /// **[Class 3 calibration]** Tolerance for the server-vs-client charge cross-check.
-/// A divergence beyond this is logged (possible cheat / clock skew / packet loss);
-/// it never changes the damage, which always uses the server measurement.
+/// A divergence beyond this is logged (possible cheat / clock skew / packet loss).
+/// The gates use the client value only inside the narrower `judged_hold_secs` band.
 const CHARGE_CROSS_CHECK_TOLERANCE_SECS: f32 = 0.35;
 
 // NetData propIds — gmid 47 `PlayerCombatInputPosition`.
@@ -294,8 +347,8 @@ struct PointerSample {
 struct InputActivate {
     /// `true` = button DOWN (press), `false` = button UP (release/commit).
     held: bool,
-    /// Client-reported hold duration in seconds (telemetry only — see
-    /// [`state::Fighter::last_client_charge`]).
+    /// Client-reported `_chargeTime` in seconds. The charge gates use it when it is
+    /// within [`judged_hold_secs`]'s band of the server's own measurement.
     client_charge: Option<f32>,
     /// The client's `_isWithinBlockZone` flag.
     block_zone: Option<bool>,
@@ -406,7 +459,7 @@ fn charge_cross_check(slot: usize, server_secs: f32, client_secs: Option<f32>) {
         info!(
             "combat: slot {slot} charge cross-check DIVERGED — server {server_secs:.3}s vs \
              client-reported {client:.3}s (Δ{delta:.3}s > {CHARGE_CROSS_CHECK_TOLERANCE_SECS}s). \
-             Server measurement is authoritative; client value is telemetry only."
+             Outside the accepted band, the server measurement is used."
         );
     } else {
         debug!(
@@ -455,30 +508,6 @@ fn parse_op46_held(user_data: &[u8]) -> Option<bool> {
     Some(held_bit == 1)
 }
 
-/// Determine the swing crit factor for a fighter based on how long they held the
-/// attack button (server-measured). Returns the charge multiplier:
-///   - the equipped template's `maxDamageFactor` when `hold_secs` reaches that
-///     template's `backswingTime` (full charge / Critical or PostCriticalDecay — the
-///     server-side equivalent of op45 reporting ≥3).
-///   - `1.0` for a partial hold (uncharged swing, no crit).
-fn charge_crit_factor(fighter: &super::state::Fighter, hold_secs: f32) -> f32 {
-    if hold_secs < critical_hold_secs(fighter) {
-        return 1.0;
-    }
-    fighter.loadout.critical_damage_factor()
-}
-
-fn charge_crit_factor_at(
-    fighter: &super::state::Fighter,
-    hold_secs: f32,
-    now: Instant,
-) -> f32 {
-    if hold_secs < critical_hold_secs_for(fighter, now) {
-        return 1.0;
-    }
-    fighter.loadout.critical_damage_factor()
-}
-
 /// Resolve one inbound, decrypted c2s combat input from `sender`.
 pub fn on_c2s_input(
     combat: &mut MatchCombat,
@@ -517,8 +546,8 @@ pub fn on_c2s_input(
     // The op46 frame signals a HOLD (button-DOWN, `_held=1`) or a COMMIT (button-UP,
     // `_held=0`). On DOWN we record the server timestamp; on UP we compute the
     // server-measured hold duration and apply the held-charge crit multiplier (bug 4):
-    //   - hold ≥ the weapon's backswingTime → full charge → its maxDamageFactor
-    //   - shorter hold → partial / uncharged → swing_factor = 1.0
+    //   - a release on the charge plateau → its maxDamageFactor (`charge_swing_factor`)
+    //   - off the plateau → swing_factor = 1.0; before MinDamageTime → no swing
     //
     // [arena-charge-decode.md §2-§5; decode-proven: _held bit0 of user_data[11]]
     if is_op46(user_data) {
@@ -532,6 +561,7 @@ pub fn on_c2s_input(
             Some(true) => {
                 // Button-DOWN: record the press timestamp for hold-duration measurement.
                 combat.fighters[sender].charge_press_at = Some(now);
+                combat.fighters[sender].charge_began_at = Some(now);
                 debug!("combat: slot {sender} op46 DOWN — charge press recorded at {now:?}");
                 // Enter the wind-up. The gmid 45 broadcast to BOTH viewers comes from
                 // the actor-state drain, exactly as it does on the live 0x36 path —
@@ -557,18 +587,28 @@ pub fn on_c2s_input(
                     .unwrap_or(0.0);
                 // Reset press timestamp — this charge is consumed.
                 combat.fighters[sender].charge_press_at = None;
-                let swing_factor =
-                    charge_crit_factor_at(&combat.fighters[sender], hold_secs, now);
+                // A paralysed fighter's release is dropped before anything else: the
+                // AttackFailed below goes Idle, which would end the paralysis lock.
+                reconcile_paralysis(&mut combat.fighters[sender], now);
+                if combat.fighters[sender].is_paralyzed() {
+                    return Vec::new();
+                }
+                let Some(swing_factor) =
+                    charge_swing_factor(&combat.fighters[sender], hold_secs, now)
+                else {
+                    fail_attack(combat, sender, hold_secs, now);
+                    return Vec::new();
+                };
                 let is_crit = swing_factor > 1.0;
                 if is_crit {
                     info!(
-                        "combat: slot {sender} op46 UP — hold {hold_secs:.3}s ≥ the weapon threshold threshold \
+                        "combat: slot {sender} op46 UP — hold {hold_secs:.3}s on the charge plateau \
                          → CRIT ×{swing_factor:.3} (weapon {:?})",
                         combat.fighters[sender].loadout.weapon.weight,
                     );
                 } else {
                     debug!(
-                        "combat: slot {sender} op46 UP — hold {hold_secs:.3}s < the weapon threshold \
+                        "combat: slot {sender} op46 UP — hold {hold_secs:.3}s off the charge plateau \
                          → normal swing ×1.0",
                     );
                 }
@@ -673,6 +713,8 @@ pub fn on_c2s_input(
             f.blocking_side = side;
             f.blocking_until = Some(now + BLOCK_WINDOW);
             f.block_raised_at = Some(now);
+            // Raising a guard ends the combo chain (02 R5).
+            f.reset_combo();
             debug!("combat: slot {sender} raised guard ({side:?}) for {BLOCK_WINDOW:?}");
         }
         return Vec::new();
@@ -844,6 +886,9 @@ pub fn on_c2s_input(
                 f.blocking_side = ActiveSide::Middle; // retail: propId 9 == 1 in 578/578
                 f.blocking_until = Some(now + BLOCK_LEAK_GUARD);
                 f.block_raised_at = Some(now);
+                // Raising a guard ends the combo chain: Recovery -> Blocking is one of
+                // the exits `PlayerRecoveryState$$OnExit@0x1d75714` resets on (02 R5).
+                f.reset_combo();
                 debug!("combat: slot {sender} op46 blockZone DOWN — guard UP");
             } else {
                 // Guard DOWN on release. Retail ends a block with a gmid 39 carrying
@@ -870,6 +915,7 @@ pub fn on_c2s_input(
             }
             // Button DOWN — start the server's charge stopwatch AND enter the wind-up.
             f.charge_press_at = Some(now);
+            f.charge_began_at = Some(now);
             f.bot_swing_at = None;
             f.pending_manual_attack = None;
             debug!(
@@ -916,22 +962,44 @@ pub fn on_c2s_input(
             );
             return Vec::new();
         }
-        let hold_secs = combat.fighters[sender]
+        let server_hold = combat.fighters[sender]
             .charge_press_at
             .map(|t| now.saturating_duration_since(t).as_secs_f32())
             .unwrap_or(0.0);
         combat.fighters[sender].charge_press_at = None;
-        // Server measurement is authoritative; the client's number is only compared.
-        charge_cross_check(sender, hold_secs, act.client_charge);
-        let swing_factor = charge_crit_factor_at(&combat.fighters[sender], hold_secs, now);
+        charge_cross_check(sender, server_hold, act.client_charge);
+        // The client's own charge clock, when it is plausible (see `judged_hold_secs`).
+        let hold_secs = judged_hold_secs(server_hold, act.client_charge);
+        let Some(swing_factor) = charge_swing_factor(&combat.fighters[sender], hold_secs, now)
+        else {
+            fail_attack(combat, sender, hold_secs, now);
+            return Vec::new();
+        };
         if combat.fighters[target_slot].is_dead() {
             return Vec::new();
         }
         // Prefer the side classified from live geometry (what the damage model is
         // calibrated on); fall back to the side the wind-up was announced with, so the
         // 45 and the 52 carry the same ActiveSide as they do in every captured pair.
-        let side = classified_side_for(&combat.fighters[sender], now)
-            .or(combat.fighters[sender].charge_side);
+        let release_side = classified_side_for(&combat.fighters[sender], now);
+        let side = release_side.or(combat.fighters[sender].charge_side);
+        // The finger crossed the screen midline during the hold: the client resets
+        // the combo there (`PlayerChargingState$$OnLateUpdate@0x1d73fe4`, 02 R3). Only
+        // judged when both ends of the hold were classified from real geometry, and
+        // not for a manual slash, whose path crosses by design. The client also
+        // restarts the charge clock at the crossing; the server cannot see when it
+        // happened, so the hold is still measured from the press.
+        let pressed_side = combat.fighters[sender].charge_side;
+        if let (Some(a), Some(b)) = (pressed_side, release_side) {
+            if a != b
+                && matches!(a, ActiveSide::Left | ActiveSide::Right)
+                && matches!(b, ActiveSide::Left | ActiveSide::Right)
+                && combat.fighters[sender].pending_manual_attack.is_none()
+            {
+                debug!("combat: slot {sender} crossed the midline mid-hold ({a:?} → {b:?}) — combo reset");
+                combat.fighters[sender].reset_combo();
+            }
+        }
         debug!(
             "combat: slot {sender} op46 UP (carrier 0x36) — hold {hold_secs:.3}s ×{swing_factor:.3}, \
              side {side:?} from x={:?}",
@@ -956,6 +1024,17 @@ pub fn on_c2s_input(
         let side = classified_side_for(&combat.fighters[sender], now);
         resolve_swing_with_side(combat, sender, target_slot, 1.0, side, now)
     }
+}
+
+/// Is this ability one of the four player shield bashes (Shield, Staggering,
+/// Harrying, Reflecting)? They are exactly the non-enemy maneuvers that ship a
+/// `_blockDuration`, because a bash IS a guard plus a strike (see the shield gate in
+/// [`resolve_ability_cast`]). They derive from `ShieldBashAbility`, whose
+/// `get_DamageSource@0x1f49388` is 11 (ShieldManeuver).
+fn is_shield_bash(ability_uuid: &str, level: u8) -> bool {
+    super::gamedata::ability(ability_uuid).is_some_and(|a| !a.enemy_only)
+        && super::gamedata::ability_rank_clamped(ability_uuid, level as u16)
+            .is_some_and(|r| r.block_duration().is_some_and(|v| v > 0.0))
 }
 
 /// `Recovery Strikes` — the one maneuver the shipped data says may be performed
@@ -1020,10 +1099,10 @@ fn performable_while_staggered(ability_uuid: &str) -> bool {
 
 /// A weapon auto-attack (committed swing), throttled per attacker.
 ///
-/// `swing_factor` is the held-charge crit multiplier:
-///   - `1.0` for a normal (partial / uncharged) swing via carrier-0x36 or bot swings.
-///   - the weapon template's `maxDamageFactor` for a full-charge crit dispatched from
-///     the op46 (0x2e) path once its server-measured `backswingTime` is reached.
+/// `swing_factor` is `1 + swing` from [`charge_swing_factor`]:
+///   - `1.0` for a swing released off the charge plateau, and for bot / unstructured
+///     swings, which have no hold;
+///   - `1 + maxDamageFactor` for a release on the plateau.
 fn resolve_swing_with_side(
     combat: &mut MatchCombat,
     sender: usize,
@@ -1035,7 +1114,23 @@ fn resolve_swing_with_side(
     // Consume the gesture at commit even when the cadence gate rejects this swing;
     // otherwise a rejected release could make the NEXT tap look like a manual slash.
     let manual_attack = combat.fighters[sender].pending_manual_attack.take();
-    let cooldown = swing_cooldown_for(&combat.fighters[sender], now);
+    // SAME-SIDE CADENCE (02 X11). From Recovery the next charge may begin at
+    // `recoveryToComboTime` only on the OPPOSITE side (`CanBeginCombo@0x1d75980`); the
+    // same side waits for `recoveryToNeutralTime` (`CanBeginRegularAttack@0x1d75a38`).
+    // Commit-to-commit that is `attackDelay + recoveryToNeutralTime`. Judged only for a
+    // side classified from real geometry: a synthetic side is not something the
+    // player did.
+    let same_side_repeat = decoded_side.is_some_and(|s| {
+        matches!(s, ActiveSide::Left | ActiveSide::Right)
+            && s == combat.fighters[sender].last_swing_side
+    });
+    let cooldown = if same_side_repeat {
+        swing_cooldown_for(&combat.fighters[sender], now)
+            .max(combat.fighters[sender].loadout.neutral_interval())
+    } else {
+        swing_cooldown_for(&combat.fighters[sender], now)
+    };
+    let charge_began_at = combat.fighters[sender].charge_began_at.take();
     if let Some(last) = combat.fighters[sender].last_swing {
         let elapsed = now.saturating_duration_since(last);
         if elapsed < cooldown {
@@ -1067,9 +1162,9 @@ fn resolve_swing_with_side(
     //
     // `decoded_side` is the side CLASSIFIED FROM THE CLIENT'S REAL POINTER GEOMETRY
     // (`classified_side_for` → `classify_side_from_x`). That is the normal path for a
-    // real client and the whole point of Phase 4.1: the combo ramp (×1.00 → ×1.45 →
-    // ×2.65 → ×4.12) only advances on *alternating* sides, so the side has to reflect
-    // what the player actually did.
+    // real client and the whole point of Phase 4.1: the combo only carries into a
+    // swing on the *opposite* side, so the side has to reflect what the player
+    // actually did.
     //
     // ======================= SYNTHETIC FALLBACK (not real input) ==================
     // When `decoded_side` is `None` there is no usable geometry — a BOT, a client
@@ -1086,19 +1181,30 @@ fn resolve_swing_with_side(
             _ => ActiveSide::Right, // None / Left / Middle → start (or restart) on Right
         }
     });
-    // A `Middle` (maneuver/charged) swing is not part of a side chain — it resets it.
-    let combo_count = if next_side == ActiveSide::Middle {
+    // CHAIN EXPIRY (02 X5). Recovery goes Idle `recoveryTime` after it begins
+    // (0.55 / 0.8 / 1.0 s), and Idle's `OnEnter` resets the combo
+    // (`PlayerIdleState$$OnEnter@0x1d75368`, R1). So the chain survives only if this
+    // charge BEGAN before then. With no recorded charge start (an unstructured
+    // swing), the commit stands in for it.
+    combat.fighters[sender].expire_combo_chain(charge_began_at.unwrap_or(now));
+    // A `Middle` swing is not part of a side chain — it resets it. Otherwise decide
+    // whether the chain carries into this swing (02 R2). The count itself advances
+    // when the hit lands (X8).
+    if next_side == ActiveSide::Middle {
         combat.fighters[sender].reset_combo();
-        0
     } else {
-        combat.fighters[sender].register_combo_swing(next_side)
-    };
+        combat.fighters[sender].begin_combo_swing(next_side);
+    }
+    combat.fighters[sender].last_swing_side = next_side;
 
     // The swing is committed: walk the attacker's actor state through
     // Attack/AutoAttack → FollowThrough → Recovery → Idle so BOTH clients animate it. Runs
-    // after `register_combo_swing` so `last_combo_side` is this swing's side, and
+    // after `begin_combo_swing` so `last_combo_side` is this swing's side, and
     // before damage so the wind-up precedes the hit on the wire, as in retail.
     let impact_delay = begin_swing_animation(combat, sender, manual_attack, now);
+    // Recovery begins one frame after the FollowThrough beat (the schedule
+    // `begin_swing_animation` just laid down). Its gates are timed from here.
+    combat.fighters[sender].recovery_began_at = Some(now + impact_delay + RECOVERY_DELAY);
 
     // The hit lands with the FollowThrough beat, not now (tracker #21).
     //
@@ -1115,7 +1221,6 @@ fn resolve_swing_with_side(
         target: target_slot,
         side: next_side,
         swing_factor,
-        combo_count,
         due: now + impact_delay,
     });
     debug!(
@@ -1159,13 +1264,17 @@ fn land_due_hits(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)
             attacker_loadout.maneuver_bonus_damage +=
                 combat.fighters[h.sender].reckless_fury_bonus;
         }
+        // The count this hit reads is the attacker's count NOW, before this hit's own
+        // increment (`CalculateAttackTypeFactor@0x1bd3df0` reads `_comboCount`, and
+        // `IncrementCombo` follows `ReceiveDamage`).
+        let combo_count = combat.fighters[h.sender].combo_count;
         let resolved = RetailDamageModel.resolve_attack(
             &attacker_loadout,
             &combat.fighters[h.target],
             DamageSource::Attack,
             h.side,
             h.swing_factor,
-            h.combo_count,
+            combo_count,
             now,
         );
         // A connected OPTIMAL block on the target RESETS the attacker's combo (§4.2: a
@@ -1177,6 +1286,12 @@ fn land_due_hits(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)
             combat.fighters[h.sender].reset_combo();
         }
         out.extend(emit_damage(combat, h.sender, h.target, &resolved, now));
+        // The hit connected, so the chain advances, blocked or negated alike (02 §4.1,
+        // X8). A swing that never landed (target dead, round over) does not reach here.
+        // An optimal block's stagger resets it again at once (R6).
+        if !blocked_high {
+            combat.fighters[h.sender].increment_combo();
+        }
         // AFTER the damage frame: retail fires `_causedStagger` from inside
         // `CombatManager.ApplyDamage` (`dump.cs:546170`), so the stun follows the hit
         // it came from.
@@ -1385,10 +1500,7 @@ pub(super) fn resolve_ability_cast(
     // — Guardbreaker correctly does not, it is a weapon maneuver — plus the
     // enemy-only ShieldOfMania, which is excluded because an enemy's loadout does not
     // model a shield and gating it would silently disarm the AI.
-    let needs_shield = super::gamedata::ability(&ea.ability_uuid)
-        .is_some_and(|a| !a.enemy_only)
-        && super::gamedata::ability_rank_clamped(&ea.ability_uuid, level as u16)
-            .is_some_and(|r| r.block_duration().is_some_and(|v| v > 0.0));
+    let needs_shield = is_shield_bash(&ea.ability_uuid, level);
     let no_shield = needs_shield && !combat.fighters[sender].loadout.has_shield;
     if short_of_stamina || short_of_magicka || no_shield {
         if no_shield {
@@ -1451,6 +1563,21 @@ pub(super) fn resolve_ability_cast(
         .fighters[sender]
         .cooldowns
         .insert(ea.ability_uuid.clone(), now + ability_cooldown(&ea.ability_uuid, level));
+
+    // COMBO across a cast (02 R5/R9). A spell leaves Recovery for Channeling, and
+    // `PlayerRecoveryState$$OnExit@0x1d75714` resets the combo on every exit except
+    // to Charging or Maneuver. A maneuver keeps the chain for its own hit, and
+    // `ActorManeuverState$$OnExit@0x1d556b0` ends it afterwards
+    // ([`apply_ability_impact`]).
+    let is_maneuver = super::gamedata::ability(&ea.ability_uuid)
+        .is_some_and(|a| a.kind == super::gamedata::AbilityKind::Maneuver);
+    if is_maneuver {
+        // Recovery -> Maneuver keeps the chain only while Recovery is still running;
+        // after `recoveryTime` the actor is Idle and the chain is gone (R1).
+        combat.fighters[sender].expire_combo_chain(now);
+    } else {
+        combat.fighters[sender].reset_combo();
+    }
 
     // Deduct stamina/magicka and emit op65 PlayerStatsUpdate to both players so the
     // HUD bars reflect the new pools immediately.  `stats_seq` is bumped inside
@@ -1876,6 +2003,8 @@ fn apply_ability_impact(
         // attack on every cast.
         AbilityTag::Maneuver if ability_uuid == uuid_reckless_fury() => {
             out.extend(apply_reckless_fury(combat, sender, level, now));
+            // The maneuver ends: `ActorManeuverState$$OnExit@0x1d556b0` (02 R9).
+            combat.fighters[sender].reset_combo();
         }
         AbilityTag::Maneuver => {
             let mut attacker_loadout = combat.fighters[sender].loadout.clone();
@@ -1949,9 +2078,11 @@ fn apply_ability_impact(
                     }
                 }
             }
-            // Middle is not part of a Left/Right chain, so it resets the combo — the
-            // same rule `resolve_swing_with_side` applies to a Middle swing.
-            combat.fighters[sender].reset_combo();
+            // The chain is NOT reset before the hit. Recovery -> Maneuver is the one
+            // exit that keeps it (`PlayerRecoveryState$$OnExit@0x1d75714`), so a
+            // maneuver out of a live chain gets `+comboDF` (02 X7, 05 D8). The chain
+            // ends when the maneuver does, below.
+            let bash = is_shield_bash(ability_uuid, level);
             // Report #107: the SOURCE, not the damage. A maneuver deals weapon
             // damage, so this arm reasonably reached for `DamageSource::Attack` — but
             // that is a pair retail never puts on the wire.
@@ -1971,25 +2102,40 @@ fn apply_ability_impact(
             // was arriving labelled as a plain swing with a side a swing cannot have.
             //
             // Shield bashes route through this same arm (there is no shield-specific
-            // `AbilityTag`), and `ShieldManeuver (11)` almost certainly belongs to
-            // them — but 11 appears in **none** of the 168, so there is no measurement
-            // behind it and it is deliberately not guessed here.
+            // `AbilityTag`). They are source 11, `ShieldManeuver`: every bash derives
+            // from `ShieldBashAbility`, whose `get_DamageSource@0x1f49388` returns 11
+            // (combat-spec 03 §5.1). 11 appears in none of the 168 decoded frames,
+            // which only means none of them was a bash; the source is read from the
+            // client, not guessed. A bash gets no combo factor (01 C) and does not
+            // advance the chain (01 F).
+            let source = if bash {
+                DamageSource::ShieldManeuver
+            } else {
+                DamageSource::WeaponManeuver
+            };
+            let combo_count = if bash { 0 } else { combat.fighters[sender].combo_count };
             let resolved = RetailDamageModel.resolve_attack(
                 &attacker_loadout,
                 &combat.fighters[target_slot],
-                DamageSource::WeaponManeuver,
+                source,
                 ActiveSide::Middle,
                 1.0,
-                0,
+                combo_count,
                 now,
             );
             info!(
-                "combat: slot {sender} maneuver {} → weapon damage {:.1} (Middle)",
-                ability_uuid, resolved.total,
+                "combat: slot {sender} maneuver {} → {} damage {:.1} (Middle, combo {combo_count})",
+                ability_uuid,
+                if bash { "shield" } else { "weapon" },
+                resolved.total,
             );
             last_hit_total = resolved.total;
             target_blocked = resolved.blocked;
             out.extend(emit_damage(combat, sender, target_slot, &resolved, now));
+            // A weapon maneuver's hit increments the chain (01 F), and the maneuver's
+            // end then resets it (`ActorManeuverState$$OnExit@0x1d556b0`, 02 R9). With
+            // one impact per maneuver the two collapse into the reset.
+            combat.fighters[sender].reset_combo();
         }
         AbilityTag::Paralyze | AbilityTag::Damage | AbilityTag::Generic
             if !super::damage::ships_damage(ability_uuid, level) =>
@@ -2891,6 +3037,8 @@ fn apply_shipped_effects(
             f.set_actor_state(ActorStateType::Paralyzed, now);
             f.clear_scheduled_states();
             f.blocking_until = None;
+            // `ActorParalyzedState$$OnEnter@0x1fd49f4` resets the combo (02 R7).
+            f.reset_combo();
             // Frozen (5) is announced with the paralysis, but nothing tracked it, so its
             // op51 remove was never sent and the PvP client kept FlashFreeze's local
             // Slow and Stamina-regen block for the rest of the round (08 §8). Paralyzed
@@ -2950,6 +3098,8 @@ fn try_paralyze(
     f.set_actor_state(ActorStateType::Paralyzed, now);
     f.clear_scheduled_states();
     f.blocking_until = None;
+    // `ActorParalyzedState$$OnEnter@0x1fd49f4` resets the combo (02 R7).
+    f.reset_combo();
     // The duration the op51 below announces is the duration the server must hold
     // the lock for. Without this the lock ran on whatever `paralyze_secs` already
     // held — rank 1's 2.0 s by default, or a previous FlashFreeze's value — so a
@@ -3062,7 +3212,14 @@ fn emit_damage(
     // hit and never arrives here. Nothing goes on the wire for it: pools are sent as
     // fractions of max, so the ceiling change is invisible to the bar — which is why
     // the game shows no opponent stamina bar and players count it in their heads.
-    let ravage = combat.fighters[attacker_slot].loadout.ravage.clone();
+    // A shield bash ravages with the SHIELD's enchantment ("on a blocked attack or
+    // Shield Bash"), not the weapon's: the basher's own shield enchants fire on
+    // source 11 (`CombatManager$$ApplyDamage@0x1bd2770`, combat-spec 03 §7).
+    let ravage = if resolved.source == super::state::DamageSource::ShieldManeuver {
+        combat.fighters[attacker_slot].loadout.shield_ravage.clone()
+    } else {
+        combat.fighters[attacker_slot].loadout.ravage.clone()
+    };
     let (rav_s, rav_m, rav_h) =
         combat.fighters[target_slot].apply_ravage(&ravage, resolved.block_physical);
     // SHIELD ravage fires on the opposite event: "on a blocked attack or Shield Bash".
@@ -3599,7 +3756,7 @@ fn apply_status_conditioning(
             // Frozen is not a second stagger/paralysis status. Retail's shipped
             // `slowStatusMultiplier` is 0.75 and its loading tip says Frozen slows the
             // target and stops stamina regeneration. op51 above drives the client-side
-            // frost VFX/slow; `swing_cooldown_for` and `critical_hold_secs_for` mirror
+            // frost VFX/slow; `swing_cooldown_for` and `charge_swing_factor` mirror
             // that slower weapon timing authoritatively. Stamina suppression is in
             // `apply_regen_tick`. Do not manufacture a Staggered actor state here.
             // PARALYSE (poison only): the absolute poison threshold layered on top —
@@ -4980,6 +5137,9 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
         // The tick is the ONLY thing that moves it for a player who stops sending
         // input mid-swing, so this must run here as well as on the input path.
         f.reconcile_scheduled_states(now);
+        // A chain whose Recovery ran out with no new charge begun is over (02 R1).
+        let charge = f.charge_began_at.unwrap_or(now);
+        f.expire_combo_chain(charge);
     }
     let mut out = Vec::new();
 
@@ -5142,6 +5302,7 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
                 f.blocking_side = ActiveSide::Middle; // retail: propId 9 == 1 in 578/578
                 f.blocking_until = Some(now + BLOCK_LEAK_GUARD);
                 f.block_raised_at = Some(now);
+                f.reset_combo(); // a guard ends the chain (02 R5), bot or human
                 // info!, not debug!: prod runs RUST_LOG=info. A played match showed
                 // 17 stuns, all one-directional, and this line — the only evidence of
                 // whether the bot ever guarded — produced nothing either way.
@@ -5157,15 +5318,21 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
             // guaranteeing the maximum combo ramp. A human-like deterministic
             // pattern alternates once, then repeats a side to reset the chain:
             // ×1, ×combo, ×1, ×combo… rather than climbing to the cap every round.
-            let side = if combat.fighters[bot].combo_count == 0 {
-                match combat.fighters[bot].last_combo_side {
+            //
+            // The count advances when a hit lands, so after one chained hit it reads
+            // 2: that is the point to repeat a side. (At BOT_SWING_COOLDOWN 1.8 s a
+            // bot's next charge begins after every weapon's `recoveryTime`, so in
+            // practice its chain has expired and it alternates every swing.)
+            let side = if combat.fighters[bot].combo_count < 2 {
+                match combat.fighters[bot].last_swing_side {
                     ActiveSide::Right => ActiveSide::Left,
                     _ => ActiveSide::Right,
                 }
             } else {
-                combat.fighters[bot].last_combo_side
+                combat.fighters[bot].last_swing_side
             };
             combat.fighters[bot].charge_side = Some(side);
+            combat.fighters[bot].charge_began_at = Some(now);
             combat.fighters[bot].set_actor_state(ActorStateType::Charging, now);
             combat.fighters[bot].bot_swing_at = Some(now + BOT_CHARGE_WINDUP);
         }
@@ -5654,7 +5821,7 @@ mod tests {
     /// ```
     /// `held=true` → bit0 of b[11] = 1 (button DOWN).
     /// `held=false` → bit0 of b[11] = 0 (button UP / commit).
-    fn make_op46_frame(net_obj_id: u32, held: bool) -> Vec<u8> {
+    pub(super) fn make_op46_frame(net_obj_id: u32, held: bool) -> Vec<u8> {
         let mut frame = vec![
             0x84u8, // C2S marker
             0x2eu8, // carrier = 0x2e (GameMessageId::PlayerCombatInputActivate = 46)
@@ -6069,7 +6236,8 @@ mod tests {
         assert!(second.is_empty(), "a delivered impact must not fire twice");
     }
 
-    /// Op46 UP after a FULL-CHARGE hold (≥ the equipped backswing) → crit ×1.325 on a Light weapon.
+    /// Op46 UP ON THE CHARGE PLATEAU → crit ×1.325 on a Light weapon.
+    /// Light's plateau is (0.315, 0.350] s (combat-spec 02 §2.3); 0.34 s is on it.
     /// Damage must be GREATER than an uncharged swing (×1.0) on the same fighter.
     /// Ratio must be ≈×1.325 (within 1% — integer rounding tolerance on an exact formula).
     #[test]
@@ -6078,12 +6246,11 @@ mod tests {
         // No-enchant combat so the physical damage ratio is clean (not diluted by fixed enchant).
         let mut combat = make_live_combat_no_enchant(now, super::super::tables::Weight::Light);
 
-        // Simulate a full-charge hold: press at t=0, release after the template gate.
+        // Press at t=0, release on the plateau.
         let press_time = now;
         combat.fighters[0].charge_press_at = Some(press_time);
-        let expected_factor = combat.fighters[0].loadout.critical_damage_factor();
-        let release_time =
-            press_time + Duration::from_secs_f32(critical_hold_secs(&combat.fighters[0]) + 0.5);
+        let expected_factor = 1.325_f32; // 1 + Light maxDamageFactor 0.325 (02 §2.4)
+        let release_time = press_time + Duration::from_secs_f32(0.34);
 
         let up_frame = make_op46_frame(0x1234_5678, false);
         let mut out = on_c2s_input(&mut combat, 0, &up_frame, release_time);
@@ -6128,16 +6295,14 @@ mod tests {
         );
     }
 
-    /// Op46 UP after a FULL-CHARGE hold with a Heavy weapon → crit ×1.987.
+    /// Op46 UP on a Heavy weapon's plateau, (0.615, 0.650] s → crit ×1.987.
     #[test]
     fn op46_full_charge_heavy_weapon_applies_crit_multiplier() {
         let now = Instant::now();
         let mut combat = make_live_combat_no_enchant(now, super::super::tables::Weight::Heavy);
 
-        let expected_factor = combat.fighters[0].loadout.critical_damage_factor();
-        combat.fighters[0].charge_press_at = Some(
-            now - Duration::from_secs_f32(critical_hold_secs(&combat.fighters[0]) + 0.3),
-        );
+        let expected_factor = 1.987_f32; // 1 + Heavy maxDamageFactor 0.987 (02 §2.4)
+        combat.fighters[0].charge_press_at = Some(now - Duration::from_secs_f32(0.64));
 
         let up_frame = make_op46_frame(0x1234_5678, false);
         let mut out = on_c2s_input(&mut combat, 0, &up_frame, now);
@@ -6159,36 +6324,94 @@ mod tests {
         );
     }
 
-    /// A hold of the length players actually use must be able to CRIT.
+    /// THE CRIT WINDOW (combat-spec 02 X1). A player's charge factor is a step: 0
+    /// until the 35 ms plateau `(MaxDamageTime, DecayStartTime]`, `maxDamageFactor` on
+    /// it, 0 again after it. The expected factors are the chapter's table, not the
+    /// code's: Light holds 0.25 / 0.32 / 0.34 / 0.36 / 0.60 s give ×1.0 / 1.325 /
+    /// 1.325 / 1.0 / 1.0. The rule this replaces gave ×1.325 for all five.
     ///
-    /// The old flat threshold was 1.2 s against a measured MAXIMUM hold of 1.73 s and
-    /// a median of 0.317 s, so a crit was very nearly unreachable. This fails if the
-    /// threshold is ever put back above what a human actually holds.
+    /// Balanced (0.465, 0.500] and Heavy (0.615, 0.650] are checked on both edges of
+    /// their plateaus too, and a release before `MinDamageTime` (0.233 / 0.3 / 0.4 s)
+    /// is not a swing at all (X2).
     #[test]
-    fn a_typical_player_hold_can_crit() {
-        const MEASURED_MEDIAN_HOLD: f32 = 0.3167;
-        for (weight, name) in [
-            (super::super::tables::Weight::Light, "Light"),
-            (super::super::tables::Weight::Versatile, "Versatile"),
-            (super::super::tables::Weight::Heavy, "Heavy"),
-        ] {
-            let now = Instant::now();
+    fn the_crit_is_a_35ms_plateau_not_a_threshold() {
+        use super::super::tables::Weight;
+        let now = Instant::now();
+        let cases: [(Weight, &str, &[(f32, Option<f32>)]); 3] = [
+            (
+                Weight::Light,
+                "Light",
+                &[
+                    (0.15, None),
+                    (0.25, Some(1.0)),
+                    (0.32, Some(1.325)),
+                    (0.34, Some(1.325)),
+                    (0.36, Some(1.0)),
+                    (0.60, Some(1.0)),
+                ],
+            ),
+            (
+                Weight::Versatile,
+                "Balanced",
+                &[
+                    (0.25, None),
+                    (0.35, Some(1.0)),
+                    (0.46, Some(1.0)),
+                    (0.47, Some(1.625)),
+                    (0.50, Some(1.625)),
+                    (0.51, Some(1.0)),
+                ],
+            ),
+            (
+                Weight::Heavy,
+                "Heavy",
+                &[
+                    (0.35, None),
+                    (0.45, Some(1.0)),
+                    (0.61, Some(1.0)),
+                    (0.62, Some(1.987)),
+                    (0.645, Some(1.987)),
+                    (0.66, Some(1.0)),
+                ],
+            ),
+        ];
+        for (weight, name, holds) in cases {
             let combat = make_live_combat_no_enchant(now, weight);
-            let factor = charge_crit_factor(&combat.fighters[0], MEASURED_MEDIAN_HOLD);
-            assert!(
-                factor > 1.0,
-                "{name}: a median-length hold ({MEASURED_MEDIAN_HOLD}s) must crit, got x{factor}"
-            );
-            let below = critical_hold_secs(&combat.fighters[0]) * 0.5;
-            assert_eq!(
-                charge_crit_factor(&combat.fighters[0], below),
-                1.0,
-                "{name}: a hold below the backswing must NOT crit"
-            );
+            for &(hold, want) in holds {
+                let got = super::charge_swing_factor(&combat.fighters[0], hold, now);
+                match (got, want) {
+                    (None, None) => {}
+                    (Some(g), Some(w)) => assert!(
+                        (g - w).abs() < 1e-4,
+                        "{name}: a {hold}s hold must be x{w}, got x{g}"
+                    ),
+                    _ => panic!("{name}: a {hold}s hold must be {want:?}, got {got:?}"),
+                }
+            }
         }
     }
 
-    /// Op46 UP after a SHORT hold (< the equipped backswing) → normal swing ×1.0 (no crit).
+    /// The same window on a REAL shipped template, not the weight fallback: the
+    /// Dragonbone Dagger ships 0.2333 / 0.1167 / 0.035, maxF 0.325 (`items.json`), so
+    /// its plateau is (0.315, 0.350] like every standard Light weapon.
+    #[test]
+    fn the_crit_window_reads_the_equipped_template() {
+        let now = Instant::now();
+        let mut combat = make_live_combat_no_enchant(now, super::super::tables::Weight::Light);
+        let dagger = super::super::gamedata::WEAPONS
+            .iter()
+            .find(|w| w.name == "Dragonbone Dagger")
+            .expect("the Dragonbone Dagger is a shipped template");
+        combat.fighters[0].loadout.weapon_template = Some(dagger);
+        let f = &combat.fighters[0];
+        assert_eq!(super::charge_swing_factor(f, 0.30, now), Some(1.0));
+        assert!((super::charge_swing_factor(f, 0.33, now).unwrap() - 1.325).abs() < 1e-4);
+        assert_eq!(super::charge_swing_factor(f, 0.40, now), Some(1.0));
+        assert_eq!(super::charge_swing_factor(f, 0.20, now), None);
+    }
+
+    /// Op46 UP after a hold that is a swing but short of the plateau (Light, 0.25 s:
+    /// past `MinDamageTime` 0.233, before the plateau at 0.315) → normal swing ×1.0.
     /// Damage must equal an uncharged swing (no crit boost applied).
     #[test]
     fn op46_short_hold_partial_charge_no_crit() {
@@ -6196,11 +6419,9 @@ mod tests {
         // No-enchant so the comparison is exact (no rounding from fixed enchant contribution).
         let mut combat = make_live_combat_no_enchant(now, super::super::tables::Weight::Light);
 
-        // Press at t=0, release halfway to the template's full-charge gate.
         let press_time = now;
         combat.fighters[0].charge_press_at = Some(press_time);
-        let release_time =
-            press_time + Duration::from_secs_f32(critical_hold_secs(&combat.fighters[0]) / 2.0);
+        let release_time = press_time + Duration::from_secs_f32(0.25);
 
         let up_frame = make_op46_frame(0x1234_5678, false);
         let _ = on_c2s_input(&mut combat, 0, &up_frame, release_time);
@@ -7439,13 +7660,13 @@ mod phase4_tests {
 
     /// `410` is the capture-observed non-attack control value used by the existing
     /// phase-4 tests. It has no `START_TRIGGER_FLAG` bit.
-    fn make_pos_frame(x: f32, y: f32, charge: f32) -> Vec<u8> {
+    pub(super) fn make_pos_frame(x: f32, y: f32, charge: f32) -> Vec<u8> {
         make_pos_frame_with_flags(x, y, charge, 410)
     }
 
     /// A prod-shaped `PlayerCombatInputActivate` (gmid 46) on the generic 0x36
     /// carrier: `{… 3:Byte 46 · 4:Bool held · 5:Float charge · 6:Bool blockZone}`.
-    fn make_act_frame(held: bool, charge: f32, block_zone: bool) -> Vec<u8> {
+    pub(super) fn make_act_frame(held: bool, charge: f32, block_zone: bool) -> Vec<u8> {
         let mut w = arena_proto::NetDataWriter::new();
         w.int(0, 565)
             .byte(1, 56)
@@ -7504,10 +7725,12 @@ mod phase4_tests {
         let mut combat = live_combat(now);
         let before = combat.fighters[1].health;
 
+        // Held 0.25 s: past the Light weapon's `MinDamageTime` (0.233 s), so a swing.
+        let release = now + Duration::from_millis(250);
         on_c2s_input(&mut combat, 0, &make_pos_frame(0.8, 0.5, 0.0), now);
         on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, false), now);
-        on_c2s_input(&mut combat, 0, &make_act_frame(false, 0.1, false), now);
-        land(&mut combat, now);
+        on_c2s_input(&mut combat, 0, &make_act_frame(false, 0.25, false), release);
+        land(&mut combat, release);
 
         assert!(
             combat.fighters[1].health < before,
@@ -7612,11 +7835,20 @@ mod phase4_tests {
 
     /// Swing `sender` by press→release at normalised X `x`, `dt` after `t0`.
     /// Returns the resulting combo count.
+    ///
+    /// The press is held for 0.25 s: a real swing on the fixture's Light weapon (past
+    /// `MinDamageTime` 0.233 s, short of the crit plateau at 0.315 s). The hit is
+    /// landed, and the return value is the combo count that hit READ (the count
+    /// advances only once it lands, combat-spec 02 X8).
     fn swing_at(combat: &mut MatchCombat, sender: usize, x: f32, t: Instant) -> u32 {
-        on_c2s_input(combat, sender, &make_pos_frame(x, 0.5, 0.0), t);
-        on_c2s_input(combat, sender, &make_act_frame(true, 0.0, false), t);
-        on_c2s_input(combat, sender, &make_act_frame(false, 0.1, false), t);
-        combat.fighters[sender].combo_count
+        let press = t - Duration::from_millis(250);
+        on_c2s_input(combat, sender, &make_pos_frame(x, 0.5, 0.0), press);
+        on_c2s_input(combat, sender, &make_act_frame(true, 0.0, false), press);
+        on_c2s_input(combat, sender, &make_pos_frame(x, 0.5, 0.25), t);
+        on_c2s_input(combat, sender, &make_act_frame(false, 0.25, false), t);
+        let read = combat.fighters[sender].combo_count;
+        land(combat, t);
+        read
     }
 
     /// The decoders read the real prod NetData layout.
@@ -7744,10 +7976,10 @@ mod phase4_tests {
         on_c2s_input(
             &mut combat,
             0,
-            &make_act_frame(false, 0.1, false),
-            now + Duration::from_millis(100),
+            &make_act_frame(false, 0.25, false),
+            now + Duration::from_millis(250),
         );
-        let swing = drain_state_changes(&mut combat, now + Duration::from_millis(100));
+        let swing = drain_state_changes(&mut combat, now + Duration::from_millis(250));
         assert_eq!(
             swing
                 .iter()
@@ -7809,7 +8041,10 @@ mod phase4_tests {
     #[test]
     fn combo_follows_the_players_real_sides() {
         let now = Instant::now();
-        let step = Duration::from_millis(900); // > weapon cadence
+        // > the weapon cadence (0.40 s), and each next press (0.25 s before its
+        // release) begins well inside the previous swing's Recovery, before
+        // `recoveryTime` 0.55 s ends the chain (02 §4.4).
+        let step = Duration::from_millis(600);
 
         // (a) Repeating the RIGHT side: combo stays pinned at 0 forever.
         let mut same = live_combat(now);
@@ -7911,10 +8146,10 @@ mod phase4_tests {
         assert_eq!(classified_side_for(&combat.fighters[0], now), None);
     }
 
-    /// **The charge timer is SERVER-measured, never client-claimed.** A client that
-    /// reports a full 2.8 s charge on an instantaneous tap gets no crit: the damage
-    /// is identical to an honest uncharged swing. The client value is kept only as
-    /// telemetry.
+    /// **A client claim cannot buy a charge.** The client's `_chargeTime` is believed
+    /// only within 0.10 s ahead of the server's measurement (`judged_hold_secs`), so a
+    /// client that reports a 2.8 s charge on an instantaneous tap gets exactly what an
+    /// honest tap gets. The claim is still recorded as telemetry.
     #[test]
     fn client_claimed_charge_cannot_buy_a_crit() {
         let now = Instant::now();
@@ -7946,8 +8181,8 @@ mod phase4_tests {
         let mut real = live_combat(now);
         on_c2s_input(&mut real, 0, &make_pos_frame(0.814, 0.5, 0.0), t);
         on_c2s_input(&mut real, 0, &make_act_frame(true, 0.0, false), t);
-        let held_to =
-            t + Duration::from_secs_f32(critical_hold_secs(&real.fighters[0]) + 0.1);
+        // On the plateau of the fixture's weapon (Light, (0.315, 0.350] s).
+        let held_to = t + Duration::from_secs_f32(0.34);
         on_c2s_input(&mut real, 0, &make_act_frame(false, 1.3, false), held_to);
         land(&mut real, held_to);
         assert!(
@@ -10682,7 +10917,6 @@ mod report_31_high_block_stun {
             target: 1,
             side: ActiveSide::Left,
             swing_factor: 1.0,
-            combo_count: 0,
             due: t0 + Duration::from_millis(50),
         });
         c.pending_impacts.push(PendingImpact {
@@ -10713,7 +10947,9 @@ mod report_31_high_block_stun {
         let now = t0 + Duration::from_secs(30);
         let mut c = combat(t0, 1);
         let normal_cadence = super::swing_cooldown_for(&c.fighters[1], now);
-        let normal_charge = super::critical_hold_secs_for(&c.fighters[1], now);
+        // A hold on the unslowed plateau.
+        let plateau = c.fighters[1].loadout.charge_params().plateau_start_time(1.0) + 0.01;
+        assert!(super::charge_swing_factor(&c.fighters[1], plateau, now).unwrap() > 1.0);
         let out = super::apply_status_conditioning(
             &mut c,
             1,
@@ -10735,9 +10971,12 @@ mod report_31_high_block_stun {
 
         let slow = super::super::gamedata::combat_params::SLOW_STATUS_MULTIPLIER;
         let frozen_cadence = super::swing_cooldown_for(&c.fighters[1], now);
-        let frozen_charge = super::critical_hold_secs_for(&c.fighters[1], now);
         assert!((frozen_cadence.as_secs_f32() - normal_cadence.as_secs_f32() / slow).abs() < 1e-5);
-        assert!((frozen_charge - normal_charge / slow).abs() < 1e-5);
+        // Frozen stretches the charge clock by this engine's existing 1/0.75, so the
+        // same hold now falls short of the plateau, and the stretched one reaches it.
+        // (The client's factor is 1.75, 02 X9, which is a separate fix.)
+        assert_eq!(super::charge_swing_factor(&c.fighters[1], plateau, now), Some(1.0));
+        assert!(super::charge_swing_factor(&c.fighters[1], plateau / slow, now).unwrap() > 1.0);
 
         // expected_peers=1 makes slot 1 a bot. It still begins a wind-up.
         super::on_tick(&mut c, now + Duration::from_millis(10), false);
@@ -11367,7 +11606,6 @@ mod round_ends_once_tests {
             target: 1,
             side: super::super::state::ActiveSide::Right,
             swing_factor: 1.0,
-            combo_count: 0,
             due: now,
         });
 
@@ -12038,7 +12276,6 @@ mod op53_op83_wire_tests {
             target: 0,
             side: ActiveSide::Right,
             swing_factor: 1.0,
-            combo_count: 0,
             due: now,
         });
         land_due_hits(c, now + Duration::from_millis(1))
@@ -12074,5 +12311,422 @@ mod op53_op83_wire_tests {
             "fixture: the swing must resolve"
         );
         assert!(op83s(&out).is_empty());
+    }
+}
+
+/// PR-05 (crit / charge / combo), combat-spec chapter 02 §10 X1/X2/X5/X6/X7/X8/X11 and
+/// the bash source (03 §5.1). Every expected number is the chapter's own arithmetic on
+/// the shipped weapon data, never the output of the code under test.
+#[cfg(test)]
+mod crit_charge_combo_tests {
+    use std::time::{Duration, Instant};
+
+    use super::super::loadout::starter;
+    use super::super::state::{
+        ActiveSide, ActorStateType, DamageType, EquippedAbility, Fighter, FlowState, MatchCombat,
+        WeaponProfile,
+    };
+    use super::super::tables::Weight;
+    use super::phase4_tests::{make_act_frame, make_pos_frame};
+    use super::*;
+
+    const RIGHT: f32 = 0.8;
+    const LEFT: f32 = 0.2;
+
+    /// Two fighters with a plain Slashing weapon of `base` damage and the weight
+    /// class's standard template values (no template resolves), no enchantments and
+    /// no armor, so a hit's health loss is exactly `base * (1 + f)`.
+    fn fight(now: Instant, weight: Weight, base: f32) -> MatchCombat {
+        let mut c = MatchCombat::new(2, 2, now);
+        for slot in 0..2 {
+            let obj = c.alloc_net_object_id();
+            let mut f = Fighter::new(slot, obj, starter(), now);
+            f.loadout.weapon = WeaponProfile {
+                primary_type: Some(DamageType::Slashing),
+                base_by_type: vec![(DamageType::Slashing, base)],
+                weight: Some(weight),
+            };
+            f.loadout.weapon_template = None;
+            f.loadout.enchants.clear();
+            f.loadout.armor_rating = 0.0;
+            f.loadout.ravage.clear();
+            c.fighters.push(f);
+        }
+        c.match_net_object_id = c.alloc_net_object_id();
+        c.phase = FlowState::StateTimeout;
+        c.phase_entered = now;
+        c
+    }
+
+    /// Press at `x_press`, release at `x_release` after `hold`, then land the hit.
+    /// Returns the health slot 1 lost.
+    fn swing(c: &mut MatchCombat, x_press: f32, x_release: f32, press: Instant, hold: f32) -> u32 {
+        let release = press + Duration::from_secs_f32(hold);
+        let before = c.fighters[1].health;
+        on_c2s_input(c, 0, &make_pos_frame(x_press, 0.5, 0.0), press);
+        on_c2s_input(c, 0, &make_act_frame(true, 0.0, false), press);
+        on_c2s_input(c, 0, &make_pos_frame(x_release, 0.5, hold), release);
+        on_c2s_input(c, 0, &make_act_frame(false, hold, false), release);
+        land_due_hits(c, release + FOLLOW_THROUGH_DELAY + Duration::from_millis(1));
+        before - c.fighters[1].health
+    }
+
+    fn uuid_of(editor: &str) -> &'static str {
+        super::super::gamedata::ABILITIES
+            .iter()
+            .find(|a| a.editor_name == editor)
+            .map(|a| a.uuid)
+            .unwrap_or_else(|| panic!("{editor} missing from the shipped table"))
+    }
+
+    /// Cast `editor`'s rank 1 from slot 0 through the real op37 path and land its
+    /// impact. Returns every frame it produced.
+    fn cast(c: &mut MatchCombat, editor: &str, now: Instant) -> Vec<(usize, Vec<u8>)> {
+        let uuid = uuid_of(editor);
+        let tag = super::super::loadout::ability_tag_for_template(uuid);
+        c.fighters[0].loadout.abilities.push(EquippedAbility {
+            instance_uuid: uuid.to_string(),
+            level: 1,
+            tag,
+        });
+        let frame = messages::request_execute_ability(c.fighters[0].net_object_id, uuid);
+        let ea = input::parse_execute_ability(&frame).expect("synthesised op37 must parse");
+        let mut out = resolve_ability_cast(c, 0, 1, &frame, &ea, now);
+        out.extend(land_due_impacts(c, now + Duration::from_secs(3)));
+        out
+    }
+
+    /// `(source, components)` of every op50 in `out` (deduplicated per viewer).
+    fn op50s(out: &[(usize, Vec<u8>)]) -> Vec<(i64, Vec<(i64, f32)>)> {
+        out.iter()
+            .filter(|(v, f)| *v == 0 && messages::user_message_gmid(f) == Some(50))
+            .map(|(_, f)| {
+                let nd = arena_proto::parse_netdata(&f[2..]);
+                let n = nd.int(12).unwrap_or(0);
+                let comps = (0..n)
+                    .map(|k| {
+                        let at = 13 + 2 * k as u8;
+                        let v = match nd.get(at + 1) {
+                            Some(arena_proto::NetDataValue::Float(v)) => *v,
+                            _ => f32::NAN,
+                        };
+                        (nd.int(at).unwrap_or(-1), v)
+                    })
+                    .collect();
+                (nd.int(6).unwrap_or(-1), comps)
+            })
+            .collect()
+    }
+
+    // -- X2: the minimum hold ------------------------------------------------
+
+    /// Tracker #228 item 4, "a brief tap still gives a full swing". A release before
+    /// `MinDamageTime` (Light 0.233 s, Heavy 0.40 s) is `AttackFailed`: no swing, no
+    /// damage, Idle, and the chain is gone (`PlayerChargingState$$OnLateUpdate
+    /// @0x1d73fe4`). The control is the same press held past the gate.
+    #[test]
+    fn a_tap_before_min_damage_time_is_not_a_swing() {
+        for (weight, tap, hold) in [(Weight::Light, 0.15, 0.25), (Weight::Heavy, 0.35, 0.45)] {
+            let now = Instant::now();
+            let mut c = fight(now, weight, 200.0);
+            c.fighters[0].combo_count = 1;
+            c.fighters[0].last_combo_side = ActiveSide::Right;
+            let dealt = swing(&mut c, LEFT, LEFT, now, tap);
+            assert_eq!(dealt, 0, "{weight:?}: a {tap}s tap must deal nothing");
+            assert!(c.pending_hits.is_empty(), "{weight:?}: no swing was queued");
+            assert!(c.fighters[0].last_swing.is_none(), "{weight:?}: no swing was committed");
+            assert_eq!(c.fighters[0].actor_state(), ActorStateType::Idle, "{weight:?}: back to Idle");
+            assert_eq!(c.fighters[0].combo_count, 0, "{weight:?}: Idle resets the chain");
+
+            let mut ok = fight(now, weight, 200.0);
+            assert_eq!(swing(&mut ok, LEFT, LEFT, now, hold), 200, "{weight:?}: a {hold}s hold is one x1.0 hit");
+        }
+    }
+
+    // -- X1: the crit window through the wire --------------------------------
+
+    /// Light holds 0.25 / 0.32 / 0.34 / 0.36 / 0.60 s → x1.0 / 1.325 / 1.325 / 1.0 /
+    /// 1.0 (02 X1), end to end through op46. Base 200: 200, 265, 265, 200, 200.
+    #[test]
+    fn only_a_release_on_the_plateau_crits() {
+        for (hold, want) in [(0.25, 200), (0.32, 265), (0.34, 265), (0.36, 200), (0.60, 200)] {
+            let now = Instant::now();
+            let mut c = fight(now, Weight::Light, 200.0);
+            assert_eq!(swing(&mut c, RIGHT, RIGHT, now, hold), want, "a {hold}s hold");
+        }
+    }
+
+    // -- composition: combo and charge ADD ------------------------------------
+
+    /// `x(1 + [combo>=1]*0.54 + swing)` (01 C/D3, 02 §7). Light, base 200: chained
+    /// uncharged 308, chained on the plateau 373. The fork's old `max(1.99, 1.325)`
+    /// gave 398 for both.
+    #[test]
+    fn a_chained_crit_adds_the_two_factors() {
+        for (hold, want) in [(0.25, 308), (0.34, 373)] {
+            let now = Instant::now();
+            let mut c = fight(now, Weight::Light, 200.0);
+            assert_eq!(swing(&mut c, RIGHT, RIGHT, now, 0.25), 200, "opener");
+            // The next charge begins 0.2 s after the first release: inside Recovery,
+            // and the commit clears the 0.40 s Light cadence.
+            let press2 = now + Duration::from_secs_f32(0.45);
+            assert_eq!(swing(&mut c, LEFT, LEFT, press2, hold), want, "chained, held {hold}s");
+        }
+    }
+
+    // -- X5: the chain expires with Recovery ---------------------------------
+
+    /// 02 X5: the second charge begins 0.7 s after the first hit, past Light's
+    /// `recoveryTime` 0.55 s, so it is a fresh x1.0 swing. Control: 0.2 s after the
+    /// first release, it chains (x1.54).
+    #[test]
+    fn a_chain_expires_after_recovery_time() {
+        let now = Instant::now();
+        let mut late = fight(now, Weight::Light, 200.0);
+        swing(&mut late, RIGHT, RIGHT, now, 0.25);
+        let first_hit = now + Duration::from_secs_f32(0.25) + FOLLOW_THROUGH_DELAY;
+        let press2 = first_hit + Duration::from_secs_f32(0.7);
+        assert_eq!(swing(&mut late, LEFT, LEFT, press2, 0.25), 200, "expired chain");
+
+        let mut soon = fight(now, Weight::Light, 200.0);
+        swing(&mut soon, RIGHT, RIGHT, now, 0.25);
+        let press2 = now + Duration::from_secs_f32(0.45);
+        assert_eq!(swing(&mut soon, LEFT, LEFT, press2, 0.25), 308, "live chain");
+    }
+
+    // -- X6: the other resets -------------------------------------------------
+
+    /// 02 X6: swing → raise a guard → drop it → opposite swing inside the window is
+    /// x1.0 (R5). The same with a spell cast in between (R5, Recovery → Channeling),
+    /// and with the finger crossing the midline during the hold (R3). The control
+    /// (the same timings with nothing in between) chains, in `a_chain_expires_…`.
+    #[test]
+    fn a_guard_a_spell_or_a_midline_crossing_ends_the_chain() {
+        let now = Instant::now();
+        let press2 = now + Duration::from_secs_f32(0.45);
+
+        let mut guard = fight(now, Weight::Light, 200.0);
+        swing(&mut guard, RIGHT, RIGHT, now, 0.25);
+        let g = now + Duration::from_secs_f32(0.30);
+        on_c2s_input(&mut guard, 0, &make_act_frame(true, 0.0, true), g);
+        on_c2s_input(&mut guard, 0, &make_act_frame(false, 0.0, true), g + Duration::from_millis(50));
+        assert_eq!(swing(&mut guard, LEFT, LEFT, press2, 0.25), 200, "guard in between");
+
+        let mut spell = fight(now, Weight::Light, 200.0);
+        swing(&mut spell, RIGHT, RIGHT, now, 0.25);
+        assert_eq!(spell.fighters[0].combo_count, 1, "precondition: a live chain");
+        let _ = cast(&mut spell, "Ward", now + Duration::from_secs_f32(0.30));
+        assert_eq!(spell.fighters[0].combo_count, 0, "a spell cast ends the chain");
+
+        let mut cross = fight(now, Weight::Light, 200.0);
+        swing(&mut cross, RIGHT, RIGHT, now, 0.25);
+        // Pressed on the right, released on the left.
+        assert_eq!(swing(&mut cross, RIGHT, LEFT, press2, 0.25), 200, "crossed mid-hold");
+    }
+
+    /// 02 R7: a paralysis resets the combo (`ActorParalyzedState$$OnEnter@0x1fd49f4`).
+    /// Control: a target that cannot be paralysed keeps its chain.
+    #[test]
+    fn a_paralysis_ends_the_chain() {
+        let now = Instant::now();
+        let mut c = fight(now, Weight::Light, 200.0);
+        swing(&mut c, RIGHT, RIGHT, now, 0.25);
+        assert_eq!(c.fighters[0].combo_count, 1);
+        let _ = try_paralyze(&mut c, 1, 0, 1, 1.0e6, false, now + Duration::from_millis(400));
+        assert_eq!(c.fighters[0].combo_count, 0, "paralysed → chain ends");
+
+        let mut immune = fight(now, Weight::Light, 200.0);
+        swing(&mut immune, RIGHT, RIGHT, now, 0.25);
+        immune.fighters[0].can_be_paralyzed = false;
+        let _ = try_paralyze(&mut immune, 1, 0, 1, 1.0e6, false, now + Duration::from_millis(400));
+        assert_eq!(immune.fighters[0].combo_count, 1, "no paralysis → chain intact");
+    }
+
+    // -- X8: the count advances when the hit lands -----------------------------
+
+    /// 02 X8: the count is `IncrementCombo` after `ReceiveDamage`, so a swing whose
+    /// round ends before impact does not advance the chain. Control: the same swing
+    /// landing does.
+    #[test]
+    fn a_hit_that_never_lands_does_not_advance_the_chain() {
+        let now = Instant::now();
+        let release = now + Duration::from_secs_f32(0.25);
+        let mut c = fight(now, Weight::Light, 200.0);
+        on_c2s_input(&mut c, 0, &make_pos_frame(RIGHT, 0.5, 0.0), now);
+        on_c2s_input(&mut c, 0, &make_act_frame(true, 0.0, false), now);
+        on_c2s_input(&mut c, 0, &make_act_frame(false, 0.25, false), release);
+        assert_eq!(c.pending_hits.len(), 1, "precondition: the swing is in the air");
+        assert_eq!(c.fighters[0].combo_count, 0, "committing does not count");
+        c.phase = FlowState::RoundEnd;
+        land_due_hits(&mut c, release + Duration::from_millis(100));
+        assert_eq!(c.fighters[0].combo_count, 0, "a hit that never landed does not count");
+
+        let mut ok = fight(now, Weight::Light, 200.0);
+        swing(&mut ok, RIGHT, RIGHT, now, 0.25);
+        assert_eq!(ok.fighters[0].combo_count, 1, "a landed hit counts");
+    }
+
+    // -- X11: same-side cadence -----------------------------------------------
+
+    /// 02 X11: on the same side the next swing waits for `recoveryToNeutralTime`
+    /// (Dragonbone Dagger: commit to commit `0.2333 + 0.40`), while the opposite side
+    /// may go at `recoveryToComboTime` (`0.2333 + 0.10`). Commits 0.45 s apart: the
+    /// alternate swing lands chained (x1.54), the repeat is refused. At 0.70 s the
+    /// repeat lands, unchained (a repeated side starts a fresh chain, R2).
+    #[test]
+    fn a_same_side_repeat_waits_for_recovery_to_neutral() {
+        let dagger = super::super::gamedata::weapon(super::super::gamedata::ids::DRAGONBONE_DAGGER)
+            .expect("the Dragonbone Dagger is shipped");
+        assert!((dagger.recovery_to_neutral_time - 0.40).abs() < 1e-3, "shipped 0.40");
+        assert!((dagger.recovery_to_combo_time - 0.10).abs() < 1e-3, "shipped 0.10");
+        let run = |x2: f32, gap: f32| {
+            let now = Instant::now();
+            let mut c = fight(now, Weight::Light, 200.0);
+            c.fighters[0].loadout.weapon_template = Some(dagger);
+            swing(&mut c, RIGHT, RIGHT, now, 0.25);
+            let press2 = now + Duration::from_secs_f32(gap);
+            swing(&mut c, x2, x2, press2, 0.25)
+        };
+        assert_eq!(run(LEFT, 0.45), 308, "opposite side, 0.45 s: chained");
+        assert_eq!(run(RIGHT, 0.45), 0, "same side, 0.45 s: too early");
+        assert_eq!(run(RIGHT, 0.70), 200, "same side, 0.70 s: allowed, fresh chain");
+    }
+
+    // -- X7: a maneuver out of a chain ------------------------------------------
+
+    /// 05 D1 / 02 X7: Balanced weapon base 100 with a shield, Power Attack rank 1
+    /// (bonus 75.33 x 1H 0.5), AR 0, no chain → `100 + 37.67 = 137.67`; the fork gave
+    /// 223.7. From a live chain it is `137.67 x (1 + 0.25)` = 172.08, and the chain
+    /// ends with the maneuver (R9).
+    #[test]
+    fn a_maneuver_takes_the_combo_and_no_charge() {
+        let r = super::super::gamedata::ability_rank_clamped(uuid_of("PowerAttack"), 1).unwrap();
+        let p = r.parameters.expect("Power Attack ships ManeuverParameters");
+        assert!((p.bonus_damage - 75.33).abs() < 0.01, "shipped bonus 75.33");
+        assert!((p.one_handed_multiplier - 0.5).abs() < 1e-4, "shipped 1H 0.5");
+
+        let now = Instant::now();
+        let mut fresh = fight(now, Weight::Versatile, 100.0);
+        assert!(fresh.fighters[0].loadout.has_shield, "precondition: one-handed with a shield");
+        let before = fresh.fighters[1].health;
+        let _ = cast(&mut fresh, "PowerAttack", now);
+        assert_eq!(before - fresh.fighters[1].health, 138, "137.67, no chain");
+
+        let mut chained = fight(now, Weight::Versatile, 100.0);
+        swing(&mut chained, RIGHT, RIGHT, now, 0.35);
+        assert_eq!(chained.fighters[0].combo_count, 1, "precondition: a live chain");
+        let before = chained.fighters[1].health;
+        let _ = cast(&mut chained, "PowerAttack", now + Duration::from_secs_f32(0.45));
+        assert_eq!(before - chained.fighters[1].health, 172, "137.67 x 1.25");
+        assert_eq!(chained.fighters[0].combo_count, 0, "the maneuver ends the chain");
+
+        // The same maneuver cast after Balanced's `recoveryTime` (0.8 s) has run out:
+        // the actor went Idle, the chain is gone (R1), and it is the fresh 137.67.
+        let mut idle = fight(now, Weight::Versatile, 100.0);
+        swing(&mut idle, RIGHT, RIGHT, now, 0.35);
+        assert_eq!(idle.fighters[0].combo_count, 1, "precondition: a live chain");
+        let before = idle.fighters[1].health;
+        let _ = cast(&mut idle, "PowerAttack", now + Duration::from_secs(5));
+        assert_eq!(before - idle.fighters[1].health, 138, "no chain after Idle");
+    }
+
+    // -- M-bash-source ------------------------------------------------------------
+
+    /// 03 §5.1 / 01 D4: a shield bash is source 11 with ONE Bashing component, the
+    /// shield's `_damageBase` (Chaurus Shield 120) plus the bash's bonus, no weapon
+    /// enchantment and no combo scaling. Control: the same bash with no chain deals
+    /// the same.
+    #[test]
+    fn a_shield_bash_hits_with_the_shield_as_source_11() {
+        let bonus = super::super::gamedata::ability_rank_clamped(uuid_of("ShieldBash"), 1)
+            .and_then(|r| r.parameters)
+            .map(|p| p.bonus_damage * p.one_handed_multiplier)
+            .expect("Shield Bash ships ManeuverParameters");
+        let chaurus = 120.0; // Chaurus Shield `damageBase`, the starter's shield
+        let now = Instant::now();
+        let run = |combo: u32| {
+            let mut c = fight(now, Weight::Light, 200.0);
+            assert!((c.fighters[0].loadout.shield_damage - chaurus).abs() < 1e-3);
+            c.fighters[0].loadout.enchants = vec![(DamageType::Poison, 10)];
+            c.fighters[0].combo_count = combo;
+            c.fighters[0].last_combo_side = ActiveSide::Right;
+            let out = cast(&mut c, "ShieldBash", now);
+            (op50s(&out), c.fighters[0].combo_count)
+        };
+        let (chained, after) = run(1);
+        assert_eq!(chained.len(), 1, "one bash hit");
+        let (source, comps) = &chained[0];
+        assert_eq!(*source, 11, "ShieldManeuver");
+        assert_eq!(comps.len(), 1, "a single component, no Poison enchant: {comps:?}");
+        assert_eq!(comps[0].0, DamageType::Bashing as i64, "Bashing");
+        assert!((comps[0].1 - (chaurus + bonus)).abs() < 0.05, "shield 120 + bonus {bonus}: {comps:?}");
+        assert_eq!(after, 0, "the bash (a maneuver) ends the chain");
+        let (fresh, _) = run(0);
+        assert_eq!(fresh, chained, "no combo scaling on a bash");
+    }
+
+    /// Review finding: on the legacy 0x2e carrier a too-short release (AttackFailed →
+    /// Idle) must not end a paralysis. Control: an unparalysed short release fails to
+    /// Idle as X2 says.
+    #[test]
+    fn a_short_release_does_not_break_a_paralysis() {
+        let now = Instant::now();
+        let mut c = fight(now, Weight::Light, 200.0);
+        let _ = try_paralyze(&mut c, 1, 0, 1, 1.0e6, false, now);
+        assert!(c.fighters[0].is_paralyzed(), "precondition: paralysed");
+        c.fighters[0].charge_press_at = Some(now);
+        let up = super::tests::make_op46_frame(0x1234_5678, false);
+        on_c2s_input(&mut c, 0, &up, now + Duration::from_millis(100));
+        assert!(c.fighters[0].is_paralyzed(), "a tap must not lift the paralysis");
+
+        let mut free = fight(now, Weight::Light, 200.0);
+        free.fighters[0].charge_press_at = Some(now);
+        free.fighters[0].set_actor_state(ActorStateType::Charging, now);
+        on_c2s_input(&mut free, 0, &up, now + Duration::from_millis(100));
+        assert_eq!(free.fighters[0].actor_state(), ActorStateType::Idle, "control: AttackFailed");
+    }
+
+    /// Coordinator review: the gates read the client's own charge clock (02 §2.1),
+    /// so arrival jitter cannot drop a real swing. The client says 0.24 s (past Light's
+    /// 0.233 s `MinDamageTime`); the server saw the UP only 0.21 s after the DOWN.
+    /// That must swing. Controls: the same 0.21 s with no client value fails (the
+    /// server clock alone), and a client claim outside the band is ignored.
+    #[test]
+    fn a_jittered_release_is_judged_on_the_client_clock() {
+        let run = |server: f32, client: f32| {
+            let now = Instant::now();
+            let mut c = fight(now, Weight::Light, 200.0);
+            let release = now + Duration::from_secs_f32(server);
+            let before = c.fighters[1].health;
+            on_c2s_input(&mut c, 0, &make_pos_frame(RIGHT, 0.5, 0.0), now);
+            on_c2s_input(&mut c, 0, &make_act_frame(true, 0.0, false), now);
+            on_c2s_input(&mut c, 0, &make_act_frame(false, client, false), release);
+            land_due_hits(&mut c, release + FOLLOW_THROUGH_DELAY + Duration::from_millis(1));
+            before - c.fighters[1].health
+        };
+        assert_eq!(run(0.21, 0.24), 200, "client 0.24 s, server 0.21 s: a swing");
+        assert_eq!(run(0.21, 0.0), 0, "control: no client clock, server 0.21 s → AttackFailed");
+        // The plateau reads the same clock: client 0.33 s is a crit although the
+        // server saw 0.30 s.
+        assert_eq!(run(0.30, 0.33), 265, "client on the plateau → crit");
+        // The clamp. A client claiming 0.34 s (a crit) when the server saw 0.20 s is
+        // 0.14 s ahead, past the 0.10 s band: ignored, judged on 0.20 s → no swing.
+        assert_eq!(run(0.20, 0.34), 0, "claim 0.14 s ahead of the server is ignored");
+        // …and one far BEHIND (0.25 s under) is ignored too: server 0.60 s, client
+        // 0.34 s would be a crit, the server's 0.60 s is not.
+        assert_eq!(run(0.60, 0.34), 200, "claim 0.26 s behind is ignored");
+        // Inside the band on the ahead side it is believed: server 0.26, client 0.34.
+        assert_eq!(run(0.26, 0.34), 265, "0.08 s ahead is within the band");
+    }
+
+    #[test]
+    fn the_client_charge_band_is_bounded() {
+        assert_eq!(judged_hold_secs(0.21, Some(0.24)), 0.24);
+        assert_eq!(judged_hold_secs(0.21, None), 0.21);
+        assert_eq!(judged_hold_secs(0.21, Some(0.0)), 0.21);
+        assert_eq!(judged_hold_secs(0.21, Some(f32::NAN)), 0.21);
+        assert_eq!(judged_hold_secs(0.20, Some(0.31)), 0.20, "0.11 ahead");
+        assert_eq!(judged_hold_secs(0.50, Some(0.24)), 0.50, "0.26 behind");
+        assert_eq!(judged_hold_secs(0.50, Some(0.26)), 0.26, "0.24 behind");
     }
 }
