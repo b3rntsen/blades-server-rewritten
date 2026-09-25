@@ -1205,6 +1205,10 @@ pub struct Fighter {
     /// ones that have aged out of [`Self::state_history`]. The wire `firstIndex` is
     /// `transitions_total - state_history.len()`.
     transitions_total: u32,
+    /// A cast pose announced by op53 that the client will hold until a state message
+    /// ends it: `(when the channel ends, transitions_total right after op53 recorded
+    /// Channeling)`. See [`Self::begin_channel_pose`].
+    channel_pose: Option<(Instant, u32)>,
     pub state_entered: Instant,
     /// Slot of the implicit arena target (the opponent) for `RequestExecuteAbility`.
     pub arena_target: usize,
@@ -1436,12 +1440,29 @@ pub struct Fighter {
     /// `reconcile_paralysis`), two of which run from input handlers that cannot
     /// reach the wire.
     ///
-    /// Deliberately holds ONLY the statuses [`Self::tracked_statuses`] can see.
-    /// Ward, Absorb and ResistElements are announced from elsewhere and are not
-    /// represented in the state this scans, so including them would make the
-    /// very first diff emit a bogus remove for a status that had just been
-    /// applied.
+    /// Deliberately holds ONLY the statuses [`Self::tracked_statuses`] can see: a
+    /// status the scan cannot see would make the very first diff emit a bogus
+    /// remove for a status that had just been applied. Every status we announce
+    /// is now visible to it (Ward / Absorb / storm armor through their pools,
+    /// 60-63 and FlashFreeze's Frozen through `status_timers`); Blocking is synced
+    /// separately, see `announced_blocking`.
     announced_statuses: Vec<StatusEffectType>,
+    /// Statuses whose lifetime no other field models, as `(status, expires_at)`:
+    /// Resist Elements' 60-63 and FlashFreeze's Frozen (5). They exist only so
+    /// [`Self::tracked_statuses`] can see them lapse and the diff sends their op51
+    /// remove. A PvP client never times a status out itself
+    /// (`PvpPlayerActor$$RemoveStatusEffect@0x1a32aa8` removes only on `force`), so
+    /// without the remove the resistance icon and FlashFreeze's local Slow stay up
+    /// until the round clears them.
+    pub status_timers: Vec<(StatusEffectType, Instant)>,
+    /// Whether the clients were last told this fighter holds `Blocking` (1).
+    ///
+    /// Blocking is announced both ways from the guard itself, not from an apply
+    /// site, because a guard is raised and dropped on a dozen paths (op46 press and
+    /// release, bot guard, bash window, stagger, paralysis, Fury, window expiry).
+    /// Kept out of `announced_statuses` so the removal diff can never absorb a raise
+    /// silently. See [`Self::sync_blocking_status`].
+    announced_blocking: bool,
     /// Consumables used in the CURRENT round — gated by
     /// [`CONSUMABLES_PER_ROUND`] (1). Reset by `reset_fighters_for_next_round`.
     /// [Phase 4.3]
@@ -1652,6 +1673,7 @@ impl Fighter {
             scheduled_states: Vec::new(),
             state_history: VecDeque::new(),
             transitions_total: 0,
+            channel_pose: None,
             state_entered: now,
             arena_target: 1 - slot.min(1), // 2-player: the other slot
             blocking_side: ActiveSide::None,
@@ -1680,6 +1702,8 @@ impl Fighter {
             transient_all_resistance: Vec::new(),
             staggered_until: None,
             announced_statuses: Vec::new(),
+            status_timers: Vec::new(),
+            announced_blocking: false,
             consumables_used: 0,
             continuous_next_tick_at: None,
             continuous_carry: 0.0,
@@ -1775,6 +1799,44 @@ impl Fighter {
         self.packed_state_history()
     }
 
+    /// Record the `Channeling` state op53 announces and remember when the channel ends.
+    /// Returns the history ring for op53's propId 7, whose newest entry is Channeling.
+    ///
+    /// The logical `actor_state` is left alone (as for op58), but the client is not:
+    /// op53 puts the caster in `PlayerChannelingState` on both clients, and the
+    /// opponent's copy never leaves it on its own — `PvpOpponentActor$$TryChangeState@0x1964cc8`
+    /// refuses every local change, and the cast animation ends only in
+    /// `ChannelingState$$EndChanneling@0x1a52578`, run from the state's exit. On the
+    /// caster's own client `AbilityChannel$$Cleanup@0x1e8faa4` goes to Idle after the
+    /// step's `_duration`. So the server owes both viewers a state change at that
+    /// instant ([`Self::reconcile_channel_pose`]; combat-spec 12 §5.2, 12-D2).
+    pub fn begin_channel_pose(&mut self, channel_ends_at: Instant) -> Vec<u8> {
+        let blob = self.record_presentational_state(ActorStateType::Channeling);
+        self.channel_pose = Some((channel_ends_at, self.transitions_total));
+        blob
+    }
+
+    /// End an op53 cast pose that is due. Re-asserts the logical state (Idle in
+    /// practice) so the drain sends a 39 to both viewers — but only when nothing has
+    /// entered a state since op53. Any later transition (a swing, a stagger, op58,
+    /// death, a round-end Idle) already took the client out of Channeling, and a
+    /// second message would be a spurious one.
+    pub fn reconcile_channel_pose(&mut self, now: Instant) {
+        let Some((until, recorded_at)) = self.channel_pose else {
+            return;
+        };
+        if self.transitions_total != recorded_at {
+            self.channel_pose = None;
+            return;
+        }
+        if now < until {
+            return;
+        }
+        self.channel_pose = None;
+        let logical = self.actor_state;
+        self.force_actor_state(logical, now);
+    }
+
     /// Take everything queued since the last drain, leaving the queue empty.
     pub fn take_state_changes(&mut self) -> Vec<StateTransition> {
         std::mem::take(&mut self.pending_state_changes)
@@ -1807,6 +1869,7 @@ impl Fighter {
             self.scheduled_states.remove(0);
             self.set_actor_state(state, now);
         }
+        self.reconcile_channel_pose(now);
     }
 
     /// Seconds spent in the current actor state — the `timeInState` float the
@@ -1870,11 +1933,28 @@ impl Fighter {
         self.weakness_rating > 0.0 && self.is_staggered(now)
     }
 
-    pub fn apply_stagger_for(&mut self, now: Instant, secs: f32) {
+    ///
+    /// Returns whether the stagger LANDED. The client refuses a Staggered add when
+    /// `!CanBeStaggered` — `Actor$$get_CanBeStaggered@0x1c5b9f4` is
+    /// `!HasStatus(RecklessFury 11) && !HasStatus(Paralyzed 9)` — and on a dead actor
+    /// (`Actor$$AddStatusEffectInternal@0x1c5700c`). A refused stagger has no status,
+    /// so callers must send no op51 and fire no `CausedStagger` hook for it.
+    pub fn apply_stagger_for(&mut self, now: Instant, secs: f32) -> bool {
         // Reckless Fury cannot be stunned. This is the guard whose absence let the
         // production stun in match fffe01ca land 2 s into a 5 s Fury.
-        if self.has_reckless_fury(now) {
-            return;
+        //
+        // Paralysis cannot be staggered either: `ActorParalyzedState$$CanTransitionTo
+        // @0x1fd4c48` admits only Dead and EnemyNonLethal, so a stagger here used to
+        // overwrite the Paralyzed state and end the lock early.
+        if self.has_reckless_fury(now) || self.is_paralyzed() || self.is_dead() {
+            return false;
+        }
+        // A FRESH stagger starts without a weakness. `StaggeredWeakness` lives exactly
+        // as long as the Staggered that produced it (`Actor$$ReactToStatusRemoved
+        // @0x1c57850`), so a rating left over from an earlier stagger must not ride
+        // this one.
+        if !self.is_staggered(now) {
+            self.weakness_rating = 0.0;
         }
         self.staggered_until =
             Some(now + std::time::Duration::from_secs_f32(secs.max(0.05)));
@@ -1887,6 +1967,7 @@ impl Fighter {
         self.blocking_until = None;
         self.block_raised_at = None;
         self.reset_combo();
+        true
     }
 
     /// Clear an expired stagger, returning true when the fighter just recovered.
@@ -1894,6 +1975,8 @@ impl Fighter {
         if let Some(t) = self.staggered_until {
             if now >= t {
                 self.staggered_until = None;
+                // The weakness ends with the stagger that produced it.
+                self.weakness_rating = 0.0;
                 if self.actor_state == ActorStateType::Staggered {
                     self.set_actor_state(ActorStateType::Idle, now);
                 }
@@ -1906,9 +1989,11 @@ impl Fighter {
     /// The statuses this fighter is currently under, restricted to the ones whose
     /// lifetime the engine actually models here.
     ///
-    /// `effects` covers the elemental conditions; stagger and paralysis live in
-    /// their own fields. Ward / Absorb / ResistElements are excluded on purpose —
-    /// see [`Self::announced_statuses`].
+    /// `effects` covers the elemental conditions and Blind; stagger, paralysis,
+    /// Fury, Wall of Fire and StaggeredWeakness live in their own fields; Ward,
+    /// Absorb, the storm armors and Dodging in `negation_pools`; 60-63 and
+    /// FlashFreeze's Frozen in `status_timers`. Blocking is synced separately
+    /// ([`Self::sync_blocking_status`]).
     pub fn tracked_statuses(&self, now: Instant) -> Vec<StatusEffectType> {
         let mut v: Vec<StatusEffectType> =
             self.effects.iter().filter(|e| now < e.expires_at).map(|e| e.effect).collect();
@@ -1927,17 +2012,95 @@ impl Fighter {
         // 204 are applies and 201 are removes. We sent the apply and never the
         // remove, so the client's dodge indicator had nothing to clear on.
         //
-        // Scoped to `DamageNegationSource::Dodge` on purpose — Ward and Absorb
-        // share `negation_pools` but are announced from elsewhere, and this list
-        // may hold ONLY what it can see (see `announced_statuses`).
+        // Ward, Absorb and the storm armors share `negation_pools`; they are mapped
+        // to their own statuses just below.
         if self.negation_pools.iter().any(|p| {
             p.source == DamageNegationSource::Dodge && p.remaining > 0.0 && now < p.expires_at
         }) {
             v.push(StatusEffectType::Dodging);
         }
+        // Every other status we announce, so each apply gets its remove. The PvP
+        // client ends a status ONLY on the server's op51 remove
+        // (`PvpAvatar$$OnCombatMessage@0x1792aa4` -> `ForceRemoveStatusEffect`); its
+        // own timer never fires (`PvpPlayerActor$$RemoveStatusEffect@0x1a32aa8`).
+        //
+        // The three pool-backed buffs end when their pool empties OR times out,
+        // as the client's step does: `AbilityDoWard$$Update@0x1e9aea0`,
+        // `AbilityDoAbsorb$$Update@0x1e91104` and `AbilityDoStormArmor$$Update
+        // @0x1e9a3ac` complete there, and each `Cleanup` removes its status.
+        // Ward and the storm armors share `DamageNegationSource::Ward`; Ward is the
+        // only `elemental_only` pool (see `NegationPool::elemental_only`).
+        for p in &self.negation_pools {
+            if p.remaining <= 0.0 || now >= p.expires_at {
+                continue;
+            }
+            match p.source {
+                DamageNegationSource::Absorb => v.push(StatusEffectType::Absorb),
+                DamageNegationSource::Ward if p.elemental_only => v.push(StatusEffectType::Ward),
+                DamageNegationSource::Ward => v.push(StatusEffectType::ElementalStormArmor),
+                _ => {}
+            }
+        }
+        // Fury's status is removed at the buff step's cleanup
+        // (`AbilityDoRecklessFury$$Cleanup@0x1e980b8`). The client gates its guard
+        // prediction on `!HasStatus(11)` (`Actor$$get_CanBlock@0x1c5b9d4`), so a
+        // Fury that is never removed leaves that player unable to raise a guard
+        // for the rest of the round.
+        if self.has_reckless_fury(now) {
+            v.push(StatusEffectType::RecklessFury);
+        }
+        // Wall of Fire: `AbilityDoFirewall$$Cleanup@0x1e9463c` removes status 13.
+        if self.firewall_until.is_some_and(|t| now < t) {
+            v.push(StatusEffectType::Firewall);
+        }
+        // Removed with the Staggered that produced it (`ReactToStatusRemoved`).
+        if self.has_staggered_weakness(now) {
+            v.push(StatusEffectType::StaggeredWeakness);
+        }
+        v.extend(self.status_timers.iter().filter(|(_, t)| now < *t).map(|(st, _)| *st));
         v.sort_by_key(|s| *s as u16);
         v.dedup();
         v
+    }
+
+    /// Does this fighter hold an Absorb shield right now? Ice Spike's stagger, the
+    /// Blind and Paralyze procs, and the Staggering Bash / Guardbreaker stun all skip
+    /// a target with status Absorb (17): `AbilityApplyIceSpikeDamage$$OnDamage
+    /// @0x1e8ea14`, `AbilityApplyPoisonSpellDamage$$OnDamage@0x1e8ebb0`,
+    /// `AbilityDoStaggeringBash$$ApplyAdditionalEffects@0x1e9a038`,
+    /// `AbilityDoGuardbreaker$$ApplyAdditionalEffects@0x1e956bc`.
+    pub fn has_absorb(&self, now: Instant) -> bool {
+        self.negation_pools.iter().any(|p| {
+            p.source == DamageNegationSource::Absorb && p.remaining > 0.0 && now < p.expires_at
+        })
+    }
+
+    /// Is the guard up at `now`? This is when the client holds the `Blocking` status
+    /// (`PlayerBlockingState$$OnLateUpdate@0x1d728d0` adds it once startup elapses,
+    /// which is immediate for a PvP opponent's `InstantShieldBlock`; `OnExit
+    /// @0x1d72f24` removes it). The bash guard window counts too
+    /// (`AbilityDoShieldBash$$Update@0x1e98a78`).
+    pub fn guard_up(&self, now: Instant) -> bool {
+        matches!(self.blocking_until, Some(t) if now < t)
+    }
+
+    /// `Some(true)` when the guard just came up and the clients have not been told,
+    /// `Some(false)` when it just came down, `None` when nothing changed. Records the
+    /// answer, so each edge is reported once.
+    ///
+    /// Retail sends Blocking (1) both ways (736 applies and 756 removes in s615+s616),
+    /// and the PvP client depends on it: `PvpPlayerActor$$AddStatusEffect@0x1a32aa0`
+    /// is a no-op, so the status exists only if the server sends it. The client's HUD
+    /// combat state (`PlayerActor$$get_CombatState@0x18698d4`) and its "late block"
+    /// feedback (`CombatHUDMenu$$ShowBlockingFeedback@0x1989b3c`) read the status,
+    /// not the actor state.
+    pub fn sync_blocking_status(&mut self, now: Instant) -> Option<bool> {
+        let up = self.guard_up(now);
+        if up == self.announced_blocking {
+            return None;
+        }
+        self.announced_blocking = up;
+        Some(up)
     }
 
     /// Statuses that have LAPSED since the last call — the ones the client still
@@ -2806,14 +2969,34 @@ impl MatchCombat {
     /// the first strikes of the next round began", which is precisely where the
     /// combined reset used to fire.
     pub fn reset_actor_animations(&mut self, now: Instant) {
-        for f in &mut self.fighters {
-            f.pending_state_changes.clear();
+        self.reset_actor_animations_except(now, None);
+    }
+
+    /// As [`Self::reset_actor_animations`], leaving slot `keep` untouched.
+    ///
+    /// A non-final round's loser is that slot. The client shows a death only from
+    /// op29, and `PvpAvatar$$CheckShouldForceServerState@0x1792864` skips op29 once a
+    /// 39 carrying the same `…, Dead` indices has already been merged — so a 39 Idle
+    /// drained ahead of op29 hid the death in rounds 1 and 2 (combat-spec 12 §7.2,
+    /// 12-D5). No client code revives the dead actor between rounds either
+    /// (`PvpAvatar$$EndRound@0x17848c0`); the loser stays Dead until
+    /// [`Self::reset_fighters_for_next_round`] forces Idle at InRound.
+    pub fn reset_actor_animations_except(&mut self, now: Instant, keep: Option<usize>) {
+        for (slot, f) in self.fighters.iter_mut().enumerate() {
+            if keep == Some(slot) {
+                continue;
+            }
             f.scheduled_states.clear();
             f.pending_manual_attack = None;
             f.active_manual_attack = None;
+            f.channel_pose = None;
             if f.actor_state != ActorStateType::Idle {
+                f.pending_state_changes.clear();
                 f.set_actor_state(ActorStateType::Idle, now);
             }
+            // An actor already logically Idle keeps its queue. At a round end that
+            // queue holds the Idle `on_round_ended` forced to end an op53 cast pose;
+            // clearing it here discarded that Idle unsent in every non-final round.
         }
     }
 
@@ -2845,6 +3028,8 @@ impl MatchCombat {
             // restarts at 0 each round), so they reset with everything else.
             f.state_history.clear();
             f.transitions_total = 0;
+            // The pose key is a transition count, and the count restarts here.
+            f.channel_pose = None;
             f.force_actor_state(ActorStateType::Idle, now);
             f.blocking_side = ActiveSide::None;
             f.blocking_until = None;
@@ -2874,6 +3059,8 @@ impl MatchCombat {
             // effect layer, so replaying removes for last round's statuses would be
             // noise at best and could clear a fresh apply at worst.
             f.announced_statuses.clear();
+            f.status_timers.clear();
+            f.announced_blocking = false;
             f.consumables_used = 0; // consumablesPerRound is PER ROUND [Phase 4.3]
             f.continuous_next_tick_at = None;
             f.continuous_carry = 0.0;
@@ -3835,8 +4022,10 @@ mod absorb_fraction_tests {
     fn staggered_weakness_is_flat_and_type_agnostic() {
         let now = Instant::now();
         let mut f = Fighter::new(0, 1, loadout::starter(), now);
+        // Stagger first, then the weakness — the order `stun_the_blocked_attacker`
+        // uses; a fresh stagger starts with no weakness.
+        assert!(f.apply_stagger_for(now, 2.5));
         f.weakness_rating = 50.4; // tier 10
-        f.apply_stagger_for(now, 2.5);
         assert!(f.has_staggered_weakness(now));
         for ty in [DamageType::Slashing, DamageType::Poison, DamageType::Shock] {
             assert_eq!(
@@ -3853,8 +4042,8 @@ mod absorb_fraction_tests {
     fn staggered_weakness_dies_with_the_stagger() {
         let now = Instant::now();
         let mut f = Fighter::new(0, 1, loadout::starter(), now);
+        assert!(f.apply_stagger_for(now, 2.5));
         f.weakness_rating = 50.4;
-        f.apply_stagger_for(now, 2.5);
         assert!(f.has_staggered_weakness(now));
         let after = now + std::time::Duration::from_secs_f32(2.6);
         assert!(!f.is_staggered(after), "precondition: the stagger has lapsed");

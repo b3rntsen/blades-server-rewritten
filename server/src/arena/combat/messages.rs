@@ -827,26 +827,25 @@ const CHANNELING_STATE_ID: u8 = 4;
 ///
 /// `{0:Int avatarObj · 1:Byte 56 Avatar · 2:Byte 1 Authority · 3:Byte 53 ·
 ///   4:ULong caster packed stats · 5:ULong opponent packed stats ·
-///   6:Byte 4 · 7:ByteArray <unmodelled> · 8:Float <time, s> · 9:String abilityUuid}`
+///   6:Byte 4 Channeling · 7:ByteArray stateHistory · 8:Float <time, s> · 9:String abilityUuid}`
 ///
 /// propId 4/5 carry the same packed-pool word as `ReceiveDamage`/`PlayerStatsUpdate`
 /// (`Health|Stamina<<10|Magicka<<20` in the hi32, seq in the lo32) — decoding them
 /// against the captures tracks the caster's and the opponent's bars draining.
 ///
-/// **Two fields could NOT be resolved from the corpus and are therefore not invented:**
+/// **propId 7** is the caster's `PvpPlayerStateHistory` ring, `[count u8][firstIndex
+/// u16-LE][count × stateId]` (`PvpPlayerStateHistory$$PackStateHistory@0x206e6c0`),
+/// with `Channeling` (4) as its newest entry — the three captured blobs below decode
+/// that way, tail 4. On the wire it is a `ByteArray` with a **u8** length prefix
+/// (proven: with u8 all 1 182 frames parse to exactly their byte length, with u16 none
+/// do). **It is required.** `PlayerStateChangeMessage$$Deserialize@0x206786c` always
+/// reads propId 7 through `NetData$$GetPropertyByteArray@0x1ebc8d4`, which indexes a
+/// `Dictionary<byte, NetDataProperty>` and throws on a missing key, and
+/// `PvpPlayerStateHistory$$UnpackStateHistory@0x206e3ac` throws on a blob shorter than
+/// 3 bytes. This builder used to omit it as "unmodelled", so the client dropped every
+/// op53 we ever sent (combat-spec 12 §0.2 / 12-D1; the stuck cast pose of #113/#227).
 ///
-/// * **propId 7** — a variable-length blob (6…23 B, 778 distinct values across 1 182
-///   frames) whose internal structure did not fall out of the corpus. On the wire it
-///   is a `ByteArray` with a **u8** length prefix (proven: with u8 all 1 182 frames
-///   parse to exactly their byte length, with u16 none do). `arena_proto`'s
-///   `NetDataWriter` now emits that u8 prefix natively — see
-///   [`arena_proto::NetDataType::len_prefix_width`] — so this builder round-trips a
-///   retail op53 with no post-processing. Production emission passes `state_blob = None`
-///   and simply OMITS the property — NetData is a sparse property bag, so the client
-///   leaves the field at its default rather than reading a fabricated blob.
-///   `Some(..)` exists so the byte-differential tests can rebuild a real captured
-///   frame exactly.
-/// * **propId 8** — a float, always a multiple of 1/60 s. It is demonstrably **NOT**
+/// **propId 8** — a float, always a multiple of 1/60 s. It is demonstrably **NOT**
 ///   the shipped `_channelDuration`: that value is rank-invariant per ability
 ///   (Fireball 0.9, Lightning Bolt 0.5, Poison Cloud 1.3, `cfee0b02…` 1.12) whereas
 ///   the captured floats spread widely for one ability (Lightning Bolt 0.15…1.27,
@@ -861,7 +860,7 @@ pub fn player_channeling_state_change(
     opponent_packed_stats: u64,
     channel_duration_secs: f32,
     ability_uuid: &str,
-    state_blob: Option<&[u8]>,
+    state_blob: &[u8],
 ) -> Vec<u8> {
     let mut w = NetDataWriter::new();
     w.int(0, caster_avatar_net_object_id)
@@ -870,11 +869,40 @@ pub fn player_channeling_state_change(
         .byte(3, GameMessageId::PlayerChannelingStateChange as u8)
         .ulong(4, caster_packed_stats)
         .ulong(5, opponent_packed_stats)
-        .byte(6, CHANNELING_STATE_ID);
-    if let Some(blob) = state_blob {
-        w.put(7, arena_proto::NetDataValue::ByteArray(blob.to_vec()));
-    }
-    w.float(8, channel_duration_secs).string(9, ability_uuid);
+        .byte(6, CHANNELING_STATE_ID)
+        .put(7, arena_proto::NetDataValue::ByteArray(state_blob.to_vec()))
+        .float(8, channel_duration_secs)
+        .string(9, ability_uuid);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// op83 `ModifyAbilityCooldowns` — shift every equipped Spell/Maneuver cooldown of the
+/// avatar at propId 0 by `cooldown_modification_secs` (positive = longer, negative =
+/// a refund).
+///
+/// **The only way a PvP player's cooldowns move.** The local
+/// `PvpPlayerActor$$ModifyCooldowns@0x1a32ad0` is a bare `ret`, so the client never
+/// applies a Harrying Bash or Focusing Dodge cooldown change it simulates itself;
+/// `PvpAvatar$$OnAbilityMessage@0x1793cc0` routes this message to
+/// `Actor$$ForceModifyCooldowns@0x1c5a0dc` → `ModifyCooldownsInternal@0x1c59f84`
+/// (combat-spec 07 §6.4). Without it the victim's HUD shows skills ready that the
+/// server refuses, silently (#227).
+///
+/// Layout `{0:Int avatarObj · 1:Byte 56 Avatar · 2:Byte 1 Authority · 3:Byte 83 ·
+/// 4:Float _cooldownModification}`. The class derives `GameMessage` directly, and
+/// `ModifyAbilityCooldownsMessage$$Deserialize@0x1cecbbc` reads exactly one property
+/// after the base `NetObjectUserMessage$$Deserialize@0x1ec16ec`, storing it as a float
+/// at `+0x2c` (`_cooldownModification`). The first property after that base is propId
+/// 4 — the same pattern as op51 `ChangeCombatStatusEffectMessage$$Deserialize@0x1ce2c0c`,
+/// whose propId 4 is capture-proven. **No retail op83 frame is in the corpus**, so this
+/// layout is read from the binary, not byte-diffed.
+pub fn modify_ability_cooldowns(avatar_net_object_id: i32, cooldown_modification_secs: f32) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, avatar_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GameMessageId::ModifyAbilityCooldowns as u8)
+        .float(4, cooldown_modification_secs);
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
@@ -3124,7 +3152,7 @@ mod tests {
                 c.opponent,
                 c.secs,
                 c.uuid,
-                Some(c.blob),
+                c.blob,
             );
             assert_eq!(hex_of(&got), hex_of(&want), "op53 case {i} must be byte-identical to the capture");
             // The retail carrier is the UserMessage one; op53 is NOT a 0x35 net-object update.
@@ -3134,32 +3162,65 @@ mod tests {
         }
     }
 
-    /// Production emission omits the unmodelled propId-7 blob. NetData is a sparse
-    /// property bag, so the frame stays well-formed and every other field is unchanged
-    /// from the captured layout — asserted against the same s127 #954966 values.
+    /// **12-D1 — op53 must carry propId 7.** `PlayerStateChangeMessage$$Deserialize@0x206786c`
+    /// reads propId 7 unconditionally (`NetData$$GetPropertyByteArray@0x1ebc8d4` throws on
+    /// a missing key) and `PvpPlayerStateHistory$$UnpackStateHistory@0x206e3ac` throws on
+    /// fewer than 3 bytes. This test used to assert the property was ABSENT; that pinned
+    /// the bug. Expected shape from the spec (12 §6.2): a ByteArray `[count][firstIndex
+    /// u16-LE][count × stateId]` whose tail is Channeling (4), as in all three captured
+    /// blobs above.
     #[test]
-    fn player_channeling_state_change_omits_the_unmodelled_blob() {
-        let sparse = player_channeling_state_change(
+    fn player_channeling_state_change_carries_the_state_history() {
+        // A caster that went Idle → Charging → Idle → Channeling this round.
+        let ring = [4u8, 0x00, 0x00, 0, 2, 0, 4];
+        let f = player_channeling_state_change(
             565,
             0x256D_21F4_0000_001F,
             0x3FFF_FFFF_0000_001F,
             0.9,
             "d07a8d30-9a1c-49b0-866d-97a8aa1534cf",
-            None,
+            &ring,
         );
-        assert_eq!(&sparse[0..2], &[0xBE, 0x36]);
-        let nd = arena_proto::parse_netdata(&sparse[2..]);
-        assert!(nd.ok, "the sparse form is a well-formed NetData stream");
+        assert_eq!(&f[0..2], &[0xBE, 0x36]);
+        let nd = arena_proto::parse_netdata(&f[2..]);
+        assert!(nd.ok, "a well-formed NetData stream");
         assert_eq!(nd.int(0), Some(565));
         assert_eq!(nd.int(1), Some(56), "Avatar");
         assert_eq!(nd.int(2), Some(1), "Authority");
         assert_eq!(nd.int(3), Some(53));
-        assert_eq!(nd.props.get(&4), Some(&arena_proto::NetDataValue::ULong(0x256D_21F4_0000_001F)));
-        assert_eq!(nd.props.get(&5), Some(&arena_proto::NetDataValue::ULong(0x3FFF_FFFF_0000_001F)));
         assert_eq!(nd.int(6), Some(CHANNELING_STATE_ID as i64));
-        assert!(!nd.props.contains_key(&7), "the unmodelled blob is omitted, not invented");
+        match nd.props.get(&7) {
+            Some(arena_proto::NetDataValue::ByteArray(b)) => {
+                assert!(b.len() >= 3, "UnpackStateHistory throws below 3 bytes");
+                assert_eq!(b[0] as usize, b.len() - 3, "count byte matches the entries");
+                assert_eq!(b.last().copied(), Some(4), "newest entry is Channeling");
+            }
+            other => panic!("op53 propId 7 must be a ByteArray, got {other:?}"),
+        }
+        // Control: the neighbouring fields are unchanged.
         assert_eq!(nd.props.get(&8), Some(&arena_proto::NetDataValue::Float(0.9)));
         assert_eq!(nd.string(9), Some("d07a8d30-9a1c-49b0-866d-97a8aa1534cf"));
+    }
+
+    /// op83 `ModifyAbilityCooldowns`, byte-for-byte against real retail frames (prod
+    /// `arena_udp_frames` 4426376, session 616, and 4395170, session 615). Both went to
+    /// the harried player right after the opponent's Harrying Bash op38; the floats are
+    /// the shipped `_cooldownIncrease` of ranks 3 (4.5) and 6 (6.5).
+    #[test]
+    fn modify_ability_cooldowns_matches_capture() {
+        let cases: [(&str, i32, f32); 2] = [
+            ("be36041f707705ef02000038015300009040", 0x2EF, 4.5),
+            ("be36041f707705ae0100003801530000d040", 0x1AE, 6.5),
+        ];
+        for (want, obj, secs) in cases {
+            let got = modify_ability_cooldowns(obj, secs);
+            assert_eq!(hex_of(&got), want, "op83 must be byte-identical to the capture");
+            assert_eq!(user_message_gmid(&got), Some(83));
+            assert_eq!(retail_channel(&got), 0);
+        }
+        // A refund is the same frame with a negative float.
+        let nd = arena_proto::parse_netdata(&modify_ability_cooldowns(7, -1.25)[2..]);
+        assert_eq!(nd.props.get(&4), Some(&arena_proto::NetDataValue::Float(-1.25)));
     }
 
     /// **Byte-differential**: op64 `PerformConsumeConsumable` vs the real prod frame
