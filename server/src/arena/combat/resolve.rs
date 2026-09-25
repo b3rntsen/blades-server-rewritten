@@ -12983,3 +12983,261 @@ mod crit_charge_combo_tests {
         assert_eq!(judged_hold_secs(0.50, Some(0.26)), 0.26, "0.24 behind");
     }
 }
+
+/// Cross-PR interaction tests for the Sprint 1 integration: PR-04 (flat block budget),
+/// PR-05 (additive combo, maneuver combo rule, min-hold) and PR-07 (authored maneuver
+/// hit times, stagger interrupts). Each test crosses at least two of them, with
+/// expected values derived from the combat spec and the shipped data, and a control.
+#[cfg(test)]
+mod sprint1_integration_tests {
+    use std::time::{Duration, Instant};
+
+    use super::super::damage::flags;
+    use super::super::loadout::starter;
+    use super::super::state::{
+        ActiveSide, ActorStateType, DamageType, EquippedAbility, Fighter, FlowState, MatchCombat,
+        WeaponProfile,
+    };
+    use super::super::tables::Weight;
+    use super::phase4_tests::{make_act_frame, make_pos_frame};
+    use super::*;
+
+    const RIGHT: f32 = 0.8;
+
+    /// Chaurus Shield (the starter's): `blockBase` 240 (untempered, ceiled = R0) and
+    /// `optimalBlockBoost` 1.0. PvP physical factor 1.6 (03 §2, capture T1).
+    /// Optimal cut = 1.6 · 240 · (1 + 1.0) · 0.1 = 76.8; low cut = 1.6 · 240 · 0.1 = 38.4.
+    const OPTIMAL_PHYS_CUT: f32 = 76.8;
+    const LOW_PHYS_CUT: f32 = 38.4;
+    /// Power Attack r1 with a Balanced base-100 weapon and a shield (05-D1):
+    /// 100 + 75.33 · 0.5 = 137.67; from a live chain × (1 + 0.25) = 172.09 (02 §4.2).
+    const PA_FRESH: f32 = 137.67;
+    const PA_CHAINED: f32 = 137.67 * 1.25;
+
+    fn uuid_of(editor: &str) -> &'static str {
+        super::super::gamedata::ABILITIES
+            .iter()
+            .find(|a| a.editor_name == editor)
+            .map(|a| a.uuid)
+            .unwrap_or_else(|| panic!("{editor} missing from the shipped table"))
+    }
+
+    fn secs(s: f32) -> Duration {
+        Duration::from_secs_f32(s)
+    }
+
+    /// Two human fighters on the starter kit (Chaurus Shield) with a plain Slashing
+    /// base-100 Balanced weapon, no enchants, no armour: a hit's health loss is exactly
+    /// the resolved total after the block.
+    fn fight(now: Instant) -> MatchCombat {
+        let mut c = MatchCombat::new(2, 2, now);
+        for slot in 0..2 {
+            let obj = c.alloc_net_object_id();
+            let mut f = Fighter::new(slot, obj, starter(), now);
+            f.loadout.weapon = WeaponProfile {
+                primary_type: Some(DamageType::Slashing),
+                base_by_type: vec![(DamageType::Slashing, 100.0)],
+                weight: Some(Weight::Versatile),
+            };
+            f.loadout.weapon_template = None;
+            f.loadout.enchants.clear();
+            f.loadout.armor_rating = 0.0;
+            f.loadout.ravage.clear();
+            f.max_stamina = 5_000;
+            f.stamina = 5_000;
+            c.fighters.push(f);
+        }
+        c.match_net_object_id = c.alloc_net_object_id();
+        c.phase = FlowState::StateTimeout;
+        c.phase_entered = now;
+        c
+    }
+
+    /// Raise `slot`'s guard at `at`. `low`: released 0.1 s earlier, inside the 0.8 s
+    /// post-release cooldown, so the latch makes the whole guard LOW (03-D18).
+    fn raise_guard(c: &mut MatchCombat, slot: usize, at: Instant, low: bool) {
+        let f = &mut c.fighters[slot];
+        f.set_actor_state(ActorStateType::Blocking, at);
+        f.blocking_side = ActiveSide::Middle;
+        f.block_raised_at = Some(at);
+        f.blocking_until = Some(at + Duration::from_secs(8));
+        f.last_block_dropped_at = low.then(|| at - Duration::from_millis(100));
+    }
+
+    /// Slot 0 presses and releases a Right swing held `hold` s; returns the release
+    /// instant. The hit is queued (it lands `FOLLOW_THROUGH_DELAY` later).
+    fn release_swing(c: &mut MatchCombat, press: Instant, hold: f32) -> Instant {
+        let release = press + secs(hold);
+        on_c2s_input(c, 0, &make_pos_frame(RIGHT, 0.5, 0.0), press);
+        on_c2s_input(c, 0, &make_act_frame(true, 0.0, false), press);
+        on_c2s_input(c, 0, &make_pos_frame(RIGHT, 0.5, hold), release);
+        on_c2s_input(c, 0, &make_act_frame(false, hold, false), release);
+        release
+    }
+
+    /// Slot 0 casts Power Attack r1 at slot 1 through the real op37 path.
+    fn cast_power_attack(c: &mut MatchCombat, at: Instant) -> Vec<(usize, Vec<u8>)> {
+        let uuid = uuid_of("PowerAttack");
+        let tag = super::super::loadout::ability_tag_for_template(uuid);
+        if !c.fighters[0].loadout.abilities.iter().any(|a| a.instance_uuid == uuid) {
+            c.fighters[0].loadout.abilities.push(EquippedAbility {
+                instance_uuid: uuid.to_string(),
+                level: 1,
+                tag,
+            });
+        }
+        let frame = messages::request_execute_ability(c.fighters[0].net_object_id, uuid);
+        let ea = input::parse_execute_ability(&frame).expect("synthesised op37 must parse");
+        resolve_ability_cast(c, 0, 1, &frame, &ea, at)
+    }
+
+    /// `(source, flags)` of every op50 addressed to slot 1's avatar (viewer 0's copy).
+    fn op50s_on_1(c: &MatchCombat, out: &[(usize, Vec<u8>)]) -> Vec<(i64, u8)> {
+        let obj = i64::from(c.fighters[1].net_object_id);
+        out.iter()
+            .filter(|(v, f)| *v == 0 && messages::user_message_gmid(f) == Some(50))
+            .map(|(_, f)| arena_proto::parse_netdata(&f[2..]))
+            .filter(|nd| nd.int(0) == Some(obj))
+            .map(|nd| (nd.int(6).unwrap_or(-1), nd.int(7).unwrap_or(0) as u8))
+            .collect()
+    }
+
+    /// Every op59 as `(dest, ability id, selfInterrupt)`.
+    fn op59s(out: &[(usize, Vec<u8>)]) -> Vec<(usize, String, bool)> {
+        out.iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(59))
+            .map(|(d, f)| {
+                let nd = arena_proto::parse_netdata(&f[2..]);
+                let flag = matches!(nd.get(5), Some(arena_proto::NetDataValue::Bool(true)));
+                (*d, nd.string(4).unwrap_or_default().to_string(), flag)
+            })
+            .collect()
+    }
+
+    /// PR-04 × PR-05 × PR-07. A Power Attack cast out of a live chain lands at its
+    /// authored `OnManeuverApplyDamage` time (0.779 s, 05-D5) on an OPTIMAL guard:
+    /// the hit takes the maneuver combo rule (`×(1 + comboDF)`, no swing term, 02 X7)
+    /// and THEN the flat optimal budget (03 §2), `172.09 − 76.8 = 95.29`, keeps bit 3,
+    /// does not stun the caster (a blocked maneuver never does, 03 V6), and ends the
+    /// chain (R9). Before PR-04 an optimal block zeroed it; before PR-05 the chain
+    /// factor was the fitted 1.44 with a charge term.
+    ///
+    /// Controls: the same chained maneuver into no guard is the full 172; a fresh
+    /// maneuver into the same optimal guard is `137.67 − 76.8 = 60.87`.
+    #[test]
+    fn a_chained_maneuver_into_an_optimal_block_takes_the_flat_cut_after_the_combo() {
+        let t0 = Instant::now();
+        // (chained, guard) → (health lost, op50s on slot 1)
+        let run = |chained: bool, guard: bool| {
+            let mut c = fight(t0);
+            let mut cast_at = t0;
+            if chained {
+                // Balanced min hold 0.3 s, plateau (0.465, 0.5] s: 0.35 s is a plain
+                // swing that lands and starts the chain.
+                let release = release_swing(&mut c, t0, 0.35);
+                let _ = land_due_hits(&mut c, release + FOLLOW_THROUGH_DELAY + Duration::from_millis(1));
+                assert_eq!(c.fighters[0].combo_count, 1, "precondition: a live chain");
+                cast_at = t0 + secs(0.45);
+            }
+            let before = c.fighters[1].health;
+            let out = cast_power_attack(&mut c, cast_at);
+            assert!(op50s_on_1(&c, &out).is_empty(), "no damage at the cast");
+            if guard {
+                // Raised after the chain's swing landed and after the cast; the
+                // maneuver hit arrives 0.63 s into the guard (optimal window 2.0 s).
+                raise_guard(&mut c, 1, cast_at + secs(0.15), false);
+            }
+            let early = land_due_impacts(&mut c, cast_at + secs(0.77));
+            assert!(op50s_on_1(&c, &early).is_empty(), "not before the authored 0.779 s");
+            let hit = land_due_impacts(&mut c, cast_at + secs(0.79));
+            let frames = op50s_on_1(&c, &hit);
+            assert_eq!(c.fighters[0].combo_count, 0, "the maneuver ends the chain (R9)");
+            assert!(
+                !c.fighters[0].is_staggered(cast_at + secs(0.8)),
+                "a blocked maneuver never stuns its caster",
+            );
+            (before - c.fighters[1].health, frames)
+        };
+
+        let (lost, frames) = run(true, true);
+        assert_eq!(frames.len(), 1, "one maneuver hit: {frames:?}");
+        assert_eq!(frames[0].0, DamageSource::WeaponManeuver as i64, "source 3");
+        assert_ne!(frames[0].1 & flags::WAS_OPTIMAL_BLOCKING, 0, "bit 3: the guard was optimal");
+        assert_eq!(lost, (PA_CHAINED - OPTIMAL_PHYS_CUT).round() as u32, "172.09 − 76.8 = 95.29");
+
+        let (open, frames) = run(true, false);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].1 & flags::WAS_OPTIMAL_BLOCKING, 0);
+        assert_eq!(open, PA_CHAINED.round() as u32, "control: no guard, the full chained 172.09");
+
+        let (fresh, _) = run(false, true);
+        assert_eq!(fresh, (PA_FRESH - OPTIMAL_PHYS_CUT).round() as u32, "control: fresh 137.67 − 76.8");
+    }
+
+    /// PR-04 × PR-07 × PR-05. Slot 0 releases a swing and casts Power Attack in the
+    /// 50 ms before the swing lands (Recovery → Maneuver, which keeps the chain). The
+    /// swing hits slot 1's OPTIMAL guard: the flat cut leaves `100 − 76.8 = 23.2`, and
+    /// the high block stuns slot 0 (a plain Attack into an optimal block, 03 §3.1).
+    /// That stagger lands inside the maneuver, so it INTERRUPTS it (06-D1): op59
+    /// `selfInterrupt=false` to both viewers, the queued 0.779 s hit never lands,
+    /// Power Attack's 8.09 s cooldown restarts from the interrupt, and the chain is
+    /// gone (the high block and R6).
+    ///
+    /// Control: the same sequence into a LOW guard. No stun, so no interrupt; the swing
+    /// takes the low cut `100 − 38.4 = 61.6`, and the maneuver lands at 0.779 s out of
+    /// the chain the swing started, `172.09 − 38.4 = 133.69`.
+    #[test]
+    fn a_high_blocked_swing_stuns_and_interrupts_the_maneuver_cast_behind_it() {
+        let t0 = Instant::now();
+        let pa = uuid_of("PowerAttack");
+        let run = |low: bool| {
+            let mut c = fight(t0);
+            raise_guard(&mut c, 1, t0, low);
+            let hp0 = c.fighters[1].health;
+            let release = release_swing(&mut c, t0, 0.35);
+            let cast_at = release + Duration::from_millis(20);
+            let mut out = cast_power_attack(&mut c, cast_at);
+            let land = release + FOLLOW_THROUGH_DELAY + Duration::from_millis(1);
+            out.extend(land_due_hits(&mut c, land));
+            out.extend(drain_state_changes(&mut c, land));
+            let hp_after_swing = c.fighters[1].health;
+            out.extend(land_due_impacts(&mut c, cast_at + secs(2.0)));
+            out.extend(drain_state_changes(&mut c, cast_at + secs(2.0)));
+            (c, out, hp0 - hp_after_swing, hp_after_swing, land)
+        };
+
+        // Optimal guard: stun → interrupt.
+        let (c, out, swing_lost, hp_after_swing, land) = run(false);
+        assert_eq!(swing_lost, (100.0 - OPTIMAL_PHYS_CUT).round() as u32, "100 − 76.8 = 23.2");
+        assert!(c.fighters[0].is_staggered(land), "the high block stuns the attacker");
+        let got = op59s(&out);
+        assert_eq!(got.len(), 2, "one op59 to each viewer: {got:?}");
+        let mut dests: Vec<usize> = got.iter().map(|g| g.0).collect();
+        dests.sort_unstable();
+        assert_eq!(dests, vec![0, 1]);
+        for (_, id, self_interrupt) in &got {
+            assert_eq!(id, pa, "op59 names Power Attack");
+            assert!(!self_interrupt, "a stagger, not a replacement");
+        }
+        assert_eq!(c.fighters[1].health, hp_after_swing, "the interrupted maneuver never lands");
+        assert_eq!(c.fighters[0].combo_count, 0, "the chain is gone");
+        assert!((ability_cooldown(pa, 1).as_secs_f32() - 8.09).abs() < 1e-3, "shipped 8.09 s");
+        let cd = c.fighters[0].cooldowns.get(pa).copied().expect("cooldown set");
+        let want = land + ability_cooldown(pa, 1);
+        assert!(
+            cd + Duration::from_millis(1) >= want && cd <= want + Duration::from_millis(1),
+            "Power Attack's cooldown restarts from the interrupt",
+        );
+
+        // Control: a LOW guard. No stun, no op59, and the maneuver lands chained.
+        let (c, out, swing_lost, hp_after_swing, land) = run(true);
+        assert_eq!(swing_lost, (100.0 - LOW_PHYS_CUT).round() as u32, "100 − 38.4 = 61.6");
+        assert!(!c.fighters[0].is_staggered(land), "a low block does not stun");
+        assert!(op59s(&out).is_empty(), "nothing to interrupt");
+        assert_eq!(
+            hp_after_swing - c.fighters[1].health,
+            (PA_CHAINED - LOW_PHYS_CUT).round() as u32,
+            "the maneuver lands out of the swing's chain: 172.09 − 38.4 = 133.69",
+        );
+    }
+}
