@@ -109,11 +109,11 @@
 //! `messages::tests::{player_dead,match_post_round_info,match_end_match}_matches_s506`.
 //! [decoded from prod arena_udp_frames s506, 2026-06-19/06-20.]
 //!
-//! BLOCK MODEL NOTE (the cross-spec correction, `docs/arena-combat-reproduction-spec.md`
-//! §4.4): a connected OPTIMAL block NEGATES physical (×0) but only HALVES elemental
-//! (×0.5) — `wasOptimalBlocking` is a defender-STATE bit, not "hit absorbed". The
-//! ÷1.6/÷1.23 divisors are the LATE/imperfect tier, NOT optimal (the status-resistance
-//! spec's "÷1.6/÷1.23-for-optimal" was a flag-averaging artifact). See `damage::block_outcome`.
+//! BLOCK MODEL NOTE: a block removes a flat per-category budget, `factor · R · 0.1`,
+//! with a 5 % floor per component; there is no ×0 and no ÷2 (combat-spec 03 V1). The
+//! 1.6 / 1.23 are PvP multipliers on the block-rating FACTOR, not divisors (03 V3).
+//! `wasOptimalBlocking` is a defender-STATE bit, not "hit absorbed". See
+//! `damage::BlockOutcome`.
 //!
 //! The c2s round-start uploads (op58 clock echo, op55, the op54 PlayerLoadoutReady
 //! loadout, the op54 flow echoes) are embedded below and replayed at their captured

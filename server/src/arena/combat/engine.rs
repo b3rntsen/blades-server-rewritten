@@ -4934,18 +4934,15 @@ pub(in crate::arena::combat) mod tests {
         );
         assert_eq!(m.fighter_health(1), full, "the block itself deals no damage");
 
-        // A (slot 0) swings Right into B's Right guard → OPTIMAL block: physical NEGATED,
-        // elemental HALVED. So B takes only the halved Shock (~14), NOT 0 and NOT the full 105.
+        // A (slot 0) swings Right into B's guard → OPTIMAL block. B's blocking item is
+        // the starter's Chaurus Shield alone (R0 240, boost 1.0 → R 480): the physical
+        // budget is 480 · 1.6 · 0.1 = 76.8 and the elemental one 480 · 0.82 · 0.1 =
+        // 39.36. A's starter hit is 81 Slashing + 23.84 Shock (the open ~105), so
+        // 81 − 76.8 = 4.2 and the Shock sits at its 5 % floor, 1.19: 5.39 → 5 HP.
         let dmg = swing(&mut m, 0, t0 + Duration::from_millis(600));
         assert!(!dmg.is_empty(), "the swing still resolves (ReceiveDamage emitted)");
         let opt_dealt = full - m.fighter_health(1);
-        assert!(opt_dealt > 0, "optimal block still lets the HALVED elemental through (not ×0 overall)");
-        assert!(
-            opt_dealt < open_dealt / 2,
-            "optimal block negates physical: {opt_dealt} << the open hit {open_dealt} (only ~halved Shock lands)"
-        );
-        // ~halved Shock ≈ 14 (27.46 × 0.5 = 13.73 → 14 after rounding).
-        assert!((opt_dealt as i32 - 14).abs() <= 1, "only the halved elemental (~14) lands, got {opt_dealt}");
+        assert_eq!(opt_dealt, 5, "flat optimal budgets against the open {open_dealt}");
         // The ReceiveDamage carries the WasOptimalBlocking flag (propId 7 bit3).
         let rd = dmg.iter().find(|(_, b)| b[1] == 0x36
             && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50)).expect("ReceiveDamage");
