@@ -1249,6 +1249,19 @@ pub const ARENA_GOLD_CURRENCY_UUID: &str = "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2
 /// 11:String WinnerPlayerId · 12:String LoserPlayerId · 13:String ResultsJSON ·
 /// 14:Bool MatchConceded · 15:Byte DisconnectReason · 16:Int OpponentTrophyCount}`.
 ///
+/// ## propId 16 IS load-bearing — it is the victory card's opponent-row cup count
+///
+/// Read off the client (`dump.cs` line ~589962): `MatchEndMatchMessage.OpponentTrophyCount`
+/// (backing field `+0x58`) is the LAST property `Deserialize@0x1cea92c` stores into that
+/// field — i.e. propId 16 — and `PvpVictoryMenu$$SetupOpponentInfo@0x17e90ec` reads it
+/// straight onto the card's opponent row. Hardcoding 0 here is exactly why every victory
+/// card showed "<opponent name> - 0" regardless of the real trophy swing. s506 sent `757`
+/// to Flappety (755 cups post-match): that is her opponent Blank's own post-match trophy
+/// count, not Flappety's. Callers must pass the RECIPIENT's OPPONENT's trophies AFTER this
+/// match's update — `pvp_trophies`, the same number that opponent's own ResultsJSON
+/// `character.pvpTrophies` carries. In a bot match that is the bot's drawn trophy count
+/// (the matchmaker's "at level N / M trophies" pick), never 0.
+///
 /// ## propIds 5..10 are the ROUND-BY-ROUND results, not the match winner repeated
 ///
 /// This was read off s506 — a 2-0 match — as "5/7/11 winner, 6/8/12 loser, 9/10
@@ -1283,6 +1296,10 @@ pub fn match_end_match(
     loser_char_uuid: &str,
     result_code: i32,
     results_json: &str,
+    // propId 16 `OpponentTrophyCount` — THIS RECIPIENT's opponent's trophies after
+    // this match's update. See the propId-16 doc note above; 0 is wrong except in
+    // the degenerate case where the opponent's post-match trophies really are 0.
+    opponent_trophy_count: i64,
 ) -> Vec<u8> {
     // propIds 5..10 are `RoundInfos[3]` — the per-round (winner, loser) pairs, in
     // order, with unused slots empty. Exactly op48's layout, which this message's
@@ -1311,7 +1328,9 @@ pub fn match_end_match(
         .string(13, results_json)
         .bool(14, false)
         .byte(15, 0)
-        .int(16, 0); // s506=757; a small per-match int, not load-bearing — 0 is fine
+        // p16 OpponentTrophyCount — this recipient's opponent's post-match trophies
+        // (s506=757). Clamped into i32 range; real trophy counts never approach it.
+        .int(16, opponent_trophy_count.clamp(i32::MIN as i64, i32::MAX as i64) as i32);
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
@@ -2642,7 +2661,7 @@ mod tests {
             (winner.to_string(), loser.to_string()),
             (winner.to_string(), loser.to_string()),
         ];
-        let got = match_end_match(123, &rounds, winner, loser, 3, rj);
+        let got = match_end_match(123, &rounds, winner, loser, 3, rj, 757);
 
         assert_eq!(&got[0..2], &[0xBE, 0x36], "carrier 0x36 (NOT 0xc2/0xc6 — that was a fragment-header misread)");
         let nd = arena_proto::parse_netdata(&got[2..]);
@@ -2662,7 +2681,11 @@ mod tests {
         assert_eq!(nd.string(13), Some(rj), "p13 = the ResultsJSON");
         assert_eq!(nd.props.get(&14), Some(&arena_proto::NetDataValue::Bool(false)), "p14 false");
         assert_eq!(nd.int(15), Some(0), "p15 Byte 0");
-        assert_eq!(nd.int(16), Some(0), "p16 Int (s506=757; 0 is fine — not load-bearing)");
+        assert_eq!(
+            nd.int(16),
+            Some(757),
+            "p16 OpponentTrophyCount = the recipient's opponent's post-match trophies (s506)"
+        );
 
         // It routes on ENet ch4 (the big fragmented channel) like the op54 profile.
         assert_eq!(retail_channel(&got), 4, "op49 → ch4 (fragmented, like op54)");
@@ -2692,7 +2715,7 @@ mod tests {
             (a.to_string(), b.to_string()),
             (a.to_string(), b.to_string()),
         ];
-        let got = match_end_match(123, &rounds, a, b, 3, "{}");
+        let got = match_end_match(123, &rounds, a, b, 3, "{}", 0);
         let nd = arena_proto::parse_netdata(&got[2..]);
 
         assert_eq!(nd.string(5), Some(b), "round 1 was won by B");
@@ -2718,7 +2741,7 @@ mod tests {
         let a = "1131a037-716c-49cc-b165-32d8ddc14f49";
         let b = "38c987fd-c42b-4ea6-b869-c8d4c03055f9";
         let rounds = [(a.to_string(), b.to_string())];
-        let got = match_end_match(123, &rounds, a, b, 3, "{}");
+        let got = match_end_match(123, &rounds, a, b, 3, "{}", 0);
         let nd = arena_proto::parse_netdata(&got[2..]);
 
         assert_eq!(nd.string(5), Some(a));

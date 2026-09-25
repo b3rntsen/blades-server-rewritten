@@ -1559,6 +1559,31 @@ impl MatchInstance {
             })
             .collect();
 
+        // op49 propId 16 (`OpponentTrophyCount`) needs the OPPONENT's post-match
+        // trophies, but the per-slot loop below only derives its OWN post-match
+        // trophies as it walks — and for a 2-player match slot 0 is processed before
+        // slot 1 has one. Resolve every slot's post-match trophies up front instead,
+        // with exactly the same Elo-swing formula the main loop uses for itself, so
+        // the two never disagree. This does not touch persistence or the reward
+        // payout — only what the OTHER recipient's card shows for this slot's cups.
+        let post_trophies_by_slot: Vec<i64> = (0..n)
+            .map(|slot| {
+                let p = pre[slot];
+                let is_winner = self.combat.winner == Some(slot);
+                let opponent = (0..n).find(|&o| o != slot);
+                let opponent_trophies = opponent.map(|o| pre[o].trophies).unwrap_or(p.trophies);
+                let rounds_won = self.combat.rounds_won.get(slot).copied().unwrap_or(0);
+                let rounds_lost = opponent
+                    .and_then(|o| self.combat.rounds_won.get(o).copied())
+                    .unwrap_or(0);
+                let outcome = MatchOutcome { rounds_won, rounds_lost, win: is_winner };
+                let scoring = arena_season::active_scoring();
+                let trophy_delta =
+                    arena_ladder::trophy_delta(outcome, p.trophies, opponent_trophies, scoring);
+                (p.trophies + trophy_delta).max(0)
+            })
+            .collect();
+
         for slot in 0..n {
             let f = &self.combat.fighters[slot];
             let is_winner = self.combat.winner == Some(slot);
@@ -1724,6 +1749,13 @@ impl MatchInstance {
                 &reward,
                 f.loadout.current_request_index,
             );
+            // The victory card's OPPONENT-row cup count (op49 propId 16) — this
+            // recipient's opponent's own post-match trophies, from the pre-pass
+            // above. Falls back to this slot's own post_trophies only in the
+            // degenerate no-opponent case (matches `opponent_trophies` above).
+            let opponent_post_trophies = opponent
+                .map(|o| post_trophies_by_slot[o])
+                .unwrap_or(post_trophies);
             let frame = messages::match_end_match(
                 self.combat.match_net_object_id,
                 &round_results,
@@ -1731,10 +1763,11 @@ impl MatchInstance {
                 &loser_uuid,
                 MATCH_END_RESULT_CODE,
                 &rj,
+                opponent_post_trophies,
             );
             info!(
                 "combat: op49 MatchEndMatchMsg → slot {slot} ({}, L{level} {rounds_won}-{rounds_lost}), \
-                 ResultsJSON {} B (gold {}, xp {}, trophies {} → {} [{:+}], meter {}, arena {}/{}{})",
+                 ResultsJSON {} B (gold {}, xp {}, trophies {} → {} [{:+}], opponent cups {}, meter {}, arena {}/{}{})",
                 if is_winner { "winner" } else { "loser" },
                 rj.len(),
                 reward.gold,
@@ -1742,6 +1775,7 @@ impl MatchInstance {
                 p.trophies,
                 post_trophies,
                 trophy_delta,
+                opponent_post_trophies,
                 post_meter,
                 tier.arena,
                 tier.level,
@@ -4127,15 +4161,26 @@ pub(in crate::arena::combat) mod tests {
     /// after the post-PostRound StateTimeout heartbeat), each carrying a ResultsJSON with
     /// `reward.currencies` + `reward.characterXp`, addressed to that player's slot. NOT
     /// emitted on an intermediate (looping) round.
+    ///
+    /// **propId 16 (`OpponentTrophyCount`)** — the bug the owner saw: the victory card's
+    /// opponent row always showed "<name> - 0" cups. Each recipient's op49 propId 16 must
+    /// equal the OTHER recipient's own post-match `pvpTrophies` (their ResultsJSON propId
+    /// 13 `character.pvpTrophies`), never a hardcoded 0. The two fighters start with
+    /// different trophy counts specifically so the two recipients' propId-16 values are a
+    /// CONTROL: a builder that echoed one fixed number (0 or otherwise) to both sides
+    /// would pass an equality check against a single expected value but fail here.
     #[test]
     fn match_end_emits_op49_per_player_on_final_round() {
         let now = Instant::now();
-        // Two named fighters (distinct UUIDs) so the op49 header carries real winner/loser.
-        let mk = |name: &str, uuid: &str| {
+        // Two named fighters (distinct UUIDs, distinct pre-match trophies) so the op49
+        // header carries real winner/loser AND the two recipients' propId-16 opponent-cup
+        // values are provably different (see the doc comment above).
+        let mk = |name: &str, uuid: &str, pvp_trophies: i64| {
             let mut l = crate::arena::combat::loadout::starter();
             l.display_name = name.into();
             l.character_uuid = uuid.into();
-            l.profile_character_json = format!(r#"{{"id":"{uuid}","name":"{name}","level":86}}"#);
+            l.profile_character_json =
+                format!(r#"{{"id":"{uuid}","name":"{name}","level":86,"pvpTrophies":{pvp_trophies}}}"#);
             l.profile_equipped_json = r#"{"equippedItems":{}}"#.into();
             l
         };
@@ -4143,8 +4188,8 @@ pub(in crate::arena::combat) mod tests {
             2,
             2,
             vec![
-                mk("Flappety", "38c987fd-c42b-4ea6-b869-c8d4c03055f9"),
-                mk("Blank", "1131a037-716c-49cc-b165-32d8ddc14f49"),
+                mk("Flappety", "38c987fd-c42b-4ea6-b869-c8d4c03055f9", 755),
+                mk("Blank", "1131a037-716c-49cc-b165-32d8ddc14f49", 620),
             ],
             now,
         );
@@ -4186,7 +4231,8 @@ pub(in crate::arena::combat) mod tests {
 
         // Each op49 header has the right winner/loser, and its ResultsJSON parses with
         // the reward fields the card animates.
-        for (_, b) in &op49s {
+        let mut own_post_trophies: std::collections::BTreeMap<usize, i64> = Default::default();
+        for (slot, b) in &op49s {
             let nd = arena_proto::parse_netdata(&b[2..]);
             assert_eq!(nd.int(3), Some(49), "GMID 49");
             assert_eq!(nd.string(5), Some("38c987fd-c42b-4ea6-b869-c8d4c03055f9"), "winner = slot 0 (Flappety)");
@@ -4195,7 +4241,120 @@ pub(in crate::arena::combat) mod tests {
             let v: serde_json::Value = serde_json::from_str(rj).expect("ResultsJSON parses");
             assert!(v["reward"]["currencies"].is_object(), "ResultsJSON has reward.currencies");
             assert!(v["reward"]["characterXp"].is_number(), "ResultsJSON has reward.characterXp");
+            let own_trophies = v["character"]["pvpTrophies"]
+                .as_i64()
+                .expect("ResultsJSON character.pvpTrophies is a number");
+            own_post_trophies.insert(*slot, own_trophies);
         }
+
+        // propId 16 — THE FIX. Each recipient's card must show the OPPONENT's own
+        // post-match trophies, never a hardcoded 0, and the two values must differ
+        // (the control: Flappety and Blank started at different trophy counts).
+        let nd0 = arena_proto::parse_netdata(&op49s.iter().find(|(s, _)| *s == 0).unwrap().1[2..]);
+        let nd1 = arena_proto::parse_netdata(&op49s.iter().find(|(s, _)| *s == 1).unwrap().1[2..]);
+        let p16_to_slot0 = nd0.int(16).expect("slot 0's op49 carries propId 16");
+        let p16_to_slot1 = nd1.int(16).expect("slot 1's op49 carries propId 16");
+        assert_eq!(
+            p16_to_slot0, own_post_trophies[&1],
+            "Flappety's card (slot 0) must show Blank's (slot 1) own post-match trophies"
+        );
+        assert_eq!(
+            p16_to_slot1, own_post_trophies[&0],
+            "Blank's card (slot 1) must show Flappety's (slot 0) own post-match trophies"
+        );
+        assert_ne!(
+            p16_to_slot0, p16_to_slot1,
+            "CONTROL: the two recipients started with different trophies, so their \
+             opponent-cup values must differ — a builder that sent one fixed number \
+             (0 or otherwise) to both sides would pass a single equality check but fail here"
+        );
+    }
+
+    /// BOT MATCH — propId 16 must carry the bot's OWN (drawn) trophy count, not 0.
+    ///
+    /// The opponent in a solo/bot match is an AI copy built from a real drawn
+    /// character's profile (`matchmaker::pick_bot_loadout` + `mark_loadout_as_bot`,
+    /// which only appends the `" (AI)"` display-name suffix — it does not touch
+    /// `profile_character_json`). So the bot's `pvpTrophies` really is the
+    /// matchmaker's "drawn at level N / M trophies" pick, e.g. 140 here. The
+    /// human's op49 propId 16 must be THAT character's own post-match trophies,
+    /// never a hardcoded 0 — same rule as the PvP test above, just with the
+    /// opponent slot marked as a bot.
+    #[test]
+    fn match_end_opponent_trophy_count_uses_the_bots_own_trophies_in_a_bot_match() {
+        let now = Instant::now();
+        let mut human = crate::arena::combat::loadout::starter();
+        human.display_name = "Flappety".into();
+        human.character_uuid = "38c987fd-c42b-4ea6-b869-c8d4c03055f9".into();
+        human.profile_character_json =
+            r#"{"id":"38c987fd-c42b-4ea6-b869-c8d4c03055f9","name":"Flappety","level":86,"pvpTrophies":600}"#
+                .into();
+        human.profile_equipped_json = r#"{"equippedItems":{}}"#.into();
+
+        let mut bot = crate::arena::combat::loadout::starter();
+        // The matchmaker's bot marker appends " (AI)" to whatever name the drawn
+        // character had — the matchmaking log line this scenario echoes was "drawn
+        // at level 89 / 140 trophies".
+        bot.display_name = "Blank (AI)".into();
+        bot.character_uuid = "1131a037-716c-49cc-b165-32d8ddc14f49".into();
+        bot.profile_character_json =
+            r#"{"id":"1131a037-716c-49cc-b165-32d8ddc14f49","name":"Blank (AI)","level":89,"pvpTrophies":140}"#
+                .into();
+        bot.profile_equipped_json = r#"{"equippedItems":{}}"#.into();
+
+        // capacity 2, 1 real peer — the solo/bot shape (see
+        // `one_ready_still_skips_in_a_solo_bot_match` above).
+        let mut m = MatchInstance::new(2, 1, vec![human, bot], now);
+        let live = drive_to_live(&mut m, 2, now);
+
+        let is_op49 = |b: &[u8]| {
+            b.len() > 3 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(49)
+        };
+
+        let (d1, t1) = swing_until_death(&mut m, 0, live);
+        assert!(!d1.iter().any(|(_, b)| is_op49(b)), "no op49 on the looping round-1 death");
+        let (_s1, live2) = drive_interround_to_live(&mut m, t1);
+        let (_d2, t) = swing_until_death(&mut m, 0, live2);
+        assert_eq!(m.combat.rounds_won, [2, 0], "the human (slot 0) won the match 2-0");
+
+        let mut op49s: Vec<(usize, Vec<u8>)> = Vec::new();
+        let step = Duration::from_millis(250);
+        for i in 1..=80u32 {
+            let out = m.on_tick(2, t + step * i);
+            for (slot, b) in out {
+                if is_op49(&b) {
+                    op49s.push((slot, b));
+                }
+            }
+            if m.phase() == FlowState::Finished {
+                break;
+            }
+        }
+        // The engine still builds (but the peer-address layer never delivers) an
+        // op49 for the bot's own slot internally — that internal message is exactly
+        // where its own post-match `pvpTrophies` is read from below.
+        assert_eq!(op49s.len(), 2, "one op49 per fighter slot, including the bot's own");
+
+        let bot_msg = &op49s.iter().find(|(s, _)| *s == 1).unwrap().1;
+        let bot_nd = arena_proto::parse_netdata(&bot_msg[2..]);
+        let bot_rj = bot_nd.string(13).expect("bot's own ResultsJSON at propId 13");
+        let bot_v: serde_json::Value = serde_json::from_str(bot_rj).expect("ResultsJSON parses");
+        let bot_post_trophies = bot_v["character"]["pvpTrophies"]
+            .as_i64()
+            .expect("character.pvpTrophies is a number");
+        assert!(
+            bot_post_trophies > 0,
+            "precondition: the bot's own post-match trophies must not already be zero \
+             (that would make the assertion below pass vacuously)"
+        );
+
+        let human_msg = &op49s.iter().find(|(s, _)| *s == 0).unwrap().1;
+        let human_nd = arena_proto::parse_netdata(&human_msg[2..]);
+        assert_eq!(
+            human_nd.int(16),
+            Some(bot_post_trophies),
+            "the human's card must show the BOT's own drawn trophy count, never 0"
+        );
     }
 
     /// THE REPORTED BUG: "first match I got paralysed from a block."
