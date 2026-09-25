@@ -227,7 +227,13 @@ services:
       # Arena UDP/ENet — clients dial this. Firewall it to just you for now
       # (security-group / iptables), since the handshake is not yet authenticated.
       - "${ARENA_UDP_PORT:-7777}:7777/udp"
-    mem_limit: 256m
+    # 512m, not 256m. At 256m the server's steady baseline (static game-data
+    # tables held parsed in memory) reached ~251 MiB and the cgroup OOM killer
+    # took it 7 times on 2026-09-25, silently dropping every connected player.
+    # The box has ~1.7 GB available. Applied live to the root-owned
+    # /etc/newblades/docker-compose.arena.yml the same day; this keeps the repo
+    # copy, which re-installs it, from reverting that.
+    mem_limit: 512m
     # Logs must OUTLIVE THE CONTAINER.
     #
     # The default json-file driver stores logs in the container's own directory,
