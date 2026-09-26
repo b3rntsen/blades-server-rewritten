@@ -51,6 +51,10 @@ pub struct ResolvedDamage {
     pub flags: u8,
     /// All components, including Magicka/Stamina drains (which are excluded from `total`).
     pub components: Vec<(DamageType, f32)>,
+    /// Components after attacker-side bonuses but before defender block/resistance.
+    /// Dodge pools drain against these raw values; the mitigated components above
+    /// are then reduced proportionally for the damage that actually lands.
+    pub raw_components: Vec<(DamageType, f32)>,
     /// Sum of health-affecting components only (matches the wire `totalDamage`).
     pub total: f32,
     pub most_resisted: DamageType,
@@ -1044,6 +1048,7 @@ fn mitigate(
     resistance_scale: f32,
 ) -> ResolvedDamage {
     let mut hit_flags = flags::SHOW_DAMAGE | flags::HAS_ATTACKER;
+    let raw_components = components.clone();
     let continuous = matches!(
         source,
         DamageSource::StatusEffect | DamageSource::ContinuousSpell
@@ -1136,6 +1141,7 @@ fn mitigate(
         active_side,
         flags: hit_flags,
         components: std::mem::take(components),
+        raw_components,
         total,
         most_resisted,
         negated: false,
@@ -1959,6 +1965,9 @@ mod tests {
             elemental_only: false,
             consumes_overflow: false,
             on_absorb_restore: (0.0, 0.0, 0.0),
+            dodge_started_at: None,
+            dodge_status_expires_at: None,
+            dodge_effectiveness: 1.0,
             bypass_types: &[],
         });
         let mut components = vec![(DamageType::Slashing, 200.0), (DamageType::Poison, 137.3), (DamageType::Magicka, 137.3)];

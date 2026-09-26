@@ -2749,9 +2749,6 @@ fn apply_caster_begin_effects(
         return out;
     };
     let viewers = combat.fighters.len();
-    // No shipped duration → until consumed. Round reset clears the pools.
-    let until_consumed = now + Duration::from_secs(3600);
-
     // CURES — the shipped `statuses_to_remove` list, applied to the CASTER. This is
     // how Resist Elements puts out a fire that is already burning; see
     // [`apply_status_cures`]. Runs first so the cast's own new statuses, applied
@@ -2788,21 +2785,33 @@ fn apply_caster_begin_effects(
 
     if let Some(cap) = r.maximum_damage_dodged() {
         if cap > 0.0 && caster < viewers {
-            // `_dodgeDuration` is authored at **1.0 s** on all four dodge maneuvers
-            // and was ignored: the pool was given the 3600 s "until consumed"
-            // placeholder, so a Dodging Strike stayed armed for an hour and ate a hit
-            // a round or more later. It is a one-second reactive window, not a
-            // banked shield.
+            let eff = combat.fighters[caster]
+                .loadout
+                .perks
+                .ability_multiplier(super::perks::fighter_health_is_critical(
+                    &combat.fighters[caster],
+                ));
             let dodge_secs = r
                 .get(super::gamedata::AbilityField::DodgeDuration)
                 .filter(|v| *v > 0.0);
-            let expires = match dodge_secs {
-                Some(secs) => now + Duration::from_secs_f32(secs),
-                None => until_consumed,
-            };
+            let status_expires = dodge_secs.map(|secs| now + Duration::from_secs_f32(secs));
+            let maneuver_secs = super::interrupts::maneuver_timing(
+                ability_uuid,
+                level,
+                super::interrupts::timing_weapon(&combat.fighters[caster]),
+            )
+            .map(|t| t.end)
+            .filter(|v| v.is_finite() && *v > 0.0);
+            let expires = now + Duration::from_secs_f32(maneuver_secs.or(dodge_secs).unwrap_or(1.0));
+            if combat.fighters[caster].is_staggered(now) {
+                combat.fighters[caster].staggered_until = None;
+                combat.fighters[caster].weakness_rating = 0.0;
+                combat.fighters[caster].set_actor_state(ActorStateType::Maneuver, now);
+                out.extend(emit_status_removals(combat, now));
+            }
             combat.fighters[caster].negation_pools.push(NegationPool {
                 source: DamageNegationSource::Dodge,
-                remaining: cap,
+                remaining: cap * eff,
                 expires_at: expires,
                 // Adrenaline / Renewing / Focusing Dodge pay out only if the dodge
                 // actually connects. Absent fields are 0, i.e. a plain Dodging Strike.
@@ -2811,6 +2820,9 @@ fn apply_caster_begin_effects(
                     r.get(super::gamedata::AbilityField::MaximumMagickaRestored).unwrap_or(0.0),
                     r.get(super::gamedata::AbilityField::MaximumCooldownReduction).unwrap_or(0.0),
                 ),
+                dodge_started_at: Some(now),
+                dodge_status_expires_at: status_expires,
+                dodge_effectiveness: eff,
                 bypass_types: &[],
                 restoration_factor: 0.0,
                 absorb_fraction: 1.0,
@@ -3061,6 +3073,9 @@ fn apply_shipped_effects_phased(
                 restoration_factor: 0.0,
                 absorb_fraction: absorb,
                 on_absorb_restore: (0.0, 0.0, 0.0),
+                dodge_started_at: None,
+                dodge_status_expires_at: None,
+                dodge_effectiveness: 1.0,
                 // Storm-armor shields are not element-scoped and have no overflow
                 // clause in their description — only Ward does.
                 elemental_only: false,
@@ -3435,6 +3450,25 @@ fn apply_wall_of_fire_burns(
     out
 }
 
+fn component_total(components: &[(super::state::DamageType, f32)], ty: super::state::DamageType) -> f32 {
+    components.iter().filter(|(t, _)| *t == ty).map(|(_, v)| *v).sum()
+}
+
+fn scale_components_by_raw_dodge(
+    components: &mut [(super::state::DamageType, f32)],
+    raw_before: &[(super::state::DamageType, f32)],
+    raw_after: &[(super::state::DamageType, f32)],
+) {
+    for (ty, value) in components.iter_mut() {
+        let before = component_total(raw_before, *ty);
+        if before <= 0.0 {
+            continue;
+        }
+        let after = component_total(raw_after, *ty).clamp(0.0, before);
+        *value *= after / before;
+    }
+}
+
 /// Apply a resolved hit: drain negation, decrement the target (unless wholly negated),
 /// record elemental conditioning + land status effects, build the `ReceiveDamage` (or
 /// `DamageNegated`) for both players, and end the match if the target died.
@@ -3447,17 +3481,41 @@ fn emit_damage(
 ) -> Vec<(usize, Vec<u8>)> {
     let mut out = Vec::new();
 
-    // Finish the mitigation pipeline: drain the DEFENDER's negation pools (Ward/Absorb/
-    // Dodge) against this hit's components (mutates the pool, so it runs HERE, not in the
-    // read-only damage model). Work on a local copy of the components so the wire frame
-    // reflects the post-negation per-type damage. [status-resistance-spec §4]
+    // Finish the mitigation pipeline: dodge drains against raw incoming components,
+    // then Ward/Absorb drain against the mitigated remainder. Work on a local copy so
+    // the wire frame reflects the post-negation per-type damage.
     let mut components = resolved.components.clone();
-    let neg = combat.fighters[target_slot].apply_negation_pools(&mut components);
+    let mut neg = if super::state::is_dodgeable_source(resolved.source) {
+        let mut raw_after_dodge = resolved.raw_components.clone();
+        let dodge = combat.fighters[target_slot].apply_dodge_negation_pools_for_source(
+            resolved.source,
+            &mut raw_after_dodge,
+            now,
+        );
+        scale_components_by_raw_dodge(&mut components, &resolved.raw_components, &raw_after_dodge);
+        dodge
+    } else {
+        super::state::NegationResult {
+            negated: false,
+            heal: 0.0,
+            restore_magicka: 0.0,
+            restore_cooldown_secs: 0.0,
+        }
+    };
+    let non_dodge = combat.fighters[target_slot].apply_non_dodge_negation_pools(
+        resolved.source,
+        &mut components,
+        now,
+    );
+    neg.heal += non_dodge.heal;
+    neg.restore_magicka += non_dodge.restore_magicka;
+    neg.restore_cooldown_secs += non_dodge.restore_cooldown_secs;
     let total: f32 = components
         .iter()
         .filter(|(t, _)| super::damage::is_health_type(*t))
         .map(|(_, v)| *v)
         .sum();
+    neg.negated = total <= 0.0;
 
     // Whole hit eaten by a Ward/Absorb pool → emit DamageNegated(66), apply the Absorb
     // heal-back, and DO NOT reduce HP (the hit dealt 0). [status-resistance-spec §4]
@@ -4493,6 +4551,9 @@ fn apply_ward(
         restoration_factor: 0.0, // Ward: pure negation, no heal-back
         absorb_fraction: 1.0,    // Ward swallows a hit whole until exhausted
         on_absorb_restore: (0.0, 0.0, 0.0),
+        dodge_started_at: None,
+        dodge_status_expires_at: None,
+        dodge_effectiveness: 1.0,
         // `Ability.Spell.Ward.Description`: "negates up to {1} ELEMENTAL damage,
         // plus any EXCESS damage from the attack that destroys it". Ward's physical
         // protection is the Armor Rating pushed below, not this pool.
@@ -4552,6 +4613,9 @@ fn apply_absorb(
         restoration_factor: restoration,
         absorb_fraction: 1.0,
         on_absorb_restore: (0.0, 0.0, 0.0),
+        dodge_started_at: None,
+        dodge_status_expires_at: None,
+        dodge_effectiveness: 1.0,
         elemental_only: false,
         consumes_overflow: false,
         bypass_types: &[],
@@ -8776,7 +8840,7 @@ mod shipped_effects_tests {
     use super::*;
     use super::super::state::{
         DamageNegationSource, DamageType, EquippedAbility, Fighter, StatusEffectType,
-        WeaponProfile,
+        NegationPool, WeaponProfile,
     };
     use super::super::tables::Weight;
     use super::super::loadout;
@@ -9269,24 +9333,25 @@ mod shipped_effects_tests {
         }
     }
 
-    /// A dodge is a ONE-SECOND reactive window, not a banked shield. `_dodgeDuration`
-    /// is authored at 1.0 s on all four dodge maneuvers and was ignored — the pool got
-    /// the 3600 s "until consumed" placeholder, so a Dodging Strike stayed armed for an
-    /// hour and could eat a hit a round later.
+    /// The dodge DAMAGE pool lives for the whole maneuver, not merely the 1.0 s
+    /// HUD status. Dodging Strike's one-handed animation ends around 1.25 s.
     #[test]
-    fn a_dodge_pool_expires_after_its_authored_second() {
+    fn a_dodge_pool_lasts_for_the_maneuver_lifetime() {
         let now = Instant::now();
         let mut c = combat2(now);
         apply_shipped_effects(&mut c, 0, 1, uuid_of("DodgingStrike"), 1, 500.0, false, false, now);
         let pool = c.fighters[0].negation_pools.first().expect("a dodge pool").clone();
         assert!(
-            pool.expires_at <= now + Duration::from_secs_f32(1.05),
-            "the dodge must lapse after its authored ~1.0s, not an hour"
+            pool.expires_at > now + Duration::from_secs_f32(1.20),
+            "the dodge damage pool must cover the full maneuver lifetime"
         );
-        assert!(pool.expires_at > now, "…but it is armed now");
+        assert!(
+            pool.expires_at < now + Duration::from_secs_f32(1.35),
+            "but it must still end with the maneuver, not remain banked"
+        );
 
         c.fighters[0].prune_negation_pools(now + Duration::from_secs_f32(1.5));
-        assert!(c.fighters[0].negation_pools.is_empty(), "and is gone a second later");
+        assert!(c.fighters[0].negation_pools.is_empty(), "and is gone after the maneuver");
     }
 
     /// Delayed Lightning Bolt trades time for damage: `_delayDuration` 4.0 is ADDITIVE
@@ -9453,6 +9518,98 @@ mod shipped_effects_tests {
         assert_eq!(out.len(), 2, "op51 Dodging to both viewers");
     }
 
+    #[test]
+    fn a_dodge_pool_scales_with_effectiveness() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0].health = 1;
+        c.fighters[0].loadout.perks.mettle = 0.20;
+        let u = uuid_of("RenewingDodge");
+        let cap = super::super::gamedata::ability_rank_clamped(u, 1)
+            .and_then(|r| r.maximum_damage_dodged())
+            .expect("Renewing Dodge ships a dodge cap");
+        apply_shipped_effects(&mut c, 0, 1, u, 1, 500.0, false, false, now);
+        let pool = c.fighters[0].negation_pools.first().expect("a dodge pool");
+        assert!((pool.remaining - cap * 1.2).abs() < 0.01, "pool scaled by Mettle");
+        assert!((pool.dodge_effectiveness - 1.2).abs() < 0.01, "payout captures the same multiplier");
+    }
+
+    #[test]
+    fn dodge_drains_raw_damage_before_resistance() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0]
+            .transient_resistances
+            .push((DamageType::Fire, 50.0, now + Duration::from_secs(5)));
+        c.fighters[0].negation_pools.push(NegationPool {
+            source: DamageNegationSource::Dodge,
+            remaining: 100.0,
+            expires_at: now + Duration::from_secs(2),
+            restoration_factor: 0.0,
+            absorb_fraction: 1.0,
+            elemental_only: false,
+            consumes_overflow: false,
+            on_absorb_restore: (0.0, 0.0, 0.0),
+            dodge_started_at: Some(now),
+            dodge_status_expires_at: Some(now + Duration::from_secs(1)),
+            dodge_effectiveness: 1.0,
+            bypass_types: &[],
+        });
+        let resolved = RetailDamageModel.resolve_flat(
+            &c.fighters[1].loadout,
+            &c.fighters[0],
+            DamageSource::Spell,
+            ActiveSide::Middle,
+            DamageType::Fire,
+            100.0,
+            now,
+        );
+        assert_eq!(resolved.raw_components, vec![(DamageType::Fire, 100.0)]);
+        assert!(
+            resolved.components[0].1 < 100.0,
+            "fixture must mitigate the hit before dodge"
+        );
+
+        let hp_before = c.fighters[0].health;
+        let _ = emit_damage(&mut c, 1, 0, &resolved, now);
+        assert_eq!(c.fighters[0].health, hp_before, "the full raw hit was dodged");
+        assert!(
+            c.fighters[0].negation_pools[0].remaining <= 0.01,
+            "pool must spend the raw 100, not the resisted {}",
+            resolved.components[0].1
+        );
+    }
+
+    #[test]
+    fn a_dodge_breaks_a_stagger_and_removes_the_status() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0].apply_stagger_for(now, 2.5);
+        assert_eq!(
+            status_removes(&emit_status_removals(&mut c, now), StatusEffectType::Staggered).len(),
+            0
+        );
+        assert!(c.fighters[0].is_staggered(now));
+
+        let out = apply_shipped_effects(
+            &mut c,
+            0,
+            1,
+            uuid_of("DodgingStrike"),
+            1,
+            500.0,
+            false,
+            false,
+            now + Duration::from_millis(100),
+        );
+        assert!(!c.fighters[0].is_staggered(now + Duration::from_millis(100)));
+        assert_eq!(
+            status_removes(&out, StatusEffectType::Staggered).len(),
+            2,
+            "the dodge must send the stagger remove to both viewers"
+        );
+    }
+
     /// The op51 apply must carry the dodge's own duration, not 0.
     ///
     /// Measured, and unambiguous: of 405 captured `Dodging` (12) op51 frames,
@@ -9495,25 +9652,30 @@ mod shipped_effects_tests {
         }
     }
 
-    /// The control: the pool's server-side expiry must still match what is
-    /// announced, so the client and the server disagree about nothing. A fix that
-    /// only changed the wire number would leave the two out of step.
+    /// The control: the HUD-visible status is still the authored 1.0 s duration,
+    /// even though chapter 04 keeps the damage pool alive to maneuver end.
     #[test]
-    fn the_announced_duration_matches_the_pool_expiry() {
+    fn the_announced_duration_is_separate_from_the_pool_expiry() {
         let now = Instant::now();
         let mut c = combat2(now);
         let u = uuid_of("DodgingStrike");
         apply_shipped_effects(&mut c, 0, 1, u, 1, 500.0, false, false, now);
         let pool = &c.fighters[0].negation_pools[0];
 
-        // Alive just inside the window, gone just outside it.
-        assert!(pool.expires_at > now + Duration::from_millis(900));
-        assert!(pool.expires_at < now + Duration::from_millis(1_100));
+        let status_until = pool.dodge_status_expires_at.expect("dodge status expiry");
+        assert!(status_until > now + Duration::from_millis(900));
+        assert!(status_until < now + Duration::from_millis(1_100));
+        assert!(pool.expires_at > status_until, "damage pool outlives the HUD status");
 
+        c.fighters[0].prune_negation_pools(now + Duration::from_millis(1_100));
+        assert!(
+            !c.fighters[0].negation_pools.is_empty(),
+            "the damage pool is still armed just after the status lapses"
+        );
         c.fighters[0].prune_negation_pools(now + Duration::from_millis(1_500));
         assert!(
             c.fighters[0].negation_pools.is_empty(),
-            "the dodge window must close a second after it opened"
+            "the damage pool closes at maneuver end"
         );
     }
 
@@ -9550,11 +9712,10 @@ mod shipped_effects_tests {
         );
     }
 
-    /// The same remove is owed when the dodge CONNECTS, not only when it times
-    /// out — `apply_negation_pools` drops a drained pool, so the window is over
-    /// early and the client must hear about it.
+    /// A connected dodge spends its budget, but the HUD status still follows the
+    /// authored status timer instead of being pulled back early.
     #[test]
-    fn a_dodge_that_eats_a_hit_also_sends_its_remove() {
+    fn a_dodge_that_eats_a_hit_keeps_the_status_until_the_timer() {
         let now = Instant::now();
         let mut c = combat2(now);
         let u = uuid_of("DodgingStrike");
@@ -9566,15 +9727,20 @@ mod shipped_effects_tests {
         let neg = c.fighters[0].apply_negation_pools(&mut components);
         assert!(neg.negated || components[0].1 < 5_000.0, "the dodge must have eaten some of it");
         assert!(
-            c.fighters[0].negation_pools.is_empty(),
-            "a drained pool is dropped — the window is over"
+            !c.fighters[0].negation_pools.is_empty(),
+            "the drained dodge pool remains as the maneuver-lifetime record"
         );
 
-        let out = emit_status_removals(&mut c, now + Duration::from_millis(100));
+        let early = emit_status_removals(&mut c, now + Duration::from_millis(100));
+        assert!(
+            dodging_removes(&early).is_empty(),
+            "a connected dodge must not remove the status before the timer"
+        );
+        let out = emit_status_removals(&mut c, now + Duration::from_millis(1_100));
         assert_eq!(
             dodging_removes(&out).len(),
             2,
-            "a spent dodge must be taken back as well as an expired one"
+            "the spent dodge is taken back when its status timer closes"
         );
     }
 
@@ -9604,18 +9770,22 @@ mod shipped_effects_tests {
         }
     }
 
-    /// op51 `Dodging` REMOVE frames in a batch (propId 4 apply, 5 status).
-    fn dodging_removes(out: &[(usize, Vec<u8>)]) -> Vec<usize> {
+    /// op51 status REMOVE frames in a batch (propId 4 apply, 5 status).
+    fn status_removes(out: &[(usize, Vec<u8>)], status: StatusEffectType) -> Vec<usize> {
         out.iter()
             .enumerate()
             .filter(|(_, (_, f))| messages::user_message_gmid(f) == Some(51))
             .filter(|(_, (_, f))| {
                 let nd = arena_proto::parse_netdata(&f[2..]);
-                nd.int(5) == Some(StatusEffectType::Dodging as i64)
+                nd.int(5) == Some(status as i64)
                     && matches!(nd.get(4), Some(arena_proto::NetDataValue::Bool(false)))
             })
             .map(|(i, _)| i)
             .collect()
+    }
+
+    fn dodging_removes(out: &[(usize, Vec<u8>)]) -> Vec<usize> {
+        status_removes(out, StatusEffectType::Dodging)
     }
 
     /// The three *Armor spells get a real shield. No op51: the elemental-armor status
@@ -11050,6 +11220,7 @@ mod report_31_high_block_stun {
             active_side: ActiveSide::Middle,
             flags: flags::SHOW_DAMAGE | flags::HAS_ATTACKER,
             components: vec![(super::super::state::DamageType::Fire, 10.0)],
+            raw_components: vec![(super::super::state::DamageType::Fire, 10.0)],
             total: 10.0,
             most_resisted: super::super::state::DamageType::None,
             negated: false,

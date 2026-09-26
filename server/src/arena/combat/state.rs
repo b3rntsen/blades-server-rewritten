@@ -1706,6 +1706,14 @@ pub struct NegationPool {
     /// on a dodge that connects: it is the only number the data actually contains,
     /// and awarding nothing was the bug.
     pub on_absorb_restore: (f32, f32, f32),
+    /// When a dodge began, for its 15-window payout curve. None for non-dodge pools.
+    pub dodge_started_at: Option<Instant>,
+    /// Wire-visible Dodging status expiry. The damage pool can outlive this because
+    /// chapter 04 keeps the pool armed for the whole maneuver while the HUD status
+    /// still announces the authored dodge duration.
+    pub dodge_status_expires_at: Option<Instant>,
+    /// Mettle/effectiveness multiplier captured at dodge begin.
+    pub dodge_effectiveness: f32,
     /// Damage types this pool does NOT absorb — `_vulnerableDamageTypes`.
     ///
     /// Blizzard Armor ships `[4 Fire]`: the ice shield is weak to fire. The shipped
@@ -2180,10 +2188,9 @@ impl Fighter {
         if self.is_paralyzed() {
             v.push(StatusEffectType::Paralyzed);
         }
-        // A live dodge window IS a tracked status, so the diff below emits its
-        // remove when the window closes — whether it closed because the second
-        // lapsed or because the dodge actually ate a hit (`apply_negation_pools`
-        // drops a drained pool).
+        // A live dodge status IS tracked, so the diff below emits its remove when
+        // the HUD-visible second closes. The damage pool may remain armed longer:
+        // chapter 04 keeps it alive through `OnManeuverEnded`.
         //
         // Retail sends that remove: of 405 captured `Dodging` (12) op51 frames,
         // 204 are applies and 201 are removes. We sent the apply and never the
@@ -2191,9 +2198,11 @@ impl Fighter {
         //
         // Ward, Absorb and the storm armors share `negation_pools`; they are mapped
         // to their own statuses just below.
-        if self.negation_pools.iter().any(|p| {
-            p.source == DamageNegationSource::Dodge && p.remaining > 0.0 && now < p.expires_at
-        }) {
+        if self
+            .negation_pools
+            .iter()
+            .any(|p| p.source == DamageNegationSource::Dodge && p.dodge_status_expires_at.is_some_and(|until| now < until))
+        {
             v.push(StatusEffectType::Dodging);
         }
         // Every other status we announce, so each apply gets its remove. The PvP
@@ -2775,6 +2784,44 @@ impl Fighter {
     /// NOTE: takes `now` via the pools' `expires_at` (the caller prunes by passing the
     /// current instant through [`Self::prune_negation_pools`] first).
     pub fn apply_negation_pools(&mut self, components: &mut [(DamageType, f32)]) -> NegationResult {
+        self.apply_negation_pools_for_source(DamageSource::Attack, components, Instant::now())
+    }
+
+    pub fn apply_negation_pools_for_source(
+        &mut self,
+        source: DamageSource,
+        components: &mut [(DamageType, f32)],
+        now: Instant,
+    ) -> NegationResult {
+        self.apply_negation_pools_filtered(source, components, now, true, true)
+    }
+
+    pub fn apply_dodge_negation_pools_for_source(
+        &mut self,
+        source: DamageSource,
+        components: &mut [(DamageType, f32)],
+        now: Instant,
+    ) -> NegationResult {
+        self.apply_negation_pools_filtered(source, components, now, true, false)
+    }
+
+    pub fn apply_non_dodge_negation_pools(
+        &mut self,
+        source: DamageSource,
+        components: &mut [(DamageType, f32)],
+        now: Instant,
+    ) -> NegationResult {
+        self.apply_negation_pools_filtered(source, components, now, false, true)
+    }
+
+    fn apply_negation_pools_filtered(
+        &mut self,
+        source: DamageSource,
+        components: &mut [(DamageType, f32)],
+        now: Instant,
+        include_dodge: bool,
+        include_non_dodge: bool,
+    ) -> NegationResult {
         if self.negation_pools.is_empty() {
             return NegationResult {
                 negated: false,
@@ -2783,9 +2830,18 @@ impl Fighter {
                 restore_cooldown_secs: 0.0,
             };
         }
+        let stat_drains_eligible = include_dodge
+            && self
+                .negation_pools
+                .iter()
+                .any(|p| p.source == DamageNegationSource::Dodge && p.remaining > 0.0);
         let health_before: f32 = components
             .iter()
-            .filter(|(t, _)| super::damage::is_health_type(*t))
+            .filter(|(t, _)| {
+                super::damage::is_health_type(*t)
+                    || (stat_drains_eligible
+                        && matches!(*t, DamageType::Stamina | DamageType::Magicka))
+            })
             .map(|(_, v)| *v)
             .sum();
         if health_before <= 0.0 {
@@ -2800,7 +2856,14 @@ impl Fighter {
         let mut restore_magicka = 0.0;
         let mut restore_cooldown_secs = 0.0;
         for pool in self.negation_pools.iter_mut() {
+            let is_dodge = pool.source == DamageNegationSource::Dodge;
+            if (is_dodge && !include_dodge) || (!is_dodge && !include_non_dodge) {
+                continue;
+            }
             if pool.remaining <= 0.0 {
+                continue;
+            }
+            if is_dodge && !is_dodgeable_source(source) {
                 continue;
             }
             // Which components may this pool touch at all? Ward is elemental-only
@@ -2808,10 +2871,20 @@ impl Fighter {
             // "any health component" reach.
             let bypass = pool.bypass_types;
             let eligible_ty = |t: DamageType| {
-                super::damage::is_health_type(t)
+                (super::damage::is_health_type(t)
+                    || (is_dodge && matches!(t, DamageType::Stamina | DamageType::Magicka)))
                     && (!pool.elemental_only || super::damage::is_elemental(t))
                     // `_vulnerableDamageTypes`: a Blizzard Armor does not stop fire.
                     && !bypass.contains(&(t as i32))
+            };
+            let dodge_factor = if is_dodge {
+                pool.dodge_started_at
+                    .and_then(|start| now.checked_duration_since(start))
+                    .map(|elapsed| dodge_payout_factor(elapsed.as_secs_f32()))
+                    .unwrap_or(1.0)
+                    * pool.dodge_effectiveness.max(0.0)
+            } else {
+                1.0
             };
             // Did this hit exhaust the pool? Only then does the overflow clause fire.
             let had_budget = pool.remaining > 0.0;
@@ -2831,9 +2904,9 @@ impl Fighter {
                     // This pool connected: pay its one-off restoration and disarm it
                     // so a multi-component hit cannot pay it several times.
                     let (h, m, c) = std::mem::take(&mut pool.on_absorb_restore);
-                    heal += h;
-                    restore_magicka += m;
-                    restore_cooldown_secs += c;
+                    heal += h * dodge_factor;
+                    restore_magicka += m * dodge_factor;
+                    restore_cooldown_secs += c * dodge_factor;
                 }
             }
             // "…plus any excess damage from the attack that destroys it." The pool
@@ -2849,10 +2922,15 @@ impl Fighter {
                 }
             }
         }
-        self.negation_pools.retain(|p| p.remaining > 0.0);
+        self.negation_pools
+            .retain(|p| p.remaining > 0.0 || (p.source == DamageNegationSource::Dodge && now < p.expires_at));
         let health_after: f32 = components
             .iter()
-            .filter(|(t, _)| super::damage::is_health_type(*t))
+            .filter(|(t, _)| {
+                super::damage::is_health_type(*t)
+                    || (stat_drains_eligible
+                        && matches!(*t, DamageType::Stamina | DamageType::Magicka))
+            })
             .map(|(_, v)| *v)
             .sum();
         NegationResult {
@@ -2915,6 +2993,26 @@ pub struct NegationResult {
     /// Seconds to take off the dodger's own cooldowns
     /// (Focusing Dodge's `_maximumCooldownReduction`).
     pub restore_cooldown_secs: f32,
+}
+
+pub fn is_dodgeable_source(source: DamageSource) -> bool {
+    matches!(
+        source,
+        DamageSource::Attack
+            | DamageSource::Spell
+            | DamageSource::WeaponManeuver
+            | DamageSource::ContinuousSpell
+            | DamageSource::EchoWeapon
+            | DamageSource::ContinuousAttack
+            | DamageSource::ShieldManeuver
+    )
+}
+
+pub fn dodge_payout_factor(t: f32) -> f32 {
+    const WINDOWS: f32 = 15.0;
+    let t = t.max(0.0);
+    let remaining = (WINDOWS - (WINDOWS * t).floor()).max(0.0);
+    (remaining / WINDOWS).powi(2)
 }
 
 // ---------------------------------------------------------------------------
@@ -4087,6 +4185,9 @@ mod absorb_fraction_tests {
             elemental_only: false,
             consumes_overflow: false,
             on_absorb_restore: (0.0, 0.0, 0.0),
+            dodge_started_at: None,
+            dodge_status_expires_at: None,
+            dodge_effectiveness: 1.0,
             bypass_types: &[],
         }
     }
@@ -4142,6 +4243,9 @@ mod absorb_fraction_tests {
             elemental_only: true,
             consumes_overflow: true,
             on_absorb_restore: (0.0, 0.0, 0.0),
+            dodge_started_at: None,
+            dodge_status_expires_at: None,
+            dodge_effectiveness: 1.0,
             bypass_types: &[],
         }
     }
@@ -4248,6 +4352,9 @@ mod absorb_fraction_tests {
             elemental_only: false,
             consumes_overflow: false,
             on_absorb_restore: (43.5, 338.0, 4.0),
+            dodge_started_at: Some(now),
+            dodge_status_expires_at: Some(now + std::time::Duration::from_secs(1)),
+            dodge_effectiveness: 1.0,
             bypass_types: &[],
         });
         // A multi-component hit: the restoration must NOT be paid per component.
@@ -4277,14 +4384,75 @@ mod absorb_fraction_tests {
             elemental_only: false,
             consumes_overflow: false,
             on_absorb_restore: (43.5, 338.0, 4.0),
+            dodge_started_at: Some(now),
+            dodge_status_expires_at: Some(now + std::time::Duration::from_secs(1)),
+            dodge_effectiveness: 1.0,
             bypass_types: &[],
         });
-        // Only a Magicka drain — not a health-type component, so nothing is absorbed.
+        // A non-dodgeable source: the pool stays armed and pays nothing.
         let mut c = vec![(DamageType::Magicka, 100.0)];
-        let r = f.apply_negation_pools(&mut c);
+        let r = f.apply_negation_pools_for_source(DamageSource::StatusEffect, &mut c, now);
         assert_eq!(r.heal, 0.0);
         assert_eq!(r.restore_magicka, 0.0);
         assert_eq!(r.restore_cooldown_secs, 0.0);
+    }
+
+    #[test]
+    fn a_dodge_only_covers_its_dodgeable_sources_and_stat_drains() {
+        let now = Instant::now();
+        let mut f = Fighter::new(0, 1, loadout::starter(), now);
+        f.negation_pools.push(NegationPool {
+            source: DamageNegationSource::Dodge,
+            remaining: 500.0,
+            expires_at: now + std::time::Duration::from_secs(2),
+            restoration_factor: 0.0,
+            absorb_fraction: 1.0,
+            elemental_only: false,
+            consumes_overflow: false,
+            on_absorb_restore: (0.0, 0.0, 0.0),
+            dodge_started_at: Some(now),
+            dodge_status_expires_at: Some(now + std::time::Duration::from_secs(1)),
+            dodge_effectiveness: 1.0,
+            bypass_types: &[],
+        });
+
+        let mut dot = vec![(DamageType::Slashing, 100.0)];
+        let r = f.apply_negation_pools_for_source(DamageSource::StatusEffect, &mut dot, now);
+        assert!(!r.negated);
+        assert_eq!(dot[0].1, 100.0, "status-effect damage is not dodgeable");
+        assert_eq!(f.negation_pools[0].remaining, 500.0, "and does not drain the dodge");
+
+        let mut drain = vec![(DamageType::Magicka, 75.0), (DamageType::Stamina, 25.0)];
+        let r = f.apply_negation_pools_for_source(DamageSource::EchoWeapon, &mut drain, now);
+        assert!(r.negated, "source 9 is dodgeable");
+        assert_eq!(drain, vec![(DamageType::Magicka, 0.0), (DamageType::Stamina, 0.0)]);
+        assert_eq!(f.negation_pools[0].remaining, 400.0);
+    }
+
+    #[test]
+    fn dodge_restoration_uses_the_fifteen_window_payout_curve() {
+        let now = Instant::now();
+        let hit_at = now + std::time::Duration::from_millis(300);
+        let mut f = Fighter::new(0, 1, loadout::starter(), now);
+        f.negation_pools.push(NegationPool {
+            source: DamageNegationSource::Dodge,
+            remaining: 500.0,
+            expires_at: now + std::time::Duration::from_secs(2),
+            restoration_factor: 0.0,
+            absorb_fraction: 1.0,
+            elemental_only: false,
+            consumes_overflow: false,
+            on_absorb_restore: (0.0, 338.0, 4.0),
+            dodge_started_at: Some(now),
+            dodge_status_expires_at: Some(now + std::time::Duration::from_secs(1)),
+            dodge_effectiveness: 1.2,
+            bypass_types: &[],
+        });
+        let mut c = vec![(DamageType::Slashing, 10.0)];
+        let r = f.apply_negation_pools_for_source(DamageSource::Attack, &mut c, hit_at);
+        let factor = dodge_payout_factor(0.3) * 1.2;
+        assert!((r.restore_magicka - 338.0 * factor).abs() < 0.05);
+        assert!((r.restore_cooldown_secs - 4.0 * factor).abs() < 0.01);
     }
 
     /// **Powerful Block / StaggeredWeakness.** The attacker holds the status and it
@@ -4355,6 +4523,9 @@ mod absorb_fraction_tests {
             elemental_only: false,
             consumes_overflow: false,
             on_absorb_restore: (0.0, 0.0, 0.0),
+            dodge_started_at: None,
+            dodge_status_expires_at: None,
+            dodge_effectiveness: 1.0,
             bypass_types: &[],
         });
         let mut c = vec![(DamageType::Slashing, 130.0)];
