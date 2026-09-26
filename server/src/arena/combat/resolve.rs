@@ -3274,17 +3274,15 @@ fn emit_damage(
 ) -> Vec<(usize, Vec<u8>)> {
     let mut out = Vec::new();
 
-    // Finish the mitigation pipeline: drain the DEFENDER's negation pools (Ward/Absorb/
-    // Dodge) against this hit's components (mutates the pool, so it runs HERE, not in the
-    // read-only damage model). Work on a local copy of the components so the wire frame
-    // reflects the post-negation per-type damage. [status-resistance-spec §4]
-    let mut components = resolved.components.clone();
-    let neg = combat.fighters[target_slot].apply_negation_pools(&mut components);
-    let total: f32 = components
-        .iter()
-        .filter(|(t, _)| super::damage::is_health_type(*t))
-        .map(|(_, v)| *v)
-        .sum();
+    // ResolveDamageTaken drains Ward/Absorb/Dodge first, on pre-mitigation values.
+    // If anything is absorbed but the hit survives, the reduced raw list then goes
+    // through block, armor and resistance.
+    let mut raw_components = if resolved.pre_mitigation_components.is_empty() {
+        resolved.components.clone()
+    } else {
+        resolved.pre_mitigation_components.clone()
+    };
+    let neg = combat.fighters[target_slot].apply_negation_pools(&mut raw_components);
 
     // Whole hit eaten by a Ward/Absorb pool → emit DamageNegated(66), apply the Absorb
     // heal-back, and DO NOT reduce HP (the hit dealt 0). [status-resistance-spec §4]
@@ -3338,12 +3336,43 @@ fn emit_damage(
         out.push((attacker_slot, frame));
         return out;
     }
+    let remitigated;
+    let (components, total, most_resisted, flags, block_physical, blocked) = if neg.absorbed {
+        let attacker = combat.fighters[attacker_slot].loadout.clone();
+        remitigated = super::damage::mitigate_components(
+            &attacker,
+            &combat.fighters[target_slot],
+            resolved.source,
+            resolved.active_side,
+            resolved.active_side,
+            &mut raw_components,
+            now,
+            1.0,
+        );
+        (
+            remitigated.components.as_slice(),
+            remitigated.total,
+            remitigated.most_resisted,
+            remitigated.flags,
+            remitigated.block_physical,
+            remitigated.blocked,
+        )
+    } else {
+        (
+            resolved.components.as_slice(),
+            resolved.total,
+            resolved.most_resisted,
+            resolved.flags,
+            resolved.block_physical,
+            resolved.blocked,
+        )
+    };
 
     let hp_before = combat.fighters[target_slot].health;
     let max_hp = combat.fighters[target_slot].max_health;
     // `take_damage_at`, not `take_damage`: Reckless Fury floors the victim at 1 HP
     // for its window ("cannot be killed").
-    combat.fighters[target_slot].take_damage_at(total.round().max(0.0) as u32, now);
+    combat.fighters[target_slot].take_damage_at(total.max(0.0) as u32, now);
     // The mirrored Stamina/Magicka tracks come off their pools BEFORE `packed_stats()`
     // is read for the frame, so the bars the client draws match the numbers the same
     // frame reports. [Fighter::drain_mirrored_pools]
@@ -3363,12 +3392,12 @@ fn emit_damage(
         combat.fighters[attacker_slot].loadout.ravage.clone()
     };
     let (rav_s, rav_m, rav_h) =
-        combat.fighters[target_slot].apply_ravage(&ravage, resolved.block_physical);
+        combat.fighters[target_slot].apply_ravage(&ravage, block_physical);
     // SHIELD ravage fires on the opposite event: "on a blocked attack or Shield Bash".
     // The defender's shield ravages whoever swung into the guard, so it is applied to
     // the ATTACKER, and only when the guard actually took the hit (`blocked`), at
     // full whatever the block let through.
-    let (sr_s, sr_m, sr_h) = if resolved.blocked {
+    let (sr_s, sr_m, sr_h) = if blocked {
         let shield = combat.fighters[target_slot].loadout.shield_ravage.clone();
         combat.fighters[attacker_slot].apply_ravage(&shield, 1.0)
     } else {
@@ -3400,7 +3429,7 @@ fn emit_damage(
             damaged.packed_stats(),
             attacker.packed_stats(),
             resolved.source,
-            resolved.flags,
+            flags,
             total,
             // The ATTACKER's current combo depth. This was a hardcoded `0`, so all
             // 5,147 production op50 events reported comboCount 0 regardless of the
@@ -3409,7 +3438,7 @@ fn emit_damage(
             // depth is the x-axis of every combo-ramp comparison.
             i16::try_from(attacker.combo_count).unwrap_or(i16::MAX),
             resolved.active_side,
-            resolved.most_resisted,
+            most_resisted,
             &components,
         )
     };
@@ -8657,7 +8686,9 @@ mod phase4_tests {
 #[cfg(test)]
 mod shipped_effects_tests {
     use super::*;
-    use super::super::state::{DamageNegationSource, Fighter, StatusEffectType};
+    use super::super::damage::flags;
+    use super::super::state::{DamageNegationSource, Fighter, NegationPool, StatusEffectType};
+    use super::super::state::DamageType;
     use super::super::loadout;
 
     fn combat2(now: Instant) -> MatchCombat {
@@ -8679,6 +8710,54 @@ mod shipped_effects_tests {
             .find(|a| a.editor_name == editor)
             .map(|a| a.uuid)
             .unwrap_or_else(|| panic!("{editor} missing from the shipped table"))
+    }
+
+    #[test]
+    fn negation_drains_raw_damage_before_resistance() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].loadout.resistances = vec![(DamageType::Fire, 60.0)];
+        c.fighters[1].negation_pools.push(NegationPool {
+            source: DamageNegationSource::Absorb,
+            remaining: 50.0,
+            expires_at: now + Duration::from_secs(5),
+            restoration_factor: 0.0,
+            absorb_fraction: 1.0,
+            elemental_only: false,
+            consumes_overflow: false,
+            on_absorb_restore: (0.0, 0.0, 0.0),
+            bypass_types: &[],
+        });
+        let hp_before = c.fighters[1].health;
+        let hit = ResolvedDamage {
+            source: DamageSource::Spell,
+            active_side: ActiveSide::Middle,
+            flags: flags::SHOW_DAMAGE | flags::HAS_ATTACKER,
+            pre_mitigation_components: vec![(DamageType::Fire, 100.0)],
+            components: vec![(DamageType::Fire, 40.0)],
+            total: 40.0,
+            most_resisted: DamageType::Fire,
+            negated: false,
+            heal: 0.0,
+            block_physical: 1.0,
+            blocked: false,
+        };
+
+        let out = emit_damage(&mut c, 0, 1, &hit, now);
+
+        assert!(
+            !out.iter().any(|(_, frame)| {
+                frame.len() > 2
+                    && frame[1] == 0x36
+                    && arena_proto::parse_netdata(&frame[2..]).int(3) == Some(66)
+            }),
+            "post-resistance negation would wrongly report the whole hit negated"
+        );
+        assert_eq!(
+            hp_before - c.fighters[1].health,
+            2,
+            "raw 100 - Absorb 50, then Fire resist 60 floors remaining 50 to 2.5 and health truncates"
+        );
     }
 
     /// THE SYSTEMIC MANEUVER BUG: all 17 maneuvers dealt identical damage because
@@ -10617,6 +10696,7 @@ mod report_31_high_block_stun {
             source: super::super::state::DamageSource::Spell,
             active_side: ActiveSide::Middle,
             flags: flags::SHOW_DAMAGE | flags::HAS_ATTACKER,
+            pre_mitigation_components: vec![(super::super::state::DamageType::Fire, 10.0)],
             components: vec![(super::super::state::DamageType::Fire, 10.0)],
             total: 10.0,
             most_resisted: super::super::state::DamageType::None,
@@ -12902,7 +12982,7 @@ mod crit_charge_combo_tests {
         assert!(fresh.fighters[0].loadout.has_shield, "precondition: one-handed with a shield");
         let before = fresh.fighters[1].health;
         let _ = cast(&mut fresh, "PowerAttack", now);
-        assert_eq!(before - fresh.fighters[1].health, 138, "137.67, no chain");
+        assert_eq!(before - fresh.fighters[1].health, 137, "137.67, no chain");
 
         let mut chained = fight(now, Weight::Versatile, 100.0);
         swing(&mut chained, RIGHT, RIGHT, now, 0.35);
@@ -12919,7 +12999,7 @@ mod crit_charge_combo_tests {
         assert_eq!(idle.fighters[0].combo_count, 1, "precondition: a live chain");
         let before = idle.fighters[1].health;
         let _ = cast(&mut idle, "PowerAttack", now + Duration::from_secs(5));
-        assert_eq!(before - idle.fighters[1].health, 138, "no chain after Idle");
+        assert_eq!(before - idle.fighters[1].health, 137, "no chain after Idle");
     }
 
     // -- M-bash-source ------------------------------------------------------------
@@ -13202,15 +13282,15 @@ mod sprint1_integration_tests {
         assert_eq!(frames.len(), 1, "one maneuver hit: {frames:?}");
         assert_eq!(frames[0].0, DamageSource::WeaponManeuver as i64, "source 3");
         assert_ne!(frames[0].1 & flags::WAS_OPTIMAL_BLOCKING, 0, "bit 3: the guard was optimal");
-        assert_eq!(lost, (PA_CHAINED - OPTIMAL_PHYS_CUT).round() as u32, "172.09 − 76.8 = 95.29");
+        assert_eq!(lost, (PA_CHAINED - OPTIMAL_PHYS_CUT) as u32, "172.09 − 76.8 = 95.29");
 
         let (open, frames) = run(true, false);
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].1 & flags::WAS_OPTIMAL_BLOCKING, 0);
-        assert_eq!(open, PA_CHAINED.round() as u32, "control: no guard, the full chained 172.09");
+        assert_eq!(open, PA_CHAINED as u32, "control: no guard, the full chained 172.09");
 
         let (fresh, _) = run(false, true);
-        assert_eq!(fresh, (PA_FRESH - OPTIMAL_PHYS_CUT).round() as u32, "control: fresh 137.67 − 76.8");
+        assert_eq!(fresh, (PA_FRESH - OPTIMAL_PHYS_CUT) as u32, "control: fresh 137.67 − 76.8");
     }
 
     /// PR-04 × PR-07 × PR-05. Slot 0 releases a swing and casts Power Attack in the
@@ -13247,7 +13327,7 @@ mod sprint1_integration_tests {
 
         // Optimal guard: stun → interrupt.
         let (c, out, swing_lost, hp_after_swing, land) = run(false);
-        assert_eq!(swing_lost, (100.0 - OPTIMAL_PHYS_CUT).round() as u32, "100 − 76.8 = 23.2");
+        assert_eq!(swing_lost, (100.0 - OPTIMAL_PHYS_CUT) as u32, "100 − 76.8 = 23.2");
         assert!(c.fighters[0].is_staggered(land), "the high block stuns the attacker");
         let got = op59s(&out);
         assert_eq!(got.len(), 2, "one op59 to each viewer: {got:?}");
@@ -13270,12 +13350,12 @@ mod sprint1_integration_tests {
 
         // Control: a LOW guard. No stun, no op59, and the maneuver lands chained.
         let (c, out, swing_lost, hp_after_swing, land) = run(true);
-        assert_eq!(swing_lost, (100.0 - LOW_PHYS_CUT).round() as u32, "100 − 38.4 = 61.6");
+        assert_eq!(swing_lost, (100.0 - LOW_PHYS_CUT) as u32, "100 − 38.4 = 61.6");
         assert!(!c.fighters[0].is_staggered(land), "a low block does not stun");
         assert!(op59s(&out).is_empty(), "nothing to interrupt");
         assert_eq!(
             hp_after_swing - c.fighters[1].health,
-            (PA_CHAINED - LOW_PHYS_CUT).round() as u32,
+            (PA_CHAINED - LOW_PHYS_CUT) as u32,
             "the maneuver lands out of the swing's chain: 172.09 − 38.4 = 133.69",
         );
     }

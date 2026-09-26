@@ -79,12 +79,12 @@ const S506_TEMPERING: u64 = 10;
 /// the note on `LIGHT_COMBO_RAMP`.
 ///
 /// **Only the fresh row is reproduced now.** The chained 165.07 (×1.4502) was dealt by
-/// a VERSATILE weapon against armour the client cuts AFTER the multiplier (combat-spec
-/// 01 D1). This fixture's stand-in is a LIGHT dagger, and this engine still cuts armour
-/// first (PR-03). The fitted `combo_factor(Versatile, 1)` = 1.44 made the stand-in hit
-/// 165 anyway, but that constant was fitted to chains like this one, and the client's
-/// shipped `_comboDamageFactor` (0.54 / 0.25 / 0.186) replaces it. So the row is kept
-/// as a recording, not as an assertion.
+/// a VERSATILE weapon against armor that is cut AFTER the multiplier (combat-spec
+/// 01 D1). This fixture's stand-in is a LIGHT dagger, so the client order now yields
+/// 191.58 for combo-1 (`144 × 1.54 − 30.18`). The fitted `combo_factor(Versatile, 1)`
+/// = 1.44 made the stand-in hit 165 anyway, but that constant was fitted to chains
+/// like this one, and the client's shipped `_comboDamageFactor` (0.54 / 0.25 / 0.186)
+/// replaces it. So the row is kept as a recording, not as an assertion.
 const S506_COMBO_RAMP: &[(u32, f32)] = &[
     (0, 113.82), // seq 27/277/488 — fresh (combo reset), no statuses
 ];
@@ -214,6 +214,12 @@ fn slash_of(rd: &super::damage::ResolvedDamage) -> f32 {
 fn poison_of(rd: &super::damage::ResolvedDamage) -> f32 {
     rd.components.iter().filter(|(t, _)| *t == DamageType::Poison).map(|(_, v)| *v).sum()
 }
+fn s506_slash_after_armor(post_multiplier: f32) -> f32 {
+    super::tables::armor_cut_share(post_multiplier, post_multiplier, blank_armor_rating())
+}
+fn s506_slash_for_combo_factor(factor: f32) -> f32 {
+    s506_slash_after_armor(144.0 * factor)
+}
 
 // ---------------------------------------------------------------------------
 // (0) The fixture really is derived from shipped data.
@@ -287,10 +293,11 @@ fn s506_combo_ramp_reproduces_recorded_slashing() {
     let c1 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Left, 1.0, 1, now));
     assert!((c0 - 113.82).abs() < 0.05, "combo-0 anchor {c0:.2} != recorded 113.82");
     // One step of the dagger's shipped `_comboDamageFactor`, added to 1 (02 §4.2).
+    // Armor is a flat post-multiplier cut (01-D1), so combo-1 is NOT combo-0 × step.
     let step = 1.0 + DAGGER_COMBO_DF;
     assert!(
-        (c1 - 113.82 * step).abs() < 0.05,
-        "combo-1 {c1:.2} should be the combo-0 base x (1 + 0.54)"
+        (c1 - s506_slash_for_combo_factor(step)).abs() < 0.05,
+        "combo-1 {c1:.2} should be raw 144 × (1 + 0.54), then the flat armor cut"
     );
     let c9 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 9, now));
     assert!(
@@ -388,9 +395,9 @@ fn s506_poison_base_and_amplification_ramp() {
 /// so Poison lands at 68.645. The physical budget, 720 · 0.16 = 115.2, exceeds the
 /// 113.82 left after armour, so Slashing sits at its 5 % floor, 5.69.
 ///
-/// KNOWN RESIDUAL: the recorded 0.77 needs the client's order, block BEFORE armour —
-/// the floor is then 5 % of the pre-armour 144, and armour takes most of that. The
-/// fork cuts armour from the base first; that is 01-D1 (PR-03), not this change.
+/// KNOWN RESIDUAL: the recorded 0.77 still does not match this derived fixture
+/// (`s506_optimal_block_physical_matches_the_recorded_0_77` keeps the anchor
+/// ignored). This test pins the PR-03 order the model now uses: block, then armor.
 #[test]
 fn s506_optimal_block_is_a_flat_budget() {
     let m = RetailDamageModel;
@@ -404,9 +411,16 @@ fn s506_optimal_block_is_a_flat_budget() {
     def.blocking_until = Some(now + std::time::Duration::from_secs(2));
     let blocked = m.resolve_attack(&lo, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
     assert!(blocked.flags & flags::WAS_OPTIMAL_BLOCKING != 0, "optimal-block flag set");
+    let optimal_after_block = super::tables::block_cut(
+        144.0,
+        144.0,
+        def.block_rating(true),
+        super::tables::pvp_block_rating_factor(true),
+    );
+    let expected_blocked_slash = s506_slash_after_armor(optimal_after_block);
     assert!(
-        (slash_of(&blocked) - S506_SLASH_BASE * 0.05).abs() < 0.01,
-        "the physical budget exceeds the hit, so Slashing sits at its 5 % floor, got {:.2}",
+        (slash_of(&blocked) - expected_blocked_slash).abs() < 0.01,
+        "optimal block then armor should land at {expected_blocked_slash:.2}, got {:.2}",
         slash_of(&blocked),
     );
     let recorded_blocked_poison = 68.65; // seq 323
@@ -421,17 +435,19 @@ fn s506_optimal_block_is_a_flat_budget() {
     let l = m.resolve_attack(&lo, &low, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
     assert!(l.blocked);
     assert_eq!(l.flags & (flags::WAS_LATE_BLOCKING | flags::WAS_OPTIMAL_BLOCKING), 0);
-    assert!((slash_of(&l) - (S506_SLASH_BASE - 57.6)).abs() < 0.01, "got {:.2}", slash_of(&l));
+    let low_after_block =
+        super::tables::block_cut(144.0, 144.0, low.block_rating(false), super::tables::pvp_block_rating_factor(true));
+    assert!((slash_of(&l) - s506_slash_after_armor(low_after_block)).abs() < 0.01, "got {:.2}", slash_of(&l));
     assert!((poison_of(&l) - (S506_POISON_BASE - 39.155)).abs() < 0.01, "got {:.2}", poison_of(&l));
 }
 
-/// The RETAIL anchor the fork cannot hit yet: seq 323's optimally blocked Slashing
-/// landed at **0.77**. In the client the block runs before armour, so the 5 % floor
-/// is 5 % of the pre-armour 144 (7.2) and armour then takes most of it. The fork
-/// cuts armour from the base first (01-D1), so it lands the floor of the post-armour
-/// 113.82 instead (5.69). Un-ignore when PR-03 moves armour after block.
+/// The RETAIL anchor the fork still cannot hit: seq 323's optimally blocked Slashing
+/// landed at **0.77**. After PR-03 the modeled order is block then armor, but the
+/// derived fixture lands at 1.44, so the residual is likely in the inverted block
+/// inputs rather than the armor position. Keep this ignored until the fixture can be
+/// rebuilt from the exact defender gear.
 #[test]
-#[ignore = "PR-03 (01-D1): needs armour after block"]
+#[ignore = "s506 residual: PR-03 order lands 1.44, recorded anchor is 0.77"]
 fn s506_optimal_block_physical_matches_the_recorded_0_77() {
     let m = RetailDamageModel;
     let now = Instant::now();
@@ -545,7 +561,7 @@ fn s506_full_chain_through_engine_reproduces_ramp_and_resets_on_block() {
          {S506_SLASH_BASE:.1}"
     );
     assert!(
-        last_slash <= S506_SLASH_BASE * (1.0 + DAGGER_COMBO_DF) + 1.0,
+        last_slash <= s506_slash_for_combo_factor(1.0 + DAGGER_COMBO_DF) + 1.0,
         "…and must not exceed the one combo step"
     );
 
@@ -581,7 +597,7 @@ fn s506_anchor_report() {
     // The recorded 165.07 is not an anchor this stand-in can reproduce (see
     // `S506_COMBO_RAMP`); the row reports the model against its own formula.
     println!("  combo-1 Slashing: model {:.2}, recorded {S506_CHAINED_RECORDED:.2} (Versatile, not asserted)", slash_of(&c1));
-    rows.push(("combo-1 Slashing (model)", slash_of(&c1), 113.82 * (1.0 + DAGGER_COMBO_DF)));
+    rows.push(("combo-1 Slashing (model)", slash_of(&c1), s506_slash_for_combo_factor(1.0 + DAGGER_COMBO_DF)));
     let c4 = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 4, now);
     // combo-4 has no recorded counterpart: the old 469.30 row is a
     // StaggeredWeakness-amplified combo-2 event. Reported against the one-step
@@ -589,7 +605,7 @@ fn s506_anchor_report() {
     rows.push((
         "combo-4 Slashing (no recorded counterpart)",
         slash_of(&c4),
-        113.82 * (1.0 + DAGGER_COMBO_DF),
+        s506_slash_for_combo_factor(1.0 + DAGGER_COMBO_DF),
     ));
 
     let mut def = blank();
@@ -598,10 +614,13 @@ fn s506_anchor_report() {
     def.block_raised_at = Some(now);
     def.blocking_until = Some(now + std::time::Duration::from_secs(2));
     let b = m.resolve_attack(&lo, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-    // Recorded 0.77; the fork lands the 5 % floor of the post-armour value until
-    // armour moves after block (PR-03). Reported against the floor so the row checks
-    // the block stage this fixture can reproduce.
-    rows.push(("optimal-block Slashing (5 % floor)", slash_of(&b), S506_SLASH_BASE * 0.05));
+    let optimal_after_block = super::tables::block_cut(
+        144.0,
+        144.0,
+        def.block_rating(true),
+        super::tables::pvp_block_rating_factor(true),
+    );
+    rows.push(("optimal-block Slashing (model)", slash_of(&b), s506_slash_after_armor(optimal_after_block)));
     rows.push(("optimal-block Poison", poison_of(&b), 68.65));
 
     let mut amped = blank();
@@ -617,7 +636,7 @@ fn s506_anchor_report() {
     rows.push((
         "deep-combo Slashing",
         slash_of(&big),
-        113.82 * (1.0 + DAGGER_COMBO_DF),
+        s506_slash_for_combo_factor(1.0 + DAGGER_COMBO_DF),
     ));
 
     println!("\n  s506 anchor    | emitted  | recorded | delta");

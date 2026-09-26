@@ -179,6 +179,13 @@ mod report109_real_pools {
         assert_ne!(pool_for_level(89), pool_for_points(3));
     }
 
+    #[test]
+    fn wire_fraction_rounds_like_the_client() {
+        assert_eq!(wire_fraction(1, 2), 512, "1023 / 2 = 511.5 rounds up");
+        assert_eq!(wire_fraction(0, 2), 0);
+        assert_eq!(wire_fraction(2, 2), STAT_MAX);
+    }
+
     /// A fighter with no character record — a bot, or the starter loadout — must
     /// NOT be read as "spent nothing" and handed a 200 pool. It keeps the level
     /// approximation until bots get real spends of their own.
@@ -240,7 +247,9 @@ pub fn wire_fraction(cur: u32, max: u32) -> u16 {
     if max == 0 {
         return 0;
     }
-    ((cur.min(max) as u64 * STAT_MAX as u64) / max as u64) as u16
+    ((cur.min(max) as f32 * STAT_MAX as f32) / max as f32)
+        .round()
+        .clamp(0.0, STAT_MAX as f32) as u16
 }
 
 // ---------------------------------------------------------------------------
@@ -2784,6 +2793,7 @@ impl Fighter {
         if self.negation_pools.is_empty() {
             return NegationResult {
                 negated: false,
+                absorbed: false,
                 heal: 0.0,
                 restore_magicka: 0.0,
                 restore_cooldown_secs: 0.0,
@@ -2797,6 +2807,7 @@ impl Fighter {
         if health_before <= 0.0 {
             return NegationResult {
                 negated: false,
+                absorbed: false,
                 heal: 0.0,
                 restore_magicka: 0.0,
                 restore_cooldown_secs: 0.0,
@@ -2805,6 +2816,7 @@ impl Fighter {
         let mut heal = 0.0;
         let mut restore_magicka = 0.0;
         let mut restore_cooldown_secs = 0.0;
+        let mut absorbed = false;
         for pool in self.negation_pools.iter_mut() {
             if pool.remaining <= 0.0 {
                 continue;
@@ -2832,6 +2844,7 @@ impl Fighter {
                 let eaten = eligible.min(pool.remaining);
                 *v -= eaten;
                 pool.remaining -= eaten;
+                absorbed |= eaten > 0.0;
                 heal += eaten * pool.restoration_factor;
                 if eaten > 0.0 {
                     // This pool connected: pay its one-off restoration and disarm it
@@ -2851,6 +2864,7 @@ impl Fighter {
                 for (ty, v) in components.iter_mut() {
                     if eligible_ty(*ty) && *v > 0.0 {
                         *v = 0.0;
+                        absorbed = true;
                     }
                 }
             }
@@ -2863,6 +2877,7 @@ impl Fighter {
             .sum();
         NegationResult {
             negated: health_after <= 0.0,
+            absorbed,
             heal,
             restore_magicka,
             restore_cooldown_secs,
@@ -2914,6 +2929,7 @@ pub enum RoundOutcome {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NegationResult {
     pub negated: bool,
+    pub absorbed: bool,
     pub heal: f32,
     /// Magicka restored by a dodge that actually absorbed something
     /// (Renewing Dodge's `_maximumMagickaRestored`).

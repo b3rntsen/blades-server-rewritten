@@ -2856,10 +2856,11 @@ pub(in crate::arena::combat) mod tests {
         // B's RAW HP dropped by the model swing. Starter = L30 **Light** weapon (the new
         // default, not Heavy): base = (heavy_base(7)=120 + QUALITY_BONUS[3]=9) × 0.60 =
         // 77.4 Slashing at combo-0 (the FIRST swing is Right, ×1.0). + a Shock enchant
-        // (tier 2 → 13.73×2 = 27.46, amp ×1.0). Health total = 77.4 + 27.46 ≈ 104.86 →
-        // round 105 (the equal Magicka drain is excluded). NO 25% clamp anymore (§4.5):
+        // (tier 2 → 13.73×2 = 27.46, amp ×1.0). Health total = 77.4 + 27.46 ≈ 104.86,
+        // truncated by the client-style health application to 104 (the equal Magicka
+        // drain is excluded). NO 25% clamp anymore (§4.5):
         // the hit is the honest model value. HP is raw (×3 arena pool); wire is a fraction.
-        assert_eq!(m.fighter_max_health(1) - m.fighter_health(1), 105, "B raw HP −105 (combo-0 Light swing, un-clamped)");
+        assert_eq!(m.fighter_max_health(1) - m.fighter_health(1), 104, "B raw HP −104 (combo-0 Light swing, un-clamped)");
         if let Some(arena_proto::NetDataValue::ULong(v)) =
             arena_proto::parse_netdata(&damage[0].1[2..]).props.get(&4)
         {

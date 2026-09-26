@@ -5,7 +5,7 @@
 //! against the captured `ReceiveDamage` frames (s293 / s506):
 //!
 //! ```text
-//! physical[type]  = (weaponBase(item, tempering) − armorCut) × (1 + f)
+//! physical[type]  = weaponBase(item, tempering) × (1 + f), then block/armor/resist
 //!                   f = [combo ≥ 1]·comboDamageFactor + swing   (attack_type_multiplier)
 //! elemental[type] = enchantDamage(family, tier) × elementAmp(conditioning)
 //!                   (+ Frost→Stamina / Shock→Magicka mirrored drain)
@@ -23,18 +23,17 @@
 //! | weapon base | `weapon_base_for_level(level, Light)` | `gamedata::weapon().base_damage` + `tables::tempering_bonus` |
 //! | enchant | `13.73 × tier` (linear GUESS) | the family's own convex `_value` curve × [`tables::ENCHANT_DAMAGE_PER_VALUE`] |
 //! | enchant drain | *always* an equal **Magicka** drain | `frostDamageToStaminaDamage` / `shockDamageToMagickaDamage` only |
-//! | armor | *not modelled* | `tables::armor_reduction` (Phase 3.3) |
+//! | armor | *not modelled* | `tables::armor_cut_share` after block and multipliers (01-D1) |
 //! | resistance | a flat loadout number | a **Resistance Rating** (Phase 3.4) |
 //! | block | fixed `÷1.6` / `÷1.23` | [`BlockOutcome::apply`]: a flat budget from the blocking item's rating (03-D1) |
 //!
-//! ## Where armor is applied (data-derived, and it is NOT where the RE doc says)
+//! ## Where armor is applied
 //!
-//! `blades-combat-formulae.md` §1 writes `physFinal = physRaw × swingMult −
-//! armorReduction`, i.e. armor AFTER the combo roll. The s506 ramp falsifies that:
-//! the recorded chain is **exactly proportional** to the combo-0 value
-//! (113.82 → 165.07 = ×1.4503, → 469.30 = ×4.123). If a flat armor cut were taken
-//! after the multiplier, the ratios would compress as the swing grows. Armor is
-//! therefore applied to the **base**, before the swing factor. [Phase 3.3]
+//! `ResolveResistanceReduction` subtracts armor after defender-side negation/block and
+//! after the attack-type multiplier. The budget is flat (`ArmorRating × 0.1`), split
+//! by each physical component's share, with the same 5% floor as the other mitigation
+//! stages. That means combo hits add the multiplier first, then lose the same armor
+//! budget rather than scaling a pre-armored base. [01-D1]
 
 use std::time::Instant;
 
@@ -49,6 +48,10 @@ pub struct ResolvedDamage {
     pub source: DamageSource,
     pub active_side: ActiveSide,
     pub flags: u8,
+    /// Components after attacker-side bonuses/factors but before defender-side
+    /// negation, block, armor and resistance. Ward/Absorb/Dodge consume this list:
+    /// `ResolveDamageTaken` runs negation first (`Actor$$ResolveDamageTaken@0x1c5389c`).
+    pub pre_mitigation_components: Vec<(DamageType, f32)>,
     /// All components, including Magicka/Stamina drains (which are excluded from `total`).
     pub components: Vec<(DamageType, f32)>,
     /// Sum of health-affecting components only (matches the wire `totalDamage`).
@@ -387,17 +390,17 @@ pub fn ships_damage(ability_uuid: &str, level: u8) -> bool {
 pub struct RetailDamageModel;
 
 impl RetailDamageModel {
-    /// The attacker's per-type PHYSICAL base **after** the defender's Armor Rating,
-    /// before the swing/combo factor. [Phase 3.3 — see the module doc for why armor
-    /// lands here and not after the multiplier.]
-    fn physical_base_after_armor(
+    /// The attacker's per-type PHYSICAL base before the swing/combo factor.
+    ///
+    /// Armor is not applied here. The client applies it later in
+    /// `ResolveResistanceReduction` after negation, block and the attack-type
+    /// multiplier, share-weighted across the post-block physical total.
+    fn physical_base_components(
         attacker: &Loadout,
         target: &Fighter,
         source: DamageSource,
         now: Instant,
     ) -> Vec<(DamageType, f32)> {
-        let armor_rating = (target.loadout.armor_rating - attacker.armor_piercing_rating).max(0.0);
-
         // Scout / Armsman / Barbarian add flat damage for LIGHT / VERSATILE / HEAVY
         // weapons. It rides on the weapon's own damage, so it is added BEFORE armour
         // and mitigated with it — a perk should not be a hole in the armour model.
@@ -460,12 +463,7 @@ impl RetailDamageModel {
                     base += maneuver_bonus;
                     maneuver_bonus = 0.0;
                 }
-                let cut = if is_physical(*ty) {
-                    tables::armor_reduction(base, armor_rating)
-                } else {
-                    0.0
-                };
-                (*ty, (base - cut).max(0.0))
+                (*ty, base.max(0.0))
             })
             .collect()
     }
@@ -492,7 +490,7 @@ impl RetailDamageModel {
         );
 
         let mut components: Vec<(DamageType, f32)> = Vec::new();
-        for (ty, base) in Self::physical_base_after_armor(attacker, target, source, now) {
+        for (ty, base) in Self::physical_base_components(attacker, target, source, now) {
             components.push((ty, base * scale));
         }
         // A shield bash carries no weapon enchantment damage: the enchant tracks are
@@ -1023,7 +1021,7 @@ fn finish_resolved(
 /// `Damage$$IsBlockable` has no bit for AreaEffect (7), and [`source_is_blockable`]
 /// keeps it out of the block stage.
 #[allow(clippy::too_many_arguments)]
-fn mitigate(
+pub fn mitigate_components(
     attacker: &Loadout,
     target: &Fighter,
     source: DamageSource,
@@ -1033,6 +1031,7 @@ fn mitigate(
     now: Instant,
     resistance_scale: f32,
 ) -> ResolvedDamage {
+    let pre_mitigation_components = components.clone();
     let mut hit_flags = flags::SHOW_DAMAGE | flags::HAS_ATTACKER;
     let continuous = matches!(
         source,
@@ -1081,7 +1080,25 @@ fn mitigate(
     //      retail's drain follows the reduced element rather than the raw roll.
     append_mirrored_drains(components);
 
-    // 2) RESISTANCE — a FLAT subtraction driven by the defender's Resistance Rating,
+    // 2) ARMOR — a flat, share-weighted cut after block and after the attack-type
+    //    multiplier. `DisplayClass328_0.b__0@0x1fd1944` subtracts
+    //    `(v / Σphys) * max(0, A - piercing) * 0.1`, with the same 5% floor as the
+    //    other mitigation stages.
+    let phys_total: f32 = components
+        .iter()
+        .filter(|(t, v)| is_physical(*t) && *v > 0.0)
+        .map(|(_, v)| *v)
+        .sum();
+    let armor_rating = (target.loadout.armor_rating - attacker.armor_piercing_rating).max(0.0);
+    if phys_total > 0.0 && armor_rating > 0.0 {
+        for (ty, v) in components.iter_mut() {
+            if is_physical(*ty) && *v > 0.0 {
+                *v = tables::armor_cut_share(*v, phys_total, armor_rating);
+            }
+        }
+    }
+
+    // 3) RESISTANCE — a FLAT subtraction driven by the defender's Resistance Rating,
     //    capped at `maximumResistanceReduction`, with elemental resistance first
     //    pierced by the attacker's Elemental-Resistance-Piercing rating/fraction.
     //    Transient Resist-Elements amounts are ratings too and add in.
@@ -1097,15 +1114,16 @@ fn mitigate(
             attacker.elem_resist_piercing,
             attacker.elem_resist_piercing_rating,
         ) + target.transient_resistance_against(*ty, now);
-        let resisted =
-            tables::resistance_reduction(before, rating * resistance_scale, continuous);
-        let gained = tables::weakness_increase(
-            before,
-            target.weakness_rating_against(*ty, now),
-            rating * resistance_scale,
-            continuous,
-        );
-        *v = (before - resisted + gained).max(0.0);
+        let weakness = target.weakness_rating_against(*ty, now);
+        let piercing = if is_elemental(*ty) {
+            attacker.elem_resist_piercing_rating
+        } else {
+            0.0
+        };
+        let mitigated =
+            tables::apply_resistance_and_weakness(before, rating * resistance_scale, weakness, continuous, piercing);
+        let resisted = (before - mitigated).max(0.0);
+        *v = mitigated;
         if resisted > 0.0 && is_elemental(*ty) {
             let frac = resisted.min(before) / before;
             if frac > most_resisted_frac {
@@ -1125,6 +1143,7 @@ fn mitigate(
         source,
         active_side,
         flags: hit_flags,
+        pre_mitigation_components,
         components: std::mem::take(components),
         total,
         most_resisted,
@@ -1133,6 +1152,28 @@ fn mitigate(
         block_physical,
         blocked: block.blocking,
     }
+}
+
+fn mitigate(
+    attacker: &Loadout,
+    target: &Fighter,
+    source: DamageSource,
+    active_side: ActiveSide,
+    block_side: ActiveSide,
+    components: &mut Vec<(DamageType, f32)>,
+    now: Instant,
+    resistance_scale: f32,
+) -> ResolvedDamage {
+    mitigate_components(
+        attacker,
+        target,
+        source,
+        active_side,
+        block_side,
+        components,
+        now,
+        resistance_scale,
+    )
 }
 
 /// `Damage$$IsBlockable@0x1bd4cc8`: the mask `0x90e` (Attack 1, Spell 2,
@@ -1407,6 +1448,66 @@ mod tests {
     }
 
     #[test]
+    fn armor_is_applied_after_the_attack_multiplier() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let attacker = plain_blade(Weight::Light);
+        let mut defender = target();
+        defender.loadout.armor_rating = 300.0;
+
+        let rd = m.resolve_attack(
+            &attacker,
+            &defender,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            1,
+            now,
+        );
+        let slash = comp(&rd, DamageType::Slashing);
+        assert!((slash - 124.0).abs() < 0.05, "100 * 1.54 - 30, got {slash}");
+
+        let control = m.resolve_attack(
+            &attacker,
+            &target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            1,
+            now,
+        );
+        assert!((comp(&control, DamageType::Slashing) - 154.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn armor_budget_is_shared_across_physical_components() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let attacker = Loadout {
+            weapon: WeaponProfile {
+                primary_type: Some(DamageType::Slashing),
+                base_by_type: vec![(DamageType::Slashing, 100.0), (DamageType::Bashing, 300.0)],
+                weight: Some(Weight::Heavy),
+            },
+            ..Default::default()
+        };
+        let mut defender = target();
+        defender.loadout.armor_rating = 400.0;
+
+        let rd = m.resolve_attack(
+            &attacker,
+            &defender,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        assert!((comp(&rd, DamageType::Slashing) - 90.0).abs() < 0.05);
+        assert!((comp(&rd, DamageType::Bashing) - 270.0).abs() < 0.05);
+    }
+
+    #[test]
     fn combo_ramp_drives_physical_not_enchant() {
         let m = RetailDamageModel;
         let lo = poison_dagger();
@@ -1429,10 +1530,10 @@ mod tests {
         assert!((comp(&c4, DamageType::Poison) - comp(&c0, DamageType::Poison)).abs() < 1e-3);
     }
 
-    /// ARMOR (Phase 3.3): a Rating removes `rating × 0.1` from the BASE, so the
-    /// combo ramp stays exactly proportional to the post-armor value.
+    /// ARMOR (01-D1): a Rating removes `rating × 0.1` after the attack-type
+    /// multiplier, so the flat cut does NOT scale with combo.
     #[test]
-    fn armor_rating_cuts_the_base_and_preserves_the_ramp() {
+    fn armor_rating_cuts_after_the_attack_multiplier() {
         let m = RetailDamageModel;
         let lo = poison_dagger();
         let mut armored = target();
@@ -1447,14 +1548,7 @@ mod tests {
             DamageType::Slashing,
         );
         assert!((c0 - 113.82).abs() < 0.05, "144 − 30.18 = 113.82, got {c0}");
-        // Armor is still cut before the attack-type factor in this engine (01 D1 is
-        // PR-03), so the chained hit stays exactly x(1 + 0.54) of the fresh one.
-        let step = 1.54;
-        assert!(
-            (c1 / c0 - step).abs() < 1e-3,
-            "the chained hit is x{step} of the fresh one, got {}",
-            c1 / c0
-        );
+        assert!((c1 - 191.58).abs() < 0.05, "144 × 1.54 − 30.18 = 191.58, got {c1}");
         // Armor does NOT touch the elemental track.
         let poison = comp(
             &m.resolve_attack(&lo, &armored, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now),

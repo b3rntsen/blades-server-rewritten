@@ -215,6 +215,21 @@ pub fn armor_reduction(incoming: f32, armor_rating: f32) -> f32 {
         .min(incoming * combat_params::MAXIMUM_ARMOR_REDUCTION)
 }
 
+/// Physical component after Armor Rating in the client damage pipeline:
+/// post-multiplier, post-block, share-weighted over the physical total, with a 5%
+/// floor (`ResolveResistanceReduction@0x1c54164`).
+pub fn armor_cut_share(d: f32, physical_total: f32, armor_rating: f32) -> f32 {
+    if d <= 0.0 {
+        return 0.0;
+    }
+    if armor_rating <= 0.0 || physical_total <= 0.0 {
+        return d;
+    }
+    let share = d / physical_total;
+    let cut = share * armor_rating * combat_params::REDUCTION_PER_ARMOR_RATING;
+    (d - cut).max(d * (1.0 - combat_params::MAXIMUM_ARMOR_REDUCTION))
+}
+
 /// Damage removed by a Resistance Rating: a FLAT
 /// `rating × reductionPerResistanceRating`, capped at `maximumResistanceReduction`
 /// (95 %) of the incoming amount. `continuous` applies
@@ -259,6 +274,44 @@ pub fn weakness_increase(
         - resistance_rating.max(0.0))
     .max(0.0);
     (net * eff).min(incoming * combat_params::MAXIMUM_WEAKNESS_EFFECT)
+}
+
+/// Client E6c resistance/weakness netting:
+/// `net = max(0, resistance - piercing) - weakness`, applied once. Positive net
+/// reduces with a 5% floor and the piercing floor; negative net increases up to x2.
+pub fn apply_resistance_and_weakness(
+    incoming: f32,
+    resistance_rating: f32,
+    weakness_rating: f32,
+    continuous: bool,
+    piercing_floor: f32,
+) -> f32 {
+    if incoming <= 0.0 {
+        return 0.0;
+    }
+    let eff = if continuous {
+        combat_params::CONTINUOUS_DAMAGE_RESISTANCE_EFFECTIVENESS
+    } else {
+        1.0
+    };
+    let resistance = resistance_rating.max(0.0);
+    let weakness = weakness_rating.max(0.0);
+    let net = resistance - weakness;
+    if net > 0.0 {
+        let reduced = incoming
+            - net * combat_params::REDUCTION_PER_RESISTANCE_RATING * eff;
+        let floored = reduced.max(incoming * (1.0 - combat_params::MAXIMUM_RESISTANCE_REDUCTION));
+        if piercing_floor > 0.0 {
+            floored.max(incoming.min(piercing_floor))
+        } else {
+            floored
+        }
+    } else if net < 0.0 {
+        let inc = (-net) * combat_params::INCREASE_PER_WEAKNESS_RATING * eff;
+        (incoming + inc).min(incoming * (1.0 + combat_params::MAXIMUM_WEAKNESS_EFFECT))
+    } else {
+        incoming
+    }
 }
 
 /// One component's value after a block: a FLAT cut, not a fraction.
@@ -470,6 +523,19 @@ mod tests {
         assert_eq!(armor_reduction(0.0, 500.0), 0.0);
     }
 
+    /// 01-D1: armor is a post-multiplier share-weighted cut, with the same 5% floor.
+    #[test]
+    fn armor_cut_is_share_weighted_after_the_multiplier() {
+        // Golden ch01 fixture: 100 × 1.54 has already happened; AR 300 removes 30.
+        assert!((armor_cut_share(154.0, 154.0, 300.0) - 124.0).abs() < 1e-3);
+        // Two physical components share one AR budget of 40, by their post-multiplier share.
+        assert!((armor_cut_share(100.0, 400.0, 400.0) - 90.0).abs() < 1e-3);
+        assert!((armor_cut_share(300.0, 400.0, 400.0) - 270.0).abs() < 1e-3);
+        // Control: no physical denominator/rating means no cut.
+        assert_eq!(armor_cut_share(100.0, 0.0, 400.0), 100.0);
+        assert_eq!(armor_cut_share(100.0, 100.0, 0.0), 100.0);
+    }
+
     /// Resistance is a FLAT subtraction at `reductionPerResistanceRating = 1.0`,
     /// de-rated to 0.75 for continuous (DoT) damage.
     #[test]
@@ -596,5 +662,19 @@ mod weakness_tests {
         assert!(
             (tick - one * combat_params::CONTINUOUS_DAMAGE_WEAKNESS_EFFECTIVENESS).abs() < 1e-3
         );
+    }
+
+    /// 01-D5: resistance, piercing and weakness are netted once; piercing also sets
+    /// a floor so a partially pierced hit cannot fall below the pierced amount.
+    #[test]
+    fn resistance_weakness_net_once_and_piercing_floor() {
+        let weak = apply_resistance_and_weakness(100.0, 30.0, 50.0, false, 0.0);
+        assert!((weak - 120.0).abs() < 1e-3, "100 + (50 - 30)");
+
+        let pierced = apply_resistance_and_weakness(60.0, 160.0, 0.0, false, 40.0);
+        assert!((pierced - 40.0).abs() < 1e-3, "piercing floor keeps min(pre, pierce)");
+
+        let control = apply_resistance_and_weakness(100.0, 30.0, 0.0, false, 0.0);
+        assert!((control - 70.0).abs() < 1e-3, "plain resistance still subtracts flat");
     }
 }
