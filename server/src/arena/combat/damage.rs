@@ -54,6 +54,10 @@ pub struct ResolvedDamage {
     pub pre_mitigation_components: Vec<(DamageType, f32)>,
     /// All components, including Magicka/Stamina drains (which are excluded from `total`).
     pub components: Vec<(DamageType, f32)>,
+    /// Components after attacker-side bonuses but before defender block/resistance.
+    /// Dodge pools drain against these raw values; the mitigated components above
+    /// are then reduced proportionally for the damage that actually lands.
+    pub raw_components: Vec<(DamageType, f32)>,
     /// Sum of health-affecting components only (matches the wire `totalDamage`).
     pub total: f32,
     pub most_resisted: DamageType,
@@ -394,6 +398,24 @@ pub fn ships_damage(ability_uuid: &str, level: u8) -> bool {
 pub struct RetailDamageModel;
 
 impl RetailDamageModel {
+    /// Resolve a flat generic damage event through the shared mitigation pipeline.
+    ///
+    /// Echo Weapon and Wall of Fire ship already-computed flat magnitudes; they still
+    /// need the same block/resistance/negation-facing shape as ordinary damage.
+    pub(super) fn resolve_flat(
+        &self,
+        attacker: &Loadout,
+        target: &Fighter,
+        source: DamageSource,
+        active_side: ActiveSide,
+        damage_type: DamageType,
+        amount: f32,
+        now: Instant,
+    ) -> ResolvedDamage {
+        let mut components = vec![(damage_type, amount.max(0.0))];
+        finish_resolved(attacker, target, source, active_side, &mut components, now, 1.0)
+    }
+
     /// The attacker's per-type PHYSICAL base before the swing/combo factor.
     ///
     /// Armor is not applied here. The client applies it later in
@@ -977,16 +999,8 @@ fn finish_resolved(
     //
     // `single_impact` keeps a 15-tick channel from paying it 15 times, exactly as it
     // already does for the perks.
-    // Venom Strikes makes the strike's POISON more effective (`_poisonEffectIncrease`).
-    // Applied before the flat augments so the multiplier scales the weapon/enchant
-    // poison the maneuver actually delivers, not the perk's flat top-up.
-    if attacker.poison_effect_multiplier > 1.0 {
-        for (ty, v) in components.iter_mut() {
-            if *ty == DamageType::Poison && *v > 0.0 {
-                *v *= attacker.poison_effect_multiplier;
-            }
-        }
-    }
+    // Venom Strikes boosts weapon-alchemy poison status effectiveness/duration, not
+    // Poison damage components (`VenomStrikesAbility` feeds `PoisonAlchemy`, 05 §3.5).
     for (ty, v) in components.iter_mut() {
         if *v > 0.0 {
             *v *= attacker.innate_damage_multiplier(*ty, source);
@@ -1040,6 +1054,7 @@ pub fn mitigate_components(
 ) -> ResolvedDamage {
     let pre_mitigation_components = components.clone();
     let mut hit_flags = flags::SHOW_DAMAGE | flags::HAS_ATTACKER;
+    let raw_components = components.clone();
     let continuous = matches!(
         source,
         DamageSource::StatusEffect | DamageSource::ContinuousSpell
@@ -1161,6 +1176,7 @@ pub fn mitigate_components(
         flags: hit_flags,
         pre_mitigation_components,
         components: std::mem::take(components),
+        raw_components,
         total,
         most_resisted,
         negated: false,
@@ -2137,6 +2153,9 @@ mod tests {
             elemental_only: false,
             consumes_overflow: false,
             on_absorb_restore: (0.0, 0.0, 0.0),
+            dodge_started_at: None,
+            dodge_status_expires_at: None,
+            dodge_effectiveness: 1.0,
             bypass_types: &[],
         });
         let mut components = vec![(DamageType::Slashing, 200.0), (DamageType::Poison, 137.3), (DamageType::Magicka, 137.3)];

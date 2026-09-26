@@ -575,6 +575,7 @@ pub fn on_c2s_input(
                 let side = classified_side_for(&combat.fighters[sender], now)
                     .unwrap_or(ActiveSide::Right);
                 combat.fighters[sender].charge_side = Some(side);
+                combat.fighters[sender].clear_scheduled_states();
                 combat.fighters[sender].set_actor_state(ActorStateType::Charging, now);
                 return Vec::new();
             }
@@ -947,6 +948,7 @@ pub fn on_c2s_input(
             // swing did not.
             let side = classified_side_for(&combat.fighters[sender], now);
             combat.fighters[sender].charge_side = side;
+            combat.fighters[sender].clear_scheduled_states();
             combat.fighters[sender]
                 .set_actor_state(ActorStateType::Charging, now);
             return Vec::new();
@@ -1871,15 +1873,17 @@ pub(super) fn resolve_ability_cast(
     // each `OnManeuverApplyDamage` time from execution begin and resolved the hit when
     // it passed (`ManeuverServerImplementation$$HandleExecutionUpdate@0x1e97764`); we
     // resolved it inline at the cast, so there was nothing a stagger could interrupt.
-    // The first authored hit carries the maneuver's one resolved hit here; the rest of
-    // a multi-hit family (Quick Strikes' second strike) is 05-D3's business.
-    // A shield bash keeps its `_blockDuration` guard phase (03), and Reckless Fury
-    // ships no hit, so both stay on `ability_impact_delay`.
+    // A shield bash keeps its `_blockDuration` guard phase (03), then lands on the
+    // authored bash `OnManeuverApplyDamage` event (05 §2.2).
+    let base_delay = ability_impact_delay(&ea.ability_uuid, level);
     let delay = match maneuver_timing.and_then(|t| t.impacts.first().copied()) {
-        Some(first) if ability_impact_delay(&ea.ability_uuid, level).is_zero() => {
-            Duration::from_secs_f32(first)
+        Some(first) if is_shield_bash(&ea.ability_uuid, level) => {
+            base_delay + Duration::from_secs_f32(first.max(0.0))
         }
-        _ => ability_impact_delay(&ea.ability_uuid, level),
+        Some(first) => {
+            Duration::from_secs_f32(first.max(0.0))
+        }
+        _ => base_delay,
     };
     // What a maneuver does to its own caster starts with the execution, not with the
     // hit: the dodge window (04-DG1: from BeginExecution), Indomitable Smash's cure
@@ -1887,10 +1891,39 @@ pub(super) fn resolve_ability_cast(
     if tag == AbilityTag::Maneuver {
         out.extend(apply_caster_begin_effects(combat, sender, &ea.ability_uuid, level, now));
     }
-    if delay.is_zero() {
+    if tag == AbilityTag::Maneuver && base_delay.is_zero() {
+        let impact_count = maneuver_timing.map(|t| t.impacts.len()).unwrap_or(1);
+        if impact_count == 0 {
+            debug!("combat: slot {sender} maneuver {} has no authored hit", ea.ability_uuid);
+        }
+        for idx in 0..impact_count {
+            let authored = maneuver_timing
+                .and_then(|t| t.impacts.get(idx).copied())
+                .unwrap_or_else(|| if idx == 0 { 0.0 } else { delay.as_secs_f32() });
+            let due = now + Duration::from_secs_f32(authored.max(0.0));
+            debug!(
+                "combat: slot {sender} maneuver {} impact {}/{} in {:?}",
+                ea.ability_uuid,
+                idx + 1,
+                impact_count,
+                due.saturating_duration_since(now)
+            );
+            combat.pending_impacts.push(super::state::PendingImpact {
+                sender,
+                target: target_slot,
+                ability_uuid: ea.ability_uuid.clone(),
+                level,
+                tag,
+                magicka_full_at_cast,
+                due,
+                cast_at: now,
+                reset_maneuver_combo_after: idx + 1 == impact_count,
+            });
+        }
+    } else if delay.is_zero() {
         out.extend(apply_ability_impact(
             combat, sender, target_slot, &ea.ability_uuid, level, tag,
-            magicka_full_at_cast, now,
+            magicka_full_at_cast, now, true,
         ));
     } else {
         debug!(
@@ -1906,6 +1939,7 @@ pub(super) fn resolve_ability_cast(
             magicka_full_at_cast,
             due: now + delay,
             cast_at: now,
+            reset_maneuver_combo_after: true,
         });
     }
     out
@@ -1997,6 +2031,25 @@ fn uuid_reckless_fury() -> &'static str {
         .unwrap_or("")
 }
 
+fn is_firewall_ability(ability_uuid: &str) -> bool {
+    super::gamedata::ability(ability_uuid).is_some_and(|a| a.editor_name == "Firewall")
+}
+
+fn spell_effectiveness_at_cast(
+    combat: &MatchCombat,
+    caster: usize,
+    magicka_full_at_cast: bool,
+) -> f32 {
+    let Some(fighter) = combat.fighters.get(caster) else {
+        return 1.0;
+    };
+    let caster_perks = super::perks::CasterPerks {
+        magicka_full: magicka_full_at_cast,
+        ..super::perks::CasterPerks::of(fighter)
+    };
+    caster_perks.magnitude_multiplier(true)
+}
+
 /// The flat bonus damage a MANEUVER rank contributes to its swing, grip applied.
 ///
 /// Every maneuver rank ships `parameters.bonusDamage` together with
@@ -2017,8 +2070,8 @@ fn uuid_reckless_fury() -> &'static str {
 /// one-handed, while a quick-strikes member gets **no** bonus two-handed at all.
 /// Reckless Fury ships 0/0 — it is a buff that swings nothing.
 ///
-/// Grip follows the same rule as the weapon's own base damage:
-/// `two_handed = !has_shield` (`loadout::base_damage_in_hand`).
+/// Grip is class-specific: Light is always 1H, Heavy is always 2H, and Balanced
+/// is 1H only when a shield is equipped.
 ///
 /// CALIBRATION NOTE: the recorded s506 Middle-maneuver values (201.37 / 274.51 /
 /// 186.98) sit inside the band of a PLAIN swing (150.81..271.46 across the
@@ -2039,6 +2092,15 @@ fn maneuver_bonus_damage(rank: &super::gamedata::AbilityRank, two_handed: bool) 
     (params.bonus_damage * mult).max(0.0)
 }
 
+fn maneuver_uses_two_handed_grip(loadout: &super::state::Loadout) -> bool {
+    match loadout.weapon.weight {
+        Some(super::tables::Weight::Light) => false,
+        Some(super::tables::Weight::Heavy) => true,
+        Some(super::tables::Weight::Versatile) => !loadout.has_shield,
+        None => false,
+    }
+}
+
 fn apply_ability_impact(
     combat: &mut MatchCombat,
     sender: usize,
@@ -2051,6 +2113,7 @@ fn apply_ability_impact(
     // freezes it (`Actor.ExecuteAbility` folds effectiveness before `PayAbilityCost`).
     magicka_full_at_cast: bool,
     now: Instant,
+    reset_maneuver_combo_after: bool,
 ) -> Vec<(usize, Vec<u8>)> {
     use super::state::AbilityTag;
     let mut out: Vec<(usize, Vec<u8>)> = Vec::new();
@@ -2145,8 +2208,8 @@ fn apply_ability_impact(
                 // nothing read them — which is why all 17 maneuvers resolved to an
                 // identical plain weapon hit regardless of which one was cast.
                 //
-                // Grip follows the same rule as the weapon's own base damage:
-                // `two_handed = !has_shield` (see `loadout::base_damage_in_hand`).
+                // Grip is class-specific: Light is always 1H, Heavy is always 2H,
+                // and Balanced is 1H only when a shield is equipped.
                 //
                 // The three authored families (see ability-spec):
                 //   power-attack  1H 0.5 / 2H 1.0 — the bonus is the TWO-handed figure
@@ -2154,15 +2217,10 @@ fn apply_ability_impact(
                 //   bashes/dodges 1.0 / 1.0
                 // Reckless Fury ships 0/0 because it is a buff that swings nothing.
                 attacker_loadout.maneuver_bonus_damage +=
-                    maneuver_bonus_damage(&r, !attacker_loadout.has_shield) * mettle;
+                    maneuver_bonus_damage(&r, maneuver_uses_two_handed_grip(&attacker_loadout))
+                        * mettle;
                 if mettle != 1.0 {
                     debug!("combat: slot {sender} maneuver bonus scaled x{mettle:.2} by Mettle");
-                }
-                // Venom Strikes' `_poisonEffectIncrease` (0.08 → ×1.08 poison).
-                if let Some(inc) = r.get(super::gamedata::AbilityField::PoisonEffectIncrease) {
-                    if inc > 0.0 {
-                        attacker_loadout.poison_effect_multiplier = 1.0 + inc;
-                    }
                 }
             }
             // The chain is NOT reset before the hit. Recovery -> Maneuver is the one
@@ -2220,9 +2278,18 @@ fn apply_ability_impact(
             target_blocked = resolved.blocked;
             out.extend(emit_damage(combat, sender, target_slot, &resolved, now));
             // A weapon maneuver's hit increments the chain (01 F), and the maneuver's
-            // end then resets it (`ActorManeuverState$$OnExit@0x1d556b0`, 02 R9). With
-            // one impact per maneuver the two collapse into the reset.
-            combat.fighters[sender].reset_combo();
+            // end then resets it (`ActorManeuverState$$OnExit@0x1d556b0`, 02 R9).
+            if !bash {
+                combat.fighters[sender].increment_combo();
+            }
+            if reset_maneuver_combo_after {
+                combat.fighters[sender].reset_combo();
+            }
+        }
+        AbilityTag::Paralyze | AbilityTag::Damage | AbilityTag::Generic
+            if is_firewall_ability(ability_uuid) =>
+        {
+            debug!("combat: slot {sender} Wall of Fire arms without an immediate hit");
         }
         AbilityTag::Paralyze | AbilityTag::Damage | AbilityTag::Generic
             if !super::damage::ships_damage(ability_uuid, level) =>
@@ -2298,6 +2365,7 @@ fn apply_ability_impact(
                                 Some(current.map_or(until, |t| t.max(until)));
                         }
                     }
+                    let channel_secs = (total_ticks as f32) * super::damage::CHANNEL_TICK_INTERVAL_SECS;
                     combat.channels.push(super::state::ActiveChannel {
                         caster_slot: sender,
                         target_slot,
@@ -2313,6 +2381,29 @@ fn apply_ability_impact(
                         // ship no wind-up, so they land inline.
                         cast_at: now,
                     });
+                    if super::gamedata::ability(ability_uuid)
+                        .is_some_and(|a| a.editor_name == "ConsumingInferno")
+                    {
+                        let expires_at = now + Duration::from_secs_f32(channel_secs);
+                        combat.fighters[sender].effects.push(super::state::ActiveEffect {
+                            effect: super::state::StatusEffectType::BlockStaminaRegen,
+                            damage_type: super::state::DamageType::None,
+                            value: 0.0,
+                            per_tick_damage: 0.0,
+                            expires_at,
+                            last_tick: now,
+                            is_transient_resist: false,
+                        });
+                        let frame = messages::change_combat_status_effect(
+                            combat.fighters[sender].net_object_id,
+                            true,
+                            super::state::StatusEffectType::BlockStaminaRegen,
+                            channel_secs,
+                        );
+                        for v in 0..combat.fighters.len() {
+                            out.push((v, frame.clone()));
+                        }
+                    }
                 }
             }
             // A landed Paralyze also carries its own paralyse threshold + duration
@@ -2347,7 +2438,8 @@ fn apply_ability_impact(
     // (`apply_caster_begin_effects` in `resolve_ability_cast`).
     out.extend(apply_shipped_effects_phased(
         combat, sender, target_slot, ability_uuid, level, last_hit_total, target_blocked,
-        target_absorbing, tag != AbilityTag::Maneuver, now,
+        target_absorbing, tag != AbilityTag::Maneuver,
+        spell_effectiveness_at_cast(combat, sender, magicka_full_at_cast), now,
     ));
     out
 }
@@ -2455,10 +2547,8 @@ fn begin_ability_guard(
 
 /// Deliver **Echo Weapon** echoes whose `_weaponDelay` has elapsed.
 ///
-/// An echo is a flat follow-up, not a re-swing: it carries the spell's per-weapon-class
-/// `_bonusDamages` and nothing else — no combo, no charge, no block interaction. It is
-/// therefore emitted directly rather than routed back through the swing resolver,
-/// which would re-apply the whole multiplier chain to it.
+/// An echo is a flat follow-up, not a re-swing: it carries the spell's
+/// per-weapon-class `_bonusDamages` as source 9 through the generic mitigation path.
 fn land_due_echoes(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
     if combat.pending_echoes.is_empty() {
         return Vec::new();
@@ -2481,36 +2571,24 @@ fn land_due_echoes(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
         if combat.fighters[e.target].is_dead() || combat.fighters[e.sender].is_dead() {
             continue;
         }
-        combat.fighters[e.target].take_damage_at(e.damage.round().max(0.0) as u32, now);
-        let msg = {
-            let hit = &combat.fighters[e.target];
-            let other = &combat.fighters[e.sender];
-            messages::receive_damage(
-                hit.net_object_id,
-                NetObjectType::Avatar as u8,
-                hit.packed_stats(),
-                other.packed_stats(),
-                super::state::DamageSource::Spell,
-                super::damage::flags::SHOW_DAMAGE
-                    | super::damage::flags::HAS_ATTACKER
-                    | hit.optimal_block_flag(now),
-                e.damage,
-                0,
-                ActiveSide::Middle,
-                super::state::DamageType::None,
-                &[(super::state::DamageType::Health, e.damage)],
-            )
-        };
+        if now > e.expires_at {
+            continue;
+        }
+        let attacker = combat.fighters[e.sender].loadout.clone();
+        let resolved = RetailDamageModel.resolve_flat(
+            &attacker,
+            &combat.fighters[e.target],
+            super::state::DamageSource::EchoWeapon,
+            e.active_side,
+            e.damage_type,
+            e.damage,
+            now,
+        );
         info!(
             "combat: slot {} ECHO landed {:.1} on slot {}",
             e.sender, e.damage, e.target
         );
-        for v in 0..combat.fighters.len() {
-            out.push((v, msg.clone()));
-        }
-        if combat.fighters[e.target].is_dead() {
-            out.extend(on_round_ending_death(combat, e.sender, now));
-        }
+        out.extend(emit_damage(combat, e.sender, e.target, &resolved, now));
     }
     out
 }
@@ -2543,7 +2621,7 @@ pub(super) fn land_due_impacts(combat: &mut MatchCombat, now: Instant) -> Vec<(u
         }
         out.extend(apply_ability_impact(
             combat, p.sender, p.target, &p.ability_uuid, p.level, p.tag,
-            p.magicka_full_at_cast, now,
+            p.magicka_full_at_cast, now, p.reset_maneuver_combo_after,
         ));
     }
     out
@@ -2674,7 +2752,7 @@ fn apply_shipped_effects(
 ) -> Vec<(usize, Vec<u8>)> {
     apply_shipped_effects_phased(
         combat, caster, target_slot, ability_uuid, level, last_hit_total, target_blocked,
-        target_absorbing, true, now,
+        target_absorbing, true, 1.0, now,
     )
 }
 
@@ -2696,9 +2774,6 @@ fn apply_caster_begin_effects(
         return out;
     };
     let viewers = combat.fighters.len();
-    // No shipped duration → until consumed. Round reset clears the pools.
-    let until_consumed = now + Duration::from_secs(3600);
-
     // CURES — the shipped `statuses_to_remove` list, applied to the CASTER. This is
     // how Resist Elements puts out a fire that is already burning; see
     // [`apply_status_cures`]. Runs first so the cast's own new statuses, applied
@@ -2715,6 +2790,13 @@ fn apply_caster_begin_effects(
     // authored number, and is called out here rather than buried.
     if let Some(bonus) = r.get(super::gamedata::AbilityField::BonusResistance) {
         if bonus > 0.0 && caster < viewers {
+            let eff = combat.fighters[caster]
+                .loadout
+                .perks
+                .ability_multiplier(super::perks::fighter_health_is_critical(
+                    &combat.fighters[caster],
+                ));
+            let bonus = bonus * eff * eff;
             let window = super::perks::ABILITY_USE_MIN_WINDOW_SECS;
             let expires = now + Duration::from_secs_f32(window);
             combat.fighters[caster]
@@ -2728,21 +2810,33 @@ fn apply_caster_begin_effects(
 
     if let Some(cap) = r.maximum_damage_dodged() {
         if cap > 0.0 && caster < viewers {
-            // `_dodgeDuration` is authored at **1.0 s** on all four dodge maneuvers
-            // and was ignored: the pool was given the 3600 s "until consumed"
-            // placeholder, so a Dodging Strike stayed armed for an hour and ate a hit
-            // a round or more later. It is a one-second reactive window, not a
-            // banked shield.
+            let eff = combat.fighters[caster]
+                .loadout
+                .perks
+                .ability_multiplier(super::perks::fighter_health_is_critical(
+                    &combat.fighters[caster],
+                ));
             let dodge_secs = r
                 .get(super::gamedata::AbilityField::DodgeDuration)
                 .filter(|v| *v > 0.0);
-            let expires = match dodge_secs {
-                Some(secs) => now + Duration::from_secs_f32(secs),
-                None => until_consumed,
-            };
+            let status_expires = dodge_secs.map(|secs| now + Duration::from_secs_f32(secs));
+            let maneuver_secs = super::interrupts::maneuver_timing(
+                ability_uuid,
+                level,
+                super::interrupts::timing_weapon(&combat.fighters[caster]),
+            )
+            .map(|t| t.end)
+            .filter(|v| v.is_finite() && *v > 0.0);
+            let expires = now + Duration::from_secs_f32(maneuver_secs.or(dodge_secs).unwrap_or(1.0));
+            if combat.fighters[caster].is_staggered(now) {
+                combat.fighters[caster].staggered_until = None;
+                combat.fighters[caster].weakness_rating = 0.0;
+                combat.fighters[caster].set_actor_state(ActorStateType::Maneuver, now);
+                out.extend(emit_status_removals(combat, now));
+            }
             combat.fighters[caster].negation_pools.push(NegationPool {
                 source: DamageNegationSource::Dodge,
-                remaining: cap,
+                remaining: cap * eff,
                 expires_at: expires,
                 // Adrenaline / Renewing / Focusing Dodge pay out only if the dodge
                 // actually connects. Absent fields are 0, i.e. a plain Dodging Strike.
@@ -2751,6 +2845,9 @@ fn apply_caster_begin_effects(
                     r.get(super::gamedata::AbilityField::MaximumMagickaRestored).unwrap_or(0.0),
                     r.get(super::gamedata::AbilityField::MaximumCooldownReduction).unwrap_or(0.0),
                 ),
+                dodge_started_at: Some(now),
+                dodge_status_expires_at: status_expires,
+                dodge_effectiveness: eff,
                 bypass_types: &[],
                 restoration_factor: 0.0,
                 absorb_fraction: 1.0,
@@ -2792,6 +2889,7 @@ fn apply_shipped_effects_phased(
     target_absorbing: bool,
     // Run [`apply_caster_begin_effects`] too (false when the cast already did).
     include_begin: bool,
+    effectiveness: f32,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
     use super::state::{DamageNegationSource, NegationPool, StatusEffectType};
@@ -2865,7 +2963,8 @@ fn apply_shipped_effects_phased(
         if caster < viewers && super::gamedata::ability(ability_uuid)
             .is_some_and(|a| a.editor_name == "Firewall")
         {
-            let secs = r.duration().unwrap_or(0.0);
+            let dmg = dmg * effectiveness;
+            let secs = r.duration().unwrap_or(0.0) * effectiveness;
             let self_pct = r
                 .get(super::gamedata::AbilityField::SelfDamagePercent)
                 .unwrap_or(0.0);
@@ -2893,7 +2992,7 @@ fn apply_shipped_effects_phased(
     // implemented: the spell produced no echoes at all.
     if let Some(delay) = r.get(super::gamedata::AbilityField::WeaponDelay) {
         if caster < viewers {
-            let secs = r.duration().unwrap_or(0.0);
+            let secs = r.duration().unwrap_or(0.0) * effectiveness;
             let class_raw = combat.fighters[caster]
                 .loadout
                 .weapon_template
@@ -2903,9 +3002,9 @@ fn apply_shipped_effects_phased(
                 .bonus_damages
                 .iter()
                 .find(|(c, _)| *c == class_raw)
-                .or_else(|| r.bonus_damages.iter().find(|(c, _)| *c == 0))
                 .map(|(_, v)| *v)
-                .unwrap_or(0.0);
+                .unwrap_or(0.0)
+                * effectiveness;
             if bonus > 0.0 && secs > 0.0 {
                 let f = &mut combat.fighters[caster];
                 f.echo_until = Some(now + Duration::from_secs_f32(secs));
@@ -2924,12 +3023,13 @@ fn apply_shipped_effects_phased(
     // spent its cost and did literally nothing.
     if let Some(bonus) = r.get(super::gamedata::AbilityField::MagickaRegenerationBonus) {
         if bonus > 0.0 && caster < viewers {
-            let surge_secs = r.get(super::gamedata::AbilityField::Duration).unwrap_or(0.0);
+            let surge_secs = r.get(super::gamedata::AbilityField::Duration).unwrap_or(0.0)
+                * effectiveness;
             let blackout_secs = r
                 .get(super::gamedata::AbilityField::NoMagickaRegenDuration)
                 .unwrap_or(0.0);
             let f = &mut combat.fighters[caster];
-            f.magicka_surge_bonus = bonus;
+            f.magicka_surge_bonus = bonus * effectiveness;
             f.magicka_surge_until = Some(now + Duration::from_secs_f32(surge_secs));
             // The blackout begins when the surge ENDS, not at cast — it is the price
             // paid afterwards, not a concurrent penalty that would cancel the surge.
@@ -2999,6 +3099,9 @@ fn apply_shipped_effects_phased(
                 restoration_factor: 0.0,
                 absorb_fraction: absorb,
                 on_absorb_restore: (0.0, 0.0, 0.0),
+                dodge_started_at: None,
+                dodge_status_expires_at: None,
+                dodge_effectiveness: 1.0,
                 // Storm-armor shields are not element-scoped and have no overflow
                 // clause in their description — only Ward does.
                 elemental_only: false,
@@ -3272,6 +3375,167 @@ fn try_paralyze(
     out
 }
 
+fn echo_damage_type(loadout: &super::state::Loadout) -> super::state::DamageType {
+    loadout
+        .weapon
+        .primary_type
+        .or_else(|| loadout.weapon.base_by_type.first().map(|(ty, _)| *ty))
+        .unwrap_or(super::state::DamageType::Slashing)
+}
+
+fn queue_echo_weapon(
+    combat: &mut MatchCombat,
+    attacker_slot: usize,
+    target_slot: usize,
+    resolved: &ResolvedDamage,
+    now: Instant,
+) {
+    if !matches!(
+        resolved.source,
+        super::state::DamageSource::Attack | super::state::DamageSource::WeaponManeuver
+    ) {
+        return;
+    }
+    let Some(until) = combat.fighters[attacker_slot].echo_until else {
+        return;
+    };
+    if now >= until {
+        return;
+    }
+    let f = &combat.fighters[attacker_slot];
+    let (bonus, delay) = (f.echo_bonus, f.echo_delay);
+    if bonus <= 0.0 || delay < 0.0 {
+        return;
+    }
+    let due = now + Duration::from_secs_f32(delay);
+    if due > until {
+        return;
+    }
+    combat.pending_echoes.push(super::state::PendingEcho {
+        sender: attacker_slot,
+        target: target_slot,
+        damage: bonus,
+        damage_type: echo_damage_type(&combat.fighters[attacker_slot].loadout),
+        active_side: resolved.active_side,
+        due,
+        expires_at: until,
+    });
+}
+
+fn wall_of_fire_trigger_source(source: super::state::DamageSource) -> bool {
+    matches!(
+        source,
+        super::state::DamageSource::Attack
+            | super::state::DamageSource::WeaponManeuver
+            | super::state::DamageSource::ShieldManeuver
+    )
+}
+
+fn apply_wall_of_fire_burns(
+    combat: &mut MatchCombat,
+    attacker_slot: usize,
+    triggering_source: super::state::DamageSource,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    if !wall_of_fire_trigger_source(triggering_source) || attacker_slot >= combat.fighters.len() {
+        return Vec::new();
+    }
+    let burns: Vec<(usize, f32)> = combat
+        .fighters
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| !f.is_dead() && f.firewall_until.is_some_and(|t| now < t))
+        .filter_map(|(owner, f)| {
+            let factor = if owner == attacker_slot { f.firewall_self_pct } else { 1.0 };
+            let burn = f.firewall_damage * factor;
+            (burn > 0.0).then_some((owner, burn))
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (owner, burn) in burns {
+        if combat.fighters[attacker_slot].is_dead()
+            || !matches!(combat.phase, FlowState::StateTimeout)
+        {
+            break;
+        }
+        let attacker_loadout = combat.fighters[owner].loadout.clone();
+        let resolved = RetailDamageModel.resolve_flat(
+            &attacker_loadout,
+            &combat.fighters[attacker_slot],
+            super::state::DamageSource::Spell,
+            ActiveSide::Middle,
+            super::state::DamageType::Fire,
+            burn,
+            now,
+        );
+        info!(
+            "combat: slot {attacker_slot} triggered slot {owner}'s WALL OF FIRE for {burn:.1}"
+        );
+        out.extend(emit_damage(combat, owner, attacker_slot, &resolved, now));
+    }
+    out
+}
+
+fn component_total(components: &[(super::state::DamageType, f32)], ty: super::state::DamageType) -> f32 {
+    components.iter().filter(|(t, _)| *t == ty).map(|(_, v)| *v).sum()
+}
+
+fn scale_components_by_raw_dodge(
+    components: &mut [(super::state::DamageType, f32)],
+    raw_before: &[(super::state::DamageType, f32)],
+    raw_after: &[(super::state::DamageType, f32)],
+) {
+    for (ty, value) in components.iter_mut() {
+        let before = component_total(raw_before, *ty);
+        if before <= 0.0 {
+            continue;
+        }
+        let after = component_total(raw_after, *ty).clamp(0.0, before);
+        *value *= after / before;
+    }
+}
+
+fn emit_destroyed_stat_updates(
+    combat: &MatchCombat,
+    slot: usize,
+    rav_s: u32,
+    rav_m: u32,
+    rav_h: u32,
+) -> Vec<(usize, Vec<u8>)> {
+    let mut out = Vec::new();
+    let Some(f) = combat.fighters.get(slot) else {
+        return out;
+    };
+    let mut frames = Vec::new();
+    if rav_h > 0 {
+        frames.push(messages_state::player_destroyed_stat_update(
+            f.net_object_id,
+            messages_state::CoreStat::Health,
+            f.ravaged_health as f32,
+        ));
+    }
+    if rav_s > 0 {
+        frames.push(messages_state::player_destroyed_stat_update(
+            f.net_object_id,
+            messages_state::CoreStat::Stamina,
+            f.ravaged_stamina as f32,
+        ));
+    }
+    if rav_m > 0 {
+        frames.push(messages_state::player_destroyed_stat_update(
+            f.net_object_id,
+            messages_state::CoreStat::Magicka,
+            f.ravaged_magicka as f32,
+        ));
+    }
+    for frame in frames {
+        for dest in 0..combat.fighters.len() {
+            out.push((dest, frame.clone()));
+        }
+    }
+    out
+}
+
 /// Apply a resolved hit: drain negation, decrement the target (unless wholly negated),
 /// record elemental conditioning + land status effects, build the `ReceiveDamage` (or
 /// `DamageNegated`) for both players, and end the match if the target died.
@@ -3284,15 +3548,42 @@ fn emit_damage(
 ) -> Vec<(usize, Vec<u8>)> {
     let mut out = Vec::new();
 
-    // ResolveDamageTaken drains Ward/Absorb/Dodge first, on pre-mitigation values.
-    // If anything is absorbed but the hit survives, the reduced raw list then goes
-    // through block, armor and resistance.
-    let mut raw_components = if resolved.pre_mitigation_components.is_empty() {
-        resolved.components.clone()
+    // Finish the mitigation pipeline: dodge drains against raw incoming components,
+    // then Ward/Absorb drain against the mitigated remainder. Work on a local copy so
+    // the wire frame reflects the post-negation per-type damage.
+    let mut components = resolved.components.clone();
+    let mut neg = if super::state::is_dodgeable_source(resolved.source) {
+        let mut raw_after_dodge = resolved.raw_components.clone();
+        let dodge = combat.fighters[target_slot].apply_dodge_negation_pools_for_source(
+            resolved.source,
+            &mut raw_after_dodge,
+            now,
+        );
+        scale_components_by_raw_dodge(&mut components, &resolved.raw_components, &raw_after_dodge);
+        dodge
     } else {
-        resolved.pre_mitigation_components.clone()
+        super::state::NegationResult {
+            negated: false,
+            absorbed: false,
+            heal: 0.0,
+            restore_magicka: 0.0,
+            restore_cooldown_secs: 0.0,
+        }
     };
-    let neg = combat.fighters[target_slot].apply_negation_pools(&mut raw_components);
+    let non_dodge = combat.fighters[target_slot].apply_non_dodge_negation_pools(
+        resolved.source,
+        &mut components,
+        now,
+    );
+    neg.heal += non_dodge.heal;
+    neg.restore_magicka += non_dodge.restore_magicka;
+    neg.restore_cooldown_secs += non_dodge.restore_cooldown_secs;
+    let total: f32 = components
+        .iter()
+        .filter(|(t, _)| super::damage::is_health_type(*t))
+        .map(|(_, v)| *v)
+        .sum();
+    neg.negated = total <= 0.0;
 
     // Whole hit eaten by a Ward/Absorb pool → emit DamageNegated(66), apply the Absorb
     // heal-back, and DO NOT reduce HP (the hit dealt 0). [status-resistance-spec §4]
@@ -3303,11 +3594,14 @@ fn emit_damage(
     if neg.heal > 0.0 {
         let f = &mut combat.fighters[target_slot];
         let heal = (neg.heal * f.loadout.healing_multiplier()).round() as u32;
-        f.health = (f.health + heal).min(f.max_health);
+        f.restore_pool(super::state::DamageType::Health, heal);
     }
     if neg.restore_magicka > 0.0 {
         let f = &mut combat.fighters[target_slot];
-        f.magicka = (f.magicka + neg.restore_magicka.round() as u32).min(f.max_magicka);
+        f.restore_pool(
+            super::state::DamageType::Magicka,
+            neg.restore_magicka.round() as u32,
+        );
         info!(
             "combat: slot {target_slot} dodge restored {:.0} magicka",
             neg.restore_magicka
@@ -3335,6 +3629,8 @@ fn emit_damage(
         ));
     }
 
+    queue_echo_weapon(combat, attacker_slot, target_slot, resolved, now);
+
     if neg.negated {
         let defender_obj = combat.fighters[target_slot].net_object_id;
         info!(
@@ -3345,39 +3641,18 @@ fn emit_damage(
         let frame = messages::damage_negated(defender_obj);
         out.push((target_slot, frame.clone()));
         out.push((attacker_slot, frame));
+        out.extend(apply_wall_of_fire_burns(combat, attacker_slot, resolved.source, now));
         return out;
     }
-    let remitigated;
-    let (components, total, most_resisted, flags, block_physical, blocked) = if neg.absorbed {
-        let attacker = combat.fighters[attacker_slot].loadout.clone();
-        remitigated = super::damage::mitigate_components(
-            &attacker,
-            &combat.fighters[target_slot],
-            resolved.source,
-            resolved.active_side,
-            resolved.active_side,
-            &mut raw_components,
-            now,
-            resolved.resistance_scale,
-        );
-        (
-            remitigated.components.as_slice(),
-            remitigated.total,
-            remitigated.most_resisted,
-            remitigated.flags,
-            remitigated.block_physical,
-            remitigated.blocked,
-        )
-    } else {
-        (
-            resolved.components.as_slice(),
-            resolved.total,
-            resolved.most_resisted,
-            resolved.flags,
-            resolved.block_physical,
-            resolved.blocked,
-        )
-    };
+    let total: f32 = components
+        .iter()
+        .filter(|(t, _)| super::damage::is_health_type(*t))
+        .map(|(_, v)| *v)
+        .sum();
+    let most_resisted = resolved.most_resisted;
+    let flags = resolved.flags;
+    let block_physical = resolved.block_physical;
+    let blocked = resolved.blocked;
 
     let hp_before = combat.fighters[target_slot].health;
     let max_hp = combat.fighters[target_slot].max_health;
@@ -3388,12 +3663,14 @@ fn emit_damage(
     // is read for the frame, so the bars the client draws match the numbers the same
     // frame reports. [Fighter::drain_mirrored_pools]
     let (drained_stam, drained_mag) = combat.fighters[target_slot].drain_mirrored_pools(&components);
-    // RAVAGE — a cut to the victim's MAXIMUM pools, taken per landed swing and given
-    // back at the round boundary. Scaled by the share of physical damage the block
-    // let through (`block_physical`); a dodged swing resolves no
-    // hit and never arrives here. Nothing goes on the wire for it: pools are sent as
-    // fractions of max, so the ceiling change is invisible to the bar — which is why
-    // the game shows no opponent stamina bar and players count it in their heads.
+    // RAVAGE — a flat cut to the victim's MAXIMUM pools, taken per landed weapon hit
+    // and given back at the round boundary. It is not scaled by block: the
+    // `damageGiven` hook fires when a weapon hit applies non-zero health damage, so
+    // even an optimal block that lets the 5% floor through ravages in full. A dodged
+    // swing resolves no hit and never arrives here. Nothing goes on the wire for it:
+    // pools are sent as fractions of max, so the ceiling change is invisible to the
+    // bar — which is why the game shows no opponent stamina bar and players count it
+    // in their heads.
     // A shield bash ravages with the SHIELD's enchantment ("on a blocked attack or
     // Shield Bash"), not the weapon's: the basher's own shield enchants fire on
     // source 11 (`CombatManager$$ApplyDamage@0x1bd2770`, combat-spec 03 §7).
@@ -3455,6 +3732,8 @@ fn emit_damage(
     };
     out.push((target_slot, msg.clone()));
     out.push((attacker_slot, msg));
+    out.extend(emit_destroyed_stat_updates(combat, target_slot, rav_s, rav_m, rav_h));
+    out.extend(emit_destroyed_stat_updates(combat, attacker_slot, sr_s, sr_m, sr_h));
 
     // Elemental conditioning + status land (after the hit resolved): record each
     // POST-NEGATION elemental component into the target's sliding window and check
@@ -3462,68 +3741,9 @@ fn emit_damage(
     // Paralyze poison→paralyse layering. [status-resistance-spec §5]
     out.extend(apply_status_conditioning(combat, target_slot, &components, now));
 
-    // The DEFENDER's gear hits back. Emitted after the hit that provoked it and
-    // before any death check, so a Revenge proc can itself be the killing blow —
-    // which is how retail orders it (`op50 blocked` then `op50 src=Revenge`).
-    // WALL OF FIRE: an attacker who lands a hit has "passed through" the wall and is
-    // burned for its per-attack `_damage`; the caster pays `_selfDamagePercent` of
-    // that for standing in their own fire.
-    if attacker_slot != target_slot
-        && combat.fighters[target_slot].firewall_until.is_some_and(|t| now < t)
-    {
-        let burn = combat.fighters[target_slot].firewall_damage;
-        if burn > 0.0 {
-            let self_hit = burn * combat.fighters[target_slot].firewall_self_pct;
-            combat.fighters[attacker_slot].take_damage_at(burn.round().max(0.0) as u32, now);
-            if self_hit > 0.0 {
-                let f = &mut combat.fighters[target_slot];
-                // The caster's own fire never kills them outright: floor at 1.
-                let cost = self_hit.round().max(0.0) as u32;
-                f.health = f.health.saturating_sub(cost).max(1.min(f.health));
-            }
-            let msg = {
-                let hit = &combat.fighters[attacker_slot];
-                let other = &combat.fighters[target_slot];
-                messages::receive_damage(
-                    hit.net_object_id,
-                    NetObjectType::Avatar as u8,
-                    hit.packed_stats(),
-                    other.packed_stats(),
-                    super::state::DamageSource::StatusEffect,
-                    super::damage::flags::SHOW_DAMAGE | hit.optimal_block_flag(now),
-                    burn,
-                    0,
-                    ActiveSide::None,
-                    super::state::DamageType::Fire,
-                    &[(super::state::DamageType::Fire, burn)],
-                )
-            };
-            info!(
-                "combat: slot {attacker_slot} walked through slot {target_slot}'s WALL OF \
-                 FIRE for {burn:.1} (caster self {self_hit:.1})"
-            );
-            for v in 0..combat.fighters.len() {
-                out.push((v, msg.clone()));
-            }
-        }
-    }
-
-    // ECHO WEAPON: the attacker's landed weapon hit is echoed after `_weaponDelay`.
-    // Only a real weapon swing echoes — an echo cannot echo itself, and a spell is
-    // not a weapon.
-    if resolved.source == super::state::DamageSource::Attack
-        && combat.fighters[attacker_slot].echo_until.is_some_and(|t| now < t)
-    {
-        let f = &combat.fighters[attacker_slot];
-        let (bonus, delay) = (f.echo_bonus, f.echo_delay);
-        if bonus > 0.0 {
-            combat.pending_echoes.push(super::state::PendingEcho {
-                sender: attacker_slot,
-                target: target_slot,
-                damage: bonus,
-                due: now + Duration::from_secs_f32(delay),
-            });
-        }
+    out.extend(apply_wall_of_fire_burns(combat, attacker_slot, resolved.source, now));
+    if !matches!(combat.phase, FlowState::StateTimeout) {
+        return out;
     }
 
     // REFLECTING BASH: send part of what just landed back at the attacker, capped by
@@ -3723,89 +3943,20 @@ fn condition_tick_count(duration_secs: f32) -> u32 {
     (duration_secs / DOT_TICK_INTERVAL.as_secs_f32()).round().max(1.0) as u32
 }
 
-/// Regen tick cadence. We regen once per second and apply the video-ground-truth per-
-/// second rates. A fractional tick (e.g. regen ~31 stamina/s from a 625 pool at L86)
-/// is rounded to nearest integer to avoid float drift.
+/// Kept for restoration-potion scheduling tests; passive regen itself is continuous
+/// and uses the elapsed server-step time.
 const REGEN_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
 /// In-combat stamina/magicka regen rate as a fraction of the pool per second.
 ///
-/// **Video ground-truth (s293)**: stamina and magicka both recover at ~5 %/s during
-/// passive recovery phases (t=50..52 clean window: 5%→10%→15% over 2s).
-/// [ground-truth: /tmp/arena-video-groundtruth.md §1; calibration flag]
-///
-/// PROVENANCE, CORRECTED (tracker #53, 2026-08-22). This comment used to say the
-/// rates "are CDN `[ExcelVariable]` (`PlayerStats._staminaRegenRate` /
-/// `_magickaRegenRate`)" and that 5 %/s "supersedes the UESP 4 %/s estimate" —
-/// i.e. that the shipped asset field was a slightly-low measurement of THIS
-/// number. It is not the same number at all.
-///
-/// A contributor decompiled the regeneration gate. `Actor` declares
-/// `ShouldApplyRegeneration()` virtual, and exactly three classes override it:
-/// `EnemyActor` (real logic — base conditions, non-lethal state, gameplay
-/// manager), and **`PvpPlayerActor` and `PvpOpponentActor`, which both return
-/// false unconditionally.** No conditions, no field reads. Confirmed against
-/// `reference/il2cpp/dump.cs` — those are the only three overrides that exist.
-///
-/// So the client's passive regeneration — the system driven by
-/// `ActorInnateStats._staminaRegenRate` / `_magickaRegenRate` / `_healthRegenRate`
-/// — is switched off for BOTH actors in arena PvP. Bethesda wrote a dedicated
-/// override for each to make sure of it. Whatever `PlayerStats` ships (4 %/s
-/// stamina, 4 %/s magicka, 0.5 %/s health) answers a PvE/open-world question and
-/// has no bearing here. Do not "reconcile" this constant with it.
-///
-/// It follows that every pool change a PvP client sees is server-authored, which
-/// is what this engine already does.
-///
-/// **What that leaves genuinely open.** Two measurements of retail remain, and
-/// they now provably measure the SAME server-driven signal:
-///   * video HUD (s293)           — 5 %/s stamina, 5 %/s magicka
-///   * captured `packedStats` wire — ~3.03 %/s stamina, ~2.93 %/s magicka
-/// They cannot both be right. The wire is the finer instrument (10-bit pool
-/// fractions, thousands of samples, versus reading a bar off video frames), but
-/// the 5 %/s figure was an explicit owner call from the video and is left in
-/// place here rather than changed on my own initiative. Raised with the owner.
-///
-/// **SET FROM THE WIRE, 2026-08-22, on the owner's call.** The video figure was
-/// 5 %/s for both; the captured `packedStats` series says 3.03 %/s stamina and
-/// 2.93 %/s magicka. Tracker #53 established that these are measurements of the
-/// SAME quantity — `PvpPlayerActor::ShouldApplyRegeneration()` returns false
-/// unconditionally, so the client applies no regeneration of its own in PvP and
-/// every pool change a player sees is server-authored. Two readings of one
-/// signal cannot both be right, and the wire is the finer instrument: 10-bit
-/// pool fractions across thousands of samples, against reading a bar off video
-/// frames. The owner made the call to take the wire.
-///
-/// This is a ~40 % nerf to both pools. Expect fights to run longer and stamina
-/// management to matter more; if it feels wrong in play, the video number is one
-/// line away and the argument for it is above.
-const STAMINA_REGEN_RATE_PER_S: f32 = 0.0303;
-const MAGICKA_REGEN_RATE_PER_S: f32 = 0.0293;
+/// Capture test T3 settled the server-side arena rule: 4%/s of the full maximum,
+/// plus flat gear regeneration, continuously over elapsed time.
+const STAMINA_REGEN_RATE_PER_S: f32 = 0.04;
+const MAGICKA_REGEN_RATE_PER_S: f32 = 0.04;
 
-/// In-combat health regen: **modelled as ZERO — an approximation, not a rule.**
-///
-/// There is no *baseline* passive HP recovery in a fight: video ground-truth (s293)
-/// shows health only changing on hits, and the old UESP-derived 0.5 %/s baseline was
-/// wrong for arena PvP. Between rounds `reset_fighters_for_next_round` restores full
-/// HP anyway.
-///
-/// Independently supported since (tracker #53): `PvpPlayerActor::
-/// ShouldApplyRegeneration()` returns false unconditionally, so the client never
-/// applies `ActorInnateStats._healthRegenRate` in PvP whatever it ships. The
-/// 0.5 %/s in the `PlayerStats` asset is an open-world figure, not a PvP one.
-///
-/// **But health CAN rise mid-round.** A regen perk plus the right rings/armour gives
-/// real in-round health recovery. It is rare, and on most builds too slow to matter,
-/// which is why a flat zero is a good approximation of the field today — but it is
-/// not a law of the game. Two things follow:
-///   * do not write "health cannot increase in a round" anywhere. It can.
-///   * when a regen build does show up, this becomes a per-fighter rate summed from
-///     the perk and the equipped items, not a global constant.
-/// [owner, 2026-08-02, correcting a claim this file previously stated as fact]
-///
-/// `BlockHealthRegen` status suppression is kept — it is what will gate that rate
-/// once it is non-zero.
-const HEALTH_REGEN_RATE_PER_S: f32 = 0.0;
+/// T3 health baseline: 0.005 x full Health.Maximum / 3 per second, plus gear and
+/// Healing Surge, clamped to Maximum - DestroyedPortion.
+const HEALTH_REGEN_RATE_PER_S: f32 = 0.005;
 
 /// **Phase 3.10 — the invented Ward / Resist-Elements constants are GONE.**
 ///
@@ -4094,13 +4245,10 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
             break;
         }
 
-        // **CONSUMING INFERNO'S UPKEEP.** `_staminaCostPerSecond` (51.81) and
-        // `_healthCostPerSecond` (31.11) are what the spell costs its CASTER for
-        // every second it burns — two distinct drains, both unread, so the spell was
-        // pure upside: huge channelled damage for a one-off magicka cost.
-        //
-        // Charged per TICK, scaled by the tick interval, so the per-second figure
-        // stays a per-second figure whatever the tick rate is.
+        // **CONSUMING INFERNO'S UPKEEP.** The tick deals damage first, then charges
+        // stamina while any remains; only once stamina is empty does it charge health.
+        // Status 51 blocks stamina regen for the channel, so the cost cannot refill
+        // under itself.
         if let Some(rank) = super::gamedata::ability_rank_clamped(&uuid, level as u16) {
             let per_tick = super::damage::CHANNEL_TICK_INTERVAL_SECS;
             let stam = rank
@@ -4113,15 +4261,11 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
                 * per_tick;
             if stam > 0.0 || health > 0.0 {
                 let f = &mut combat.fighters[caster];
-                if stam > 0.0 {
+                if stam > 0.0 && f.stamina > 0 {
                     f.stamina = f.stamina.saturating_sub(stam.round().max(0.0) as u32);
-                }
-                if health > 0.0 {
-                    // Never self-kill on upkeep: floor at 1. A channel that killed its
-                    // own caster would end the round for the wrong player, and nothing
-                    // in the data says the cost is lethal.
+                } else if health > 0.0 {
                     let cost = health.round().max(0.0) as u32;
-                    f.health = f.health.saturating_sub(cost).max(1.min(f.health));
+                    f.health = f.health.saturating_sub(cost);
                 }
                 f.stats_seq = f.stats_seq.wrapping_add(1);
             }
@@ -4451,6 +4595,9 @@ fn apply_ward(
         restoration_factor: 0.0, // Ward: pure negation, no heal-back
         absorb_fraction: 1.0,    // Ward swallows a hit whole until exhausted
         on_absorb_restore: (0.0, 0.0, 0.0),
+        dodge_started_at: None,
+        dodge_status_expires_at: None,
+        dodge_effectiveness: 1.0,
         // `Ability.Spell.Ward.Description`: "negates up to {1} ELEMENTAL damage,
         // plus any EXCESS damage from the attack that destroys it". Ward's physical
         // protection is the Armor Rating pushed below, not this pool.
@@ -4510,6 +4657,9 @@ fn apply_absorb(
         restoration_factor: restoration,
         absorb_fraction: 1.0,
         on_absorb_restore: (0.0, 0.0, 0.0),
+        dodge_started_at: None,
+        dodge_status_expires_at: None,
+        dodge_effectiveness: 1.0,
         elemental_only: false,
         consumes_overflow: false,
         bypass_types: &[],
@@ -4648,7 +4798,7 @@ fn on_round_ended(
         fighter.executions.clear();
         fighter.interrupt_pending = None;
         if !ended_by_death || slot != loser {
-            fighter.force_actor_state(ActorStateType::Idle, now);
+            fighter.force_actor_state(ActorStateType::Emote, now);
         }
     }
     if replay {
@@ -4783,7 +4933,7 @@ fn on_round_ended(
         combat.interround_step = 0;
         combat.phase = FlowState::NextState;
 
-        // Return both actors to Idle NOW, as the round ends — not six interround
+        // Return both living actors to Emote NOW, as the round ends — not six interround
         // steps later when round 2 goes live.
         //
         // `reset_fighters_for_next_round` already does this, but it runs only at
@@ -4795,9 +4945,8 @@ fn on_round_ended(
         //
         // This is additive: it tells the clients earlier and removes nothing. Retail
         // interleaves actor-state (gmid 39) with the match-state walk rather than
-        // confining it to round start — 856 gmid-39 frames sit among the 277 gmid-79
-        // state changes in session 615 — so an Idle inside the walk is the shape the
-        // client already expects.
+        // confining it to round start. The round-end neutral pose is Emote
+        // (`PvpAvatar::EndRound` / victory positioning), not Idle.
         //
         // The LOSER of a death is exempt: it stays Dead, and its op29 below must be the
         // first state frame the clients see for it (12-D5).
@@ -4847,25 +4996,45 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Per-second Stamina/Magicka regen for all alive fighters. Called from `on_tick`
-/// once per `REGEN_TICK_INTERVAL`.
+/// Continuous resource regeneration for all alive fighters. Called from `on_tick`
+/// with elapsed server-step time since the previous pass.
 ///
-/// **Video ground-truth (s293):** health has ZERO in-round passive regen — HP only
-/// changes on hits.  Stamina and magicka recover at ~5 %/s (video-pinned from t=50..52
-/// and the t=113..117 confirming window).  Between-round HP reset is handled separately
-/// by `reset_fighters_for_next_round`; no in-round HP regen is applied here.
+/// Capture T3: stamina and magicka recover at 4%/s of full Maximum, health at
+/// 0.005 x Health.Maximum / 3 per second, plus flat gear/perk sources, all clamped
+/// to `Maximum - DestroyedPortion`.
 ///
 /// Block-regen status effects suppress per-stat regen:
-///   - `BlockHealthRegen`(50) — kept for future out-of-arena paths; no-op here (0.0 rate)
+///   - `BlockHealthRegen`(50) / Burning(4) → no health regen
 ///   - `BlockStaminaRegen`(51) → no stamina regen (Frozen)
 ///   - `BlockMagickaRegen`(52) → no magicka regen (Enervated)
 ///
 /// After all fighters are ticked, emits `PlayerStatsUpdate`(65) for any fighter
-/// whose pools changed. [video-ground-truth §1; /tmp/arena-video-groundtruth.md]
+/// whose pools changed.
 pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
-    use super::state::StatusEffectType;
+    use super::state::{DamageType, StatusEffectType};
 
     let mut out = Vec::new();
+    let dt = now
+        .checked_duration_since(combat.last_regen_tick)
+        .unwrap_or_default()
+        .as_secs_f32();
+    if dt <= 0.0 {
+        return out;
+    }
+    combat.last_regen_tick = now;
+
+    fn drain_gain(carry: &mut f32, amount: f32) -> u32 {
+        if amount <= 0.0 || !amount.is_finite() {
+            return 0;
+        }
+        *carry += amount;
+        let whole = carry.floor();
+        if whole < 1.0 {
+            return 0;
+        }
+        *carry -= whole;
+        whole as u32
+    }
 
     for slot in 0..combat.fighters.len() {
         let f = &mut combat.fighters[slot];
@@ -4920,20 +5089,19 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
         // stats-update emit, and so a restoration and a regen landing in the
         // same second produce ONE frame rather than two.
         //
-        // Health is restored even though passive health regen is zero: a potion
-        // is not regeneration, and `ShouldApplyRegeneration` returning false in
-        // PvP says nothing about drinking one.
+        // Potions are restorations, not regeneration, but they share this elapsed-time
+        // pump so a potion and regen landing in the same step produce one stats frame.
         if let Some(mut pr) = f.pending_restore.take() {
-            let give = pr.per_tick.min(pr.remaining);
+            let give = (pr.per_tick * dt).min(pr.remaining);
             let mult = match pr.affected_stat {
                 0 => f.loadout.healing_multiplier(),
                 _ => 1.0,
             };
-            let amount = (give * mult).round() as u32;
+            let amount = (give * mult).floor() as u32;
             match pr.affected_stat {
-                0 => f.health = (f.health + amount).min(f.max_health),
-                1 => f.stamina = (f.stamina + amount).min(f.max_stamina),
-                2 => f.magicka = (f.magicka + amount).min(f.max_magicka),
+                0 => f.restore_pool(DamageType::Health, amount),
+                1 => f.restore_pool(DamageType::Stamina, amount),
+                2 => f.restore_pool(DamageType::Magicka, amount),
                 _ => {}
             }
             pr.remaining -= give;
@@ -4966,57 +5134,56 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
             .effects
             .iter()
             .any(|e| {
-                matches!(
-                    e.effect,
-                    StatusEffectType::BlockHealthRegen | StatusEffectType::Burning
-                ) && now < e.expires_at
+                matches!(e.effect, StatusEffectType::BlockHealthRegen | StatusEffectType::Burning)
+                    && now < e.expires_at
             });
-        let health_reduction = f.regen_reduction(0, now);
-        if !block_health && (f.health < f.max_health || health_reduction > 0.0) && f.max_stamina > 0 {
+        if !block_health && f.health < f.damaged_max_health() && f.max_stamina > 0 {
             // `Stamina.BoundedPercent` — against the pool's FULL maximum, the same
             // reading Maximum Power uses (ravage does not lower `Maximum`).
-            let stamina_fraction =
-                f.stamina as f32 / f.max_stamina.saturating_add(f.ravaged_stamina) as f32;
-            let rate =
-                (f.loadout.perks.healing_surge_rate(stamina_fraction) - health_reduction)
-                    * f.loadout.regen_multiplier(0);
-            // REGEN_TICK_INTERVAL is 1 s, so a per-second rate IS the per-tick
-            // amount. Rounded, and not floored to a minimum of 1: an unperked
-            // fighter must gain exactly nothing.
-            let heal = rate.round() as i32;
+            let stamina_fraction = f.stamina as f32 / f.max_stamina.max(1) as f32;
+            let base = HEALTH_REGEN_RATE_PER_S * f.max_health as f32
+                / super::state::ARENA_HEALTH_MULTIPLIER as f32)
+                + f.loadout.health_regen
+                + f.loadout.perks.healing_surge_rate(stamina_fraction)
+                - f.regen_reduction(0, now);
+            let rate = (base * f.loadout.regen_multiplier(0)).max(0.0);
+            let heal = drain_gain(&mut f.regen_carry_health, rate * dt);
             if heal > 0 {
-                let heal = heal as u32;
-                f.health = (f.health + heal).min(f.max_health);
+                f.restore_pool(DamageType::Health, heal);
             }
         }
 
-        // Stamina regen: 3.03 %/s — the captured wire rate (see the constant).
-        let stamina_reduction = f.regen_reduction(1, now);
-        if !block_stam && (f.stamina < f.max_stamina || stamina_reduction > 0.0) {
-            let regen = ((STAMINA_REGEN_RATE_PER_S * f.max_stamina as f32 - stamina_reduction)
-                * f.loadout.regen_multiplier(1))
-                .round() as i32;
+        if !block_stam && f.stamina < f.damaged_max_stamina() {
+            let base = STAMINA_REGEN_RATE_PER_S * f.max_stamina as f32
+                + f.loadout.stamina_regen
+                - f.regen_reduction(1, now);
+            let rate = (base * f.loadout.regen_multiplier(1)).max(0.0);
+            let regen = drain_gain(&mut f.regen_carry_stamina, rate * dt);
             if regen > 0 {
-                f.stamina = (f.stamina + (regen as u32).max(1)).min(f.max_stamina);
+                f.restore_pool(DamageType::Stamina, regen);
             }
         }
         // Magicka Surge's BLACKOUT: for `_noMagickaRegenDuration` after the surge
         // ends, magicka does not regenerate at all. This is the drawback that pays
         // for the surge and it is authored, not invented.
-        let surge_blackout = f.no_magicka_regen_until.is_some_and(|t| now < t);
-        // Magicka regen: 2.93 %/s — the captured wire rate (see the constant) — plus
-        // Magicka Surge's flat `_magickaRegenerationBonus` while it is up.
-        let magicka_reduction = f.regen_reduction(2, now);
-        if !block_mag && !surge_blackout && (f.magicka < f.max_magicka || magicka_reduction > 0.0) {
-            let mut regen = MAGICKA_REGEN_RATE_PER_S * f.max_magicka as f32;
-            if f.magicka_surge_until.is_some_and(|t| now < t) {
-                // REGEN_TICK_INTERVAL is 1 s, so a per-second rate is the per-tick
-                // amount (the same equivalence the health block above relies on).
-                regen += f.magicka_surge_bonus;
+        let surge_live = f.magicka_surge_until.is_some_and(|t| now < t);
+        if f.magicka_surge_until.is_some_and(|t| now >= t) {
+            f.magicka_surge_until = None;
+            f.magicka_surge_bonus = 0.0;
+            f.magicka = 0;
+            f.regen_carry_magicka = 0.0;
+        }
+        let surge_blackout = !surge_live && f.no_magicka_regen_until.is_some_and(|t| now < t);
+        if !block_mag && !surge_blackout && f.magicka < f.damaged_max_magicka() {
+            let mut base = MAGICKA_REGEN_RATE_PER_S * f.max_magicka as f32 + f.loadout.magicka_regen;
+            if surge_live {
+                base += f.magicka_surge_bonus.max(0.0);
             }
-            let regen = ((regen - magicka_reduction) * f.loadout.regen_multiplier(2)).round() as i32;
+            base -= f.regen_reduction(2, now);
+            let rate = (base * f.loadout.regen_multiplier(2)).max(0.0);
+            let regen = drain_gain(&mut f.regen_carry_magicka, rate * dt);
             if regen > 0 {
-                f.magicka = (f.magicka + (regen as u32).max(1)).min(f.max_magicka);
+                f.restore_pool(DamageType::Magicka, regen);
             }
         }
 
@@ -5250,10 +5417,9 @@ pub fn drain_state_changes_for(
 ///
 /// `PlayerAttack` (manual slash) or `PlayerAutoAttack` (fallback) now, then
 /// `PlayerFollowThrough` and `PlayerRecovery` on the capture-measured delays, then
-/// back to `Idle` at the template's
-/// `attackDelay + recoveryToNeutralTime`. A combo is legal earlier, at
-/// `attackDelay + recoveryToComboTime`, so the animation and input gates deliberately
-/// use separate values. The transitions land on the outbox;
+/// back to `Idle` after the recovery state's authored `recoveryTime`. A combo is
+/// legal earlier, at `attackDelay + recoveryToComboTime`, so the animation and input
+/// gates deliberately use separate values. The transitions land on the outbox;
 /// [`drain_state_changes`] puts them on the wire.
 ///
 /// Retail's per-session counts corroborate one of each per swing: s503 sent 330 × gmid
@@ -5265,7 +5431,13 @@ fn begin_swing_animation(
     manual_attack: Option<ManualAttackGesture>,
     now: Instant,
 ) -> Duration {
-    let neutral = combat.fighters[slot].loadout.neutral_interval();
+    let recovery_time = Duration::from_secs_f32(
+        combat.fighters[slot]
+            .loadout
+            .charge_params()
+            .recovery_time
+            .max(0.0),
+    );
     let f = &mut combat.fighters[slot];
     // A new combo may start while the previous swing is still recovering. Drop that
     // swing's pending Idle transition so it cannot interrupt the new animation.
@@ -5282,9 +5454,9 @@ fn begin_swing_animation(
         now + follow_delay + RECOVERY_DELAY,
         ActorStateType::PlayerRecovery,
     );
-    // Never idle earlier than the Recovery beat, even for a special template with
-    // unusually short authored values.
-    let idle_at = (now + neutral).max(now + follow_delay + RECOVERY_DELAY * 2);
+    // Recovery itself owns the return to Idle: retail goes Idle at
+    // release + FollowThrough delay + one frame + recoveryTime.
+    let idle_at = now + follow_delay + RECOVERY_DELAY + recovery_time;
     f.schedule_state(idle_at, ActorStateType::Idle);
     follow_delay
 }
@@ -5478,13 +5650,9 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
         return out;
     }
 
-    // Regen tick — once per second, regenerate HP/Stamina/Magicka for all alive
-    // fighters. Runs AFTER DoT (DoT damage may deplete a pool; regen brings it back up).
-    // Guarded against DoT-ending the round (the RoundEnd/NextState check above).
-    if now.duration_since(combat.last_regen_tick) >= REGEN_TICK_INTERVAL {
-        combat.last_regen_tick = now;
-        out.extend(apply_regen_tick(combat, now));
-    }
+    // Regen is continuous: apply the elapsed server-step time since the last pass.
+    // Runs AFTER DoT (DoT damage may deplete a pool; regen brings it back up).
+    out.extend(apply_regen_tick(combat, now));
 
     let bot_slots: Vec<usize> = (combat.expected_peers..combat.fighters.len()).collect();
     for bot in bot_slots {
@@ -5667,24 +5835,19 @@ mod tests {
     ///
     /// The other regen tests compute their expectation from the same constant
     /// they check, so they follow any edit silently — they verify the arithmetic,
-    /// not the number. This figure has already flipped once (video 5 %/s -> wire
-    /// 3.03 %/s, owner's call 2026-08-22) and is exactly the kind of value that
-    /// gets "tidied" back. Changing it should mean changing this test and saying
-    /// why.
+    /// not the number. T3 settled the retail server formula: in-combat stamina and
+    /// magicka at 4%/s, and health at 0.005 x Max / 3 per second.
     #[test]
     fn the_regen_rates_are_the_measured_wire_values() {
         assert_eq!(
-            STAMINA_REGEN_RATE_PER_S, 0.0303,
-            "stamina regen is the captured 3.03 %/s, not the video 5 %/s",
+            STAMINA_REGEN_RATE_PER_S, 0.04,
+            "stamina regen is the captured T3 4%/s",
         );
         assert_eq!(
-            MAGICKA_REGEN_RATE_PER_S, 0.0293,
-            "magicka regen is the captured 2.93 %/s, not the video 5 %/s",
+            MAGICKA_REGEN_RATE_PER_S, 0.04,
+            "magicka regen is the captured T3 4%/s",
         );
-        // Health is still zero AND still unwired — no code reads this constant.
-        // Asserting both halves so "I set the constant" cannot be mistaken for
-        // "health now regenerates".
-        assert_eq!(HEALTH_REGEN_RATE_PER_S, 0.0);
+        assert_eq!(HEALTH_REGEN_RATE_PER_S, 0.005);
     }
 
     /// Advance past the FollowThrough beat so a committed swing lands.
@@ -5988,13 +6151,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Regen tick: 5%/s stamina+magicka, ZERO in-round health regen (video-proven)
+    // Regen: 4%/s stamina+magicka and 0.005 x health / 3 per second
     // -----------------------------------------------------------------------
 
-    /// Video ground-truth (s293 §1): stamina and magicka recover at ~5 %/s.
-    /// One regen tick on a half-depleted pool must add ≈5% of max and emit op65.
+    /// Capture T3: stamina recovers continuously at 4%/s.
     #[test]
-    fn regen_tick_raises_stamina_at_5pct_per_second() {
+    fn regen_tick_raises_stamina_at_4pct_per_second() {
         let now = Instant::now();
         let mut combat = make_live_combat(now);
 
@@ -6010,11 +6172,10 @@ mod tests {
         let out = apply_regen_tick(&mut combat, tick_now);
 
         let stam_after = combat.fighters[0].stamina;
-        // Must increase by ~5% of max (±1 for rounding).
-        let expected_regen = ((STAMINA_REGEN_RATE_PER_S * max_stam as f32).round() as u32).max(1);
+        let expected_regen = (STAMINA_REGEN_RATE_PER_S * max_stam as f32).floor() as u32;
         assert_eq!(
             stam_after - stam_before, expected_regen,
-            "regen tick must add ~5% of max stamina ({} expected), stam {stam_before}→{stam_after}",
+            "regen tick must add 4% of max stamina ({} expected), stam {stam_before}→{stam_after}",
             expected_regen,
         );
 
@@ -6030,9 +6191,9 @@ mod tests {
         );
     }
 
-    /// Video ground-truth (s293 §1): magicka recovers at ~5 %/s, symmetric with stamina.
+    /// Capture T3: magicka recovers continuously at 4%/s, symmetric with stamina.
     #[test]
-    fn regen_tick_raises_magicka_at_5pct_per_second() {
+    fn regen_tick_raises_magicka_at_4pct_per_second() {
         let now = Instant::now();
         let mut combat = make_live_combat(now);
 
@@ -6044,10 +6205,10 @@ mod tests {
         let out = apply_regen_tick(&mut combat, tick_now);
 
         let mag_after = combat.fighters[0].magicka;
-        let expected_regen = ((MAGICKA_REGEN_RATE_PER_S * max_mag as f32).round() as u32).max(1);
+        let expected_regen = (MAGICKA_REGEN_RATE_PER_S * max_mag as f32).floor() as u32;
         assert_eq!(
             mag_after - mag_before, expected_regen,
-            "regen tick must add ~5% of max magicka ({expected_regen} expected), mag {mag_before}→{mag_after}",
+            "regen tick must add 4% of max magicka ({expected_regen} expected), mag {mag_before}→{mag_after}",
         );
         let _ = out; // op65 emission already verified in the stamina test
     }
@@ -6066,14 +6227,13 @@ mod tests {
         let out = apply_regen_tick(&mut combat, now + REGEN_TICK_INTERVAL);
         assert!(!out.is_empty());
 
-        let expected = ((STAMINA_REGEN_RATE_PER_S * max_stam as f32 * 1.05).round() as u32).max(1);
+        let expected = (STAMINA_REGEN_RATE_PER_S * max_stam as f32 * 1.05).floor() as u32;
         assert_eq!(combat.fighters[0].stamina - stam_before, expected);
     }
 
-    /// Video ground-truth (s293 §1): health has ZERO in-round passive regen.
-    /// A regen tick must NOT increase health, even when the fighter is damaged.
+    /// Capture T3: health regenerates at 0.005 x max / 3 per second.
     #[test]
-    fn regen_tick_does_not_regen_health() {
+    fn regen_tick_raises_health_at_the_t3_base_rate() {
         let now = Instant::now();
         let mut combat = make_live_combat(now);
 
@@ -6086,9 +6246,13 @@ mod tests {
         let out = apply_regen_tick(&mut combat, tick_now);
 
         let hp_after = combat.fighters[0].health;
+        let expected_regen =
+            (HEALTH_REGEN_RATE_PER_S * max_hp as f32 / super::super::state::ARENA_HEALTH_MULTIPLIER as f32)
+                .floor() as u32;
         assert_eq!(
-            hp_after, hp_before,
-            "in-round health must NOT regen (video-proven zero): hp was {hp_before}, got {hp_after}"
+            hp_after - hp_before,
+            expected_regen,
+            "health regen must follow T3 base rate: hp was {hp_before}, got {hp_after}"
         );
         // The tick may still emit op65 if stamina/magicka changed, but HP must be static.
         let _ = out;
@@ -6481,9 +6645,9 @@ mod tests {
         assert_eq!(nd.int(10), Some(15), "Piercing Strikes animation id");
     }
 
-    /// A shield bash's authored 0.50 s is its guarding phase, not a guard that begins
-    /// after the damage. Staggering Bash may stun an unblocking target only when its
-    /// second, striking phase lands.
+    /// A shield bash's authored 0.50 s is its guarding phase; the strike then lands
+    /// on the clip's `OnManeuverApplyDamage` event at +0.331469 s (05 §2.2). Staggering
+    /// Bash may stun an unblocking target only when that second, striking phase lands.
     #[test]
     fn staggering_bash_guards_first_then_strikes_and_staggers() {
         let now = Instant::now();
@@ -6504,13 +6668,13 @@ mod tests {
         assert!(!combat.fighters[1].is_staggered(now));
         assert_eq!(combat.fighters[0].block_phase(now), Some(BlockPhase::Optimal));
 
-        let early = super::land_due_impacts(&mut combat, now + Duration::from_millis(499));
+        let early = super::land_due_impacts(&mut combat, now + Duration::from_millis(830));
         assert!(early.is_empty(), "the strike cannot land during the guard phase");
         assert_eq!(combat.fighters[1].health, hp_before);
 
-        let impact = now + Duration::from_millis(501);
+        let impact = now + Duration::from_millis(832);
         let landed = super::land_due_impacts(&mut combat, impact);
-        assert!(gmids(&landed).contains(&50), "the second phase deals weapon damage");
+        assert!(gmids(&landed).contains(&50), "the authored 0.331 s bash event deals weapon damage");
         assert!(combat.fighters[1].health < hp_before);
         assert!(
             combat.fighters[1].is_staggered(impact),
@@ -8186,9 +8350,10 @@ mod phase4_tests {
     /// cast pose held "right through the break and up until the first strikes of the
     /// next round began".
     ///
-    /// The round end must therefore put both actors back to Idle itself.
+    /// The round end must therefore put both actors into the client's neutral Emote
+    /// pose itself.
     #[test]
-    fn a_round_ending_returns_both_actors_to_idle() {
+    fn a_round_ending_returns_both_actors_to_emote() {
         let now = Instant::now();
         let mut combat = live_combat(now);
 
@@ -8202,12 +8367,12 @@ mod phase4_tests {
 
         assert_eq!(
             combat.fighters[0].actor_state(),
-            ActorStateType::Idle,
+            ActorStateType::Emote,
             "the winner's actor must stop animating when the round ends"
         );
         assert_eq!(
             combat.fighters[1].actor_state(),
-            ActorStateType::Idle,
+            ActorStateType::Emote,
             "the loser's actor must stop animating when the round ends"
         );
 
@@ -8218,13 +8383,17 @@ mod phase4_tests {
             !frames.is_empty(),
             "the reset must emit actor-state frames, not just mutate server state"
         );
+        assert_eq!(
+            generic_state_count(&frames, ActorStateType::Emote),
+            4,
+            "two actors, two viewers each, must see round-end Emote"
+        );
     }
 
-    /// The control: an actor already Idle must not emit a redundant change. Without
-    /// this the fix would spam an op39 at every round end for a fighter that was
-    /// simply standing still, which is not what retail does.
+    /// An actor that is still logically Idle enters the round-end Emote pose; it is
+    /// visible to clients, so this is not a redundant no-op.
     #[test]
-    fn an_already_idle_actor_emits_nothing() {
+    fn an_idle_actor_enters_round_end_emote() {
         let now = Instant::now();
         let mut combat = live_combat(now);
         assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Idle);
@@ -8232,10 +8401,167 @@ mod phase4_tests {
 
         combat.reset_actor_animations(now);
         let frames = drain_state_changes(&mut combat, now);
+        assert_eq!(
+            generic_state_count(&frames, ActorStateType::Emote),
+            4,
+            "round-end neutral is Emote, not Idle"
+        );
+    }
+
+    /// The control: an actor already Emote must not emit a redundant change. Without
+    /// this the fix would spam an op39 at every round end for a fighter that was
+    /// simply standing still, which is not what retail does.
+    #[test]
+    fn an_already_emote_actor_emits_nothing() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        combat.fighters[0].force_actor_state(ActorStateType::Emote, now);
+        combat.fighters[1].force_actor_state(ActorStateType::Emote, now);
+        let _ = drain_state_changes(&mut combat, now);
+
+        combat.reset_actor_animations(now);
+        let frames = drain_state_changes(&mut combat, now);
         assert!(
             frames.is_empty(),
-            "an actor that was already Idle must not produce a state change: {frames:?}"
+            "an actor that was already Emote must not produce a state change: {frames:?}"
         );
+    }
+
+    fn generic_state_count(out: &[(usize, Vec<u8>)], state: ActorStateType) -> usize {
+        out.iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(39))
+            .filter(|(_, f)| arena_proto::parse_netdata(&f[2..]).int(6) == Some(state as i64))
+            .count()
+    }
+
+    #[test]
+    fn swing_idle_uses_the_recovery_state_clock() {
+        use super::super::tables::Weight;
+
+        let cases = [
+            (Weight::Light, 250, 617),
+            (Weight::Versatile, 350, 867),
+            (Weight::Heavy, 450, 1067),
+        ];
+        for (weight, hold_ms, idle_ms) in cases {
+            let now = Instant::now();
+            let mut combat = live_combat(now);
+            set_weapon_weight(&mut combat, 0, weight);
+
+            on_c2s_input(&mut combat, 0, &make_pos_frame(0.8, 0.5, 0.0), now);
+            on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, false), now);
+            let _ = drain_state_changes(&mut combat, now);
+
+            let release = now + Duration::from_millis(hold_ms);
+            on_c2s_input(
+                &mut combat,
+                0,
+                &make_act_frame(false, hold_ms as f32 / 1000.0, false),
+                release,
+            );
+            let commit = drain_state_changes(&mut combat, release);
+            assert_eq!(
+                commit
+                    .iter()
+                    .filter(|(_, f)| messages::user_message_gmid(f) == Some(52))
+                    .count(),
+                2,
+                "{weight:?}: release emits the AutoAttack beat"
+            );
+
+            combat.fighters[0].reconcile_scheduled_states(
+                release + Duration::from_millis(idle_ms - 10),
+            );
+            let early =
+                drain_state_changes(&mut combat, release + Duration::from_millis(idle_ms - 10));
+            assert_eq!(
+                generic_state_count(&early, ActorStateType::Idle),
+                0,
+                "{weight:?}: Idle must not fire before the recovery clock"
+            );
+
+            combat.fighters[0].reconcile_scheduled_states(
+                release + Duration::from_millis(idle_ms + 10),
+            );
+            let idle =
+                drain_state_changes(&mut combat, release + Duration::from_millis(idle_ms + 10));
+            assert_eq!(
+                generic_state_count(&idle, ActorStateType::Idle),
+                2,
+                "{weight:?}: Idle at release + follow-through + one frame + recoveryTime"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_charge_clears_the_previous_swing_idle() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+
+        on_c2s_input(&mut combat, 0, &make_pos_frame(0.8, 0.5, 0.0), now);
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, false), now);
+        let first_release = now + Duration::from_millis(250);
+        on_c2s_input(
+            &mut combat,
+            0,
+            &make_act_frame(false, 0.25, false),
+            first_release,
+        );
+        let _ = drain_state_changes(&mut combat, first_release);
+
+        let second_press = first_release + Duration::from_millis(200);
+        on_c2s_input(&mut combat, 0, &make_pos_frame(0.2, 0.5, 0.0), second_press);
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, false), second_press);
+        let second_charge = drain_state_changes(&mut combat, second_press);
+        assert_eq!(
+            second_charge
+                .iter()
+                .filter(|(_, f)| messages::user_message_gmid(f) == Some(45))
+                .count(),
+            2,
+            "the new charge is visible to both viewers"
+        );
+
+        let old_idle_due = first_release + Duration::from_millis(650);
+        combat.fighters[0].reconcile_scheduled_states(old_idle_due);
+        let mid_charge = drain_state_changes(&mut combat, old_idle_due);
+        assert_eq!(
+            generic_state_count(&mid_charge, ActorStateType::Idle),
+            0,
+            "the first swing's stale Idle must not interrupt the held charge"
+        );
+        assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Charging);
+
+        let second_release = second_press + Duration::from_millis(1000);
+        on_c2s_input(
+            &mut combat,
+            0,
+            &make_act_frame(false, 1.0, false),
+            second_release,
+        );
+        let next_commit = drain_state_changes(&mut combat, second_release);
+        assert_eq!(
+            generic_state_count(&next_commit, ActorStateType::Idle),
+            0,
+            "no 39 Idle is allowed between the second 45 and its 52"
+        );
+        assert_eq!(
+            next_commit
+                .iter()
+                .filter(|(_, f)| messages::user_message_gmid(f) == Some(52))
+                .count(),
+            2,
+            "the held charge still commits"
+        );
+    }
+
+    fn set_weapon_weight(
+        combat: &mut MatchCombat,
+        slot: usize,
+        weight: super::super::tables::Weight,
+    ) {
+        combat.fighters[slot].loadout.weapon.weight = Some(weight);
+        combat.fighters[slot].loadout.weapon_template = None;
     }
 
     fn live_combat(now: Instant) -> MatchCombat {
@@ -8849,8 +9175,11 @@ mod phase4_tests {
 mod shipped_effects_tests {
     use super::*;
     use super::super::damage::flags;
-    use super::super::state::{DamageNegationSource, Fighter, NegationPool, StatusEffectType};
-    use super::super::state::DamageType;
+    use super::super::state::{
+        DamageNegationSource, DamageType, EquippedAbility, Fighter, StatusEffectType,
+        NegationPool, WeaponProfile,
+    };
+    use super::super::tables::Weight;
     use super::super::loadout;
 
     fn combat2(now: Instant) -> MatchCombat {
@@ -8968,6 +9297,317 @@ mod shipped_effects_tests {
         assert_eq!(qs_2h, 0.0, "…and two-handed must get none (2H multiplier is 0)");
     }
 
+    fn equip(c: &mut MatchCombat, editor: &str) -> &'static str {
+        let uuid = uuid_of(editor);
+        let tag = loadout::ability_tag_for_template(uuid);
+        c.fighters[0].loadout.abilities.push(EquippedAbility {
+            instance_uuid: uuid.to_string(),
+            level: 1,
+            tag,
+        });
+        uuid
+    }
+
+    fn cast_equipped(c: &mut MatchCombat, uuid: &str, now: Instant) -> Vec<(usize, Vec<u8>)> {
+        let frame = cast_frame(uuid);
+        let ea = input::parse_execute_ability(&frame).expect("synthesised op37 must parse");
+        resolve_ability_cast(c, 0, 1, &frame, &ea, now)
+    }
+
+    fn cast_frame(uuid: &str) -> Vec<u8> {
+        let mut f = vec![
+            0xBE, 0x36, 0x04, 0x1F, 0x70, 0x77, 0x0A, 0x35, 0x02, 0x00, 0x00, 0x38, 0x03, 0x25,
+            0x24, 0x00,
+        ];
+        f.extend_from_slice(uuid.as_bytes());
+        f
+    }
+
+    fn op50_count(out: &[(usize, Vec<u8>)]) -> usize {
+        out.iter()
+            .filter(|(_, f)| {
+                f.len() > 2
+                    && f[1] == 0x36
+                    && arena_proto::parse_netdata(&f[2..]).int(3) == Some(50)
+            })
+            .count()
+    }
+
+    fn op50_sources(out: &[(usize, Vec<u8>)]) -> Vec<(i64, i64, Vec<i64>)> {
+        out.iter()
+            .filter(|(v, f)| *v == 0 && messages::user_message_gmid(f) == Some(50))
+            .map(|(_, f)| {
+                let nd = arena_proto::parse_netdata(&f[2..]);
+                let n = nd.int(12).unwrap_or(0);
+                let tys = (0..n)
+                    .map(|k| nd.int(13 + 2 * k as u8).unwrap_or(-1))
+                    .collect();
+                (nd.int(0).unwrap_or(-1), nd.int(6).unwrap_or(-1), tys)
+            })
+            .collect()
+    }
+
+    fn physical_weapon(c: &mut MatchCombat, weight: Weight, has_shield: bool, base: f32) {
+        c.fighters[0].loadout.weapon = WeaponProfile {
+            primary_type: Some(DamageType::Slashing),
+            base_by_type: vec![(DamageType::Slashing, base)],
+            weight: Some(weight),
+        };
+        c.fighters[0].loadout.weapon_template = None;
+        c.fighters[0].loadout.has_shield = has_shield;
+        c.fighters[0].loadout.enchants.clear();
+        c.fighters[1].loadout.armor_rating = 0.0;
+    }
+
+    fn power_attack_loss(weight: Weight, has_shield: bool) -> u32 {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        physical_weapon(&mut c, weight, has_shield, 0.0);
+        let uuid = equip(&mut c, "PowerAttack");
+        let before = c.fighters[1].health;
+        let mut out = cast_equipped(&mut c, uuid, now);
+        out.extend(land_due_impacts(&mut c, now + Duration::from_secs(2)));
+        assert!(op50_count(&out) > 0, "PowerAttack must land a hit");
+        before - c.fighters[1].health
+    }
+
+    #[test]
+    fn maneuver_grip_follows_weapon_class_not_shield_alone() {
+        let light_no_shield = power_attack_loss(Weight::Light, false);
+        let heavy_with_shield = power_attack_loss(Weight::Heavy, true);
+        let balanced_with_shield = power_attack_loss(Weight::Versatile, true);
+        let balanced_no_shield = power_attack_loss(Weight::Versatile, false);
+
+        assert_eq!(
+            light_no_shield, balanced_with_shield,
+            "Light is always 1H and Balanced is 1H only with a shield",
+        );
+        assert_eq!(
+            heavy_with_shield, balanced_no_shield,
+            "Heavy is always 2H and Balanced becomes 2H without a shield",
+        );
+        assert!(
+            heavy_with_shield > light_no_shield,
+            "2H PowerAttack bonus must exceed the 1H bonus",
+        );
+    }
+
+    #[test]
+    fn quick_family_strikes_use_their_two_authored_impacts() {
+        for editor in ["QuickStrikes", "PiercingStrikes", "VenomStrikes", "RecoveryStrikes"] {
+            let now = Instant::now();
+            let mut c = combat2(now);
+            physical_weapon(&mut c, Weight::Light, true, 100.0);
+            let uuid = equip(&mut c, editor);
+            let out = cast_equipped(&mut c, uuid, now);
+            assert_eq!(op50_count(&out), 0, "{editor}: cast queues impacts instead of landing inline");
+            assert_eq!(c.pending_impacts.len(), 2, "{editor}: two authored maneuver hits");
+
+            let first = land_due_impacts(&mut c, now + Duration::from_millis(250));
+            assert_eq!(op50_count(&first), 2, "{editor}: first hit to both viewers");
+            assert_eq!(c.fighters[0].combo_count, 1, "{editor}: chain stays live between hits");
+            assert_eq!(c.pending_impacts.len(), 1, "{editor}: second hit remains queued");
+
+            let second = land_due_impacts(&mut c, now + Duration::from_secs(2));
+            assert_eq!(op50_count(&second), 2, "{editor}: second hit to both viewers");
+            assert_eq!(c.fighters[0].combo_count, 0, "{editor}: final hit ends the maneuver chain");
+            assert!(c.pending_impacts.is_empty(), "{editor}: queue drained");
+        }
+    }
+
+    #[test]
+    fn non_quick_family_maneuvers_keep_their_single_authored_impact() {
+        for editor in ["PowerAttack", "Guardbreaker"] {
+            let now = Instant::now();
+            let mut c = combat2(now);
+            let uuid = equip(&mut c, editor);
+            let _ = cast_equipped(&mut c, uuid, now);
+            assert_eq!(c.pending_impacts.len(), 1, "{editor}: one authored maneuver hit");
+        }
+    }
+
+    #[test]
+    fn venom_strikes_does_not_multiply_direct_poison_damage() {
+        let now = Instant::now();
+        let target = Fighter::new(1, 2, loadout::starter(), now);
+        let mut baseline = loadout::starter();
+        baseline.weapon = WeaponProfile {
+            primary_type: Some(DamageType::Poison),
+            base_by_type: vec![(DamageType::Poison, 100.0)],
+            weight: Some(Weight::Light),
+        };
+        baseline.enchants.clear();
+        let mut venom = baseline.clone();
+        venom.poison_effect_multiplier = 2.0;
+
+        let base = RetailDamageModel.resolve_attack(
+            &baseline,
+            &target,
+            DamageSource::WeaponManeuver,
+            ActiveSide::Middle,
+            1.0,
+            0,
+            now,
+        );
+        let boosted = RetailDamageModel.resolve_attack(
+            &venom,
+            &target,
+            DamageSource::WeaponManeuver,
+            ActiveSide::Middle,
+            1.0,
+            0,
+            now,
+        );
+        assert_eq!(boosted.total, base.total, "Venom effect must not double direct Poison damage");
+    }
+
+    #[test]
+    fn indomitable_smash_resistance_gets_mettle_squared() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0].health = 1;
+        c.fighters[0].loadout.perks.mettle = 0.20;
+        let uuid = uuid_of("IndomitableSmash");
+        apply_caster_begin_effects(&mut c, 0, uuid, 1, now);
+        let got = c.fighters[0].transient_all_resistance[0].0;
+        let want = 250.0 * 1.2 * 1.2;
+        assert!((got - want).abs() < 0.01, "got {got}, want {want}");
+    }
+
+    #[test]
+    fn wall_of_fire_has_no_cast_hit_and_burns_the_attacker() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let wall = equip(&mut c, "Firewall");
+        let cast = cast_equipped(&mut c, wall, now);
+        assert_eq!(op50_count(&cast), 0, "Wall of Fire arms without an immediate hit");
+        assert!(c.fighters[0].firewall_until.is_some());
+
+        let attacker_hp = c.fighters[1].health;
+        let resolved = RetailDamageModel.resolve_attack(
+            &c.fighters[1].loadout,
+            &c.fighters[0],
+            super::super::state::DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        let out = emit_damage(&mut c, 1, 0, &resolved, now);
+        assert!(
+            c.fighters[1].health < attacker_hp,
+            "the attacker burns even though the wall belongs to slot 0",
+        );
+        assert!(
+            op50_sources(&out)
+                .iter()
+                .any(|(_, source, tys)| *source == super::super::state::DamageSource::Spell as i64
+                    && tys.contains(&(DamageType::Fire as i64))),
+            "the burn is a Spell-source Fire op50",
+        );
+    }
+
+    #[test]
+    fn wall_of_fire_owner_pays_twenty_percent_for_own_attacks() {
+        let now = Instant::now();
+        let mut owner_attacks = combat2(now);
+        let wall = equip(&mut owner_attacks, "Firewall");
+        let _ = cast_equipped(&mut owner_attacks, wall, now);
+        let owner_hp = owner_attacks.fighters[0].health;
+        let resolved = RetailDamageModel.resolve_attack(
+            &owner_attacks.fighters[0].loadout,
+            &owner_attacks.fighters[1],
+            super::super::state::DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        let _ = emit_damage(&mut owner_attacks, 0, 1, &resolved, now);
+        let self_loss = owner_hp - owner_attacks.fighters[0].health;
+
+        let mut opponent_attacks = combat2(now);
+        let wall = equip(&mut opponent_attacks, "Firewall");
+        let _ = cast_equipped(&mut opponent_attacks, wall, now);
+        let opponent_hp = opponent_attacks.fighters[1].health;
+        let resolved = RetailDamageModel.resolve_attack(
+            &opponent_attacks.fighters[1].loadout,
+            &opponent_attacks.fighters[0],
+            super::super::state::DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        let _ = emit_damage(&mut opponent_attacks, 1, 0, &resolved, now);
+        let opponent_loss = opponent_hp - opponent_attacks.fighters[1].health;
+
+        assert!(self_loss > 0, "owner attacks pay the self-burn");
+        assert!(opponent_loss > self_loss * 3, "opponent burn is the full wall damage");
+    }
+
+    #[test]
+    fn echo_weapon_lands_source_nine_with_weapon_type() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0].max_magicka = 1000;
+        c.fighters[0].magicka = 1000;
+        let echo = equip(&mut c, "EchoWeapon");
+        let _ = cast_equipped(&mut c, echo, now);
+        let resolved = RetailDamageModel.resolve_attack(
+            &c.fighters[0].loadout,
+            &c.fighters[1],
+            super::super::state::DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        let first = emit_damage(&mut c, 0, 1, &resolved, now);
+        assert_eq!(c.pending_echoes.len(), 1, "the weapon hit queues one echo");
+        assert!(
+            op50_sources(&first)
+                .iter()
+                .all(|(_, source, _)| *source != super::super::state::DamageSource::EchoWeapon as i64),
+            "the echo is delayed, not inline",
+        );
+        let landed = land_due_echoes(&mut c, now + Duration::from_millis(500));
+        assert!(
+            op50_sources(&landed)
+                .iter()
+                .any(|(_, source, tys)| *source == super::super::state::DamageSource::EchoWeapon as i64
+                    && tys.contains(&(DamageType::Slashing as i64))),
+            "echo op50 is source 9 with the weapon damage type",
+        );
+    }
+
+    #[test]
+    fn echo_weapon_triggers_on_weapon_maneuvers_and_drops_the_tail_window() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0].max_magicka = 1000;
+        c.fighters[0].magicka = 1000;
+        let echo = equip(&mut c, "EchoWeapon");
+        let _ = cast_equipped(&mut c, echo, now);
+        let resolved = RetailDamageModel.resolve_attack(
+            &c.fighters[0].loadout,
+            &c.fighters[1],
+            super::super::state::DamageSource::WeaponManeuver,
+            ActiveSide::Middle,
+            1.0,
+            0,
+            now,
+        );
+        let _ = emit_damage(&mut c, 0, 1, &resolved, now);
+        assert_eq!(c.pending_echoes.len(), 1, "WeaponManeuver source 3 queues echo");
+
+        c.pending_echoes.clear();
+        c.fighters[0].echo_until = Some(now + Duration::from_millis(400));
+        c.fighters[0].echo_delay = 0.5;
+        let _ = emit_damage(&mut c, 0, 1, &resolved, now);
+        assert!(c.pending_echoes.is_empty(), "hits whose echo would land after expiry are dropped");
+    }
+
     /// Reckless Fury is a BUFF: it ships bonusDamage 0 with both multipliers 0, so it
     /// must contribute no swing damage at all. The server used to resolve it as an
     /// ordinary Middle weapon hit.
@@ -9079,24 +9719,25 @@ mod shipped_effects_tests {
         }
     }
 
-    /// A dodge is a ONE-SECOND reactive window, not a banked shield. `_dodgeDuration`
-    /// is authored at 1.0 s on all four dodge maneuvers and was ignored — the pool got
-    /// the 3600 s "until consumed" placeholder, so a Dodging Strike stayed armed for an
-    /// hour and could eat a hit a round later.
+    /// The dodge DAMAGE pool lives for the whole maneuver, not merely the 1.0 s
+    /// HUD status. Dodging Strike's one-handed animation ends around 1.25 s.
     #[test]
-    fn a_dodge_pool_expires_after_its_authored_second() {
+    fn a_dodge_pool_lasts_for_the_maneuver_lifetime() {
         let now = Instant::now();
         let mut c = combat2(now);
         apply_shipped_effects(&mut c, 0, 1, uuid_of("DodgingStrike"), 1, 500.0, false, false, now);
         let pool = c.fighters[0].negation_pools.first().expect("a dodge pool").clone();
         assert!(
-            pool.expires_at <= now + Duration::from_secs_f32(1.05),
-            "the dodge must lapse after its authored ~1.0s, not an hour"
+            pool.expires_at > now + Duration::from_secs_f32(1.20),
+            "the dodge damage pool must cover the full maneuver lifetime"
         );
-        assert!(pool.expires_at > now, "…but it is armed now");
+        assert!(
+            pool.expires_at < now + Duration::from_secs_f32(1.35),
+            "but it must still end with the maneuver, not remain banked"
+        );
 
         c.fighters[0].prune_negation_pools(now + Duration::from_secs_f32(1.5));
-        assert!(c.fighters[0].negation_pools.is_empty(), "and is gone a second later");
+        assert!(c.fighters[0].negation_pools.is_empty(), "and is gone after the maneuver");
     }
 
     /// Delayed Lightning Bolt trades time for damage: `_delayDuration` 4.0 is ADDITIVE
@@ -9179,15 +9820,23 @@ mod shipped_effects_tests {
         );
     }
 
-    /// Consuming Inferno charges its caster stamina AND health for every second it
-    /// burns. Both `_staminaCostPerSecond` and `_healthCostPerSecond` were unread, so
-    /// the spell was pure upside.
+    /// Consuming Inferno charges stamina while any remains, then health, and blocks
+    /// stamina regeneration for the channel.
     #[test]
     fn consuming_inferno_drains_its_caster_while_it_burns() {
         let now = Instant::now();
         let mut c = combat2(now);
         let u = uuid_of("ConsumingInferno");
         let (stam0, hp0) = (c.fighters[0].stamina, c.fighters[0].health);
+        c.fighters[0].effects.push(super::super::state::ActiveEffect {
+            effect: super::super::state::StatusEffectType::BlockStaminaRegen,
+            damage_type: super::super::state::DamageType::None,
+            value: 0.0,
+            per_tick_damage: 0.0,
+            expires_at: now + Duration::from_secs(3),
+            last_tick: now,
+            is_transient_resist: false,
+        });
         c.channels.push(super::super::state::ActiveChannel {
             caster_slot: 0,
             target_slot: 1,
@@ -9201,8 +9850,11 @@ mod shipped_effects_tests {
         });
         let _ = super::apply_channel_ticks(&mut c, now);
         assert!(c.fighters[0].stamina < stam0, "stamina must drain: {stam0} -> {}", c.fighters[0].stamina);
-        assert!(c.fighters[0].health < hp0, "health must drain: {hp0} -> {}", c.fighters[0].health);
-        assert!(!c.fighters[0].is_dead(), "upkeep must never self-kill");
+        assert_eq!(c.fighters[0].health, hp0, "health waits until stamina is empty");
+
+        c.fighters[0].stamina = 0;
+        let _ = super::apply_channel_ticks(&mut c, now + Duration::from_secs_f32(super::super::damage::CHANNEL_TICK_INTERVAL_SECS));
+        assert!(c.fighters[0].health < hp0, "health must drain after stamina is empty: {hp0} -> {}", c.fighters[0].health);
     }
 
     /// Thunderstorm is three bolts over nine seconds, not one immediate hit. It ships
@@ -9214,7 +9866,7 @@ mod shipped_effects_tests {
         let mut c = combat2(now);
         let u = uuid_of("Thunderstorm");
         let out = apply_ability_impact(
-            &mut c, 0, 1, u, 1, super::super::state::AbilityTag::Damage, false, now,
+            &mut c, 0, 1, u, 1, super::super::state::AbilityTag::Damage, false, now, true,
         );
         assert!(!out.is_empty(), "the first bolt lands immediately");
         let ch = c.channels.iter().find(|ch| ch.ability_uuid == u).expect("bolts scheduled");
@@ -9263,6 +9915,98 @@ mod shipped_effects_tests {
         assert_eq!(out.len(), 2, "op51 Dodging to both viewers");
     }
 
+    #[test]
+    fn a_dodge_pool_scales_with_effectiveness() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0].health = 1;
+        c.fighters[0].loadout.perks.mettle = 0.20;
+        let u = uuid_of("RenewingDodge");
+        let cap = super::super::gamedata::ability_rank_clamped(u, 1)
+            .and_then(|r| r.maximum_damage_dodged())
+            .expect("Renewing Dodge ships a dodge cap");
+        apply_shipped_effects(&mut c, 0, 1, u, 1, 500.0, false, false, now);
+        let pool = c.fighters[0].negation_pools.first().expect("a dodge pool");
+        assert!((pool.remaining - cap * 1.2).abs() < 0.01, "pool scaled by Mettle");
+        assert!((pool.dodge_effectiveness - 1.2).abs() < 0.01, "payout captures the same multiplier");
+    }
+
+    #[test]
+    fn dodge_drains_raw_damage_before_resistance() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0]
+            .transient_resistances
+            .push((DamageType::Fire, 50.0, now + Duration::from_secs(5)));
+        c.fighters[0].negation_pools.push(NegationPool {
+            source: DamageNegationSource::Dodge,
+            remaining: 100.0,
+            expires_at: now + Duration::from_secs(2),
+            restoration_factor: 0.0,
+            absorb_fraction: 1.0,
+            elemental_only: false,
+            consumes_overflow: false,
+            on_absorb_restore: (0.0, 0.0, 0.0),
+            dodge_started_at: Some(now),
+            dodge_status_expires_at: Some(now + Duration::from_secs(1)),
+            dodge_effectiveness: 1.0,
+            bypass_types: &[],
+        });
+        let resolved = RetailDamageModel.resolve_flat(
+            &c.fighters[1].loadout,
+            &c.fighters[0],
+            DamageSource::Spell,
+            ActiveSide::Middle,
+            DamageType::Fire,
+            100.0,
+            now,
+        );
+        assert_eq!(resolved.raw_components, vec![(DamageType::Fire, 100.0)]);
+        assert!(
+            resolved.components[0].1 < 100.0,
+            "fixture must mitigate the hit before dodge"
+        );
+
+        let hp_before = c.fighters[0].health;
+        let _ = emit_damage(&mut c, 1, 0, &resolved, now);
+        assert_eq!(c.fighters[0].health, hp_before, "the full raw hit was dodged");
+        assert!(
+            c.fighters[0].negation_pools[0].remaining <= 0.01,
+            "pool must spend the raw 100, not the resisted {}",
+            resolved.components[0].1
+        );
+    }
+
+    #[test]
+    fn a_dodge_breaks_a_stagger_and_removes_the_status() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0].apply_stagger_for(now, 2.5);
+        assert_eq!(
+            status_removes(&emit_status_removals(&mut c, now), StatusEffectType::Staggered).len(),
+            0
+        );
+        assert!(c.fighters[0].is_staggered(now));
+
+        let out = apply_shipped_effects(
+            &mut c,
+            0,
+            1,
+            uuid_of("DodgingStrike"),
+            1,
+            500.0,
+            false,
+            false,
+            now + Duration::from_millis(100),
+        );
+        assert!(!c.fighters[0].is_staggered(now + Duration::from_millis(100)));
+        assert_eq!(
+            status_removes(&out, StatusEffectType::Staggered).len(),
+            2,
+            "the dodge must send the stagger remove to both viewers"
+        );
+    }
+
     /// The op51 apply must carry the dodge's own duration, not 0.
     ///
     /// Measured, and unambiguous: of 405 captured `Dodging` (12) op51 frames,
@@ -9305,25 +10049,30 @@ mod shipped_effects_tests {
         }
     }
 
-    /// The control: the pool's server-side expiry must still match what is
-    /// announced, so the client and the server disagree about nothing. A fix that
-    /// only changed the wire number would leave the two out of step.
+    /// The control: the HUD-visible status is still the authored 1.0 s duration,
+    /// even though chapter 04 keeps the damage pool alive to maneuver end.
     #[test]
-    fn the_announced_duration_matches_the_pool_expiry() {
+    fn the_announced_duration_is_separate_from_the_pool_expiry() {
         let now = Instant::now();
         let mut c = combat2(now);
         let u = uuid_of("DodgingStrike");
         apply_shipped_effects(&mut c, 0, 1, u, 1, 500.0, false, false, now);
         let pool = &c.fighters[0].negation_pools[0];
 
-        // Alive just inside the window, gone just outside it.
-        assert!(pool.expires_at > now + Duration::from_millis(900));
-        assert!(pool.expires_at < now + Duration::from_millis(1_100));
+        let status_until = pool.dodge_status_expires_at.expect("dodge status expiry");
+        assert!(status_until > now + Duration::from_millis(900));
+        assert!(status_until < now + Duration::from_millis(1_100));
+        assert!(pool.expires_at > status_until, "damage pool outlives the HUD status");
 
+        c.fighters[0].prune_negation_pools(now + Duration::from_millis(1_100));
+        assert!(
+            !c.fighters[0].negation_pools.is_empty(),
+            "the damage pool is still armed just after the status lapses"
+        );
         c.fighters[0].prune_negation_pools(now + Duration::from_millis(1_500));
         assert!(
             c.fighters[0].negation_pools.is_empty(),
-            "the dodge window must close a second after it opened"
+            "the damage pool closes at maneuver end"
         );
     }
 
@@ -9360,11 +10109,10 @@ mod shipped_effects_tests {
         );
     }
 
-    /// The same remove is owed when the dodge CONNECTS, not only when it times
-    /// out — `apply_negation_pools` drops a drained pool, so the window is over
-    /// early and the client must hear about it.
+    /// A connected dodge spends its budget, but the HUD status still follows the
+    /// authored status timer instead of being pulled back early.
     #[test]
-    fn a_dodge_that_eats_a_hit_also_sends_its_remove() {
+    fn a_dodge_that_eats_a_hit_keeps_the_status_until_the_timer() {
         let now = Instant::now();
         let mut c = combat2(now);
         let u = uuid_of("DodgingStrike");
@@ -9376,15 +10124,20 @@ mod shipped_effects_tests {
         let neg = c.fighters[0].apply_negation_pools(&mut components);
         assert!(neg.negated || components[0].1 < 5_000.0, "the dodge must have eaten some of it");
         assert!(
-            c.fighters[0].negation_pools.is_empty(),
-            "a drained pool is dropped — the window is over"
+            !c.fighters[0].negation_pools.is_empty(),
+            "the drained dodge pool remains as the maneuver-lifetime record"
         );
 
-        let out = emit_status_removals(&mut c, now + Duration::from_millis(100));
+        let early = emit_status_removals(&mut c, now + Duration::from_millis(100));
+        assert!(
+            dodging_removes(&early).is_empty(),
+            "a connected dodge must not remove the status before the timer"
+        );
+        let out = emit_status_removals(&mut c, now + Duration::from_millis(1_100));
         assert_eq!(
             dodging_removes(&out).len(),
             2,
-            "a spent dodge must be taken back as well as an expired one"
+            "the spent dodge is taken back when its status timer closes"
         );
     }
 
@@ -9414,18 +10167,22 @@ mod shipped_effects_tests {
         }
     }
 
-    /// op51 `Dodging` REMOVE frames in a batch (propId 4 apply, 5 status).
-    fn dodging_removes(out: &[(usize, Vec<u8>)]) -> Vec<usize> {
+    /// op51 status REMOVE frames in a batch (propId 4 apply, 5 status).
+    fn status_removes(out: &[(usize, Vec<u8>)], status: StatusEffectType) -> Vec<usize> {
         out.iter()
             .enumerate()
             .filter(|(_, (_, f))| messages::user_message_gmid(f) == Some(51))
             .filter(|(_, (_, f))| {
                 let nd = arena_proto::parse_netdata(&f[2..]);
-                nd.int(5) == Some(StatusEffectType::Dodging as i64)
+                nd.int(5) == Some(status as i64)
                     && matches!(nd.get(4), Some(arena_proto::NetDataValue::Bool(false)))
             })
             .map(|(i, _)| i)
             .collect()
+    }
+
+    fn dodging_removes(out: &[(usize, Vec<u8>)]) -> Vec<usize> {
+        status_removes(out, StatusEffectType::Dodging)
     }
 
     /// The three *Armor spells get a real shield. No op51: the elemental-armor status
@@ -10799,7 +11556,7 @@ mod report_31_high_block_stun {
             op50_count(&out) == 0,
             "the first, guarding half of a shield bash must not deal damage"
         );
-        let landed = super::land_due_impacts(&mut c, now + Duration::from_millis(501));
+        let landed = super::land_due_impacts(&mut c, now + Duration::from_millis(832));
         assert!(
             op50_count(&landed) > 0,
             "the shield bash's second half still lands its weapon hit — it must not be \
@@ -11000,6 +11757,7 @@ mod report_31_high_block_stun {
             flags: flags::SHOW_DAMAGE | flags::HAS_ATTACKER,
             pre_mitigation_components: vec![(super::super::state::DamageType::Fire, 10.0)],
             components: vec![(super::super::state::DamageType::Fire, 10.0)],
+            raw_components: vec![(super::super::state::DamageType::Fire, 10.0)],
             total: 10.0,
             most_resisted: super::super::state::DamageType::None,
             negated: false,
@@ -11601,6 +12359,7 @@ mod report_31_high_block_stun {
             due: t0 + Duration::from_millis(1500),
                     magicka_full_at_cast: false,
             cast_at: t0,
+            reset_maneuver_combo_after: true,
         });
 
         c.reset_fighters_for_next_round(t0 + Duration::from_secs(1));
@@ -12037,8 +12796,8 @@ mod continuous_area_tests {
         }
         let lost = hp0 - combat.fighters[1].health;
         assert!(
-            (46..=47).contains(&lost),
-            "5s at 9.4/s = 47 HP, lost {lost}"
+            (34..=47).contains(&lost),
+            "5s at 9.4/s emits 47 raw HP before base health regen, net lost {lost}"
         );
         assert_eq!(
             combat.fighters[0].health, combat.fighters[0].max_health,
@@ -12199,6 +12958,7 @@ mod round_ends_once_tests {
             magicka_full_at_cast: false,
             due,
             cast_at: due,
+            reset_maneuver_combo_after: true,
         }
     }
 

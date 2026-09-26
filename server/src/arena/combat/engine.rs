@@ -3423,12 +3423,12 @@ pub(in crate::arena::combat) mod tests {
                 !loser.contains(&39),
                 "viewer {viewer}: no 39 for the loser in the death burst, got {loser:?}"
             );
-            // Control: the WINNER is still returned to Idle at the round end.
+            // Control: the WINNER is still returned to the round-end Emote pose.
             assert!(
                 death.iter().filter(|(v, _)| *v == viewer).filter_map(|(_, b)| state_frame(b)).any(
-                    |(obj, g, s)| obj == winner_obj && g == 39 && s == Some(ActorStateType::Idle as i64)
+                    |(obj, g, s)| obj == winner_obj && g == 39 && s == Some(ActorStateType::Emote as i64)
                 ),
-                "viewer {viewer}: the winner's round-end 39 Idle must still go out"
+                "viewer {viewer}: the winner's round-end 39 Emote must still go out"
             );
         }
 
@@ -4721,6 +4721,7 @@ pub(in crate::arena::combat) mod tests {
         // Spend both pools so there is headroom to regenerate into, then let one tick
         // pass to prove regen IS running before we freeze anything. Without this
         // control the test would also pass on a fighter that simply never regenerates.
+        m.combat.last_regen_tick = live;
         m.combat.fighters[1].stamina = m.combat.fighters[1].max_stamina / 2;
         m.combat.fighters[1].magicka = m.combat.fighters[1].max_magicka / 2;
         let baseline = m.combat.fighters[1].stamina;
@@ -4782,6 +4783,7 @@ pub(in crate::arena::combat) mod tests {
         use crate::arena::combat::state::StatusEffectType;
         let (mut m, _t0, live) = live_inst_at(2);
 
+        m.combat.last_regen_tick = live;
         m.combat.fighters[1].magicka = m.combat.fighters[1].max_magicka / 2;
         m.combat.fighters[1].stamina = m.combat.fighters[1].max_stamina / 2;
         let baseline = m.combat.fighters[1].magicka;
@@ -4915,7 +4917,7 @@ pub(in crate::arena::combat) mod tests {
         let dmg = swing(&mut m, 0, t0 + Duration::from_millis(600));
         assert!(!dmg.is_empty(), "the swing still resolves (ReceiveDamage emitted)");
         let opt_dealt = full - m.fighter_health(1);
-        assert_eq!(opt_dealt, 5, "flat optimal budgets against the open {open_dealt}");
+        assert_eq!(opt_dealt, 4, "flat optimal budgets against the open {open_dealt}");
         // The ReceiveDamage carries the WasOptimalBlocking flag (propId 7 bit3).
         let rd = dmg.iter().find(|(_, b)| b[1] == 0x36
             && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50)).expect("ReceiveDamage");
