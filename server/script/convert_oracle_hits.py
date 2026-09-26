@@ -13,10 +13,12 @@ from pathlib import Path
 
 STAGES = {
     "attack-entry",
+    "D0-attacker-snapshot",
     "D1-permanent",
     "D2-conversion",
     "D3-situational",
     "D-bonuses",
+    "E0-defender-snapshot",
     "E0-taken-entry",
     "E1-negation",
     "E3-preblock",
@@ -110,6 +112,8 @@ def compact_hit(run_name, ordinal, hit):
     stages = {}
     for event in hit["stages"]:
         stages[stage_key(event)] = clean_event(event)
+    attacker_snapshot = stages.get("D0-attacker-snapshot")
+    defender_snapshot = stages.get("E0-defender-snapshot")
     receive = stages.get("G-receive", {})
     before_h = ((receive.get("before") or {}).get("H") or [None])[0]
     after_h = ((receive.get("after") or {}).get("H") or [None])[0]
@@ -134,6 +138,8 @@ def compact_hit(run_name, ordinal, hit):
         "source": hit.get("source"),
         "sim": hit.get("sim"),
         "attack_type": attack_type,
+        "attacker_snapshot": attacker_snapshot,
+        "defender_snapshot": defender_snapshot,
         "stages": stages,
         "health_before": before_h,
         "health_after": after_h,
