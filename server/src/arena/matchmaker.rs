@@ -545,6 +545,7 @@ fn pick_character(
 fn loadout_from_row(r: &CharacterDbEntryCharacterWalletInventory) -> crate::arena::combat::Loadout {
     use crate::arena::combat::loadout;
     let mut lo = loadout::from_character(&r.character.0, &r.inventory.0);
+    loadout::apply_racial_innates_from_customization(&mut lo, &r.data.0.customization);
     lo.character_uuid = r.id.to_string();
     lo.profile_equipped_json =
         serde_json::json!({ "equippedItems": &r.inventory.0.loadout.equipped_items }).to_string();

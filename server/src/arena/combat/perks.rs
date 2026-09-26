@@ -358,9 +358,9 @@ pub fn health_is_critical(health: u32, max_health: u32) -> bool {
 }
 
 /// [`health_is_critical`] for a fighter, against the pool's full maximum
-/// (`max_health + ravaged_health`).
+/// (`max_health`; ravage is tracked as a destroyed portion, not a smaller maximum).
 pub fn fighter_health_is_critical(f: &super::state::Fighter) -> bool {
-    health_is_critical(f.health, f.max_health.saturating_add(f.ravaged_health))
+    health_is_critical(f.health, f.max_health)
 }
 
 /// Maximum Power's condition: the magicka pool reads FULL.
@@ -375,7 +375,7 @@ pub fn fighter_health_is_critical(f: &super::state::Fighter) -> bool {
 /// compute its own `magicka >= max_magicka` against the ravage-LOWERED ceiling and
 /// override [`CasterPerks::of`], so the ravage-aware test here was dead for casts.
 pub fn magicka_full_for_maximum_power(f: &super::state::Fighter) -> bool {
-    f.magicka >= f.max_magicka.saturating_add(f.ravaged_magicka)
+    f.magicka >= f.max_magicka
 }
 
 impl CasterPerks<'_> {

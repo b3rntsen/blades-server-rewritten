@@ -69,8 +69,9 @@
 //! # What actually drives the animation
 //!
 //! `PvpAvatar::OnStateChangeMessage` (dump.cs:583534) → `ApplyStateChange`
-//! (dump.cs:583535), whose `forceStateChange` argument defaults to true — the server
-//! is authoritative and the client will not veto a transition. It reads prop 6 (the
+//! (dump.cs:583535), whose `forceStateChange` argument is not read by
+//! `CheckShouldForceServerState`: the client can still veto when it is already in the
+//! target state or when its local history agrees with prop 7. It reads prop 6 (the
 //! state id), the leaf `ActiveSide` at prop 9, and for gmid 52 the `Vector2` at prop
 //! 10. Props 7 and 8 feed reconciliation, not the clip.
 //!
