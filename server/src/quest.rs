@@ -2282,6 +2282,32 @@ pub(crate) mod jobs_gen {
         "c5da36d7-5e28-454c-b1f5-ba57c2f5c0c4", "dbfd45fe-8c8c-4c8d-83c6-9b4566afc788",
         "e7418cc7-01de-4c84-ba00-e221f8783d51",
     ];
+    /// The dungeon templates a Duel (the one-on-one "Champion" job) is fought in:
+    /// the arena layouts, and nothing else. [report #237]
+    ///
+    /// Retail, over the 463 distinct jobs in the 2026-06-07 capture snapshot: all
+    /// 46 Duels sat on one of these five (`JobArenaVariant_01/03/04/05/06`, 8-11
+    /// each), and 0 of 417 non-duel jobs did. Drawing a Duel from
+    /// [`DUNGEON_TEMPLATES`] put roughly 12 in 17 of them in a cave, forest, Ayleid
+    /// ruin or stone dungeon, named after that place.
+    ///
+    /// `JobArenaVariant_02` (`46f8e6e8…`) exists in `parsed.json` but is left out:
+    /// retail never rolled it (0/46, where a uniform pick over six would miss it
+    /// with p ≈ 0.0002), and the localization table has no `UI.Arena.*.Title` for
+    /// it, so a Duel there would go out with an empty name list and wedge the quest
+    /// map (see [`nameable`]).
+    pub(super) const DUEL_DUNGEON_TEMPLATES: &[&str] = &[
+        "e7418cc7-01de-4c84-ba00-e221f8783d51", // JobArenaVariant_01
+        "a9386df1-5b26-462b-9c56-de9cb371c790", // JobArenaVariant_03
+        "dbfd45fe-8c8c-4c8d-83c6-9b4566afc788", // JobArenaVariant_04
+        "19a3b1b0-c18b-4f2f-b73f-780f3759fe48", // JobArenaVariant_05
+        "3bcfeff9-5b22-4f7c-b1b8-ef4b277f7bc2", // JobArenaVariant_06
+    ];
+    /// Where a job of this type may be rolled. Only a Duel is narrowed; every other
+    /// type keeps drawing from the full pool exactly as before.
+    pub(super) fn dungeon_pool(job_type: i64) -> &'static [&'static str] {
+        if job_type == 5 { DUEL_DUNGEON_TEMPLATES } else { DUNGEON_TEMPLATES }
+    }
     const ENEMY_FAMILIES: &[&str] = &[
         "008cf5b0-2590-433b-832e-f2e6f0e0226f", "06591d48-8c3a-4f81-a2c6-dba2e7163788",
         "1696d9c0-900f-4829-ae3f-f0441d92a37c", "1b2a30db-2871-43a2-bca0-eaa4bd804698",
@@ -3025,7 +3051,8 @@ pub(crate) mod jobs_gen {
             );
         }
 
-        let dungeon = rng.pick(DUNGEON_TEMPLATES).copied().unwrap_or("");
+        // Still exactly one draw whichever pool it is, so no later roll moves.
+        let dungeon = rng.pick(dungeon_pool(job_type)).copied().unwrap_or("");
         let prim_fam = rng.pick(ENEMY_FAMILIES).copied().unwrap_or("");
         let sec_fam = rng.pick(ENEMY_FAMILIES).copied().unwrap_or("");
         let boss_fam = rng.pick(ENEMY_FAMILIES).copied().unwrap_or(prim_fam);
@@ -6051,5 +6078,109 @@ mod quest_map_wedge_2026_09_25 {
         }
         assert!(checked > 50_000, "only {checked} jobs checked");
         assert!(defeat_or_explore > checked / 4, "the sweep barely exercised Defeat/Explore");
+    }
+}
+
+/// Report #237: "Champion 1v1 fights in jobs should be in an arena, not a random map
+/// location." A Duel drew its dungeon from the same pool as every other job, so most
+/// of them were fought in a cave, forest, ruin or stone dungeon. Retail fought all 46
+/// captured Duels in an arena (see `DUEL_DUNGEON_TEMPLATES`).
+#[cfg(test)]
+mod report_237_duel_arena {
+    use super::jobs_gen;
+    use serde_json::Value;
+    use uuid::Uuid;
+
+    /// 2026-09-26 16:52 UTC, the week the report was filed.
+    const NOW: u64 = 1_790_441_545;
+    const HALLOWEEN_TEST: &str = "7c2ed7c5-b63a-4ad7-b860-f80bfb885353";
+
+    fn pools() -> Value {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        serde_json::from_str(&std::fs::read_to_string(dir.join("job_pools.json")).unwrap())
+            .unwrap()
+    }
+
+    fn duels(pools: &Value, character: Uuid, level: u16, now: u64) -> Vec<Value> {
+        let boundary = jobs_gen::current_reset_boundary(pools, now);
+        jobs_gen::generate(pools, character, level, 0, boundary, now)
+            .0
+            .into_iter()
+            .filter(|j| j["jobSetup"]["jobType"] == 5)
+            .collect()
+    }
+
+    /// Every Duel, for any character in any week, is in one of the five arenas and
+    /// is named after it.
+    #[test]
+    fn every_duel_is_fought_in_a_retail_arena() {
+        let pools = pools();
+        let mut seen = std::collections::BTreeMap::<String, u32>::new();
+        let mut checked = 0;
+        for c in 1..=300u128 {
+            for week in 0..20u64 {
+                let now = NOW + week * 7 * 86_400;
+                for duel in duels(&pools, Uuid::from_u128(c * 0x9E37_79B9), 50, now) {
+                    let js = &duel["jobSetup"];
+                    let t = js["dungeonTemplateId"].as_str().unwrap();
+                    assert!(
+                        jobs_gen::DUEL_DUNGEON_TEMPLATES.contains(&t),
+                        "Duel {} rolled outside the arenas: {t}",
+                        duel["questId"]
+                    );
+                    let place = js["questName"]["dynamicElements"][1]["localizationValue"]
+                        .as_str()
+                        .unwrap_or_else(|| panic!("Duel {} has no location name", duel["questId"]));
+                    assert!(place.starts_with("UI.Arena.Arena"), "{place}");
+                    *seen.entry(t.to_string()).or_default() += 1;
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked >= 6_000, "only {checked} Duels checked");
+        // All five arenas are in play, as they were in retail (8-11 of 46 each).
+        assert_eq!(seen.len(), jobs_gen::DUEL_DUNGEON_TEMPLATES.len(), "{seen:?}");
+    }
+
+    /// The Duel production is serving HalloweenTest this week was rolled into
+    /// `JobStoneVariant_03`. It moves into an arena, and nothing else about it moves:
+    /// the dungeon pick is still one draw, so the champion, level, rewards and name
+    /// stay what the player was already shown.
+    #[test]
+    fn a_duel_prod_served_in_a_stone_dungeon_moves_to_an_arena_and_nothing_else_moves() {
+        let pools = pools();
+        let ht = duels(&pools, Uuid::parse_str(HALLOWEEN_TEST).unwrap(), 86, NOW);
+        let duel = ht
+            .iter()
+            .find(|j| j["questId"] == "18ae9573-ef4a-4ce3-bc24-715ea2d0d0b7")
+            .expect("this is not prod's board");
+        let js = &duel["jobSetup"];
+        let t = js["dungeonTemplateId"].as_str().unwrap();
+        assert_ne!(t, "4d3153a0-cfc5-405c-b065-92547ee9fbbc", "still in JobStoneVariant_03");
+        assert!(jobs_gen::DUEL_DUNGEON_TEMPLATES.contains(&t), "{t}");
+
+        // Control: every value prod served before the fix is unchanged.
+        assert_eq!(duel["difficultyLevel"], 82);
+        assert_eq!(duel["seed"], -2_524_332_663_550_136_772_i64);
+        assert_eq!(js["duelBossId"], "024b4f81-c7ef-4322-a547-ee863b4c02ad");
+        assert_eq!(js["bossEnemyFamilyId"], "31be99a6-8557-4e9b-81e6-5503f900b7d2");
+        assert_eq!(js["bossLevelDelta"], 7);
+        assert_eq!(js["rewardXp"], 1657);
+        assert_eq!(js["rewardItemCount"], 0);
+        assert_eq!(js["questName"]["key"], "UI.Jobs.Names.Duel.002");
+        assert_eq!(
+            js["questName"]["dynamicElements"][0]["localizationValue"],
+            "NPC.Duelist3.Name"
+        );
+    }
+
+    /// Control: only a Duel is narrowed. Defeat, Explore, Clear, Rescue and Gather
+    /// draw from exactly the pool they always did.
+    #[test]
+    fn other_job_types_keep_their_pool() {
+        for t in [0, 1, 2, 3, 4] {
+            assert_eq!(jobs_gen::dungeon_pool(t), jobs_gen::dungeon_pool(-1), "jobType {t}");
+            assert!(jobs_gen::dungeon_pool(t).len() > jobs_gen::DUEL_DUNGEON_TEMPLATES.len());
+        }
     }
 }
