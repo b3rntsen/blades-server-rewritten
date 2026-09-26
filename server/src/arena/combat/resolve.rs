@@ -1237,10 +1237,11 @@ fn land_due_hits(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)
     if combat.pending_hits.is_empty() {
         return Vec::new();
     }
-    let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut combat.pending_hits)
+    let (mut due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut combat.pending_hits)
         .into_iter()
         .partition(|h| now >= h.due);
     combat.pending_hits = waiting;
+    due.sort_by_key(|h| h.due);
 
     let mut out = Vec::new();
     for h in due {
@@ -1260,11 +1261,11 @@ fn land_due_hits(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)
         // (`_bonusDamages`: Light 11.24 / Versatile 14.17 / Heavy 17.86 at rank 1).
         // Ride the maneuver channel — same "flat additive on the physical base"
         // treatment, on a clone so it expires with the buff rather than sticking.
-        if combat.fighters[h.sender].has_reckless_fury(now) {
+        if combat.fighters[h.sender].has_reckless_fury(h.due) {
             attacker_loadout.maneuver_bonus_damage += combat.fighters[h.sender].reckless_fury_bonus;
         }
-        // The count this hit reads is the attacker's count NOW, before this hit's own
-        // increment (`CalculateAttackTypeFactor@0x1bd3df0` reads `_comboCount`, and
+        // The count this hit reads at its landing, before this hit's own increment
+        // (`CalculateAttackTypeFactor@0x1bd3df0` reads `_comboCount`, and
         // `IncrementCombo` follows `ReceiveDamage`).
         let combo_count = combat.fighters[h.sender].combo_count;
         let resolved = RetailDamageModel.resolve_attack(
@@ -1274,7 +1275,7 @@ fn land_due_hits(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)
             h.side,
             h.swing_factor,
             combo_count,
-            now,
+            h.due,
         );
         // A connected OPTIMAL block on the target RESETS the attacker's combo (§4.2: a
         // block breaks the chain — the next swing starts fresh at ×1.0) **and STUNS the
@@ -2655,10 +2656,17 @@ pub(super) fn land_due_impacts(combat: &mut MatchCombat, now: Instant) -> Vec<(u
     let mut out = Vec::new();
     // One impact at a time, interrupts first: an impact that lands can stagger or
     // paralyse a caster whose own impact is due in the same tick, and that one must
-    // then not land (06-D1). Queue order is kept.
+    // then not land (06-D1). Due impacts land in scheduled-time order, matching
+    // `land_due_hits` and the double-KO landing rule.
     loop {
         out.extend(super::interrupts::process_interrupts(combat, now));
-        let Some(i) = combat.pending_impacts.iter().position(|p| now >= p.due) else {
+        let Some((i, _)) = combat
+            .pending_impacts
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| now >= p.due)
+            .min_by_key(|(_, p)| p.due)
+        else {
             break;
         };
         let p = combat.pending_impacts.remove(i);
@@ -3774,12 +3782,25 @@ fn emit_damage(
     // frame reports. [Fighter::drain_mirrored_pools]
     let (drained_stam, drained_mag) =
         combat.fighters[target_slot].drain_mirrored_pools(&components);
-    if resolved.source.is_weapon_based() && combat.fighters[attacker_slot].loadout.cooldown_penalty_secs > 0.0 {
+    if resolved.source.is_weapon_based()
+        && combat.fighters[attacker_slot].loadout.cooldown_penalty_secs > 0.0
+    {
         let secs = combat.fighters[attacker_slot].loadout.cooldown_penalty_secs;
+        let mut extended_any = false;
         for until in combat.fighters[target_slot].cooldowns.values_mut() {
             if *until > now {
                 *until += Duration::from_secs_f32(secs);
+                extended_any = true;
             }
+        }
+        if extended_any {
+            out.push((
+                target_slot,
+                messages::modify_ability_cooldowns(
+                    combat.fighters[target_slot].net_object_id,
+                    secs,
+                ),
+            ));
         }
     }
     // RAVAGE — a flat cut to the victim's MAXIMUM pools, taken per landed weapon hit
@@ -12016,10 +12037,16 @@ mod shipped_effects_tests {
             blocked: false,
             resistance_scale: 1.0,
         };
-        let _ = emit_damage(&mut c, 0, 1, &hit, now);
+        let out = emit_damage(&mut c, 0, 1, &hit, now);
         assert_eq!(
             c.fighters[1].cooldowns.get(&spell).copied(),
             Some(now + Duration::from_secs(6))
+        );
+        let op83 = messages::modify_ability_cooldowns(c.fighters[1].net_object_id, 1.0);
+        assert!(
+            out.iter()
+                .any(|(viewer, frame)| *viewer == 1 && *frame == op83),
+            "Cooldown Penalty must send op83 to the victim so the HUD cooldown moves"
         );
 
         let mut control = combat2(now);
@@ -12030,11 +12057,15 @@ mod shipped_effects_tests {
             .insert(spell.clone(), now + Duration::from_secs(5));
         let mut spell_hit = hit.clone();
         spell_hit.source = DamageSource::Spell;
-        let _ = emit_damage(&mut control, 0, 1, &spell_hit, now);
+        let control_out = emit_damage(&mut control, 0, 1, &spell_hit, now);
         assert_eq!(
             control.fighters[1].cooldowns.get(&spell).copied(),
             Some(now + Duration::from_secs(5)),
             "control: spells do not carry the weapon cooldown penalty"
+        );
+        assert!(
+            !control_out.iter().any(|(_, frame)| *frame == op83),
+            "control: non-weapon hits must not emit Cooldown Penalty op83"
         );
     }
 
@@ -15057,6 +15088,73 @@ mod round_ends_once_tests {
             1,
             "exactly one round result to each viewer"
         );
+    }
+
+    /// If multiple lethal swings are overdue on one server tick, the scheduled landing
+    /// time decides the round, not queue insertion order.
+    #[test]
+    fn due_hits_land_by_scheduled_time_not_insertion_order() {
+        let now = Instant::now();
+        let early = now + Duration::from_millis(10);
+        let late = now + Duration::from_millis(20);
+        let mut c = live(now);
+        c.fighters[0].health = 1;
+        c.fighters[1].health = 1;
+        c.pending_hits.push(PendingHit {
+            sender: 1,
+            target: 0,
+            side: super::super::state::ActiveSide::Right,
+            swing_factor: 1.0,
+            due: late,
+        });
+        c.pending_hits.push(PendingHit {
+            sender: 0,
+            target: 1,
+            side: super::super::state::ActiveSide::Right,
+            swing_factor: 1.0,
+            due: early,
+        });
+
+        let out = land_due_hits(&mut c, now + Duration::from_millis(30));
+
+        assert_eq!(
+            c.round_winners,
+            vec![Some(0)],
+            "the earlier scheduled lethal hit must win even when inserted second"
+        );
+        assert_eq!(c.rounds_won, [1, 0]);
+        assert!(
+            !c.fighters[0].is_dead(),
+            "the later queued hit must not land after the round ends"
+        );
+        assert_eq!(op48_count(&out), 1);
+    }
+
+    /// Spells and maneuvers use the same landing-order rule as weapon swings.
+    #[test]
+    fn due_impacts_land_by_scheduled_time_not_insertion_order() {
+        let now = Instant::now();
+        let early = now + Duration::from_millis(10);
+        let late = now + Duration::from_millis(20);
+        let mut c = live(now);
+        c.fighters[0].health = 1;
+        c.fighters[1].health = 1;
+        c.pending_impacts.push(impact(1, late));
+        c.pending_impacts.push(impact(0, early));
+
+        let out = land_due_impacts(&mut c, now + Duration::from_millis(30));
+
+        assert_eq!(
+            c.round_winners,
+            vec![Some(0)],
+            "the earlier scheduled lethal impact must win even when inserted second"
+        );
+        assert_eq!(c.rounds_won, [1, 0]);
+        assert!(
+            !c.fighters[0].is_dead(),
+            "the later queued impact must not land after the round ends"
+        );
+        assert_eq!(op48_count(&out), 1);
     }
 
     /// The match-ending variant: the winner must stay the fighter who got the kill.
