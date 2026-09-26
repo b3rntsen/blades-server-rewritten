@@ -499,6 +499,23 @@ fn apply_enchant_with_rating(lo: &mut Loadout, id: &Uuid, tier: u8, item_rating:
         "FortifyStaminaRegenerationPropertyLogic" => lo.stamina_regen += magnitude,
         "FortifyMagickaRegenerationPropertyLogic" => lo.magicka_regen += magnitude,
 
+        // Savior's Hide: "+{0} Health regeneration per second while Health is
+        // critical" (tracker #231). `MultiplyRegenerationBonusInstance.GetRegenerationBonus`
+        // (libil2cpp `0x1D50B34`) returns `GetXValue()` into the same additive list as
+        // Regenerate Health when `CanApplyMultiplier` (`0x1D50BD0`, condition 1 =
+        // OnCriticalStat) sees `Actor.get_IsAtCriticalHealth`. The asset ships
+        // `_xValueByTier = [5.0]` (`property_logic_static.json`); the generated tier
+        // table has no magnitude for this single-tier artifact family, so the shipped
+        // value is used here.
+        "MultiplyHealthRegenOnCriticalPropertyLogic" => {
+            lo.health_regen_on_critical += CRITICAL_HEALTH_REGEN_PER_S
+        }
+
+        // Fork of Horripilation: "Prevents the wielder's Magicka regeneration."
+        // `BlockRegenerationBonusInstance.ShouldBlockRegeneration` (`0x1D4AB04`) is
+        // `_blockStats == stat`, and the asset's `_blockStats` is 2 (Magicka).
+        "BlockMagickaRegenerationPropertyLogic" => lo.blocks_magicka_regen = true,
+
         // ---- Ravage: a cut to the target's MAXIMUM pool ---------------------
         // "Reduces target's maximum Stamina by {0}." Per landed swing, and it does
         // not cross a round. The magnitude is read on the WEAPON'S OWN WEIGHT CURVE
@@ -649,6 +666,12 @@ fn apply_enchant_with_rating(lo: &mut Loadout, id: &Uuid, tier: u8, item_rating:
 
 /// Apply an item TEMPLATE's `mandatory_properties` (where every artifact effect
 /// lives) through [`apply_enchant`].
+/// `MultiplyHealthRegenOnCriticalPropertyLogic._xValueByTier[0]` — Savior's Hide's
+/// per-second Health regeneration at critical health, from
+/// `reference/game-defs/property_logic_static.json` in blades-capture. A type-4
+/// (ArtifactPower) property, so `GetRawXValue` does not scale it by the item.
+const CRITICAL_HEALTH_REGEN_PER_S: f32 = 5.0;
+
 pub(crate) fn apply_template_properties(lo: &mut Loadout, template: &str) {
     apply_template_properties_with_rating(lo, template, None);
 }
@@ -2271,5 +2294,40 @@ mod learned_perk_tests {
         let got = learned_perks(&json!({ SCOUT: 250 }));
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].level, 11);
+    }
+}
+
+/// Tracker #231: the two artifact regeneration properties Sprint 2 left unwired.
+/// Fortify Stamina/Magicka and the three Fortify … Regeneration families are covered
+/// by main; Savior's Hide and Fork of Horripilation still fell through `_ => {}`.
+#[cfg(test)]
+mod report_231_artifact_regen_tests {
+    use super::super::state::Loadout;
+    use super::apply_template_properties;
+
+    const SAVIORS_HIDE: &str = "12c4920e-a9e0-4498-b134-3ce66fb9558f";
+    const FORK_OF_HORRIPILATION: &str = "e86a6f9a-4e40-40d6-a9dd-1036b4190caa";
+
+    /// Control: a bare loadout carries neither property.
+    #[test]
+    fn control_no_artifact_no_bonus() {
+        let lo = Loadout::default();
+        assert_eq!(lo.health_regen_on_critical, 0.0);
+        assert!(!lo.blocks_magicka_regen);
+    }
+
+    #[test]
+    fn saviors_hide_regenerates_health_at_critical() {
+        let mut lo = Loadout::default();
+        apply_template_properties(&mut lo, SAVIORS_HIDE);
+        assert!((lo.health_regen_on_critical - 5.0).abs() < 1e-6);
+        assert_eq!(lo.health_regen, 0.0, "only at critical, not always");
+    }
+
+    #[test]
+    fn fork_of_horripilation_blocks_magicka_regen() {
+        let mut lo = Loadout::default();
+        apply_template_properties(&mut lo, FORK_OF_HORRIPILATION);
+        assert!(lo.blocks_magicka_regen);
     }
 }

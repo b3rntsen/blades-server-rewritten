@@ -939,6 +939,14 @@ pub struct Loadout {
     /// Flat in-combat magicka regeneration per second from `Fortify Magicka
     /// Regeneration` enchants.
     pub magicka_regen: f32,
+    /// Flat per-second Health regeneration that applies only while the wearer is at
+    /// critical health — Savior's Hide's `MultiplyHealthRegenOnCriticalPropertyLogic`
+    /// (tracker #231). Summed into the same additive list as [`Self::health_regen`].
+    pub health_regen_on_critical: f32,
+    /// Fork of Horripilation's `BlockMagickaRegenerationPropertyLogic` ("Prevents the
+    /// wielder's Magicka regeneration", tracker #231). Blocks the whole magicka term —
+    /// base rate and gear bonus alike — like an active `BlockMagickaRegen` status.
+    pub blocks_magicka_regen: bool,
     /// Attribute points this character spent on Stamina. Max Stamina is
     /// [`pool_for_points`] of this, NOT a function of level — see that function
     /// for the extraction and the identity check. 0 for a bot or the starter
