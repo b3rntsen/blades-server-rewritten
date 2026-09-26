@@ -57,11 +57,9 @@ const FROSTBITE_UUID: &str = "4be1d681-c35d-4540-b255-c2910ac80664";
 /// plus its 0.100 s combo-recovery gate. The old use of full `recoveryTime` imposed
 /// 0.783 s and rejected retail-paced releases observed at 0.372–0.668 s.
 fn charge_speed_multiplier(fighter: &super::state::Fighter, now: Instant) -> f32 {
-    if fighter.is_slowed(now) {
-        1.0 + super::gamedata::combat_params::SLOW_STATUS_MULTIPLIER
-    } else {
-        1.0
-    }
+    fighter
+        .loadout
+        .weapon_speed_multiplier(fighter.is_slowed(now))
 }
 
 fn swing_cooldown_for(fighter: &super::state::Fighter, now: Instant) -> Duration {
@@ -3776,6 +3774,14 @@ fn emit_damage(
     // frame reports. [Fighter::drain_mirrored_pools]
     let (drained_stam, drained_mag) =
         combat.fighters[target_slot].drain_mirrored_pools(&components);
+    if resolved.source.is_weapon_based() && combat.fighters[attacker_slot].loadout.cooldown_penalty_secs > 0.0 {
+        let secs = combat.fighters[attacker_slot].loadout.cooldown_penalty_secs;
+        for until in combat.fighters[target_slot].cooldowns.values_mut() {
+            if *until > now {
+                *until += Duration::from_secs_f32(secs);
+            }
+        }
+    }
     // RAVAGE — a flat cut to the victim's MAXIMUM pools, taken per landed weapon hit
     // and given back at the round boundary. It is not scaled by block: the
     // `damageGiven` hook fires when a weapon hit applies non-zero health damage, so
@@ -3808,7 +3814,15 @@ fn emit_damage(
     // The defender's shield ravages whoever swung into the guard, so it is applied to
     // the ATTACKER, and only when the guard actually took the hit (`blocked`), at
     // full whatever the block let through.
-    let (sr_s, sr_m, sr_h) = if blocked {
+    let shield_retaliates = blocked
+        && (flags & super::damage::flags::WAS_OPTIMAL_BLOCKING) != 0
+        && matches!(
+            resolved.source,
+            super::state::DamageSource::Attack
+                | super::state::DamageSource::WeaponManeuver
+                | super::state::DamageSource::ShieldManeuver
+        );
+    let (sr_s, sr_m, sr_h) = if shield_retaliates {
         let shield = combat.fighters[target_slot].loadout.shield_ravage.clone();
         combat.fighters[attacker_slot].apply_ravage(&shield, 1.0)
     } else {
@@ -3946,6 +3960,14 @@ fn emit_damage(
         &components,
         now,
     ));
+    if shield_retaliates {
+        out.extend(apply_shield_enchant_retaliation(
+            combat,
+            target_slot,
+            attacker_slot,
+            now,
+        ));
+    }
 
     // ONE round end, however many fighters this hit left dead. Both dead (the target
     // died and Reflecting Bash / Revenge killed the attacker) is a double KO, which
@@ -3960,6 +3982,52 @@ fn emit_damage(
             target_slot
         };
         out.extend(on_round_ending_death(combat, winner, now));
+    }
+    out
+}
+
+fn apply_shield_enchant_retaliation(
+    combat: &mut MatchCombat,
+    defender_slot: usize,
+    attacker_slot: usize,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    let mut out = Vec::new();
+    let entries = combat.fighters[defender_slot]
+        .loadout
+        .shield_enchant_damage
+        .clone();
+    if entries.is_empty() {
+        return out;
+    }
+    let total: f32 = entries
+        .iter()
+        .filter(|(ty, _)| super::damage::is_health_type(*ty))
+        .map(|(_, v)| *v)
+        .sum();
+    if total <= 0.0 {
+        return out;
+    }
+    combat.fighters[attacker_slot].take_fractional_damage_at(total, now);
+    let msg = {
+        let hit = &combat.fighters[attacker_slot];
+        let other = &combat.fighters[defender_slot];
+        messages::receive_damage(
+            hit.net_object_id,
+            NetObjectType::Avatar as u8,
+            hit.packed_stats(),
+            other.packed_stats(),
+            super::state::DamageSource::ShieldManeuver,
+            super::damage::flags::SHOW_DAMAGE | super::damage::flags::HAS_ATTACKER,
+            total,
+            0,
+            ActiveSide::None,
+            super::state::DamageType::None,
+            &entries,
+        )
+    };
+    for slot in 0..combat.fighters.len() {
+        out.push((slot, msg.clone()));
     }
     out
 }
@@ -4213,7 +4281,14 @@ fn apply_status_conditioning(
             continue;
         }
 
-        combat.fighters[target_slot].record_element_damage(*ty, *amount, now);
+        let fortify: f32 = combat.fighters[1 - target_slot]
+            .loadout
+            .status_fortify
+            .iter()
+            .filter(|(c, _)| *c == condition)
+            .map(|(_, v)| *v)
+            .sum();
+        combat.fighters[target_slot].record_element_damage(*ty, *amount + fortify, now);
         let recent = combat.fighters[target_slot].recent_element_damage(*ty);
         let threshold = combat.fighters[target_slot].condition_threshold(condition);
         if recent >= threshold {
@@ -4222,6 +4297,10 @@ fn apply_status_conditioning(
             let base_hp = combat.fighters[target_slot].base_max_health();
             let per_tick =
                 dot_percent_health(*ty) * DOT_TICK_INTERVAL.as_secs_f32() * base_hp as f32;
+            let duration_secs = condition_duration_secs(
+                &combat.fighters[1 - target_slot],
+                &combat.fighters[target_slot],
+            );
             combat.fighters[target_slot]
                 .effects
                 .push(super::state::ActiveEffect {
@@ -4229,7 +4308,7 @@ fn apply_status_conditioning(
                     damage_type: *ty,
                     value: per_tick,
                     per_tick_damage: per_tick,
-                    expires_at: now + Duration::from_secs_f32(CONDITION_DURATION_SECS),
+                    expires_at: now + Duration::from_secs_f32(duration_secs),
                     last_tick: now,
                     is_transient_resist: false,
                 });
@@ -4247,10 +4326,10 @@ fn apply_status_conditioning(
                 target_obj,
                 true,
                 condition,
-                CONDITION_DURATION_SECS,
+                duration_secs,
             );
             info!(
-                "combat status: gsid={} target_slot={target_slot} target={} status={condition:?} source_element={ty:?} recent_damage={recent:.1} threshold={threshold:.1} duration={CONDITION_DURATION_SECS} dot_per_tick={per_tick:.2} poisoned_ravage_hp={poisoned_ravage}",
+                "combat status: gsid={} target_slot={target_slot} target={} status={condition:?} source_element={ty:?} recent_damage={recent:.1} threshold={threshold:.1} duration={duration_secs} dot_per_tick={per_tick:.2} poisoned_ravage_hp={poisoned_ravage}",
                 combat.game_session_id, combat.fighters[target_slot].loadout.display_name,
             );
             for slot in 0..combat.fighters.len() {
@@ -4298,6 +4377,12 @@ fn apply_status_conditioning(
         }
     }
     out
+}
+
+fn condition_duration_secs(attacker: &super::state::Fighter, victim: &super::state::Fighter) -> f32 {
+    CONDITION_DURATION_SECS
+        * (1.0 + attacker.loadout.status_extend.max(0.0))
+        * (1.0 - victim.loadout.status_shorten.max(0.0)).max(0.0)
 }
 
 /// Clear a lapsed `Paralyzed` actor-state back to Idle once the paralyse duration
@@ -11820,6 +11905,176 @@ mod shipped_effects_tests {
             0.0,
             "damage taken while the condition is active is not counted toward the next landing",
         );
+    }
+
+    #[test]
+    fn attacker_fortify_condition_counts_toward_landing() {
+        use super::super::state::DamageType;
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let threshold = c.fighters[1].condition_threshold(StatusEffectType::Poisoned);
+        c.fighters[0].loadout.status_fortify = vec![(StatusEffectType::Poisoned, 16.8)];
+
+        let just_short =
+            apply_status_conditioning(&mut c, 1, &[(DamageType::Poison, threshold - 10.0)], now);
+        assert_eq!(just_short.len(), 2, "attacker Fortify Poisoned pushes it over");
+
+        let mut control = combat2(now);
+        control.fighters[1].loadout.status_fortify = vec![(StatusEffectType::Poisoned, 16.8)];
+        let none = apply_status_conditioning(
+            &mut control,
+            1,
+            &[(DamageType::Poison, threshold - 10.0)],
+            now,
+        );
+        assert!(
+            none.is_empty(),
+            "control: defender-side Fortify Poisoned does not raise or lower the landing gate"
+        );
+    }
+
+    #[test]
+    fn elemental_condition_duration_uses_attacker_extend_and_victim_shorten() {
+        use super::super::state::DamageType;
+        let now = Instant::now();
+        let cases = [
+            (0.0, 0.15, 4.25),
+            (0.15, 0.15, 4.888),
+            (0.15, 0.0, 5.75),
+            (0.15, 0.375, 3.594),
+            (0.0, 0.375, 3.125),
+            (0.0, 0.497, 2.516),
+            (0.0, 0.5625, 2.188),
+        ];
+        for (extend, shorten, want) in cases {
+            let mut c = combat2(now);
+            c.fighters[0].loadout.status_extend = extend;
+            c.fighters[1].loadout.status_shorten = shorten;
+            let threshold = c.fighters[1].condition_threshold(StatusEffectType::Burning);
+            let out =
+                apply_status_conditioning(&mut c, 1, &[(DamageType::Fire, threshold + 1.0)], now);
+            assert_eq!(out.len(), 2);
+            let effect = c.fighters[1]
+                .effects
+                .iter()
+                .find(|e| e.effect == StatusEffectType::Burning)
+                .expect("Burning lands");
+            let got = effect.expires_at.duration_since(now).as_secs_f32();
+            assert!(
+                (got - want).abs() < 0.006,
+                "extend {extend} shorten {shorten}: got {got}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn haste_shortens_charge_thresholds_and_shorten_stagger_reduces_stun() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let normal_plateau = c.fighters[0].loadout.charge_params().attack_delay
+            + c.fighters[0].loadout.charge_params().backswing_time
+            + c.fighters[0].loadout.charge_params().max_damage_time * 0.5;
+        assert!(
+            super::charge_swing_factor(&c.fighters[0], normal_plateau, now).is_some(),
+            "control: normal hold reaches the plateau"
+        );
+
+        c.fighters[0].loadout.haste = 0.24;
+        assert!(
+            super::charge_swing_factor(&c.fighters[0], normal_plateau * 0.76, now).is_some(),
+            "Warlock's Ring t7 haste reaches the same threshold at x0.76"
+        );
+
+        c.fighters[1].loadout.shorten_stagger = 0.20;
+        assert!(c.fighters[1].apply_stagger_for(now, 2.5));
+        assert!(c.fighters[1].is_staggered(now + Duration::from_millis(1900)));
+        assert!(
+            !c.fighters[1].is_staggered(now + Duration::from_millis(2050)),
+            "Shorten Stagger t10 makes 2.5s become 2.0s"
+        );
+    }
+
+    #[test]
+    fn cooldown_penalty_extends_active_target_cooldowns_on_weapon_hits() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let spell = uuid_of("Fireball").to_string();
+        c.fighters[0].loadout.cooldown_penalty_secs = 1.0;
+        c.fighters[1]
+            .cooldowns
+            .insert(spell.clone(), now + Duration::from_secs(5));
+        let hit = ResolvedDamage {
+            source: DamageSource::Attack,
+            active_side: ActiveSide::Right,
+            flags: flags::SHOW_DAMAGE | flags::HAS_ATTACKER,
+            pre_mitigation_components: vec![(DamageType::Slashing, 10.0)],
+            components: vec![(DamageType::Slashing, 10.0)],
+            raw_components: vec![(DamageType::Slashing, 10.0)],
+            total: 10.0,
+            most_resisted: DamageType::None,
+            negated: false,
+            heal: 0.0,
+            block_physical: 1.0,
+            blocked: false,
+            resistance_scale: 1.0,
+        };
+        let _ = emit_damage(&mut c, 0, 1, &hit, now);
+        assert_eq!(
+            c.fighters[1].cooldowns.get(&spell).copied(),
+            Some(now + Duration::from_secs(6))
+        );
+
+        let mut control = combat2(now);
+        control.fighters[0].loadout.cooldown_penalty_secs = 1.0;
+        control
+            .fighters[1]
+            .cooldowns
+            .insert(spell.clone(), now + Duration::from_secs(5));
+        let mut spell_hit = hit.clone();
+        spell_hit.source = DamageSource::Spell;
+        let _ = emit_damage(&mut control, 0, 1, &spell_hit, now);
+        assert_eq!(
+            control.fighters[1].cooldowns.get(&spell).copied(),
+            Some(now + Duration::from_secs(5)),
+            "control: spells do not carry the weapon cooldown penalty"
+        );
+    }
+
+    #[test]
+    fn shield_retaliation_requires_an_optimal_block() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].loadout.shield_ravage = vec![(DamageType::Stamina, 42.0)];
+        c.fighters[1].loadout.shield_enchant_damage = vec![(DamageType::Fire, 20.0)];
+        let hit = ResolvedDamage {
+            source: DamageSource::Attack,
+            active_side: ActiveSide::Right,
+            flags: flags::SHOW_DAMAGE | flags::HAS_ATTACKER,
+            pre_mitigation_components: vec![(DamageType::Slashing, 10.0)],
+            components: vec![(DamageType::Slashing, 10.0)],
+            raw_components: vec![(DamageType::Slashing, 10.0)],
+            total: 10.0,
+            most_resisted: DamageType::None,
+            negated: false,
+            heal: 0.0,
+            block_physical: 1.0,
+            blocked: true,
+            resistance_scale: 1.0,
+        };
+        let hp_before = c.fighters[0].health;
+        let _ = emit_damage(&mut c, 0, 1, &hit, now);
+        assert_eq!(c.fighters[0].ravaged_stamina, 0, "low block control");
+        assert_eq!(c.fighters[0].health, hp_before, "low block has no shield damage");
+
+        let mut opt = combat2(now);
+        opt.fighters[1].loadout.shield_ravage = vec![(DamageType::Stamina, 42.0)];
+        opt.fighters[1].loadout.shield_enchant_damage = vec![(DamageType::Fire, 20.0)];
+        let mut high = hit.clone();
+        high.flags |= flags::WAS_OPTIMAL_BLOCKING;
+        let hp_before = opt.fighters[0].health;
+        let _ = emit_damage(&mut opt, 0, 1, &high, now);
+        assert_eq!(opt.fighters[0].ravaged_stamina, 42);
+        assert_eq!(hp_before - opt.fighters[0].health, 20);
     }
 
     #[test]

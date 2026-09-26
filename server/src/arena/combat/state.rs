@@ -1071,6 +1071,9 @@ pub struct Loadout {
     ///
     /// A shield has no weapon weight, so these ship a single curve — 52.66 at tier 10.
     pub shield_ravage: Vec<(DamageType, f32)>,
+    /// Shield elemental/stamina/magicka damage enchants. They ride the owner's shield
+    /// bash and retaliate on an optimal blocked weapon/bash hit.
+    pub shield_enchant_damage: Vec<(DamageType, f32)>,
     /// Display name + character UUID for the round-start op50 spawn. Empty for the
     /// starter loadout (no character row); set by `loadout::from_character` + the
     /// matchmaker's character load.
@@ -1112,11 +1115,11 @@ pub struct Loadout {
     /// `blockBase`, ceiled (`get_EquippedBlockRating@0x1c54420`). See
     /// [`crate::arena::combat::loadout::blocking_item_rating`].
     pub block_rating: f32,
-    /// Flat Block Reduction enchant rating. It adds to `R` AFTER the optimal boost
-    /// (`Actor$$ResolveBlocking@0x1c54284` boosts the equipped rating only, then the
-    /// `BlockRatingMethod` sources add). Type-agnostic for now; the per-type split is
-    /// a separate gap (03-D11).
+    /// Legacy flat Block Reduction enchant rating, retained for hand-built tests.
     pub block_rating_bonus: f32,
+    /// Per-type Block Reduction enchant ratings. These add to `R` only for matching
+    /// component types, after the equipped blocking item boost.
+    pub block_rating_bonuses: Vec<(DamageType, f32)>,
     /// The shield's `optimalBlockBoost` as shipped (1.0 on all 51 shields).
     pub shield_optimal_block_boost: f32,
     /// The equipped shield's `_damageBase`: a shield bash's base damage, all of it
@@ -1127,6 +1130,18 @@ pub struct Loadout {
     /// attacker's enchants — subtracted from the defender's resistance rating before
     /// the reduction is computed. [Phase 3.4]
     pub elem_resist_piercing_rating: f32,
+    /// Damage conversion suffixes: up to this much physical damage is moved into the
+    /// target element at D2 for Attack, WeaponManeuver and ShieldManeuver sources.
+    pub convert_damage: Vec<(DamageType, f32)>,
+    /// Haste sources as speed reductions. The shipped table is raw weapon-speed
+    /// multiplier (0.88..0.70), so this stores `1 - raw`.
+    pub haste: f32,
+    /// Ebony Blade-style cooldown penalty, seconds added to the victim's active spell
+    /// and maneuver cooldowns on landed weapon hits.
+    pub cooldown_penalty_secs: f32,
+    /// Shorten Stagger sources on the wearer. Applied when this fighter receives a
+    /// Staggered status.
+    pub shorten_stagger: f32,
     /// **PDOC / EDOC** — `Opportunist{Physical,Elemental}PropertyLogic`, flat damage
     /// "against targets suffering a condition".
     ///
@@ -1161,11 +1176,14 @@ pub struct Loadout {
     /// Attacker-side **Elemental Resistance Piercing** (fraction 0..1): the defender's
     /// elemental resistance is scaled by `(1 − elem_resist_piercing)` before applying.
     pub elem_resist_piercing: f32,
-    /// Per-condition threshold BUMP (fraction): "Fortify Poisoned/Burning/Frozen/
-    /// Enervated" raise that condition's land threshold by this fraction of max HP.
-    pub status_resist: Vec<(StatusEffectType, f32)>,
-    /// "Shorten/Extend Elemental Statuses" → multiply status `_duration` by this (1.0 =
-    /// none). Parsed but not yet applied to DoT timers (informational).
+    /// Attacker-side Fortify<Condition>: flat damage added to matching elemental
+    /// hits when accumulating status conditioning.
+    pub status_fortify: Vec<(StatusEffectType, f32)>,
+    /// Victim-side Shorten Elemental Statuses amount, summed as 0.15 per piece.
+    pub status_shorten: f32,
+    /// Attacker-side Extend Elemental Statuses amount, summed as 0.15 per piece.
+    pub status_extend: f32,
+    /// Legacy condition duration multiplier, retained for old fixtures.
     pub status_dur_mult: f32,
 }
 
@@ -1216,6 +1234,15 @@ impl Loadout {
         } else {
             self.weapon_optimal_block_boost
         }
+    }
+
+    pub fn weapon_speed_multiplier(&self, slowed: bool) -> f32 {
+        let slow = if slowed {
+            crate::arena::combat::gamedata::combat_params::SLOW_STATUS_MULTIPLIER
+        } else {
+            0.0
+        };
+        (1.0 - self.haste + slow).max(0.05)
     }
 
     /// Commit-to-commit swing cadence (Phase 3.12): the equipped template's own
@@ -2398,6 +2425,17 @@ impl Fighter {
         boosted + self.loadout.block_rating_bonus
     }
 
+    pub fn block_rating_against(&self, optimal: bool, ty: DamageType) -> f32 {
+        let typed: f32 = self
+            .loadout
+            .block_rating_bonuses
+            .iter()
+            .filter(|(t, _)| *t == ty)
+            .map(|(_, v)| *v)
+            .sum();
+        self.block_rating(optimal) + typed
+    }
+
     /// True iff this fighter is currently staggered. [Phase 3.13]
     pub fn is_staggered(&self, now: Instant) -> bool {
         matches!(self.staggered_until, Some(t) if now < t)
@@ -2467,7 +2505,9 @@ impl Fighter {
         if !self.is_staggered(now) {
             self.weakness_rating = 0.0;
         }
-        self.staggered_until = Some(now + std::time::Duration::from_secs_f32(secs.max(0.05)));
+        let shorten = self.loadout.shorten_stagger.max(0.0);
+        let duration = secs * (1.0 - shorten).max(0.0);
+        self.staggered_until = Some(now + std::time::Duration::from_secs_f32(duration.max(0.05)));
         // A re-stagger does not change the state, so the seam in `force_actor_state`
         // does not see it; it still interrupts a maneuver started from the first
         // stagger (Recovery Strikes, a dodge).
@@ -3068,6 +3108,32 @@ impl Fighter {
         rating.max(0.0)
     }
 
+    pub fn resistance_rating_against_source(
+        &self,
+        ty: DamageType,
+        source: DamageSource,
+        pierce_frac: f32,
+        pierce_rating: f32,
+    ) -> f32 {
+        let mut rating = self.resistance_rating_against(ty, pierce_frac, pierce_rating);
+        if matches!(
+            source,
+            DamageSource::Spell
+                | DamageSource::ContinuousSpell
+                | DamageSource::AreaEffect
+                | DamageSource::EchoWeapon
+        ) {
+            rating += self
+                .loadout
+                .resistances
+                .iter()
+                .filter(|(t, _)| *t == DamageType::None)
+                .map(|(_, v)| *v)
+                .sum::<f32>();
+        }
+        rating
+    }
+
     /// The **Weakness Rating** this fighter suffers for an incoming `ty` component —
     /// a flat damage INCREASE (`increasePerWeaknessRating`), capped at
     /// `maximumWeaknessEffect`. Kept separate from resistance: netting the two (as the
@@ -3130,8 +3196,7 @@ impl Fighter {
     }
 
     /// The per-condition land threshold (absolute HP) for `condition`: the base
-    /// `HEALTH_PERCENT_TO_CAUSE_STATUS × base_max_health`, RAISED by any matching
-    /// `status_resist` ("Fortify Poisoned/…") bump. [§5.2 + §5.5]
+    /// `HEALTH_PERCENT_TO_CAUSE_STATUS × base_max_health`.
     ///
     /// **Tracker #31.** This used `max_health`, i.e. the arena-TRIPLED bar, which
     /// made every elemental condition need 3× the shipped damage to land. The repo
@@ -3157,19 +3222,9 @@ impl Fighter {
     /// magnitude without inventing a number; pinning the exact rule needs a
     /// dedicated pass over the capture corpus.
     pub fn condition_threshold(&self, condition: StatusEffectType) -> f32 {
-        // Both terms are fractions of the SAME pool — the Fortify bump used to be a
-        // fraction of the tripled bar while the base was too, so they matched; now
-        // that the base is the un-cheated pool the bump follows it.
         let pool = self.base_max_health() as f32;
-        let base = HEALTH_PERCENT_TO_CAUSE_STATUS * pool;
-        let bump: f32 = self
-            .loadout
-            .status_resist
-            .iter()
-            .filter(|(c, _)| *c == condition)
-            .map(|(_, frac)| *frac * pool)
-            .sum();
-        base + bump
+        let _ = condition;
+        HEALTH_PERCENT_TO_CAUSE_STATUS * pool
     }
 
     /// The elemental amplification factor for an attacker's `ty` enchant track against
@@ -4600,8 +4655,8 @@ mod tests {
             "physical is not conditioned"
         );
 
-        // Base Poisoned threshold = 25% of the character's OWN max HP; Fortify-Poisoned
-        // raises it. Tracker #31: the arena `CHEAT_BASE_HEALTH_MULTIPLIER` must NOT
+        // Base Poisoned threshold = 25% of the character's OWN max HP. Tracker #31:
+        // the arena `CHEAT_BASE_HEALTH_MULTIPLIER` must NOT
         // inflate it — under the old reading every elemental condition needed 3× the
         // shipped damage and Frostbite could never freeze anyone.
         let base_hp = f.base_max_health() as f32;
@@ -4618,12 +4673,11 @@ mod tests {
             base < HEALTH_PERCENT_TO_CAUSE_STATUS * max,
             "the arena health cheat does not raise it"
         );
-        f.loadout.status_resist = vec![(StatusEffectType::Poisoned, 0.10)];
-        let bumped = f.condition_threshold(StatusEffectType::Poisoned);
-        assert!(bumped > base, "Fortify Poisoned raises the threshold");
-        assert!(
-            (bumped - (HEALTH_PERCENT_TO_CAUSE_STATUS + 0.10) * base_hp).abs() < 1e-2,
-            "the Fortify bump is a fraction of the same un-cheated pool"
+        f.loadout.status_fortify = vec![(StatusEffectType::Poisoned, 16.8)];
+        assert_eq!(
+            f.condition_threshold(StatusEffectType::Poisoned),
+            base,
+            "Fortify<Condition> belongs to the attacker, not the victim threshold"
         );
     }
 

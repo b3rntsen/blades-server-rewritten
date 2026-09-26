@@ -260,6 +260,17 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         apply_template_properties_with_rating(&mut lo, &template, item_rating_for_material);
 
         // --- enchantments, dispatched on the family's LOGIC CLASS (Phase 3.6/3.7) ---
+        let primary_mult = 1.0 + eq
+            .item
+            .properties
+            .enchanting
+            .iter()
+            .filter_map(|prop| {
+                let family = gamedata::enchant_family(&prop.id.as_hyphenated().to_string())?;
+                (family.logic == "FortifyPrimaryEnchantPropertyLogic")
+                    .then(|| gamedata::enchant_magnitude(&family.uuid, prop.tier.min(u8::MAX as u64) as u8).unwrap_or(0.15))
+            })
+            .sum::<f32>();
         for prop in &eq.item.properties.enchanting {
             let tier = prop.tier.min(u8::MAX as u64) as u8;
             // Record the property id for EVERY equipped item before dispatching.
@@ -269,7 +280,13 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
             // just as much as the weapon.
             lo.property_ids.push(prop.id);
             let before = lo.enchants.len();
-            apply_enchant_with_rating(&mut lo, &prop.id, tier, item_rating_for_material);
+            apply_enchant_with_rating_and_multiplier(
+                &mut lo,
+                &prop.id,
+                tier,
+                item_rating_for_material,
+                primary_mult,
+            );
             // Keep `enchant_property_ids` positionally aligned with `enchants`: an
             // enchant that produced a damage track records the property behind it.
             for _ in before..lo.enchants.len() {
@@ -461,6 +478,16 @@ fn apply_enchant(lo: &mut Loadout, id: &Uuid, tier: u8) {
 }
 
 fn apply_enchant_with_rating(lo: &mut Loadout, id: &Uuid, tier: u8, item_rating: Option<f32>) {
+    apply_enchant_with_rating_and_multiplier(lo, id, tier, item_rating, 1.0);
+}
+
+fn apply_enchant_with_rating_and_multiplier(
+    lo: &mut Loadout,
+    id: &Uuid,
+    tier: u8,
+    item_rating: Option<f32>,
+    xvalue_multiplier: f32,
+) {
     let uuid = id.as_hyphenated().to_string();
     let Some(family) = gamedata::enchant_family(&uuid) else {
         return;
@@ -471,8 +498,11 @@ fn apply_enchant_with_rating(lo: &mut Loadout, id: &Uuid, tier: u8, item_rating:
     // elsewhere; the client ships the real per-family curve. Falls back to the old
     // inference only where the client ships no table, so nothing silently drops to
     // zero. See `gamedata::ENCHANT_MAGNITUDES`.
-    let magnitude = gamedata::enchant_magnitude(&uuid, tier)
+    let mut magnitude = gamedata::enchant_magnitude(&uuid, tier)
         .unwrap_or_else(|| value * tables::ENCHANT_DAMAGE_PER_VALUE);
+    if family.logic != "FortifyPrimaryEnchantPropertyLogic" {
+        magnitude *= xvalue_multiplier.max(0.0);
+    }
 
     match family.logic {
         // ---- offensive weapon damage tracks -------------------------------
@@ -544,6 +574,12 @@ fn apply_enchant_with_rating(lo: &mut Loadout, id: &Uuid, tier: u8, item_rating:
         "ShieldRavageHealthPropertyLogic" => {
             push_shield_ravage(lo, DamageType::Health, magnitude)
         }
+        "ShieldFireDamagePropertyLogic" => lo.shield_enchant_damage.push((DamageType::Fire, magnitude)),
+        "ShieldFrostDamagePropertyLogic" => lo.shield_enchant_damage.push((DamageType::Frost, magnitude)),
+        "ShieldShockDamagePropertyLogic" => lo.shield_enchant_damage.push((DamageType::Shock, magnitude)),
+        "ShieldPoisonDamagePropertyLogic" => lo.shield_enchant_damage.push((DamageType::Poison, magnitude)),
+        "ShieldStaminaDamagePropertyLogic" => lo.shield_enchant_damage.push((DamageType::Stamina, magnitude)),
+        "ShieldMagickaDamagePropertyLogic" => lo.shield_enchant_damage.push((DamageType::Magicka, magnitude)),
 
         // ---- elemental retaliation (Revenge) -------------------------------
         // Only these FOUR ship values. All nine `SpellRevenge*` /
@@ -590,14 +626,14 @@ fn apply_enchant_with_rating(lo: &mut Loadout, id: &Uuid, tier: u8, item_rating:
         // (`block_rating_bonus`), not part of the blocking item's own rating. The
         // client adds it only for the enchant's own damage types; that split is
         // 03-D11 and not modelled yet, so it still applies to every type.
-        "BlockReductionFirePropertyLogic"
-        | "BlockReductionFrostPropertyLogic"
-        | "BlockReductionShockPropertyLogic"
-        | "BlockReductionPoisonPropertyLogic"
-        | "BlockReductionSlashingPropertyLogic"
-        | "BlockReductionCleavingPropertyLogic"
-        | "BlockReductionBashingPropertyLogic"
-        | "BlockReductionTemplarPropertyLogic" => lo.block_rating_bonus += magnitude,
+        "BlockReductionFirePropertyLogic" => lo.block_rating_bonuses.push((DamageType::Fire, magnitude)),
+        "BlockReductionFrostPropertyLogic" => lo.block_rating_bonuses.push((DamageType::Frost, magnitude)),
+        "BlockReductionShockPropertyLogic" => lo.block_rating_bonuses.push((DamageType::Shock, magnitude)),
+        "BlockReductionPoisonPropertyLogic" => lo.block_rating_bonuses.push((DamageType::Poison, magnitude)),
+        "BlockReductionSlashingPropertyLogic" => lo.block_rating_bonuses.push((DamageType::Slashing, magnitude)),
+        "BlockReductionCleavingPropertyLogic" => lo.block_rating_bonuses.push((DamageType::Cleaving, magnitude)),
+        "BlockReductionBashingPropertyLogic" => lo.block_rating_bonuses.push((DamageType::Bashing, magnitude)),
+        "BlockReductionTemplarPropertyLogic" => lo.block_rating_bonus += magnitude,
 
         // Powerful Block is NOT block rating. Its shipped tooltip is "Target stunned
         // by a blocked attack takes {0} extra damage while stunned", and in the client
@@ -608,6 +644,14 @@ fn apply_enchant_with_rating(lo: &mut Loadout, id: &Uuid, tier: u8, item_rating:
 
         // ---- piercing ------------------------------------------------------
         "ResistancePiercingElementalPropertyLogic" => lo.elem_resist_piercing_rating += magnitude,
+        "ConvertDamageFirePropertyLogic" => lo.convert_damage.push((DamageType::Fire, magnitude)),
+        "ConvertDamageFrostPropertyLogic" => lo.convert_damage.push((DamageType::Frost, magnitude)),
+        "ConvertDamageShockPropertyLogic" => lo.convert_damage.push((DamageType::Shock, magnitude)),
+        "ConvertDamagePoisonPropertyLogic" => lo.convert_damage.push((DamageType::Poison, magnitude)),
+        "HastePropertyLogic" => lo.haste += (1.0 - magnitude).max(0.0),
+        "CoolDownPenaltyPropertyLogic" => lo.cooldown_penalty_secs += magnitude,
+        "ShortenStaggerPropertyLogic" => lo.shorten_stagger += magnitude,
+        "ResistSpellsPropertyLogic" => push_resist(lo, DamageType::None, magnitude),
 
         // ---- Opportunist (PDOC / EDOC) ---------------------------------------
         // "Increases physical damage by {0} against targets suffering a condition."
@@ -617,20 +661,18 @@ fn apply_enchant_with_rating(lo: &mut Loadout, id: &Uuid, tier: u8, item_rating:
         "ArmorPiercingPhysicalPropertyLogic" => lo.armor_piercing_rating += magnitude,
 
         // ---- status-threshold fortifies (Phase 3.8) ------------------------
-        "FortifyPoisonedPropertyLogic" => push_status_resist(lo, StatusEffectType::Poisoned, magnitude),
-        "FortifyBurningPropertyLogic" => push_status_resist(lo, StatusEffectType::Burning, magnitude),
-        "FortifyFrozenPropertyLogic" => push_status_resist(lo, StatusEffectType::Frozen, magnitude),
-        "FortifyEnervatedPropertyLogic" => push_status_resist(lo, StatusEffectType::Enervated, magnitude),
+        "FortifyPoisonedPropertyLogic" => push_status_fortify(lo, StatusEffectType::Poisoned, magnitude),
+        "FortifyBurningPropertyLogic" => push_status_fortify(lo, StatusEffectType::Burning, magnitude),
+        "FortifyFrozenPropertyLogic" => push_status_fortify(lo, StatusEffectType::Frozen, magnitude),
+        "FortifyEnervatedPropertyLogic" => push_status_fortify(lo, StatusEffectType::Enervated, magnitude),
 
         // ---- status duration ------------------------------------------------
         // The shared curve is a magnitude, not a percentage; express it as a
         // fraction of the family's own tier-10 ceiling so the multiplier stays in
         // a sane band. [Class 3: shape authored, family + curve real]
-        "ShortenElementalStatusPropertyLogic" => {
-            lo.status_dur_mult *= (1.0 - curve_fraction(family, tier) * 0.5).max(0.1)
-        }
+        "ShortenElementalStatusPropertyLogic" => lo.status_shorten += magnitude,
         "ExtendElementalStatusesPropertyLogic" => {
-            lo.status_dur_mult *= 1.0 + curve_fraction(family, tier) * 0.5
+            lo.status_extend += magnitude;
         }
 
         // ---- offensive element amplification --------------------------------
@@ -987,21 +1029,14 @@ fn push_resist(lo: &mut Loadout, ty: DamageType, rating: f32) {
     lo.resistances.push((ty, rating));
 }
 
-fn push_status_resist(lo: &mut Loadout, cond: StatusEffectType, magnitude: f32) {
-    // The threshold bump is expressed as a fraction of max HP by
-    // `Fighter::condition_threshold`; the shipped magnitude is a damage figure, so
-    // scale it against the base 25 %-of-maxHP trigger at L86 arena HP.
-    lo.status_resist.push((cond, magnitude / STATUS_THRESHOLD_REFERENCE_HP));
+fn push_status_fortify(lo: &mut Loadout, cond: StatusEffectType, magnitude: f32) {
+    lo.status_fortify.push((cond, magnitude));
 }
 
 fn push_fortify(lo: &mut Loadout, ty: DamageType, frac: f32) {
     lo.element_fortify.push((ty, frac));
 }
 
-/// Reference max-HP used to turn a `Fortify <Condition>` damage magnitude into the
-/// fraction-of-max-HP threshold bump `Fighter::condition_threshold` expects
-/// (L86 arena HP ≈ 3150). [Class 3: bridge]
-const STATUS_THRESHOLD_REFERENCE_HP: f32 = 3150.0;
 
 // ---------------------------------------------------------------------------
 // Abilities (Phase 3.11)
