@@ -598,6 +598,42 @@ fn loadout_from_row(r: &CharacterDbEntryCharacterWalletInventory) -> crate::aren
     lo
 }
 
+/// Report #232: the client saves the loadout picked on the between-rounds
+/// `ChooseLoadout` screen with `POST /loadouts/current`. When that character is a human
+/// in a live match, rebuild its combat loadout from the committed row and stage it
+/// for the match; the engine adopts it before the next round. Best-effort: any
+/// failure leaves the match on the loadout it already has.
+pub(crate) async fn stage_live_match_loadout(
+    db: &DbPool,
+    registry: &MatchRegistry,
+    user_id: Uuid,
+    character_id: Uuid,
+) {
+    let character_uuid = character_id.to_string();
+    if !registry.has_live_human(&character_uuid) {
+        return;
+    }
+    let Ok(mut conn) = db.get().await else { return };
+    let row = characters::table
+        .filter(characters::id.eq(character_id))
+        .filter(characters::user_id.eq(user_id))
+        .select(CharacterDbEntryCharacterWalletInventory::as_select())
+        .first(&mut conn)
+        .await
+        .optional();
+    let row = match row {
+        Ok(Some(row)) => row,
+        Ok(None) => return,
+        Err(e) => {
+            warn!("arena: between-rounds loadout for {character_uuid} not reloaded: {e}");
+            return;
+        }
+    };
+    let lo = loadout_from_row(&row);
+    let staged = registry.stage_between_rounds_loadout(&character_uuid, lo);
+    info!("arena: between-rounds loadout for {character_uuid} staged={staged}");
+}
+
 /// Build the op54 round-start PROFILE character JSON, **trimmed to retail's
 /// schema**. Retail's opponent profile is rejected by the client's deserializer
 /// when it carries keys retail never sends (capture-proven by the field-diff of

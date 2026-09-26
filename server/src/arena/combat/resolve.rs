@@ -3787,10 +3787,21 @@ fn emit_damage(
     // A shield bash ravages with the SHIELD's enchantment ("on a blocked attack or
     // Shield Bash"), not the weapon's: the basher's own shield enchants fire on
     // source 11 (`CombatManager$$ApplyDamage@0x1bd2770`, combat-spec 03 §7).
+    //
+    // The WEAPON families ride weapon-based hits only: retail's
+    // `WeaponRavageBonusInstance$$Ravage@0x1D5495C` returns early unless
+    // `IsWeaponBased(source)` (Attack or WeaponManeuver). We used to apply them to
+    // every source, so each 0.2 s channel tick of Frostbite — and of Blizzard Armor,
+    // which ships a DamagePerSecond of 0.0 and so ticks for nothing — took a full
+    // weapon-ravage bite: a caster with Ravage Stamina on the weapon emptied the
+    // victim's stamina ceiling (290 → 57) in under two seconds while dealing 0 damage
+    // (prod 2026-09-26, gsid 567778fb, report #231).
     let ravage = if resolved.source == super::state::DamageSource::ShieldManeuver {
         combat.fighters[attacker_slot].loadout.shield_ravage.clone()
-    } else {
+    } else if resolved.source.is_weapon_based() {
         combat.fighters[attacker_slot].loadout.ravage.clone()
+    } else {
+        Vec::new()
     };
     let (rav_s, rav_m, rav_h) = combat.fighters[target_slot].apply_ravage(&ravage, block_physical);
     // SHIELD ravage fires on the opposite event: "on a blocked attack or Shield Bash".
@@ -13120,6 +13131,60 @@ mod report_31_high_block_stun {
             let nd = arena_proto::parse_netdata(&frame[2..]);
             nd.int(3) == Some(50) && nd.int(6) == Some(6)
         }));
+    }
+
+    /// Report #231: Weapon Ravage rides weapon-based hits only
+    /// (`IsWeaponBased@0x1BD3E6C` gates `WeaponRavageBonusInstance$$Ravage`). On prod a
+    /// bot's Blizzard Armor (DamagePerSecond 0.0) ticked 0 damage every 0.2 s and each
+    /// tick ravaged 32 off the player's stamina ceiling: 290 → 57 in under two seconds.
+    #[test]
+    fn weapon_ravage_rides_weapon_hits_not_spells_or_channel_ticks() {
+        use super::super::state::{DamageSource, DamageType};
+        let now = Instant::now();
+        let hit = |source: DamageSource, components: Vec<(DamageType, f32)>| ResolvedDamage {
+            source,
+            active_side: ActiveSide::Middle,
+            flags: flags::SHOW_DAMAGE | flags::HAS_ATTACKER,
+            total: components.iter().map(|(_, v)| *v).sum(),
+            pre_mitigation_components: components.clone(),
+            raw_components: components.clone(),
+            components,
+            most_resisted: DamageType::None,
+            negated: false,
+            heal: 0.0,
+            block_physical: 1.0,
+            blocked: false,
+            resistance_scale: 1.0,
+        };
+        // A zero-damage frost channel tick (Blizzard Armor), a Frostbite tick and an
+        // Ice Spike: none of them is a weapon hit.
+        for (source, components) in [
+            (DamageSource::ContinuousSpell, vec![(DamageType::Frost, 0.0), (DamageType::Stamina, 0.0)]),
+            (DamageSource::ContinuousSpell, vec![(DamageType::Frost, 7.9), (DamageType::Stamina, 7.9)]),
+            (DamageSource::Spell, vec![(DamageType::Frost, 120.0), (DamageType::Stamina, 120.0)]),
+        ] {
+            let mut c = combat(now, 2);
+            c.fighters[0].loadout.ravage = vec![(DamageType::Stamina, 32.0)];
+            let ceiling = c.fighters[1].max_stamina;
+            for _ in 0..10 {
+                super::emit_damage(&mut c, 0, 1, &hit(source, components.clone()), now);
+            }
+            assert_eq!(
+                c.fighters[1].damaged_max_stamina(), ceiling,
+                "{source:?} must not carry the attacker's WEAPON ravage",
+            );
+            assert_eq!(c.fighters[1].ravaged_stamina, 0);
+        }
+        // Control: the same enchant still bites on a weapon swing and a weapon maneuver.
+        for source in [DamageSource::Attack, DamageSource::WeaponManeuver] {
+            let mut c = combat(now, 2);
+            c.fighters[0].loadout.ravage = vec![(DamageType::Stamina, 32.0)];
+            let ceiling = c.fighters[1].max_stamina;
+            super::emit_damage(&mut c, 0, 1, &hit(source, vec![(DamageType::Slashing, 50.0)]), now);
+            // Ravage is a DESTROYED portion (`ravaged_stamina`) under the full maximum.
+            assert_eq!(c.fighters[1].ravaged_stamina, 32, "{source:?} is weapon-based");
+            assert_eq!(c.fighters[1].damaged_max_stamina(), ceiling - 32);
+        }
     }
 
     /// Two fighters both wearing Revenge must not ping-pong retaliation forever.

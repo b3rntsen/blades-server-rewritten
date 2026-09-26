@@ -55,7 +55,10 @@ magicka bar at all. Players who use this track the numbers in their heads.
 ## The model
 
 - The **weapon** families apply **per landed swing**, from the attacker's loadout onto
-  the victim's maximum.
+  the victim's maximum — weapon-based sources only (`Attack`, `WeaponManeuver`):
+  `WeaponRavageBonusInstance$$Ravage@0x1D5495C` returns early unless
+  `CombatManager.IsWeaponBased@0x1BD3E6C` (`(source | 2) == 3`). A spell or a channel
+  tick never ravages; before report #231 every 0.2 s Frostbite / Blizzard Armor tick did.
 - The **shield** families fire on the opposite event — *"on a blocked attack or Shield
   Bash"* — and ravage whoever swung into the guard. They are held in a separate
   `shield_ravage` list so the resolver cannot apply one as if it were the other.

@@ -1116,6 +1116,29 @@ impl MatchRegistry {
             .collect()
     }
 
+    /// Is `character_uuid` a HUMAN fighter in a live match? Bot copies do not count.
+    pub fn has_live_human(&self, character_uuid: &str) -> bool {
+        self.matches
+            .lock()
+            .unwrap()
+            .values()
+            .any(|m| m.instance.human_slot_of(character_uuid).is_some())
+    }
+
+    /// Hand a loadout rebuilt from the character row to the live match that human is
+    /// fighting in; it is adopted at the next between-rounds beat (report #232).
+    /// False when that character is not a human in any live match.
+    pub fn stage_between_rounds_loadout(&self, character_uuid: &str, lo: Loadout) -> bool {
+        let mut matches = self.matches.lock().unwrap();
+        match matches
+            .values_mut()
+            .find(|m| m.instance.human_slot_of(character_uuid).is_some())
+        {
+            Some(m) => m.instance.stage_between_rounds_loadout(character_uuid, lo),
+            None => false,
+        }
+    }
+
     pub fn available_permits(&self) -> usize {
         self.semaphore.available_permits()
     }
