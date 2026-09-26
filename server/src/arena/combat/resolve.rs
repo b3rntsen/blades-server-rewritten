@@ -1874,14 +1874,15 @@ pub(super) fn resolve_ability_cast(
     // each `OnManeuverApplyDamage` time from execution begin and resolved the hit when
     // it passed (`ManeuverServerImplementation$$HandleExecutionUpdate@0x1e97764`); we
     // resolved it inline at the cast, so there was nothing a stagger could interrupt.
-    // The first authored hit carries the maneuver's one resolved hit here; the rest of
-    // a multi-hit family (Quick Strikes' second strike) is 05-D3's business.
-    // A shield bash keeps its `_blockDuration` guard phase (03), and Reckless Fury
-    // ships no hit, so both stay on `ability_impact_delay`.
+    // A shield bash keeps its `_blockDuration` guard phase (03), then lands on the
+    // authored bash `OnManeuverApplyDamage` event (05 §2.2).
     let base_delay = ability_impact_delay(&ea.ability_uuid, level);
     let delay = match maneuver_timing.and_then(|t| t.impacts.first().copied()) {
-        Some(first) if base_delay.is_zero() => {
-            Duration::from_secs_f32(first)
+        Some(first) if is_shield_bash(&ea.ability_uuid, level) => {
+            base_delay + Duration::from_secs_f32(first.max(0.0))
+        }
+        Some(first) => {
+            Duration::from_secs_f32(first.max(0.0))
         }
         _ => base_delay,
     };
@@ -1892,7 +1893,7 @@ pub(super) fn resolve_ability_cast(
         out.extend(apply_caster_begin_effects(combat, sender, &ea.ability_uuid, level, now));
     }
     if tag == AbilityTag::Maneuver && base_delay.is_zero() {
-        let impact_count = maneuver_impact_count(&ea.ability_uuid);
+        let impact_count = maneuver_timing.map(|t| t.impacts.len()).unwrap_or(1);
         if impact_count == 0 {
             debug!("combat: slot {sender} maneuver {} has no authored hit", ea.ability_uuid);
         }
@@ -2090,18 +2091,6 @@ fn maneuver_bonus_damage(rank: &super::gamedata::AbilityRank, two_handed: bool) 
         params.one_handed_multiplier
     };
     (params.bonus_damage * mult).max(0.0)
-}
-
-fn maneuver_impact_count(ability_uuid: &str) -> usize {
-    match super::gamedata::ABILITIES
-        .iter()
-        .find(|a| a.uuid == ability_uuid)
-        .map(|a| a.editor_name)
-    {
-        Some("QuickStrikes") | Some("RecoveryStrikes") => 2,
-        Some("RecklessFury") => 0,
-        _ => 1,
-    }
 }
 
 fn maneuver_uses_two_handed_grip(loadout: &super::state::Loadout) -> bool {
@@ -3653,12 +3642,14 @@ fn emit_damage(
     // is read for the frame, so the bars the client draws match the numbers the same
     // frame reports. [Fighter::drain_mirrored_pools]
     let (drained_stam, drained_mag) = combat.fighters[target_slot].drain_mirrored_pools(&components);
-    // RAVAGE — a cut to the victim's MAXIMUM pools, taken per landed swing and given
-    // back at the round boundary. Scaled by the share of physical damage the block
-    // let through (`block_physical`); a dodged swing resolves no
-    // hit and never arrives here. Nothing goes on the wire for it: pools are sent as
-    // fractions of max, so the ceiling change is invisible to the bar — which is why
-    // the game shows no opponent stamina bar and players count it in their heads.
+    // RAVAGE — a flat cut to the victim's MAXIMUM pools, taken per landed weapon hit
+    // and given back at the round boundary. It is not scaled by block: the
+    // `damageGiven` hook fires when a weapon hit applies non-zero health damage, so
+    // even an optimal block that lets the 5% floor through ravages in full. A dodged
+    // swing resolves no hit and never arrives here. Nothing goes on the wire for it:
+    // pools are sent as fractions of max, so the ceiling change is invisible to the
+    // bar — which is why the game shows no opponent stamina bar and players count it
+    // in their heads.
     // A shield bash ravages with the SHIELD's enchantment ("on a blocked attack or
     // Shield Bash"), not the weapon's: the basher's own shield enchants fire on
     // source 11 (`CombatManager$$ApplyDamage@0x1bd2770`, combat-spec 03 §7).
@@ -3667,8 +3658,7 @@ fn emit_damage(
     } else {
         combat.fighters[attacker_slot].loadout.ravage.clone()
     };
-    let (rav_s, rav_m, rav_h) =
-        combat.fighters[target_slot].apply_ravage(&ravage, resolved.block_physical);
+    let (rav_s, rav_m, rav_h) = combat.fighters[target_slot].apply_ravage(&ravage, 1.0);
     // SHIELD ravage fires on the opposite event: "on a blocked attack or Shield Bash".
     // The defender's shield ravages whoever swung into the guard, so it is applied to
     // the ATTACKER, and only when the guard actually took the hit (`blocked`), at
@@ -6536,9 +6526,9 @@ mod tests {
         assert_eq!(nd.int(10), Some(15), "Piercing Strikes animation id");
     }
 
-    /// A shield bash's authored 0.50 s is its guarding phase, not a guard that begins
-    /// after the damage. Staggering Bash may stun an unblocking target only when its
-    /// second, striking phase lands.
+    /// A shield bash's authored 0.50 s is its guarding phase; the strike then lands
+    /// on the clip's `OnManeuverApplyDamage` event at +0.331469 s (05 §2.2). Staggering
+    /// Bash may stun an unblocking target only when that second, striking phase lands.
     #[test]
     fn staggering_bash_guards_first_then_strikes_and_staggers() {
         let now = Instant::now();
@@ -6559,13 +6549,13 @@ mod tests {
         assert!(!combat.fighters[1].is_staggered(now));
         assert_eq!(combat.fighters[0].block_phase(now), Some(BlockPhase::Optimal));
 
-        let early = super::land_due_impacts(&mut combat, now + Duration::from_millis(499));
+        let early = super::land_due_impacts(&mut combat, now + Duration::from_millis(830));
         assert!(early.is_empty(), "the strike cannot land during the guard phase");
         assert_eq!(combat.fighters[1].health, hp_before);
 
-        let impact = now + Duration::from_millis(501);
+        let impact = now + Duration::from_millis(832);
         let landed = super::land_due_impacts(&mut combat, impact);
-        assert!(gmids(&landed).contains(&50), "the second phase deals weapon damage");
+        assert!(gmids(&landed).contains(&50), "the authored 0.331 s bash event deals weapon damage");
         assert!(combat.fighters[1].health < hp_before);
         assert!(
             combat.fighters[1].is_staggered(impact),
@@ -9190,8 +9180,8 @@ mod shipped_effects_tests {
     }
 
     #[test]
-    fn quick_and_recovery_strikes_use_two_authored_impacts() {
-        for editor in ["QuickStrikes", "RecoveryStrikes"] {
+    fn quick_family_strikes_use_their_two_authored_impacts() {
+        for editor in ["QuickStrikes", "PiercingStrikes", "VenomStrikes", "RecoveryStrikes"] {
             let now = Instant::now();
             let mut c = combat2(now);
             physical_weapon(&mut c, Weight::Light, true, 100.0);
@@ -9213,13 +9203,13 @@ mod shipped_effects_tests {
     }
 
     #[test]
-    fn other_quick_family_maneuvers_keep_one_impact() {
-        for editor in ["PiercingStrikes", "VenomStrikes"] {
+    fn non_quick_family_maneuvers_keep_their_single_authored_impact() {
+        for editor in ["PowerAttack", "Guardbreaker"] {
             let now = Instant::now();
             let mut c = combat2(now);
             let uuid = equip(&mut c, editor);
             let _ = cast_equipped(&mut c, uuid, now);
-            assert_eq!(c.pending_impacts.len(), 1, "{editor}: only Quick/Recovery are two-hit");
+            assert_eq!(c.pending_impacts.len(), 1, "{editor}: one authored maneuver hit");
         }
     }
 
@@ -11214,7 +11204,7 @@ mod report_31_high_block_stun {
             op50_count(&out) == 0,
             "the first, guarding half of a shield bash must not deal damage"
         );
-        let landed = super::land_due_impacts(&mut c, now + Duration::from_millis(501));
+        let landed = super::land_due_impacts(&mut c, now + Duration::from_millis(832));
         assert!(
             op50_count(&landed) > 0,
             "the shield bash's second half still lands its weapon hit — it must not be \

@@ -2625,25 +2625,22 @@ impl Fighter {
         }
     }
 
-    /// Take `attacker`'s Ravage off this fighter's destroyed portions, scaled by `factor`.
+    /// Take `attacker`'s Ravage off this fighter's destroyed portions.
     ///
     /// Returns `(stamina, magicka)` actually removed, for the log. Current pool is
     /// clamped down with the ceiling: a fighter sitting on a full bar loses the
     /// stamina, it does not sit above its own maximum.
     ///
-    /// `factor` is the hit's PHYSICAL block factor — ravage rides the weapon swing, so
-    /// an optimal block (physical x0) negates it outright and a late block reduces it
-    /// in proportion. A dodged swing never reaches this function at all, because no
-    /// hit resolves. **This scaling is authored, not measured** — ravage is absent from
-    /// the capture corpus entirely (no op50 component, no status effect), so no capture
-    /// can settle it; see `docs/arena-ravage.md`.
-    pub fn apply_ravage(&mut self, ravage: &[(DamageType, f32)], factor: f32) -> (u32, u32, u32) {
-        if ravage.is_empty() || factor <= 0.0 {
+    /// The `factor` argument is retained for older call sites, but weapon ravage is a
+    /// flat `damageGiven` effect: block decides whether a weapon hit landed, not how
+    /// much ceiling the landed hit destroys (combat-spec 11 §1.3).
+    pub fn apply_ravage(&mut self, ravage: &[(DamageType, f32)], _factor: f32) -> (u32, u32, u32) {
+        if ravage.is_empty() {
             return (0, 0, 0);
         }
         let (mut took_s, mut took_m, mut took_h) = (0_u32, 0_u32, 0_u32);
         for (ty, amount) in ravage {
-            let cut = (amount * factor).round().max(0.0) as u32;
+            let cut = amount.round().max(0.0) as u32;
             if cut == 0 {
                 continue;
             }
@@ -2952,25 +2949,106 @@ impl Fighter {
             };
             // Did this hit exhaust the pool? Only then does the overflow clause fire.
             let had_budget = pool.remaining > 0.0;
-            // Drain this pool across the eligible health components (in order).
-            for (ty, v) in components.iter_mut() {
-                if !eligible_ty(*ty) || *v <= 0.0 || pool.remaining <= 0.0 {
-                    continue;
+            if is_dodge {
+                // `ResolveDamageNegationInstance`: health first, proportional across
+                // health damage types; any leftover pool then splits pro-rata over
+                // Magicka and Stamina damage (combat-spec 04 §2.4).
+                let fraction = pool.absorb_fraction.clamp(0.0, 1.0);
+                let health_total: f32 = components
+                    .iter()
+                    .filter(|(ty, v)| eligible_ty(*ty) && super::damage::is_health_type(*ty) && *v > 0.0)
+                    .map(|(_, v)| *v * fraction)
+                    .sum();
+                let magicka_total: f32 = components
+                    .iter()
+                    .filter(|(ty, v)| eligible_ty(*ty) && *ty == DamageType::Magicka && *v > 0.0)
+                    .map(|(_, v)| *v * fraction)
+                    .sum();
+                let stamina_total: f32 = components
+                    .iter()
+                    .filter(|(ty, v)| eligible_ty(*ty) && *ty == DamageType::Stamina && *v > 0.0)
+                    .map(|(_, v)| *v * fraction)
+                    .sum();
+                let total = health_total + magicka_total + stamina_total;
+                let mut eaten_total = 0.0;
+                if total <= pool.remaining {
+                    for (ty, v) in components.iter_mut() {
+                        if eligible_ty(*ty)
+                            && (super::damage::is_health_type(*ty)
+                                || matches!(*ty, DamageType::Magicka | DamageType::Stamina))
+                            && *v > 0.0
+                        {
+                            let eaten = *v * fraction;
+                            *v -= eaten;
+                            eaten_total += eaten;
+                        }
+                    }
+                    pool.remaining -= eaten_total;
+                } else {
+                    let health_eaten = pool.remaining.min(health_total);
+                    if health_eaten > 0.0 && health_total > 0.0 {
+                        let ratio = health_eaten / health_total;
+                        for (ty, v) in components.iter_mut() {
+                            if eligible_ty(*ty) && super::damage::is_health_type(*ty) && *v > 0.0 {
+                                let eaten = *v * fraction * ratio;
+                                *v -= eaten;
+                                eaten_total += eaten;
+                            }
+                        }
+                        pool.remaining -= health_eaten;
+                    }
+                    let stat_total = magicka_total + stamina_total;
+                    if pool.remaining > 0.0 && stat_total > 0.0 {
+                        let stat_eaten = pool.remaining.min(stat_total);
+                        for target_ty in [DamageType::Magicka, DamageType::Stamina] {
+                            let ty_total = if target_ty == DamageType::Magicka {
+                                magicka_total
+                            } else {
+                                stamina_total
+                            };
+                            if ty_total <= 0.0 {
+                                continue;
+                            }
+                            let ty_eaten = stat_eaten * ty_total / stat_total;
+                            for (ty, v) in components.iter_mut() {
+                                if eligible_ty(*ty) && *ty == target_ty && *v > 0.0 {
+                                    let eaten = (*v * fraction).min(ty_eaten);
+                                    *v -= eaten;
+                                    eaten_total += eaten;
+                                }
+                            }
+                        }
+                        pool.remaining -= stat_eaten;
+                    }
                 }
-                // Only `absorb_fraction` of this component is eligible (1.0 for
-                // Ward/Absorb/Dodge), and never more than the pool has left.
-                let eligible = *v * pool.absorb_fraction.clamp(0.0, 1.0);
-                let eaten = eligible.min(pool.remaining);
-                *v -= eaten;
-                pool.remaining -= eaten;
-                heal += eaten * pool.restoration_factor;
-                if eaten > 0.0 {
-                    // This pool connected: pay its one-off restoration and disarm it
-                    // so a multi-component hit cannot pay it several times.
+                heal += eaten_total * pool.restoration_factor;
+                if eaten_total > 0.0 {
                     let (h, m, c) = std::mem::take(&mut pool.on_absorb_restore);
                     heal += h * dodge_factor;
                     restore_magicka += m * dodge_factor;
                     restore_cooldown_secs += c * dodge_factor;
+                }
+            } else {
+                // Drain this pool across the eligible health components (in order).
+                for (ty, v) in components.iter_mut() {
+                    if !eligible_ty(*ty) || *v <= 0.0 || pool.remaining <= 0.0 {
+                        continue;
+                    }
+                    // Only `absorb_fraction` of this component is eligible (1.0 for
+                    // Ward/Absorb), and never more than the pool has left.
+                    let eligible = *v * pool.absorb_fraction.clamp(0.0, 1.0);
+                    let eaten = eligible.min(pool.remaining);
+                    *v -= eaten;
+                    pool.remaining -= eaten;
+                    heal += eaten * pool.restoration_factor;
+                    if eaten > 0.0 {
+                        // This pool connected: pay its one-off restoration and disarm it
+                        // so a multi-component hit cannot pay it several times.
+                        let (h, m, c) = std::mem::take(&mut pool.on_absorb_restore);
+                        heal += h * dodge_factor;
+                        restore_magicka += m * dodge_factor;
+                        restore_cooldown_secs += c * dodge_factor;
+                    }
                 }
             }
             // "…plus any excess damage from the attack that destroys it." The pool
@@ -3850,23 +3928,31 @@ mod tests {
         assert!(!f.is_dead(), "ravage does not kill on its own");
     }
 
-    /// Block scales it, because ravage rides the swing: an optimal block (physical
-    /// factor 0) negates it outright, a late block takes a proportional bite.
+    /// Weapon ravage is flat on any landed weapon hit. Block decides how much health
+    /// damage lands, but the ravage hook itself is not scaled by the block factor
+    /// (combat-spec 11 §1.3).
     #[test]
-    fn block_scales_ravage_and_an_optimal_block_negates_it() {
+    fn block_does_not_scale_weapon_ravage() {
         let mut opt = Fighter::new(0, 564, Loadout::default(), Instant::now());
         opt.max_stamina = 660;
         opt.stamina = 660;
-        assert_eq!(opt.apply_ravage(&[(DamageType::Stamina, 42.0)], 0.0), (0, 0, 0));
-        assert_eq!(opt.damaged_max_stamina(), 660, "an optimal block loses no ceiling");
+        let (s, _, _) = opt.apply_ravage(&[(DamageType::Stamina, 42.0)], 0.0);
+        assert_eq!(s, 42, "even an optimal-blocked landed hit ravages in full");
+        assert_eq!(opt.damaged_max_stamina(), 618);
 
         let mut late = Fighter::new(0, 564, Loadout::default(), Instant::now());
         late.max_stamina = 660;
         late.stamina = 660;
         let (s, _, _) = late.apply_ravage(&[(DamageType::Stamina, 42.0)], 0.5);
-        assert_eq!(s, 21, "a half-reducing late block ravages half");
+        assert_eq!(s, 42, "a late block also leaves the flat ravage amount alone");
         assert_eq!(late.max_stamina, 660);
-        assert_eq!(late.damaged_max_stamina(), 639);
+        assert_eq!(late.damaged_max_stamina(), 618);
+
+        let mut none = Fighter::new(0, 564, Loadout::default(), Instant::now());
+        none.max_stamina = 660;
+        none.stamina = 660;
+        assert_eq!(none.apply_ravage(&[], 0.0), (0, 0, 0), "control: no ravage enchant");
+        assert_eq!(none.damaged_max_stamina(), 660);
     }
 
     /// It does not cross a round boundary — the owner's rule, and the reason the
@@ -4502,6 +4588,65 @@ mod absorb_fraction_tests {
         assert!(r.negated, "source 9 is dodgeable");
         assert_eq!(drain, vec![(DamageType::Magicka, 0.0), (DamageType::Stamina, 0.0)]);
         assert_eq!(f.negation_pools[0].remaining, 400.0);
+    }
+
+    fn dodge_pool(remaining: f32, now: Instant) -> NegationPool {
+        NegationPool {
+            source: DamageNegationSource::Dodge,
+            remaining,
+            expires_at: now + std::time::Duration::from_secs(2),
+            restoration_factor: 0.0,
+            absorb_fraction: 1.0,
+            elemental_only: false,
+            consumes_overflow: false,
+            on_absorb_restore: (0.0, 0.0, 0.0),
+            dodge_started_at: Some(now),
+            dodge_status_expires_at: Some(now + std::time::Duration::from_secs(1)),
+            dodge_effectiveness: 1.0,
+            bypass_types: &[],
+        }
+    }
+
+    /// 04 §2.4: partial dodge negation takes health damage first, proportionally
+    /// across health damage types. Control: when the pool covers the full health hit,
+    /// the whole health list is zeroed.
+    #[test]
+    fn dodge_partial_health_negation_is_proportional_across_health_types() {
+        let now = Instant::now();
+        let mut f = Fighter::new(0, 1, loadout::starter(), now);
+        f.negation_pools.push(dodge_pool(100.0, now));
+        let mut mixed = vec![(DamageType::Slashing, 100.0), (DamageType::Fire, 100.0)];
+        let r = f.apply_negation_pools_for_source(DamageSource::Attack, &mut mixed, now);
+        assert!(!r.negated, "half the health damage still lands");
+        assert_eq!(mixed, vec![(DamageType::Slashing, 50.0), (DamageType::Fire, 50.0)]);
+
+        let mut full = Fighter::new(0, 1, loadout::starter(), now);
+        full.negation_pools.push(dodge_pool(100.0, now));
+        let mut control = vec![(DamageType::Slashing, 40.0), (DamageType::Fire, 60.0)];
+        let r = full.apply_negation_pools_for_source(DamageSource::Attack, &mut control, now);
+        assert!(r.negated, "control: the pool covered the whole health hit");
+        assert_eq!(control, vec![(DamageType::Slashing, 0.0), (DamageType::Fire, 0.0)]);
+    }
+
+    /// 04 §2.4: only leftover pool after health is split over Magicka and Stamina
+    /// pro-rata. Control: with no health damage, the same split applies directly to
+    /// the two non-health pools.
+    #[test]
+    fn dodge_leftover_pool_splits_pro_rata_over_magicka_and_stamina() {
+        let now = Instant::now();
+        let mut f = Fighter::new(0, 1, loadout::starter(), now);
+        f.negation_pools.push(dodge_pool(80.0, now));
+        let mut mixed = vec![(DamageType::Fire, 50.0), (DamageType::Stamina, 50.0)];
+        let r = f.apply_negation_pools_for_source(DamageSource::Attack, &mut mixed, now);
+        assert!(!r.negated, "20 stamina damage remains");
+        assert_eq!(mixed, vec![(DamageType::Fire, 0.0), (DamageType::Stamina, 20.0)]);
+
+        let mut stat_only = Fighter::new(0, 1, loadout::starter(), now);
+        stat_only.negation_pools.push(dodge_pool(80.0, now));
+        let mut control = vec![(DamageType::Magicka, 50.0), (DamageType::Stamina, 50.0)];
+        let r = stat_only.apply_negation_pools_for_source(DamageSource::Attack, &mut control, now);
+        assert!(!r.negated, "control: 20 total stat damage remains");
+        assert_eq!(control, vec![(DamageType::Magicka, 10.0), (DamageType::Stamina, 10.0)]);
     }
 
     #[test]
