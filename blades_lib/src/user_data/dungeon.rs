@@ -31,6 +31,11 @@ pub struct LootTableResult {
 }
 
 impl LootTableResult {
+    /// Nothing to hand out: no stack, no coin, no gear.
+    pub fn is_empty(&self) -> bool {
+        self.stackable_items.is_empty() && self.currencies.is_empty() && self.item.is_empty()
+    }
+
     pub fn merge(&mut self, other: LootTableResult) {
         for (uuid, amount) in other.stackable_items {
             self.stackable_items.insert(
@@ -63,8 +68,16 @@ pub struct DungeonEnemyResult {
     ///
     /// It still `default`s on the way in: a field we always send is not
     /// necessarily a field every stored row already has.
+    ///
+    /// ONE bare loot result, not a map of them (report #236). The client's
+    /// `EnemyGeneratedData.SpawnGroupLoot` is a single `RewardData`, where
+    /// `LootTableLoot` beside it is a `Dictionary<string, RewardData>`, and all 38
+    /// filled retail observations are exactly `{"stackableItems":{<DoorKey>:1}}`.
+    /// Typed as a map keyed by table id, that retail value could not even be
+    /// deserialized ("stackableItems" is not a uuid), and an empty `LootTableResult`
+    /// still serializes as the `{}` retail sends everywhere else.
     #[serde(default)]
-    pub spawn_group_loot: HashMap<Uuid, LootTableResult>,
+    pub spawn_group_loot: LootTableResult,
     /// Omitted when empty — the opposite rule to the field above, and measured
     /// the same way: of those 66,994 results, 190 omit `lootTableLoot` entirely
     /// and **not one** sends it as `{}`. Absent is retail's encoding of "no loot
@@ -78,12 +91,8 @@ pub struct DungeonEnemyResult {
 
 impl DungeonEnemyResult {
     pub fn merged_loot_table(&self) -> LootTableResult {
-        let mut result = LootTableResult::default();
-        for loot_table in self
-            .spawn_group_loot
-            .values()
-            .chain(self.loot_table_loot.values())
-        {
+        let mut result = self.spawn_group_loot.clone();
+        for loot_table in self.loot_table_loot.values() {
             result.merge(loot_table.clone());
         }
         result
@@ -550,5 +559,33 @@ mod enemy_loot_wire_shape {
         let e = enemy(json!({ "enemyLevel": 3, "givenXP": 10, "spawnGroupLoot": {} }));
         assert!(e.loot_table_loot.is_empty());
         assert!(e.spawn_group_loot.is_empty());
+    }
+
+    /// Report #236. Retail's EQ15 Mercenary, verbatim from a captured `/quests`
+    /// body: the door key rides in `spawnGroupLoot` as a BARE result. Typed as a
+    /// map keyed by table id this failed to parse, so the key could neither be
+    /// generated nor imported.
+    #[test]
+    fn retail_spawn_group_loot_is_one_bare_result() {
+        const DOOR_KEY: &str = "faa3aeb3-9284-4d83-8981-1af00e3a6398";
+        let src = json!({
+            "enemyLevel": 14,
+            "givenXP": 90,
+            "spawnGroupLoot": { "stackableItems": { "faa3aeb3-9284-4d83-8981-1af00e3a6398": 1 } },
+            "lootTableLoot": {
+                "871c2e9b-7e7a-4564-a022-e435dfb8a436": {
+                    "currencies": { "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 18 }
+                }
+            },
+        });
+        let e = enemy(src.clone());
+        let key: Uuid = DOOR_KEY.parse().unwrap();
+        assert_eq!(e.spawn_group_loot.stackable_items.get(&key), Some(&1));
+        // Corpse loot is both halves: the key AND the gold.
+        let merged = e.merged_loot_table();
+        assert_eq!(merged.stackable_items.get(&key), Some(&1));
+        assert_eq!(merged.currencies.len(), 1);
+        // And it goes back out in exactly retail's shape.
+        assert_eq!(serde_json::to_value(&e).unwrap(), src);
     }
 }

@@ -309,6 +309,71 @@ fn add_missing_item_tables(
     changed
 }
 
+/// Give a stored row the key a key-holder enemy should carry (#236).
+///
+/// Rows generated before report #236 have the right enemies but no key: the
+/// Mercenary's `spawnGroupLoot` was always `{}`, and a key-holder rolling the
+/// DoorKey table got an empty result for it. Both rows are durable -- an event
+/// quest is minted once per window -- so without this the player who accepted
+/// one keeps a keyless Mercenary until the window closes.
+///
+/// Only what was empty BY CONSTRUCTION is filled: an empty `spawnGroupLoot`
+/// where the fresh roll has one, and an empty result for a table the enemy
+/// corpus does not model (a modelled table rolling empty is an ordinary outcome
+/// and stays empty). Nothing already rolled is rewritten, enemies absent from
+/// the stored row are not grown, and version-1 rows stay byte-for-byte.
+///
+/// A row whose enemies carry no loot at all predates enemy loot entirely, and
+/// `dungeon_update` credits its corpses from the client's request instead;
+/// giving one of its enemies loot would switch every other corpse in it to
+/// crediting nothing, so such a row is left alone.
+fn add_missing_enemy_key_loot(
+    stored: &mut DungeonGeneratedData,
+    fresh: &DungeonGeneratedData,
+) -> bool {
+    use blades_lib::util::dungeon::enemy_table_is_unmodelled;
+
+    if stored.version != 0 {
+        return false;
+    }
+    let has_enemy_loot = stored
+        .enemy_generated_data
+        .values()
+        .flatten()
+        .flatten()
+        .any(|e| !e.loot_table_loot.is_empty() || !e.spawn_group_loot.is_empty());
+    if !has_enemy_loot {
+        return false;
+    }
+
+    let mut changed = false;
+    for (group, fresh_spawners) in &fresh.enemy_generated_data {
+        let Some(stored_spawners) = stored.enemy_generated_data.get_mut(group) else {
+            continue;
+        };
+        for (fresh_enemies, stored_enemies) in fresh_spawners.iter().zip(stored_spawners.iter_mut()) {
+            for (fresh_enemy, stored_enemy) in fresh_enemies.iter().zip(stored_enemies.iter_mut()) {
+                if stored_enemy.spawn_group_loot.is_empty() && !fresh_enemy.spawn_group_loot.is_empty() {
+                    stored_enemy.spawn_group_loot = fresh_enemy.spawn_group_loot.clone();
+                    changed = true;
+                }
+                for (table, fresh_loot) in &fresh_enemy.loot_table_loot {
+                    if fresh_loot.is_empty() || !enemy_table_is_unmodelled(table) {
+                        continue;
+                    }
+                    if let Some(stored_loot) = stored_enemy.loot_table_loot.get_mut(table) {
+                        if stored_loot.is_empty() {
+                            *stored_loot = fresh_loot.clone();
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    changed
+}
+
 /// The shipped `quests_daily.json` scaling — the same table the server loads.
 ///
 /// Tests reached for `QuestLevelScaling::default()`, which is EMPTY and therefore
@@ -330,6 +395,128 @@ pub(crate) fn shipped_scaling() -> blades_lib::static_data::QuestLevelScaling {
          fall back to the old formula and agree with any regression"
     );
     scaling
+}
+
+#[cfg(test)]
+mod report236_key_holder_repair_tests {
+    use super::*;
+
+    /// "A Battle Unceasing" (EQ15), the event quest of the report.
+    const EQ15_QUEST: &str = "e8f3614c-8672-4f77-9dad-4b400676f4b6";
+    const MERCENARY: &str = "a91ebfe6-0167-4643-bd6f-ed27d8dfad41";
+    /// EQ13's quest; its key-holder rolls the DoorKey TABLE instead.
+    const EQ13_QUEST: &str = "31baf922-2b1a-4605-ae52-4946e26994c6";
+    const EQ13_KEY_HOLDER: &str = "101b2285-0679-4d5c-92d5-a34045f145ce";
+    const KEY_TABLE: &str = "8858f284-4f33-4da4-8085-0befa7ef2637";
+    const DOOR_KEY: &str = "faa3aeb3-9284-4d83-8981-1af00e3a6398";
+
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+
+    fn fresh(quest: &str, level: i64) -> DungeonGeneratedData {
+        let game_data = super::report85_job_generated_data_tests::game_data();
+        let (_, generated) = generate_quest_data(
+            &game_data,
+            uuid(quest),
+            level,
+            &blades_lib::static_data::QuestLevelScaling::default(),
+        )
+        .expect("the quest exists");
+        generated.expect("it has a dungeon")
+    }
+
+    /// The row as stored before the fix: no spawnGroupLoot, and the key table
+    /// present but empty -- exactly what production holds for RonnieRaider.
+    fn as_stored_before_the_fix(fresh: &DungeonGeneratedData) -> DungeonGeneratedData {
+        let mut stored = fresh.clone();
+        for enemy in stored.enemy_generated_data.values_mut().flatten().flatten() {
+            enemy.spawn_group_loot = Default::default();
+            if let Some(l) = enemy.loot_table_loot.get_mut(&uuid(KEY_TABLE)) {
+                *l = Default::default();
+            }
+        }
+        stored
+    }
+
+    fn keys(data: &DungeonGeneratedData, group: &str) -> u64 {
+        data.enemy_generated_data[&uuid(group)]
+            .iter()
+            .flatten()
+            .filter_map(|e| e.merged_loot_table().stackable_items.get(&uuid(DOOR_KEY)).copied())
+            .sum()
+    }
+
+    /// THE REPAIR, for both roads: an accepted EQ15 gains the Mercenary's key,
+    /// and an accepted EQ13 its key-holder's.
+    #[test]
+    fn an_accepted_quest_gains_its_key_holders_key() {
+        for (quest, holder) in [(EQ15_QUEST, MERCENARY), (EQ13_QUEST, EQ13_KEY_HOLDER)] {
+            // Stored at one level, refreshed at another: the player levelled.
+            let mut stored = as_stored_before_the_fix(&fresh(quest, 73));
+            assert_eq!(keys(&stored, holder), 0, "{quest}: the precondition");
+            assert!(add_missing_enemy_key_loot(&mut stored, &fresh(quest, 89)), "{quest}");
+            assert_eq!(keys(&stored, holder), 1, "{quest}: still no key");
+        }
+    }
+
+    /// CONTROL: nothing already rolled changes -- not the gold the player may
+    /// have seen, not an empty roll of a table the corpus DOES model, not the
+    /// items or chests.
+    #[test]
+    fn it_fills_only_what_was_empty_by_construction() {
+        let mut stored = as_stored_before_the_fix(&fresh(EQ15_QUEST, 73));
+        let gold = uuid("871c2e9b-7e7a-4564-a022-e435dfb8a436");
+        // A modelled table that rolled empty must stay empty.
+        let some_enemy = stored
+            .enemy_generated_data
+            .get_mut(&uuid("7461fd2c-c417-4b80-b185-6d491982787e"))
+            .unwrap()[0][0]
+            .loot_table_loot
+            .get_mut(&gold)
+            .unwrap();
+        *some_enemy = Default::default();
+        let before = serde_json::to_value(&stored).unwrap();
+
+        assert!(add_missing_enemy_key_loot(&mut stored, &fresh(EQ15_QUEST, 73)));
+
+        let mut after = serde_json::to_value(&stored).unwrap();
+        // Take the one intended change back out; everything else must be equal.
+        after["enemyGeneratedData"][MERCENARY][0][0]["spawnGroupLoot"] = serde_json::json!({});
+        assert_eq!(after, before);
+    }
+
+    /// CONTROL: retail and imported rows are version 1 and stay byte-for-byte.
+    #[test]
+    fn it_leaves_captured_rows_alone() {
+        let mut stored = as_stored_before_the_fix(&fresh(EQ15_QUEST, 30));
+        stored.version = 1;
+        let before = serde_json::to_value(&stored).unwrap();
+        assert!(!add_missing_enemy_key_loot(&mut stored, &fresh(EQ15_QUEST, 30)));
+        assert_eq!(serde_json::to_value(&stored).unwrap(), before);
+    }
+
+    /// CONTROL: a row from before enemy loot existed is left alone. Its corpses
+    /// are credited from the client's request; one enemy with loot would switch
+    /// every other corpse in it to crediting nothing.
+    #[test]
+    fn a_row_that_predates_enemy_loot_is_left_alone() {
+        let mut stored = fresh(EQ15_QUEST, 30);
+        for enemy in stored.enemy_generated_data.values_mut().flatten().flatten() {
+            enemy.spawn_group_loot = Default::default();
+            enemy.loot_table_loot.clear();
+        }
+        assert!(!add_missing_enemy_key_loot(&mut stored, &fresh(EQ15_QUEST, 30)));
+        assert_eq!(keys(&stored, MERCENARY), 0);
+    }
+
+    /// CONTROL: an up-to-date row reports no change, so /quests does not write
+    /// the same bytes back on every poll.
+    #[test]
+    fn an_up_to_date_row_is_not_rewritten() {
+        let mut stored = fresh(EQ15_QUEST, 30);
+        assert!(!add_missing_enemy_key_loot(&mut stored, &fresh(EQ15_QUEST, 30)));
+    }
 }
 
 #[cfg(test)]
@@ -856,11 +1043,13 @@ pub async fn get_quests(
             // the stale item map on the ordinary /quests refresh that precedes play,
             // and persist it because /dungeons/current/update reads the DB row again.
             for row in &mut quests {
-                if jobs_gen::is_job_row(&row.info.0)
-                    || matches!(row.info.0.r#type, blades_lib::user_data::QuestType::GameEvent)
-                {
+                if jobs_gen::is_job_row(&row.info.0) {
                     continue;
                 }
+                // Event rows take only the enemy-key repair below (#236): the story
+                // repairs were written for, and tested against, story rows.
+                let is_event =
+                    matches!(row.info.0.r#type, blades_lib::user_data::QuestType::GameEvent);
                 // Repair a story quest stamped with a job's difficulty.
                 //
                 // A retired code path minted story quests with a real
@@ -879,7 +1068,7 @@ pub async fn get_quests(
                 // Same shape as the loot repair below, and deliberately ahead of
                 // it: that one gives up when a row has no generated_data, and
                 // this must run for every story row regardless.
-                if repair_story_quest_difficulty(&mut row.info.0) {
+                if !is_event && repair_story_quest_difficulty(&mut row.info.0) {
                     use crate::schema::quests;
                     diesel::update(
                         quests::table
@@ -902,9 +1091,18 @@ pub async fn get_quests(
                 ) else {
                     continue;
                 };
-                let refreshed = refresh_empty_item_loot(stored, fresh.clone());
-                let grew = add_missing_item_tables(stored, &fresh);
-                if refreshed || grew {
+                let refreshed = !is_event && refresh_empty_item_loot(stored, fresh.clone());
+                let grew = !is_event && add_missing_item_tables(stored, &fresh);
+                let keyed = add_missing_enemy_key_loot(stored, &fresh);
+                if keyed {
+                    log::info!(
+                        "quests: gave the key-holder of quest {} ({}) its door key for character {}",
+                        row.id,
+                        row.info.0.gld_quest_id,
+                        character_id_var
+                    );
+                }
+                if refreshed || grew || keyed {
                     use crate::schema::quests;
                     diesel::update(
                         quests::table
