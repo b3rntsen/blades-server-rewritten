@@ -1091,6 +1091,9 @@ fn parse_equipped_abilities(equipped: &Value, levels: &Value) -> Vec<EquippedAbi
     let levels = levels.as_object();
     for v in slots.values() {
         if let Some(uuid) = v.as_str() {
+            if gamedata::ability(uuid).is_some_and(|a| a.enemy_only) {
+                continue;
+            }
             let mut level = levels
                 .and_then(|m| m.get(uuid))
                 .and_then(Value::as_u64)
@@ -1703,6 +1706,29 @@ mod tests {
             AbilityTag::Perk
         );
         assert_eq!(ability_tag_for_template("not-a-uuid"), AbilityTag::Generic);
+    }
+
+    #[test]
+    fn equipped_enemy_only_abilities_are_not_imported() {
+        let tempest = gamedata::ABILITIES
+            .iter()
+            .find(|a| a.editor_name == "TempestArmor")
+            .expect("TempestArmor");
+        assert!(tempest.enemy_only, "precondition: Tempest Armor is enemy-only");
+        let equipped = serde_json::json!({
+            "0": tempest.uuid,
+            "1": gamedata::ids::WARD,
+        });
+        let levels = serde_json::json!({
+            tempest.uuid: 1,
+            gamedata::ids::WARD: 1,
+        });
+
+        let got = super::parse_equipped_abilities(&equipped, &levels);
+
+        assert_eq!(got.len(), 1, "only the player-legal control ability imports");
+        assert_eq!(got[0].instance_uuid, gamedata::ids::WARD);
+        assert_eq!(got[0].tag, AbilityTag::Ward);
     }
 
     /// A resolved weapon carries the shipped cadence + block stats and the

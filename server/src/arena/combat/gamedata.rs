@@ -14658,6 +14658,65 @@ impl Ability {
         let s = self.ranks_start as usize;
         &ABILITY_RANKS[s..s + self.ranks_len as usize]
     }
+
+    /// Shipped `LearnableAbility.tags[]` values.
+    ///
+    /// Tags 3/4/7/9 are consumed by enemy AI selection (15 §4.2); tag 7 is also
+    /// the player cast-state bypass from PR-07. The generator that emits this file
+    /// now keeps the tag list beside the ability row so AI code does not maintain a
+    /// second editor-name catalogue.
+    pub fn tags(&self) -> &'static [u8] {
+        match self.uuid {
+            "0cfe29cd-89d9-42ad-9227-8308e2f87c7f" => &[2],
+            "1c836287-44d8-40a6-bf02-d457f57d171d" => &[2, 7],
+            "1e7f0dd6-6015-4f65-b811-3246e407e330" => &[3, 4, 7, 9],
+            "256b722a-c4bd-45ad-ae25-15ee805fbc70" => &[2, 3, 7],
+            "2ab06506-2114-4738-bd87-f6f402d3ce2e" => &[1, 7],
+            "3b610e1d-b4d0-48ae-bc6a-7b3fc6fe5f12" => &[2, 3, 4, 7],
+            "4be1d681-c35d-4540-b255-c2910ac80664" => &[1],
+            "4e760726-b012-4b25-bc92-0cd6312d6601" => &[3, 4, 7],
+            "50b19efb-c7d8-41fe-8791-4782cff99e70" => &[1],
+            "521b9643-52e9-449a-b8ea-9221c0a73f20" => &[2],
+            "63c09fe6-a62b-42bd-93df-a9a6db6a2321" => &[2, 7],
+            "65ede044-d68a-4b2b-8f0c-02075ad133cc" => &[2, 7],
+            "66610227-07bf-4e3b-a75b-c591271f0817" => &[1],
+            "66bdc017-30c5-4b5e-9753-215c45056f6a" => &[1],
+            "69ffa3fd-deb7-4824-bab6-ac6450f19676" => &[3, 4, 10],
+            "7f78d342-f346-4210-9f62-01a540687bb3" => &[3, 4, 7, 9],
+            "7fc15804-1637-40a9-8dcc-3ea1eb0f778d" => &[1],
+            "85596d85-5f2a-4f3a-9059-960eaff79a87" => &[1],
+            "91078132-ef5c-492a-97f2-ac69be5140a8" => &[2],
+            "95eeca9c-7fbd-40a8-9d5b-9c061f08403c" => &[2, 3, 4, 7],
+            "9b915ec3-c63b-4b62-b417-4c5436d45fc1" => &[3, 4, 6, 10],
+            "9fdc4d52-ce90-44f8-9b5d-21f31e27dbda" => &[1],
+            "a9d330ac-3d9d-4aa0-92ea-65a552604acf" => &[3, 6],
+            "ade28628-e213-4eaf-9eeb-5fce53870b92" => &[1],
+            "ba61ce46-163f-4a61-8ede-f5b7ae365e40" => &[3, 4, 10],
+            "be56c560-a4ba-47ad-8513-f24c342ca594" => &[3, 4, 7, 9],
+            "c112c956-eaac-4d7d-878e-32cd7d1e5209" => &[1],
+            "c1494bda-4219-4bec-8017-fb376a058ea7" => &[1],
+            "c4b48518-e847-4f3d-81a2-2856bdb4ed98" => &[2, 3, 4, 7],
+            "cc768bae-a063-4885-8207-f39c6542fb36" => &[1],
+            "cdab44fb-6ff6-4701-a4ec-d19cce79e49f" => &[1],
+            "ce6b63e9-9f18-49c4-aee0-51f7985f9892" => &[1],
+            "cfee0b02-6d91-4d34-869c-a7e54329060d" => &[1],
+            "d07a8d30-9a1c-49b0-866d-97a8aa1534cf" => &[1],
+            "dfb8d247-1333-42eb-9730-a1c16d10584f" => &[1],
+            "e07f9b1a-64db-44ef-ba25-0e4378789ddc" => &[1],
+            "e08f95de-85bb-4829-ba7e-cf45bc6fb422" => &[1, 7],
+            "e14eedd5-cd50-404e-9697-a37fd1d2ce02" => &[1],
+            "e685e88f-34e7-4fdc-bacd-618763078d65" => &[3, 4, 7, 9],
+            "eb0cb7e6-47cf-48e7-8cc9-dbf80fc77f13" => &[1],
+            "ef3e58a3-9bf0-49ca-8e1e-9dd34c61557d" => &[1],
+            "f60f69d4-24bc-46fb-a4fa-d4abdac0f06f" => &[2, 7],
+            "f9a2373b-a84f-4716-90ce-165baa2dd6ed" => &[3, 4, 10],
+            _ => &[],
+        }
+    }
+
+    pub fn has_tag(&self, tag: u8) -> bool {
+        self.tags().contains(&tag)
+    }
 }
 
 /// All 63 learnable abilities, **sorted by `uuid`**.
@@ -44016,6 +44075,21 @@ mod tests {
     }
 
     #[test]
+    fn ability_ai_tags_match_the_shipped_tag_rows() {
+        let by_editor = |editor: &str| {
+            ABILITIES
+                .iter()
+                .find(|a| a.editor_name == editor)
+                .unwrap_or_else(|| panic!("{editor} missing"))
+        };
+        assert_eq!(by_editor("ShieldOfMania").tags(), &[3, 6]);
+        assert_eq!(by_editor("ShieldBash").tags(), &[3, 4, 10]);
+        assert_eq!(by_editor("DodgingStrike").tags(), &[3, 4, 7, 9]);
+        assert!(by_editor("Ward").has_tag(7), "control: Ward is Quick");
+        assert!(!by_editor("QuickStrikes").has_tag(7), "control: Quick Strikes is not tag 7");
+    }
+
+    #[test]
     fn damage_reduction_caps_match_combat_parameters() {
         assert_eq!(combat_params::MAXIMUM_BLOCK_REDUCTION, MAX_BLOCK_REDUCTION);
         assert_eq!(combat_params::MAXIMUM_ARMOR_REDUCTION, MAX_ARMOR_REDUCTION);
@@ -45124,4 +45198,3 @@ pub fn enchant_magnitude(family_uuid: &str, tier: u8) -> Option<f32> {
     let e = ENCHANT_MAGNITUDES.iter().find(|e| e.family_uuid == family_uuid)?;
     e.tiers.get((tier as usize).min(10)).copied()
 }
-

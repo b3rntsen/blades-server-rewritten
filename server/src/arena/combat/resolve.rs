@@ -5734,16 +5734,6 @@ fn bot_reaction_time(
     }
 }
 
-fn bot_resample_reaction_time(
-    f: &mut super::state::Fighter,
-    game_session_id: &str,
-    slot: usize,
-) -> Duration {
-    let t = bot_draw_reaction_time(f, game_session_id, slot);
-    f.bot_ai.reaction_time = Some(t);
-    t
-}
-
 fn bot_schedule_next_decision(
     f: &mut super::state::Fighter,
     game_session_id: &str,
@@ -5758,54 +5748,6 @@ fn bot_noise(rng: &mut BotRng, sigma: f32) -> f32 {
     (rng.gaussian_f32() * sigma).clamp(-3.0 * sigma, 3.0 * sigma)
 }
 
-fn editor_name(ability_uuid: &str) -> Option<&'static str> {
-    super::gamedata::ability(ability_uuid).map(|a| a.editor_name)
-}
-
-fn bot_ability_has_attack_counter(editor: &str) -> bool {
-    matches!(
-        editor,
-        "DodgingStrike"
-            | "AdrenalineDodge"
-            | "RenewingDodge"
-            | "FocusingDodge"
-            | "Absorb"
-            | "TempestArmor"
-            | "FirestormArmor"
-            | "BlizzardArmor"
-            | "Firewall"
-            | "ShieldBash"
-            | "HarryingBash"
-            | "ReflectingBash"
-            | "StaggeringBash"
-    )
-}
-
-fn bot_ability_has_spell_counter(editor: &str) -> bool {
-    matches!(
-        editor,
-        "DodgingStrike"
-            | "AdrenalineDodge"
-            | "RenewingDodge"
-            | "FocusingDodge"
-            | "Absorb"
-            | "TempestArmor"
-            | "FirestormArmor"
-            | "BlizzardArmor"
-            | "ShieldBash"
-            | "HarryingBash"
-            | "ReflectingBash"
-            | "StaggeringBash"
-    )
-}
-
-fn bot_ability_has_dodge(editor: &str) -> bool {
-    matches!(
-        editor,
-        "DodgingStrike" | "AdrenalineDodge" | "RenewingDodge" | "FocusingDodge"
-    )
-}
-
 fn bot_is_dodging(f: &super::state::Fighter, now: Instant) -> bool {
     f.tracked_statuses(now)
         .contains(&super::state::StatusEffectType::Dodging)
@@ -5817,18 +5759,19 @@ fn bot_ability_allowed_by_ai_tags(
     snapshot: BotOpponentSnapshot,
     now: Instant,
 ) -> bool {
-    let Some(editor) = editor_name(ability_uuid) else {
+    let Some(ability) = super::gamedata::ability(ability_uuid) else {
         return true;
     };
-    if f.is_staggered(now) && !super::interrupts::is_quick(ability_uuid) {
+    if f.is_staggered(now) && !ability.has_tag(7) {
         return false;
     }
-    if bot_ability_has_dodge(editor) && bot_is_dodging(f, now) {
+    if ability.has_tag(9) && bot_is_dodging(f, now) {
         return false;
     }
-    let attack_counter = bot_ability_has_attack_counter(editor);
-    let spell_counter = bot_ability_has_spell_counter(editor);
-    if !attack_counter && !spell_counter {
+    let off_buff = ability.has_tag(1) || ability.has_tag(2);
+    let attack_counter = ability.has_tag(3);
+    let spell_counter = ability.has_tag(4);
+    if off_buff && !attack_counter && !spell_counter {
         return true;
     }
     let attack_live = matches!(
@@ -5836,7 +5779,7 @@ fn bot_ability_allowed_by_ai_tags(
         BotObservedState::Charging | BotObservedState::Maneuver
     );
     let spell_live = snapshot.state == BotObservedState::CastingOffensiveSpell;
-    (attack_counter && attack_live) || (spell_counter && spell_live)
+    off_buff || (attack_counter && attack_live) || (spell_counter && spell_live)
 }
 
 fn bot_snapshot_opponent(
@@ -5908,14 +5851,13 @@ fn bot_ability_score(
         score += r.maximum_damage_dodged().unwrap_or(0.0) * 0.02;
         score += r.maximum_amount_absorbed().unwrap_or(0.0) * 0.03;
     }
-    if let Some(editor) = editor_name(ability_uuid) {
-        let counter_live = (bot_ability_has_attack_counter(editor)
+    if let Some(ability) = super::gamedata::ability(ability_uuid) {
+        let counter_live = (ability.has_tag(3)
             && matches!(
                 snapshot.state,
                 BotObservedState::Charging | BotObservedState::Maneuver
             ))
-            || (bot_ability_has_spell_counter(editor)
-                && snapshot.state == BotObservedState::CastingOffensiveSpell);
+            || (ability.has_tag(4) && snapshot.state == BotObservedState::CastingOffensiveSpell);
         if counter_live {
             score += 35.0;
         }
@@ -5939,12 +5881,19 @@ pub(super) fn bot_next_ready_ability(
         uuid: String,
         score: f32,
         out_of_resource: bool,
+        kind: super::gamedata::AbilityKind,
     }
 
     let mut candidates = Vec::new();
     let abilities = f.loadout.abilities.clone();
     for a in abilities {
         if a.tag == super::state::AbilityTag::Perk {
+            continue;
+        }
+        let Some(ability) = super::gamedata::ability(&a.instance_uuid) else {
+            continue;
+        };
+        if ability.enemy_only {
             continue;
         }
         if f.cooldowns
@@ -5956,13 +5905,13 @@ pub(super) fn bot_next_ready_ability(
         if super::interrupts::cast_refusal_after_guard(f, &a.instance_uuid, now).is_some() {
             continue;
         }
-        if !bot_ability_allowed_by_ai_tags(f, &a.instance_uuid, snapshot, now) {
-            continue;
-        }
         let (stam_cost, mag_cost) = tables::ability_cost(&a.instance_uuid, a.level);
         let short =
             (stam_cost > 0 && f.stamina < stam_cost) || (mag_cost > 0 && f.magicka < mag_cost);
         if short && (stam_cost > f.max_stamina || mag_cost > f.max_magicka) {
+            continue;
+        }
+        if !short && !bot_ability_allowed_by_ai_tags(f, &a.instance_uuid, snapshot, now) {
             continue;
         }
         let mut score = bot_ability_score(f, &a.instance_uuid, a.level, snapshot);
@@ -5972,23 +5921,36 @@ pub(super) fn bot_next_ready_ability(
             uuid: a.instance_uuid,
             score,
             out_of_resource: short,
+            kind: ability.kind,
         });
     }
 
-    let best_valid = candidates
-        .iter()
-        .filter(|c| !c.out_of_resource)
-        .max_by(|a, b| a.score.total_cmp(&b.score))?;
-    if let Some(best_oor) = candidates
-        .iter()
-        .filter(|c| c.out_of_resource)
-        .max_by(|a, b| a.score.total_cmp(&b.score))
-    {
-        if best_valid.score - best_oor.score < BOT_RESOURCE_SAVE_DELTA {
-            return None;
+    let mut conserved = Vec::new();
+    for kind in [
+        super::gamedata::AbilityKind::Spell,
+        super::gamedata::AbilityKind::Maneuver,
+    ] {
+        let Some(best_valid) = candidates
+            .iter()
+            .filter(|c| !c.out_of_resource && c.kind == kind)
+            .max_by(|a, b| a.score.total_cmp(&b.score))
+        else {
+            continue;
+        };
+        if candidates
+            .iter()
+            .filter(|c| c.out_of_resource && c.kind == kind)
+            .max_by(|a, b| a.score.total_cmp(&b.score))
+            .is_some_and(|best_oor| best_valid.score - best_oor.score < BOT_RESOURCE_SAVE_DELTA)
+        {
+            conserved.push(kind);
         }
     }
-    Some(best_valid.uuid.clone())
+    candidates
+        .iter()
+        .filter(|c| !c.out_of_resource && !conserved.contains(&c.kind))
+        .max_by(|a, b| a.score.total_cmp(&b.score))
+        .map(|c| c.uuid.clone())
 }
 
 fn bot_random_swing_side(
@@ -6154,7 +6116,7 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
             BotObservedState::Staggered | BotObservedState::Paralyzed
         ) && previous != Some(snapshot.state)
         {
-            let t = bot_resample_reaction_time(&mut combat.fighters[bot], &game_session_id, bot);
+            let t = bot_reaction_time(&mut combat.fighters[bot], &game_session_id, bot);
             combat.fighters[bot].bot_ai.next_decision_at = Some(now + t);
             continue;
         }
@@ -13715,6 +13677,41 @@ mod report_31_high_block_stun {
     }
 
     #[test]
+    fn bot_ai_tag_gate_reads_shipped_tags_not_editor_catalogues() {
+        let mania = super::super::gamedata::ability(uuid_of("ShieldOfMania")).unwrap();
+        assert!(
+            mania.has_tag(3) && !mania.has_tag(4),
+            "Shield of Mania ships AttackCounter (3), not SpellCounter (4)",
+        );
+        let bash = super::super::gamedata::ability(uuid_of("ShieldBash")).unwrap();
+        assert!(bash.has_tag(3) && bash.has_tag(4), "control: bashes counter both");
+        let wall = super::super::gamedata::ability(uuid_of("Firewall")).unwrap();
+        assert!(wall.has_tag(2) && wall.has_tag(3), "control: Wall of Fire is also a buff");
+
+        let now = Instant::now();
+        let mut c = combat(now, 1);
+        c.fighters[1].loadout.has_shield = true;
+        c.fighters[1].loadout.abilities = vec![EquippedAbility {
+            instance_uuid: uuid_of("ShieldBash").into(),
+            level: 1,
+            tag: AbilityTag::Maneuver,
+        }];
+        let gsid = c.game_session_id.clone();
+        assert_eq!(
+            super::bot_next_ready_ability(
+                &mut c.fighters[1],
+                &gsid,
+                1,
+                snapshot(BotObservedState::CastingOffensiveSpell),
+                now,
+            )
+            .as_deref(),
+            Some(uuid_of("ShieldBash")),
+            "tag 4 counters are offered against offensive spell casts",
+        );
+    }
+
+    #[test]
     fn only_quick_abilities_are_offered_from_stagger() {
         let now = Instant::now();
         let mut c = combat(now, 1);
@@ -13819,6 +13816,120 @@ mod report_31_high_block_stun {
         );
     }
 
+    #[test]
+    fn resource_conservation_sees_out_of_resource_counters_before_the_ai_tag_gate() {
+        let now = Instant::now();
+        let mut c = combat(now, 1);
+        c.game_session_id = "oor-before-tag-gate".into();
+        c.fighters[1].loadout.abilities = vec![
+            EquippedAbility {
+                instance_uuid: uuid_of("Ward").into(),
+                level: 1,
+                tag: AbilityTag::Ward,
+            },
+            EquippedAbility {
+                instance_uuid: uuid_of("Absorb").into(),
+                level: 2,
+                tag: AbilityTag::Absorb,
+            },
+        ];
+        let ward_cost = tables::ability_cost(uuid_of("Ward"), 1).1;
+        let absorb_cost = tables::ability_cost(uuid_of("Absorb"), 2).1;
+        assert!(
+            ward_cost < absorb_cost && absorb_cost <= c.fighters[1].max_magicka,
+            "control: Ward is affordable while Absorb is only waiting on magicka",
+        );
+        c.fighters[1].magicka = ward_cost;
+        let gsid = c.game_session_id.clone();
+        assert!(
+            super::bot_next_ready_ability(
+                &mut c.fighters[1],
+                &gsid,
+                1,
+                snapshot(BotObservedState::Idle),
+                now,
+            )
+            .is_none(),
+            "Absorb is tag-gated against Idle, but still belongs to the spell OOR conservation set",
+        );
+    }
+
+    #[test]
+    fn resource_conservation_is_per_ability_type() {
+        let now = Instant::now();
+        let mut c = combat(now, 1);
+        c.game_session_id = "per-type-resource".into();
+        c.fighters[1].loadout.abilities = vec![
+            EquippedAbility {
+                instance_uuid: uuid_of("PowerAttack").into(),
+                level: 1,
+                tag: AbilityTag::Maneuver,
+            },
+            EquippedAbility {
+                instance_uuid: uuid_of("Paralyze").into(),
+                level: 12,
+                tag: AbilityTag::Paralyze,
+            },
+        ];
+        c.fighters[1].magicka = 0;
+        c.fighters[1].stamina = c.fighters[1].max_stamina;
+        let gsid = c.game_session_id.clone();
+        assert_eq!(
+            super::bot_next_ready_ability(
+                &mut c.fighters[1],
+                &gsid,
+                1,
+                snapshot(BotObservedState::Idle),
+                now,
+            )
+            .as_deref(),
+            Some(uuid_of("PowerAttack")),
+            "an OOR spell must not conserve away an affordable maneuver",
+        );
+    }
+
+    #[test]
+    fn enemy_only_abilities_are_never_selected_by_the_bot() {
+        let now = Instant::now();
+        let mut c = combat(now, 1);
+        c.game_session_id = "enemy-only-skip".into();
+        c.fighters[1].loadout.abilities = vec![
+            EquippedAbility {
+                instance_uuid: uuid_of("TempestArmor").into(),
+                level: 1,
+                tag: AbilityTag::Damage,
+            },
+            EquippedAbility {
+                instance_uuid: uuid_of("FirestormArmor").into(),
+                level: 1,
+                tag: AbilityTag::Damage,
+            },
+            EquippedAbility {
+                instance_uuid: uuid_of("Ward").into(),
+                level: 1,
+                tag: AbilityTag::Ward,
+            },
+        ];
+        assert!(super::super::gamedata::ability(uuid_of("TempestArmor")).unwrap().enemy_only);
+        assert!(super::super::gamedata::ability(uuid_of("FirestormArmor")).unwrap().enemy_only);
+        assert!(
+            !super::super::gamedata::ability(uuid_of("Ward")).unwrap().enemy_only,
+            "control: a player ability in the same loadout remains selectable",
+        );
+        let gsid = c.game_session_id.clone();
+        assert_eq!(
+            super::bot_next_ready_ability(
+                &mut c.fighters[1],
+                &gsid,
+                1,
+                snapshot(BotObservedState::Idle),
+                now,
+            )
+            .as_deref(),
+            Some(uuid_of("Ward")),
+        );
+    }
+
     /// The bot's opening clock is its per-match reaction sample. The sample is in
     /// the 0.2-0.3 s band, stays stable for the match, and the bot does not act
     /// before it elapses.
@@ -13844,19 +13955,33 @@ mod report_31_high_block_stun {
     }
 
     #[test]
-    fn bot_redraws_reaction_when_the_opponent_is_staggered() {
+    fn bot_reuses_the_match_reaction_time_when_the_opponent_is_staggered() {
         let now = Instant::now();
         let mut c = combat(now, 1);
+        c.game_session_id = "reuse-reaction".into();
+        let gsid = c.game_session_id.clone();
+        let t = super::bot_reaction_time(&mut c.fighters[1], &gsid, 1);
         let due = bot_decision_due(&mut c, 1, now);
+        assert_eq!(
+            c.fighters[1].bot_ai.reaction_time,
+            Some(t),
+            "control: the match has exactly one stored reaction sample before the restart",
+        );
         c.fighters[0].apply_stagger_for(due, 2.5);
         super::on_tick(&mut c, due, false);
         let next = c.fighters[1]
             .bot_ai
             .next_decision_at
             .expect("stagger snapshot reschedules the next decision");
-        assert!(
-            next > due + Duration::from_millis(190),
-            "redrawn reaction should restart the wait after the stagger snapshot",
+        assert_eq!(
+            c.fighters[1].bot_ai.reaction_time,
+            Some(t),
+            "a stagger restarts the wait, but does not redraw T",
+        );
+        assert_eq!(
+            next,
+            due + t,
+            "the restarted wait is now + the original per-match T",
         );
     }
 
