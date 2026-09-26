@@ -2,7 +2,8 @@
 //!
 //! - `GET /social/characters` resolves user ids to public character cards.
 //! - `GET /social/users/{user}/characters/{character}/towns/current` returns the
-//!   small town summary shown on another player's profile.
+//!   small town summary shown on another player's profile (`format=short`), or
+//!   the whole town a guildmate walks around in when visiting (`format=full`).
 //!
 //! Every screen that shows *other* players goes through here: the guild roster,
 //! the guild message log, friends, arena opponent cards. The client holds only
@@ -185,11 +186,11 @@ struct SocialTownWire {
 
 #[derive(Serialize)]
 struct SocialTownInner {
-    town: SocialTownWire,
+    town: Value,
 }
 
-/// Retail wraps the projection as `{"social":{"town":...}}`; it does not
-/// return the full town graph on this route.
+/// Retail wraps both shapes as `{"social":{"town":...}}`: the three-scalar
+/// projection for `format=short`, the whole stored town for `format=full`.
 #[derive(Serialize)]
 struct SocialTownResponse {
     social: SocialTownInner,
@@ -308,16 +309,30 @@ pub async fn get_social_characters(
     }))
 }
 
+#[derive(Deserialize)]
+pub struct SocialTownQuery {
+    format: Option<String>,
+}
+
 /// The profile/guild flow calls this immediately after `/social/characters`.
 /// Seven consecutive 404s from one production client exposed that only the
 /// first half of the social read surface had been implemented.
 ///
-/// Captured retail response (two independent towns):
+/// The client's `GetSocialContactTownConfigurationRequest` sends
+/// `format=short` for the profile card and `format=full` when the player taps
+/// "Visit Town". Captured retail responses:
 ///
 /// ```json
-/// {"social":{"town":{"levelInfo":{"level":10,"experiencePoints":137641},
-///                    "name":"Valhalla"}}}
+/// short: {"social":{"town":{"levelInfo":{"level":10,"experiencePoints":137641},
+///                           "name":"Valhalla"}}}
+/// full:  {"social":{"town":{"levelInfo":{...},"name":"Rivendell",
+///                           "districts":[...],"validationFlags":...}}}
 /// ```
+///
+/// The full body has exactly the keys of the owner's own `/towns/current`
+/// town. Answering a visit with the short projection left the client with no
+/// districts, so every guildmate's town rendered as a fresh level-1 town with
+/// no buildings and therefore no merchants (tracker report #230).
 #[get(
     "/blades.bgs.services/api/game/v1/public/social/users/{user_id}/characters/{character_id}/towns/current"
 )]
@@ -325,9 +340,11 @@ pub async fn get_social_town(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
     path: web::Path<(Uuid, Uuid)>,
+    query: web::Query<SocialTownQuery>,
 ) -> Result<Json<SocialTownResponse>, BladeApiError> {
     session.get_session_or_error()?;
     let (wanted_user_id, wanted_character_id) = path.into_inner();
+    let full = query.format.as_deref() == Some("full");
 
     let mut conn = app_state.db_pool.get().await?;
     let rows: Vec<crate::models::CharacterDbEntryTown> = {
@@ -342,7 +359,9 @@ pub async fn get_social_town(
     let row = rows
         .get(0)
         .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, SOCIAL_SERVICE_ID, 11))?;
-    let town = social_town_projection(row.town.as_ref().map(|v| &v.0));
+    let town = social_town_body(row.town.as_ref().map(|v| &v.0), full, || {
+        crate::town::load_default_town(&app_state)
+    })?;
 
     Ok(Json(SocialTownResponse {
         social: SocialTownInner { town },
@@ -391,6 +410,30 @@ pub async fn get_social_loadout(
             },
         },
     }))
+}
+
+/// The `town` object for either format. `format=full` is the stored town
+/// verbatim; a character with no captured town gets the default town, the same
+/// fallback the owner's own `/towns/current` serves, so owner and visitor see
+/// the same place. `default_town` is only called on that miss.
+fn social_town_body(
+    stored: Option<&Value>,
+    full: bool,
+    default_town: impl FnOnce() -> Result<Value, BladeApiError>,
+) -> Result<Value, BladeApiError> {
+    let stored = stored.filter(|v| !v.is_null());
+    if !full {
+        return Ok(social_town_short(stored));
+    }
+    match stored {
+        Some(t) => Ok(t.clone()),
+        None => default_town(),
+    }
+}
+
+/// The `format=short` body: the projection below, as JSON.
+fn social_town_short(town: Option<&Value>) -> Value {
+    serde_json::to_value(social_town_projection(town)).unwrap_or(Value::Null)
 }
 
 /// Project the stored town down to the three scalar fields retail returned.
@@ -646,7 +689,9 @@ mod wire {
         assert_eq!(projected.name, "Valhalla");
 
         let response = serde_json::to_value(SocialTownResponse {
-            social: SocialTownInner { town: projected },
+            social: SocialTownInner {
+                town: social_town_short(Some(&town)),
+            },
         })
         .unwrap();
         assert_eq!(
@@ -660,6 +705,80 @@ mod wire {
                 }
             })
         );
+    }
+
+    /// A stored town in retail's shape (the key set of the captured
+    /// `format=full` body and of the owner's own `/towns/current`).
+    fn stored_town() -> Value {
+        json!({
+            "levelInfo": {"level": 10, "experiencePoints": 184392},
+            "name": "Rivendell",
+            "districts": [{
+                "id": "9a12c0d3-218c-4ef2-b78c-b6e3bca60719",
+                "props": {},
+                "usedAnchors": [],
+                "segments": {"s1": {"id": "s1", "lotsCleared": [], "buildings": {
+                    "b1": {"id": "b1", "typeId": "597f678f-b49e-4559-96a8-266aafeca6ad",
+                           "level": 9, "state": "NORMAL"}
+                }}}
+            }],
+            "validationFlags": 0
+        })
+    }
+
+    fn no_default() -> Result<Value, BladeApiError> {
+        panic!("the default town must only be read when there is no stored town")
+    }
+
+    /// Report #230: visiting a guildmate sends `format=full`. Answering with the
+    /// short projection dropped `districts`, so the client drew an empty level-1
+    /// town with no merchants. Full must be the stored town, every key intact.
+    #[test]
+    fn social_town_full_is_the_whole_stored_town() {
+        let town = stored_town();
+        let body = social_town_body(Some(&town), true, no_default).unwrap();
+        assert_eq!(body, town);
+
+        let mut keys: Vec<&str> = body
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["districts", "levelInfo", "name", "validationFlags"]);
+        assert_eq!(
+            body["districts"][0]["segments"]["s1"]["buildings"]["b1"]["level"],
+            9
+        );
+    }
+
+    /// Control: the same stored town under `format=short` (and with no format)
+    /// is still the three-scalar profile card, so the full path is not simply
+    /// "always send everything".
+    #[test]
+    fn social_town_short_stays_the_projection() {
+        let town = stored_town();
+        let short = json!({
+            "levelInfo": {"level": 10, "experiencePoints": 184392},
+            "name": "Rivendell"
+        });
+        assert_eq!(
+            social_town_body(Some(&town), false, no_default).unwrap(),
+            short
+        );
+        assert!(social_town_body(None, false, no_default).is_ok());
+    }
+
+    /// A character with no captured town is visited as the default town, the
+    /// same one its owner sees, rather than a districtless projection.
+    #[test]
+    fn social_town_full_without_a_stored_town_is_the_default_town() {
+        let default = json!({"levelInfo": {"level": 0}, "name": "", "districts": [{"id": "d"}]});
+        for stored in [None, Some(Value::Null)] {
+            let body = social_town_body(stored.as_ref(), true, || Ok(default.clone())).unwrap();
+            assert_eq!(body, default);
+        }
     }
 
     #[test]

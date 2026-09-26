@@ -2267,6 +2267,16 @@ async fn load_town_economy(
         .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))
 }
 
+/// Read `default_town.json`, the town every character without a captured one
+/// sees. A missing or invalid file is a 500, never a panic.
+pub(crate) fn load_default_town(app_state: &ServerGlobal) -> Result<Value, BladeApiError> {
+    let path = app_state.static_data_path.join("default_town.json");
+    let content = std::fs::read_to_string(&path)
+        .map_err(|_e| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0))?;
+    serde_json::from_str(&content)
+        .map_err(|_e| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0))
+}
+
 /// Take the character's town JSON out of the loaded row for in-place mutation.
 /// If the character has no captured town (or a null town), create one from the default.
 fn take_town(
@@ -2277,14 +2287,8 @@ fn take_town(
         Some(JsonDbWrapper(v)) if !v.is_null() => Ok(v),
         _ => {
             // No town exists - load from default template
-            let path = app_state.static_data_path.join("default_town.json");
-            let content = std::fs::read_to_string(&path).map_err(|_e| {
-                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0)
-            })?;
-            let town: Value = serde_json::from_str(&content).map_err(|_e| {
-                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0)
-            })?;
-            
+            let town = load_default_town(app_state)?;
+
             // Store it back in the entry so it gets saved
             entry.town = Some(JsonDbWrapper(town.clone()));
             Ok(town)
