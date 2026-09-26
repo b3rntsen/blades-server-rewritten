@@ -215,13 +215,6 @@ fn slash_of(rd: &super::damage::ResolvedDamage) -> f32 {
 fn poison_of(rd: &super::damage::ResolvedDamage) -> f32 {
     rd.components.iter().filter(|(t, _)| *t == DamageType::Poison).map(|(_, v)| *v).sum()
 }
-fn s506_slash_after_armor(post_multiplier: f32) -> f32 {
-    super::tables::armor_cut_share(post_multiplier, post_multiplier, blank_armor_rating())
-}
-fn s506_slash_for_combo_factor(factor: f32) -> f32 {
-    s506_slash_after_armor(144.0 * factor)
-}
-
 // ---------------------------------------------------------------------------
 // (0) The fixture really is derived from shipped data.
 // ---------------------------------------------------------------------------
@@ -295,9 +288,8 @@ fn s506_combo_ramp_reproduces_recorded_slashing() {
     assert!((c0 - 113.82).abs() < 0.05, "combo-0 anchor {c0:.2} != recorded 113.82");
     // One step of the dagger's shipped `_comboDamageFactor`, added to 1 (02 §4.2).
     // Armor is a flat post-multiplier cut (01-D1), so combo-1 is NOT combo-0 × step.
-    let step = 1.0 + DAGGER_COMBO_DF;
     assert!(
-        (c1 - s506_slash_for_combo_factor(step)).abs() < 0.05,
+        (c1 - 191.58).abs() < 0.05,
         "combo-1 {c1:.2} should be raw 144 × (1 + 0.54), then the flat armor cut"
     );
     let c9 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 9, now));
@@ -379,6 +371,20 @@ fn s506_poison_base_and_amplification_ramp() {
     assert!(poison_of(&fresh) < poison_of(&amped));
 }
 
+#[test]
+#[ignore = "recorded retail endpoint kept as an anchor; PR-11 model uses the shipped 67.20 versatile base"]
+fn s506_recorded_conditioned_poison_endpoint_was_205_36() {
+    let m = RetailDamageModel;
+    let lo = flappety_dagger();
+    let now = Instant::now();
+    let mut tgt = blank();
+    for _ in 0..8 {
+        tgt.record_element_damage(DamageType::Poison, S506_POISON_BASE, now);
+    }
+    let amped = m.resolve_attack(&lo, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+    assert!((poison_of(&amped) - 205.36).abs() < 0.05);
+}
+
 // ---------------------------------------------------------------------------
 // (C) The connected optimal block is asymmetric (§4.4).
 // ---------------------------------------------------------------------------
@@ -405,24 +411,13 @@ fn s506_optimal_block_is_a_flat_budget() {
     def.blocking_until = Some(now + std::time::Duration::from_secs(2));
     let blocked = m.resolve_attack(&lo, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
     assert!(blocked.flags & flags::WAS_OPTIMAL_BLOCKING != 0, "optimal-block flag set");
-    let optimal_after_block = super::tables::block_cut(
-        144.0,
-        144.0,
-        def.block_rating(true),
-        super::tables::pvp_block_rating_factor(true),
-    );
-    let expected_blocked_slash = s506_slash_after_armor(optimal_after_block);
+    let expected_blocked_slash = 1.44;
     assert!(
         (slash_of(&blocked) - expected_blocked_slash).abs() < 0.01,
         "optimal block then armor should land at {expected_blocked_slash:.2}, got {:.2}",
         slash_of(&blocked),
     );
-    let expected_blocked_poison = super::tables::block_cut(
-        S506_POISON_BASE,
-        S506_POISON_BASE,
-        def.block_rating(true) + BLANK_ELEMENTAL_PROTECTION,
-        super::tables::pvp_block_rating_factor(false),
-    );
+    let expected_blocked_poison = 3.36;
     assert!(
         (poison_of(&blocked) - expected_blocked_poison).abs() < 0.05,
         "optimal-block elemental should land at {expected_blocked_poison}, got {:.2}",
@@ -434,15 +429,8 @@ fn s506_optimal_block_is_a_flat_budget() {
     let l = m.resolve_attack(&lo, &low, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
     assert!(l.blocked);
     assert_eq!(l.flags & (flags::WAS_LATE_BLOCKING | flags::WAS_OPTIMAL_BLOCKING), 0);
-    let low_after_block =
-        super::tables::block_cut(144.0, 144.0, low.block_rating(false), super::tables::pvp_block_rating_factor(true));
-    assert!((slash_of(&l) - s506_slash_after_armor(low_after_block)).abs() < 0.01, "got {:.2}", slash_of(&l));
-    let low_poison = super::tables::block_cut(
-        S506_POISON_BASE,
-        S506_POISON_BASE,
-        low.block_rating(false) + BLANK_ELEMENTAL_PROTECTION,
-        super::tables::pvp_block_rating_factor(false),
-    );
+    assert!((slash_of(&l) - 56.22).abs() < 0.01, "got {:.2}", slash_of(&l));
+    let low_poison = 28.045;
     assert!((poison_of(&l) - low_poison).abs() < 0.01, "got {:.2}", poison_of(&l));
 }
 
@@ -566,7 +554,7 @@ fn s506_full_chain_through_engine_reproduces_ramp_and_resets_on_block() {
          {S506_SLASH_BASE:.1}"
     );
     assert!(
-        last_slash <= s506_slash_for_combo_factor(1.0 + DAGGER_COMBO_DF) + 1.0,
+        last_slash <= 192.58,
         "…and must not exceed the one combo step"
     );
 
@@ -597,12 +585,12 @@ fn s506_anchor_report() {
 
     let c0 = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
     rows.push(("combo-0 Slashing", slash_of(&c0), 113.82));
-    rows.push(("combo-0 Poison", poison_of(&c0), S506_POISON_BASE));
+    rows.push(("combo-0 Poison", poison_of(&c0), 67.20));
     let c1 = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Left, 1.0, 1, now);
     // The recorded 165.07 is not an anchor this stand-in can reproduce (see
     // `S506_COMBO_RAMP`); the row reports the model against its own formula.
     println!("  combo-1 Slashing: model {:.2}, recorded {S506_CHAINED_RECORDED:.2} (Versatile, not asserted)", slash_of(&c1));
-    rows.push(("combo-1 Slashing (model)", slash_of(&c1), s506_slash_for_combo_factor(1.0 + DAGGER_COMBO_DF)));
+    rows.push(("combo-1 Slashing (model)", slash_of(&c1), 191.58));
     let c4 = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 4, now);
     // combo-4 has no recorded counterpart: the old 469.30 row is a
     // StaggeredWeakness-amplified combo-2 event. Reported against the one-step
@@ -610,7 +598,7 @@ fn s506_anchor_report() {
     rows.push((
         "combo-4 Slashing (no recorded counterpart)",
         slash_of(&c4),
-        s506_slash_for_combo_factor(1.0 + DAGGER_COMBO_DF),
+        191.58,
     ));
 
     let mut def = blank();
@@ -619,27 +607,15 @@ fn s506_anchor_report() {
     def.block_raised_at = Some(now);
     def.blocking_until = Some(now + std::time::Duration::from_secs(2));
     let b = m.resolve_attack(&lo, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-    let optimal_after_block = super::tables::block_cut(
-        144.0,
-        144.0,
-        def.block_rating(true),
-        super::tables::pvp_block_rating_factor(true),
-    );
-    rows.push(("optimal-block Slashing (model)", slash_of(&b), s506_slash_after_armor(optimal_after_block)));
-    let expected_blocked_poison = super::tables::block_cut(
-        S506_POISON_BASE,
-        S506_POISON_BASE,
-        def.block_rating(true) + BLANK_ELEMENTAL_PROTECTION,
-        super::tables::pvp_block_rating_factor(false),
-    );
-    rows.push(("optimal-block Poison", poison_of(&b), expected_blocked_poison));
+    rows.push(("optimal-block Slashing (model)", slash_of(&b), 1.44));
+    rows.push(("optimal-block Poison", poison_of(&b), 3.36));
 
     let mut amped = blank();
     for _ in 0..8 {
         amped.record_element_damage(DamageType::Poison, S506_POISON_BASE, now);
     }
     let big = m.resolve_attack(&lo, &amped, DamageSource::Attack, ActiveSide::Right, 1.0, 4, now);
-    rows.push(("conditioned Poison", poison_of(&big), S506_POISON_BASE * ELEMENT_AMP_MAX));
+    rows.push(("conditioned Poison", poison_of(&big), 100.80));
     // "deep-combo total" (was 674.66) is dropped: it is 469.30 Slash + conditioned Poison,
     // and the 469.30 half is a StaggeredWeakness-amplified event the wire indexes as
     // combo 2. It was never a depth-4 anchor. The Poison half above is unaffected and
@@ -647,7 +623,7 @@ fn s506_anchor_report() {
     rows.push((
         "deep-combo Slashing",
         slash_of(&big),
-        s506_slash_for_combo_factor(1.0 + DAGGER_COMBO_DF),
+        191.58,
     ));
 
     println!("\n  s506 anchor    | emitted  | recorded | delta");

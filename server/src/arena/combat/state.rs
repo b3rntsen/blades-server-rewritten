@@ -1407,6 +1407,10 @@ pub struct Fighter {
     pub ravaged_stamina: u32,
     pub ravaged_magicka: u32,
     pub ravaged_health: u32,
+    /// Fractional health damage owed to this fighter. Health is stored as an integer
+    /// pool for the wire, but retail applies damage as floats and floors only the
+    /// running total, so small periodic ticks must accumulate instead of disappearing.
+    pub health_damage_carry: f32,
     pub effects: Vec<ActiveEffect>,
     /// The fighter's current animation/logic state.
     ///
@@ -1950,6 +1954,7 @@ impl Fighter {
             ravaged_stamina: 0,
             ravaged_magicka: 0,
             ravaged_health: 0,
+            health_damage_carry: 0.0,
             effects: Vec::new(),
             // Construction, not a transition — nothing to tell a client that has no
             // avatar yet, so the field is set directly rather than via the mutator.
@@ -2651,6 +2656,18 @@ impl Fighter {
         self.take_damage(amount);
     }
 
+    /// Apply floating health damage with a running floor. This matches retail's
+    /// no-per-hit-rounding health path while preserving the integer pool we put on
+    /// the wire.
+    pub fn take_fractional_damage_at(&mut self, amount: f32, now: Instant) -> u32 {
+        let owed = self.health_damage_carry + amount.max(0.0);
+        let whole = (owed + 0.0001).floor();
+        self.health_damage_carry = (owed - whole).max(0.0);
+        let whole = whole.max(0.0) as u32;
+        self.take_damage_at(whole, now);
+        whole
+    }
+
     /// Apply the **non-health** damage components of a hit to their pools:
     /// `DamageType::Stamina` drains stamina and `DamageType::Magicka` drains
     /// magicka, both clamped at 0.
@@ -2851,7 +2868,7 @@ impl Fighter {
     /// and that multiplier is `PvpDefaultSettings.CHEAT_BASE_HEALTH_MULTIPLIER`: a
     /// pacing knob bolted onto the bar, not a change to the character's stats.
     pub fn base_max_health(&self) -> u32 {
-        self.max_health / ARENA_HEALTH_MULTIPLIER.max(1)
+        (self.max_health + self.ravaged_health) / ARENA_HEALTH_MULTIPLIER.max(1)
     }
 
     /// The per-condition land threshold (absolute HP) for `condition`: the base
@@ -3432,6 +3449,7 @@ impl MatchCombat {
             f.ravaged_stamina = 0;
             f.ravaged_magicka = 0;
             f.ravaged_health = 0;
+            f.health_damage_carry = 0.0;
             f.health = f.max_health;
             f.stamina = f.max_stamina;
             f.magicka = f.max_magicka;

@@ -3358,7 +3358,7 @@ fn emit_damage(
             resolved.active_side,
             &mut raw_components,
             now,
-            1.0,
+            resolved.resistance_scale,
         );
         (
             remitigated.components.as_slice(),
@@ -3383,7 +3383,7 @@ fn emit_damage(
     let max_hp = combat.fighters[target_slot].max_health;
     // `take_damage_at`, not `take_damage`: Reckless Fury floors the victim at 1 HP
     // for its window ("cannot be killed").
-    combat.fighters[target_slot].take_damage_at(total.max(0.0) as u32, now);
+    combat.fighters[target_slot].take_fractional_damage_at(total.max(0.0), now);
     // The mirrored Stamina/Magicka tracks come off their pools BEFORE `packed_stats()`
     // is read for the frame, so the bars the client draws match the numbers the same
     // frame reports. [Fighter::drain_mirrored_pools]
@@ -4063,6 +4063,9 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
             || caster >= combat.fighters.len()
             || combat.fighters[caster].is_dead()
         {
+            if target < combat.fighters.len() && combat.channels[i].ability_uuid == FROSTBITE_UUID {
+                combat.fighters[target].frostbite_slow_until = None;
+            }
             combat.channels[i].remaining_ticks = 0;
             continue;
         }
@@ -4133,7 +4136,22 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
         c.next_tick_at += Duration::from_secs_f32(c.interval_secs);
     }
 
+    let ended_frostbite_targets: Vec<usize> = combat
+        .channels
+        .iter()
+        .filter(|c| c.remaining_ticks == 0 && c.ability_uuid == FROSTBITE_UUID)
+        .map(|c| c.target_slot)
+        .collect();
     combat.channels.retain(|c| c.remaining_ticks > 0);
+    for target in ended_frostbite_targets {
+        if !combat.channels.iter().any(|c| {
+            c.target_slot == target && c.ability_uuid == FROSTBITE_UUID && c.remaining_ticks > 0
+        }) {
+            if let Some(f) = combat.fighters.get_mut(target) {
+                f.frostbite_slow_until = None;
+            }
+        }
+    }
     out
 }
 
@@ -4358,7 +4376,7 @@ fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
                 let tick_total = resolved.total.max(0.0);
                 let hp_before = combat.fighters[slot].health;
                 let max_hp = combat.fighters[slot].max_health;
-                combat.fighters[slot].take_damage_at(tick_total as u32, now);
+                combat.fighters[slot].take_fractional_damage_at(tick_total, now);
                 let hp_after = combat.fighters[slot].health;
                 let pct = if max_hp > 0 { 100.0 * tick_total / max_hp as f32 } else { 0.0 };
                 info!(
@@ -4960,8 +4978,8 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
             let stamina_fraction =
                 f.stamina as f32 / f.max_stamina.saturating_add(f.ravaged_stamina) as f32;
             let rate =
-                f.loadout.perks.healing_surge_rate(stamina_fraction) * f.loadout.regen_multiplier(0)
-                    - health_reduction;
+                (f.loadout.perks.healing_surge_rate(stamina_fraction) - health_reduction)
+                    * f.loadout.regen_multiplier(0);
             // REGEN_TICK_INTERVAL is 1 s, so a per-second rate IS the per-tick
             // amount. Rounded, and not floored to a minimum of 1: an unperked
             // fighter must gain exactly nothing.
@@ -4969,21 +4987,17 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
             if heal > 0 {
                 let heal = heal as u32;
                 f.health = (f.health + heal).min(f.max_health);
-            } else if heal < 0 {
-                f.take_damage_at(heal.unsigned_abs(), now);
             }
         }
 
         // Stamina regen: 3.03 %/s — the captured wire rate (see the constant).
         let stamina_reduction = f.regen_reduction(1, now);
         if !block_stam && (f.stamina < f.max_stamina || stamina_reduction > 0.0) {
-            let regen = (STAMINA_REGEN_RATE_PER_S * f.max_stamina as f32 * f.loadout.regen_multiplier(1)
-                - stamina_reduction)
+            let regen = ((STAMINA_REGEN_RATE_PER_S * f.max_stamina as f32 - stamina_reduction)
+                * f.loadout.regen_multiplier(1))
                 .round() as i32;
             if regen > 0 {
                 f.stamina = (f.stamina + (regen as u32).max(1)).min(f.max_stamina);
-            } else if regen < 0 {
-                f.stamina = f.stamina.saturating_sub(regen.unsigned_abs());
             }
         }
         // Magicka Surge's BLACKOUT: for `_noMagickaRegenDuration` after the surge
@@ -4994,17 +5008,15 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
         // Magicka Surge's flat `_magickaRegenerationBonus` while it is up.
         let magicka_reduction = f.regen_reduction(2, now);
         if !block_mag && !surge_blackout && (f.magicka < f.max_magicka || magicka_reduction > 0.0) {
-            let mut regen = MAGICKA_REGEN_RATE_PER_S * f.max_magicka as f32 * f.loadout.regen_multiplier(2);
+            let mut regen = MAGICKA_REGEN_RATE_PER_S * f.max_magicka as f32;
             if f.magicka_surge_until.is_some_and(|t| now < t) {
                 // REGEN_TICK_INTERVAL is 1 s, so a per-second rate is the per-tick
                 // amount (the same equivalence the health block above relies on).
-                regen += f.magicka_surge_bonus * f.loadout.regen_multiplier(2);
+                regen += f.magicka_surge_bonus;
             }
-            let regen = (regen - magicka_reduction).round() as i32;
+            let regen = ((regen - magicka_reduction) * f.loadout.regen_multiplier(2)).round() as i32;
             if regen > 0 {
                 f.magicka = (f.magicka + (regen as u32).max(1)).min(f.max_magicka);
-            } else if regen < 0 {
-                f.magicka = f.magicka.saturating_sub(regen.unsigned_abs());
             }
         }
 
@@ -7389,7 +7401,7 @@ mod tests {
     /// resist could not have produced a 44.997 tick under the old model — the ceiling
     /// was 2.25.
     #[test]
-    fn report31_frost_resistance_is_charged_once_per_cast_not_once_per_tick() {
+    fn report31_frostbite_tick_resistance_uses_t2_periodic_scale() {
         use super::super::gamedata;
         use super::super::state::DamageType;
         let r = gamedata::ability_rank_clamped(FROSTBITE_UUID, FROSTBITE_RANK as u16)
@@ -7420,19 +7432,22 @@ mod tests {
             .sum::<f32>()
             / viewers as f32;
 
-        // The whole channel pays the resistance ONCE, the same as a single hit of the
-        // same total would. `continuous` also applies the shipped 0.75 effectiveness.
+        // Capture-test T2: each 0.2 s periodic tick pays `0.75 x 0.2` of the rating.
+        let expected_ticks = super::super::damage::channel_ticks(FROSTBITE_UUID, FROSTBITE_RANK)
+            .expect("Frostbite is channelled") as f32;
         let expected_loss = RATING
             * gamedata::combat_params::REDUCTION_PER_RESISTANCE_RATING
-            * gamedata::combat_params::CONTINUOUS_DAMAGE_RESISTANCE_EFFECTIVENESS;
+            * gamedata::combat_params::CONTINUOUS_DAMAGE_RESISTANCE_EFFECTIVENESS
+            * super::super::damage::CHANNEL_TICK_INTERVAL_SECS
+            * expected_ticks;
         assert!(
             (frost - (unresisted - expected_loss)).abs() < 1.0,
-            "a resisted Frostbite channel must lose the rating ONCE ({expected_loss:.1} off \
+            "a resisted Frostbite channel must lose 0.15 x rating per tick ({expected_loss:.1} off \
              {unresisted:.1}), got {frost:.1}"
         );
         // The load-bearing half: it must not be the old ~14.
         assert!(
-            frost > unresisted * 0.75,
+            frost > unresisted * 0.70,
             "one resist affix must not delete the spell — {frost:.1} of {unresisted:.1}"
         );
     }
@@ -7505,6 +7520,29 @@ mod tests {
         assert!(
             combat.channels.is_empty() || combat.fighters[target].is_dead(),
             "the killing tick must end the channel without panicking"
+        );
+    }
+
+    #[test]
+    fn frostbite_slow_clears_when_the_channel_is_interrupted() {
+        let now = Instant::now();
+        let mut combat = make_prod_scale_combat(now);
+        let _ = cast_frostbite(&mut combat, now);
+        let target = combat.channels[0].target_slot;
+        assert!(
+            combat.fighters[target].frostbite_slow_until.is_some_and(|t| t > now),
+            "control: Frostbite applies its channel-local slow"
+        );
+
+        let interrupt_at = now + Duration::from_millis(100);
+        combat.fighters[0].interrupt_pending = Some(interrupt_at);
+        let _ = super::super::interrupts::process_interrupts(&mut combat, interrupt_at);
+
+        assert_eq!(combat.channels[0].remaining_ticks, 0, "interrupt ends the channel");
+        assert_eq!(
+            combat.fighters[target].frostbite_slow_until,
+            None,
+            "the slow must end with the interrupted channel"
         );
     }
 
@@ -8865,6 +8903,7 @@ mod shipped_effects_tests {
             heal: 0.0,
             block_physical: 1.0,
             blocked: false,
+            resistance_scale: 1.0,
         };
 
         let out = emit_damage(&mut c, 0, 1, &hit, now);
@@ -9782,13 +9821,46 @@ mod shipped_effects_tests {
         assert_eq!(damage_frames, 50, "25 ticks, broadcast to two viewers");
         assert_eq!(
             hp_before - c.fighters[1].health,
-            expected as u32 * 25,
-            "each tick is mitigated/applied independently and HP damage truncates per tick",
+            (expected * 25.0).floor() as u32,
+            "health damage carries its fractional part instead of truncating every tick",
         );
         assert!(
             !c.fighters[1].effects.iter().any(|e| e.effect == StatusEffectType::Burning),
             "the fifth tick and expiry happen in the same boundary pass",
         );
+    }
+
+    #[test]
+    fn dot_health_damage_carries_fractional_ticks() {
+        use super::super::state::{ActiveEffect, DamageType};
+        let now = Instant::now();
+
+        let run = |per_tick_damage: f32, ticks: u32| {
+            let mut c = combat2(now);
+            c.fighters[1].effects.push(ActiveEffect {
+                effect: StatusEffectType::Burning,
+                damage_type: DamageType::Fire,
+                value: per_tick_damage,
+                per_tick_damage,
+                expires_at: now + DOT_TICK_INTERVAL * ticks,
+                last_tick: now,
+                is_transient_resist: false,
+            });
+            let hp_before = c.fighters[1].health;
+            let _ = apply_dot_ticks(&mut c, now + DOT_TICK_INTERVAL * ticks);
+            (
+                hp_before - c.fighters[1].health,
+                c.fighters[1].health_damage_carry,
+            )
+        };
+
+        let (damage, carry) = run(3.866, 25);
+        assert_eq!(damage, 96, "25 x 3.866 = 96.65, floored once by the carry");
+        assert!((carry - 0.65).abs() < 0.01);
+
+        let (damage, carry) = run(10.4, 30);
+        assert_eq!(damage, 312, "30 x 10.4 = 312 exactly");
+        assert!(carry.abs() < 0.01);
     }
 
     /// Capture-test T2: elemental DoT resistance is applied every 0.2s tick, with the
@@ -9868,6 +9940,33 @@ mod shipped_effects_tests {
             .round() as u32;
         assert_eq!(before_max - c.fighters[1].max_health, want);
         assert_eq!(c.fighters[1].ravaged_health, want);
+    }
+
+    #[test]
+    fn poisoned_repeated_landings_use_the_unravaged_base_health() {
+        use super::super::state::DamageType;
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].max_health = 3150;
+        c.fighters[1].health = 3150;
+        let threshold = c.fighters[1].condition_threshold(StatusEffectType::Poisoned);
+
+        let _ = apply_status_conditioning(
+            &mut c,
+            1,
+            &[(DamageType::Poison, threshold + 1.0)],
+            now,
+        );
+        c.fighters[1].effects.clear();
+        let _ = apply_status_conditioning(
+            &mut c,
+            1,
+            &[(DamageType::Poison, threshold + 1.0)],
+            now + Duration::from_secs(6),
+        );
+
+        assert_eq!(c.fighters[1].ravaged_health, 420, "two 20% landings on base 1050");
+        assert_eq!(c.fighters[1].max_health, 2730);
     }
 
     /// 03-D19: bit 3 of op50 is the defender's `IsOptimalBlocking`, read for every
@@ -10907,6 +11006,7 @@ mod report_31_high_block_stun {
             heal: 0.0,
             block_physical: 1.0,
             blocked: false,
+            resistance_scale: 1.0,
         };
 
         let out = super::emit_damage(&mut c, 0, 1, &fire_hit, now);
@@ -13560,8 +13660,8 @@ mod sprint1_integration_tests {
         assert!(op59s(&out).is_empty(), "nothing to interrupt");
         assert_eq!(
             hp_after_swing - c.fighters[1].health,
-            (PA_CHAINED - LOW_PHYS_CUT) as u32,
-            "the maneuver lands out of the swing's chain: 172.09 − 38.4 = 133.69",
+            134,
+            "the maneuver lands out of the swing's chain: 172.09 - 38.4 = 133.69, plus the swing's fractional carry",
         );
     }
 }

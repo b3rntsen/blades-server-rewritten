@@ -70,6 +70,10 @@ pub struct ResolvedDamage {
     /// flags cannot say this: a low block carries no bit at all (03 §2.7), and bit 3
     /// is defender state, set even on an unblockable frame.
     pub blocked: bool,
+    /// What share of the defender's flat resistance this resolution charged. Partial
+    /// Absorb re-enters mitigation after shrinking the raw list, and must reuse the
+    /// periodic/channel scale instead of falling back to single-hit math.
+    pub resistance_scale: f32,
 }
 
 /// Damage flags (`ReceiveDamage` propId 7 bitfield).
@@ -820,26 +824,17 @@ pub fn resolve_continuous_area_tick(
 /// full channel**, 0.4% of a 3240 HP bar. Reported as "Frostbite and Ice spike quite
 /// surely damage too little".
 ///
-/// The captures say otherwise, and they are the same captures this model was built
-/// from: 118 `ContinuousSpell` frames across s615+s616 carry per-tick magnitudes of
-/// 39.33 - 45.00, matching `dps x 0.2` with nothing subtracted. Under the old model a
-/// defender with a t4 resist could not have produced a 44.997 tick — the ceiling was
-/// 2.25.
-///
-/// So the flat cost is charged ONCE PER CAST, spread across the ticks: a full channel
-/// loses exactly `rating`, the same as a single hit of the same total would. This
-/// mirrors the rule already applied to flat BONUSES, which are paid only on
-/// `single_impact` — the asymmetry was that the code refused to pay a flat bonus per
-/// tick while still charging a flat penalty per tick.
+/// Capture-test T2 then pinned the periodic scale: a 0.2 s server tick charges
+/// `0.2` of the resistance budget, and the mitigation loop applies the shipped
+/// `continuousDamageResistanceEffectiveness` (`0.75`) on top. A Frostbite tick
+/// therefore subtracts `rating x 0.2 x 0.75 = rating x 0.15`.
 ///
 /// 1.0 for everything else, so every capture-pinned single-hit test is untouched.
-fn resistance_scale_for(source: DamageSource, ability_uuid: &str, ability_level: u8) -> f32 {
-    if source != DamageSource::ContinuousSpell {
-        return 1.0;
-    }
-    match channel_ticks(ability_uuid, ability_level) {
-        Some(t) if t > 1 => 1.0 / t as f32,
-        _ => 1.0,
+fn resistance_scale_for(source: DamageSource, _ability_uuid: &str, _ability_level: u8) -> f32 {
+    if source == DamageSource::ContinuousSpell {
+        CHANNEL_TICK_INTERVAL_SECS
+    } else {
+        1.0
     }
 }
 
@@ -923,8 +918,8 @@ fn finish_resolved(
     components: &mut Vec<(DamageType, f32)>,
     now: Instant,
     // What share of the defender's flat resistance THIS call should charge. 1.0
-    // everywhere except a channelled-spell tick, which charges 1/ticks so the whole
-    // channel pays the resistance ONCE. See `resistance_scale_for`.
+    // everywhere except a channelled-spell tick, which charges one PvP tick's worth
+    // of the periodic resistance budget. See `resistance_scale_for`.
     resistance_scale: f32,
 ) -> ResolvedDamage {
     // A channelled spell IS continuous damage, so the shipped
@@ -1085,11 +1080,6 @@ pub fn mitigate_components(
         1.0
     };
 
-    // 1.5) MIRRORED STAT DRAIN — Frost→Stamina / Shock→Magicka, 1:1 with the
-    //      element's **post-block** value. This lands HERE, after step 1, because
-    //      retail's drain follows the reduced element rather than the raw roll.
-    append_mirrored_drains(components);
-
     // 2) ARMOR — a flat, share-weighted cut after block and after the attack-type
     //    multiplier. `DisplayClass328_0.b__0@0x1fd1944` subtracts
     //    `(v / Σphys) * max(0, A - piercing) * 0.1`, with the same 5% floor as the
@@ -1115,6 +1105,9 @@ pub fn mitigate_components(
     let mut most_resisted = DamageType::None;
     let mut most_resisted_frac = MOST_RESISTED_FLOOR;
     for (ty, v) in components.iter_mut() {
+        if matches!(*ty, DamageType::Stamina | DamageType::Magicka) {
+            continue;
+        }
         *v *= target.loadout.innate_base_resistance_multiplier(*ty, source);
         let before = *v;
         if before <= 0.0 {
@@ -1149,6 +1142,11 @@ pub fn mitigate_components(
         }
     }
 
+    // 3.5) MIRRORED STAT DRAIN — Frost→Stamina / Shock→Magicka, 1:1 with the final
+    //      health-affecting element. The drain itself does not run through armor,
+    //      base resistance, resistance or weakness a second time.
+    append_mirrored_drains(components);
+
     let total: f32 = components
         .iter()
         .filter(|(t, _)| is_health_type(*t))
@@ -1167,6 +1165,7 @@ pub fn mitigate_components(
         heal: 0.0,
         block_physical,
         blocked: block.blocking,
+        resistance_scale,
     }
 }
 
@@ -1290,10 +1289,6 @@ mod tests {
             enchants: vec![],
             ..Default::default()
         }
-    }
-
-    fn poison_light_t10() -> f32 {
-        weapon_damage_family_value_for_weight(DamageType::Poison, 10, Weight::Light)
     }
 
     #[test]
@@ -1611,7 +1606,7 @@ mod tests {
             &m.resolve_attack(&lo, &armored, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now),
             DamageType::Poison,
         );
-        assert!((poison - poison_light_t10()).abs() < 0.5, "armor is physical-only, got {poison}");
+        assert!((poison - 57.25).abs() < 0.5, "armor is physical-only, got {poison}");
         // Armor Piercing eats the rating.
         let mut piercer = poison_dagger();
         piercer.armor_piercing_rating = 301.8;
@@ -1629,7 +1624,7 @@ mod tests {
         let m = RetailDamageModel;
         let now = Instant::now();
         let rd = m.resolve_attack(&poison_dagger(), &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-        assert!((comp(&rd, DamageType::Poison) - poison_light_t10()).abs() < 0.5);
+        assert!((comp(&rd, DamageType::Poison) - 57.25).abs() < 0.5);
         assert_eq!(comp(&rd, DamageType::Magicka), 0.0, "Poison does NOT drain Magicka");
         assert_eq!(comp(&rd, DamageType::Stamina), 0.0, "Poison does NOT drain Stamina");
 
@@ -1648,6 +1643,21 @@ mod tests {
         assert_eq!(comp(&f, DamageType::Magicka), 0.0, "Frost drains STAMINA, not Magicka");
         // Drains never count toward the wire total.
         assert!((s.total - comp(&s, DamageType::Slashing) - comp(&s, DamageType::Shock)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn mirrored_drain_is_based_on_final_element_after_resistance() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let mut shock = plain_blade(Weight::Light);
+        shock.weapon.base_by_type = vec![(DamageType::Shock, 100.0)];
+        let mut resisted = target();
+        resisted.loadout.resistances = vec![(DamageType::Shock, 20.0)];
+
+        let hit = m.resolve_attack(&shock, &resisted, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+
+        assert!((comp(&hit, DamageType::Shock) - 80.0).abs() < 0.01);
+        assert!((comp(&hit, DamageType::Magicka) - 80.0).abs() < 0.01);
     }
 
     /// A defender guarding with `item` at `tempering`, the guard raised at `now`
@@ -1780,8 +1790,7 @@ mod tests {
         let lo = poison_dagger();
         let open = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
         assert!(close(comp(&open, DamageType::Slashing), 144.0));
-        let poison_base = poison_light_t10();
-        assert!(close(comp(&open, DamageType::Poison), poison_base));
+        assert!(close(comp(&open, DamageType::Poison), 57.25));
         assert!(!open.blocked);
 
         let def = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, false);
@@ -1789,13 +1798,7 @@ mod tests {
         assert!(opt.blocked);
         assert_ne!(opt.flags & flags::WAS_OPTIMAL_BLOCKING, 0);
         assert!(close(comp(&opt, DamageType::Slashing), 28.8), "{:?}", opt.components);
-        let opt_poison = tables::block_cut(
-            poison_base,
-            poison_base,
-            def.block_rating(true),
-            tables::pvp_block_rating_factor(false),
-        );
-        assert!(close(comp(&opt, DamageType::Poison), opt_poison), "{:?}", opt.components);
+        assert!(close(comp(&opt, DamageType::Poison), 2.8625), "{:?}", opt.components);
         assert!(close(opt.block_physical, 28.8 / 144.0));
 
         // The same guard, low: 144 − 57.6 plus the low elemental budget; no wire flag.
@@ -1804,13 +1807,7 @@ mod tests {
         assert!(low.blocked);
         assert_eq!(low.flags & (flags::WAS_OPTIMAL_BLOCKING | flags::WAS_LATE_BLOCKING), 0);
         assert!(close(comp(&low, DamageType::Slashing), 86.4));
-        let low_poison = tables::block_cut(
-            poison_base,
-            poison_base,
-            low_def.block_rating(false),
-            tables::pvp_block_rating_factor(false),
-        );
-        assert!(close(comp(&low, DamageType::Poison), low_poison));
+        assert!(close(comp(&low, DamageType::Poison), 27.73));
     }
 
     /// A block sets a Stamina or Magicka component to 0 outright
@@ -1961,15 +1958,14 @@ mod tests {
         tgt.loadout.resistances = vec![(DamageType::Poison, 40.0)];
         let now = Instant::now();
         let rd = m.resolve_attack(&poison_dagger(), &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-        let poison_base = poison_light_t10();
-        assert!((comp(&rd, DamageType::Poison) - (poison_base - 40.0)).abs() < 0.5);
+        assert!((comp(&rd, DamageType::Poison) - 17.25).abs() < 0.5);
         assert_eq!(rd.most_resisted, DamageType::Poison);
 
         let mut piercer = poison_dagger();
         piercer.elem_resist_piercing_rating = 25.0;
         let rd2 = m.resolve_attack(&piercer, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
         assert!(
-            (comp(&rd2, DamageType::Poison) - (poison_base - 15.0)).abs() < 0.5,
+            (comp(&rd2, DamageType::Poison) - 42.25).abs() < 0.5,
             "piercing 25 of the 40 rating leaves 15, got {}",
             comp(&rd2, DamageType::Poison)
         );
@@ -1977,7 +1973,7 @@ mod tests {
         let mut wall = target();
         wall.loadout.resistances = vec![(DamageType::Poison, 100_000.0)];
         let rd3 = m.resolve_attack(&poison_dagger(), &wall, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-        assert!((comp(&rd3, DamageType::Poison) - poison_base * 0.05).abs() < 0.5);
+        assert!((comp(&rd3, DamageType::Poison) - 2.8625).abs() < 0.5);
     }
 
     /// THE FORTIFY BUG — EDIR's twin, on the same frost build.
@@ -2080,12 +2076,11 @@ mod tests {
         tgt.loadout.weaknesses = vec![(DamageType::Poison, 50.0)];
         let now = Instant::now();
         let rd = m.resolve_attack(&poison_dagger(), &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-        let poison_base = poison_light_t10();
-        assert!((comp(&rd, DamageType::Poison) - (poison_base + 50.0)).abs() < 0.5);
+        assert!((comp(&rd, DamageType::Poison) - 107.25).abs() < 0.5);
         let mut huge = target();
         huge.loadout.weaknesses = vec![(DamageType::Poison, 100_000.0)];
         let rd2 = m.resolve_attack(&poison_dagger(), &huge, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-        assert!((comp(&rd2, DamageType::Poison) - poison_base * 2.0).abs() < 0.5, "capped at ×2");
+        assert!((comp(&rd2, DamageType::Poison) - 114.5).abs() < 0.5, "capped at ×2");
     }
 
     #[test]
@@ -2098,7 +2093,7 @@ mod tests {
         let health_sum: f32 = rd.components.iter().filter(|(t, _)| is_health_type(*t)).map(|(_, v)| *v).sum();
         assert!((rd.total - health_sum).abs() < 1e-3);
         // The total is the exact Σ of components — no clamp scaling anywhere.
-        let expect = 144.0 * 1.54 + poison_light_t10();
+        let expect = 278.85;
         assert!((rd.total - expect).abs() < 1.0, "unclamped total {} != {expect}", rd.total);
     }
 
@@ -2167,18 +2162,9 @@ mod tests {
         let dot = m.resolve_attack(&poison_dagger(), &tgt, DamageSource::StatusEffect, ActiveSide::Right, 1.0, 0, now);
         let hit = m.resolve_attack(&poison_dagger(), &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
         assert!(!dot.blocked);
-        let poison_base = poison_light_t10();
-        let dot_poison = tables::apply_resistance_and_weakness(poison_base, 40.0, 0.0, 0.75, 0.0);
-        assert!((comp(&dot, DamageType::Poison) - dot_poison).abs() < 0.01);
+        assert!((comp(&dot, DamageType::Poison) - 27.25).abs() < 0.01);
         assert!(hit.blocked);
-        let blocked_poison = tables::block_cut(
-            poison_base,
-            poison_base,
-            tgt.block_rating(true),
-            tables::pvp_block_rating_factor(false),
-        );
-        let hit_poison = tables::apply_resistance_and_weakness(blocked_poison, 40.0, 0.0, 1.0, 0.0);
-        assert!((comp(&hit, DamageType::Poison) - hit_poison).abs() < 0.01);
+        assert!((comp(&hit, DamageType::Poison) - 0.143125).abs() < 0.01);
     }
 
     // -----------------------------------------------------------------------
