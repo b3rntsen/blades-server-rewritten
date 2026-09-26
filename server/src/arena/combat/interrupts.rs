@@ -26,32 +26,12 @@ const FROSTBITE_UUID: &str = "4be1d681-c35d-4540-b255-c2910ac80664";
 // The Quick tag
 // ---------------------------------------------------------------------------
 
-/// Every ability whose `tags` carry 7 (`Quick`) in the shipped `LearnableAbilityList`
-/// (`reference/game-defs/abilities_full.json`), by editor name. `gamedata.rs` does not
-/// carry the tag list, so it is restated here and pinned by a test.
-const QUICK_TAGGED: &[&str] = &[
-    "Absorb",
-    "AdrenalineDodge",
-    "BlizzardArmor",
-    "DodgingStrike",
-    "EchoWeapon",
-    "Firewall",
-    "FirestormArmor",
-    "FocusingDodge",
-    "MagickaSurge",
-    "RecoveryStrikes",
-    "RenewingDodge",
-    "Spellbreaker",
-    "TempestArmor",
-    "Thunderstorm",
-    "Ward",
-];
-
 /// Does this ability carry the `Quick` tag? A Quick ability skips `CanCast`'s state
 /// gate, so it may be cast from any actor state except while paralysed
 /// (`Actor$$CanCast@0x1c58f54`, 07 §2.4).
 pub fn is_quick(ability_uuid: &str) -> bool {
-    gamedata::ability(ability_uuid).is_some_and(|a| QUICK_TAGGED.contains(&a.editor_name))
+    gamedata::ability(ability_uuid).is_some()
+        && super::ability_tags::ability_has_tag(ability_uuid, 7)
 }
 
 // ---------------------------------------------------------------------------
@@ -460,8 +440,8 @@ mod tests {
     use super::super::messages;
     use super::super::resolve::{self, drain_state_changes, on_c2s_input, on_tick};
     use super::super::state::{
-        AbilityTag, ActorStateType, DamageNegationSource, EquippedAbility, Fighter, FlowState,
-        MatchCombat,
+        AbilityTag, ActorStateType, BotObservedState, BotOpponentSnapshot, DamageNegationSource,
+        EquippedAbility, Fighter, FlowState, MatchCombat,
     };
     use super::*;
 
@@ -555,14 +535,31 @@ mod tests {
 
     // --- the Quick tag -----------------------------------------------------
 
-    /// The list restates abilities_full.json's tag-7 set (15 abilities), hand-copied
-    /// from the shipped data; every name must still resolve in gamedata.rs.
+    /// The list is abilities_full.json's tag-7 set (15 abilities), generated from
+    /// `server/data/abilities_tags_source.json` instead of a local editor catalogue.
     #[test]
     fn the_quick_tag_set_is_the_shipped_one() {
-        for name in QUICK_TAGGED {
+        let quick_tagged = [
+            "Absorb",
+            "AdrenalineDodge",
+            "BlizzardArmor",
+            "DodgingStrike",
+            "EchoWeapon",
+            "Firewall",
+            "FirestormArmor",
+            "FocusingDodge",
+            "MagickaSurge",
+            "RecoveryStrikes",
+            "RenewingDodge",
+            "Spellbreaker",
+            "TempestArmor",
+            "Thunderstorm",
+            "Ward",
+        ];
+        for name in quick_tagged {
             assert!(is_quick(uuid_of(name)), "{name} is tag-7 in abilities_full.json");
         }
-        assert_eq!(QUICK_TAGGED.len(), 15);
+        assert_eq!(quick_tagged.len(), 15);
         // Controls: abilities whose shipped tags carry no 7.
         for name in [
             "Fireball", "LightningBolt", "IceSpike", "QuickStrikes", "PowerAttack",
@@ -844,14 +841,20 @@ mod tests {
             });
         }
         c.fighters[1].cooldowns.insert(uuid_of("MagickaSurge").into(), t0 + secs(15.0));
+        let snapshot = BotOpponentSnapshot {
+            state: BotObservedState::Idle,
+            ability_uuid: None,
+        };
         assert_eq!(
-            resolve::bot_next_ready_ability(&c.fighters[1], t0).as_deref(),
+            resolve::bot_next_ready_ability(&mut c.fighters[1], "interrupt-test", 1, snapshot, t0)
+                .as_deref(),
             Some(uuid_of("Fireball")),
         );
         // A raised guard does not hide a ready ability: the bot lowers it to cast.
         c.fighters[1].set_actor_state(ActorStateType::Blocking, t0);
         assert_eq!(
-            resolve::bot_next_ready_ability(&c.fighters[1], t0).as_deref(),
+            resolve::bot_next_ready_ability(&mut c.fighters[1], "interrupt-test", 1, snapshot, t0)
+                .as_deref(),
             Some(uuid_of("Fireball")),
         );
     }

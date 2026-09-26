@@ -52,8 +52,7 @@ pub const MAX_HEALTH_LEVEL_INCREASES: u16 = 49;
 /// gave a level-89 fighter 1,080 base HP — 57% above the shipped ceiling.
 pub fn health_for_level(level: u16) -> u32 {
     HEALTH_BASE
-        + HEALTH_PER_LEVEL
-            * u32::from(level.saturating_sub(1).min(MAX_HEALTH_LEVEL_INCREASES))
+        + HEALTH_PER_LEVEL * u32::from(level.saturating_sub(1).min(MAX_HEALTH_LEVEL_INCREASES))
 }
 
 #[cfg(test)]
@@ -71,11 +70,7 @@ mod retail_health_curve {
         assert_eq!(health_for_level(49), 680, "the last level before the cap");
         assert_eq!(health_for_level(50), 690, "all 49 health increases applied");
         for level in [51, 89, 100, u16::MAX] {
-            assert_eq!(
-                health_for_level(level),
-                690,
-                "level {level} stays capped"
-            );
+            assert_eq!(health_for_level(level), 690, "level {level} stays capped");
         }
     }
 
@@ -84,14 +79,14 @@ mod retail_health_curve {
         let fighter = Fighter::new(
             0,
             1,
-            Loadout { level: 89, ..Default::default() },
+            Loadout {
+                level: 89,
+                ..Default::default()
+            },
             Instant::now(),
         );
         assert_eq!(fighter.max_health, 690 * ARENA_HEALTH_MULTIPLIER);
-        assert_eq!(
-            fighter.health, fighter.max_health,
-            "a fighter starts full"
-        );
+        assert_eq!(fighter.health, fighter.max_health, "a fighter starts full");
     }
 }
 
@@ -191,7 +186,10 @@ mod report109_real_pools {
     /// approximation until bots get real spends of their own.
     #[test]
     fn a_bot_keeps_the_level_approximation() {
-        let lo = Loadout { level: 50, ..Default::default() };
+        let lo = Loadout {
+            level: 50,
+            ..Default::default()
+        };
         assert!(!lo.has_character, "the default loadout is not a character");
         assert_eq!(lo.stamina_points, 0);
         // If `has_character` were ignored, this bot would get 200 rather than 445.
@@ -216,8 +214,14 @@ mod report109_real_pools {
             ..Default::default()
         };
         let f = Fighter::new(0, 1, lo, now);
-        assert_eq!(f.max_stamina, 660, "stamina from his own spend, not his level");
-        assert_eq!(f.max_magicka, 230, "and magicka separately — the pools differ");
+        assert_eq!(
+            f.max_stamina, 660,
+            "stamina from his own spend, not his level"
+        );
+        assert_eq!(
+            f.max_magicka, 230,
+            "and magicka separately — the pools differ"
+        );
         assert_eq!(f.stamina, f.max_stamina, "a fighter starts full");
         assert_eq!(f.magicka, f.max_magicka);
         // The negative control: the formula this replaced gave one number for both.
@@ -229,7 +233,15 @@ mod report109_real_pools {
     #[test]
     fn a_bot_fighter_still_uses_the_level_approximation() {
         let now = std::time::Instant::now();
-        let f = Fighter::new(0, 1, Loadout { level: 50, ..Default::default() }, now);
+        let f = Fighter::new(
+            0,
+            1,
+            Loadout {
+                level: 50,
+                ..Default::default()
+            },
+            now,
+        );
         assert_eq!(f.max_stamina, pool_for_level(50));
         assert_eq!(f.max_magicka, pool_for_level(50));
         assert_ne!(f.max_stamina, POOL_BASE, "not read as \"spent nothing\"");
@@ -403,7 +415,10 @@ impl InnateDamageFactor {
             return false;
         }
         if let Some(weight) = self.weapon_class {
-            if !matches!(ty, DamageType::Slashing | DamageType::Cleaving | DamageType::Bashing) {
+            if !matches!(
+                ty,
+                DamageType::Slashing | DamageType::Cleaving | DamageType::Bashing
+            ) {
                 return false;
             }
             if !matches!(source, DamageSource::Attack | DamageSource::WeaponManeuver) {
@@ -1175,7 +1190,12 @@ impl Loadout {
     }
 
     pub fn regen_multiplier(&self, stat: usize) -> f32 {
-        1.0 + self.innate_regen_multipliers.get(stat).copied().unwrap_or(0.0).max(0.0)
+        1.0 + self
+            .innate_regen_multipliers
+            .get(stat)
+            .copied()
+            .unwrap_or(0.0)
+            .max(0.0)
     }
 
     /// The blocking item's `OptimalBlockBoost`: the shield's when a shield is
@@ -1196,7 +1216,9 @@ impl Loadout {
         use crate::arena::combat::tables;
         match self.weapon_template {
             Some(w) => tables::swing_interval_for_weapon(w),
-            None => tables::fallback_swing_interval(self.weapon.weight.unwrap_or(tables::Weight::Light)),
+            None => {
+                tables::fallback_swing_interval(self.weapon.weight.unwrap_or(tables::Weight::Light))
+            }
         }
     }
 
@@ -1383,6 +1405,83 @@ pub struct PendingRestore {
     pub per_tick: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BotObservedState {
+    Idle,
+    Charging,
+    Maneuver,
+    CastingOffensiveSpell,
+    Staggered,
+    Paralyzed,
+    Dodging,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BotOpponentSnapshot {
+    pub state: BotObservedState,
+    pub ability_uuid: Option<&'static str>,
+}
+
+/// Deterministic SplitMix64 stream. It keeps bot AI reproducible without coupling the
+/// combat core to a thread-local RNG.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BotRng {
+    state: u64,
+}
+
+impl BotRng {
+    pub fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+
+    pub fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    pub fn unit_f32(&mut self) -> f32 {
+        let v = self.next_u64() >> 40;
+        ((v as f32) + 0.5) / ((1u32 << 24) as f32)
+    }
+
+    pub fn gaussian_f32(&mut self) -> f32 {
+        let u1 = self.unit_f32().max(f32::MIN_POSITIVE);
+        let u2 = self.unit_f32();
+        (-2.0 * u1.ln()).sqrt() * (std::f32::consts::TAU * u2).cos()
+    }
+
+    pub fn chance_half(&mut self) -> bool {
+        self.next_u64() & 1 == 0
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BotAiState {
+    pub rng: Option<BotRng>,
+    pub reaction_time: Option<std::time::Duration>,
+    pub next_decision_at: Option<Instant>,
+    pub last_snapshot: Option<BotOpponentSnapshot>,
+    pub last_sampled_target_state: Option<BotObservedState>,
+    pub pending_swing_factor: f32,
+}
+
+impl Default for BotAiState {
+    fn default() -> Self {
+        Self {
+            rng: None,
+            reaction_time: None,
+            next_decision_at: None,
+            last_snapshot: None,
+            last_sampled_target_state: None,
+            pending_swing_factor: 1.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Fighter {
     pub slot: usize,
@@ -1514,12 +1613,16 @@ pub struct Fighter {
     /// drained in the same tick and the client would flash through the animation.
     pub bot_swing_at: Option<Instant>,
     /// For a BOT: how many times it has cast each ability this match, keyed by
-    /// instance UUID. Drives least-cast-first selection so a bot match exercises the
-    /// whole loadout instead of hammering whichever ability happens to sort first.
+    /// instance UUID. Kept for match accounting and tests; choice now uses a seeded
+    /// score-plus-noise selector.
     pub bot_cast_counts: std::collections::HashMap<String, u32>,
     /// For a BOT: when it last cast an ability, throttling casts independently of the
     /// swing cadence so it does both rather than one or the other.
     pub bot_last_cast: Option<Instant>,
+    /// For a BOT: deterministic per-match AI state. The RNG is lazily seeded from the
+    /// match id and slot, then reused for reaction time, ability noise, swing side and
+    /// charge selection.
+    pub bot_ai: BotAiState,
     /// Server-side timestamp when this fighter last pressed the attack button (op46
     /// `_held=1`). Used with the release timestamp (op46 `_held=0`) to compute the
     /// server-measured hold duration for the held-charge crit gate (bug 4).
@@ -1970,7 +2073,7 @@ impl Fighter {
             reckless_fury_until: None,
             reckless_fury_bonus: 0.0,
             maneuver_state_until: None,
-            player_net_object_id: 0, // assigned by MatchInstance::new
+            player_net_object_id: 0,  // assigned by MatchInstance::new
             ability_net_object_id: 0, // assigned by MatchInstance::new
             health: max_health,
             stamina: max_stamina,
@@ -2009,6 +2112,7 @@ impl Fighter {
             bot_swing_at: None,
             bot_cast_counts: std::collections::HashMap::new(),
             bot_last_cast: None,
+            bot_ai: BotAiState::default(),
             combo_count: 0,
             last_combo_side: ActiveSide::None,
             last_swing_side: ActiveSide::None,
@@ -2045,7 +2149,9 @@ impl Fighter {
     /// is, the caster is in the client's `Maneuver` state, which admits no Blocking,
     /// Charging or attack (`ActorManeuverState$$CanTransitionTo@0x1d55814`).
     pub fn maneuver_active(&self, now: Instant) -> bool {
-        self.executions.iter().any(|e| e.is_maneuver && now < e.until)
+        self.executions
+            .iter()
+            .any(|e| e.is_maneuver && now < e.until)
     }
 
     /// Is an op53 cast pose still standing, i.e. is the client showing this actor in
@@ -2222,7 +2328,8 @@ impl Fighter {
     /// Seconds spent in the current actor state — the `timeInState` float the
     /// `PlayerStateChange` family carries at propId 8.
     pub fn time_in_state(&self, now: Instant) -> f32 {
-        now.saturating_duration_since(self.state_entered).as_secs_f32()
+        now.saturating_duration_since(self.state_entered)
+            .as_secs_f32()
     }
 
     /// This fighter's live **Block Rating** `R` while guarding, before piercing:
@@ -2236,7 +2343,11 @@ impl Fighter {
     /// doubled.
     pub fn block_rating(&self, optimal: bool) -> f32 {
         let r0 = self.loadout.block_rating;
-        let boosted = if optimal { r0 * (1.0 + self.loadout.blocking_item_boost()) } else { r0 };
+        let boosted = if optimal {
+            r0 * (1.0 + self.loadout.blocking_item_boost())
+        } else {
+            r0
+        };
         boosted + self.loadout.block_rating_bonus
     }
 
@@ -2309,8 +2420,7 @@ impl Fighter {
         if !self.is_staggered(now) {
             self.weakness_rating = 0.0;
         }
-        self.staggered_until =
-            Some(now + std::time::Duration::from_secs_f32(secs.max(0.05)));
+        self.staggered_until = Some(now + std::time::Duration::from_secs_f32(secs.max(0.05)));
         // A re-stagger does not change the state, so the seam in `force_actor_state`
         // does not see it; it still interrupts a maneuver started from the first
         // stagger (Recovery Strikes, a dodge).
@@ -2352,8 +2462,12 @@ impl Fighter {
     /// FlashFreeze's Frozen in `status_timers`. Blocking is synced separately
     /// ([`Self::sync_blocking_status`]).
     pub fn tracked_statuses(&self, now: Instant) -> Vec<StatusEffectType> {
-        let mut v: Vec<StatusEffectType> =
-            self.effects.iter().filter(|e| now < e.expires_at).map(|e| e.effect).collect();
+        let mut v: Vec<StatusEffectType> = self
+            .effects
+            .iter()
+            .filter(|e| now < e.expires_at)
+            .map(|e| e.effect)
+            .collect();
         if self.is_staggered(now) {
             v.push(StatusEffectType::Staggered);
         }
@@ -2370,11 +2484,10 @@ impl Fighter {
         //
         // Ward, Absorb and the storm armors share `negation_pools`; they are mapped
         // to their own statuses just below.
-        if self
-            .negation_pools
-            .iter()
-            .any(|p| p.source == DamageNegationSource::Dodge && p.dodge_status_expires_at.is_some_and(|until| now < until))
-        {
+        if self.negation_pools.iter().any(|p| {
+            p.source == DamageNegationSource::Dodge
+                && p.dodge_status_expires_at.is_some_and(|until| now < until)
+        }) {
             v.push(StatusEffectType::Dodging);
         }
         // Every other status we announce, so each apply gets its remove. The PvP
@@ -2415,7 +2528,12 @@ impl Fighter {
         if self.has_staggered_weakness(now) {
             v.push(StatusEffectType::StaggeredWeakness);
         }
-        v.extend(self.status_timers.iter().filter(|(_, t)| now < *t).map(|(st, _)| *st));
+        v.extend(
+            self.status_timers
+                .iter()
+                .filter(|(_, t)| now < *t)
+                .map(|(st, _)| *st),
+        );
         v.sort_by_key(|s| *s as u16);
         v.dedup();
         v
@@ -2468,8 +2586,12 @@ impl Fighter {
     /// Call once per tick, per fighter.
     pub fn drain_lapsed_statuses(&mut self, now: Instant) -> Vec<StatusEffectType> {
         let active = self.tracked_statuses(now);
-        let lapsed: Vec<StatusEffectType> =
-            self.announced_statuses.iter().copied().filter(|s| !active.contains(s)).collect();
+        let lapsed: Vec<StatusEffectType> = self
+            .announced_statuses
+            .iter()
+            .copied()
+            .filter(|s| !active.contains(s))
+            .collect();
         self.announced_statuses = active;
         lapsed
     }
@@ -2478,7 +2600,8 @@ impl Fighter {
     /// Cures use this so the next timer diff does not announce the same removal a
     /// second time.
     pub fn acknowledge_status_removed(&mut self, status: StatusEffectType) {
-        self.announced_statuses.retain(|announced| *announced != status);
+        self.announced_statuses
+            .retain(|announced| *announced != status);
     }
 
     /// True when health is below `CombatParameters.criticalHealthThreshold` (35 %).
@@ -2597,7 +2720,11 @@ impl Fighter {
         let optimal_allowed = self.last_block_dropped_at.is_none_or(|dropped| {
             raised.saturating_duration_since(dropped).as_secs_f32() >= OPTIMAL_BLOCK_RECOVERY_SECS
         });
-        Some(if optimal_allowed { BlockPhase::Optimal } else { BlockPhase::Late })
+        Some(if optimal_allowed {
+            BlockPhase::Optimal
+        } else {
+            BlockPhase::Late
+        })
     }
 
     /// The `ReceiveDamage` bit 3 (`wasOptimalBlocking`) for a frame addressed to this
@@ -2684,7 +2811,10 @@ impl Fighter {
     pub fn take_damage_at(&mut self, amount: u32, now: Instant) {
         if self.has_reckless_fury(now) {
             let floor = 1;
-            self.health = self.health.saturating_sub(amount).max(floor.min(self.health));
+            self.health = self
+                .health
+                .saturating_sub(amount)
+                .max(floor.min(self.health));
             self.stats_seq = self.stats_seq.wrapping_add(1);
             return;
         }
@@ -2765,13 +2895,22 @@ impl Fighter {
     pub fn restore_pool(&mut self, ty: DamageType, amount: u32) {
         match ty {
             DamageType::Health => {
-                self.health = self.health.saturating_add(amount).min(self.damaged_max_health());
+                self.health = self
+                    .health
+                    .saturating_add(amount)
+                    .min(self.damaged_max_health());
             }
             DamageType::Stamina => {
-                self.stamina = self.stamina.saturating_add(amount).min(self.damaged_max_stamina());
+                self.stamina = self
+                    .stamina
+                    .saturating_add(amount)
+                    .min(self.damaged_max_stamina());
             }
             DamageType::Magicka => {
-                self.magicka = self.magicka.saturating_add(amount).min(self.damaged_max_magicka());
+                self.magicka = self
+                    .magicka
+                    .saturating_add(amount)
+                    .min(self.damaged_max_magicka());
             }
             _ => {}
         }
@@ -2920,7 +3059,12 @@ impl Fighter {
     /// Combined flat resistance including transient Resist-Elements buffs (timed via
     /// `now`). The damage pipeline calls this instead of `resistance_against` so that
     /// the Resist-Elements flat reduction is applied AFTER block in the same step.
-    pub fn total_resistance_against(&self, ty: DamageType, attacker_elem_pierce: f32, now: Instant) -> f32 {
+    pub fn total_resistance_against(
+        &self,
+        ty: DamageType,
+        attacker_elem_pierce: f32,
+        now: Instant,
+    ) -> f32 {
         let perm = self.resistance_against(ty, attacker_elem_pierce);
         let transient = self.transient_resistance_against(ty, now);
         perm + transient
@@ -2984,12 +3128,18 @@ impl Fighter {
         let Some(condition) = condition_for_element(ty) else {
             return 1.0;
         };
-        super::damage::element_amp(self.recent_element_damage(ty), self.condition_threshold(condition))
+        super::damage::element_amp(
+            self.recent_element_damage(ty),
+            self.condition_threshold(condition),
+        )
     }
 
     /// Sum of the (non-expired) accumulated damage of `ty` in the sliding window.
     pub fn recent_element_damage(&self, ty: DamageType) -> f32 {
-        self.damage_history.get(&ty).map(|v| v.iter().map(|(a, _)| *a).sum()).unwrap_or(0.0)
+        self.damage_history
+            .get(&ty)
+            .map(|v| v.iter().map(|(a, _)| *a).sum())
+            .unwrap_or(0.0)
     }
 
     /// Push a landed elemental component into the window + prune lapsed entries. Called
@@ -3131,7 +3281,9 @@ impl Fighter {
                 let fraction = pool.absorb_fraction.clamp(0.0, 1.0);
                 let health_total: f32 = components
                     .iter()
-                    .filter(|(ty, v)| eligible_ty(*ty) && super::damage::is_health_type(*ty) && *v > 0.0)
+                    .filter(|(ty, v)| {
+                        eligible_ty(*ty) && super::damage::is_health_type(*ty) && *v > 0.0
+                    })
                     .map(|(_, v)| *v * fraction)
                     .sum();
                 let magicka_total: f32 = components
@@ -3241,8 +3393,9 @@ impl Fighter {
                 }
             }
         }
-        self.negation_pools
-            .retain(|p| p.remaining > 0.0 || (p.source == DamageNegationSource::Dodge && now < p.expires_at));
+        self.negation_pools.retain(|p| {
+            p.remaining > 0.0 || (p.source == DamageNegationSource::Dodge && now < p.expires_at)
+        });
         let health_after: f32 = components
             .iter()
             .filter(|(t, _)| {
@@ -3522,7 +3675,9 @@ impl MatchCombat {
     /// loops to the next round. `MaxMatchRounds` is 3 (`messages::MATCH_MAX_ROUNDS`,
     /// s506 Match propId8) → first to `ROUND_WINS_TO_WIN_MATCH` wins.
     pub fn match_is_won(&self) -> bool {
-        self.rounds_won.iter().any(|&w| w >= ROUND_WINS_TO_WIN_MATCH)
+        self.rounds_won
+            .iter()
+            .any(|&w| w >= ROUND_WINS_TO_WIN_MATCH)
     }
 
     /// The `(winner uuid, loser uuid)` of every DECIDED round, in order: the per-round
@@ -3530,7 +3685,10 @@ impl MatchCombat {
     /// [`Self::round_winners`]), so the array has at most best-of-3 entries.
     pub fn decided_round_results(&self) -> Vec<(String, String)> {
         let uuid = |s: usize| {
-            self.fighters.get(s).map(|f| f.loadout.character_uuid.clone()).unwrap_or_default()
+            self.fighters
+                .get(s)
+                .map(|f| f.loadout.character_uuid.clone())
+                .unwrap_or_default()
         };
         self.round_winners
             .iter()
@@ -3724,6 +3882,10 @@ impl MatchCombat {
             f.charge_press_at = None;
             f.charge_side = None;
             f.bot_swing_at = None;
+            f.bot_ai.next_decision_at = None;
+            f.bot_ai.last_snapshot = None;
+            f.bot_ai.last_sampled_target_state = None;
+            f.bot_ai.pending_swing_factor = 1.0;
             f.reset_combo();
             f.last_swing_side = ActiveSide::None;
             f.charge_began_at = None;
@@ -3811,7 +3973,10 @@ impl MatchCombat {
         };
         let loser = self.opponent_of(winner).unwrap_or(winner);
         let uuid = |slot: usize| {
-            self.fighters.get(slot).map(|f| f.loadout.character_uuid.clone()).unwrap_or_default()
+            self.fighters
+                .get(slot)
+                .map(|f| f.loadout.character_uuid.clone())
+                .unwrap_or_default()
         };
         (uuid(winner), uuid(loser))
     }
@@ -3840,14 +4005,22 @@ mod tests {
         // While it is running there is nothing to remove, and the status is
         // recorded as announced.
         assert!(f.drain_lapsed_statuses(t0).is_empty());
-        assert!(f.drain_lapsed_statuses(t0 + Duration::from_millis(500)).is_empty());
+        assert!(
+            f.drain_lapsed_statuses(t0 + Duration::from_millis(500))
+                .is_empty()
+        );
 
         let lapsed = f.drain_lapsed_statuses(t0 + Duration::from_millis(1100));
-        assert_eq!(lapsed, vec![StatusEffectType::Staggered], "the stagger must be reported");
+        assert_eq!(
+            lapsed,
+            vec![StatusEffectType::Staggered],
+            "the stagger must be reported"
+        );
 
         // Not again — a repeated remove would clear a fresh stagger applied later.
         assert!(
-            f.drain_lapsed_statuses(t0 + Duration::from_millis(1200)).is_empty(),
+            f.drain_lapsed_statuses(t0 + Duration::from_millis(1200))
+                .is_empty(),
             "a lapsed status must be reported once",
         );
     }
@@ -3863,7 +4036,8 @@ mod tests {
 
         f.apply_stagger_for(t0 + Duration::from_millis(800), 1.0);
         assert!(
-            f.drain_lapsed_statuses(t0 + Duration::from_millis(1100)).is_empty(),
+            f.drain_lapsed_statuses(t0 + Duration::from_millis(1100))
+                .is_empty(),
             "the refresh extended it past 1.1s, so nothing lapsed",
         );
         assert_eq!(
@@ -3941,7 +4115,11 @@ mod tests {
         // 1. THE decisive check: on the killing blow health is EXACTLY zero and the
         //    other two pools are not. Only one pool empties at death, and unlike
         //    monotonicity (check 4) that holds for every build.
-        assert_eq!(decoded.first().unwrap().1 .0, 990, "health at the top of the round");
+        assert_eq!(
+            decoded.first().unwrap().1.0,
+            990,
+            "health at the top of the round"
+        );
         let (fid, (h, s, m, _)) = *decoded.last().unwrap();
         assert_eq!(h, 0, "frame {fid} is the killing blow — health is 0");
         assert_eq!((s, m), (22, 240), "and the other two pools are NOT 0 there");
@@ -3949,11 +4127,11 @@ mod tests {
         // 2. The regenerating pools recover mid-round, while health nets out at a
         //    collapse. A comparison of net behaviour — not "health cannot rise".
         assert!(
-            decoded.windows(2).any(|w| w[1].1 .2 > w[0].1 .2),
+            decoded.windows(2).any(|w| w[1].1.2 > w[0].1.2),
             "magicka must recover somewhere in the round — it regenerates at ~5%/s"
         );
         assert_eq!(
-            (decoded.first().unwrap().1 .0, decoded.last().unwrap().1 .0),
+            (decoded.first().unwrap().1.0, decoded.last().unwrap().1.0),
             (990, 0),
             "health nets out at a collapse across the round"
         );
@@ -3965,7 +4143,11 @@ mod tests {
         let before = PackedStats::unpack(0x3de2_0fff_0000_0030);
         let after = PackedStats::unpack(0x3cc3_4613_0000_0044);
         assert_eq!((before.2, after.2), (1023, 531), "the cast spent magicka");
-        assert_eq!((before.0, after.0), (990, 972), "health barely moved across it");
+        assert_eq!(
+            (before.0, after.0),
+            (990, 972),
+            "health barely moved across it"
+        );
 
         // 4. FIXTURE-SCOPED: this fighter had no health-regen source, so its health
         //    never rises. Kept as extra signal against a re-swap on these exact bytes —
@@ -3984,8 +4166,8 @@ mod tests {
         }
 
         // 5. And the sequence id is still the LOW half — that part was always right.
-        assert_eq!(decoded.first().unwrap().1 .3, 48);
-        assert_eq!(decoded.last().unwrap().1 .3, 346);
+        assert_eq!(decoded.first().unwrap().1.3, 48);
+        assert_eq!(decoded.last().unwrap().1.3, 346);
     }
 
     #[test]
@@ -4018,8 +4200,14 @@ mod tests {
         assert_eq!((s, m, h), (42, 0, 0));
         assert_eq!(f.max_stamina, 660, "Maximum stays fixed");
         assert_eq!(f.damaged_max_stamina(), 618, "DamagedMaximum came down");
-        assert_eq!(f.stamina, 618, "a full pool cannot sit above DamagedMaximum");
-        assert_eq!(f.ravaged_stamina, 42, "and the round remembers what to give back");
+        assert_eq!(
+            f.stamina, 618,
+            "a full pool cannot sit above DamagedMaximum"
+        );
+        assert_eq!(
+            f.ravaged_stamina, 42,
+            "and the round remembers what to give back"
+        );
     }
 
     /// Per swing, and it accumulates — which is the whole point of the mechanic.
@@ -4033,7 +4221,10 @@ mod tests {
         f.max_stamina = 660;
         f.stamina = 660;
         const RECKLESS_FURY_COST: u32 = 425;
-        assert!(f.max_stamina > RECKLESS_FURY_COST, "affordable before any ravage");
+        assert!(
+            f.max_stamina > RECKLESS_FURY_COST,
+            "affordable before any ravage"
+        );
         for _ in 0..6 {
             f.apply_ravage(&[(DamageType::Stamina, 42.0)], 1.0);
         }
@@ -4078,7 +4269,8 @@ mod tests {
         // And it comes back with the round, like every other ravage.
         let mut c = MatchCombat::new(2, 1, now);
         c.fighters.push(f);
-        c.fighters.push(Fighter::new(1, 565, Loadout::default(), now));
+        c.fighters
+            .push(Fighter::new(1, 565, Loadout::default(), now));
         c.reset_fighters_for_next_round(now);
         assert!(
             crate::arena::combat::perks::CasterPerks::of(&c.fighters[0]).magicka_full,
@@ -4124,14 +4316,21 @@ mod tests {
         late.max_stamina = 660;
         late.stamina = 660;
         let (s, _, _) = late.apply_ravage(&[(DamageType::Stamina, 42.0)], 0.5);
-        assert_eq!(s, 42, "a late block also leaves the flat ravage amount alone");
+        assert_eq!(
+            s, 42,
+            "a late block also leaves the flat ravage amount alone"
+        );
         assert_eq!(late.max_stamina, 660);
         assert_eq!(late.damaged_max_stamina(), 618);
 
         let mut none = Fighter::new(0, 564, Loadout::default(), Instant::now());
         none.max_stamina = 660;
         none.stamina = 660;
-        assert_eq!(none.apply_ravage(&[], 0.0), (0, 0, 0), "control: no ravage enchant");
+        assert_eq!(
+            none.apply_ravage(&[], 0.0),
+            (0, 0, 0),
+            "control: no ravage enchant"
+        );
         assert_eq!(none.damaged_max_stamina(), 660);
     }
 
@@ -4141,8 +4340,10 @@ mod tests {
     fn the_round_reset_hands_the_whole_ceiling_back() {
         let now = Instant::now();
         let mut c = MatchCombat::new(2, 1, now);
-        c.fighters.push(Fighter::new(0, 564, Loadout::default(), now));
-        c.fighters.push(Fighter::new(1, 565, Loadout::default(), now));
+        c.fighters
+            .push(Fighter::new(0, 564, Loadout::default(), now));
+        c.fighters
+            .push(Fighter::new(1, 565, Loadout::default(), now));
         c.fighters[0].max_stamina = 660;
         c.fighters[0].stamina = 660;
         c.fighters[0].max_magicka = 590;
@@ -4152,14 +4353,24 @@ mod tests {
                 1.0,
             );
         }
-        assert_eq!(c.fighters[0].damaged_max_stamina(), 492, "ravaged during the round");
+        assert_eq!(
+            c.fighters[0].damaged_max_stamina(),
+            492,
+            "ravaged during the round"
+        );
         assert_eq!(c.fighters[0].damaged_max_magicka(), 422);
 
         c.reset_fighters_for_next_round(now);
 
-        assert_eq!(c.fighters[0].max_stamina, 660, "round 2 starts on the full ceiling");
+        assert_eq!(
+            c.fighters[0].max_stamina, 660,
+            "round 2 starts on the full ceiling"
+        );
         assert_eq!(c.fighters[0].max_magicka, 590);
-        assert_eq!(c.fighters[0].stamina, 660, "and refills to it, not to the ravaged max");
+        assert_eq!(
+            c.fighters[0].stamina, 660,
+            "and refills to it, not to the ravaged max"
+        );
         assert_eq!(c.fighters[0].ravaged_stamina, 0);
         assert_eq!(c.fighters[0].ravaged_magicka, 0);
     }
@@ -4179,15 +4390,30 @@ mod tests {
     fn arena_triples_health_and_wire_is_fraction() {
         let now = Instant::now();
         // Level-30 fighter: base 200 + 290 = 490, ×3 arena = 1470 raw HP.
-        let f0 = Fighter::new(0, 564, Loadout { level: 30, ..Default::default() }, now);
-        assert_eq!(f0.max_health, health_for_level(30) * ARENA_HEALTH_MULTIPLIER);
+        let f0 = Fighter::new(
+            0,
+            564,
+            Loadout {
+                level: 30,
+                ..Default::default()
+            },
+            now,
+        );
+        assert_eq!(
+            f0.max_health,
+            health_for_level(30) * ARENA_HEALTH_MULTIPLIER
+        );
         assert_eq!(f0.max_health, 1470);
         // Flappety's live level-86 loadout has two tier-10 Fortify Health enchants:
         // (690 level pool + 2 × 110.64) × 3 = 2733.84 → 2734.
         let fortified = Fighter::new(
             0,
             564,
-            Loadout { level: 86, max_health_bonus: 221.28, ..Default::default() },
+            Loadout {
+                level: 86,
+                max_health_bonus: 221.28,
+                ..Default::default()
+            },
             now,
         );
         assert_eq!(fortified.max_health, 2734);
@@ -4200,12 +4426,18 @@ mod tests {
         let mut f = f0;
         f.health = f.max_health / 2;
         let (h_half, _, _, _) = PackedStats::unpack(f.packed_stats());
-        assert!((h_half as i32 - STAT_MAX as i32 / 2).abs() <= 1, "half HP → ~half wire, got {h_half}");
+        assert!(
+            (h_half as i32 - STAT_MAX as i32 / 2).abs() <= 1,
+            "half HP → ~half wire, got {h_half}"
+        );
     }
 
     #[test]
     fn flow_wire_names() {
-        assert_eq!(FlowState::BackendMatchCreated.wire_name(), Some("BackendMatchCreated"));
+        assert_eq!(
+            FlowState::BackendMatchCreated.wire_name(),
+            Some("BackendMatchCreated")
+        );
         assert_eq!(FlowState::StateTimeout.wire_name(), Some("StateTimeout"));
         assert_eq!(FlowState::Connecting.wire_name(), None);
     }
@@ -4223,10 +4455,18 @@ mod tests {
             f.increment_combo(); // the hit connects
             read
         };
-        assert_eq!(swing(&mut f, ActiveSide::Right), 0, "first hit of a chain reads 0");
+        assert_eq!(
+            swing(&mut f, ActiveSide::Right),
+            0,
+            "first hit of a chain reads 0"
+        );
         assert_eq!(swing(&mut f, ActiveSide::Left), 1, "alternating → reads 1");
         assert_eq!(swing(&mut f, ActiveSide::Right), 2, "alternating → reads 2");
-        assert_eq!(swing(&mut f, ActiveSide::Right), 0, "repeat side → fresh chain");
+        assert_eq!(
+            swing(&mut f, ActiveSide::Right),
+            0,
+            "repeat side → fresh chain"
+        );
         // A swing that never connects does not advance the count (X8).
         assert_eq!(f.begin_combo_swing(ActiveSide::Left), 1);
         assert_eq!(f.combo_count, 1, "no increment until the hit lands");
@@ -4240,29 +4480,55 @@ mod tests {
     #[test]
     fn conditioning_window_accumulates_and_threshold_scales() {
         let now = Instant::now();
-        let mut f = Fighter::new(1, 565, Loadout { level: 100, ..Default::default() }, now);
+        let mut f = Fighter::new(
+            1,
+            565,
+            Loadout {
+                level: 100,
+                ..Default::default()
+            },
+            now,
+        );
         let max = f.max_health as f32;
-        assert_eq!(f.recent_element_damage(DamageType::Poison), 0.0, "empty window");
+        assert_eq!(
+            f.recent_element_damage(DamageType::Poison),
+            0.0,
+            "empty window"
+        );
         f.record_element_damage(DamageType::Poison, 100.0, now);
         f.record_element_damage(DamageType::Poison, 50.0, now);
-        assert_eq!(f.recent_element_damage(DamageType::Poison), 150.0, "window sums recent poison");
+        assert_eq!(
+            f.recent_element_damage(DamageType::Poison),
+            150.0,
+            "window sums recent poison"
+        );
         // Non-elemental + zero are ignored.
         f.record_element_damage(DamageType::Slashing, 999.0, now);
         f.record_element_damage(DamageType::Poison, 0.0, now);
-        assert_eq!(f.recent_element_damage(DamageType::Slashing), 0.0, "physical is not conditioned");
+        assert_eq!(
+            f.recent_element_damage(DamageType::Slashing),
+            0.0,
+            "physical is not conditioned"
+        );
 
         // Base Poisoned threshold = 25% of the character's OWN max HP; Fortify-Poisoned
         // raises it. Tracker #31: the arena `CHEAT_BASE_HEALTH_MULTIPLIER` must NOT
         // inflate it — under the old reading every elemental condition needed 3× the
         // shipped damage and Frostbite could never freeze anyone.
         let base_hp = f.base_max_health() as f32;
-        assert!((max - base_hp * ARENA_HEALTH_MULTIPLIER as f32).abs() < 1e-2, "the bar IS tripled");
+        assert!(
+            (max - base_hp * ARENA_HEALTH_MULTIPLIER as f32).abs() < 1e-2,
+            "the bar IS tripled"
+        );
         let base = f.condition_threshold(StatusEffectType::Poisoned);
         assert!(
             (base - HEALTH_PERCENT_TO_CAUSE_STATUS * base_hp).abs() < 1e-2,
             "base threshold = 25% of the UN-cheated max HP"
         );
-        assert!(base < HEALTH_PERCENT_TO_CAUSE_STATUS * max, "the arena health cheat does not raise it");
+        assert!(
+            base < HEALTH_PERCENT_TO_CAUSE_STATUS * max,
+            "the arena health cheat does not raise it"
+        );
         f.loadout.status_resist = vec![(StatusEffectType::Poisoned, 0.10)];
         let bumped = f.condition_threshold(StatusEffectType::Poisoned);
         assert!(bumped > base, "Fortify Poisoned raises the threshold");
@@ -4277,24 +4543,57 @@ mod tests {
     #[test]
     fn resistance_against_flat_with_piercing() {
         let now = Instant::now();
-        let mut f = Fighter::new(1, 565, Loadout { level: 100, ..Default::default() }, now);
+        let mut f = Fighter::new(
+            1,
+            565,
+            Loadout {
+                level: 100,
+                ..Default::default()
+            },
+            now,
+        );
         f.loadout.resistances = vec![(DamageType::Poison, 40.0), (DamageType::Slashing, 20.0)];
         // No piercing: full flat resist.
         assert_eq!(f.resistance_against(DamageType::Poison, 0.0), 40.0);
-        assert_eq!(f.resistance_against(DamageType::Slashing, 0.0), 20.0, "piercing doesn't touch physical");
+        assert_eq!(
+            f.resistance_against(DamageType::Slashing, 0.0),
+            20.0,
+            "piercing doesn't touch physical"
+        );
         // 50% elem piercing halves the ELEMENTAL resist only.
         assert_eq!(f.resistance_against(DamageType::Poison, 0.5), 20.0);
-        assert_eq!(f.resistance_against(DamageType::Slashing, 0.5), 20.0, "physical resist unaffected by elem piercing");
+        assert_eq!(
+            f.resistance_against(DamageType::Slashing, 0.5),
+            20.0,
+            "physical resist unaffected by elem piercing"
+        );
         // Phase 3.4: WEAKNESS is now a SEPARATE flat increase (`increasePerWeaknessRating`,
         // capped by `maximumWeaknessEffect`) rather than being netted off the resistance —
         // netting them hid the cap and let a weakness silently cancel a resist.
         f.loadout.weaknesses = vec![(DamageType::Poison, 50.0)];
-        assert_eq!(f.resistance_against(DamageType::Poison, 0.0), 40.0, "resistance is untouched by weakness");
-        assert_eq!(f.weakness_rating_against(DamageType::Poison, Instant::now()), 50.0);
-        assert_eq!(f.weakness_rating_against(DamageType::Slashing, Instant::now()), 0.0);
+        assert_eq!(
+            f.resistance_against(DamageType::Poison, 0.0),
+            40.0,
+            "resistance is untouched by weakness"
+        );
+        assert_eq!(
+            f.weakness_rating_against(DamageType::Poison, Instant::now()),
+            50.0
+        );
+        assert_eq!(
+            f.weakness_rating_against(DamageType::Slashing, Instant::now()),
+            0.0
+        );
         // Elemental-Resistance-PIERCING can also be a RATING subtraction (Phase 3.4).
-        assert_eq!(f.resistance_rating_against(DamageType::Poison, 0.0, 15.0), 25.0);
-        assert_eq!(f.resistance_rating_against(DamageType::Poison, 0.0, 999.0), 0.0, "never negative");
+        assert_eq!(
+            f.resistance_rating_against(DamageType::Poison, 0.0, 15.0),
+            25.0
+        );
+        assert_eq!(
+            f.resistance_rating_against(DamageType::Poison, 0.0, 999.0),
+            0.0,
+            "never negative"
+        );
     }
 
     #[test]
@@ -4324,7 +4623,10 @@ mod tests {
         assert_eq!(f.weakness_rating_against(DamageType::Fire, now), 0.0);
         assert_eq!(f.regen_reduction(1, now), 20.0);
         assert_eq!(f.regen_reduction(2, now), 0.0);
-        assert_eq!(f.weakness_rating_against(DamageType::Poison, now + Duration::from_secs(11)), 0.0);
+        assert_eq!(
+            f.weakness_rating_against(DamageType::Poison, now + Duration::from_secs(11)),
+            0.0
+        );
         assert_eq!(f.regen_reduction(1, now + Duration::from_secs(11)), 0.0);
     }
 
@@ -4338,7 +4640,15 @@ mod tests {
     #[test]
     fn block_degrades_from_optimal_to_late_after_2s() {
         let now = Instant::now();
-        let mut f = Fighter::new(0, 564, Loadout { level: 50, ..Default::default() }, now);
+        let mut f = Fighter::new(
+            0,
+            564,
+            Loadout {
+                level: 50,
+                ..Default::default()
+            },
+            now,
+        );
         let block_window = std::time::Duration::from_secs(5); // long window so it doesn't expire
 
         // Fresh block: raised just now → OPTIMAL.
@@ -4374,7 +4684,15 @@ mod tests {
     #[test]
     fn block_reraise_within_recovery_window_is_late() {
         let now = Instant::now();
-        let mut f = Fighter::new(0, 564, Loadout { level: 50, ..Default::default() }, now);
+        let mut f = Fighter::new(
+            0,
+            564,
+            Loadout {
+                level: 50,
+                ..Default::default()
+            },
+            now,
+        );
         let block_window = std::time::Duration::from_secs(5);
 
         // Drop the block (record last_block_dropped_at = now).
@@ -4404,7 +4722,11 @@ mod tests {
         let still_late = now + std::time::Duration::from_millis(500);
         f.block_raised_at = Some(still_late);
         f.blocking_until = Some(still_late + block_window);
-        assert_eq!(f.block_phase(still_late), Some(BlockPhase::Late), "0.9 s < 1.4 s → still LATE");
+        assert_eq!(
+            f.block_phase(still_late),
+            Some(BlockPhase::Late),
+            "0.9 s < 1.4 s → still LATE"
+        );
 
         let after_recovery = now + std::time::Duration::from_millis(1500);
         f.block_raised_at = Some(after_recovery);
@@ -4426,27 +4748,50 @@ mod tests {
     #[test]
     fn resist_elements_flat_subtraction_after_block_via_transient() {
         let now = Instant::now();
-        let mut f = Fighter::new(1, 565, Loadout { level: 50, ..Default::default() }, now);
+        let mut f = Fighter::new(
+            1,
+            565,
+            Loadout {
+                level: 50,
+                ..Default::default()
+            },
+            now,
+        );
         let expires = now + std::time::Duration::from_secs(12);
 
         // Push Resist-Elements transient resistances for all four element types (50 each).
-        for ty in [DamageType::Fire, DamageType::Frost, DamageType::Shock, DamageType::Poison] {
+        for ty in [
+            DamageType::Fire,
+            DamageType::Frost,
+            DamageType::Shock,
+            DamageType::Poison,
+        ] {
             f.transient_resistances.push((ty, 50.0, expires));
         }
 
         // Each elemental type has 50 flat resist NOW; expires AFTER now.
-        assert!((f.total_resistance_against(DamageType::Poison, 0.0, now) - 50.0).abs() < 1e-3,
-            "transient Poison resist = 50");
-        assert!((f.total_resistance_against(DamageType::Fire, 0.0, now) - 50.0).abs() < 1e-3,
-            "transient Fire resist = 50");
+        assert!(
+            (f.total_resistance_against(DamageType::Poison, 0.0, now) - 50.0).abs() < 1e-3,
+            "transient Poison resist = 50"
+        );
+        assert!(
+            (f.total_resistance_against(DamageType::Fire, 0.0, now) - 50.0).abs() < 1e-3,
+            "transient Fire resist = 50"
+        );
         // Physical is NOT covered by Resist-Elements (only elemental four).
-        assert_eq!(f.total_resistance_against(DamageType::Slashing, 0.0, now), 0.0,
-            "Slashing has no transient resist from Resist-Elements");
+        assert_eq!(
+            f.total_resistance_against(DamageType::Slashing, 0.0, now),
+            0.0,
+            "Slashing has no transient resist from Resist-Elements"
+        );
 
         // After expiry the transient resist disappears.
         let after = now + std::time::Duration::from_secs(13);
-        assert_eq!(f.total_resistance_against(DamageType::Poison, 0.0, after), 0.0,
-            "transient resist expires after its duration");
+        assert_eq!(
+            f.total_resistance_against(DamageType::Poison, 0.0, after),
+            0.0,
+            "transient resist expires after its duration"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -4459,7 +4804,15 @@ mod tests {
     fn dot_concurrent_instances_stack_independently() {
         let now = Instant::now();
         let expires = now + std::time::Duration::from_secs(5);
-        let mut f = Fighter::new(1, 565, Loadout { level: 50, ..Default::default() }, now);
+        let mut f = Fighter::new(
+            1,
+            565,
+            Loadout {
+                level: 50,
+                ..Default::default()
+            },
+            now,
+        );
 
         // Push two concurrent Poisoned effects with different per-tick magnitudes
         // (mimics s506: Flappety had 1.25/tick + 4.42/tick concurrently).
@@ -4484,12 +4837,16 @@ mod tests {
 
         assert_eq!(f.effects.len(), 2, "two independent DoT instances");
         let total_per_tick: f32 = f.effects.iter().map(|e| e.per_tick_damage).sum();
-        assert!((total_per_tick - 5.67).abs() < 1e-3,
-            "combined tick = 1.25 + 4.42 = 5.67 (concurrent, not refreshed/merged)");
+        assert!(
+            (total_per_tick - 5.67).abs() < 1e-3,
+            "combined tick = 1.25 + 4.42 = 5.67 (concurrent, not refreshed/merged)"
+        );
 
         // Verify they expire at the same time (both created simultaneously).
-        assert!(f.effects.iter().all(|e| e.expires_at == expires),
-            "both instances share the same expiry");
+        assert!(
+            f.effects.iter().all(|e| e.expires_at == expires),
+            "both instances share the same expiry"
+        );
     }
 }
 
@@ -4575,7 +4932,10 @@ mod absorb_fraction_tests {
         let mut c = vec![(DamageType::Slashing, 100.0)];
         f.apply_negation_pools(&mut c);
         assert_eq!(c[0].1, 50.0, "half the hit must land");
-        assert_eq!(f.negation_pools[0].remaining, 66.0, "and only half drains the pool");
+        assert_eq!(
+            f.negation_pools[0].remaining, 66.0,
+            "and only half drains the pool"
+        );
     }
 
     /// Ward / Absorb / Dodge are unchanged: fraction 1.0 swallows the hit whole, which
@@ -4700,7 +5060,10 @@ mod absorb_fraction_tests {
         f.negation_pools.push(ward_pool(50.0));
         let mut first = vec![(DamageType::Fire, 300.0)];
         f.apply_negation_pools(&mut first);
-        assert!(f.negation_pools.is_empty(), "precondition: the Ward is spent");
+        assert!(
+            f.negation_pools.is_empty(),
+            "precondition: the Ward is spent"
+        );
         let mut second = vec![(DamageType::Fire, 200.0)];
         let r = f.apply_negation_pools(&mut second);
         assert_eq!(second[0].1, 200.0, "the next hit lands in full");
@@ -4736,9 +5099,19 @@ mod absorb_fraction_tests {
             (DamageType::Poison, 20.0),
         ];
         let r = f.apply_negation_pools(&mut c);
-        assert!((r.heal - 43.5).abs() < 1e-3, "health paid once, got {}", r.heal);
-        assert!((r.restore_magicka - 338.0).abs() < 1e-3, "magicka paid once");
-        assert!((r.restore_cooldown_secs - 4.0).abs() < 1e-3, "cooldown paid once");
+        assert!(
+            (r.heal - 43.5).abs() < 1e-3,
+            "health paid once, got {}",
+            r.heal
+        );
+        assert!(
+            (r.restore_magicka - 338.0).abs() < 1e-3,
+            "magicka paid once"
+        );
+        assert!(
+            (r.restore_cooldown_secs - 4.0).abs() < 1e-3,
+            "cooldown paid once"
+        );
     }
 
     /// A dodge that never connects pays nothing — the reward is for a dodge that
@@ -4792,12 +5165,18 @@ mod absorb_fraction_tests {
         let r = f.apply_negation_pools_for_source(DamageSource::StatusEffect, &mut dot, now);
         assert!(!r.negated);
         assert_eq!(dot[0].1, 100.0, "status-effect damage is not dodgeable");
-        assert_eq!(f.negation_pools[0].remaining, 500.0, "and does not drain the dodge");
+        assert_eq!(
+            f.negation_pools[0].remaining, 500.0,
+            "and does not drain the dodge"
+        );
 
         let mut drain = vec![(DamageType::Magicka, 75.0), (DamageType::Stamina, 25.0)];
         let r = f.apply_negation_pools_for_source(DamageSource::EchoWeapon, &mut drain, now);
         assert!(r.negated, "source 9 is dodgeable");
-        assert_eq!(drain, vec![(DamageType::Magicka, 0.0), (DamageType::Stamina, 0.0)]);
+        assert_eq!(
+            drain,
+            vec![(DamageType::Magicka, 0.0), (DamageType::Stamina, 0.0)]
+        );
         assert_eq!(f.negation_pools[0].remaining, 400.0);
     }
 
@@ -4829,14 +5208,20 @@ mod absorb_fraction_tests {
         let mut mixed = vec![(DamageType::Slashing, 100.0), (DamageType::Fire, 100.0)];
         let r = f.apply_negation_pools_for_source(DamageSource::Attack, &mut mixed, now);
         assert!(!r.negated, "half the health damage still lands");
-        assert_eq!(mixed, vec![(DamageType::Slashing, 50.0), (DamageType::Fire, 50.0)]);
+        assert_eq!(
+            mixed,
+            vec![(DamageType::Slashing, 50.0), (DamageType::Fire, 50.0)]
+        );
 
         let mut full = Fighter::new(0, 1, loadout::starter(), now);
         full.negation_pools.push(dodge_pool(100.0, now));
         let mut control = vec![(DamageType::Slashing, 40.0), (DamageType::Fire, 60.0)];
         let r = full.apply_negation_pools_for_source(DamageSource::Attack, &mut control, now);
         assert!(r.negated, "control: the pool covered the whole health hit");
-        assert_eq!(control, vec![(DamageType::Slashing, 0.0), (DamageType::Fire, 0.0)]);
+        assert_eq!(
+            control,
+            vec![(DamageType::Slashing, 0.0), (DamageType::Fire, 0.0)]
+        );
     }
 
     /// 04 §2.4: only leftover pool after health is split over Magicka and Stamina
@@ -4850,14 +5235,20 @@ mod absorb_fraction_tests {
         let mut mixed = vec![(DamageType::Fire, 50.0), (DamageType::Stamina, 50.0)];
         let r = f.apply_negation_pools_for_source(DamageSource::Attack, &mut mixed, now);
         assert!(!r.negated, "20 stamina damage remains");
-        assert_eq!(mixed, vec![(DamageType::Fire, 0.0), (DamageType::Stamina, 20.0)]);
+        assert_eq!(
+            mixed,
+            vec![(DamageType::Fire, 0.0), (DamageType::Stamina, 20.0)]
+        );
 
         let mut stat_only = Fighter::new(0, 1, loadout::starter(), now);
         stat_only.negation_pools.push(dodge_pool(80.0, now));
         let mut control = vec![(DamageType::Magicka, 50.0), (DamageType::Stamina, 50.0)];
         let r = stat_only.apply_negation_pools_for_source(DamageSource::Attack, &mut control, now);
         assert!(!r.negated, "control: 20 total stat damage remains");
-        assert_eq!(control, vec![(DamageType::Magicka, 10.0), (DamageType::Stamina, 10.0)]);
+        assert_eq!(
+            control,
+            vec![(DamageType::Magicka, 10.0), (DamageType::Stamina, 10.0)]
+        );
     }
 
     #[test]
@@ -4918,7 +5309,10 @@ mod absorb_fraction_tests {
         f.weakness_rating = 50.4;
         assert!(f.has_staggered_weakness(now));
         let after = now + std::time::Duration::from_secs_f32(2.6);
-        assert!(!f.is_staggered(after), "precondition: the stagger has lapsed");
+        assert!(
+            !f.is_staggered(after),
+            "precondition: the stagger has lapsed"
+        );
         assert!(
             !f.has_staggered_weakness(after),
             "the weakness must lapse with it, not outlive it"
@@ -4935,7 +5329,10 @@ mod absorb_fraction_tests {
         let mut f = Fighter::new(0, 1, loadout::starter(), now);
         f.apply_stagger_for(now, 2.5);
         assert!(f.is_staggered(now));
-        assert!(!f.has_staggered_weakness(now), "a plain stagger does not amplify");
+        assert!(
+            !f.has_staggered_weakness(now),
+            "a plain stagger does not amplify"
+        );
         assert_eq!(f.weakness_rating_against(DamageType::Slashing, now), 0.0);
     }
 
@@ -4961,7 +5358,10 @@ mod absorb_fraction_tests {
         });
         let mut c = vec![(DamageType::Slashing, 130.0)];
         let r = f.apply_negation_pools(&mut c);
-        assert_eq!(c[0].1, 80.0, "Absorb eats physical, and the excess still lands");
+        assert_eq!(
+            c[0].1, 80.0,
+            "Absorb eats physical, and the excess still lands"
+        );
         assert!((r.heal - 50.0).abs() < 1e-3, "and heals back what it ate");
     }
 }

@@ -44,6 +44,7 @@
 #![allow(dead_code)]
 
 pub mod trace;
+pub mod ability_tags;
 pub mod damage;
 pub mod engine;
 pub mod gamedata;
