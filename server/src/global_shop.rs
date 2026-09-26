@@ -249,6 +249,100 @@ fn apply_authored(catalog: Value, authored: &Value) -> Value {
     out
 }
 
+/// Replace the lossy reconstructed daily windows with a complete daily block.
+///
+/// The capture corpus holds 2,753 retail window tuples, but the shipped static
+/// build can store only one window per product and deliberately kept the latest.
+/// That collapsed the real ~38-product daily replacement into an uneven ramp:
+/// today's live response had two daily products and no ingredients or soul gems.
+///
+/// Capture 599 is a complete retail control. Its 16:00 UTC block contains 38
+/// products in observed category slots, including three ingredients and five soul
+/// gems; its 05:00 UTC section contains one featured item. The rotation file
+/// carries those measured slot counts and the APK-derived product pools. Products
+/// advance without overlap each day, while weekly and special windows continue to
+/// come from the captured catalogue unchanged.
+fn apply_daily_rotation(
+    mut catalog: Value,
+    rotation: &blades_lib::static_data::GlobalShopDailyRotation,
+    now: i64,
+) -> Value {
+    let Some(map) = catalog
+        .get_mut("globalShopOverrides")
+        .and_then(Value::as_object_mut)
+    else {
+        return catalog;
+    };
+
+    for group in &rotation.groups {
+        if group.boundary_hour_utc >= 24
+            || group.daily_count == 0
+            || group.product_ids.len() < group.daily_count
+        {
+            continue;
+        }
+
+        // First retire every product in this pool. Exactly the selected slice is
+        // re-enabled below, so stale latest-window entries cannot leak into today.
+        for product_id in &group.product_ids {
+            if let Some(entry) = map.get_mut(&product_id.to_string()) {
+                entry["isActive"] = Value::Bool(false);
+            }
+        }
+
+        let boundary = i64::from(group.boundary_hour_utc) * 3_600;
+        let day_start = (now - boundary).div_euclid(86_400) * 86_400 + boundary;
+        let day_index = day_start.div_euclid(86_400);
+        let offset = (day_index * group.daily_count as i64)
+            .rem_euclid(group.product_ids.len() as i64) as usize;
+
+        for n in 0..group.daily_count {
+            let product_id = group.product_ids[(offset + n) % group.product_ids.len()];
+            let Some(entry) = map.get_mut(&product_id.to_string()) else {
+                continue;
+            };
+            entry["activeStartDate"] = Value::from(day_start);
+            entry["activeEndDate"] = Value::from(day_start + 86_400);
+            entry["isActive"] = Value::Bool(true);
+            if let Some(limits) = entry
+                .get_mut("maxPurchaseLimits")
+                .and_then(Value::as_array_mut)
+            {
+                for limit in limits {
+                    let Some(tracking_id) = limit
+                        .get("purchaseTrackingId")
+                        .and_then(Value::as_str)
+                    else {
+                        continue;
+                    };
+                    let Some((head, tail)) = tracking_id.rsplit_once("::") else {
+                        continue;
+                    };
+                    if tail.parse::<i64>().is_ok() {
+                        limit["purchaseTrackingId"] =
+                            Value::from(format!("{head}::{day_start}"));
+                    }
+                }
+            }
+        }
+    }
+    catalog
+}
+
+fn effective_catalog(
+    static_data: &blades_lib::static_data::StaticData,
+    now: i64,
+) -> Value {
+    apply_authored(
+        apply_daily_rotation(
+            shift_to_now(&static_data.global_shop_overrides, now),
+            &static_data.global_shop_daily_rotation,
+            now,
+        ),
+        &static_data.global_shop_authored,
+    )
+}
+
 /// Price the product from the same effective catalogue the client sees.
 ///
 /// A live replayed/authored override wins over the APK base price. This keeps
@@ -260,10 +354,7 @@ fn authoritative_prices(
     product_id: Uuid,
     now: i64,
 ) -> Option<Vec<Price>> {
-    let current = apply_authored(
-        shift_to_now(&static_data.global_shop_overrides, now),
-        &static_data.global_shop_authored,
-    );
+    let current = effective_catalog(static_data, now);
     let override_entry = current
         .get("globalShopOverrides")
         .and_then(Value::as_object)
@@ -320,10 +411,7 @@ pub async fn get_override(app_state: web::Data<Arc<ServerGlobal>>) -> Json<Value
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    Json(apply_authored(
-        shift_to_now(&app_state.static_data.global_shop_overrides, now),
-        &app_state.static_data.global_shop_authored,
-    ))
+    Json(effective_catalog(&app_state.static_data, now))
 }
 
 /// `GET /catalogoverrides/iap` — real-money SKU catalogue, served verbatim (priced
@@ -670,10 +758,7 @@ fn lifetime_purchase_cap(
     product_id: Uuid,
     now: i64,
 ) -> Option<u64> {
-    let current = apply_authored(
-        shift_to_now(&static_data.global_shop_overrides, now),
-        &static_data.global_shop_authored,
-    );
+    let current = effective_catalog(static_data, now);
     let n = current
         .get("globalShopOverrides")
         .and_then(Value::as_object)?
@@ -704,10 +789,7 @@ fn window_purchase_cap(
     product_id: Uuid,
     now: i64,
 ) -> Option<(String, u64)> {
-    let current = apply_authored(
-        shift_to_now(&static_data.global_shop_overrides, now),
-        &static_data.global_shop_authored,
-    );
+    let current = effective_catalog(static_data, now);
     let limits = current
         .get("globalShopOverrides")?
         .as_object()?
@@ -1065,6 +1147,12 @@ mod replay_tests {
         serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
     }
 
+    fn daily_rotation() -> blades_lib::static_data::GlobalShopDailyRotation {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/global_shop_daily_rotation.json");
+        serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+    }
+
     fn live_count(v: &Value, now: i64) -> usize {
         v["globalShopOverrides"]
             .as_object()
@@ -1095,6 +1183,105 @@ mod replay_tests {
                         .any(|p| p["currencyId"].as_str() == Some(SIGILS))
             })
             .count()
+    }
+
+    fn live_ids_in_group(
+        v: &Value,
+        group: &blades_lib::static_data::GlobalShopRotationGroup,
+        now: i64,
+    ) -> std::collections::HashSet<Uuid> {
+        group
+            .product_ids
+            .iter()
+            .filter(|id| {
+                let e = &v["globalShopOverrides"][id.to_string()];
+                e["isActive"].as_bool().unwrap_or(false)
+                    && e["activeStartDate"].as_i64().unwrap_or(i64::MAX) <= now
+                    && now <= e["activeEndDate"].as_i64().unwrap_or(i64::MIN)
+            })
+            .copied()
+            .collect()
+    }
+
+    /// Report #238: the latest-window static build collapsed retail's complete
+    /// daily block to two products. Every measured category slot must be filled on
+    /// every day, including the ingredients and soul gems the reporter was missing.
+    #[test]
+    fn daily_rotation_fills_every_measured_retail_slot() {
+        let raw = catalog();
+        let rotation = daily_rotation();
+        let measured = [
+            ("featured-equipment", 5, 1),
+            ("armor", 16, 8),
+            ("divine", 16, 4),
+            ("ingredients", 16, 3),
+            ("gold", 16, 1),
+            ("jewels", 16, 2),
+            ("jewelry", 16, 7),
+            ("shields", 16, 5),
+            ("smithing-materials", 16, 1),
+            ("soul-gems", 16, 5),
+            ("town-materials", 16, 2),
+        ];
+        assert_eq!(rotation.groups.len(), measured.len());
+        for (group, (name, boundary, count)) in rotation.groups.iter().zip(measured) {
+            assert_eq!(group.name, name);
+            assert_eq!(group.boundary_hour_utc, boundary);
+            assert_eq!(group.daily_count, count);
+        }
+        let base = 1_800_000_000;
+        for day in 0..42 {
+            let now = base + day * 86_400;
+            let served = apply_daily_rotation(shift_to_now(&raw, now), &rotation, now);
+            for group in &rotation.groups {
+                assert_eq!(
+                    live_ids_in_group(&served, group, now).len(),
+                    group.daily_count,
+                    "{} slot count on day {day}",
+                    group.name,
+                );
+            }
+        }
+    }
+
+    /// Retail's measured daily block has zero overlap between consecutive days.
+    /// Each pool is large enough to preserve that property while cycling all APK
+    /// products through the measured category slots.
+    #[test]
+    fn consecutive_daily_blocks_do_not_repeat_products() {
+        let raw = catalog();
+        let rotation = daily_rotation();
+        let first = 1_800_000_000;
+        let second = first + 86_400;
+        let a = apply_daily_rotation(shift_to_now(&raw, first), &rotation, first);
+        let b = apply_daily_rotation(shift_to_now(&raw, second), &rotation, second);
+        for group in &rotation.groups {
+            let a_ids = live_ids_in_group(&a, group, first);
+            let b_ids = live_ids_in_group(&b, group, second);
+            assert!(
+                a_ids.is_disjoint(&b_ids),
+                "{} repeated across consecutive days: {:?}",
+                group.name,
+                a_ids.intersection(&b_ids).collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    #[test]
+    fn every_rotated_product_exists_in_the_served_catalogue() {
+        let raw = catalog();
+        let map = raw["globalShopOverrides"].as_object().unwrap();
+        for group in daily_rotation().groups {
+            assert!(group.boundary_hour_utc < 24, "{} has an invalid boundary", group.name);
+            assert!(
+                group.product_ids.len() >= 2 * group.daily_count,
+                "{} cannot avoid consecutive-day repeats",
+                group.name,
+            );
+            for id in group.product_ids {
+                assert!(map.contains_key(&id.to_string()), "{} is absent: {id}", group.name);
+            }
+        }
     }
 
     /// The bug: 547 offers served, every one of them expired, so the shop is empty

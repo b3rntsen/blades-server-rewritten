@@ -1217,6 +1217,29 @@ impl FreeProductIds {
     }
 }
 
+/// One independently timed section of retail's daily global-shop rotation.
+///
+/// Product ids are grouped at build time from the APK's editor names; the server
+/// intentionally does not infer product classes from reward contents at runtime.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalShopRotationGroup {
+    pub name: String,
+    pub boundary_hour_utc: u8,
+    pub daily_count: usize,
+    #[serde(default)]
+    pub product_ids: Vec<Uuid>,
+}
+
+/// Capture-derived daily slot counts plus the APK-derived product pools that can
+/// occupy them. Missing data leaves the old replay untouched.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalShopDailyRotation {
+    #[serde(default)]
+    pub groups: Vec<GlobalShopRotationGroup>,
+}
+
 /// All capture-derived static definitions, loaded once at startup. Fields are added
 /// per feature; each is independently optional (a missing/!invalid data file leaves
 /// its field empty rather than failing startup).
@@ -1230,6 +1253,10 @@ pub struct StaticData {
     /// verbatim by `GET /catalogoverrides/globalshop`. Opaque JSON — special/limited
     /// offers with adjusted prices; the base catalog lives in the client's bundles.
     pub global_shop_overrides: Value,
+    /// Daily product pools and slot counts reconstructed from the complete retail
+    /// snapshot in capture 599. This repairs the lossy latest-window-per-product
+    /// static catalogue without changing the separately captured weekly windows.
+    pub global_shop_daily_rotation: GlobalShopDailyRotation,
     /// Admin-authored global-shop windows (`{globalShopOverrides: {...}}`), applied
     /// ON TOP of the replayed catalogue and never shifted.
     ///

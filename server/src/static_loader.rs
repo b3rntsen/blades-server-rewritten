@@ -154,6 +154,12 @@ pub fn load(dir: &Path) -> StaticData {
     if global_shop_authored.is_null() {
         global_shop_authored = json!({ "globalShopOverrides": {} });
     }
+    let global_shop_daily_rotation: blades_lib::static_data::GlobalShopDailyRotation =
+        read_json(&dir.join("global_shop_daily_rotation.json"));
+    log::info!(
+        "[static] global_shop_daily_rotation.json: {} group(s) loaded",
+        global_shop_daily_rotation.groups.len(),
+    );
     let mut iap: Value = read_json(&dir.join("iap.json"));
     if iap.is_null() {
         iap = json!({ "fulfillmentOverrides": {} });
@@ -256,6 +262,7 @@ pub fn load(dir: &Path) -> StaticData {
         gifts: gifts.into_iter().map(|g| (g.global_gift_id, g)).collect::<HashMap<_, _>>(),
         announcements,
         global_shop_overrides,
+        global_shop_daily_rotation,
         global_shop_authored,
         iap,
         global_shop_grants,
