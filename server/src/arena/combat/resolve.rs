@@ -5348,6 +5348,13 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
                 / super::state::ARENA_HEALTH_MULTIPLIER as f32
                 + f.loadout.health_regen
                 + f.loadout.perks.healing_surge_rate(stamina_fraction)
+                // Savior's Hide: the same additive list, only while health is
+                // critical (tracker #231).
+                + if super::perks::fighter_health_is_critical(f) {
+                    f.loadout.health_regen_on_critical
+                } else {
+                    0.0
+                }
                 - f.regen_reduction(0, now);
             let rate = (base * f.loadout.regen_multiplier(0)).max(0.0);
             let heal = drain_gain(&mut f.regen_carry_health, rate * dt);
@@ -5376,7 +5383,11 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
             f.regen_carry_magicka = 0.0;
         }
         let surge_blackout = !surge_live && f.no_magicka_regen_until.is_some_and(|t| now < t);
-        if !block_mag && !surge_blackout && f.magicka < f.damaged_max_magicka() {
+        // Fork of Horripilation blocks the pool outright, gear bonus included: a
+        // blocked pool skips the whole `rate x max + Σ additive` term in retail
+        // (`Actor.UpdateStatsRegeneration@0x1C52764`, tracker #231).
+        let gear_blocks_mag = f.loadout.blocks_magicka_regen;
+        if !block_mag && !gear_blocks_mag && !surge_blackout && f.magicka < f.damaged_max_magicka() {
             let mut base =
                 MAGICKA_REGEN_RATE_PER_S * f.max_magicka as f32 + f.loadout.magicka_regen;
             if surge_live {
@@ -16718,5 +16729,68 @@ mod double_ko_cap_tests {
             "control: below the cap it replays"
         );
         assert_eq!(c.phase, FlowState::NextState);
+    }
+}
+
+/// Tracker #231: Savior's Hide and Fork of Horripilation in the regen tick. Their
+/// loadout wiring is tested in `loadout::report_231_artifact_regen_tests`.
+#[cfg(test)]
+mod report_231_artifact_regen_tick_tests {
+    use std::time::Instant;
+
+    use super::super::state::MatchCombat;
+    use super::{apply_regen_tick, HEALTH_REGEN_RATE_PER_S, REGEN_TICK_INTERVAL};
+
+    fn live() -> (MatchCombat, Instant) {
+        let now = Instant::now();
+        let mut c = super::tests::make_live_combat(now);
+        c.last_regen_tick = now;
+        (c, now)
+    }
+
+    /// The base in-combat health tick for one second, before any gear.
+    fn base_heal(c: &MatchCombat) -> u32 {
+        (HEALTH_REGEN_RATE_PER_S * c.fighters[0].max_health as f32
+            / super::super::state::ARENA_HEALTH_MULTIPLIER as f32
+            * c.fighters[0].loadout.regen_multiplier(0))
+        .floor() as u32
+    }
+
+    /// Savior's Hide: +5 HP/s only while health is critical. Control: the other
+    /// fighter at the same critical health, without the armour.
+    #[test]
+    fn saviors_hide_heals_only_at_critical_health() {
+        let (mut c, now) = live();
+        let max = c.fighters[0].max_health;
+        let base = base_heal(&c);
+        c.fighters[0].loadout.health_regen_on_critical = 5.0;
+
+        c.fighters[0].health = max / 2;
+        apply_regen_tick(&mut c, now + REGEN_TICK_INTERVAL);
+        assert_eq!(c.fighters[0].health, max / 2 + base, "not critical: base only");
+
+        c.fighters[0].health = 10;
+        c.fighters[1].health = 10;
+        c.fighters[0].regen_carry_health = 0.0;
+        c.fighters[1].regen_carry_health = 0.0;
+        apply_regen_tick(&mut c, now + REGEN_TICK_INTERVAL * 2);
+        let control_gain = c.fighters[1].health - 10;
+        assert_eq!(c.fighters[0].health - 10, control_gain + 5, "critical: +5 over the control");
+    }
+
+    /// Fork of Horripilation: no magicka regen at all — base and gear alike — while
+    /// stamina keeps regenerating. Control: the other fighter regenerates magicka.
+    #[test]
+    fn fork_of_horripilation_stops_magicka_regen() {
+        let (mut c, now) = live();
+        c.fighters[0].magicka = 10;
+        c.fighters[1].magicka = 10;
+        c.fighters[0].loadout.magicka_regen = 16.6;
+        c.fighters[0].loadout.blocks_magicka_regen = true;
+        c.fighters[0].stamina = 0;
+        apply_regen_tick(&mut c, now + REGEN_TICK_INTERVAL);
+        assert_eq!(c.fighters[0].magicka, 10, "magicka blocked");
+        assert!(c.fighters[0].stamina > 0, "stamina is not affected");
+        assert!(c.fighters[1].magicka > 10, "control: unblocked magicka regenerates");
     }
 }
