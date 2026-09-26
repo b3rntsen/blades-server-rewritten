@@ -78,6 +78,9 @@ mod roundtrip_s506;
 #[cfg(test)]
 mod roundtrip_s506_damage;
 
+#[cfg(test)]
+mod oracle;
+
 pub use engine::MatchInstance;
 pub use state::Loadout;
 
