@@ -23,18 +23,8 @@ pub const ARENA_HEALTH_MULTIPLIER: u32 = 3;
 /// match; before that, a round-ending death loops to the next round.
 pub const ROUND_WINS_TO_WIN_MATCH: u8 = 2;
 
-/// How many double-KO rounds a match may REPLAY. **AUTHORED, not capture-derived**
-/// (no recorded match has a double KO). After one replay, the next double KO is
-/// decided by [`MatchCombat::draw_tiebreak_winner`] like a timed-out round. Uncapped,
-/// two phase-locked fighters whose killing blow and Revenge retaliation land in the
-/// same step replay the identical round forever (CRE-SOAK seed 0x4d4e3b4e79f4ca03).
-pub const MAX_DOUBLE_KO_REPLAYS: u8 = 1;
-
-/// Hard backstop on rounds played in one match: best-of-3 plus the replays above.
-/// With the replay cap a match cannot legitimately reach it undecided; if it ever
-/// does, the match ends on the round tally (see `resolve::on_round_ended`).
-pub const MATCH_ROUND_HARD_CAP: usize =
-    (2 * ROUND_WINS_TO_WIN_MATCH as usize - 1) + MAX_DOUBLE_KO_REPLAYS as usize;
+/// Hard backstop on rounds played in one match: retail-style best-of-3.
+pub const MATCH_ROUND_HARD_CAP: usize = 2 * ROUND_WINS_TO_WIN_MATCH as usize - 1;
 
 /// Base max-Health from the shipped `PlayerStatsData._playerStats._healthBase`.
 pub const HEALTH_BASE: u32 = 200;
@@ -1515,6 +1505,8 @@ pub struct Fighter {
     /// Raw pools (hundreds-to-thousands; Health is ×3 in arena). The WIRE packs a
     /// FRACTION of max — see `packed_stats` / `wire_fraction`, not these raw values.
     pub health: u32,
+    /// Exact landing time of the hit/tick that first killed this fighter this round.
+    pub death_at: Option<Instant>,
     pub stamina: u32,
     pub magicka: u32,
     pub max_health: u32,
@@ -2130,6 +2122,7 @@ impl Fighter {
             player_net_object_id: 0,  // assigned by MatchInstance::new
             ability_net_object_id: 0, // assigned by MatchInstance::new
             health: max_health,
+            death_at: None,
             stamina: max_stamina,
             magicka: max_magicka,
             max_health,
@@ -2863,6 +2856,7 @@ impl Fighter {
     /// rather than 0 — the fighter survives the window and dies normally afterwards
     /// if the damage keeps coming.
     pub fn take_damage_at(&mut self, amount: u32, now: Instant) {
+        let was_alive = !self.is_dead();
         if self.has_reckless_fury(now) {
             let floor = 1;
             self.health = self
@@ -2873,6 +2867,9 @@ impl Fighter {
             return;
         }
         self.take_damage(amount);
+        if was_alive && self.is_dead() {
+            self.death_at = Some(now);
+        }
     }
 
     /// Apply floating health damage with a running floor. This matches retail's
@@ -3504,8 +3501,7 @@ pub enum RoundOutcome {
     Ongoing,
     /// Exactly one fighter died — `winner` scores the round.
     Win { winner: usize },
-    /// **Both** fighters hit 0 HP in the same resolution step: no score, the round
-    /// is replayed. [Phase 3.14 — AUTHORED, no capture evidence]
+    /// **Both** fighters hit 0 HP before the round closes.
     DoubleKo,
 }
 
@@ -3592,16 +3588,9 @@ pub struct MatchCombat {
     /// captured op48 frames fills (5,6),(7,8),(9,10) for rounds 1..N and sets
     /// propId 11 = N-1. See `messages::match_post_round_info`.
     ///
-    /// `None` is a REPLAYED double KO: a round that happened but that nobody won. The
-    /// client models exactly that: `RoundInfo$$IsTied@0x2071a74` and
-    /// `MatchPostRoundInfoMessage$$IsTied@0x1cebbd0` are "winner id and loser id both
-    /// empty", and `MatchEndMatchMessage$$GetNumberOfRoundsWonBy@0x1cea200` counts
-    /// round entries whose winner id equals the player. So a tied round is sent with
-    /// empty ids and left out of the per-round arrays ([`Self::decided_round_results`]),
-    /// which keeps the client's tally equal to `rounds_won`.
+    /// Double KOs are decided immediately and recorded as `Some(winner)`, so the
+    /// client's tally from op48/op49 stays equal to `rounds_won`.
     pub round_winners: Vec<Option<usize>>,
-    /// Double-KO rounds replayed so far this match (capped by [`MAX_DOUBLE_KO_REPLAYS`]).
-    pub double_ko_replays: u8,
     /// When the current flow phase started (drives StateTimeout heartbeat /
     /// round timers from the tick).
     pub phase_entered: Instant,
@@ -3712,7 +3701,6 @@ impl MatchCombat {
             round: 0,
             rounds_won: [0; 2],
             round_winners: Vec::new(),
-            double_ko_replays: 0,
             phase_entered: now,
             winner: None,
             matchend_step: 0,
@@ -3765,7 +3753,6 @@ impl MatchCombat {
             1 => RoundOutcome::Win {
                 winner: self.opponent_of(dead[0]).unwrap_or(dead[0]),
             },
-            // Simultaneous 0 HP: nobody scores, the round is replayed.
             _ => RoundOutcome::DoubleKo,
         }
     }
@@ -3799,6 +3786,53 @@ impl MatchCombat {
             return if trophies.0 < trophies.1 { 0 } else { 1 };
         }
         0
+    }
+
+    /// Owner decision, 2026-09-26: a double KO is decided immediately.
+    ///
+    /// First key: whose killing impact landed first, at millisecond precision. If the
+    /// lethal landing times are equal to the millisecond (or unavailable in a direct
+    /// unit-test fixture), lower character level wins, then lower XP, then a seeded
+    /// per-match coin flip.
+    pub fn double_ko_winner(&self) -> usize {
+        if self.fighters.len() < 2 {
+            return 0;
+        }
+        match (self.fighters[0].death_at, self.fighters[1].death_at) {
+            (Some(a), Some(b)) => {
+                let delta = if a >= b {
+                    a.duration_since(b)
+                } else {
+                    b.duration_since(a)
+                };
+                if delta >= std::time::Duration::from_millis(1) {
+                    return if a < b { 1 } else { 0 };
+                }
+            }
+            (Some(_), None) => return 1,
+            (None, Some(_)) => return 0,
+            (None, None) => {}
+        }
+
+        let level0 = self.fighters[0].loadout.level;
+        let level1 = self.fighters[1].loadout.level;
+        if level0 != level1 {
+            return if level0 < level1 { 0 } else { 1 };
+        }
+
+        let xp0 = self.fighters[0].loadout.character_experience;
+        let xp1 = self.fighters[1].loadout.character_experience;
+        if xp0 != xp1 {
+            return if xp0 < xp1 { 0 } else { 1 };
+        }
+
+        let mut seed = 0xcbf2_9ce4_8422_2325u64;
+        for b in self.game_session_id.as_bytes() {
+            seed ^= *b as u64;
+            seed = seed.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        seed ^= (self.round_winners.len() as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        BotRng::new(seed).chance_half() as usize
     }
 
     /// Charge every equipped ability's **initial cooldown** for the round that is
@@ -3908,6 +3942,7 @@ impl MatchCombat {
             f.magicka_surge_bonus = 0.0;
             f.no_magicka_regen_until = None;
             f.health = f.max_health;
+            f.death_at = None;
             f.stamina = f.max_stamina;
             f.magicka = f.max_magicka;
             f.stats_seq = f.stats_seq.wrapping_add(1);
