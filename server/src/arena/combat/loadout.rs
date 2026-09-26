@@ -51,9 +51,7 @@ pub fn starter() -> Loadout {
     // Chaurus Shield — installing the weapon first would classify it as
     // two-handed and quietly hand the starter 15% more damage.
     if let Some(sh) = gamedata::shield(STARTER_SHIELD) {
-        lo.has_shield = true;
-        lo.block_rating += sh.block_base;
-        lo.shield_optimal_block_boost = sh.optimal_block_boost.max(1.0);
+        install_shield(&mut lo, sh, 0);
     }
     match gamedata::weapon(STARTER_WEAPON) {
         Some(w) => install_weapon(&mut lo, w, STARTER_TEMPERING),
@@ -124,8 +122,35 @@ fn install_weapon(lo: &mut Loadout, w: &'static gamedata::WeaponStats, tempering
         weight: Some(weight),
     };
     lo.weapon_template = Some(w);
-    lo.weapon_optimal_block_boost = w.optimal_block_boost.max(1.0);
-    lo.block_rating += w.block_base;
+    lo.weapon_optimal_block_boost = w.optimal_block_boost;
+    // The weapon is the blocking item only when no shield is equipped.
+    if !lo.has_shield {
+        lo.block_rating = blocking_item_rating(w.uuid, w.block_base, tempering_level);
+    }
+}
+
+/// Install an equipped shield: it becomes the blocking item, whatever the weapon.
+fn install_shield(lo: &mut Loadout, s: &'static gamedata::ShieldStats, tempering_level: u64) {
+    lo.has_shield = true;
+    lo.block_rating = blocking_item_rating(s.uuid, s.block_base, tempering_level);
+    lo.shield_optimal_block_boost = s.optimal_block_boost;
+    // A Shield Bash hits with the shield's own `_damageBase` (M-bash-source, PR-05).
+    lo.shield_damage = s.damage_base;
+}
+
+/// The blocking item's rating `R0`: the temper-level block value when the item is
+/// tempered, otherwise its `blockBase`, ceiled.
+///
+/// `get_EquippedBlockRating@0x1c54420` adds `CeilToInt(item rating)` from
+/// `GetDisplayedBlockRatingForItem@0x1c56504`, which reads
+/// `GetTemperPropertiesForLevel(level) +0x18` for a tempered item and
+/// `IBlockingItemTemplate.GetBlockBase()` otherwise. The broken-item factor is not
+/// applied: PvP items do not degrade (`DegradeBlockingItem` is a `ret` stub on both
+/// PvP actors) and its value is not extracted.
+pub fn blocking_item_rating(uuid: &str, block_base: f32, tempering_level: u64) -> f32 {
+    super::block_temper::tempered_block_value(uuid, tempering_level)
+        .unwrap_or(block_base)
+        .ceil()
 }
 
 /// The UESP fallback surface, for characters whose weapon does not resolve to a
@@ -171,6 +196,8 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         display_name: character.name.clone(),
         status_dur_mult: 1.0,
         shield_optimal_block_boost: 1.0,
+        // The shipped value on 363 of 370 weapons; replaced when the weapon resolves.
+        weapon_optimal_block_boost: 1.0,
         ..Default::default()
     };
 
@@ -202,9 +229,7 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
             lo.armor_rating += a.armor_rating;
             armor_pieces.push((a.equipment_slot, a.armor_set));
         } else if let Some(s) = gamedata::shield(&template) {
-            lo.has_shield = true;
-            lo.block_rating += s.block_base;
-            lo.shield_optimal_block_boost = lo.shield_optimal_block_boost.max(s.optimal_block_boost);
+            install_shield(&mut lo, s, eq.item.tempering_level);
         }
 
         // --- jewellery GRADING affixes: +N ranks to a named ability ------------
@@ -425,14 +450,13 @@ fn apply_enchant(lo: &mut Loadout, id: &Uuid, tier: u8) {
 
         // ---- block rating -------------------------------------------------
         // `magnitude`, not the raw `value`: the shared `_value` curve runs
-        // 268…7591, while an item's own `block_base` is ~50 (a shield) to ~276
-        // (the whole starter set) — and `tables::block_reduction` divides by
-        // BLOCK_RATING_SCALE (100) × REDUCTION_PER_BLOCK_RATING (0.1), so it caps
-        // at MAXIMUM_BLOCK_REDUCTION (0.95) from rating 950 up. Adding the raw
-        // 7591 put a single tier-10 block enchant 8× past the cap on its own,
-        // pinning block_reduction at 0.95 and making a guard eat 95 % of every
-        // hit. Every sibling arm here scales by ENCHANT_DAMAGE_PER_VALUE first;
-        // this one did not.
+        // 268…7591, while an item's own `block_base` is ~50 to 330. Every sibling
+        // arm here scales the curve first; this one once did not.
+        //
+        // It is a flat ADDITIVE to `R`, applied after the optimal boost
+        // (`block_rating_bonus`), not part of the blocking item's own rating. The
+        // client adds it only for the enchant's own damage types; that split is
+        // 03-D11 and not modelled yet, so it still applies to every type.
         "BlockReductionFirePropertyLogic"
         | "BlockReductionFrostPropertyLogic"
         | "BlockReductionShockPropertyLogic"
@@ -440,7 +464,7 @@ fn apply_enchant(lo: &mut Loadout, id: &Uuid, tier: u8) {
         | "BlockReductionSlashingPropertyLogic"
         | "BlockReductionCleavingPropertyLogic"
         | "BlockReductionBashingPropertyLogic"
-        | "BlockReductionTemplarPropertyLogic" => lo.block_rating += magnitude,
+        | "BlockReductionTemplarPropertyLogic" => lo.block_rating_bonus += magnitude,
 
         // Powerful Block is NOT block rating. Its shipped tooltip is "Target stunned
         // by a blocked attack takes {0} extra damage while stunned", and in the client
@@ -1337,9 +1361,7 @@ mod tests {
     ///
     /// The block-rating arm added the family's RAW `_value` (the shared 268…7591
     /// curve) while the resist / piercing / fortify arms all multiply by
-    /// [`tables::ENCHANT_DAMAGE_PER_VALUE`] first. Since
-    /// [`tables::block_reduction`] saturates at `MAXIMUM_BLOCK_REDUCTION` from a
-    /// rating of `BLOCK_RATING_SCALE / REDUCTION_PER_BLOCK_RATING` = 950 up, a
+    /// [`tables::ENCHANT_DAMAGE_PER_VALUE`] first. Under the old fractional block, a
 
     /// THE CALIBRATION. The shipped tables are the wire magnitudes; the old global
     /// constant was a back-solve that only ever fitted the one family it came from.
@@ -1431,28 +1453,14 @@ mod tests {
             "the raw curve value {raw} is ~55x the magnitude — adding it raw is the bug",
         );
 
-        // And the consequence the tester felt: the raw value alone saturates
-        // block_reduction at its cap; the scaled one does not.
-        let cap = gamedata::combat_params::MAXIMUM_BLOCK_REDUCTION;
-        assert!(
-            (tables::block_reduction(raw, true) - cap).abs() < 1e-6,
-            "the raw curve value pins block_reduction at the {cap} cap",
-        );
-        assert!(
-            tables::block_reduction(l.block_rating, true) < cap,
-            "the scaled magnitude leaves block_reduction below the cap, got {}",
-            tables::block_reduction(l.block_rating, true),
-        );
+        assert_eq!(l.block_rating_bonus, 0.0, "nor a Block Reduction bonus");
 
-        // A full starter set PLUS a top-tier block enchant still must not cap out —
-        // 276 + 137 = 413 → 0.413, well under 0.95.
+        // A starter set PLUS a top-tier Powerful Block keeps the shield's own rating.
         let mut s = starter();
+        let before = s.block_rating;
         apply_enchant(&mut s, &Uuid::parse_str(POWERFUL_BLOCK).unwrap(), top);
-        assert!(
-            tables::block_reduction(s.block_rating, true) < cap,
-            "starter gear + one Powerful Block capped out at {}",
-            tables::block_reduction(s.block_rating, true),
-        );
+        assert_eq!(s.block_rating, before);
+        assert_eq!(s.block_rating_bonus, 0.0);
     }
 
     /// The seven `Material Block Bonus Vs <type>` families and `Templar Set Block
@@ -1527,11 +1535,80 @@ mod tests {
         install_weapon(&mut lo, w, 10);
         assert!((lo.swing_interval().as_secs_f32() - 0.333333).abs() < 1e-4);
         assert!((lo.neutral_interval().as_secs_f32() - 0.633333).abs() < 1e-4);
-        assert!((lo.critical_hold_secs() - 0.116667).abs() < 1e-4);
-        assert!((lo.critical_damage_factor() - 1.325).abs() < 1e-4);
-        assert!((lo.block_rating - 49.5).abs() < 1e-3);
+        // The dagger's charge plateau is (0.315, 0.350] s and pays maxF 0.325
+        // (combat-spec 02 §2.3); its combo factor is the shipped 0.54 (02 §4.2).
+        let cp = lo.charge_params();
+        assert!((cp.plateau_start_time(1.0) - 0.315).abs() < 1e-3);
+        assert!((cp.decay_start_time(1.0) - 0.350).abs() < 1e-3);
+        assert!((cp.max_damage_factor - 0.325).abs() < 1e-4);
+        assert!((cp.combo_damage_factor - 0.54).abs() < 1e-4);
+        // No shield, so the weapon is the blocking item, at its TEMPERED block value:
+        // tempering.json `levels[9].protection` = 72.0 for tempering 10 (not the
+        // untempered blockBase 49.5).
+        assert_eq!(lo.block_rating, 72.0);
         // Untempered = the shipped quality-0 cell exactly.
         assert!((profile_base(&weapon_profile(w, 0)) - 99.0).abs() < 1e-3);
+    }
+
+    /// 03-D3: the blocking item is the shield if one is equipped, otherwise the
+    /// weapon — never the two summed — at its TEMPERED block value, ceiled.
+    /// Expected values are the shipped `tempering.json` rows and `blockBase`.
+    #[test]
+    fn the_blocking_item_is_the_shield_else_the_weapon_never_both() {
+        const STEEL_LONGSWORD: &str = "68577fab-83f5-4bd1-983c-f396963ac14b"; // blockBase 115.5
+        const DAEDRIC_SHIELD: &str = "fc5ef036-e045-4920-b95f-b32067b00163"; // blockBase 300
+        let sword = gamedata::weapon(STEEL_LONGSWORD).unwrap();
+        let shield = gamedata::shield(DAEDRIC_SHIELD).unwrap();
+
+        // Sword and board: the shield alone, T10 → 450 (not 450 + the sword's 116).
+        let mut sb = Loadout::default();
+        install_shield(&mut sb, shield, 10);
+        install_weapon(&mut sb, sword, 10);
+        assert_eq!(sb.block_rating, 450.0);
+        assert_eq!(sb.blocking_item_boost(), 1.0);
+        // Untempered, the shield's own blockBase.
+        let mut sb0 = Loadout::default();
+        install_shield(&mut sb0, shield, 0);
+        install_weapon(&mut sb0, sword, 10);
+        assert_eq!(sb0.block_rating, 300.0);
+        // Tempering 5 reads row 4 (345), tempering 11+ clamps to row 9.
+        assert_eq!(blocking_item_rating(DAEDRIC_SHIELD, 300.0, 5), 345.0);
+        assert_eq!(blocking_item_rating(DAEDRIC_SHIELD, 300.0, 12), 450.0);
+
+        // Two-handed: the sword blocks, untempered blockBase 115.5 ceiled to 116.
+        let mut two = Loadout::default();
+        install_weapon(&mut two, sword, 0);
+        assert_eq!(two.block_rating, 116.0);
+
+        // The T1 fixture items (blades-capture capture-tests.md §1).
+        assert_eq!(blocking_item_rating("905ee635-200e-445a-89de-db5ecbb17989", 148.5, 10), 216.0);
+        assert_eq!(blocking_item_rating("aa4ffedf-ad74-4aa1-bd82-18a041100f79", 247.5, 10), 360.0);
+        assert_eq!(blocking_item_rating("28000fc8-4208-4036-90d4-5e698b680d96", 147.0, 0), 147.0);
+    }
+
+    /// The generated temper table covers the weapon and shield templates, and never
+    /// LOWERS an item below its untempered `blockBase` (row 0 is tempering level 1).
+    #[test]
+    fn the_temper_table_is_consistent_with_the_templates() {
+        use super::super::block_temper::{tempered_block_value, BLOCK_TEMPER};
+        assert!(BLOCK_TEMPER.windows(2).all(|w| w[0].0 < w[1].0), "sorted for binary search");
+        let mut covered = 0;
+        for w in gamedata::WEAPONS.iter() {
+            if let Some(v1) = tempered_block_value(w.uuid, 1) {
+                covered += 1;
+                assert!(v1 >= w.block_base, "{}: T1 {v1} < blockBase {}", w.name, w.block_base);
+                assert!(tempered_block_value(w.uuid, 10).unwrap() >= v1, "{}", w.name);
+            }
+            assert_eq!(tempered_block_value(w.uuid, 0), None, "level 0 is the template");
+        }
+        for sh in gamedata::SHIELDS.iter() {
+            if let Some(v1) = tempered_block_value(sh.uuid, 1) {
+                covered += 1;
+                assert!(v1 >= sh.block_base, "{}: T1 {v1} < blockBase {}", sh.name, sh.block_base);
+            }
+        }
+        assert_eq!(covered, BLOCK_TEMPER.len());
+        assert_eq!(covered, 332 + 46, "332 weapon and 46 shield templates carry a temper table");
     }
 
     #[test]
@@ -1542,8 +1619,9 @@ mod tests {
         // Glass Dagger 72.0 + tempering-4 bonus 9.0.
         let base: f32 = s.weapon.base_by_type.iter().map(|(_, v)| *v).sum();
         assert!((base - 81.0).abs() < 1e-3, "starter base {base}");
-        // Chaurus Shield 240 + the dagger's own 36.
-        assert!((s.block_rating - 276.0).abs() < 1e-3, "starter block rating {}", s.block_rating);
+        // The Chaurus Shield alone (blockBase 240, untempered). The dagger's 36 is NOT
+        // added: the shield, when equipped, is the one blocking item (03-D3).
+        assert_eq!(s.block_rating, 240.0, "starter block rating {}", s.block_rating);
         assert!(s.has_shield);
         assert_eq!(s.enchants, vec![(DamageType::Shock, 3)]);
     }

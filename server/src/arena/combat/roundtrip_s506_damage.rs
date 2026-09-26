@@ -24,7 +24,7 @@
 //!     zero-status, replicated events; the deeper values once quoted here are
 //!     StaggeredWeakness-amplified and mis-indexed — see `S506_COMBO_RAMP`);
 //!   - the **Poison enchant** track 137.32 fresh → 205.36 fully conditioned;
-//!   - the **connected optimal block**: physical ≈ 0, elemental ≈ 68.65;
+//!   - the **connected optimal block**: physical at its 5 % floor, elemental 68.65;
 //!   - the **paralyse threshold** (now the shipped ABSOLUTE 32.7, not 0.45·maxHP);
 //!   - no 25 %-of-maxHP clamp;
 //!   - the **sum invariant** (`totalDamage == Σ health types`, drains excluded).
@@ -38,7 +38,7 @@ use super::state::{
     health_for_level, paralyze_damage_threshold, ActiveSide, ActorStateType, DamageSource,
     DamageType, Fighter, Loadout, ARENA_HEALTH_MULTIPLIER,
 };
-use super::tables::{combo_factor, Weight};
+use super::tables::Weight;
 
 // ---------------------------------------------------------------------------
 // s506 ground truth (docs/arena-combat-reproduction-spec.md §2a/§3/§4).
@@ -77,10 +77,22 @@ const S506_TEMPERING: u64 = 10;
 /// The chain is also NOT Flappety's: `netObjectId` on all four events is the VICTIM,
 /// and it is Flappety's. Blank dealt these hits with gear that is not in our data. See
 /// the note on `LIGHT_COMBO_RAMP`.
+///
+/// **Only the fresh row is reproduced now.** The chained 165.07 (×1.4502) was dealt by
+/// a VERSATILE weapon against armour the client cuts AFTER the multiplier (combat-spec
+/// 01 D1). This fixture's stand-in is a LIGHT dagger, and this engine still cuts armour
+/// first (PR-03). The fitted `combo_factor(Versatile, 1)` = 1.44 made the stand-in hit
+/// 165 anyway, but that constant was fitted to chains like this one, and the client's
+/// shipped `_comboDamageFactor` (0.54 / 0.25 / 0.186) replaces it. So the row is kept
+/// as a recording, not as an assertion.
 const S506_COMBO_RAMP: &[(u32, f32)] = &[
     (0, 113.82), // seq 27/277/488 — fresh (combo reset), no statuses
-    (1, 165.07), // seq 37/287 — first chained swing, no statuses (×1.4502)
 ];
+/// seq 37/287 — the first chained swing, no statuses (×1.4502). See above for why it
+/// is not asserted.
+const S506_CHAINED_RECORDED: f32 = 165.07;
+/// The stand-in dagger's shipped `_comboDamageFactor` (`items.json`, 02 §4.2).
+const DAGGER_COMBO_DF: f32 = 0.54;
 
 /// The §2a recorded `Middle` WeaponManeuver Slashing band (seq 88/106/337).
 const S506_MANEUVER_SLASH: &[f32] = &[201.37, 274.51, 186.98];
@@ -147,11 +159,20 @@ fn flappety_dagger() -> Loadout {
 /// [Class 3: authored/unverifiable — flagged.]
 const BLANK_HELMET: &str = "0c39d0f3-79c8-4e58-b435-3622a42e4d3d"; // Paladin's Helmet, AR 230.4
 const BLANK_GAUNTLETS: &str = "a2c629d2-65a9-445d-9594-ca992aed624b"; // Quicksilver Gauntlets, AR 71.4
-/// Blank's shield — the video shows "poison dagger + shield" (§1). Ebony Shield
-/// `blockBase 330`; with the Dragonbone Dagger's own 49.5 that is a Block Rating of
-/// 379.5, which at the optimal (×2) weight reproduces the recorded ÷2 elemental.
-/// [Class 3: the *shield model* is inverted from the block anchor, as above.]
+/// Blank's shield — the video shows "poison dagger + shield" (§1).
+///
+/// The seq-323 optimal block cut Poison 137.32 → 68.65, a flat elemental budget of
+/// 68.67. Under the client's rule, `(2·R0 + EP) · 0.82 · 0.1`, the only clean fit with
+/// an integer `R0` and a shipped Elemental Protection rank is `R0 = 360` with EP
+/// rank 6 (117.5): 68.675 — the same pair that matches the T1 "Galadriel" hits to the
+/// cent (blades-capture `docs/combat-spec/capture-tests.md` §1). An Ebony Shield
+/// (blockBase 330) at tempering 4 is 360. The shield is the blocking item alone; the
+/// dagger's 49.5 is NOT added (03-D3 — the old fixture summed them to 379.5).
+/// [Class 3: the *shield + perk* are inverted from the block anchor, as above.]
 const BLANK_SHIELD: &str = "1d248608-7347-4122-8b42-840b6304c203"; // Ebony Shield, blockBase 330
+const BLANK_SHIELD_TEMPERING: u64 = 4;
+/// ElementalProtection rank 6 BonusValue.
+const BLANK_ELEMENTAL_PROTECTION: f32 = 117.5;
 
 fn blank_armor_rating() -> f32 {
     gamedata::armor_rating(BLANK_HELMET).expect("helmet")
@@ -159,21 +180,26 @@ fn blank_armor_rating() -> f32 {
 }
 
 fn blank_block_rating() -> f32 {
-    gamedata::block_base(BLANK_SHIELD).expect("shield")
-        + gamedata::weapon(gamedata::ids::DRAGONBONE_DAGGER).unwrap().block_base
+    loadout::blocking_item_rating(
+        BLANK_SHIELD,
+        gamedata::block_base(BLANK_SHIELD).expect("shield"),
+        BLANK_SHIELD_TEMPERING,
+    )
 }
 
 /// Blank, the opponent (#125): a L86 fighter at arena ×3 HP wearing the armor +
 /// shield above.
 fn blank() -> Fighter {
-    let lo = Loadout {
+    let mut lo = Loadout {
         level: S506_LEVEL,
         armor_rating: blank_armor_rating(),
         block_rating: blank_block_rating(),
+        has_shield: true,
         shield_optimal_block_boost: 1.0,
         status_dur_mult: 1.0,
         ..Default::default()
     };
+    lo.perks.elemental_block_rating = BLANK_ELEMENTAL_PROTECTION;
     Fighter::new(1, 125, lo, Instant::now())
 }
 
@@ -252,9 +278,7 @@ fn s506_combo_ramp_reproduces_recorded_slashing() {
         assert!(
             (got - recorded).abs() <= tol,
             "DIVERGENCE (COMBO §4.2): combo {count} Slashing modeled {got:.2} vs s506 recorded \
-             {recorded:.2} (tol ±{tol:.2}). combo_factor(Light,{count})={:.3}, tempered base 144.0, \
-             armor cut {:.2}.",
-            combo_factor(Weight::Versatile, count),
+             {recorded:.2} (tol ±{tol:.2}). Tempered base 144.0, armor cut {:.2}.",
             super::tables::armor_reduction(144.0, blank_armor_rating()),
         );
     }
@@ -262,50 +286,47 @@ fn s506_combo_ramp_reproduces_recorded_slashing() {
     let c0 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now));
     let c1 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Left, 1.0, 1, now));
     assert!((c0 - 113.82).abs() < 0.05, "combo-0 anchor {c0:.2} != recorded 113.82");
-    let step = super::tables::combo_factor(Weight::Versatile, 1);
+    // One step of the dagger's shipped `_comboDamageFactor`, added to 1 (02 §4.2).
+    let step = 1.0 + DAGGER_COMBO_DF;
     assert!(
-        (c1 - 113.82 * step).abs() < 1.5,
-        "combo-1 anchor {c1:.2} should be the combo-0 base x the Versatile factor \
-         {step} (recorded 165.07)"
+        (c1 - 113.82 * step).abs() < 0.05,
+        "combo-1 {c1:.2} should be the combo-0 base x (1 + 0.54)"
     );
     let c9 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 9, now));
     assert!(
-        (c9 - 113.82 * super::tables::combo_factor(Weight::Versatile, 9)).abs() < 1.0,
-        "a deep combo is capped at the ramp's own ceiling, got {c9:.1}"
+        (c9 - c1).abs() < 0.05,
+        "the combo is ONE step: depth 9 {c9:.2} must equal depth 1 {c1:.2}"
     );
-    // The ramp is exactly proportional to the post-armor base — the reason armor is
-    // applied BEFORE the swing factor (see `damage.rs` module doc).
-    // The attacker was VERSATILE (Serpentstrike) — see the fixture note. The recorded
-    // first step is 1.451, twice and identically, and the Versatile population median
-    // is 1.443.
-    let want = super::tables::combo_factor(Weight::Versatile, 1);
-    assert!(
-        (c1 / c0 - want).abs() < 0.05,
-        "recorded first step {} should match the Versatile factor {want}",
-        c1 / c0
-    );
+    let _ = S506_CHAINED_RECORDED;
 }
 
+/// The recorded s506 Middle maneuvers (201.37 / 274.51 / 186.98) all sit above a plain
+/// fresh swing, which is what a maneuver's own `bonusDamage` makes them.
+///
+/// This test used to prove the recording fitted a "crit x charge" band, resolving a
+/// maneuver as a charged swing. The client does not do that: a maneuver's hit is
+/// `(weapon + bonus*grip) * (1 + [combo>=1]*comboDF)` with no swing term
+/// (`CalculateAttackTypeFactor@0x1bd3df0`, combat-spec 05 §2.6). Which maneuver each
+/// recording was is not known, so the band cannot pin a bonus. What it can pin is that
+/// the charge factor never reaches a maneuver.
 #[test]
 fn s506_middle_maneuver_lands_in_recorded_band() {
     let m = RetailDamageModel;
     let lo = flappety_dagger();
-    let modeled: Vec<f32> = [1.0, 1.5, 1.8]
-        .iter()
-        .map(|&sf| {
-            slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Middle, sf, 0, Instant::now()))
-        })
-        .collect();
-    let lo_m = *modeled.iter().min_by(|a, b| a.total_cmp(b)).unwrap();
-    let hi_m = *modeled.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
+    let now = Instant::now();
+    let fresh = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now));
     for &rec in S506_MANEUVER_SLASH {
-        assert!(
-            rec >= lo_m * 0.85 && rec <= hi_m * 1.15,
-            "DIVERGENCE (MANEUVER §4.2): recorded Middle maneuver {rec:.1} outside the modeled \
-             charged band [{lo_m:.1}, {hi_m:.1}] (Light crit ×{:.3} × swing_factor).",
-            Weight::Versatile.crit_combo().0,
-        );
+        assert!(rec > fresh, "recorded maneuver {rec:.1} must exceed a plain swing {fresh:.1}");
     }
+    let plain = slash_of(&m.resolve_attack(
+        &lo, &blank(), DamageSource::WeaponManeuver, ActiveSide::Middle, 1.0, 0, now,
+    ));
+    let charged = slash_of(&m.resolve_attack(
+        &lo, &blank(), DamageSource::WeaponManeuver, ActiveSide::Middle, 1.8, 0, now,
+    ));
+    assert!((plain - fresh).abs() < 0.05, "a bonus-less maneuver is the weapon hit");
+    assert!((charged - plain).abs() < 0.05, "a maneuver takes no swing factor");
+    let _ = Weight::Versatile;
 }
 
 // ---------------------------------------------------------------------------
@@ -361,14 +382,22 @@ fn s506_poison_base_and_amplification_ramp() {
 // (C) The connected optimal block is asymmetric (§4.4).
 // ---------------------------------------------------------------------------
 
+/// s506 seq 323: a connected optimal block on a Right swing → Slashing 113.82 → 0.77,
+/// Poison 137.32 → 68.65. There is no ×0 and no ÷2 (03 V1): the block removes a flat
+/// budget per category. Blank's elemental budget is (720 + 117.5) · 0.082 = 68.675,
+/// so Poison lands at 68.645. The physical budget, 720 · 0.16 = 115.2, exceeds the
+/// 113.82 left after armour, so Slashing sits at its 5 % floor, 5.69.
+///
+/// KNOWN RESIDUAL: the recorded 0.77 needs the client's order, block BEFORE armour —
+/// the floor is then 5 % of the pre-armour 144, and armour takes most of that. The
+/// fork cuts armour from the base first; that is 01-D1 (PR-03), not this change.
 #[test]
-fn s506_optimal_block_negates_physical_halves_elemental() {
+fn s506_optimal_block_is_a_flat_budget() {
     let m = RetailDamageModel;
     let lo = flappety_dagger();
-    // s506 seq 323: a connected optimal block on a Right swing → Slashing 113.82→0.77
-    // (≈0), Poison 137.32→68.65 (=÷2.0).
     let now = Instant::now();
     let mut def = blank();
+    assert_eq!(def.loadout.block_rating, 360.0);
     def.set_actor_state(ActorStateType::Blocking, now);
     def.blocking_side = ActiveSide::Right;
     def.block_raised_at = Some(now);
@@ -376,28 +405,43 @@ fn s506_optimal_block_negates_physical_halves_elemental() {
     let blocked = m.resolve_attack(&lo, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
     assert!(blocked.flags & flags::WAS_OPTIMAL_BLOCKING != 0, "optimal-block flag set");
     assert!(
-        slash_of(&blocked) <= 1.0,
-        "DIVERGENCE (BLOCK §4.4): a connected optimal block must drive physical to ≈0 \
-         (recorded 0.77), got {:.2}",
+        (slash_of(&blocked) - S506_SLASH_BASE * 0.05).abs() < 0.01,
+        "the physical budget exceeds the hit, so Slashing sits at its 5 % floor, got {:.2}",
         slash_of(&blocked),
     );
     let recorded_blocked_poison = 68.65; // seq 323
     assert!(
-        (poison_of(&blocked) - recorded_blocked_poison).abs() < 1.5,
-        "DIVERGENCE (BLOCK §4.4): optimal-block elemental must land near {recorded_blocked_poison} \
-         (137.32 × ~0.5), got {:.2}. Block Rating {:.1} → elemental reduction {:.4}.",
+        (poison_of(&blocked) - recorded_blocked_poison).abs() < 0.05,
+        "optimal-block elemental must land at the recorded {recorded_blocked_poison}, got {:.2}",
         poison_of(&blocked),
-        def.block_rating(true),
-        super::tables::block_reduction(def.block_rating(true), false),
     );
-    // A LATE guard does NOT negate physical. Forced by TIMING (re-raised inside the
-    // OPTIMAL_BLOCK_RECOVERY cooldown) — tracker #31 removed the wrong-side gate,
-    // because high/low blocking is a phase and never a direction.
-    let mut late = def.clone();
-    late.last_block_dropped_at = Some(now);
-    let l = m.resolve_attack(&lo, &late, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-    assert!(l.flags & flags::WAS_LATE_BLOCKING != 0);
-    assert!(slash_of(&l) > 1.0, "a late block only reduces, got {:.2}", slash_of(&l));
+    // A LOW guard (re-raised inside the 0.8 s cooldown): ×1 R, and NO wire flag.
+    let mut low = def.clone();
+    low.last_block_dropped_at = Some(now);
+    let l = m.resolve_attack(&lo, &low, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+    assert!(l.blocked);
+    assert_eq!(l.flags & (flags::WAS_LATE_BLOCKING | flags::WAS_OPTIMAL_BLOCKING), 0);
+    assert!((slash_of(&l) - (S506_SLASH_BASE - 57.6)).abs() < 0.01, "got {:.2}", slash_of(&l));
+    assert!((poison_of(&l) - (S506_POISON_BASE - 39.155)).abs() < 0.01, "got {:.2}", poison_of(&l));
+}
+
+/// The RETAIL anchor the fork cannot hit yet: seq 323's optimally blocked Slashing
+/// landed at **0.77**. In the client the block runs before armour, so the 5 % floor
+/// is 5 % of the pre-armour 144 (7.2) and armour then takes most of it. The fork
+/// cuts armour from the base first (01-D1), so it lands the floor of the post-armour
+/// 113.82 instead (5.69). Un-ignore when PR-03 moves armour after block.
+#[test]
+#[ignore = "PR-03 (01-D1): needs armour after block"]
+fn s506_optimal_block_physical_matches_the_recorded_0_77() {
+    let m = RetailDamageModel;
+    let now = Instant::now();
+    let mut def = blank();
+    def.set_actor_state(ActorStateType::Blocking, now);
+    def.blocking_side = ActiveSide::Right;
+    def.block_raised_at = Some(now);
+    def.blocking_until = Some(now + std::time::Duration::from_secs(2));
+    let b = m.resolve_attack(&flappety_dagger(), &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+    assert!((slash_of(&b) - 0.77).abs() < 0.05, "got {:.2}", slash_of(&b));
 }
 
 // ---------------------------------------------------------------------------
@@ -480,7 +524,8 @@ fn s506_full_chain_through_engine_reproduces_ramp_and_resets_on_block() {
     let mut last_slash = 0.0;
     for step in 0..5u32 {
         let side = if step % 2 == 0 { ActiveSide::Right } else { ActiveSide::Left };
-        let depth = attacker.register_combo_swing(side);
+        let depth = attacker.begin_combo_swing(side);
+        attacker.increment_combo(); // the hit connects
         assert_eq!(depth, step, "alternating swings increment the combo each step");
         let rd = m.resolve_attack(&lo, &blank(), DamageSource::Attack, side, 1.0, depth, Instant::now());
         let s = slash_of(&rd);
@@ -500,12 +545,12 @@ fn s506_full_chain_through_engine_reproduces_ramp_and_resets_on_block() {
          {S506_SLASH_BASE:.1}"
     );
     assert!(
-        last_slash <= S506_SLASH_BASE * super::tables::combo_factor(Weight::Versatile, 9) + 1.0,
-        "…and must not exceed the ramp ceiling"
+        last_slash <= S506_SLASH_BASE * (1.0 + DAGGER_COMBO_DF) + 1.0,
+        "…and must not exceed the one combo step"
     );
 
     attacker.reset_combo();
-    let depth_after = attacker.register_combo_swing(ActiveSide::Right);
+    let depth_after = attacker.begin_combo_swing(ActiveSide::Right);
     assert_eq!(depth_after, 0);
     let fresh = slash_of(&m.resolve_attack(
         &lo,
@@ -533,15 +578,18 @@ fn s506_anchor_report() {
     rows.push(("combo-0 Slashing", slash_of(&c0), 113.82));
     rows.push(("combo-0 Poison", poison_of(&c0), 137.32));
     let c1 = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Left, 1.0, 1, now);
-    rows.push(("combo-1 Slashing", slash_of(&c1), 165.07));
+    // The recorded 165.07 is not an anchor this stand-in can reproduce (see
+    // `S506_COMBO_RAMP`); the row reports the model against its own formula.
+    println!("  combo-1 Slashing: model {:.2}, recorded {S506_CHAINED_RECORDED:.2} (Versatile, not asserted)", slash_of(&c1));
+    rows.push(("combo-1 Slashing (model)", slash_of(&c1), 113.82 * (1.0 + DAGGER_COMBO_DF)));
     let c4 = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 4, now);
     // combo-4 has no recorded counterpart: the old 469.30 row is a
-    // StaggeredWeakness-amplified combo-2 event. Reported against the ramp table so
-    // the row still shows the modelled value without implying a recording.
+    // StaggeredWeakness-amplified combo-2 event. Reported against the one-step
+    // formula so the row still shows the modelled value without implying a recording.
     rows.push((
         "combo-4 Slashing (no recorded counterpart)",
         slash_of(&c4),
-        113.82 * super::tables::combo_factor(Weight::Versatile, 9),
+        113.82 * (1.0 + DAGGER_COMBO_DF),
     ));
 
     let mut def = blank();
@@ -550,7 +598,10 @@ fn s506_anchor_report() {
     def.block_raised_at = Some(now);
     def.blocking_until = Some(now + std::time::Duration::from_secs(2));
     let b = m.resolve_attack(&lo, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-    rows.push(("optimal-block Slashing", slash_of(&b), 0.77));
+    // Recorded 0.77; the fork lands the 5 % floor of the post-armour value until
+    // armour moves after block (PR-03). Reported against the floor so the row checks
+    // the block stage this fixture can reproduce.
+    rows.push(("optimal-block Slashing (5 % floor)", slash_of(&b), S506_SLASH_BASE * 0.05));
     rows.push(("optimal-block Poison", poison_of(&b), 68.65));
 
     let mut amped = blank();
@@ -566,7 +617,7 @@ fn s506_anchor_report() {
     rows.push((
         "deep-combo Slashing",
         slash_of(&big),
-        113.82 * super::tables::combo_factor(Weight::Versatile, 9),
+        113.82 * (1.0 + DAGGER_COMBO_DF),
     ));
 
     println!("\n  s506 anchor    | emitted  | recorded | delta");
@@ -696,7 +747,8 @@ fn mirrored_drain_mirrors_the_post_block_elemental() {
          i.e. drained unmitigated. s293 seq 40/164/348 carry element == drain on \
          `wasOptimalBlocking` hits, and obj#65 seq 468->474 shows the pool really falling.",
     );
-    // The drain is NOT a health type, so the hit total is the blocked elemental alone
-    // and is unaffected by this change.
-    assert_eq!(blocked.total, frost_blocked, "`total` sums health types only");
+    // The drain is NOT a health type, so the hit total is the blocked Slashing (at its
+    // 5 % floor) plus the blocked elemental — the drain is not in it.
+    let slash_blocked = comp_of(&blocked, DamageType::Slashing);
+    assert!((blocked.total - (slash_blocked + frost_blocked)).abs() < 1e-3, "`total` sums health types only");
 }

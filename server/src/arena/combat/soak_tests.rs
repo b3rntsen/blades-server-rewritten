@@ -408,7 +408,11 @@ fn human_input(m: &MatchInstance, slot: usize, rng: &mut Rng) -> Option<Vec<u8>>
                 return None;
             }
             Some(match rng.below(10) {
-                0..=3 => vec![0x84, 0x36], // swing (the engine tests' swing frame)
+                0..=2 => vec![0x84, 0x36], // swing (the engine tests' swing frame)
+                // An attack PRESS: the next release (5) commits it after a random hold,
+                // so the soak also drives the charge clock (a tap below MinDamageTime
+                // fails, a hold on the plateau crits, combat-spec 02 X1/X2).
+                3 => c2s_zone(true, false),
                 4 => c2s_zone(true, true),  // raise guard
                 5 => c2s_zone(false, false), // release
                 _ => {
@@ -502,7 +506,25 @@ fn run_match(
                 }
                 Some(50) => o.damage_frames += 1,
                 Some(29) if *viewer == 0 => o.deaths += 1,
-                Some(48) if *viewer == 0 => o.round_results_sent += 1,
+                Some(48) if *viewer == 0 => {
+                    o.round_results_sent += 1;
+                    // The client tallies the score from op48's per-round array
+                    // (`GetNumberOfRoundsWonBy@0x1cea200` counts entries naming the
+                    // winner; a tied round has empty ids). So the decided entries must
+                    // equal the server's score after every round end, replays included.
+                    let nd = arena_proto::parse_netdata(&frame[2..]);
+                    let decided = [5u8, 7, 9]
+                        .iter()
+                        .filter(|&&p| nd.string(p).is_some_and(|w| !w.is_empty()))
+                        .count();
+                    let score: usize = m.combat.rounds_won.iter().map(|&w| w as usize).sum();
+                    if decided != score {
+                        return Err(format!(
+                            "op48 carries {decided} decided rounds but the score is {:?}",
+                            m.combat.rounds_won
+                        ));
+                    }
+                }
                 Some(49) => {
                     if m.combat.match_state != MatchState::Victory {
                         return Err(format!(
@@ -905,6 +927,28 @@ fn soak_bound_is_derived_from_the_engine_timers() {
     assert_eq!(walk(MATCH_STATE_MATCHEND_PROGRESSION), Duration::from_secs(16));
     assert!(b >= Duration::from_secs(474) && b < Duration::from_secs(480), "bound {b:?}");
     eprintln!("CRE-SOAK bound: {b:?}");
+}
+
+/// Regression: this BotVsBot pairing double-KO'd every round after the first (the
+/// killing swing, then the victim's Frost Revenge on 2 HP) and the uncapped replay
+/// rule looped it past the termination bound. With one replay per match it must
+/// terminate, with exactly one replayed round and a 2-round winner.
+#[test]
+fn the_double_ko_loop_seed_terminates() {
+    let fx = load_fixtures();
+    let find = |n: &str| fx.iter().find(|f| f.name == n).unwrap_or_else(|| panic!("no fixture {n}"));
+    let o = run_guarded(
+        0x4d4e3b4e79f4ca03,
+        find("prod-32"),
+        find("edge-healing-surge-zero-stamina"),
+        Mode::BotVsBot,
+        match_bound(MAX_TICK),
+    )
+    .expect("the match terminates within the bound");
+    assert_eq!(o.double_kos, 1, "one replayed double KO, then the tiebreak decides");
+    assert!(o.rounds <= super::super::state::MATCH_ROUND_HARD_CAP, "{} rounds", o.rounds);
+    let w = o.winner.expect("a match winner");
+    assert_eq!(o.rounds_won[w], 2, "{:?}", o.rounds_won);
 }
 
 /// Replay ONE soak match, for diagnosis: `SOAK_ONE=<seed>,<Mode>,<fixture a>,<fixture b>`

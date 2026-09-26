@@ -181,6 +181,19 @@ struct PrePvpState {
     level: u16,
 }
 
+/// Both slots' `pvpTrophies`, `(slot0, slot1)`, read off the loaded profiles (0 for
+/// a bot or starter loadout): the second key of [`MatchCombat::draw_tiebreak_winner`].
+pub(super) fn pvp_trophies(combat: &MatchCombat) -> (i64, i64) {
+    let trophy = |slot: usize| {
+        combat
+            .fighters
+            .get(slot)
+            .map(|f| PrePvpState::from_profile(&f.loadout.profile_character_json, f.loadout.level).trophies)
+            .unwrap_or(0)
+    };
+    (trophy(0), trophy(1))
+}
+
 impl PrePvpState {
     /// Parse the PvP block out of a character profile blob. An empty/unparseable
     /// blob (bot, starter loadout) yields all-zero, which the reward path handles.
@@ -807,24 +820,12 @@ impl MatchInstance {
 
         // The departure counts as the final round, won by the survivor. op48 is
         // cumulative, so it carries every completed round plus this one.
-        self.combat.round_winners.push(winner);
+        self.combat.round_winners.push(Some(winner));
         if winner < self.combat.rounds_won.len() {
             self.combat.rounds_won[winner] += 1;
         }
 
-        let uuid_of = |slot: usize| -> String {
-            self.combat
-                .fighters
-                .get(slot)
-                .map(|f| f.loadout.character_uuid.clone())
-                .unwrap_or_default()
-        };
-        let round_results: Vec<(String, String)> = self
-            .combat
-            .round_winners
-            .iter()
-            .map(|&w| (uuid_of(w), uuid_of(1 - w)))
-            .collect();
+        let round_results = self.combat.decided_round_results();
 
         let result = messages::match_post_round_info(
             self.combat.match_net_object_id,
@@ -1088,22 +1089,7 @@ impl MatchInstance {
                 if matches!(self.combat.phase, FlowState::StateTimeout)
                     && now.duration_since(self.combat.phase_entered) >= ROUND_TIMEOUT
                 {
-                    let trophy = |slot: usize| {
-                        self.combat
-                            .fighters
-                            .get(slot)
-                            .map(|f| {
-                                PrePvpState::from_profile(
-                                    &f.loadout.profile_character_json,
-                                    f.loadout.level,
-                                )
-                                .trophies
-                            })
-                            .unwrap_or(0)
-                    };
-                    let winner = self
-                        .combat
-                        .draw_tiebreak_winner((trophy(0), trophy(1)));
+                    let winner = self.combat.draw_tiebreak_winner(pvp_trophies(&self.combat));
                     out.extend(resolve::on_round_timeout(&mut self.combat, winner, now));
                     self.combat.phase_entered = now;
                 }
@@ -1533,22 +1519,7 @@ impl MatchInstance {
         // cumulative array op48 sends, built the same way. `round_winners` records the
         // winning SLOT of each round in order; `rounds_won` is only a tally and cannot
         // say WHICH round each side took.
-        let round_results: Vec<(String, String)> = self
-            .combat
-            .round_winners
-            .iter()
-            .map(|&w| {
-                let l = 1 - w;
-                let uuid = |s: usize| {
-                    self.combat
-                        .fighters
-                        .get(s)
-                        .map(|f| f.loadout.character_uuid.clone())
-                        .unwrap_or_default()
-                };
-                (uuid(w), uuid(l))
-            })
-            .collect();
+        let round_results = self.combat.decided_round_results();
 
         // Pre-match PvP state per slot, read off the loaded character profiles. The
         // opponent's trophies feed the Elo swing, so both sides are resolved up front.
@@ -4934,18 +4905,15 @@ pub(in crate::arena::combat) mod tests {
         );
         assert_eq!(m.fighter_health(1), full, "the block itself deals no damage");
 
-        // A (slot 0) swings Right into B's Right guard → OPTIMAL block: physical NEGATED,
-        // elemental HALVED. So B takes only the halved Shock (~14), NOT 0 and NOT the full 105.
+        // A (slot 0) swings Right into B's guard → OPTIMAL block. B's blocking item is
+        // the starter's Chaurus Shield alone (R0 240, boost 1.0 → R 480): the physical
+        // budget is 480 · 1.6 · 0.1 = 76.8 and the elemental one 480 · 0.82 · 0.1 =
+        // 39.36. A's starter hit is 81 Slashing + 23.84 Shock (the open ~105), so
+        // 81 − 76.8 = 4.2 and the Shock sits at its 5 % floor, 1.19: 5.39 → 5 HP.
         let dmg = swing(&mut m, 0, t0 + Duration::from_millis(600));
         assert!(!dmg.is_empty(), "the swing still resolves (ReceiveDamage emitted)");
         let opt_dealt = full - m.fighter_health(1);
-        assert!(opt_dealt > 0, "optimal block still lets the HALVED elemental through (not ×0 overall)");
-        assert!(
-            opt_dealt < open_dealt / 2,
-            "optimal block negates physical: {opt_dealt} << the open hit {open_dealt} (only ~halved Shock lands)"
-        );
-        // ~halved Shock ≈ 14 (27.46 × 0.5 = 13.73 → 14 after rounding).
-        assert!((opt_dealt as i32 - 14).abs() <= 1, "only the halved elemental (~14) lands, got {opt_dealt}");
+        assert_eq!(opt_dealt, 5, "flat optimal budgets against the open {open_dealt}");
         // The ReceiveDamage carries the WasOptimalBlocking flag (propId 7 bit3).
         let rd = dmg.iter().find(|(_, b)| b[1] == 0x36
             && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50)).expect("ReceiveDamage");

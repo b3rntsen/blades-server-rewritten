@@ -15,10 +15,10 @@
 //!
 //! What remains is genuinely *derived*:
 //!
-//! * the **capture-pinned combo ramp** ([`LIGHT_COMBO_RAMP`]) — a wire
-//!   measurement, not an asset value;
+//! * (the combo factor is no longer here: it is the shipped per-weapon
+//!   `_comboDamageFactor`, read through `Loadout::charge_params`, combat-spec 02 §4.2);
 //! * the **rating→reduction** helpers ([`armor_reduction`],
-//!   [`resistance_reduction`], [`block_reduction`], [`weakness_increase`]),
+//!   [`resistance_reduction`], [`block_cut`], [`weakness_increase`]),
 //!   which apply the shipped `CombatParameters` factors;
 //! * the **tempering axis** ([`QUALITY_BONUS`] / [`tempering_bonus`]) — the
 //!   shipped `WeaponTemplateList` carries only the *quality-0* cell (verified:
@@ -115,65 +115,6 @@ pub fn fallback_swing_interval(weight: Weight) -> std::time::Duration {
 }
 
 // ---------------------------------------------------------------------------
-// Combo ramp (capture-pinned — NOT shipped data)
-// ---------------------------------------------------------------------------
-
-/// The Light combo ceiling — identical to its depth-1 factor, because the ramp is a
-/// single step (see [`combo_factor`]).
-///
-/// **Was 4.12, and that number was an artifact.** The s506 series it came from is
-/// damage Flappety RECEIVED — `netObjectId` on an op50 is the victim — dealt by Blank
-/// wielding **Serpentstrike, a VERSATILE weapon**, and the deep values were inflated
-/// by `StaggeredWeakness` (the Powerful Block enchantment). Re-measuring that same
-/// session with the contaminated chain excluded gives 113.8 → 165.1 = **1.451**,
-/// twice and identically, which is the Versatile population median (1.443) — not a
-/// light ramp at all. The contaminated chain reproduces the old 2.652 and 4.124
-/// exactly, which is what identified them.
-pub const LIGHT_COMBO_CAP: f32 = 1.99;
-
-/// The combo multiplier for a normal swing at chain depth `count` (0 = fresh).
-/// The combo multiplier at chain depth `count` (0 = the fresh post-reset swing).
-///
-/// **The ramp is ONE STEP, then flat.** A chained swing is worth its class's factor
-/// from depth 1 onward and does not keep climbing. Measured from 46 retail sessions
-/// by the paired, within-chain step ratio `p(d)/p(d-1)` on ADJACENT hits of the same
-/// chain:
-///
-/// | class     | 0→1                     | 1→2            | 2→3   | 3→4   |
-/// |-----------|-------------------------|----------------|-------|-------|
-/// | Light     | 2.01 (n=123, CI 1.89-2.18) | 1.000 (n=44) | 1.000 | —     |
-/// | Versatile | 1.428 (n=296, CI 1.40-1.48) | 1.000 (n=87) | 1.000 | 1.000 |
-/// | Heavy     | 1.285 (n=50, CI 1.24-1.34)  | 1.000 (n=19) | 1.000 | —     |
-///
-/// Every step past the first has a bootstrap CI of exactly **[1.00, 1.00]**. The
-/// apparent rise at depth 2+ in a naive per-depth table is pure selection — chains
-/// that survive to depth 2 are the ones that happened to take a bigger first step —
-/// and the paired test removes it. This is why the old geometric curves and the
-/// 5-entry `LIGHT_COMBO_RAMP` are gone rather than re-tuned.
-///
-/// Ratios are of the PHYSICAL component only: across 396 in-chain pairs with a real
-/// physical change, the elemental component was unchanged in 293 and tracked the
-/// physical ratio in 7. Enchantment damage does not combo.
-pub fn combo_factor(weight: Weight, count: u32) -> f32 {
-    if count == 0 {
-        return 1.0;
-    }
-    match weight {
-        // n=63 chains / 123 step-pairs, 14 sessions, 33 fighter-streams. The widest
-        // band of the three (IQR 1.52-2.46) and 40 of its 63 chains come from one
-        // weapon, so the value may move — but Light is unambiguously the largest of
-        // the three, so the class ORDER is safe. Tightening it needs more light-weapon
-        // retail captures, not more filtering.
-        Weight::Light => 1.99,
-        // The best-evidenced of the three: n=206 chains / 296 step-pairs, 28 sessions,
-        // 92 fighter-streams, 19 distinct weapons clustering 1.25-1.60.
-        Weight::Versatile => 1.44,
-        // n=33 chains / 50 step-pairs, 13 sessions, 22 fighter-streams, 10 weapons.
-        Weight::Heavy => 1.29,
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Tempering (the axis the shipped WeaponTemplateList does NOT carry)
 // ---------------------------------------------------------------------------
 
@@ -238,15 +179,30 @@ pub fn tempering_bonus_in_hand(weight: Weight, tempering_level: u64, two_handed:
 /// literal flat damage subtraction, which is exactly how the enemy assets read
 /// (`Nascent Flame Atronach` `resistances.Fire = 65.28`).
 ///
-/// Block is different: `maximumBlockReduction`/`minimumBlockReduction` bound a
-/// **fraction**, so a Block Rating is scaled into 0..1. `BLOCK_RATING_SCALE`
-/// is the percentage-point divisor that puts real shield ratings (150–330) in a
-/// sane band instead of saturating instantly. [Class 3: bridge constant]
-pub const BLOCK_RATING_SCALE: f32 = 100.0;
+/// Block has the same flat shape — see [`block_cut`].
+///
+/// `PvpClientManager.PhysicalBlockMultiplier` (`+0x144`), set to 1.6 in
+/// `PvpClientManager$$Initialize@0x1adac7c` (0x1adaf38–0x1adaf54).
+pub const PVP_PHYSICAL_BLOCK_MULTIPLIER: f32 = 1.6;
+/// `PvpClientManager.ElementalBlockMultiplier` (`+0x148`), 1.23.
+pub const PVP_ELEMENTAL_BLOCK_MULTIPLIER: f32 = 1.23;
 
-/// A connected **optimal** block reads the rating at double weight.
-/// [uesp: "blockRating/10 (low block) / blockRating/5 (high block — 2×)"]
-pub const OPTIMAL_BLOCK_RATING_MULTIPLIER: f32 = 2.0;
+/// The PvP block-rating FACTOR for a damage category:
+/// `PvpPlayerActor$$GetBlockRatingFactor@0x1a32348` multiplies the shipped
+/// `_physicalBlockRatingFactor` (1.0) / `_elementalBlockRatingFactor` (0.6666667) by
+/// the two `PvpClientManager` multipliers — physical **1.6**, elemental **0.82**.
+///
+/// These are the factors the retail arena server used. Capture test T1
+/// (blades-capture `docs/combat-spec/capture-tests.md` §1): of 128 clean physical and
+/// 72 clean elemental blocked hits, 19 and 30 sit within 1 % of the PvP value and 0
+/// of either within 1 % of the PvE one; the mean factors are 1.5988 and 0.8231.
+pub fn pvp_block_rating_factor(physical: bool) -> f32 {
+    if physical {
+        combat_params::PHYSICAL_BLOCK_RATING_FACTOR * PVP_PHYSICAL_BLOCK_MULTIPLIER
+    } else {
+        combat_params::ELEMENTAL_BLOCK_RATING_FACTOR * PVP_ELEMENTAL_BLOCK_MULTIPLIER
+    }
+}
 
 /// Physical damage removed by an Armor Rating: a FLAT
 /// `rating × reductionPerArmorRating`, capped so armor can never remove more than
@@ -305,29 +261,31 @@ pub fn weakness_increase(
     (net * eff).min(incoming * combat_params::MAXIMUM_WEAKNESS_EFFECT)
 }
 
-/// The FRACTION of a hit a Block Rating removes.
+/// One component's value after a block: a FLAT cut, not a fraction.
 ///
-/// `clamp(rating / BLOCK_RATING_SCALE × reductionPerBlockRating × categoryFactor,
-/// minimumBlockReduction, maximumBlockReduction)` with `categoryFactor` =
-/// `physicalBlockRatingFactor` (1.0) or `elementalBlockRatingFactor` (0.6666667).
+/// ```text
+/// cut = factor · (d / D_category) · R · reductionPerBlockRating (0.1)
+/// d'  = max(d · (1 − maximumBlockReduction 0.95), d − cut)
+/// ```
 ///
-/// **Blocking is NOT de-rated against continuous damage** —
-/// `continuousDamageBlockingEffectiveness == 1`, unlike absorb / fortify /
-/// resistance / revenge / weakness which are all 0.75. [Phase 3.5, correction 1]
-pub fn block_reduction(block_rating: f32, physical: bool) -> f32 {
-    if block_rating <= 0.0 {
-        return combat_params::MINIMUM_BLOCK_REDUCTION;
+/// `DisplayClass305_0$$<ResolveBlocking>b__1@0x1fd06f0` (the final `Max` at
+/// 0x1fd0bf8–0x1fd0c38). `share = d / D_category` spreads ONE budget of
+/// `factor · R · 0.1` over the category's components, so the block removes the same
+/// amount from a 50 hit as from a 450 one until the 5 % floor bites. `rating` is
+/// the per-hit `R` after the optimal boost, the additives and piercing.
+///
+/// The fork used to take a FRACTION, `clamp(R / 100 · 0.1 · factor)`, so the cut
+/// grew with the hit; that is 03-D1 / M-block-shape.
+pub fn block_cut(d: f32, category_total: f32, rating: f32, factor: f32) -> f32 {
+    if d <= 0.0 {
+        return 0.0;
     }
-    let factor = if physical {
-        combat_params::PHYSICAL_BLOCK_RATING_FACTOR
-    } else {
-        combat_params::ELEMENTAL_BLOCK_RATING_FACTOR
-    };
-    let raw = block_rating / BLOCK_RATING_SCALE * combat_params::REDUCTION_PER_BLOCK_RATING * factor;
-    raw.clamp(
-        combat_params::MINIMUM_BLOCK_REDUCTION,
-        combat_params::MAXIMUM_BLOCK_REDUCTION,
-    )
+    if rating <= 0.0 || category_total <= 0.0 {
+        return d;
+    }
+    let share = d / category_total;
+    let cut = factor * share * rating * combat_params::REDUCTION_PER_BLOCK_RATING;
+    (d - cut).max(d * (1.0 - combat_params::MAXIMUM_BLOCK_REDUCTION))
 }
 
 // ---------------------------------------------------------------------------
@@ -521,19 +479,30 @@ mod tests {
         assert!((resistance_reduction(10.0, 1000.0, false) - 9.5).abs() < 1e-3);
     }
 
-    /// Block is a FRACTION, and it is **not** de-rated against continuous damage
-    /// (`continuousDamageBlockingEffectiveness == 1`).
+    /// Block is a FLAT per-category budget with a 5 % floor per component (03 §2.5,
+    /// `b__1@0x1fd06f0`). Expected values are hand arithmetic from the spec.
     #[test]
-    fn block_is_a_fraction_with_elemental_two_thirds_of_physical() {
-        let rating = 750.0;
-        let phys = block_reduction(rating, true);
-        let elem = block_reduction(rating, false);
-        assert!((phys - 0.75).abs() < 1e-4, "phys {phys}");
-        assert!((elem - 0.5).abs() < 1e-4, "elem {elem}");
-        assert!((elem / phys - combat_params::ELEMENTAL_BLOCK_RATING_FACTOR).abs() < 1e-4);
-        // Caps.
-        assert!((block_reduction(100_000.0, true) - combat_params::MAXIMUM_BLOCK_REDUCTION).abs() < 1e-6);
-        assert_eq!(block_reduction(0.0, true), combat_params::MINIMUM_BLOCK_REDUCTION);
+    fn block_is_a_flat_budget_not_a_fraction() {
+        let phys = pvp_block_rating_factor(true);
+        let elem = pvp_block_rating_factor(false);
+        assert!((phys - 1.6).abs() < 1e-6, "PvP physical factor {phys}");
+        assert!((elem - 0.82).abs() < 1e-6, "PvP elemental factor {elem}");
+
+        // Ebony Shield (R 330), low block: the physical budget is 330·1.6·0.1 = 52.8,
+        // the SAME for a 50, 150 or 450 hit until the 5 % floor bites.
+        for (d, want) in [(150.0_f32, 97.2_f32), (450.0, 397.2), (200.0, 147.2)] {
+            let got = block_cut(d, d, 330.0, phys);
+            assert!((got - want).abs() < 1e-3, "d={d}: got {got}, want {want}");
+        }
+        // 50 − 52.8 is below the 5 % floor, so 2.5 remains.
+        assert!((block_cut(50.0, 50.0, 330.0, phys) - 2.5).abs() < 1e-4);
+        // The budget is split by share: two physical components of 100 and 300 lose
+        // 13.2 and 39.6 (52.8 × ¼, × ¾).
+        assert!((block_cut(100.0, 400.0, 330.0, phys) - 86.8).abs() < 1e-3);
+        assert!((block_cut(300.0, 400.0, 330.0, phys) - 260.4).abs() < 1e-3);
+        // Control: no rating, no cut; a non-positive component stays at 0.
+        assert_eq!(block_cut(200.0, 200.0, 0.0, phys), 200.0);
+        assert_eq!(block_cut(0.0, 200.0, 330.0, phys), 0.0);
         assert_eq!(
             combat_params::CONTINUOUS_DAMAGE_BLOCKING_EFFECTIVENESS,
             1.0,
@@ -556,38 +525,41 @@ mod tests {
         assert_eq!(enchant_damage(POISON, 3), None);
     }
 
-    /// The combo ramp is ONE STEP, then flat — measured by the paired within-chain
-    /// step ratio, where every step past the first has a bootstrap CI of exactly
-    /// [1.00, 1.00]. This replaces a per-depth table whose deeper entries were a
-    /// selection artefact.
+    /// The weight-class fallback for an unresolved weapon must be the standard shipped
+    /// template of that class, field for field: 363 of the 370 templates share one of
+    /// three signatures (combat-spec 02 §2.3). Checked against the most common tuple in
+    /// the shipped table, so the fallback cannot drift from the data.
     #[test]
-    fn the_combo_ramp_is_a_single_step_then_flat() {
-        for w in [Weight::Light, Weight::Versatile, Weight::Heavy] {
-            assert_eq!(combo_factor(w, 0), 1.0, "{w:?} depth 0 is the fresh swing");
-            let step = combo_factor(w, 1);
-            assert!(step > 1.0, "{w:?} must gain something on the first chained swing");
-            for d in 2..10 {
-                assert_eq!(
-                    combo_factor(w, d),
-                    step,
-                    "{w:?} depth {d} must equal depth 1 — the ramp does not keep climbing"
-                );
+    fn the_charge_fallback_is_the_modal_shipped_template_per_class() {
+        use crate::arena::combat::state::{Loadout, WeaponProfile};
+        for (class, weight) in [
+            (gamedata::WeaponClass::Light, Weight::Light),
+            (gamedata::WeaponClass::Versatile, Weight::Versatile),
+            (gamedata::WeaponClass::Heavy, Weight::Heavy),
+        ] {
+            let key = |w: &gamedata::WeaponStats| {
+                [w.attack_delay, w.backswing_time, w.max_damage_time, w.max_damage_factor,
+                 w.combo_damage_factor, w.recovery_time]
+                    .map(|v| (v * 1000.0).round() as i64)
+            };
+            let mut counts: std::collections::HashMap<[i64; 6], usize> = Default::default();
+            for w in gamedata::WEAPONS.iter().filter(|w| w.weapon_class == class) {
+                *counts.entry(key(w)).or_default() += 1;
             }
+            let (modal, n) = counts.iter().max_by_key(|(_, n)| **n).unwrap();
+            assert!(*n >= 100, "{weight:?}: the standard template covers most of the class");
+            let lo = Loadout {
+                weapon: WeaponProfile { weight: Some(weight), ..Default::default() },
+                ..Default::default()
+            };
+            let cp = lo.charge_params();
+            let got = [cp.attack_delay, cp.backswing_time, cp.max_damage_time,
+                       cp.max_damage_factor, cp.combo_damage_factor, cp.recovery_time]
+                .map(|v| (v * 1000.0).round() as i64);
+            assert_eq!(&got, modal, "{weight:?} fallback must equal the shipped standard");
         }
     }
 
-    /// The class ORDER is the robust part of the measurement: Light gains most on the
-    /// chained swing, Heavy least. Asserted as an ordering so it survives the point
-    /// estimates moving (Light's band is the widest of the three).
-    #[test]
-    fn heavier_weapons_gain_less_from_a_combo() {
-        let l = combo_factor(Weight::Light, 1);
-        let v = combo_factor(Weight::Versatile, 1);
-        let h = combo_factor(Weight::Heavy, 1);
-        assert!(l > v && v > h, "expected Light {l} > Versatile {v} > Heavy {h}");
-        assert!(h > 1.0, "even Heavy gains something");
-        assert!(l < 3.0, "and nothing approaches the old 4.12, which was a status artefact");
-    }
     #[test]
     fn fallback_surface_still_available_for_bots() {
         assert_eq!(fallback::heavy_base(10), 165.0);

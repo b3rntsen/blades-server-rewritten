@@ -23,6 +23,19 @@ pub const ARENA_HEALTH_MULTIPLIER: u32 = 3;
 /// match; before that, a round-ending death loops to the next round.
 pub const ROUND_WINS_TO_WIN_MATCH: u8 = 2;
 
+/// How many double-KO rounds a match may REPLAY. **AUTHORED, not capture-derived**
+/// (no recorded match has a double KO). After one replay, the next double KO is
+/// decided by [`MatchCombat::draw_tiebreak_winner`] like a timed-out round. Uncapped,
+/// two phase-locked fighters whose killing blow and Revenge retaliation land in the
+/// same step replay the identical round forever (CRE-SOAK seed 0x4d4e3b4e79f4ca03).
+pub const MAX_DOUBLE_KO_REPLAYS: u8 = 1;
+
+/// Hard backstop on rounds played in one match: best-of-3 plus the replays above.
+/// With the replay cap a match cannot legitimately reach it undecided; if it ever
+/// does, the match ends on the round tally (see `resolve::on_round_ended`).
+pub const MATCH_ROUND_HARD_CAP: usize =
+    (2 * ROUND_WINS_TO_WIN_MATCH as usize - 1) + MAX_DOUBLE_KO_REPLAYS as usize;
+
 /// Base max-Health from the shipped `PlayerStatsData._playerStats._healthBase`.
 pub const HEALTH_BASE: u32 = 200;
 /// Health gained by each `_healthPoints` entry in the shipped per-level table.
@@ -542,9 +555,13 @@ const PVP_BASE_STAGGER_DURATION: f32 = 2.5;
 /// The block phase for a defending fighter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockPhase {
-    /// Guard just raised — within `BLOCK_OPTIMAL_TIME_SECS` (phys ×0, elem ×0.5).
+    /// Guard within `BLOCK_OPTIMAL_TIME_SECS` of going up, raised outside the
+    /// post-release cooldown: the block uses `R × (1 + OptimalBlockBoost)`.
     Optimal,
-    /// Guard held too long — after `BLOCK_OPTIMAL_TIME_SECS` (phys ÷1.6, elem ÷1.23).
+    /// A LOW block: held past the optimal window, or raised inside the cooldown. An
+    /// ordinary block at `×1 R` that carries NO wire flag. (The name predates the
+    /// client read; the client's "late block" is a different thing, a hit that lands
+    /// before the guard's startup finishes and is not mitigated at all — 03 §2.7.)
     Late,
 }
 
@@ -786,7 +803,8 @@ pub struct WeaponProfile {
     /// Base damage per type before swing/ability/enchant factors, already including
     /// the item's `tempering_level` bonus (`tables::tempering_bonus`).
     pub base_by_type: Vec<(DamageType, f32)>,
-    /// Weapon weight class — drives the combo/crit ramp (`damage::combo_factor`).
+    /// Weapon weight class — picks the standard timings/factors when no template
+    /// resolved (`Loadout::charge_params`).
     /// Resolved from the template's `weapon_class`; `None` ⇒ the model default (Light).
     pub weight: Option<crate::arena::combat::tables::Weight>,
 }
@@ -962,11 +980,23 @@ pub struct Loadout {
     /// `tables::armor_reduction` (`rating × reductionPerArmorRating`, capped at
     /// `maximumArmorReduction`). 0.0 for a fighter with no resolvable armor.
     pub armor_rating: f32,
-    /// Summed **Block Rating** contributed by the equipped weapon + shield
-    /// (`blockBase`). Feeds `tables::block_reduction`.
+    /// The **blocking item's** rating `R0`: the shield if one is equipped, otherwise
+    /// the weapon — never the two summed (`InventoryUtility$$GetEquippedBlockingItem
+    /// @0x1e61f50`). It is the item's temper-level block value when tempered, else its
+    /// `blockBase`, ceiled (`get_EquippedBlockRating@0x1c54420`). See
+    /// [`crate::arena::combat::loadout::blocking_item_rating`].
     pub block_rating: f32,
-    /// The shield's `optimalBlockBoost` (1.0 when no shield / unresolved).
+    /// Flat Block Reduction enchant rating. It adds to `R` AFTER the optimal boost
+    /// (`Actor$$ResolveBlocking@0x1c54284` boosts the equipped rating only, then the
+    /// `BlockRatingMethod` sources add). Type-agnostic for now; the per-type split is
+    /// a separate gap (03-D11).
+    pub block_rating_bonus: f32,
+    /// The shield's `optimalBlockBoost` as shipped (1.0 on all 51 shields).
     pub shield_optimal_block_boost: f32,
+    /// The equipped shield's `_damageBase`: a shield bash's base damage, all of it
+    /// Bashing (`Actor$$get_ShieldDamage@0x1c5b250`, `ShieldTemplate.DamageType` = 3).
+    /// 0 when no shield resolved.
+    pub shield_damage: f32,
     /// **Elemental Resistance Piercing RATING** (not a fraction) contributed by the
     /// attacker's enchants — subtracted from the defender's resistance rating before
     /// the reduction is computed. [Phase 3.4]
@@ -990,7 +1020,8 @@ pub struct Loadout {
     /// The caster's Paralyze ability rank (0 = not equipped) — selects the shipped
     /// `_damageToCauseParalyze` / `_duration` row. [Phase 3.9]
     pub paralyze_rank: u8,
-    /// The equipped WEAPON's `optimalBlockBoost` (1.0 when unresolved).
+    /// The equipped WEAPON's `optimalBlockBoost` as shipped (1.0 on 363 of 370
+    /// weapons; 0.5, 0.0 and 2.0 on the rest).
     pub weapon_optimal_block_boost: f32,
 
     // --- Defensive / offensive enchant-derived fields (status-resistance-spec §2.5) ---
@@ -1013,6 +1044,17 @@ pub struct Loadout {
 }
 
 impl Loadout {
+    /// The blocking item's `OptimalBlockBoost`: the shield's when a shield is
+    /// equipped, otherwise the weapon's (`InventoryUtility$$GetEquippedBlockingItem
+    /// @0x1e61f50`; `get_OptimalBlockBoost@0x1c5b8d8`).
+    pub fn blocking_item_boost(&self) -> f32 {
+        if self.has_shield {
+            self.shield_optimal_block_boost
+        } else {
+            self.weapon_optimal_block_boost
+        }
+    }
+
     /// Commit-to-commit swing cadence (Phase 3.12): the equipped template's own
     /// `attackDelay + recoveryToComboTime`, floored at `globalMinimumAttackDelay`; the
     /// weight-class fallback when no template resolved.
@@ -1034,27 +1076,97 @@ impl Loadout {
         }
     }
 
-    /// Per-template full-charge point (`WeaponTemplate._backswingTime`).
-    pub fn critical_hold_secs(&self) -> f32 {
-        use crate::arena::combat::tables;
-        self.weapon_template
-            .map(|w| w.backswing_time)
-            .filter(|v| *v > 0.0)
-            .unwrap_or_else(|| match self.weapon.weight {
-                Some(tables::Weight::Heavy) => 0.25,
-                Some(tables::Weight::Versatile) => 0.2,
-                _ => 0.116_667,
-            })
+    /// The swing timings and factors of the equipped weapon (combat-spec 02 §2.2-§2.3,
+    /// §4.2, §5.1). Read from the shipped template; a fighter whose weapon did not
+    /// resolve (bot / starter fallback) gets its weight class's standard template
+    /// values, which 363 of the 370 shipped templates share exactly (02 §2.3).
+    pub fn charge_params(&self) -> ChargeParams {
+        use crate::arena::combat::tables::Weight;
+        if let Some(w) = self.weapon_template {
+            return ChargeParams {
+                attack_delay: w.attack_delay,
+                backswing_time: w.backswing_time,
+                max_damage_time: w.max_damage_time,
+                min_damage_factor: w.min_damage_factor,
+                max_damage_factor: w.max_damage_factor,
+                combo_damage_factor: w.combo_damage_factor,
+                recovery_time: w.recovery_time,
+            };
+        }
+        // attackDelay / backswing / maxDamageTime / maxF / comboDF / recoveryTime of
+        // the standard Light, Balanced and Heavy templates (02 §2.3, §4.2, §5.1).
+        let (ad, bs, mdt, maxf, combo, rt) = match self.weapon.weight {
+            Some(Weight::Heavy) => (0.40, 0.25, 0.035, 0.987, 0.186, 1.00),
+            Some(Weight::Versatile) => (0.30, 0.20, 0.035, 0.625, 0.25, 0.80),
+            _ => (0.233_333, 0.116_667, 0.035, 0.325, 0.54, 0.55),
+        };
+        ChargeParams {
+            attack_delay: ad,
+            backswing_time: bs,
+            max_damage_time: mdt,
+            min_damage_factor: 0.0,
+            max_damage_factor: maxf,
+            combo_damage_factor: combo,
+            recovery_time: rt,
+        }
+    }
+}
+
+/// The per-weapon inputs of the client's charge clock, combo factor and recovery
+/// gates (`WeaponTemplate +0xe4..+0xfc`, combat-spec 02 §2.2).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChargeParams {
+    pub attack_delay: f32,
+    pub backswing_time: f32,
+    pub max_damage_time: f32,
+    pub min_damage_factor: f32,
+    pub max_damage_factor: f32,
+    /// `_comboDamageFactor`: added once the chain is >= 1 (0.54 / 0.25 / 0.186).
+    pub combo_damage_factor: f32,
+    /// Recovery -> Idle, which ends the chain (02 §4.4, R1).
+    pub recovery_time: f32,
+}
+
+impl ChargeParams {
+    /// `PlayerActor$$get_MinDamageTime@0x18693b8`: `max(attackDelay*s, 0.1)`. A release
+    /// before it is not a swing (`AttackChargeState$$IsAttackPossible@0x1a4eecc`).
+    pub fn min_damage_time(&self, s: f32) -> f32 {
+        (self.attack_delay * s)
+            .max(crate::arena::combat::gamedata::combat_params::GLOBAL_MINIMUM_ATTACK_DELAY)
     }
 
-    /// Full-charge multiplier. The asset stores the increase above base, so a
-    /// Dragonbone Dagger's 0.325 becomes ×1.325.
-    pub fn critical_damage_factor(&self) -> f32 {
-        use crate::arena::combat::tables;
-        self.weapon_template
-            .map(|w| 1.0 + w.max_damage_factor)
-            .filter(|v| *v > 1.0)
-            .unwrap_or_else(|| self.weapon.weight.unwrap_or(tables::Weight::Light).crit_combo().0)
+    /// `get_DecayStartTime@0x186958c`: `MinDamageTime + backswing*s`, the plateau's end.
+    pub fn decay_start_time(&self, s: f32) -> f32 {
+        self.min_damage_time(s) + self.backswing_time * s
+    }
+
+    /// `get_MaxDamageTime@0x18694b0`: `DecayStartTime - maxDamageTime*s`, where the
+    /// plateau starts. (The getter and the field of the same name mean different
+    /// things: the field is the plateau's length.)
+    pub fn plateau_start_time(&self, s: f32) -> f32 {
+        self.decay_start_time(s) - self.max_damage_time * s
+    }
+
+    /// The swing factor a release after `t` seconds of charge is worth, or `None` when
+    /// the release is too early to be a swing at all (`AttackFailed`).
+    ///
+    /// `AttackChargeState$$GetDamageFactor@0x1a4ecb8` with
+    /// `PlayerActor$$get_ShouldLerpDamageFactor@0x1862e18` = false: a step, not a ramp.
+    /// `maxDamageFactor` on the plateau `(MaxDamageTime, DecayStartTime]` only, and
+    /// `minDamageFactor` before and after it. `s` is the weapon-speed multiplier.
+    pub fn swing_factor(&self, t: f32, s: f32) -> Option<f32> {
+        let min = self.min_damage_time(s);
+        if t < min {
+            return None;
+        }
+        let f = if t <= min {
+            0.0
+        } else if t > self.plateau_start_time(s) && t <= self.decay_start_time(s) {
+            self.max_damage_factor
+        } else {
+            self.min_damage_factor
+        };
+        Some(f)
     }
 }
 
@@ -1114,6 +1226,9 @@ pub struct ActiveChannel {
     /// is authored — and it is per-channel because a hardcoded global tick turned
     /// Thunderstorm into a single immediate hit.
     pub interval_secs: f32,
+    /// When the cast that started this channel was accepted; matches
+    /// [`Execution::started_at`] for the two interruptible channels.
+    pub cast_at: Instant,
 }
 
 // ---------------------------------------------------------------------------
@@ -1266,18 +1381,29 @@ pub struct Fighter {
     /// server-measured hold duration for the held-charge crit gate (bug 4).
     /// `None` ⇒ no press in progress (e.g. bot swings, or between attacks).
     pub charge_press_at: Option<Instant>,
-    /// **Combo state** (`docs/arena-combat-reproduction-spec.md` §4.2). The number of
-    /// uninterrupted, **alternating-side** swings chained so far — drives the combo
-    /// ramp (`damage::combo_factor`: ×1.0 → ×1.45 → … → ~×4.12 for a Light weapon).
-    /// Incremented on a normal Left/Right swing that alternates vs `last_combo_side`
-    /// within the combo window; RESET to 0 on a non-alternating/late swing, an optimal
-    /// block, a `Middle` maneuver, and at round start. Mirrors the client's
-    /// `AttackerStateData._comboCount`/`IncrementCombo`/`ResetCombo` (dump.cs).
+    /// **Combo state** (combat-spec 02 §4). `Actor._comboCount`: the number of
+    /// connected weapon hits in the current chain. A hit reads it before its own
+    /// increment, and `>= 1` adds `_comboDamageFactor` once
+    /// (`damage::attack_type_multiplier`). Advanced when a hit LANDS
+    /// ([`Self::increment_combo`]); a swing that repeats a side starts a fresh chain
+    /// ([`Self::begin_combo_swing`]); reset by the §4.3 events (going Idle after
+    /// `recoveryTime`, a guard, a spell, a stagger, a paralysis, a midline crossing
+    /// during the hold, a maneuver's end, a round start).
     pub combo_count: u32,
     /// The `ActiveSide` of this fighter's last combo-counting swing (Left/Right), so
     /// the next swing can tell an *alternating* chain (combo++) from a repeat (reset).
     /// `None` at round start / after a reset.
     pub last_combo_side: ActiveSide,
+    /// The side of the last committed swing, kept through a combo reset. The
+    /// Recovery gates compare the next charge's side with THIS swing's side
+    /// (`PlayerRecoveryState$$CanBeginCombo@0x1d75980`), whatever the chain did.
+    pub last_swing_side: ActiveSide,
+    /// When the current charge began (op46 DOWN, or a bot's wind-up). The chain
+    /// survives only if the next charge BEGINS inside Recovery (combat-spec 02 §4.4).
+    pub charge_began_at: Option<Instant>,
+    /// When the last swing's Recovery began: the FollowThrough beat plus one frame.
+    /// `recoveryTime` after it the actor goes Idle and the chain ends (02 R1, X5).
+    pub recovery_began_at: Option<Instant>,
 
     // --- Phase 4.1: client pointer geometry (`PlayerCombatInputPosition`, gmid 47) ---
     /// Most recent **normalised screen X** the client reported (gmid 47 propId 4,
@@ -1492,6 +1618,38 @@ pub struct Fighter {
     /// How long the CURRENT paralysis lasts (the casting rank's shipped `_duration`);
     /// read by `resolve::reconcile_paralysis`. [Phase 3.9]
     pub paralyze_secs: f32,
+    /// When this fighter last entered `Staggered` or `Paralyzed`, until
+    /// [`super::interrupts::process_interrupts`] has cancelled whatever that
+    /// interrupted. Set at the single state seam ([`Self::force_actor_state`]) and by
+    /// a re-stagger, so no stagger or paralysis path can forget it.
+    pub interrupt_pending: Option<Instant>,
+    /// Casts whose interruptible phase is still running: a spell's `AbilityChannel`
+    /// wind-up, a channelled spell, or a weapon maneuver up to `OnManeuverEnded`.
+    /// See [`Execution`].
+    pub executions: Vec<Execution>,
+}
+
+/// One cast in its interruptible phase.
+///
+/// The client ends a spell's channel or wind-up, and a maneuver, when the actor leaves
+/// `Channeling` / `Maneuver` for `Staggered` or `Paralyzed`
+/// (`ChannelingState$$EndChanneling@0x1a52578`, `ActorManeuverState$$OnExit@0x1d556b0`):
+/// `RequestInterruptAbility` → `AbilityExecutor$$ForceStop@0x1e9ba28` runs every step's
+/// cleanup and drops the rest, so no damage step runs and the cooldown starts at the
+/// interrupt (`AbilityExecutor$$Interrupt@0x1e9b94c` → `EndExecution`). In PvP the
+/// server drives that with op59 `InterruptAbility` (combat-spec 06 §1.8, 07 §5.5).
+#[derive(Debug, Clone)]
+pub struct Execution {
+    pub ability_uuid: String,
+    /// The instant the cast was accepted (op38). Pending impacts and channels carry
+    /// the same instant as `cast_at`, which is how they are matched to this record.
+    pub started_at: Instant,
+    /// End of the interruptible phase: the channel's end, or `OnManeuverEnded`.
+    pub until: Instant,
+    /// The rank's full cooldown, which starts when the execution ends.
+    pub cooldown: std::time::Duration,
+    /// A weapon maneuver (the caster is in `Maneuver`), not a spell.
+    pub is_maneuver: bool,
 }
 
 /// A damage-negation pool (Ward/Absorb/Dodge) on a fighter — a quantity of
@@ -1688,6 +1846,9 @@ impl Fighter {
             bot_last_cast: None,
             combo_count: 0,
             last_combo_side: ActiveSide::None,
+            last_swing_side: ActiveSide::None,
+            charge_began_at: None,
+            recovery_began_at: None,
             last_input_x: None,
             last_input_y: None,
             last_input_at: None,
@@ -1710,7 +1871,22 @@ impl Fighter {
             equipped_consumable: None,
             pending_restore: None,
             paralyze_secs: paralyze_duration_secs(1),
+            interrupt_pending: None,
+            executions: Vec::new(),
         }
+    }
+
+    /// Is a weapon maneuver still executing (before its `OnManeuverEnded`)? While it
+    /// is, the caster is in the client's `Maneuver` state, which admits no Blocking,
+    /// Charging or attack (`ActorManeuverState$$CanTransitionTo@0x1d55814`).
+    pub fn maneuver_active(&self, now: Instant) -> bool {
+        self.executions.iter().any(|e| e.is_maneuver && now < e.until)
+    }
+
+    /// Is an op53 cast pose still standing, i.e. is the client showing this actor in
+    /// `Channeling`? `Actor$$CanCast@0x1c58f54` lets a cast through from Channeling.
+    pub fn in_channel_pose(&self, now: Instant) -> bool {
+        matches!(self.channel_pose, Some((until, at)) if at == self.transitions_total && now < until)
     }
 
     /// This fighter's current actor state. The only way to read the private field.
@@ -1742,6 +1918,11 @@ impl Fighter {
     pub fn force_actor_state(&mut self, next: ActorStateType, now: Instant) {
         let from = self.actor_state;
         let time_in_previous = self.time_in_state(now);
+        // Entering Staggered or Paralyzed interrupts a channel, a spell wind-up or a
+        // maneuver (see [`Execution`]). Keep the earliest unprocessed instant.
+        if matches!(next, ActorStateType::Staggered | ActorStateType::Paralyzed) {
+            self.interrupt_pending.get_or_insert(now);
+        }
         self.actor_state = next;
         self.state_entered = now;
         // The ring already contains the state being ENTERED — capture-pinned: the
@@ -1878,21 +2059,19 @@ impl Fighter {
         now.saturating_duration_since(self.state_entered).as_secs_f32()
     }
 
-    /// This fighter's live **Block Rating** while guarding (Phase 3.5): the summed
-    /// weapon + shield `blockBase`, multiplied by `optimalBlockBoost` and the UESP
-    /// high-block ×2 when the guard is in its OPTIMAL phase.
+    /// This fighter's live **Block Rating** `R` while guarding, before piercing:
+    /// the blocking item's `R0`, times `(1 + OptimalBlockBoost)` of THAT item on an
+    /// optimal block, plus the flat Block Reduction enchants.
+    ///
+    /// `Actor$$ResolveBlocking@0x1c54284` (0x1c5433c/0x1c54358) computes
+    /// `R = R0 + R0 × boost`, i.e. `×(1 + boost)`: ×2 for the boost of 1.0 that every
+    /// shield and 363 of 370 weapons ship, ×1.5 / ×1 / ×3 for the other seven weapons.
+    /// The additive `BlockRatingMethod` sources come after the boost, so they are not
+    /// doubled.
     pub fn block_rating(&self, optimal: bool) -> f32 {
-        use super::tables;
-        let base = self.loadout.block_rating;
-        if !optimal {
-            return base;
-        }
-        let boost = self
-            .loadout
-            .shield_optimal_block_boost
-            .max(self.loadout.weapon_optimal_block_boost)
-            .max(1.0);
-        base * boost * tables::OPTIMAL_BLOCK_RATING_MULTIPLIER
+        let r0 = self.loadout.block_rating;
+        let boosted = if optimal { r0 * (1.0 + self.loadout.blocking_item_boost()) } else { r0 };
+        boosted + self.loadout.block_rating_bonus
     }
 
     /// True iff this fighter is currently staggered. [Phase 3.13]
@@ -1958,6 +2137,10 @@ impl Fighter {
         }
         self.staggered_until =
             Some(now + std::time::Duration::from_secs_f32(secs.max(0.05)));
+        // A re-stagger does not change the state, so the seam in `force_actor_state`
+        // does not see it; it still interrupts a maneuver started from the first
+        // stagger (Recovery Strikes, a dodge).
+        self.interrupt_pending.get_or_insert(now);
         self.set_actor_state(ActorStateType::Staggered, now);
         // A stagger overrides whatever swing was in flight: drop its queued
         // follow-through/recovery/idle, which would otherwise fire mid-stagger and
@@ -2140,32 +2323,55 @@ impl Fighter {
         true
     }
 
-    /// Reset the combo chain (`combo_count` → 0, `last_combo_side` → None) — on an
-    /// optimal block, a `Middle` maneuver, a non-alternating/late swing, or round
-    /// start. Mirrors the client's `AttackerStateData.ResetCombo`.
+    /// Reset the combo chain (`combo_count` → 0, `last_combo_side` → None).
+    /// `Actor$$ResetCombo@0x1c5bf5c`; the call sites are combat-spec 02 §4.3 R1-R11.
     pub fn reset_combo(&mut self) {
         self.combo_count = 0;
         self.last_combo_side = ActiveSide::None;
     }
 
-    /// Register a landed normal Left/Right swing and return the resulting combo count
-    /// (post-increment). An *alternating* side vs `last_combo_side` continues the chain
-    /// (`combo_count += 1`); a repeat side (or a None side) RESETS it to 0. `Middle`
-    /// (maneuver) and blocks do not call this — they `reset_combo`. Mirrors
-    /// `AttackerStateData.IncrementCombo`.
-    pub fn register_combo_swing(&mut self, side: ActiveSide) -> u32 {
+    /// A new normal (Left/Right) swing begins. The count is NOT advanced here: it
+    /// counts connected hits ([`Self::increment_combo`]). What this decides is
+    /// whether the chain survives into the new swing. A charge that alternates sides
+    /// keeps it; a repeated side, or no previous side, starts a fresh chain
+    /// (`PlayerActorState$$ChangeStateIfRequired@0x1d5c444`, 02 R2).
+    ///
+    /// Returns the count the coming hit will read.
+    pub fn begin_combo_swing(&mut self, side: ActiveSide) -> u32 {
         let alternates = matches!(
             (self.last_combo_side, side),
             (ActiveSide::Left, ActiveSide::Right) | (ActiveSide::Right, ActiveSide::Left)
         );
-        if alternates {
-            self.combo_count = self.combo_count.saturating_add(1);
-        } else {
-            // First swing of a chain, or a repeated side → start a fresh chain at 0.
+        if !alternates {
             self.combo_count = 0;
         }
         self.last_combo_side = side;
         self.combo_count
+    }
+
+    /// End the chain if Recovery has already run out (02 R1, X5). The actor goes Idle
+    /// `recoveryTime` after its last Recovery began, and Idle's `OnEnter` resets the
+    /// combo (`PlayerIdleState$$OnEnter@0x1d75368`). `next_action_began` is when the
+    /// action that would read the chain began: a charge's start, a maneuver's cast,
+    /// or `now` when the question is just "is it still live". A charge begun inside
+    /// Recovery keeps the chain however long it is then held.
+    pub fn expire_combo_chain(&mut self, next_action_began: Instant) {
+        let Some(began) = self.recovery_began_at else {
+            return;
+        };
+        let expiry =
+            std::time::Duration::from_secs_f32(self.loadout.charge_params().recovery_time.max(0.0));
+        if next_action_began.saturating_duration_since(began) >= expiry {
+            self.reset_combo();
+            self.recovery_began_at = None;
+        }
+    }
+
+    /// A weapon hit (source Attack or WeaponManeuver) connected, negated or not:
+    /// `CombatManager$$ApplyDamage@0x1bd2770` calls `IncrementCombo` after
+    /// `ReceiveDamage` (02 §4.1, X8).
+    pub fn increment_combo(&mut self) {
+        self.combo_count = self.combo_count.saturating_add(1);
     }
 
     /// True iff this fighter's guard is up at `now` (a `PlayerBlockingStateChange`
@@ -2187,11 +2393,20 @@ impl Fighter {
         up
     }
 
-    /// The current OPTIMAL/LATE block phase for `now`, given the dump.cs constants:
-    /// - OPTIMAL iff the guard has been up for < `BLOCK_OPTIMAL_TIME_SECS` **and**
-    ///   the last block was dropped more than `OPTIMAL_BLOCK_RECOVERY_SECS` ago (or
-    ///   was never dropped — first block of the match is always OPTIMAL);
-    /// - LATE otherwise (held too long, or re-raised inside the recovery window).
+    /// The current OPTIMAL/LATE (low) block phase for `now`:
+    /// - OPTIMAL iff the guard has been up for < `BLOCK_OPTIMAL_TIME_SECS` **and** it
+    ///   was raised at least `OPTIMAL_BLOCK_RECOVERY_SECS` after the previous release
+    ///   (or there was none — the first guard of the match is always eligible);
+    /// - LATE (a low block) otherwise.
+    ///
+    /// **Eligibility is latched at the press, not re-checked at the hit.**
+    /// `PlayerActorState$$ChangeToBlockingState@0x1d5beec` stores
+    /// `OptimalBlockAllowed = !_optimalBlockTimeCooldownEnabled` (`@0x1c4ef1c`) into
+    /// the state's parameters when the guard goes up, and
+    /// `PlayerBlockingState$$get_IsOptimalBlocking@0x1d7288c` reads only that latch
+    /// and the window. So a guard raised 0.5 s after a release stays LOW for its whole
+    /// life, even when the hit lands after the 0.8 s cooldown has run out. The latch is
+    /// derived from the raise and release instants, which is the same fact.
     ///
     /// Returns `None` when the guard is not up.
     pub fn block_phase(&self, now: Instant) -> Option<BlockPhase> {
@@ -2200,15 +2415,28 @@ impl Fighter {
         if !matches!(self.blocking_until, Some(until) if now < until) {
             return None;
         }
-        let held_secs = now.duration_since(raised).as_secs_f32();
+        let held_secs = now.saturating_duration_since(raised).as_secs_f32();
         if held_secs >= BLOCK_OPTIMAL_TIME_SECS {
             return Some(BlockPhase::Late);
         }
-        // Within the 2s optimal window: check recovery cooldown.
-        let in_recovery = self.last_block_dropped_at
-            .map(|t| now.duration_since(t).as_secs_f32() < OPTIMAL_BLOCK_RECOVERY_SECS)
-            .unwrap_or(false);
-        Some(if in_recovery { BlockPhase::Late } else { BlockPhase::Optimal })
+        let optimal_allowed = self.last_block_dropped_at.is_none_or(|dropped| {
+            raised.saturating_duration_since(dropped).as_secs_f32() >= OPTIMAL_BLOCK_RECOVERY_SECS
+        });
+        Some(if optimal_allowed { BlockPhase::Optimal } else { BlockPhase::Late })
+    }
+
+    /// The `ReceiveDamage` bit 3 (`wasOptimalBlocking`) for a frame addressed to this
+    /// fighter. It is DEFENDER STATE, read for every source — DoT ticks included —
+    /// not a verdict on the hit: `CombatManager$$ApplyDamage@0x1bd2770` passes
+    /// `target.IsOptimalBlocking` to `ReceiveDamage` (0x1bd2a24–0x1bd2a58).
+    pub fn optimal_block_flag(&self, now: Instant) -> u8 {
+        let optimal = self.actor_state() == ActorStateType::Blocking
+            && self.block_phase(now) == Some(BlockPhase::Optimal);
+        if optimal {
+            crate::arena::combat::damage::flags::WAS_OPTIMAL_BLOCKING
+        } else {
+            0
+        }
     }
 
     /// Return the sum of transient Resist-Elements resistances for `ty` (non-expired
@@ -2743,7 +2971,17 @@ pub struct MatchCombat {
     /// ORDER and the count both go on the wire. Capture-pinned: every one of the 375
     /// captured op48 frames fills (5,6),(7,8),(9,10) for rounds 1..N and sets
     /// propId 11 = N-1. See `messages::match_post_round_info`.
-    pub round_winners: Vec<usize>,
+    ///
+    /// `None` is a REPLAYED double KO: a round that happened but that nobody won. The
+    /// client models exactly that: `RoundInfo$$IsTied@0x2071a74` and
+    /// `MatchPostRoundInfoMessage$$IsTied@0x1cebbd0` are "winner id and loser id both
+    /// empty", and `MatchEndMatchMessage$$GetNumberOfRoundsWonBy@0x1cea200` counts
+    /// round entries whose winner id equals the player. So a tied round is sent with
+    /// empty ids and left out of the per-round arrays ([`Self::decided_round_results`]),
+    /// which keeps the client's tally equal to `rounds_won`.
+    pub round_winners: Vec<Option<usize>>,
+    /// Double-KO rounds replayed so far this match (capped by [`MAX_DOUBLE_KO_REPLAYS`]).
+    pub double_ko_replays: u8,
     /// When the current flow phase started (drives StateTimeout heartbeat /
     /// round timers from the tick).
     pub phase_entered: Instant,
@@ -2803,6 +3041,9 @@ pub struct PendingImpact {
     /// magicka cost was deducted) — the order the client uses.
     pub magicka_full_at_cast: bool,
     pub due: Instant,
+    /// When the cast was accepted; matches [`Execution::started_at`], so an
+    /// interrupt of that execution drops this impact.
+    pub cast_at: Instant,
 }
 
 /// An **Echo Weapon** echo waiting to land: a flat follow-up hit `_weaponDelay`
@@ -2820,8 +3061,10 @@ pub struct PendingHit {
     pub sender: usize,
     pub target: usize,
     pub side: ActiveSide,
+    /// `1 + swing`, where `swing` is the charge plateau's factor (0 off it).
     pub swing_factor: f32,
-    pub combo_count: u32,
+    // No combo count: the hit reads the attacker's count when it LANDS, and the
+    // count advances only then (combat-spec 02 X8).
     pub due: Instant,
 }
 
@@ -2842,6 +3085,7 @@ impl MatchCombat {
             round: 0,
             rounds_won: [0; 2],
             round_winners: Vec::new(),
+            double_ko_replays: 0,
             phase_entered: now,
             winner: None,
             matchend_step: 0,
@@ -2859,6 +3103,20 @@ impl MatchCombat {
     /// s506 Match propId8) → first to `ROUND_WINS_TO_WIN_MATCH` wins.
     pub fn match_is_won(&self) -> bool {
         self.rounds_won.iter().any(|&w| w >= ROUND_WINS_TO_WIN_MATCH)
+    }
+
+    /// The `(winner uuid, loser uuid)` of every DECIDED round, in order: the per-round
+    /// array op48 and op49 carry. Replayed double KOs are left out (see
+    /// [`Self::round_winners`]), so the array has at most best-of-3 entries.
+    pub fn decided_round_results(&self) -> Vec<(String, String)> {
+        let uuid = |s: usize| {
+            self.fighters.get(s).map(|f| f.loadout.character_uuid.clone()).unwrap_or_default()
+        };
+        self.round_winners
+            .iter()
+            .flatten()
+            .map(|&w| (uuid(w), uuid(1 - w)))
+            .collect()
     }
 
     /// How a round ended. [Phase 3.14]
@@ -3040,6 +3298,9 @@ impl MatchCombat {
             f.charge_side = None;
             f.bot_swing_at = None;
             f.reset_combo();
+            f.last_swing_side = ActiveSide::None;
+            f.charge_began_at = None;
+            f.recovery_began_at = None;
             // Phase 4.1: drop last round's pointer geometry so the first swing of the
             // new round can never be classified from a stale pre-reset sample.
             f.last_input_x = None;
@@ -3055,6 +3316,8 @@ impl MatchCombat {
             f.transient_all_resistance.clear();
             f.maneuver_state_until = None;
             f.staggered_until = None;
+            f.interrupt_pending = None;
+            f.executions.clear();
             // A new round starts with nothing announced: the client resets its own
             // effect layer, so replaying removes for last round's statuses would be
             // noise at best and could clear a fresh apply at worst.
@@ -3507,19 +3770,26 @@ mod tests {
         assert_eq!(FlowState::Connecting.wire_name(), None);
     }
 
-    /// COMBO state (§4.2): alternating Left/Right swings ramp `combo_count`; a repeat
-    /// side or a `reset_combo` (block / round / maneuver) restarts the chain at 0.
+    /// COMBO state (combat-spec 02 §4.1-§4.3): the count is the number of connected
+    /// hits in the chain; a swing that alternates sides keeps it, a repeated side
+    /// starts a fresh one (R2), and `reset_combo` zeroes it. The count a hit reads
+    /// is the one BEFORE its own increment.
     #[test]
-    fn combo_counter_ramps_on_alternating_resets_on_repeat() {
+    fn combo_counts_connected_hits_and_resets_on_a_repeated_side() {
         let now = Instant::now();
         let mut f = Fighter::new(0, 564, Loadout::default(), now);
-        assert_eq!(f.register_combo_swing(ActiveSide::Right), 0, "first swing = combo 0");
-        assert_eq!(f.register_combo_swing(ActiveSide::Left), 1, "alternating → combo 1");
-        assert_eq!(f.register_combo_swing(ActiveSide::Right), 2, "alternating → combo 2");
-        // A repeated side restarts the chain.
-        assert_eq!(f.register_combo_swing(ActiveSide::Right), 0, "repeat side → chain restarts at 0");
-        // An explicit reset (optimal block / round) zeroes it.
-        f.register_combo_swing(ActiveSide::Left);
+        let swing = |f: &mut Fighter, side| {
+            let read = f.begin_combo_swing(side);
+            f.increment_combo(); // the hit connects
+            read
+        };
+        assert_eq!(swing(&mut f, ActiveSide::Right), 0, "first hit of a chain reads 0");
+        assert_eq!(swing(&mut f, ActiveSide::Left), 1, "alternating → reads 1");
+        assert_eq!(swing(&mut f, ActiveSide::Right), 2, "alternating → reads 2");
+        assert_eq!(swing(&mut f, ActiveSide::Right), 0, "repeat side → fresh chain");
+        // A swing that never connects does not advance the count (X8).
+        assert_eq!(f.begin_combo_swing(ActiveSide::Left), 1);
+        assert_eq!(f.combo_count, 1, "no increment until the hit lands");
         f.reset_combo();
         assert_eq!(f.combo_count, 0);
         assert_eq!(f.last_combo_side, ActiveSide::None);
@@ -3791,7 +4061,9 @@ mod stun_duration_tests {
         let now = Instant::now();
         let mut f = Fighter::new(0, 1, loadout::starter(), now);
         f.blocking_until = Some(now + std::time::Duration::from_secs(5));
-        f.register_combo_swing(ActiveSide::Right);
+        f.begin_combo_swing(ActiveSide::Right);
+        f.increment_combo();
+        assert_eq!(f.combo_count, 1, "precondition: a live chain");
         f.apply_stagger_for(now, 1.20);
         assert!(f.blocking_until.is_none(), "guard must drop");
         assert_eq!(f.combo_count, 0, "combo must break");
