@@ -3292,7 +3292,8 @@ fn emit_damage(
     // restorations (Adrenaline / Renewing / Focusing) would have had the same hole.
     if neg.heal > 0.0 {
         let f = &mut combat.fighters[target_slot];
-        f.health = (f.health + neg.heal.round() as u32).min(f.max_health);
+        let heal = (neg.heal * f.loadout.healing_multiplier()).round() as u32;
+        f.health = (f.health + heal).min(f.max_health);
     }
     if neg.restore_magicka > 0.0 {
         let f = &mut combat.fighters[target_slot];
@@ -4887,7 +4888,11 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
         // PvP says nothing about drinking one.
         if let Some(mut pr) = f.pending_restore.take() {
             let give = pr.per_tick.min(pr.remaining);
-            let amount = give.round() as u32;
+            let mult = match pr.affected_stat {
+                0 => f.loadout.healing_multiplier(),
+                _ => 1.0,
+            };
+            let amount = (give * mult).round() as u32;
             match pr.affected_stat {
                 0 => f.health = (f.health + amount).min(f.max_health),
                 1 => f.stamina = (f.stamina + amount).min(f.max_stamina),
@@ -4928,7 +4933,7 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
             // reading Maximum Power uses (ravage does not lower `Maximum`).
             let stamina_fraction =
                 f.stamina as f32 / f.max_stamina.saturating_add(f.ravaged_stamina) as f32;
-            let rate = f.loadout.perks.healing_surge_rate(stamina_fraction);
+            let rate = f.loadout.perks.healing_surge_rate(stamina_fraction) * f.loadout.regen_multiplier(0);
             // REGEN_TICK_INTERVAL is 1 s, so a per-second rate IS the per-tick
             // amount. Rounded, and not floored to a minimum of 1: an unperked
             // fighter must gain exactly nothing.
@@ -4940,7 +4945,9 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
 
         // Stamina regen: 3.03 %/s — the captured wire rate (see the constant).
         if !block_stam && f.stamina < f.max_stamina {
-            let regen = ((STAMINA_REGEN_RATE_PER_S * f.max_stamina as f32).round() as u32).max(1);
+            let regen =
+                ((STAMINA_REGEN_RATE_PER_S * f.max_stamina as f32 * f.loadout.regen_multiplier(1)).round() as u32)
+                    .max(1);
             f.stamina = (f.stamina + regen).min(f.max_stamina);
         }
         // Magicka Surge's BLACKOUT: for `_noMagickaRegenDuration` after the surge
@@ -4951,11 +4958,12 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
         // Magicka Surge's flat `_magickaRegenerationBonus` while it is up.
         if !block_mag && !surge_blackout && f.magicka < f.max_magicka {
             let mut regen =
-                ((MAGICKA_REGEN_RATE_PER_S * f.max_magicka as f32).round() as u32).max(1);
+                ((MAGICKA_REGEN_RATE_PER_S * f.max_magicka as f32 * f.loadout.regen_multiplier(2)).round() as u32)
+                    .max(1);
             if f.magicka_surge_until.is_some_and(|t| now < t) {
                 // REGEN_TICK_INTERVAL is 1 s, so a per-second rate is the per-tick
                 // amount (the same equivalence the health block above relies on).
-                regen += f.magicka_surge_bonus.round().max(0.0) as u32;
+                regen += (f.magicka_surge_bonus * f.loadout.regen_multiplier(2)).round().max(0.0) as u32;
             }
             f.magicka = (f.magicka + regen).min(f.max_magicka);
         }
@@ -5990,6 +5998,24 @@ mod tests {
             "regen tick must add ~5% of max magicka ({expected_regen} expected), mag {mag_before}→{mag_after}",
         );
         let _ = out; // op65 emission already verified in the stamina test
+    }
+
+    #[test]
+    fn racial_regeneration_multiplies_the_passive_regen_amount() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        combat.fighters[0].loadout.innate_regen_multipliers[1] = 0.05;
+
+        let max_stam = combat.fighters[0].max_stamina;
+        combat.fighters[0].stamina = max_stam / 2;
+        let stam_before = combat.fighters[0].stamina;
+        combat.last_regen_tick = now;
+
+        let out = apply_regen_tick(&mut combat, now + REGEN_TICK_INTERVAL);
+        assert!(!out.is_empty());
+
+        let expected = ((STAMINA_REGEN_RATE_PER_S * max_stam as f32 * 1.05).round() as u32).max(1);
+        assert_eq!(combat.fighters[0].stamina - stam_before, expected);
     }
 
     /// Video ground-truth (s293 §1): health has ZERO in-round passive regen.

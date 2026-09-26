@@ -998,6 +998,11 @@ fn finish_resolved(
             }
         }
     }
+    for (ty, v) in components.iter_mut() {
+        if *v > 0.0 {
+            *v *= attacker.innate_damage_multiplier(*ty, source);
+        }
+    }
 
     mitigate(
         attacker,
@@ -1094,7 +1099,7 @@ pub fn mitigate_components(
         .filter(|(t, v)| is_physical(*t) && *v > 0.0)
         .map(|(_, v)| *v)
         .sum();
-    let armor_rating = (target.loadout.armor_rating - attacker.armor_piercing_rating).max(0.0);
+    let armor_rating = (target.loadout.armor_rating_with_innates() - attacker.armor_piercing_rating).max(0.0);
     if phys_total > 0.0 && armor_rating > 0.0 {
         for (ty, v) in components.iter_mut() {
             if is_physical(*ty) && *v > 0.0 {
@@ -1110,6 +1115,7 @@ pub fn mitigate_components(
     let mut most_resisted = DamageType::None;
     let mut most_resisted_frac = MOST_RESISTED_FLOOR;
     for (ty, v) in components.iter_mut() {
+        *v *= target.loadout.innate_base_resistance_multiplier(*ty, source);
         let before = *v;
         if before <= 0.0 {
             continue;
@@ -1298,6 +1304,33 @@ mod tests {
         assert!((light - 57.25).abs() < 0.01, "Fire t10 light = 57.25, got {light}");
         assert!((versatile - 67.2).abs() < 0.01, "Fire t10 versatile = 67.2, got {versatile}");
         assert!((heavy - 78.49).abs() < 0.01, "Fire t10 heavy = 78.49, got {heavy}");
+    }
+
+    #[test]
+    fn racial_damage_factor_and_base_resistance_apply_before_flat_mitigation() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+
+        let mut argonian = plain_blade(Weight::Light);
+        argonian.innate_damage_factors.push(super::super::state::InnateDamageFactor {
+            damage_types: Vec::new(),
+            damage_sources: Vec::new(),
+            weapon_class: Some(Weight::Light),
+            factor: 0.05,
+        });
+        let hit = m.resolve_attack(&argonian, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        assert!((comp(&hit, DamageType::Slashing) - 105.0).abs() < 0.01);
+
+        let mut frost = plain_blade(Weight::Light);
+        frost.weapon.base_by_type = vec![(DamageType::Frost, 100.0)];
+        let mut nord = target();
+        nord.loadout.innate_base_resistances.push(super::super::state::InnateBaseResistance {
+            damage_types: vec![DamageType::Frost],
+            damage_sources: Vec::new(),
+            factor: 0.15,
+        });
+        let resisted = m.resolve_attack(&frost, &nord, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        assert!((comp(&resisted, DamageType::Frost) - 85.0).abs() < 0.01);
     }
 
     /// An un-armored, un-blocking L100 target.

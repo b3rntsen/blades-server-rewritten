@@ -110,6 +110,9 @@ fn character_from(row: &Value, name: &str) -> CompleteCharacter {
 /// two avatars distinct, exactly as the paired-match guard requires).
 fn build_loadout(row: &Value, name: &str, equipped: &Value, idx: usize) -> Loadout {
     let mut lo = loadout::from_character(&character_from(row, name), &inventory_from(equipped));
+    if let Some(customization) = row.get("customization") {
+        loadout::apply_racial_innates_from_customization(&mut lo, customization);
+    }
     lo.character_uuid = format!("50ac0000-0000-4000-8000-{:012x}", idx + 1);
     lo.display_name = name.to_string();
     lo

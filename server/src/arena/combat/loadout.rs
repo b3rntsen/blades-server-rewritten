@@ -29,7 +29,10 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::gamedata;
-use super::state::{AbilityTag, ActorAnimation, DamageType, EquippedAbility, Loadout, StatusEffectType, WeaponProfile};
+use super::state::{
+    AbilityTag, ActorAnimation, DamageSource, DamageType, EquippedAbility, InnateBaseResistance,
+    InnateDamageFactor, Loadout, StatusEffectType, WeaponProfile,
+};
 use super::tables;
 
 /// A representative starter loadout, used when there is no character row / no DB
@@ -339,6 +342,103 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         .unwrap_or(0);
 
     lo
+}
+
+/// Apply `CharacterVisualCategory._innateBonuses` from `.cre/reference/game-defs/races.json`.
+///
+/// `from_character` deliberately stays a pure parser over character + inventory; race
+/// lives in `data.customization.CharacterUID`, so callers with that profile blob opt
+/// in here after building the equipment loadout.
+pub fn apply_racial_innates_from_customization(lo: &mut Loadout, customization: &Value) {
+    let Some(uid) = customization_character_uid(customization) else {
+        return;
+    };
+    match uid {
+        "342a912a-ab40-4acc-8a48-c5a10476bac0" => {
+            push_base_resist(lo, &[], &[DamageSource::Spell, DamageSource::ContinuousSpell, DamageSource::AreaEffect, DamageSource::EchoWeapon], 0.10);
+            push_weapon_factor(lo, tables::Weight::Versatile, 0.05);
+        }
+        "e1bb7fe2-4d60-4b7f-bd4d-a55da2edf922" => {
+            lo.innate_armor_multiplier += 0.05;
+            push_source_factor(lo, &[DamageSource::WeaponManeuver, DamageSource::ShieldManeuver], 0.05);
+        }
+        "ff21fc3d-6afa-4c18-9844-05daaa60fb19" => {
+            lo.innate_healing_multiplier += 0.05;
+            push_weapon_factor(lo, tables::Weight::Versatile, 0.05);
+        }
+        "a183c3ad-dc3d-42fd-9566-8727f9543304" => {
+            push_base_resist(lo, &[DamageType::Poison], &[], 0.15);
+            lo.innate_regen_multipliers[1] += 0.05;
+        }
+        "6a386cd0-36c2-463a-b6a4-418b0bbeb159" => {
+            push_base_resist(lo, &[DamageType::Frost], &[], 0.15);
+            push_weapon_factor(lo, tables::Weight::Heavy, 0.05);
+        }
+        "8905a147-84f6-4730-ae2f-cf6f69559d3f" => {
+            push_base_resist(lo, &[DamageType::Poison], &[], 0.15);
+            push_source_factor(lo, &[DamageSource::WeaponManeuver, DamageSource::ShieldManeuver], 0.05);
+        }
+        "84cb19ea-f66f-4451-8f66-018338d070b4" => {
+            push_base_resist(lo, &[DamageType::Fire], &[], 0.15);
+            push_source_factor(lo, &[DamageSource::Spell, DamageSource::ContinuousSpell, DamageSource::AreaEffect, DamageSource::EchoWeapon], 0.05);
+        }
+        "8d9c8503-d992-45f2-910e-befd2201d3a1"
+        | "468f591f-5f01-4b41-9d98-cda62918f83b" => {
+            push_base_resist(lo, &[DamageType::Shock], &[], 0.15);
+            lo.innate_regen_multipliers[2] += 0.05;
+        }
+        "127a8438-5903-4f91-9587-a4142ed12866" => {
+            lo.innate_armor_multiplier += 0.05;
+            push_type_factor(lo, &[DamageType::Poison], 0.10);
+        }
+        "8accc37f-1a14-453a-b30a-7d4163de2a11" => {
+            lo.innate_regen_multipliers[0] += 0.05;
+            push_weapon_factor(lo, tables::Weight::Light, 0.05);
+        }
+        _ => {}
+    }
+}
+
+fn customization_character_uid(customization: &Value) -> Option<&str> {
+    let uid = customization.get("CharacterUID")?;
+    uid.as_str()
+        .or_else(|| uid.get("id").and_then(|id| id.get("_v")).and_then(Value::as_str))
+        .or_else(|| uid.get("_v").and_then(Value::as_str))
+}
+
+fn push_type_factor(lo: &mut Loadout, damage_types: &[DamageType], factor: f32) {
+    lo.innate_damage_factors.push(InnateDamageFactor {
+        damage_types: damage_types.to_vec(),
+        damage_sources: Vec::new(),
+        weapon_class: None,
+        factor,
+    });
+}
+
+fn push_source_factor(lo: &mut Loadout, damage_sources: &[DamageSource], factor: f32) {
+    lo.innate_damage_factors.push(InnateDamageFactor {
+        damage_types: Vec::new(),
+        damage_sources: damage_sources.to_vec(),
+        weapon_class: None,
+        factor,
+    });
+}
+
+fn push_weapon_factor(lo: &mut Loadout, weapon_class: tables::Weight, factor: f32) {
+    lo.innate_damage_factors.push(InnateDamageFactor {
+        damage_types: Vec::new(),
+        damage_sources: Vec::new(),
+        weapon_class: Some(weapon_class),
+        factor,
+    });
+}
+
+fn push_base_resist(lo: &mut Loadout, damage_types: &[DamageType], damage_sources: &[DamageSource], factor: f32) {
+    lo.innate_base_resistances.push(InnateBaseResistance {
+        damage_types: damage_types.to_vec(),
+        damage_sources: damage_sources.to_vec(),
+        factor,
+    });
 }
 
 fn profile_base(p: &WeaponProfile) -> f32 {
@@ -1392,6 +1492,26 @@ mod tests {
             .map(|(_, v)| *v)
             .sum();
         assert!((unscaled - magnitude).abs() < 0.001, "direct calls keep the raw xValue fallback");
+    }
+
+    #[test]
+    fn racial_innates_read_character_uid_from_customization() {
+        let mut argonian = lo();
+        apply_racial_innates_from_customization(
+            &mut argonian,
+            &json!({ "CharacterUID": { "id": { "_v": "8accc37f-1a14-453a-b30a-7d4163de2a11" } } }),
+        );
+        argonian.weapon.weight = Some(tables::Weight::Light);
+        assert!((argonian.regen_multiplier(0) - 1.05).abs() < 1e-6);
+        assert!((argonian.innate_damage_multiplier(DamageType::Slashing, DamageSource::Attack) - 1.05).abs() < 1e-6);
+
+        let mut nord = lo();
+        apply_racial_innates_from_customization(
+            &mut nord,
+            &json!({ "CharacterUID": "6a386cd0-36c2-463a-b6a4-418b0bbeb159" }),
+        );
+        assert!((nord.innate_base_resistance_multiplier(DamageType::Frost, DamageSource::Attack) - 0.85).abs() < 1e-6);
+        assert!((nord.innate_base_resistance_multiplier(DamageType::Fire, DamageSource::Attack) - 1.0).abs() < 1e-6);
     }
 
     #[test]

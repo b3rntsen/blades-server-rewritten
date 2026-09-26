@@ -304,6 +304,23 @@ pub enum DamageSource {
     ShieldManeuver = 11,
 }
 
+/// A racial innate percent-damage bonus from `CharacterVisualCategory._innateBonuses`.
+#[derive(Debug, Clone)]
+pub struct InnateDamageFactor {
+    pub damage_types: Vec<DamageType>,
+    pub damage_sources: Vec<DamageSource>,
+    pub weapon_class: Option<crate::arena::combat::tables::Weight>,
+    pub factor: f32,
+}
+
+/// A racial innate base-resistance multiplier (`ResistInnateLogic`).
+#[derive(Debug, Clone)]
+pub struct InnateBaseResistance {
+    pub damage_types: Vec<DamageType>,
+    pub damage_sources: Vec<DamageSource>,
+    pub factor: f32,
+}
+
 /// `ActorAnimation` (`BGS.Game.Animation`, `dump.cs:12812`) — the animation a
 /// maneuver plays, carried at propId 10 of op58 `PlayerManeuverStateChange`.
 ///
@@ -370,6 +387,41 @@ pub enum DamageType {
     Stamina = 8,
     Magicka = 9,
     Health = 10,
+}
+
+impl InnateDamageFactor {
+    fn matches(
+        &self,
+        ty: DamageType,
+        source: DamageSource,
+        weapon_weight: Option<crate::arena::combat::tables::Weight>,
+    ) -> bool {
+        if !self.damage_types.is_empty() && !self.damage_types.contains(&ty) {
+            return false;
+        }
+        if !self.damage_sources.is_empty() && !self.damage_sources.contains(&source) {
+            return false;
+        }
+        if let Some(weight) = self.weapon_class {
+            if !matches!(ty, DamageType::Slashing | DamageType::Cleaving | DamageType::Bashing) {
+                return false;
+            }
+            if !matches!(source, DamageSource::Attack | DamageSource::WeaponManeuver) {
+                return false;
+            }
+            if weapon_weight != Some(weight) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl InnateBaseResistance {
+    fn matches(&self, ty: DamageType, source: DamageSource) -> bool {
+        (self.damage_types.is_empty() || self.damage_types.contains(&ty))
+            && (self.damage_sources.is_empty() || self.damage_sources.contains(&source))
+    }
 }
 
 /// `ActorStateType` — an actor's current combat animation/logic state
@@ -921,6 +973,18 @@ pub struct Loadout {
     /// field zero) for a fighter with no perks, which every application site
     /// treats as a no-op.
     pub perks: super::perks::PerkBonuses,
+    /// Racial innate percent damage factors. These multiply existing damage tracks as
+    /// `x (1 + sum)`, after flat permanent bonuses and before target mitigation.
+    pub innate_damage_factors: Vec<InnateDamageFactor>,
+    /// Racial innate base-resistance cuts. These are percentage multipliers applied
+    /// before flat resistance ratings, and piercing does not reduce them.
+    pub innate_base_resistances: Vec<InnateBaseResistance>,
+    /// Racial FortifyArmor multiplier sources, summed then applied as `armor x (1+x)`.
+    pub innate_armor_multiplier: f32,
+    /// Racial Healing multiplier for non-regeneration health restoration.
+    pub innate_healing_multiplier: f32,
+    /// Racial Regeneration multipliers by stat: health, stamina, magicka.
+    pub innate_regen_multipliers: [f32; 3],
     /// Attacker-side `Fortify <Element> Damage` — a 0..1 fraction per element that
     /// raises that element track's amplification ceiling. [Phase 3.6]
     pub element_fortify: Vec<(DamageType, f32)>,
@@ -1053,6 +1117,38 @@ pub struct Loadout {
 }
 
 impl Loadout {
+    pub fn innate_damage_multiplier(&self, ty: DamageType, source: DamageSource) -> f32 {
+        let sum: f32 = self
+            .innate_damage_factors
+            .iter()
+            .filter(|f| f.matches(ty, source, self.weapon.weight))
+            .map(|f| f.factor)
+            .sum();
+        1.0 + sum
+    }
+
+    pub fn innate_base_resistance_multiplier(&self, ty: DamageType, source: DamageSource) -> f32 {
+        let sum: f32 = self
+            .innate_base_resistances
+            .iter()
+            .filter(|r| r.matches(ty, source))
+            .map(|r| r.factor)
+            .sum();
+        (1.0 - sum).max(0.0)
+    }
+
+    pub fn armor_rating_with_innates(&self) -> f32 {
+        self.armor_rating * (1.0 + self.innate_armor_multiplier.max(0.0))
+    }
+
+    pub fn healing_multiplier(&self) -> f32 {
+        1.0 + self.innate_healing_multiplier.max(0.0)
+    }
+
+    pub fn regen_multiplier(&self, stat: usize) -> f32 {
+        1.0 + self.innate_regen_multipliers.get(stat).copied().unwrap_or(0.0).max(0.0)
+    }
+
     /// The blocking item's `OptimalBlockBoost`: the shield's when a shield is
     /// equipped, otherwise the weapon's (`InventoryUtility$$GetEquippedBlockingItem
     /// @0x1e61f50`; `get_OptimalBlockBoost@0x1c5b8d8`).
