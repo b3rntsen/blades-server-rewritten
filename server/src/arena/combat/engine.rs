@@ -4719,6 +4719,7 @@ pub(in crate::arena::combat) mod tests {
         // Spend both pools so there is headroom to regenerate into, then let one tick
         // pass to prove regen IS running before we freeze anything. Without this
         // control the test would also pass on a fighter that simply never regenerates.
+        m.combat.last_regen_tick = live;
         m.combat.fighters[1].stamina = m.combat.fighters[1].max_stamina / 2;
         m.combat.fighters[1].magicka = m.combat.fighters[1].max_magicka / 2;
         let baseline = m.combat.fighters[1].stamina;
@@ -4780,6 +4781,7 @@ pub(in crate::arena::combat) mod tests {
         use crate::arena::combat::state::StatusEffectType;
         let (mut m, _t0, live) = live_inst_at(2);
 
+        m.combat.last_regen_tick = live;
         m.combat.fighters[1].magicka = m.combat.fighters[1].max_magicka / 2;
         m.combat.fighters[1].stamina = m.combat.fighters[1].max_stamina / 2;
         let baseline = m.combat.fighters[1].magicka;
@@ -4913,7 +4915,7 @@ pub(in crate::arena::combat) mod tests {
         let dmg = swing(&mut m, 0, t0 + Duration::from_millis(600));
         assert!(!dmg.is_empty(), "the swing still resolves (ReceiveDamage emitted)");
         let opt_dealt = full - m.fighter_health(1);
-        assert_eq!(opt_dealt, 5, "flat optimal budgets against the open {open_dealt}");
+        assert_eq!(opt_dealt, 4, "flat optimal budgets against the open {open_dealt}");
         // The ReceiveDamage carries the WasOptimalBlocking flag (propId 7 bit3).
         let rd = dmg.iter().find(|(_, b)| b[1] == 0x36
             && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50)).expect("ReceiveDamage");

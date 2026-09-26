@@ -381,6 +381,16 @@ fn apply_enchant(lo: &mut Loadout, id: &Uuid, tier: u8) {
         // flat stat, not resistance or regeneration: Flappety's two t10 enchants
         // contribute 2 × 110.64 before the arena multiplier.
         "FortifyHealthPropertyLogic" => lo.max_health_bonus += magnitude,
+        "FortifyStaminaPropertyLogic" => lo.max_stamina_bonus += magnitude,
+        "FortifyMagickaPropertyLogic" => lo.max_magicka_bonus += magnitude,
+
+        // ---- regeneration -------------------------------------------------
+        // These are flat points per second, summed only during combat regen. The
+        // material-regeneration families are intentionally left out until their item
+        // scaling is settled.
+        "FortifyHealthRegenerationPropertyLogic" => lo.health_regen += magnitude,
+        "FortifyStaminaRegenerationPropertyLogic" => lo.stamina_regen += magnitude,
+        "FortifyMagickaRegenerationPropertyLogic" => lo.magicka_regen += magnitude,
 
         // ---- Ravage: a cut to the target's MAXIMUM pool ---------------------
         // "Reduces target's maximum Stamina by {0}." Per landed swing, and it does

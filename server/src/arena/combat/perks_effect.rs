@@ -279,11 +279,7 @@ fn two_fighter_combat(now: Instant) -> MatchCombat {
     c
 }
 
-/// HEALING SURGE — the only source of health regeneration in a PvP fight.
-///
-/// Passive health regen is zero on purpose, so this test doubles as the proof that
-/// an UNPERKED fighter still regenerates nothing: if someone switched
-/// `HEALTH_REGEN_RATE_PER_S` on, the control arm goes red.
+/// HEALING SURGE — a bonus on top of the T3 passive health regeneration.
 #[test]
 fn healing_surge_is_the_only_health_regen_and_needs_high_stamina() {
     let now = Instant::now();
@@ -303,20 +299,20 @@ fn healing_surge_is_the_only_health_regen_and_needs_high_stamina() {
         c.fighters[0].health
     };
 
-    assert_eq!(run(false, 1.0), 500, "an UNPERKED fighter must gain no health at all");
-    assert_eq!(run(true, 0.25), 500, "Healing Surge must not pay out at low stamina");
+    assert_eq!(run(false, 1.0), 501, "an UNPERKED fighter gains only base health regen");
+    assert_eq!(run(true, 0.25), 501, "low stamina pays only base health regen");
 
     // Rank 8 ships 15.4/s, at a 1 s tick, at full stamina.
-    assert_eq!(run(true, 1.0), 515, "expected the full rank-8 rate at full stamina");
+    assert_eq!(run(true, 1.0), 517, "expected base plus the full rank-8 rate at full stamina");
 
     // The client's curve is `bonus x stamina^7` (`GetRegenerationBonus@0x1A7DFBC`):
     // 15.4 x 0.75^7 = 2.06 -> 2 HP. The old linear ramp paid 7.7 -> 8 HP here.
-    assert_eq!(run(true, 0.75), 502, "75% stamina pays 0.13x, not the old 0.50x");
+    assert_eq!(run(true, 0.75), 503, "75% stamina pays 0.13x, not the old 0.50x");
 }
 
 /// Healing Surge reads `Stamina.BoundedPercent`, which is against the pool's FULL
 /// maximum: a stamina pool refilled to its RAVAGED ceiling is not "full".
-/// 90 of (90 + 10 ravaged) = 0.9 -> 15.4 x 0.9^7 = 7.37 -> 7 HP, not 15.
+/// 90 of 100 = 0.9 -> 15.4 x 0.9^7 = 7.37, plus the base term -> 9 HP, not 17.
 #[test]
 fn healing_surge_reads_stamina_against_the_unravaged_maximum() {
     let now = Instant::now();
@@ -325,11 +321,11 @@ fn healing_surge_reads_stamina_against_the_unravaged_maximum() {
     f.loadout.perks = perks(&[perk(HEALING_SURGE, 8)]);
     f.max_health = 1000;
     f.health = 500;
-    f.max_stamina = 90;
+    f.max_stamina = 100;
     f.ravaged_stamina = 10;
     f.stamina = 90;
     super::resolve::apply_regen_tick(&mut c, now + Duration::from_secs(1));
-    assert_eq!(c.fighters[0].health, 507);
+    assert_eq!(c.fighters[0].health, 509);
 }
 
 /// Cast `ability` (equipped at rank 1) from slot 0 at `now` on a fresh combat whose
@@ -501,7 +497,7 @@ fn maximum_power_is_void_at_a_ravaged_ceiling() {
         }
         if ravage > 0.0 {
             f.apply_ravage(&[(DamageType::Magicka, ravage)], 1.0);
-            f.magicka = f.max_magicka; // refilled to the LOWERED ceiling
+            f.magicka = f.damaged_max_magicka(); // refilled to the damaged ceiling
         }
         f.loadout.abilities = vec![EquippedAbility {
             instance_uuid: super::gamedata::ids::FIREBALL.to_string(),

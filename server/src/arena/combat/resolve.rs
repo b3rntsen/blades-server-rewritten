@@ -2364,6 +2364,7 @@ fn apply_ability_impact(
             // `apply_channel_ticks` delivers them on the shipped PvP tick.
             if let Some(total_ticks) = super::damage::channel_ticks(ability_uuid, level) {
                 if total_ticks > 1 {
+                    let channel_secs = (total_ticks as f32) * super::damage::CHANNEL_TICK_INTERVAL_SECS;
                     combat.channels.push(super::state::ActiveChannel {
                         caster_slot: sender,
                         target_slot,
@@ -2379,6 +2380,29 @@ fn apply_ability_impact(
                         // ship no wind-up, so they land inline.
                         cast_at: now,
                     });
+                    if super::gamedata::ability(ability_uuid)
+                        .is_some_and(|a| a.editor_name == "ConsumingInferno")
+                    {
+                        let expires_at = now + Duration::from_secs_f32(channel_secs);
+                        combat.fighters[sender].effects.push(super::state::ActiveEffect {
+                            effect: super::state::StatusEffectType::BlockStaminaRegen,
+                            damage_type: super::state::DamageType::None,
+                            value: 0.0,
+                            per_tick_damage: 0.0,
+                            expires_at,
+                            last_tick: now,
+                            is_transient_resist: false,
+                        });
+                        let frame = messages::change_combat_status_effect(
+                            combat.fighters[sender].net_object_id,
+                            true,
+                            super::state::StatusEffectType::BlockStaminaRegen,
+                            channel_secs,
+                        );
+                        for v in 0..combat.fighters.len() {
+                            out.push((v, frame.clone()));
+                        }
+                    }
                 }
             }
             // A landed Paralyze also carries its own paralyse threshold + duration
@@ -2998,12 +3022,13 @@ fn apply_shipped_effects_phased(
     // spent its cost and did literally nothing.
     if let Some(bonus) = r.get(super::gamedata::AbilityField::MagickaRegenerationBonus) {
         if bonus > 0.0 && caster < viewers {
-            let surge_secs = r.get(super::gamedata::AbilityField::Duration).unwrap_or(0.0);
+            let surge_secs = r.get(super::gamedata::AbilityField::Duration).unwrap_or(0.0)
+                * effectiveness;
             let blackout_secs = r
                 .get(super::gamedata::AbilityField::NoMagickaRegenDuration)
                 .unwrap_or(0.0);
             let f = &mut combat.fighters[caster];
-            f.magicka_surge_bonus = bonus;
+            f.magicka_surge_bonus = bonus * effectiveness;
             f.magicka_surge_until = Some(now + Duration::from_secs_f32(surge_secs));
             // The blackout begins when the surge ENDS, not at cast — it is the price
             // paid afterwards, not a concurrent penalty that would cancel the surge.
@@ -3469,6 +3494,47 @@ fn scale_components_by_raw_dodge(
     }
 }
 
+fn emit_destroyed_stat_updates(
+    combat: &MatchCombat,
+    slot: usize,
+    rav_s: u32,
+    rav_m: u32,
+    rav_h: u32,
+) -> Vec<(usize, Vec<u8>)> {
+    let mut out = Vec::new();
+    let Some(f) = combat.fighters.get(slot) else {
+        return out;
+    };
+    let mut frames = Vec::new();
+    if rav_h > 0 {
+        frames.push(messages_state::player_destroyed_stat_update(
+            f.net_object_id,
+            messages_state::CoreStat::Health,
+            f.ravaged_health as f32,
+        ));
+    }
+    if rav_s > 0 {
+        frames.push(messages_state::player_destroyed_stat_update(
+            f.net_object_id,
+            messages_state::CoreStat::Stamina,
+            f.ravaged_stamina as f32,
+        ));
+    }
+    if rav_m > 0 {
+        frames.push(messages_state::player_destroyed_stat_update(
+            f.net_object_id,
+            messages_state::CoreStat::Magicka,
+            f.ravaged_magicka as f32,
+        ));
+    }
+    for frame in frames {
+        for dest in 0..combat.fighters.len() {
+            out.push((dest, frame.clone()));
+        }
+    }
+    out
+}
+
 /// Apply a resolved hit: drain negation, decrement the target (unless wholly negated),
 /// record elemental conditioning + land status effects, build the `ReceiveDamage` (or
 /// `DamageNegated`) for both players, and end the match if the target died.
@@ -3525,11 +3591,14 @@ fn emit_damage(
     // restorations (Adrenaline / Renewing / Focusing) would have had the same hole.
     if neg.heal > 0.0 {
         let f = &mut combat.fighters[target_slot];
-        f.health = (f.health + neg.heal.round() as u32).min(f.max_health);
+        f.restore_pool(super::state::DamageType::Health, neg.heal.round() as u32);
     }
     if neg.restore_magicka > 0.0 {
         let f = &mut combat.fighters[target_slot];
-        f.magicka = (f.magicka + neg.restore_magicka.round() as u32).min(f.max_magicka);
+        f.restore_pool(
+            super::state::DamageType::Magicka,
+            neg.restore_magicka.round() as u32,
+        );
         info!(
             "combat: slot {target_slot} dodge restored {:.0} magicka",
             neg.restore_magicka
@@ -3649,6 +3718,8 @@ fn emit_damage(
     };
     out.push((target_slot, msg.clone()));
     out.push((attacker_slot, msg));
+    out.extend(emit_destroyed_stat_updates(combat, target_slot, rav_s, rav_m, rav_h));
+    out.extend(emit_destroyed_stat_updates(combat, attacker_slot, sr_s, sr_m, sr_h));
 
     // Elemental conditioning + status land (after the hit resolved): record each
     // POST-NEGATION elemental component into the target's sliding window and check
@@ -3858,89 +3929,20 @@ fn condition_tick_count(duration_secs: f32) -> u32 {
     (duration_secs / DOT_TICK_INTERVAL.as_secs_f32()).round().max(1.0) as u32
 }
 
-/// Regen tick cadence. We regen once per second and apply the video-ground-truth per-
-/// second rates. A fractional tick (e.g. regen ~31 stamina/s from a 625 pool at L86)
-/// is rounded to nearest integer to avoid float drift.
+/// Kept for restoration-potion scheduling tests; passive regen itself is continuous
+/// and uses the elapsed server-step time.
 const REGEN_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
 /// In-combat stamina/magicka regen rate as a fraction of the pool per second.
 ///
-/// **Video ground-truth (s293)**: stamina and magicka both recover at ~5 %/s during
-/// passive recovery phases (t=50..52 clean window: 5%→10%→15% over 2s).
-/// [ground-truth: /tmp/arena-video-groundtruth.md §1; calibration flag]
-///
-/// PROVENANCE, CORRECTED (tracker #53, 2026-08-22). This comment used to say the
-/// rates "are CDN `[ExcelVariable]` (`PlayerStats._staminaRegenRate` /
-/// `_magickaRegenRate`)" and that 5 %/s "supersedes the UESP 4 %/s estimate" —
-/// i.e. that the shipped asset field was a slightly-low measurement of THIS
-/// number. It is not the same number at all.
-///
-/// A contributor decompiled the regeneration gate. `Actor` declares
-/// `ShouldApplyRegeneration()` virtual, and exactly three classes override it:
-/// `EnemyActor` (real logic — base conditions, non-lethal state, gameplay
-/// manager), and **`PvpPlayerActor` and `PvpOpponentActor`, which both return
-/// false unconditionally.** No conditions, no field reads. Confirmed against
-/// `reference/il2cpp/dump.cs` — those are the only three overrides that exist.
-///
-/// So the client's passive regeneration — the system driven by
-/// `ActorInnateStats._staminaRegenRate` / `_magickaRegenRate` / `_healthRegenRate`
-/// — is switched off for BOTH actors in arena PvP. Bethesda wrote a dedicated
-/// override for each to make sure of it. Whatever `PlayerStats` ships (4 %/s
-/// stamina, 4 %/s magicka, 0.5 %/s health) answers a PvE/open-world question and
-/// has no bearing here. Do not "reconcile" this constant with it.
-///
-/// It follows that every pool change a PvP client sees is server-authored, which
-/// is what this engine already does.
-///
-/// **What that leaves genuinely open.** Two measurements of retail remain, and
-/// they now provably measure the SAME server-driven signal:
-///   * video HUD (s293)           — 5 %/s stamina, 5 %/s magicka
-///   * captured `packedStats` wire — ~3.03 %/s stamina, ~2.93 %/s magicka
-/// They cannot both be right. The wire is the finer instrument (10-bit pool
-/// fractions, thousands of samples, versus reading a bar off video frames), but
-/// the 5 %/s figure was an explicit owner call from the video and is left in
-/// place here rather than changed on my own initiative. Raised with the owner.
-///
-/// **SET FROM THE WIRE, 2026-08-22, on the owner's call.** The video figure was
-/// 5 %/s for both; the captured `packedStats` series says 3.03 %/s stamina and
-/// 2.93 %/s magicka. Tracker #53 established that these are measurements of the
-/// SAME quantity — `PvpPlayerActor::ShouldApplyRegeneration()` returns false
-/// unconditionally, so the client applies no regeneration of its own in PvP and
-/// every pool change a player sees is server-authored. Two readings of one
-/// signal cannot both be right, and the wire is the finer instrument: 10-bit
-/// pool fractions across thousands of samples, against reading a bar off video
-/// frames. The owner made the call to take the wire.
-///
-/// This is a ~40 % nerf to both pools. Expect fights to run longer and stamina
-/// management to matter more; if it feels wrong in play, the video number is one
-/// line away and the argument for it is above.
-const STAMINA_REGEN_RATE_PER_S: f32 = 0.0303;
-const MAGICKA_REGEN_RATE_PER_S: f32 = 0.0293;
+/// Capture test T3 settled the server-side arena rule: 4%/s of the full maximum,
+/// plus flat gear regeneration, continuously over elapsed time.
+const STAMINA_REGEN_RATE_PER_S: f32 = 0.04;
+const MAGICKA_REGEN_RATE_PER_S: f32 = 0.04;
 
-/// In-combat health regen: **modelled as ZERO — an approximation, not a rule.**
-///
-/// There is no *baseline* passive HP recovery in a fight: video ground-truth (s293)
-/// shows health only changing on hits, and the old UESP-derived 0.5 %/s baseline was
-/// wrong for arena PvP. Between rounds `reset_fighters_for_next_round` restores full
-/// HP anyway.
-///
-/// Independently supported since (tracker #53): `PvpPlayerActor::
-/// ShouldApplyRegeneration()` returns false unconditionally, so the client never
-/// applies `ActorInnateStats._healthRegenRate` in PvP whatever it ships. The
-/// 0.5 %/s in the `PlayerStats` asset is an open-world figure, not a PvP one.
-///
-/// **But health CAN rise mid-round.** A regen perk plus the right rings/armour gives
-/// real in-round health recovery. It is rare, and on most builds too slow to matter,
-/// which is why a flat zero is a good approximation of the field today — but it is
-/// not a law of the game. Two things follow:
-///   * do not write "health cannot increase in a round" anywhere. It can.
-///   * when a regen build does show up, this becomes a per-fighter rate summed from
-///     the perk and the equipped items, not a global constant.
-/// [owner, 2026-08-02, correcting a claim this file previously stated as fact]
-///
-/// `BlockHealthRegen` status suppression is kept — it is what will gate that rate
-/// once it is non-zero.
-const HEALTH_REGEN_RATE_PER_S: f32 = 0.0;
+/// T3 health baseline: 0.005 x full Health.Maximum / 3 per second, plus gear and
+/// Healing Surge, clamped to Maximum - DestroyedPortion.
+const HEALTH_REGEN_RATE_PER_S: f32 = 0.005;
 
 /// **Phase 3.10 — the invented Ward / Resist-Elements constants are GONE.**
 ///
@@ -4223,13 +4225,10 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
             break;
         }
 
-        // **CONSUMING INFERNO'S UPKEEP.** `_staminaCostPerSecond` (51.81) and
-        // `_healthCostPerSecond` (31.11) are what the spell costs its CASTER for
-        // every second it burns — two distinct drains, both unread, so the spell was
-        // pure upside: huge channelled damage for a one-off magicka cost.
-        //
-        // Charged per TICK, scaled by the tick interval, so the per-second figure
-        // stays a per-second figure whatever the tick rate is.
+        // **CONSUMING INFERNO'S UPKEEP.** The tick deals damage first, then charges
+        // stamina while any remains; only once stamina is empty does it charge health.
+        // Status 51 blocks stamina regen for the channel, so the cost cannot refill
+        // under itself.
         if let Some(rank) = super::gamedata::ability_rank_clamped(&uuid, level as u16) {
             let per_tick = super::damage::CHANNEL_TICK_INTERVAL_SECS;
             let stam = rank
@@ -4242,15 +4241,11 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
                 * per_tick;
             if stam > 0.0 || health > 0.0 {
                 let f = &mut combat.fighters[caster];
-                if stam > 0.0 {
+                if stam > 0.0 && f.stamina > 0 {
                     f.stamina = f.stamina.saturating_sub(stam.round().max(0.0) as u32);
-                }
-                if health > 0.0 {
-                    // Never self-kill on upkeep: floor at 1. A channel that killed its
-                    // own caster would end the round for the wrong player, and nothing
-                    // in the data says the cost is lethal.
+                } else if health > 0.0 {
                     let cost = health.round().max(0.0) as u32;
-                    f.health = f.health.saturating_sub(cost).max(1.min(f.health));
+                    f.health = f.health.saturating_sub(cost);
                 }
                 f.stats_seq = f.stats_seq.wrapping_add(1);
             }
@@ -4953,25 +4948,45 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Per-second Stamina/Magicka regen for all alive fighters. Called from `on_tick`
-/// once per `REGEN_TICK_INTERVAL`.
+/// Continuous resource regeneration for all alive fighters. Called from `on_tick`
+/// with elapsed server-step time since the previous pass.
 ///
-/// **Video ground-truth (s293):** health has ZERO in-round passive regen — HP only
-/// changes on hits.  Stamina and magicka recover at ~5 %/s (video-pinned from t=50..52
-/// and the t=113..117 confirming window).  Between-round HP reset is handled separately
-/// by `reset_fighters_for_next_round`; no in-round HP regen is applied here.
+/// Capture T3: stamina and magicka recover at 4%/s of full Maximum, health at
+/// 0.005 x Health.Maximum / 3 per second, plus flat gear/perk sources, all clamped
+/// to `Maximum - DestroyedPortion`.
 ///
 /// Block-regen status effects suppress per-stat regen:
-///   - `BlockHealthRegen`(50) — kept for future out-of-arena paths; no-op here (0.0 rate)
+///   - `BlockHealthRegen`(50) / Burning(4) → no health regen
 ///   - `BlockStaminaRegen`(51) → no stamina regen (Frozen)
 ///   - `BlockMagickaRegen`(52) → no magicka regen (Enervated)
 ///
 /// After all fighters are ticked, emits `PlayerStatsUpdate`(65) for any fighter
-/// whose pools changed. [video-ground-truth §1; /tmp/arena-video-groundtruth.md]
+/// whose pools changed.
 pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
-    use super::state::StatusEffectType;
+    use super::state::{DamageType, StatusEffectType};
 
     let mut out = Vec::new();
+    let dt = now
+        .checked_duration_since(combat.last_regen_tick)
+        .unwrap_or_default()
+        .as_secs_f32();
+    if dt <= 0.0 {
+        return out;
+    }
+    combat.last_regen_tick = now;
+
+    fn drain_gain(carry: &mut f32, amount: f32) -> u32 {
+        if amount <= 0.0 || !amount.is_finite() {
+            return 0;
+        }
+        *carry += amount;
+        let whole = carry.floor();
+        if whole < 1.0 {
+            return 0;
+        }
+        *carry -= whole;
+        whole as u32
+    }
 
     for slot in 0..combat.fighters.len() {
         let f = &mut combat.fighters[slot];
@@ -5026,16 +5041,15 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
         // stats-update emit, and so a restoration and a regen landing in the
         // same second produce ONE frame rather than two.
         //
-        // Health is restored even though passive health regen is zero: a potion
-        // is not regeneration, and `ShouldApplyRegeneration` returning false in
-        // PvP says nothing about drinking one.
+        // Potions are restorations, not regeneration, but they share this elapsed-time
+        // pump so a potion and regen landing in the same step produce one stats frame.
         if let Some(mut pr) = f.pending_restore.take() {
-            let give = pr.per_tick.min(pr.remaining);
-            let amount = give.round() as u32;
+            let give = (pr.per_tick * dt).min(pr.remaining);
+            let amount = give.floor() as u32;
             match pr.affected_stat {
-                0 => f.health = (f.health + amount).min(f.max_health),
-                1 => f.stamina = (f.stamina + amount).min(f.max_stamina),
-                2 => f.magicka = (f.magicka + amount).min(f.max_magicka),
+                0 => f.restore_pool(DamageType::Health, amount),
+                1 => f.restore_pool(DamageType::Stamina, amount),
+                2 => f.restore_pool(DamageType::Magicka, amount),
                 _ => {}
             }
             pr.remaining -= give;
@@ -5066,42 +5080,51 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
         let block_health = f
             .effects
             .iter()
-            .any(|e| e.effect == StatusEffectType::BlockHealthRegen && now < e.expires_at);
-        if !block_health && f.health < f.max_health && f.max_stamina > 0 {
+            .any(|e| {
+                matches!(e.effect, StatusEffectType::BlockHealthRegen | StatusEffectType::Burning)
+                    && now < e.expires_at
+            });
+        if !block_health && f.health < f.damaged_max_health() && f.max_stamina > 0 {
             // `Stamina.BoundedPercent` — against the pool's FULL maximum, the same
             // reading Maximum Power uses (ravage does not lower `Maximum`).
-            let stamina_fraction =
-                f.stamina as f32 / f.max_stamina.saturating_add(f.ravaged_stamina) as f32;
-            let rate = f.loadout.perks.healing_surge_rate(stamina_fraction);
-            // REGEN_TICK_INTERVAL is 1 s, so a per-second rate IS the per-tick
-            // amount. Rounded, and not floored to a minimum of 1: an unperked
-            // fighter must gain exactly nothing.
-            let heal = rate.round() as u32;
+            let stamina_fraction = f.stamina as f32 / f.max_stamina.max(1) as f32;
+            let rate = (HEALTH_REGEN_RATE_PER_S * f.max_health as f32
+                / super::state::ARENA_HEALTH_MULTIPLIER as f32)
+                + f.loadout.health_regen
+                + f.loadout.perks.healing_surge_rate(stamina_fraction);
+            let heal = drain_gain(&mut f.regen_carry_health, rate * dt);
             if heal > 0 {
-                f.health = (f.health + heal).min(f.max_health);
+                f.restore_pool(DamageType::Health, heal);
             }
         }
 
-        // Stamina regen: 3.03 %/s — the captured wire rate (see the constant).
-        if !block_stam && f.stamina < f.max_stamina {
-            let regen = ((STAMINA_REGEN_RATE_PER_S * f.max_stamina as f32).round() as u32).max(1);
-            f.stamina = (f.stamina + regen).min(f.max_stamina);
+        if !block_stam && f.stamina < f.damaged_max_stamina() {
+            let rate = STAMINA_REGEN_RATE_PER_S * f.max_stamina as f32 + f.loadout.stamina_regen;
+            let regen = drain_gain(&mut f.regen_carry_stamina, rate * dt);
+            if regen > 0 {
+                f.restore_pool(DamageType::Stamina, regen);
+            }
         }
         // Magicka Surge's BLACKOUT: for `_noMagickaRegenDuration` after the surge
         // ends, magicka does not regenerate at all. This is the drawback that pays
         // for the surge and it is authored, not invented.
-        let surge_blackout = f.no_magicka_regen_until.is_some_and(|t| now < t);
-        // Magicka regen: 2.93 %/s — the captured wire rate (see the constant) — plus
-        // Magicka Surge's flat `_magickaRegenerationBonus` while it is up.
-        if !block_mag && !surge_blackout && f.magicka < f.max_magicka {
-            let mut regen =
-                ((MAGICKA_REGEN_RATE_PER_S * f.max_magicka as f32).round() as u32).max(1);
-            if f.magicka_surge_until.is_some_and(|t| now < t) {
-                // REGEN_TICK_INTERVAL is 1 s, so a per-second rate is the per-tick
-                // amount (the same equivalence the health block above relies on).
-                regen += f.magicka_surge_bonus.round().max(0.0) as u32;
+        let surge_live = f.magicka_surge_until.is_some_and(|t| now < t);
+        if f.magicka_surge_until.is_some_and(|t| now >= t) {
+            f.magicka_surge_until = None;
+            f.magicka_surge_bonus = 0.0;
+            f.magicka = 0;
+            f.regen_carry_magicka = 0.0;
+        }
+        let surge_blackout = !surge_live && f.no_magicka_regen_until.is_some_and(|t| now < t);
+        if !block_mag && !surge_blackout && f.magicka < f.damaged_max_magicka() {
+            let mut rate = MAGICKA_REGEN_RATE_PER_S * f.max_magicka as f32 + f.loadout.magicka_regen;
+            if surge_live {
+                rate += f.magicka_surge_bonus.max(0.0);
             }
-            f.magicka = (f.magicka + regen).min(f.max_magicka);
+            let regen = drain_gain(&mut f.regen_carry_magicka, rate * dt);
+            if regen > 0 {
+                f.restore_pool(DamageType::Magicka, regen);
+            }
         }
 
         let changed = f.stamina != before_s || f.magicka != before_m || f.health != before_h;
@@ -5562,13 +5585,9 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
         return out;
     }
 
-    // Regen tick — once per second, regenerate HP/Stamina/Magicka for all alive
-    // fighters. Runs AFTER DoT (DoT damage may deplete a pool; regen brings it back up).
-    // Guarded against DoT-ending the round (the RoundEnd/NextState check above).
-    if now.duration_since(combat.last_regen_tick) >= REGEN_TICK_INTERVAL {
-        combat.last_regen_tick = now;
-        out.extend(apply_regen_tick(combat, now));
-    }
+    // Regen is continuous: apply the elapsed server-step time since the last pass.
+    // Runs AFTER DoT (DoT damage may deplete a pool; regen brings it back up).
+    out.extend(apply_regen_tick(combat, now));
 
     let bot_slots: Vec<usize> = (combat.expected_peers..combat.fighters.len()).collect();
     for bot in bot_slots {
@@ -5751,24 +5770,19 @@ mod tests {
     ///
     /// The other regen tests compute their expectation from the same constant
     /// they check, so they follow any edit silently — they verify the arithmetic,
-    /// not the number. This figure has already flipped once (video 5 %/s -> wire
-    /// 3.03 %/s, owner's call 2026-08-22) and is exactly the kind of value that
-    /// gets "tidied" back. Changing it should mean changing this test and saying
-    /// why.
+    /// not the number. T3 settled the retail server formula: in-combat stamina and
+    /// magicka at 4%/s, and health at 0.005 x Max / 3 per second.
     #[test]
     fn the_regen_rates_are_the_measured_wire_values() {
         assert_eq!(
-            STAMINA_REGEN_RATE_PER_S, 0.0303,
-            "stamina regen is the captured 3.03 %/s, not the video 5 %/s",
+            STAMINA_REGEN_RATE_PER_S, 0.04,
+            "stamina regen is the captured T3 4%/s",
         );
         assert_eq!(
-            MAGICKA_REGEN_RATE_PER_S, 0.0293,
-            "magicka regen is the captured 2.93 %/s, not the video 5 %/s",
+            MAGICKA_REGEN_RATE_PER_S, 0.04,
+            "magicka regen is the captured T3 4%/s",
         );
-        // Health is still zero AND still unwired — no code reads this constant.
-        // Asserting both halves so "I set the constant" cannot be mistaken for
-        // "health now regenerates".
-        assert_eq!(HEALTH_REGEN_RATE_PER_S, 0.0);
+        assert_eq!(HEALTH_REGEN_RATE_PER_S, 0.005);
     }
 
     /// Advance past the FollowThrough beat so a committed swing lands.
@@ -6072,13 +6086,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Regen tick: 5%/s stamina+magicka, ZERO in-round health regen (video-proven)
+    // Regen: 4%/s stamina+magicka and 0.005 x health / 3 per second
     // -----------------------------------------------------------------------
 
-    /// Video ground-truth (s293 §1): stamina and magicka recover at ~5 %/s.
-    /// One regen tick on a half-depleted pool must add ≈5% of max and emit op65.
+    /// Capture T3: stamina recovers continuously at 4%/s.
     #[test]
-    fn regen_tick_raises_stamina_at_5pct_per_second() {
+    fn regen_tick_raises_stamina_at_4pct_per_second() {
         let now = Instant::now();
         let mut combat = make_live_combat(now);
 
@@ -6094,11 +6107,10 @@ mod tests {
         let out = apply_regen_tick(&mut combat, tick_now);
 
         let stam_after = combat.fighters[0].stamina;
-        // Must increase by ~5% of max (±1 for rounding).
-        let expected_regen = ((STAMINA_REGEN_RATE_PER_S * max_stam as f32).round() as u32).max(1);
+        let expected_regen = (STAMINA_REGEN_RATE_PER_S * max_stam as f32).floor() as u32;
         assert_eq!(
             stam_after - stam_before, expected_regen,
-            "regen tick must add ~5% of max stamina ({} expected), stam {stam_before}→{stam_after}",
+            "regen tick must add 4% of max stamina ({} expected), stam {stam_before}→{stam_after}",
             expected_regen,
         );
 
@@ -6114,9 +6126,9 @@ mod tests {
         );
     }
 
-    /// Video ground-truth (s293 §1): magicka recovers at ~5 %/s, symmetric with stamina.
+    /// Capture T3: magicka recovers continuously at 4%/s, symmetric with stamina.
     #[test]
-    fn regen_tick_raises_magicka_at_5pct_per_second() {
+    fn regen_tick_raises_magicka_at_4pct_per_second() {
         let now = Instant::now();
         let mut combat = make_live_combat(now);
 
@@ -6128,18 +6140,17 @@ mod tests {
         let out = apply_regen_tick(&mut combat, tick_now);
 
         let mag_after = combat.fighters[0].magicka;
-        let expected_regen = ((MAGICKA_REGEN_RATE_PER_S * max_mag as f32).round() as u32).max(1);
+        let expected_regen = (MAGICKA_REGEN_RATE_PER_S * max_mag as f32).floor() as u32;
         assert_eq!(
             mag_after - mag_before, expected_regen,
-            "regen tick must add ~5% of max magicka ({expected_regen} expected), mag {mag_before}→{mag_after}",
+            "regen tick must add 4% of max magicka ({expected_regen} expected), mag {mag_before}→{mag_after}",
         );
         let _ = out; // op65 emission already verified in the stamina test
     }
 
-    /// Video ground-truth (s293 §1): health has ZERO in-round passive regen.
-    /// A regen tick must NOT increase health, even when the fighter is damaged.
+    /// Capture T3: health regenerates at 0.005 x max / 3 per second.
     #[test]
-    fn regen_tick_does_not_regen_health() {
+    fn regen_tick_raises_health_at_the_t3_base_rate() {
         let now = Instant::now();
         let mut combat = make_live_combat(now);
 
@@ -6152,9 +6163,13 @@ mod tests {
         let out = apply_regen_tick(&mut combat, tick_now);
 
         let hp_after = combat.fighters[0].health;
+        let expected_regen =
+            (HEALTH_REGEN_RATE_PER_S * max_hp as f32 / super::super::state::ARENA_HEALTH_MULTIPLIER as f32)
+                .floor() as u32;
         assert_eq!(
-            hp_after, hp_before,
-            "in-round health must NOT regen (video-proven zero): hp was {hp_before}, got {hp_after}"
+            hp_after - hp_before,
+            expected_regen,
+            "health regen must follow T3 base rate: hp was {hp_before}, got {hp_after}"
         );
         // The tick may still emit op65 if stamina/magicka changed, but HP must be static.
         let _ = out;
@@ -9434,15 +9449,23 @@ mod shipped_effects_tests {
         );
     }
 
-    /// Consuming Inferno charges its caster stamina AND health for every second it
-    /// burns. Both `_staminaCostPerSecond` and `_healthCostPerSecond` were unread, so
-    /// the spell was pure upside.
+    /// Consuming Inferno charges stamina while any remains, then health, and blocks
+    /// stamina regeneration for the channel.
     #[test]
     fn consuming_inferno_drains_its_caster_while_it_burns() {
         let now = Instant::now();
         let mut c = combat2(now);
         let u = uuid_of("ConsumingInferno");
         let (stam0, hp0) = (c.fighters[0].stamina, c.fighters[0].health);
+        c.fighters[0].effects.push(super::super::state::ActiveEffect {
+            effect: super::super::state::StatusEffectType::BlockStaminaRegen,
+            damage_type: super::super::state::DamageType::None,
+            value: 0.0,
+            per_tick_damage: 0.0,
+            expires_at: now + Duration::from_secs(3),
+            last_tick: now,
+            is_transient_resist: false,
+        });
         c.channels.push(super::super::state::ActiveChannel {
             caster_slot: 0,
             target_slot: 1,
@@ -9456,8 +9479,11 @@ mod shipped_effects_tests {
         });
         let _ = super::apply_channel_ticks(&mut c, now);
         assert!(c.fighters[0].stamina < stam0, "stamina must drain: {stam0} -> {}", c.fighters[0].stamina);
-        assert!(c.fighters[0].health < hp0, "health must drain: {hp0} -> {}", c.fighters[0].health);
-        assert!(!c.fighters[0].is_dead(), "upkeep must never self-kill");
+        assert_eq!(c.fighters[0].health, hp0, "health waits until stamina is empty");
+
+        c.fighters[0].stamina = 0;
+        let _ = super::apply_channel_ticks(&mut c, now + Duration::from_secs_f32(super::super::damage::CHANNEL_TICK_INTERVAL_SECS));
+        assert!(c.fighters[0].health < hp0, "health must drain after stamina is empty: {hp0} -> {}", c.fighters[0].health);
     }
 
     /// Thunderstorm is three bolts over nine seconds, not one immediate hit. It ships
@@ -12256,8 +12282,8 @@ mod continuous_area_tests {
         }
         let lost = hp0 - combat.fighters[1].health;
         assert!(
-            (46..=47).contains(&lost),
-            "5s at 9.4/s = 47 HP, lost {lost}"
+            (34..=47).contains(&lost),
+            "5s at 9.4/s emits 47 raw HP before base health regen, net lost {lost}"
         );
         assert_eq!(
             combat.fighters[0].health, combat.fighters[0].max_health,
