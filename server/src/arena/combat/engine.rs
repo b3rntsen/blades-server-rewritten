@@ -174,6 +174,9 @@ const MATCH_END_RESULT_CODE: i32 = 3;
 struct PrePvpState {
     trophies: i64,
     high_water: i64,
+    /// Raw `matchmakingPvpTrophies` (0 when absent). Only read to price a BOT
+    /// opponent's Elo swing — see [`elo_opponent_trophies`].
+    matchmaking: i64,
     chest_meter: i64,
     winning_streak: i64,
     matches_played: i64,
@@ -205,6 +208,7 @@ impl PrePvpState {
             // `matchmakingPvpTrophies` is the season high-water mark; never let it
             // start below the live count or the ladder would demote on load.
             high_water: i("matchmakingPvpTrophies").max(i("pvpTrophies")),
+            matchmaking: i("matchmakingPvpTrophies"),
             chest_meter: i("pvpChestMeter"),
             winning_streak: i("pvpWinningStreak"),
             matches_played: i("numberPvpMatchPlayed"),
@@ -219,6 +223,19 @@ impl PrePvpState {
                 .map(|l| l as u16)
                 .unwrap_or(fallback_level),
         }
+    }
+}
+
+/// The opponent trophy count a slot's Elo swing is priced against.
+///
+/// Human opponent: their live `pvpTrophies`, unchanged from retail. Bot opponent:
+/// [`crate::arena::arena_ladder::bot_opponent_trophies`] (report #224 — an authored rule; retail had
+/// no bots). No opponent: the slot's own trophies, an even match.
+fn elo_opponent_trophies(own: &PrePvpState, opponent: Option<(&PrePvpState, bool)>) -> i64 {
+    match opponent {
+        None => own.trophies,
+        Some((opp, true)) => crate::arena::arena_ladder::bot_opponent_trophies(own.trophies, opp.matchmaking),
+        Some((opp, false)) => opp.trophies,
     }
 }
 
@@ -1530,6 +1547,18 @@ impl MatchInstance {
             })
             .collect();
 
+        // What each slot's Elo swing is priced against. Computed once so the card
+        // preview below and the persisted payout in the main loop cannot disagree.
+        let elo_opponent: Vec<i64> = (0..n)
+            .map(|slot| {
+                let opponent = (0..n).find(|&o| o != slot).map(|o| {
+                    let is_bot = crate::arena::matchmaker::is_bot_loadout(&self.combat.fighters[o].loadout);
+                    (&pre[o], is_bot)
+                });
+                elo_opponent_trophies(&pre[slot], opponent)
+            })
+            .collect();
+
         // op49 propId 16 (`OpponentTrophyCount`) needs the OPPONENT's post-match
         // trophies, but the per-slot loop below only derives its OWN post-match
         // trophies as it walks — and for a 2-player match slot 0 is processed before
@@ -1542,7 +1571,7 @@ impl MatchInstance {
                 let p = pre[slot];
                 let is_winner = self.combat.winner == Some(slot);
                 let opponent = (0..n).find(|&o| o != slot);
-                let opponent_trophies = opponent.map(|o| pre[o].trophies).unwrap_or(p.trophies);
+                let opponent_trophies = elo_opponent[slot];
                 let rounds_won = self.combat.rounds_won.get(slot).copied().unwrap_or(0);
                 let rounds_lost = opponent
                     .and_then(|o| self.combat.rounds_won.get(o).copied())
@@ -1560,7 +1589,7 @@ impl MatchInstance {
             let is_winner = self.combat.winner == Some(slot);
             let p = pre[slot];
             let opponent = (0..n).find(|&o| o != slot);
-            let opponent_trophies = opponent.map(|o| pre[o].trophies).unwrap_or(p.trophies);
+            let opponent_trophies = elo_opponent[slot];
 
             // Round score from the authoritative match state (best-of-3). It is the
             // sole driver of the reward multiplier, and that is capture-proven: the
@@ -4404,6 +4433,102 @@ pub(in crate::arena::combat) mod tests {
             Some(bot_post_trophies),
             "the human's card must show the BOT's own drawn trophy count, never 0"
         );
+    }
+
+    /// Drive a 2-0 win for a 588-trophy human (slot 0) against `opponent` (slot 1) and
+    /// return the human's own post-match `pvpTrophies` from their ResultsJSON — the
+    /// value `arena_economy` persists. `peers` is 1 for the solo/bot shape, 2 for PvP.
+    fn human_post_trophies_after_2_0_win(opponent: Loadout, peers: usize) -> i64 {
+        let now = Instant::now();
+        let mut human = crate::arena::combat::loadout::starter();
+        human.display_name = "LagorPing".into();
+        human.character_uuid = "38c987fd-c42b-4ea6-b869-c8d4c03055f9".into();
+        human.profile_character_json = r#"{"id":"38c987fd-c42b-4ea6-b869-c8d4c03055f9","name":"LagorPing","level":86,"pvpTrophies":588,"matchmakingPvpTrophies":588}"#.into();
+        human.profile_equipped_json = r#"{"equippedItems":{}}"#.into();
+
+        let mut m = MatchInstance::new(2, peers, vec![human, opponent], now);
+        let live = drive_to_live(&mut m, 2, now);
+        let (_d1, t1) = swing_until_death(&mut m, 0, live);
+        let (_s1, live2) = drive_interround_to_live(&mut m, t1);
+        let (_d2, t) = swing_until_death(&mut m, 0, live2);
+        assert_eq!(m.combat.rounds_won, [2, 0], "precondition: the human won 2-0");
+
+        let step = Duration::from_millis(250);
+        for i in 1..=80u32 {
+            for (slot, b) in m.on_tick(2, t + step * i) {
+                let is_op49 = b.len() > 3 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(49);
+                if is_op49 && slot == 0 {
+                    let nd = arena_proto::parse_netdata(&b[2..]);
+                    let v: serde_json::Value =
+                        serde_json::from_str(nd.string(13).expect("ResultsJSON")).expect("ResultsJSON parses");
+                    return v["character"]["pvpTrophies"].as_i64().expect("character.pvpTrophies");
+                }
+            }
+        }
+        panic!("no op49 reached the human");
+    }
+
+    /// An opponent at 0 live trophies but bracketed at `matchmaking` — the Meryl Andra
+    /// shape from report #224 (bracketed at 455, paid out as if 0).
+    fn opponent_loadout(name: &str, matchmaking: Option<i64>) -> Loadout {
+        let mut l = crate::arena::combat::loadout::starter();
+        l.display_name = name.into();
+        l.character_uuid = "1131a037-716c-49cc-b165-32d8ddc14f49".into();
+        let mm = matchmaking.map(|v| format!(r#","matchmakingPvpTrophies":{v}"#)).unwrap_or_default();
+        l.profile_character_json =
+            format!(r#"{{"id":"1131a037-716c-49cc-b165-32d8ddc14f49","name":"{name}","level":89,"pvpTrophies":0{mm}}}"#);
+        l.profile_equipped_json = r#"{"equippedItems":{}}"#.into();
+        l
+    }
+
+    fn two_nil_win() -> crate::arena::arena_ladder::MatchOutcome {
+        crate::arena::arena_ladder::MatchOutcome { rounds_won: 2, rounds_lost: 0, win: true }
+    }
+
+    /// Report #224 CONTROL: human-vs-human is priced at the opponent's LIVE
+    /// `pvpTrophies`, exactly as before — a `matchmakingPvpTrophies` on a HUMAN
+    /// opponent is ignored, so the bot rule cannot leak into PvP.
+    #[test]
+    fn report_224_human_opponent_still_pays_on_live_trophies() {
+        use crate::arena::{arena_ladder, arena_season};
+        let got = human_post_trophies_after_2_0_win(opponent_loadout("Meryl Andra", Some(455)), 2);
+        let scoring = arena_season::active_scoring();
+        assert_eq!(got, 588 + arena_ladder::trophy_delta(two_nil_win(), 588, 0, scoring));
+        assert_ne!(
+            got,
+            588 + arena_ladder::trophy_delta(two_nil_win(), 588, 455, scoring),
+            "a human opponent must NOT be priced at matchmakingPvpTrophies"
+        );
+    }
+
+    /// Report #224: a BOT is priced at its `matchmakingPvpTrophies` (the rating the
+    /// bracket used), not its live 0. Same profile as the control above, only the
+    /// " (AI)" marker differs, so the difference is the rule and nothing else.
+    #[test]
+    fn report_224_bot_pays_on_its_matchmaking_trophies() {
+        use crate::arena::{arena_ladder, arena_season};
+        let got = human_post_trophies_after_2_0_win(opponent_loadout("Meryl Andra (AI)", Some(455)), 1);
+        let scoring = arena_season::active_scoring();
+        assert_eq!(got, 588 + arena_ladder::trophy_delta(two_nil_win(), 588, 455, scoring));
+        assert_ne!(
+            got,
+            588 + arena_ladder::trophy_delta(two_nil_win(), 588, 0, scoring),
+            "CONTROL: the old live-trophy pricing gives a different number"
+        );
+    }
+
+    /// Report #224: a bot with no rating (key missing, or 0 — an unrated copy) is an
+    /// even match: priced at the human's own trophies.
+    #[test]
+    fn report_224_unrated_bot_pays_as_an_even_match() {
+        use crate::arena::{arena_ladder, arena_season};
+        let scoring = arena_season::active_scoring();
+        let even = 588 + arena_ladder::trophy_delta(two_nil_win(), 588, 588, scoring);
+        assert_ne!(even, 588 + arena_ladder::trophy_delta(two_nil_win(), 588, 0, scoring));
+        for mm in [None, Some(0)] {
+            let got = human_post_trophies_after_2_0_win(opponent_loadout("Meryl Andra (AI)", mm), 1);
+            assert_eq!(got, even, "matchmakingPvpTrophies {mm:?} must price as an even match");
+        }
     }
 
     /// THE REPORTED BUG: "first match I got paralysed from a block."
