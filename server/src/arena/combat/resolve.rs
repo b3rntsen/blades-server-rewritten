@@ -46,6 +46,7 @@ const CARRIER_USERMESSAGE: u8 = 0x36;
 /// Carrier for `PlayerCombatInputActivate` (op46) — `0x2e` (46). Op46 uses its own
 /// carrier byte (`GameMessageId` value), NOT the generic `0x36` UserMessage carrier.
 const CARRIER_OP46: u8 = 0x2e;
+const FROSTBITE_UUID: &str = "4be1d681-c35d-4540-b255-c2910ac80664";
 
 /// The minimum spacing between committed swings for `fighter` — **Phase 3.12**: the
 /// equipped weapon's own `attackDelay + recoveryToComboTime`, floored at
@@ -55,18 +56,17 @@ const CARRIER_OP46: u8 = 0x2e;
 /// 400/650/900 ms). A Dragonbone Dagger commits every 0.333 s: 0.233 s attack delay
 /// plus its 0.100 s combo-recovery gate. The old use of full `recoveryTime` imposed
 /// 0.783 s and rejected retail-paced releases observed at 0.372–0.668 s.
-fn combat_speed_multiplier(fighter: &super::state::Fighter, now: Instant) -> f32 {
-    if fighter.is_frozen(now) {
-        super::gamedata::combat_params::SLOW_STATUS_MULTIPLIER
+fn charge_speed_multiplier(fighter: &super::state::Fighter, now: Instant) -> f32 {
+    if fighter.is_slowed(now) {
+        1.0 + super::gamedata::combat_params::SLOW_STATUS_MULTIPLIER
     } else {
         1.0
     }
 }
 
 fn swing_cooldown_for(fighter: &super::state::Fighter, now: Instant) -> Duration {
-    Duration::from_secs_f32(
-        fighter.loadout.swing_interval().as_secs_f32() / combat_speed_multiplier(fighter, now),
-    )
+    let _ = now;
+    Duration::from_secs_f32(fighter.loadout.swing_interval().as_secs_f32())
 }
 
 /// The swing factor of a release after `hold_secs` of server-measured charge, as
@@ -85,14 +85,13 @@ fn swing_cooldown_for(fighter: &super::state::Fighter, now: Instant) -> Duration
 /// nearly every real swing critted: the measured median hold is 0.317 s. The 1.2 s
 /// "video-calibrated" threshold before it was wrong the other way.
 ///
-/// `s` is the weapon-speed multiplier. Frost keeps this engine's existing `/0.75`
-/// scaling here; the client's `x1.75` (02 X9) is a separate fix.
+/// `s` is the weapon-speed multiplier: Slow is `1 + slowStatusMultiplier` = 1.75.
 fn charge_swing_factor(
     fighter: &super::state::Fighter,
     hold_secs: f32,
     now: Instant,
 ) -> Option<f32> {
-    let s = 1.0 / combat_speed_multiplier(fighter, now);
+    let s = charge_speed_multiplier(fighter, now);
     fighter
         .loadout
         .charge_params()
@@ -152,7 +151,7 @@ fn fail_attack(combat: &mut MatchCombat, sender: usize, hold_secs: f32, now: Ins
         combat.fighters[sender]
             .loadout
             .charge_params()
-            .min_damage_time(1.0 / combat_speed_multiplier(&combat.fighters[sender], now))
+            .min_damage_time(charge_speed_multiplier(&combat.fighters[sender], now))
             * 1000.0,
     );
 }
@@ -2288,6 +2287,17 @@ fn apply_ability_impact(
             // `apply_channel_ticks` delivers them on the shipped PvP tick.
             if let Some(total_ticks) = super::damage::channel_ticks(ability_uuid, level) {
                 if total_ticks > 1 {
+                    if ability_uuid == FROSTBITE_UUID {
+                        if let Some(secs) =
+                            super::gamedata::ability_rank_clamped(ability_uuid, level as u16)
+                            .and_then(|r| r.get(super::gamedata::AbilityField::ChannelMaxLength))
+                        {
+                            let until = now + Duration::from_secs_f32(secs);
+                            let current = combat.fighters[target_slot].frostbite_slow_until;
+                            combat.fighters[target_slot].frostbite_slow_until =
+                                Some(current.map_or(until, |t| t.max(until)));
+                        }
+                    }
                     combat.channels.push(super::state::ActiveChannel {
                         caster_slot: sender,
                         target_slot,
@@ -3906,12 +3916,21 @@ fn apply_status_conditioning(
                 last_tick: now,
                 is_transient_resist: false,
             });
+            let poisoned_ravage = if condition == super::state::StatusEffectType::Poisoned {
+                let ravage =
+                    base_hp as f32 * super::gamedata::combat_params::POISONED_RAVAGE_HEALTH_PERCENT;
+                let (_, _, health) = combat.fighters[target_slot]
+                    .apply_ravage(&[(DamageType::Health, ravage)], 1.0);
+                health
+            } else {
+                0
+            };
             combat.fighters[target_slot].clear_element_damage(*ty);
             let frame = messages::change_combat_status_effect(
                 target_obj, true, condition, CONDITION_DURATION_SECS,
             );
             info!(
-                "combat status: gsid={} target_slot={target_slot} target={} status={condition:?} source_element={ty:?} recent_damage={recent:.1} threshold={threshold:.1} duration={CONDITION_DURATION_SECS} dot_per_tick={per_tick:.2}",
+                "combat status: gsid={} target_slot={target_slot} target={} status={condition:?} source_element={ty:?} recent_damage={recent:.1} threshold={threshold:.1} duration={CONDITION_DURATION_SECS} dot_per_tick={per_tick:.2} poisoned_ravage_hp={poisoned_ravage}",
                 combat.game_session_id,
                 combat.fighters[target_slot].loadout.display_name,
             );
@@ -4922,33 +4941,50 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
         // rank 1 to 15.4 at rank 8), and the fighters showing no regen are the ones
         // without the perk.
         //
-        // `BlockHealthRegen`(50) suppresses it, exactly as 51/52 suppress the two
-        // pools. Nothing in combat emits 50, but an item property can set it.
+        // Burning suppresses health regeneration intrinsically. `BlockHealthRegen`(50)
+        // is still honoured for item-property paths, exactly as 51/52 suppress the two
+        // other pools.
         let block_health = f
             .effects
             .iter()
-            .any(|e| e.effect == StatusEffectType::BlockHealthRegen && now < e.expires_at);
-        if !block_health && f.health < f.max_health && f.max_stamina > 0 {
+            .any(|e| {
+                matches!(
+                    e.effect,
+                    StatusEffectType::BlockHealthRegen | StatusEffectType::Burning
+                ) && now < e.expires_at
+            });
+        let health_reduction = f.regen_reduction(0, now);
+        if !block_health && (f.health < f.max_health || health_reduction > 0.0) && f.max_stamina > 0 {
             // `Stamina.BoundedPercent` — against the pool's FULL maximum, the same
             // reading Maximum Power uses (ravage does not lower `Maximum`).
             let stamina_fraction =
                 f.stamina as f32 / f.max_stamina.saturating_add(f.ravaged_stamina) as f32;
-            let rate = f.loadout.perks.healing_surge_rate(stamina_fraction) * f.loadout.regen_multiplier(0);
+            let rate =
+                f.loadout.perks.healing_surge_rate(stamina_fraction) * f.loadout.regen_multiplier(0)
+                    - health_reduction;
             // REGEN_TICK_INTERVAL is 1 s, so a per-second rate IS the per-tick
             // amount. Rounded, and not floored to a minimum of 1: an unperked
             // fighter must gain exactly nothing.
-            let heal = rate.round() as u32;
+            let heal = rate.round() as i32;
             if heal > 0 {
+                let heal = heal as u32;
                 f.health = (f.health + heal).min(f.max_health);
+            } else if heal < 0 {
+                f.take_damage_at(heal.unsigned_abs(), now);
             }
         }
 
         // Stamina regen: 3.03 %/s — the captured wire rate (see the constant).
-        if !block_stam && f.stamina < f.max_stamina {
-            let regen =
-                ((STAMINA_REGEN_RATE_PER_S * f.max_stamina as f32 * f.loadout.regen_multiplier(1)).round() as u32)
-                    .max(1);
-            f.stamina = (f.stamina + regen).min(f.max_stamina);
+        let stamina_reduction = f.regen_reduction(1, now);
+        if !block_stam && (f.stamina < f.max_stamina || stamina_reduction > 0.0) {
+            let regen = (STAMINA_REGEN_RATE_PER_S * f.max_stamina as f32 * f.loadout.regen_multiplier(1)
+                - stamina_reduction)
+                .round() as i32;
+            if regen > 0 {
+                f.stamina = (f.stamina + (regen as u32).max(1)).min(f.max_stamina);
+            } else if regen < 0 {
+                f.stamina = f.stamina.saturating_sub(regen.unsigned_abs());
+            }
         }
         // Magicka Surge's BLACKOUT: for `_noMagickaRegenDuration` after the surge
         // ends, magicka does not regenerate at all. This is the drawback that pays
@@ -4956,16 +4992,20 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
         let surge_blackout = f.no_magicka_regen_until.is_some_and(|t| now < t);
         // Magicka regen: 2.93 %/s — the captured wire rate (see the constant) — plus
         // Magicka Surge's flat `_magickaRegenerationBonus` while it is up.
-        if !block_mag && !surge_blackout && f.magicka < f.max_magicka {
-            let mut regen =
-                ((MAGICKA_REGEN_RATE_PER_S * f.max_magicka as f32 * f.loadout.regen_multiplier(2)).round() as u32)
-                    .max(1);
+        let magicka_reduction = f.regen_reduction(2, now);
+        if !block_mag && !surge_blackout && (f.magicka < f.max_magicka || magicka_reduction > 0.0) {
+            let mut regen = MAGICKA_REGEN_RATE_PER_S * f.max_magicka as f32 * f.loadout.regen_multiplier(2);
             if f.magicka_surge_until.is_some_and(|t| now < t) {
                 // REGEN_TICK_INTERVAL is 1 s, so a per-second rate is the per-tick
                 // amount (the same equivalence the health block above relies on).
-                regen += (f.magicka_surge_bonus * f.loadout.regen_multiplier(2)).round().max(0.0) as u32;
+                regen += f.magicka_surge_bonus * f.loadout.regen_multiplier(2);
             }
-            f.magicka = (f.magicka + regen).min(f.max_magicka);
+            let regen = (regen - magicka_reduction).round() as i32;
+            if regen > 0 {
+                f.magicka = (f.magicka + (regen as u32).max(1)).min(f.max_magicka);
+            } else if regen < 0 {
+                f.magicka = f.magicka.saturating_sub(regen.unsigned_abs());
+            }
         }
 
         let changed = f.stamina != before_s || f.magicka != before_m || f.health != before_h;
@@ -6040,6 +6080,38 @@ mod tests {
         );
         // The tick may still emit op65 if stamina/magicka changed, but HP must be static.
         let _ = out;
+    }
+
+    #[test]
+    fn burning_blocks_health_regen_from_healing_surge() {
+        let now = Instant::now();
+        let mut control = make_live_combat(now);
+        control.fighters[0].loadout.perks.healing_surge = 12.0;
+        control.fighters[0].health = control.fighters[0].max_health - 100;
+        control.fighters[0].stamina = control.fighters[0].max_stamina;
+        let hp_before = control.fighters[0].health;
+
+        let out = apply_regen_tick(&mut control, now + REGEN_TICK_INTERVAL);
+        assert!(!out.is_empty(), "control Healing Surge should emit a stats update");
+        assert_eq!(control.fighters[0].health - hp_before, 12);
+
+        let mut burning = make_live_combat(now);
+        burning.fighters[0].loadout.perks.healing_surge = 12.0;
+        burning.fighters[0].health = burning.fighters[0].max_health - 100;
+        burning.fighters[0].stamina = burning.fighters[0].max_stamina;
+        burning.fighters[0].effects.push(super::super::state::ActiveEffect {
+            effect: super::super::state::StatusEffectType::Burning,
+            damage_type: DamageType::Fire,
+            value: 0.0,
+            per_tick_damage: 0.0,
+            expires_at: now + Duration::from_secs(5),
+            last_tick: now,
+            is_transient_resist: false,
+        });
+        let hp_before = burning.fighters[0].health;
+
+        let _ = apply_regen_tick(&mut burning, now + REGEN_TICK_INTERVAL);
+        assert_eq!(burning.fighters[0].health, hp_before);
     }
 
     /// tracker #24: op65 propId 5 is `_pvpOtherActorStats` — the OPPONENT of the
@@ -7560,6 +7632,24 @@ mod tests {
         assert!(
             (dur - super::super::gamedata::combat_params::ELEMENTAL_STATUS_DURATION).abs() < 0.01,
             "the shipped elemental-status duration (5 s), got {dur}"
+        );
+    }
+
+    #[test]
+    fn frostbite_applies_a_channel_slow_without_waiting_for_frozen() {
+        let now = Instant::now();
+        let mut combat = make_prod_scale_combat(now);
+        assert!(!combat.fighters[1].is_slowed(now));
+
+        let _ = cast_frostbite(&mut combat, now);
+
+        assert!(
+            combat.fighters[1].is_slowed(now + Duration::from_millis(1)),
+            "Frostbite's channel registers a SlowEffect even before elemental Frozen lands",
+        );
+        assert!(
+            !combat.fighters[1].is_slowed(now + Duration::from_millis(3100)),
+            "the Frostbite slow lasts for the shipped 3s channel",
         );
     }
 
@@ -9757,6 +9847,29 @@ mod shipped_effects_tests {
         );
     }
 
+    #[test]
+    fn poisoned_landing_ravages_twenty_percent_of_base_max_health() {
+        use super::super::state::DamageType;
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let base = c.fighters[1].base_max_health();
+        let before_max = c.fighters[1].max_health;
+        let threshold = c.fighters[1].condition_threshold(StatusEffectType::Poisoned);
+
+        let out = apply_status_conditioning(
+            &mut c,
+            1,
+            &[(DamageType::Poison, threshold + 1.0)],
+            now,
+        );
+
+        assert_eq!(out.len(), 2, "Poisoned lands and is broadcast");
+        let want = (base as f32 * super::super::gamedata::combat_params::POISONED_RAVAGE_HEALTH_PERCENT)
+            .round() as u32;
+        assert_eq!(before_max - c.fighters[1].max_health, want);
+        assert_eq!(c.fighters[1].ravaged_health, want);
+    }
+
     /// 03-D19: bit 3 of op50 is the defender's `IsOptimalBlocking`, read for every
     /// source (`CombatManager$$ApplyDamage@0x1bd2770`, 0x1bd2a24). A Burning tick on
     /// a defender whose guard is optimal carries flags 0x9; the DoT itself is never
@@ -11426,18 +11539,19 @@ mod report_31_high_block_stun {
         });
         assert!(froze, "precondition: the op51 Frozen(5) apply must land");
         assert!(c.fighters[1].is_frozen(now));
+        assert!(c.fighters[1].is_slowed(now));
         assert!(!c.fighters[1].is_staggered(now));
         assert_eq!(c.fighters[1].actor_state(), ActorStateType::Idle);
         assert!(c.fighters[1].take_state_changes().is_empty());
 
-        let slow = super::super::gamedata::combat_params::SLOW_STATUS_MULTIPLIER;
+        let slow = 1.0 + super::super::gamedata::combat_params::SLOW_STATUS_MULTIPLIER;
         let frozen_cadence = super::swing_cooldown_for(&c.fighters[1], now);
-        assert!((frozen_cadence.as_secs_f32() - normal_cadence.as_secs_f32() / slow).abs() < 1e-5);
-        // Frozen stretches the charge clock by this engine's existing 1/0.75, so the
-        // same hold now falls short of the plateau, and the stretched one reaches it.
-        // (The client's factor is 1.75, 02 X9, which is a separate fix.)
-        assert_eq!(super::charge_swing_factor(&c.fighters[1], plateau, now), Some(1.0));
-        assert!(super::charge_swing_factor(&c.fighters[1], plateau / slow, now).unwrap() > 1.0);
+        assert_eq!(frozen_cadence, normal_cadence, "Slow does not change committed swing cooldown");
+        // Frozen stretches charge thresholds by 1.75, so the same hold now falls short
+        // of the plateau, and the 1.75-scaled plateau reaches it.
+        assert_eq!(super::charge_swing_factor(&c.fighters[1], plateau, now), None);
+        let slowed_plateau = c.fighters[1].loadout.charge_params().plateau_start_time(slow) + 0.01;
+        assert!(super::charge_swing_factor(&c.fighters[1], slowed_plateau, now).unwrap() > 1.0);
 
         // expected_peers=1 makes slot 1 a bot. It still begins a wind-up.
         super::on_tick(&mut c, now + Duration::from_millis(10), false);
@@ -11451,6 +11565,7 @@ mod report_31_high_block_stun {
             .duration;
         let thawed = now + Duration::from_secs_f32(frost_secs + 0.1);
         assert!(!c.fighters[1].is_frozen(thawed));
+        assert!(!c.fighters[1].is_slowed(thawed));
         assert_eq!(super::swing_cooldown_for(&c.fighters[1], thawed), normal_cadence);
     }
 

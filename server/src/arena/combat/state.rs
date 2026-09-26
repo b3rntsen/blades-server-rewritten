@@ -639,6 +639,25 @@ pub fn condition_for_element(t: DamageType) -> Option<StatusEffectType> {
     })
 }
 
+pub fn weakness_status_damage_type(effect: StatusEffectType) -> Option<DamageType> {
+    Some(match effect {
+        StatusEffectType::FireWeakness => DamageType::Fire,
+        StatusEffectType::FrostWeakness => DamageType::Frost,
+        StatusEffectType::ShockWeakness => DamageType::Shock,
+        StatusEffectType::PoisonWeakness => DamageType::Poison,
+        _ => return None,
+    })
+}
+
+pub fn regen_reduction_status_stat(effect: StatusEffectType) -> Option<usize> {
+    Some(match effect {
+        StatusEffectType::HealthRegenReduction => 0,
+        StatusEffectType::StaminaRegenReduction => 1,
+        StatusEffectType::MagickaRegenReduction => 2,
+        _ => return None,
+    })
+}
+
 /// `DamageNegationSource` (dump.cs 546390) — which pool ate a hit. Drives op66
 /// `DamageNegated`. [`arena-status-resistance-spec.md` §4.5]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1647,6 +1666,8 @@ pub struct Fighter {
     /// No magicka regenerates at all until this instant — Magicka Surge's drawback,
     /// which begins when the surge itself ends.
     pub no_magicka_regen_until: Option<Instant>,
+    /// Frostbite applies a SlowEffect while the channel is live, without an op51 status.
+    pub frostbite_slow_until: Option<Instant>,
 
     pub reckless_fury_until: Option<Instant>,
     /// Flat bonus damage Fury adds to each swing while active, chosen by the
@@ -1911,6 +1932,7 @@ impl Fighter {
             magicka_surge_until: None,
             magicka_surge_bonus: 0.0,
             no_magicka_regen_until: None,
+            frostbite_slow_until: None,
             reckless_fury_until: None,
             reckless_fury_bonus: 0.0,
             maneuver_state_until: None,
@@ -2184,12 +2206,20 @@ impl Fighter {
         matches!(self.staggered_until, Some(t) if now < t)
     }
 
-    /// Frozen is an elemental slow, not a stagger/paralysis input lock. The client
-    /// animates it from op51; the resolver uses this to scale weapon charge/cadence.
+    /// Frozen is an elemental slow, not a stagger/paralysis input lock.
     pub fn is_frozen(&self, now: Instant) -> bool {
         self.effects
             .iter()
             .any(|effect| effect.effect == StatusEffectType::Frozen && now < effect.expires_at)
+            || self
+                .status_timers
+                .iter()
+                .any(|(effect, expires)| *effect == StatusEffectType::Frozen && now < *expires)
+    }
+
+    /// Any active slow source: Frozen's elemental status, or Frostbite's channel-local slow.
+    pub fn is_slowed(&self, now: Instant) -> bool {
+        self.is_frozen(now) || self.frostbite_slow_until.is_some_and(|t| now < t)
     }
 
     /// Enter the staggered state for `CombatParameters.baseStaggerDuration`.
@@ -2779,6 +2809,12 @@ impl Fighter {
             .filter(|(t, _)| *t == ty)
             .map(|(_, v)| *v)
             .sum();
+        let alchemy: f32 = self
+            .effects
+            .iter()
+            .filter(|e| now < e.expires_at && weakness_status_damage_type(e.effect) == Some(ty))
+            .map(|e| e.value)
+            .sum();
         // `StaggeredWeakness` (Powerful Block) is TYPE-AGNOSTIC: the client's
         // `GetWeakness(DamageType)` is two instructions and never reads its argument,
         // and the capture agrees — one identical delta across Slashing, Shock and
@@ -2788,7 +2824,16 @@ impl Fighter {
         } else {
             0.0
         };
-        gear + staggered
+        gear + alchemy + staggered
+    }
+
+    /// Active alchemy regen-reduction amount for stat 0/1/2.
+    pub fn regen_reduction(&self, stat: usize, now: Instant) -> f32 {
+        self.effects
+            .iter()
+            .filter(|e| now < e.expires_at && regen_reduction_status_stat(e.effect) == Some(stat))
+            .map(|e| e.value)
+            .sum()
     }
 
     /// Combined flat resistance including transient Resist-Elements buffs (timed via
@@ -3411,6 +3456,7 @@ impl MatchCombat {
             f.blocking_until = None;
             f.block_raised_at = None;
             f.last_block_dropped_at = None;
+            f.frostbite_slow_until = None;
             f.last_swing = None;
             f.charge_press_at = None;
             f.charge_side = None;
@@ -3973,6 +4019,37 @@ mod tests {
         // Elemental-Resistance-PIERCING can also be a RATING subtraction (Phase 3.4).
         assert_eq!(f.resistance_rating_against(DamageType::Poison, 0.0, 15.0), 25.0);
         assert_eq!(f.resistance_rating_against(DamageType::Poison, 0.0, 999.0), 0.0, "never negative");
+    }
+
+    #[test]
+    fn alchemy_weakness_and_regen_reduction_statuses_read_their_magnitude() {
+        let now = Instant::now();
+        let mut f = Fighter::new(0, 1, Loadout::default(), now);
+        f.effects.push(ActiveEffect {
+            effect: StatusEffectType::PoisonWeakness,
+            damage_type: DamageType::Poison,
+            value: 53.1,
+            per_tick_damage: 0.0,
+            expires_at: now + Duration::from_secs(10),
+            last_tick: now,
+            is_transient_resist: false,
+        });
+        f.effects.push(ActiveEffect {
+            effect: StatusEffectType::StaminaRegenReduction,
+            damage_type: DamageType::None,
+            value: 20.0,
+            per_tick_damage: 0.0,
+            expires_at: now + Duration::from_secs(10),
+            last_tick: now,
+            is_transient_resist: false,
+        });
+
+        assert_eq!(f.weakness_rating_against(DamageType::Poison, now), 53.1);
+        assert_eq!(f.weakness_rating_against(DamageType::Fire, now), 0.0);
+        assert_eq!(f.regen_reduction(1, now), 20.0);
+        assert_eq!(f.regen_reduction(2, now), 0.0);
+        assert_eq!(f.weakness_rating_against(DamageType::Poison, now + Duration::from_secs(11)), 0.0);
+        assert_eq!(f.regen_reduction(1, now + Duration::from_secs(11)), 0.0);
     }
 
     // -----------------------------------------------------------------------
