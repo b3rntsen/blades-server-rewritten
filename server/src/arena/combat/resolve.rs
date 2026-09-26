@@ -5762,15 +5762,16 @@ fn bot_ability_allowed_by_ai_tags(
     let Some(ability) = super::gamedata::ability(ability_uuid) else {
         return true;
     };
-    if f.is_staggered(now) && !ability.has_tag(7) {
+    if f.is_staggered(now) && !super::ability_tags::ability_has_tag(ability.uuid, 7) {
         return false;
     }
-    if ability.has_tag(9) && bot_is_dodging(f, now) {
+    if super::ability_tags::ability_has_tag(ability.uuid, 9) && bot_is_dodging(f, now) {
         return false;
     }
-    let off_buff = ability.has_tag(1) || ability.has_tag(2);
-    let attack_counter = ability.has_tag(3);
-    let spell_counter = ability.has_tag(4);
+    let off_buff = super::ability_tags::ability_has_tag(ability.uuid, 1)
+        || super::ability_tags::ability_has_tag(ability.uuid, 2);
+    let attack_counter = super::ability_tags::ability_has_tag(ability.uuid, 3);
+    let spell_counter = super::ability_tags::ability_has_tag(ability.uuid, 4);
     if off_buff && !attack_counter && !spell_counter {
         return true;
     }
@@ -5852,12 +5853,13 @@ fn bot_ability_score(
         score += r.maximum_amount_absorbed().unwrap_or(0.0) * 0.03;
     }
     if let Some(ability) = super::gamedata::ability(ability_uuid) {
-        let counter_live = (ability.has_tag(3)
+        let counter_live = (super::ability_tags::ability_has_tag(ability.uuid, 3)
             && matches!(
                 snapshot.state,
                 BotObservedState::Charging | BotObservedState::Maneuver
             ))
-            || (ability.has_tag(4) && snapshot.state == BotObservedState::CastingOffensiveSpell);
+            || (super::ability_tags::ability_has_tag(ability.uuid, 4)
+                && snapshot.state == BotObservedState::CastingOffensiveSpell);
         if counter_live {
             score += 35.0;
         }
@@ -13680,13 +13682,22 @@ mod report_31_high_block_stun {
     fn bot_ai_tag_gate_reads_shipped_tags_not_editor_catalogues() {
         let mania = super::super::gamedata::ability(uuid_of("ShieldOfMania")).unwrap();
         assert!(
-            mania.has_tag(3) && !mania.has_tag(4),
+            super::super::ability_tags::ability_has_tag(mania.uuid, 3)
+                && !super::super::ability_tags::ability_has_tag(mania.uuid, 4),
             "Shield of Mania ships AttackCounter (3), not SpellCounter (4)",
         );
         let bash = super::super::gamedata::ability(uuid_of("ShieldBash")).unwrap();
-        assert!(bash.has_tag(3) && bash.has_tag(4), "control: bashes counter both");
+        assert!(
+            super::super::ability_tags::ability_has_tag(bash.uuid, 3)
+                && super::super::ability_tags::ability_has_tag(bash.uuid, 4),
+            "control: bashes counter both"
+        );
         let wall = super::super::gamedata::ability(uuid_of("Firewall")).unwrap();
-        assert!(wall.has_tag(2) && wall.has_tag(3), "control: Wall of Fire is also a buff");
+        assert!(
+            super::super::ability_tags::ability_has_tag(wall.uuid, 2)
+                && super::super::ability_tags::ability_has_tag(wall.uuid, 3),
+            "control: Wall of Fire is also a buff"
+        );
 
         let now = Instant::now();
         let mut c = combat(now, 1);

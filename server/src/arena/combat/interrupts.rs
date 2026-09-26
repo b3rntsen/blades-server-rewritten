@@ -30,7 +30,8 @@ const FROSTBITE_UUID: &str = "4be1d681-c35d-4540-b255-c2910ac80664";
 /// gate, so it may be cast from any actor state except while paralysed
 /// (`Actor$$CanCast@0x1c58f54`, 07 §2.4).
 pub fn is_quick(ability_uuid: &str) -> bool {
-    gamedata::ability(ability_uuid).is_some_and(|a| a.has_tag(7))
+    gamedata::ability(ability_uuid).is_some()
+        && super::ability_tags::ability_has_tag(ability_uuid, 7)
 }
 
 // ---------------------------------------------------------------------------
@@ -534,8 +535,8 @@ mod tests {
 
     // --- the Quick tag -----------------------------------------------------
 
-    /// The list is abilities_full.json's tag-7 set (15 abilities), now read from
-    /// gamedata instead of a second local catalogue.
+    /// The list is abilities_full.json's tag-7 set (15 abilities), generated from
+    /// `server/data/abilities_tags_source.json` instead of a local editor catalogue.
     #[test]
     fn the_quick_tag_set_is_the_shipped_one() {
         let quick_tagged = [
