@@ -216,6 +216,7 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
 
     for eq in inventory.loadout.equipped_items.0.values() {
         let template = eq.item.item_template_id.as_hyphenated().to_string();
+        let mut item_rating_for_material = None;
 
         // --- item stats (Phase 3.1/3.2/3.3/3.5) ---
         if let Some(w) = gamedata::weapon(&template) {
@@ -227,9 +228,11 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
             }
         } else if let Some(a) = gamedata::armor(&template) {
             lo.armor_rating += a.armor_rating;
+            item_rating_for_material = Some(a.armor_rating);
             armor_pieces.push((a.equipment_slot, a.armor_set));
         } else if let Some(s) = gamedata::shield(&template) {
             install_shield(&mut lo, s, eq.item.tempering_level);
+            item_rating_for_material = Some(blocking_item_rating(&template, s.block_base, eq.item.tempering_level));
         }
 
         // --- jewellery GRADING affixes: +N ranks to a named ability ------------
@@ -251,7 +254,7 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         // new is modelled here; the properties simply arrive. A property whose logic
         // has no arm yet still falls through `apply_enchant`'s `_ => {}` exactly as
         // before, so this cannot switch on anything unmodelled by accident.
-        apply_template_properties(&mut lo, &template);
+        apply_template_properties_with_rating(&mut lo, &template, item_rating_for_material);
 
         // --- enchantments, dispatched on the family's LOGIC CLASS (Phase 3.6/3.7) ---
         for prop in &eq.item.properties.enchanting {
@@ -263,7 +266,7 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
             // just as much as the weapon.
             lo.property_ids.push(prop.id);
             let before = lo.enchants.len();
-            apply_enchant(&mut lo, &prop.id, tier);
+            apply_enchant_with_rating(&mut lo, &prop.id, tier, item_rating_for_material);
             // Keep `enchant_property_ids` positionally aligned with `enchants`: an
             // enchant that produced a damage track records the property behind it.
             for _ in before..lo.enchants.len() {
@@ -354,6 +357,10 @@ fn profile_base(p: &WeaponProfile) -> f32 {
 /// Unknown families are ignored (they are cosmetic / out-of-combat / economy
 /// logics such as `SelfRepairOnFrostDamagePropertyLogic`).
 fn apply_enchant(lo: &mut Loadout, id: &Uuid, tier: u8) {
+    apply_enchant_with_rating(lo, id, tier, None);
+}
+
+fn apply_enchant_with_rating(lo: &mut Loadout, id: &Uuid, tier: u8, item_rating: Option<f32>) {
     let uuid = id.as_hyphenated().to_string();
     let Some(family) = gamedata::enchant_family(&uuid) else {
         return;
@@ -426,26 +433,25 @@ fn apply_enchant(lo: &mut Loadout, id: &Uuid, tier: u8) {
         "RevengePoisonPropertyLogic" => lo.revenge.push((DamageType::Poison, magnitude)),
 
         // ---- resistance ratings (Phase 3.4) --------------------------------
-        "ResistFirePropertyLogic" | "ResistFireMaterialPropertyLogic" => {
-            push_resist(lo, DamageType::Fire, magnitude)
+        "ResistFirePropertyLogic" => push_resist(lo, DamageType::Fire, magnitude),
+        "ResistFireMaterialPropertyLogic" => push_resist(lo, DamageType::Fire, material_magnitude(magnitude, item_rating)),
+        "ResistFrostPropertyLogic" => push_resist(lo, DamageType::Frost, magnitude),
+        "ResistFrostMaterialPropertyLogic" => push_resist(lo, DamageType::Frost, material_magnitude(magnitude, item_rating)),
+        "ResistShockPropertyLogic" => push_resist(lo, DamageType::Shock, magnitude),
+        "ResistShockMaterialPropertyLogic" => push_resist(lo, DamageType::Shock, material_magnitude(magnitude, item_rating)),
+        "ResistPoisonPropertyLogic" => push_resist(lo, DamageType::Poison, magnitude),
+        "ResistPoisonMaterialPropertyLogic" => push_resist(lo, DamageType::Poison, material_magnitude(magnitude, item_rating)),
+        "ResistSlashingPropertyLogic" => push_resist(lo, DamageType::Slashing, magnitude),
+        "ResistSlashingMaterialPropertyLogic" => {
+            push_resist(lo, DamageType::Slashing, material_magnitude(magnitude, item_rating))
         }
-        "ResistFrostPropertyLogic" | "ResistFrostMaterialPropertyLogic" => {
-            push_resist(lo, DamageType::Frost, magnitude)
+        "ResistCleavingPropertyLogic" => push_resist(lo, DamageType::Cleaving, magnitude),
+        "ResistCleavingMaterialPropertyLogic" => {
+            push_resist(lo, DamageType::Cleaving, material_magnitude(magnitude, item_rating))
         }
-        "ResistShockPropertyLogic" | "ResistShockMaterialPropertyLogic" => {
-            push_resist(lo, DamageType::Shock, magnitude)
-        }
-        "ResistPoisonPropertyLogic" | "ResistPoisonMaterialPropertyLogic" => {
-            push_resist(lo, DamageType::Poison, magnitude)
-        }
-        "ResistSlashingPropertyLogic" | "ResistSlashingMaterialPropertyLogic" => {
-            push_resist(lo, DamageType::Slashing, magnitude)
-        }
-        "ResistCleavingPropertyLogic" | "ResistCleavingMaterialPropertyLogic" => {
-            push_resist(lo, DamageType::Cleaving, magnitude)
-        }
-        "ResistBashingPropertyLogic" | "ResistBashingMaterialPropertyLogic" => {
-            push_resist(lo, DamageType::Bashing, magnitude)
+        "ResistBashingPropertyLogic" => push_resist(lo, DamageType::Bashing, magnitude),
+        "ResistBashingMaterialPropertyLogic" => {
+            push_resist(lo, DamageType::Bashing, material_magnitude(magnitude, item_rating))
         }
 
         // ---- block rating -------------------------------------------------
@@ -534,12 +540,20 @@ fn apply_enchant(lo: &mut Loadout, id: &Uuid, tier: u8) {
 /// Apply an item TEMPLATE's `mandatory_properties` (where every artifact effect
 /// lives) through [`apply_enchant`].
 pub(crate) fn apply_template_properties(lo: &mut Loadout, template: &str) {
+    apply_template_properties_with_rating(lo, template, None);
+}
+
+pub(crate) fn apply_template_properties_with_rating(
+    lo: &mut Loadout,
+    template: &str,
+    item_rating: Option<f32>,
+) {
     for (property_uuid, tier) in gamedata::mandatory_properties(template) {
         // The generated table stores the uuid as a string; `apply_enchant` keys on
         // `Uuid`. A malformed one is skipped rather than panicking — a bad row in a
         // 37k-line generated file must not take the arena down.
         if let Ok(id) = uuid::Uuid::parse_str(property_uuid) {
-            apply_enchant(lo, &id, *tier);
+            apply_enchant_with_rating(lo, &id, *tier, item_rating);
         }
     }
 }
@@ -604,6 +618,10 @@ fn push_shield_ravage(lo: &mut Loadout, ty: DamageType, magnitude: f32) {
 
 fn push_enchant(lo: &mut Loadout, ty: DamageType, tier: u8) {
     lo.enchants.push((ty, tier));
+}
+
+fn material_magnitude(magnitude: f32, item_rating: Option<f32>) -> f32 {
+    item_rating.map(|r| magnitude * r).unwrap_or(magnitude)
 }
 
 /// Bonus ranks a jewellery GRADING affix grants at `tier`.
@@ -1278,6 +1296,7 @@ mod tests {
     const WEAPON_POISON_DAMAGE: &str = "08ea75d0-5cf1-44a9-9816-d3c6740c4191";
     const FORTIFY_HEALTH: &str = "b4de8d1b-d8a1-4575-8517-c1e5800a7525";
     const RESIST_FIRE: &str = "464bedb7-a631-43b6-a2df-f65f089d39da";
+    const RESIST_FIRE_MATERIAL: &str = "11af0ed4-72de-4884-90d1-d465078247bc";
     const ELEM_PIERCE: &str = "98757a01-33b8-40ea-bb45-6acd89811ae3";
     /// `Powerful Block` — `PowerfulBlockPropertyLogic`. The ONLY one of the nine
     /// logic classes in the block-rating arm whose shipped curve is non-zero
@@ -1348,6 +1367,31 @@ mod tests {
         assert!((vers - 42.0).abs() < 1e-2, "versatile t10 = 42.0, got {vers}");
         assert!((heavy - 52.66).abs() < 1e-2, "heavy t10 = 52.66, got {heavy}");
         assert!(light < vers && vers < heavy, "light < versatile < heavy");
+    }
+
+    #[test]
+    fn material_resistance_multiplies_by_the_piece_rating() {
+        let id = Uuid::parse_str(RESIST_FIRE_MATERIAL).unwrap();
+        let magnitude = gamedata::enchant_magnitude(RESIST_FIRE_MATERIAL, 10).unwrap();
+        let mut l = lo();
+        apply_enchant_with_rating(&mut l, &id, 10, Some(230.4));
+        let got: f32 = l
+            .resistances
+            .iter()
+            .filter(|(ty, _)| *ty == DamageType::Fire)
+            .map(|(_, v)| *v)
+            .sum();
+        assert!((got - magnitude * 230.4).abs() < 0.01, "material resist is xValue x AR");
+
+        let mut control = lo();
+        apply_enchant(&mut control, &id, 10);
+        let unscaled: f32 = control
+            .resistances
+            .iter()
+            .filter(|(ty, _)| *ty == DamageType::Fire)
+            .map(|(_, v)| *v)
+            .sum();
+        assert!((unscaled - magnitude).abs() < 0.001, "direct calls keep the raw xValue fallback");
     }
 
     #[test]

@@ -21,7 +21,7 @@
 //! | quantity | before | now |
 //! |---|---|---|
 //! | weapon base | `weapon_base_for_level(level, Light)` | `gamedata::weapon().base_damage` + `tables::tempering_bonus` |
-//! | enchant | `13.73 × tier` (linear GUESS) | the family's own convex `_value` curve × [`tables::ENCHANT_DAMAGE_PER_VALUE`] |
+//! | enchant | `13.73 × tier` (linear GUESS) | the shipped per-element weapon table for the weapon class |
 //! | enchant drain | *always* an equal **Magicka** drain | `frostDamageToStaminaDamage` / `shockDamageToMagickaDamage` only |
 //! | armor | *not modelled* | `tables::armor_cut_share` after block and multipliers (01-D1) |
 //! | resistance | a flat loadout number | a **Resistance Rating** (Phase 3.4) |
@@ -569,15 +569,20 @@ impl RetailDamageModel {
 /// a cached copy silently desyncs whenever caller code sets `enchants` alone
 /// (which several engine tests do).
 fn enchant_tracks(attacker: &Loadout) -> Vec<(DamageType, f32)> {
+    let weight = attacker.weapon.weight.unwrap_or(tables::Weight::Light);
     attacker
         .enchants
         .iter()
-        .map(|(ty, tier)| (*ty, weapon_damage_family_value(*ty, *tier)))
+        .map(|(ty, tier)| (*ty, weapon_damage_family_value_for_weight(*ty, *tier, weight)))
         .collect()
 }
 
 /// The shipped `Weapon <Element> Damage` family for an element.
 pub fn weapon_damage_family_value(ty: DamageType, tier: u8) -> f32 {
+    weapon_damage_family_value_for_weight(ty, tier, tables::Weight::Light)
+}
+
+pub fn weapon_damage_family_value_for_weight(ty: DamageType, tier: u8, weight: tables::Weight) -> f32 {
     let family = match ty {
         DamageType::Fire => "c40ed851-8777-4d09-b169-0223dae8f67d",
         DamageType::Frost => "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
@@ -587,7 +592,7 @@ pub fn weapon_damage_family_value(ty: DamageType, tier: u8) -> f32 {
         DamageType::Magicka => "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
         _ => return 0.0,
     };
-    tables::enchant_damage(family, tier).unwrap_or(0.0)
+    super::gamedata::enchant_magnitude_for_weight(family, tier, weight).unwrap_or(0.0)
 }
 
 fn fortify_for(attacker: &Loadout, ty: DamageType) -> f32 {
@@ -1281,6 +1286,20 @@ mod tests {
         }
     }
 
+    fn poison_light_t10() -> f32 {
+        weapon_damage_family_value_for_weight(DamageType::Poison, 10, Weight::Light)
+    }
+
+    #[test]
+    fn weapon_damage_enchants_use_the_weight_specific_base_table() {
+        let light = weapon_damage_family_value_for_weight(DamageType::Fire, 10, Weight::Light);
+        let versatile = weapon_damage_family_value_for_weight(DamageType::Fire, 10, Weight::Versatile);
+        let heavy = weapon_damage_family_value_for_weight(DamageType::Fire, 10, Weight::Heavy);
+        assert!((light - 57.25).abs() < 0.01, "Fire t10 light = 57.25, got {light}");
+        assert!((versatile - 67.2).abs() < 0.01, "Fire t10 versatile = 67.2, got {versatile}");
+        assert!((heavy - 78.49).abs() < 0.01, "Fire t10 heavy = 78.49, got {heavy}");
+    }
+
     /// An un-armored, un-blocking L100 target.
     pub(super) fn target() -> Fighter {
         Fighter::new(1, 565, Loadout { level: 100, ..Default::default() }, Instant::now())
@@ -1559,7 +1578,7 @@ mod tests {
             &m.resolve_attack(&lo, &armored, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now),
             DamageType::Poison,
         );
-        assert!((poison - 137.32).abs() < 0.5, "armor is physical-only, got {poison}");
+        assert!((poison - poison_light_t10()).abs() < 0.5, "armor is physical-only, got {poison}");
         // Armor Piercing eats the rating.
         let mut piercer = poison_dagger();
         piercer.armor_piercing_rating = 301.8;
@@ -1577,7 +1596,7 @@ mod tests {
         let m = RetailDamageModel;
         let now = Instant::now();
         let rd = m.resolve_attack(&poison_dagger(), &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-        assert!((comp(&rd, DamageType::Poison) - 137.32).abs() < 0.5);
+        assert!((comp(&rd, DamageType::Poison) - poison_light_t10()).abs() < 0.5);
         assert_eq!(comp(&rd, DamageType::Magicka), 0.0, "Poison does NOT drain Magicka");
         assert_eq!(comp(&rd, DamageType::Stamina), 0.0, "Poison does NOT drain Stamina");
 
@@ -1718,9 +1737,9 @@ mod tests {
 
     /// The owner's match (gsid 45149845, 2026-09-25): every physical hit into an
     /// optimal block did exactly 0.0. There is no ×0: the same hit keeps what the
-    /// budget leaves. Poison dagger (Slashing 144 + Poison 137.32, both from shipped
-    /// data) into a Leather Shield T10 (R 720 optimal): 144 − 115.2 = 28.8 and
-    /// 137.32 − 59.04 = 78.28.
+    /// budget leaves. Poison dagger (Slashing 144 + tier-10 light Poison, both from
+    /// shipped data) into a Leather Shield T10 (R 720 optimal): 144 − 115.2 = 28.8
+    /// and the elemental track takes the PvP elemental block budget.
     #[test]
     fn an_optimal_block_does_not_zero_physical() {
         let m = RetailDamageModel;
@@ -1728,7 +1747,8 @@ mod tests {
         let lo = poison_dagger();
         let open = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
         assert!(close(comp(&open, DamageType::Slashing), 144.0));
-        assert!(close(comp(&open, DamageType::Poison), 137.32));
+        let poison_base = poison_light_t10();
+        assert!(close(comp(&open, DamageType::Poison), poison_base));
         assert!(!open.blocked);
 
         let def = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, false);
@@ -1736,16 +1756,28 @@ mod tests {
         assert!(opt.blocked);
         assert_ne!(opt.flags & flags::WAS_OPTIMAL_BLOCKING, 0);
         assert!(close(comp(&opt, DamageType::Slashing), 28.8), "{:?}", opt.components);
-        assert!(close(comp(&opt, DamageType::Poison), 78.28), "{:?}", opt.components);
+        let opt_poison = tables::block_cut(
+            poison_base,
+            poison_base,
+            def.block_rating(true),
+            tables::pvp_block_rating_factor(false),
+        );
+        assert!(close(comp(&opt, DamageType::Poison), opt_poison), "{:?}", opt.components);
         assert!(close(opt.block_physical, 28.8 / 144.0));
 
-        // The same guard, low: 144 − 57.6 and 137.32 − 29.52; no wire flag at all.
+        // The same guard, low: 144 − 57.6 plus the low elemental budget; no wire flag.
         let low_def = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, true);
         let low = m.resolve_attack(&lo, &low_def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
         assert!(low.blocked);
         assert_eq!(low.flags & (flags::WAS_OPTIMAL_BLOCKING | flags::WAS_LATE_BLOCKING), 0);
         assert!(close(comp(&low, DamageType::Slashing), 86.4));
-        assert!(close(comp(&low, DamageType::Poison), 107.8));
+        let low_poison = tables::block_cut(
+            poison_base,
+            poison_base,
+            low_def.block_rating(false),
+            tables::pvp_block_rating_factor(false),
+        );
+        assert!(close(comp(&low, DamageType::Poison), low_poison));
     }
 
     /// A block sets a Stamina or Magicka component to 0 outright
@@ -1896,14 +1928,15 @@ mod tests {
         tgt.loadout.resistances = vec![(DamageType::Poison, 40.0)];
         let now = Instant::now();
         let rd = m.resolve_attack(&poison_dagger(), &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-        assert!((comp(&rd, DamageType::Poison) - 97.32).abs() < 0.5);
+        let poison_base = poison_light_t10();
+        assert!((comp(&rd, DamageType::Poison) - (poison_base - 40.0)).abs() < 0.5);
         assert_eq!(rd.most_resisted, DamageType::Poison);
 
         let mut piercer = poison_dagger();
         piercer.elem_resist_piercing_rating = 25.0;
         let rd2 = m.resolve_attack(&piercer, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
         assert!(
-            (comp(&rd2, DamageType::Poison) - (137.32 - 15.0)).abs() < 0.5,
+            (comp(&rd2, DamageType::Poison) - (poison_base - 15.0)).abs() < 0.5,
             "piercing 25 of the 40 rating leaves 15, got {}",
             comp(&rd2, DamageType::Poison)
         );
@@ -1911,7 +1944,7 @@ mod tests {
         let mut wall = target();
         wall.loadout.resistances = vec![(DamageType::Poison, 100_000.0)];
         let rd3 = m.resolve_attack(&poison_dagger(), &wall, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-        assert!((comp(&rd3, DamageType::Poison) - 137.32 * 0.05).abs() < 0.5);
+        assert!((comp(&rd3, DamageType::Poison) - poison_base * 0.05).abs() < 0.5);
     }
 
     /// THE FORTIFY BUG — EDIR's twin, on the same frost build.
@@ -2014,11 +2047,12 @@ mod tests {
         tgt.loadout.weaknesses = vec![(DamageType::Poison, 50.0)];
         let now = Instant::now();
         let rd = m.resolve_attack(&poison_dagger(), &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-        assert!((comp(&rd, DamageType::Poison) - 187.32).abs() < 0.5);
+        let poison_base = poison_light_t10();
+        assert!((comp(&rd, DamageType::Poison) - (poison_base + 50.0)).abs() < 0.5);
         let mut huge = target();
         huge.loadout.weaknesses = vec![(DamageType::Poison, 100_000.0)];
         let rd2 = m.resolve_attack(&poison_dagger(), &huge, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-        assert!((comp(&rd2, DamageType::Poison) - 137.32 * 2.0).abs() < 0.5, "capped at ×2");
+        assert!((comp(&rd2, DamageType::Poison) - poison_base * 2.0).abs() < 0.5, "capped at ×2");
     }
 
     #[test]
@@ -2031,7 +2065,7 @@ mod tests {
         let health_sum: f32 = rd.components.iter().filter(|(t, _)| is_health_type(*t)).map(|(_, v)| *v).sum();
         assert!((rd.total - health_sum).abs() < 1e-3);
         // The total is the exact Σ of components — no clamp scaling anywhere.
-        let expect = 144.0 * 1.54 + 137.32;
+        let expect = 144.0 * 1.54 + poison_light_t10();
         assert!((rd.total - expect).abs() < 1.0, "unclamped total {} != {expect}", rd.total);
     }
 
@@ -2079,8 +2113,9 @@ mod tests {
 
     /// `continuousDamageBlockingEffectiveness == 1`, while resistance IS de-rated to
     /// 0.75 for continuous damage. And a StatusEffect (4) DoT is never blocked at all
-    /// (`Damage$$IsBlockable@0x1bd4cc8`): it keeps 137.32 − 0.75 × 40 = 107.32 into a
-    /// raised guard, where the direct hit loses the block budget and the full 40.
+    /// (`Damage$$IsBlockable@0x1bd4cc8`): it keeps the poison tick outside the
+    /// guard budget, with resistance de-rated to continuous-damage effectiveness,
+    /// where the direct hit loses the block budget and the full 40.
     #[test]
     fn a_status_effect_dot_is_not_blocked_and_its_resistance_is_derated() {
         assert_eq!(combat_params::CONTINUOUS_DAMAGE_BLOCKING_EFFECTIVENESS, 1.0);
@@ -2099,10 +2134,18 @@ mod tests {
         let dot = m.resolve_attack(&poison_dagger(), &tgt, DamageSource::StatusEffect, ActiveSide::Right, 1.0, 0, now);
         let hit = m.resolve_attack(&poison_dagger(), &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
         assert!(!dot.blocked);
-        assert!((comp(&dot, DamageType::Poison) - 107.32).abs() < 0.01);
+        let poison_base = poison_light_t10();
+        let dot_poison = tables::apply_resistance_and_weakness(poison_base, 40.0, 0.0, 0.75, 0.0);
+        assert!((comp(&dot, DamageType::Poison) - dot_poison).abs() < 0.01);
         assert!(hit.blocked);
-        // 137.32 − 59.04 (optimal elemental budget) − 40 = 38.28.
-        assert!((comp(&hit, DamageType::Poison) - 38.28).abs() < 0.01);
+        let blocked_poison = tables::block_cut(
+            poison_base,
+            poison_base,
+            tgt.block_rating(true),
+            tables::pvp_block_rating_factor(false),
+        );
+        let hit_poison = tables::apply_resistance_and_weakness(blocked_poison, 40.0, 0.0, 1.0, 0.0);
+        assert!((comp(&hit, DamageType::Poison) - hit_poison).abs() < 0.01);
     }
 
     // -----------------------------------------------------------------------
