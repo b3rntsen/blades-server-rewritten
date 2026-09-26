@@ -573,7 +573,9 @@ impl RetailDamageModel {
 /// a cached copy silently desyncs whenever caller code sets `enchants` alone
 /// (which several engine tests do).
 fn enchant_tracks(attacker: &Loadout) -> Vec<(DamageType, f32)> {
-    let weight = attacker.weapon.weight.unwrap_or(tables::Weight::Light);
+    let Some(weight) = attacker.weapon.weight else {
+        return Vec::new();
+    };
     attacker
         .enchants
         .iter()
@@ -985,17 +987,17 @@ fn finish_resolved(
             }
         }
     }
+    for (ty, v) in components.iter_mut() {
+        if *v > 0.0 {
+            *v *= attacker.innate_damage_multiplier(*ty, source);
+        }
+    }
     if single_impact {
         for (ty, v) in components.iter_mut() {
             if is_elemental(*ty) && *v > 0.0 {
                 *v += (attacker.perks.element_bonus(*ty) + fortify_for(attacker, *ty))
                     * fortify_scale;
             }
-        }
-    }
-    for (ty, v) in components.iter_mut() {
-        if *v > 0.0 {
-            *v *= attacker.innate_damage_multiplier(*ty, source);
         }
     }
 
@@ -1302,6 +1304,19 @@ mod tests {
     }
 
     #[test]
+    fn weapon_damage_enchants_pay_nothing_without_a_weapon_class() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let mut unarmed = plain_blade(Weight::Light);
+        unarmed.weapon.weight = None;
+        unarmed.enchants = vec![(DamageType::Fire, 10)];
+
+        let hit = m.resolve_attack(&unarmed, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+
+        assert_eq!(comp(&hit, DamageType::Fire), 0.0);
+    }
+
+    #[test]
     fn racial_damage_factor_and_base_resistance_apply_before_flat_mitigation() {
         let m = RetailDamageModel;
         let now = Instant::now();
@@ -1326,6 +1341,18 @@ mod tests {
         });
         let resisted = m.resolve_attack(&frost, &nord, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
         assert!((comp(&resisted, DamageType::Frost) - 85.0).abs() < 0.01);
+
+        let mut fire = plain_blade(Weight::Light);
+        fire.weapon.base_by_type = vec![(DamageType::Fire, 100.0)];
+        fire.perks.element_damage.push((DamageType::Fire, 10.0));
+        fire.innate_damage_factors.push(super::super::state::InnateDamageFactor {
+            damage_types: vec![DamageType::Fire],
+            damage_sources: Vec::new(),
+            weapon_class: None,
+            factor: 0.05,
+        });
+        let ordered = m.resolve_attack(&fire, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        assert!((comp(&ordered, DamageType::Fire) - 115.0).abs() < 0.01);
     }
 
     /// An un-armored, un-blocking L100 target.

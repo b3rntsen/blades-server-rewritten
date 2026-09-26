@@ -699,7 +699,9 @@ fn curve_fraction(family: &'static gamedata::EnchantFamily, tier: u8) -> f32 {
 
 /// Record one Ravage family on the loadout, at the magnitude for this weapon's weight.
 fn push_ravage(lo: &mut Loadout, ty: DamageType, uuid: &str, tier: u8) {
-    let weight = lo.weapon.weight.unwrap_or(tables::Weight::Light);
+    let Some(weight) = lo.weapon.weight else {
+        return;
+    };
     let Some(magnitude) = gamedata::enchant_magnitude_for_weight(uuid, tier, weight) else {
         return;
     };
@@ -1467,6 +1469,15 @@ mod tests {
         assert!((vers - 42.0).abs() < 1e-2, "versatile t10 = 42.0, got {vers}");
         assert!((heavy - 52.66).abs() < 1e-2, "heavy t10 = 52.66, got {heavy}");
         assert!(light < vers && vers < heavy, "light < versatile < heavy");
+    }
+
+    #[test]
+    fn weapon_ravage_pays_nothing_without_a_weapon_class() {
+        let id = Uuid::parse_str("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07").unwrap();
+        let mut l = lo();
+        l.weapon.weight = None;
+        apply_enchant_with_rating(&mut l, &id, 10, None);
+        assert!(l.ravage.is_empty(), "class-None weapon enchants have no authored track");
     }
 
     #[test]
