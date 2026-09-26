@@ -3051,7 +3051,10 @@ pub struct PendingEcho {
     pub sender: usize,
     pub target: usize,
     pub damage: f32,
+    pub damage_type: DamageType,
+    pub active_side: ActiveSide,
     pub due: Instant,
+    pub expires_at: Instant,
 }
 
 #[derive(Debug, Clone)]

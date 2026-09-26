@@ -387,6 +387,24 @@ pub fn ships_damage(ability_uuid: &str, level: u8) -> bool {
 pub struct RetailDamageModel;
 
 impl RetailDamageModel {
+    /// Resolve a flat generic damage event through the shared mitigation pipeline.
+    ///
+    /// Echo Weapon and Wall of Fire ship already-computed flat magnitudes; they still
+    /// need the same block/resistance/negation-facing shape as ordinary damage.
+    pub(super) fn resolve_flat(
+        &self,
+        attacker: &Loadout,
+        target: &Fighter,
+        source: DamageSource,
+        active_side: ActiveSide,
+        damage_type: DamageType,
+        amount: f32,
+        now: Instant,
+    ) -> ResolvedDamage {
+        let mut components = vec![(damage_type, amount.max(0.0))];
+        finish_resolved(attacker, target, source, active_side, &mut components, now, 1.0)
+    }
+
     /// The attacker's per-type PHYSICAL base **after** the defender's Armor Rating,
     /// before the swing/combo factor. [Phase 3.3 — see the module doc for why armor
     /// lands here and not after the multiplier.]

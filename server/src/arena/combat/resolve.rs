@@ -2029,6 +2029,25 @@ fn uuid_reckless_fury() -> &'static str {
         .unwrap_or("")
 }
 
+fn is_firewall_ability(ability_uuid: &str) -> bool {
+    super::gamedata::ability(ability_uuid).is_some_and(|a| a.editor_name == "Firewall")
+}
+
+fn spell_effectiveness_at_cast(
+    combat: &MatchCombat,
+    caster: usize,
+    magicka_full_at_cast: bool,
+) -> f32 {
+    let Some(fighter) = combat.fighters.get(caster) else {
+        return 1.0;
+    };
+    let caster_perks = super::perks::CasterPerks {
+        magicka_full: magicka_full_at_cast,
+        ..super::perks::CasterPerks::of(fighter)
+    };
+    caster_perks.magnitude_multiplier(true)
+}
+
 /// The flat bonus damage a MANEUVER rank contributes to its swing, grip applied.
 ///
 /// Every maneuver rank ships `parameters.bonusDamage` together with
@@ -2278,6 +2297,11 @@ fn apply_ability_impact(
             }
         }
         AbilityTag::Paralyze | AbilityTag::Damage | AbilityTag::Generic
+            if is_firewall_ability(ability_uuid) =>
+        {
+            debug!("combat: slot {sender} Wall of Fire arms without an immediate hit");
+        }
+        AbilityTag::Paralyze | AbilityTag::Damage | AbilityTag::Generic
             if !super::damage::ships_damage(ability_uuid, level) =>
         {
             // This ability ships neither `_damage` nor `_damagePerSecond`. Resolving it
@@ -2389,7 +2413,8 @@ fn apply_ability_impact(
     // (`apply_caster_begin_effects` in `resolve_ability_cast`).
     out.extend(apply_shipped_effects_phased(
         combat, sender, target_slot, ability_uuid, level, last_hit_total, target_blocked,
-        target_absorbing, tag != AbilityTag::Maneuver, now,
+        target_absorbing, tag != AbilityTag::Maneuver,
+        spell_effectiveness_at_cast(combat, sender, magicka_full_at_cast), now,
     ));
     out
 }
@@ -2497,10 +2522,8 @@ fn begin_ability_guard(
 
 /// Deliver **Echo Weapon** echoes whose `_weaponDelay` has elapsed.
 ///
-/// An echo is a flat follow-up, not a re-swing: it carries the spell's per-weapon-class
-/// `_bonusDamages` and nothing else — no combo, no charge, no block interaction. It is
-/// therefore emitted directly rather than routed back through the swing resolver,
-/// which would re-apply the whole multiplier chain to it.
+/// An echo is a flat follow-up, not a re-swing: it carries the spell's
+/// per-weapon-class `_bonusDamages` as source 9 through the generic mitigation path.
 fn land_due_echoes(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
     if combat.pending_echoes.is_empty() {
         return Vec::new();
@@ -2523,36 +2546,24 @@ fn land_due_echoes(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
         if combat.fighters[e.target].is_dead() || combat.fighters[e.sender].is_dead() {
             continue;
         }
-        combat.fighters[e.target].take_damage_at(e.damage.round().max(0.0) as u32, now);
-        let msg = {
-            let hit = &combat.fighters[e.target];
-            let other = &combat.fighters[e.sender];
-            messages::receive_damage(
-                hit.net_object_id,
-                NetObjectType::Avatar as u8,
-                hit.packed_stats(),
-                other.packed_stats(),
-                super::state::DamageSource::Spell,
-                super::damage::flags::SHOW_DAMAGE
-                    | super::damage::flags::HAS_ATTACKER
-                    | hit.optimal_block_flag(now),
-                e.damage,
-                0,
-                ActiveSide::Middle,
-                super::state::DamageType::None,
-                &[(super::state::DamageType::Health, e.damage)],
-            )
-        };
+        if now > e.expires_at {
+            continue;
+        }
+        let attacker = combat.fighters[e.sender].loadout.clone();
+        let resolved = RetailDamageModel.resolve_flat(
+            &attacker,
+            &combat.fighters[e.target],
+            super::state::DamageSource::EchoWeapon,
+            e.active_side,
+            e.damage_type,
+            e.damage,
+            now,
+        );
         info!(
             "combat: slot {} ECHO landed {:.1} on slot {}",
             e.sender, e.damage, e.target
         );
-        for v in 0..combat.fighters.len() {
-            out.push((v, msg.clone()));
-        }
-        if combat.fighters[e.target].is_dead() {
-            out.extend(on_round_ending_death(combat, e.sender, now));
-        }
+        out.extend(emit_damage(combat, e.sender, e.target, &resolved, now));
     }
     out
 }
@@ -2716,7 +2727,7 @@ fn apply_shipped_effects(
 ) -> Vec<(usize, Vec<u8>)> {
     apply_shipped_effects_phased(
         combat, caster, target_slot, ability_uuid, level, last_hit_total, target_blocked,
-        target_absorbing, true, now,
+        target_absorbing, true, 1.0, now,
     )
 }
 
@@ -2841,6 +2852,7 @@ fn apply_shipped_effects_phased(
     target_absorbing: bool,
     // Run [`apply_caster_begin_effects`] too (false when the cast already did).
     include_begin: bool,
+    effectiveness: f32,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
     use super::state::{DamageNegationSource, NegationPool, StatusEffectType};
@@ -2914,7 +2926,8 @@ fn apply_shipped_effects_phased(
         if caster < viewers && super::gamedata::ability(ability_uuid)
             .is_some_and(|a| a.editor_name == "Firewall")
         {
-            let secs = r.duration().unwrap_or(0.0);
+            let dmg = dmg * effectiveness;
+            let secs = r.duration().unwrap_or(0.0) * effectiveness;
             let self_pct = r
                 .get(super::gamedata::AbilityField::SelfDamagePercent)
                 .unwrap_or(0.0);
@@ -2942,7 +2955,7 @@ fn apply_shipped_effects_phased(
     // implemented: the spell produced no echoes at all.
     if let Some(delay) = r.get(super::gamedata::AbilityField::WeaponDelay) {
         if caster < viewers {
-            let secs = r.duration().unwrap_or(0.0);
+            let secs = r.duration().unwrap_or(0.0) * effectiveness;
             let class_raw = combat.fighters[caster]
                 .loadout
                 .weapon_template
@@ -2952,9 +2965,9 @@ fn apply_shipped_effects_phased(
                 .bonus_damages
                 .iter()
                 .find(|(c, _)| *c == class_raw)
-                .or_else(|| r.bonus_damages.iter().find(|(c, _)| *c == 0))
                 .map(|(_, v)| *v)
-                .unwrap_or(0.0);
+                .unwrap_or(0.0)
+                * effectiveness;
             if bonus > 0.0 && secs > 0.0 {
                 let f = &mut combat.fighters[caster];
                 f.echo_until = Some(now + Duration::from_secs_f32(secs));
@@ -3321,6 +3334,107 @@ fn try_paralyze(
     out
 }
 
+fn echo_damage_type(loadout: &super::state::Loadout) -> super::state::DamageType {
+    loadout
+        .weapon
+        .primary_type
+        .or_else(|| loadout.weapon.base_by_type.first().map(|(ty, _)| *ty))
+        .unwrap_or(super::state::DamageType::Slashing)
+}
+
+fn queue_echo_weapon(
+    combat: &mut MatchCombat,
+    attacker_slot: usize,
+    target_slot: usize,
+    resolved: &ResolvedDamage,
+    now: Instant,
+) {
+    if !matches!(
+        resolved.source,
+        super::state::DamageSource::Attack | super::state::DamageSource::WeaponManeuver
+    ) {
+        return;
+    }
+    let Some(until) = combat.fighters[attacker_slot].echo_until else {
+        return;
+    };
+    if now >= until {
+        return;
+    }
+    let f = &combat.fighters[attacker_slot];
+    let (bonus, delay) = (f.echo_bonus, f.echo_delay);
+    if bonus <= 0.0 || delay < 0.0 {
+        return;
+    }
+    let due = now + Duration::from_secs_f32(delay);
+    if due > until {
+        return;
+    }
+    combat.pending_echoes.push(super::state::PendingEcho {
+        sender: attacker_slot,
+        target: target_slot,
+        damage: bonus,
+        damage_type: echo_damage_type(&combat.fighters[attacker_slot].loadout),
+        active_side: resolved.active_side,
+        due,
+        expires_at: until,
+    });
+}
+
+fn wall_of_fire_trigger_source(source: super::state::DamageSource) -> bool {
+    matches!(
+        source,
+        super::state::DamageSource::Attack
+            | super::state::DamageSource::WeaponManeuver
+            | super::state::DamageSource::ShieldManeuver
+    )
+}
+
+fn apply_wall_of_fire_burns(
+    combat: &mut MatchCombat,
+    attacker_slot: usize,
+    triggering_source: super::state::DamageSource,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    if !wall_of_fire_trigger_source(triggering_source) || attacker_slot >= combat.fighters.len() {
+        return Vec::new();
+    }
+    let burns: Vec<(usize, f32)> = combat
+        .fighters
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| !f.is_dead() && f.firewall_until.is_some_and(|t| now < t))
+        .filter_map(|(owner, f)| {
+            let factor = if owner == attacker_slot { f.firewall_self_pct } else { 1.0 };
+            let burn = f.firewall_damage * factor;
+            (burn > 0.0).then_some((owner, burn))
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (owner, burn) in burns {
+        if combat.fighters[attacker_slot].is_dead()
+            || !matches!(combat.phase, FlowState::StateTimeout)
+        {
+            break;
+        }
+        let attacker_loadout = combat.fighters[owner].loadout.clone();
+        let resolved = RetailDamageModel.resolve_flat(
+            &attacker_loadout,
+            &combat.fighters[attacker_slot],
+            super::state::DamageSource::Spell,
+            ActiveSide::Middle,
+            super::state::DamageType::Fire,
+            burn,
+            now,
+        );
+        info!(
+            "combat: slot {attacker_slot} triggered slot {owner}'s WALL OF FIRE for {burn:.1}"
+        );
+        out.extend(emit_damage(combat, owner, attacker_slot, &resolved, now));
+    }
+    out
+}
+
 /// Apply a resolved hit: drain negation, decrement the target (unless wholly negated),
 /// record elemental conditioning + land status effects, build the `ReceiveDamage` (or
 /// `DamageNegated`) for both players, and end the match if the target died.
@@ -3385,6 +3499,8 @@ fn emit_damage(
         ));
     }
 
+    queue_echo_weapon(combat, attacker_slot, target_slot, resolved, now);
+
     if neg.negated {
         let defender_obj = combat.fighters[target_slot].net_object_id;
         info!(
@@ -3395,6 +3511,7 @@ fn emit_damage(
         let frame = messages::damage_negated(defender_obj);
         out.push((target_slot, frame.clone()));
         out.push((attacker_slot, frame));
+        out.extend(apply_wall_of_fire_burns(combat, attacker_slot, resolved.source, now));
         return out;
     }
 
@@ -3481,68 +3598,9 @@ fn emit_damage(
     // Paralyze poison→paralyse layering. [status-resistance-spec §5]
     out.extend(apply_status_conditioning(combat, target_slot, &components, now));
 
-    // The DEFENDER's gear hits back. Emitted after the hit that provoked it and
-    // before any death check, so a Revenge proc can itself be the killing blow —
-    // which is how retail orders it (`op50 blocked` then `op50 src=Revenge`).
-    // WALL OF FIRE: an attacker who lands a hit has "passed through" the wall and is
-    // burned for its per-attack `_damage`; the caster pays `_selfDamagePercent` of
-    // that for standing in their own fire.
-    if attacker_slot != target_slot
-        && combat.fighters[target_slot].firewall_until.is_some_and(|t| now < t)
-    {
-        let burn = combat.fighters[target_slot].firewall_damage;
-        if burn > 0.0 {
-            let self_hit = burn * combat.fighters[target_slot].firewall_self_pct;
-            combat.fighters[attacker_slot].take_damage_at(burn.round().max(0.0) as u32, now);
-            if self_hit > 0.0 {
-                let f = &mut combat.fighters[target_slot];
-                // The caster's own fire never kills them outright: floor at 1.
-                let cost = self_hit.round().max(0.0) as u32;
-                f.health = f.health.saturating_sub(cost).max(1.min(f.health));
-            }
-            let msg = {
-                let hit = &combat.fighters[attacker_slot];
-                let other = &combat.fighters[target_slot];
-                messages::receive_damage(
-                    hit.net_object_id,
-                    NetObjectType::Avatar as u8,
-                    hit.packed_stats(),
-                    other.packed_stats(),
-                    super::state::DamageSource::StatusEffect,
-                    super::damage::flags::SHOW_DAMAGE | hit.optimal_block_flag(now),
-                    burn,
-                    0,
-                    ActiveSide::None,
-                    super::state::DamageType::Fire,
-                    &[(super::state::DamageType::Fire, burn)],
-                )
-            };
-            info!(
-                "combat: slot {attacker_slot} walked through slot {target_slot}'s WALL OF \
-                 FIRE for {burn:.1} (caster self {self_hit:.1})"
-            );
-            for v in 0..combat.fighters.len() {
-                out.push((v, msg.clone()));
-            }
-        }
-    }
-
-    // ECHO WEAPON: the attacker's landed weapon hit is echoed after `_weaponDelay`.
-    // Only a real weapon swing echoes — an echo cannot echo itself, and a spell is
-    // not a weapon.
-    if resolved.source == super::state::DamageSource::Attack
-        && combat.fighters[attacker_slot].echo_until.is_some_and(|t| now < t)
-    {
-        let f = &combat.fighters[attacker_slot];
-        let (bonus, delay) = (f.echo_bonus, f.echo_delay);
-        if bonus > 0.0 {
-            combat.pending_echoes.push(super::state::PendingEcho {
-                sender: attacker_slot,
-                target: target_slot,
-                damage: bonus,
-                due: now + Duration::from_secs_f32(delay),
-            });
-        }
+    out.extend(apply_wall_of_fire_burns(combat, attacker_slot, resolved.source, now));
+    if !matches!(combat.phase, FlowState::StateTimeout) {
+        return out;
     }
 
     // REFLECTING BASH: send part of what just landed back at the attacker, capped by
@@ -8825,6 +8883,20 @@ mod shipped_effects_tests {
             .count()
     }
 
+    fn op50_sources(out: &[(usize, Vec<u8>)]) -> Vec<(i64, i64, Vec<i64>)> {
+        out.iter()
+            .filter(|(v, f)| *v == 0 && messages::user_message_gmid(f) == Some(50))
+            .map(|(_, f)| {
+                let nd = arena_proto::parse_netdata(&f[2..]);
+                let n = nd.int(12).unwrap_or(0);
+                let tys = (0..n)
+                    .map(|k| nd.int(13 + 2 * k as u8).unwrap_or(-1))
+                    .collect();
+                (nd.int(0).unwrap_or(-1), nd.int(6).unwrap_or(-1), tys)
+            })
+            .collect()
+    }
+
     fn physical_weapon(c: &mut MatchCombat, weight: Weight, has_shield: bool, base: f32) {
         c.fighters[0].loadout.weapon = WeaponProfile {
             primary_type: Some(DamageType::Slashing),
@@ -8950,6 +9022,140 @@ mod shipped_effects_tests {
         let got = c.fighters[0].transient_all_resistance[0].0;
         let want = 250.0 * 1.2 * 1.2;
         assert!((got - want).abs() < 0.01, "got {got}, want {want}");
+    }
+
+    #[test]
+    fn wall_of_fire_has_no_cast_hit_and_burns_the_attacker() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let wall = equip(&mut c, "Firewall");
+        let cast = cast_equipped(&mut c, wall, now);
+        assert_eq!(op50_count(&cast), 0, "Wall of Fire arms without an immediate hit");
+        assert!(c.fighters[0].firewall_until.is_some());
+
+        let attacker_hp = c.fighters[1].health;
+        let resolved = RetailDamageModel.resolve_attack(
+            &c.fighters[1].loadout,
+            &c.fighters[0],
+            super::super::state::DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        let out = emit_damage(&mut c, 1, 0, &resolved, now);
+        assert!(
+            c.fighters[1].health < attacker_hp,
+            "the attacker burns even though the wall belongs to slot 0",
+        );
+        assert!(
+            op50_sources(&out)
+                .iter()
+                .any(|(_, source, tys)| *source == super::super::state::DamageSource::Spell as i64
+                    && tys.contains(&(DamageType::Fire as i64))),
+            "the burn is a Spell-source Fire op50",
+        );
+    }
+
+    #[test]
+    fn wall_of_fire_owner_pays_twenty_percent_for_own_attacks() {
+        let now = Instant::now();
+        let mut owner_attacks = combat2(now);
+        let wall = equip(&mut owner_attacks, "Firewall");
+        let _ = cast_equipped(&mut owner_attacks, wall, now);
+        let owner_hp = owner_attacks.fighters[0].health;
+        let resolved = RetailDamageModel.resolve_attack(
+            &owner_attacks.fighters[0].loadout,
+            &owner_attacks.fighters[1],
+            super::super::state::DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        let _ = emit_damage(&mut owner_attacks, 0, 1, &resolved, now);
+        let self_loss = owner_hp - owner_attacks.fighters[0].health;
+
+        let mut opponent_attacks = combat2(now);
+        let wall = equip(&mut opponent_attacks, "Firewall");
+        let _ = cast_equipped(&mut opponent_attacks, wall, now);
+        let opponent_hp = opponent_attacks.fighters[1].health;
+        let resolved = RetailDamageModel.resolve_attack(
+            &opponent_attacks.fighters[1].loadout,
+            &opponent_attacks.fighters[0],
+            super::super::state::DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        let _ = emit_damage(&mut opponent_attacks, 1, 0, &resolved, now);
+        let opponent_loss = opponent_hp - opponent_attacks.fighters[1].health;
+
+        assert!(self_loss > 0, "owner attacks pay the self-burn");
+        assert!(opponent_loss > self_loss * 3, "opponent burn is the full wall damage");
+    }
+
+    #[test]
+    fn echo_weapon_lands_source_nine_with_weapon_type() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0].max_magicka = 1000;
+        c.fighters[0].magicka = 1000;
+        let echo = equip(&mut c, "EchoWeapon");
+        let _ = cast_equipped(&mut c, echo, now);
+        let resolved = RetailDamageModel.resolve_attack(
+            &c.fighters[0].loadout,
+            &c.fighters[1],
+            super::super::state::DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        let first = emit_damage(&mut c, 0, 1, &resolved, now);
+        assert_eq!(c.pending_echoes.len(), 1, "the weapon hit queues one echo");
+        assert!(
+            op50_sources(&first)
+                .iter()
+                .all(|(_, source, _)| *source != super::super::state::DamageSource::EchoWeapon as i64),
+            "the echo is delayed, not inline",
+        );
+        let landed = land_due_echoes(&mut c, now + Duration::from_millis(500));
+        assert!(
+            op50_sources(&landed)
+                .iter()
+                .any(|(_, source, tys)| *source == super::super::state::DamageSource::EchoWeapon as i64
+                    && tys.contains(&(DamageType::Slashing as i64))),
+            "echo op50 is source 9 with the weapon damage type",
+        );
+    }
+
+    #[test]
+    fn echo_weapon_triggers_on_weapon_maneuvers_and_drops_the_tail_window() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0].max_magicka = 1000;
+        c.fighters[0].magicka = 1000;
+        let echo = equip(&mut c, "EchoWeapon");
+        let _ = cast_equipped(&mut c, echo, now);
+        let resolved = RetailDamageModel.resolve_attack(
+            &c.fighters[0].loadout,
+            &c.fighters[1],
+            super::super::state::DamageSource::WeaponManeuver,
+            ActiveSide::Middle,
+            1.0,
+            0,
+            now,
+        );
+        let _ = emit_damage(&mut c, 0, 1, &resolved, now);
+        assert_eq!(c.pending_echoes.len(), 1, "WeaponManeuver source 3 queues echo");
+
+        c.pending_echoes.clear();
+        c.fighters[0].echo_until = Some(now + Duration::from_millis(400));
+        c.fighters[0].echo_delay = 0.5;
+        let _ = emit_damage(&mut c, 0, 1, &resolved, now);
+        assert!(c.pending_echoes.is_empty(), "hits whose echo would land after expiry are dropped");
     }
 
     /// Reckless Fury is a BUFF: it ships bonusDamage 0 with both multipliers 0, so it
