@@ -456,6 +456,8 @@ struct AbyssProgressWire {
 #[serde(rename_all = "camelCase")]
 struct UpdateAbyssResponse {
     abyss_future_rewards: Vec<AbyssFutureRewardWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    abyss_dungeon_generated_data: Option<AbyssDungeonGeneratedData>,
     character: CompleteCharacterWithIdWithoutData,
     abyss_progress: AbyssProgressWire,
     inventory: CompleteInventoryUpdate,
@@ -504,6 +506,8 @@ pub async fn update_abyss(
                 let revive_count = run.revive_count;
                 let future_rewards =
                     build_future_rewards(run.score, u64::from(entry.character.0.level), run.seed);
+                let abyss_dungeon_generated_data =
+                    active_floor_generated_data(&app_state.game_data, run);
                 apply_combat_durability(&body.actions, &mut entry.inventory.0, &mut tracker);
                 let consumed = apply_item_consumption(
                     &body.actions,
@@ -538,6 +542,7 @@ pub async fn update_abyss(
 
                 Ok::<_, BladeApiError>(Json(UpdateAbyssResponse {
                     abyss_future_rewards: future_rewards,
+                    abyss_dungeon_generated_data,
                     character: CompleteCharacterWithIdWithoutData {
                         id: character_id,
                         character: entry.character.0,
@@ -551,6 +556,7 @@ pub async fn update_abyss(
                 Ok::<_, BladeApiError>(Json(UpdateAbyssResponse {
                     // No active run: nothing to advertise against.
                     abyss_future_rewards: Vec::new(),
+                    abyss_dungeon_generated_data: None,
                     character: CompleteCharacterWithIdWithoutData {
                         id: character_id,
                         character: entry.character.0,
@@ -992,6 +998,26 @@ fn build_generated_data(
         slice.difficulty_level as i64,
         0,
     )
+}
+
+fn active_floor_generated_data(
+    game_data: &blades_lib::game_data::GameData,
+    run: &AbyssRun,
+) -> Option<AbyssDungeonGeneratedData> {
+    run.slices
+        .get(run.current_floor_index)
+        .and_then(|slice| {
+            blades_lib::util::dungeon::generate_for_dungeon(
+                game_data,
+                &slice.dungeon_settings_id,
+                slice.difficulty_level as i64,
+                0,
+            )
+        })
+        .map(|inner| AbyssDungeonGeneratedData {
+            quest_id: Uuid::parse_str(ABYSS_QUEST_ID).unwrap(),
+            inner,
+        })
 }
 
 fn abyss_enemy_key(
@@ -2219,6 +2245,55 @@ mod tests {
             23,
             "floor 1 at offset 0: 18 × 1.25 = 22.5 → 23"
         );
+    }
+
+    #[test]
+    fn update_after_floor_completion_advertises_the_new_floors_generated_data() {
+        let gd = game_data();
+        let sd = real_static_abyss();
+        let floor_1 = "663053f0-3a46-4012-b004-6cb2e907f33c";
+        let floor_76 = "65375990-e5b3-41cf-b5d3-cbe2c740cb1d";
+        let mut run = run_from(&[(1, 10), (76, 400)], 10);
+        run.slices[0].dungeon_settings_id = Uuid::parse_str(floor_1).unwrap();
+        run.slices[1].dungeon_settings_id = Uuid::parse_str(floor_76).unwrap();
+        run.current_floor_index = 0;
+
+        let before = active_floor_generated_data(&gd, &run).expect("floor 1 generated data");
+        assert!(
+            before
+                .inner
+                .enemy_generated_data
+                .contains_key(&Uuid::parse_str("c41668b3-ad8b-42b4-ba5d-a0574039a3cc").unwrap()),
+            "control: c416... is a floor-1 spawn group"
+        );
+
+        apply_actions(
+            &sd,
+            &mut run,
+            &parse_actions(serde_json::json!([{"type": "abyss_slice_completed", "time": 1}])),
+        );
+
+        let after = active_floor_generated_data(&gd, &run).expect("floor 76 generated data");
+        assert_eq!(run.current_floor_index, 1);
+        assert!(
+            !after
+                .inner
+                .enemy_generated_data
+                .contains_key(&Uuid::parse_str("c41668b3-ad8b-42b4-ba5d-a0574039a3cc").unwrap()),
+            "floor 76 must not keep advertising floor-1 enemy ids"
+        );
+        let expected: std::collections::HashSet<_> = gd
+            .dungeons
+            .get(&Uuid::parse_str(floor_76).unwrap())
+            .unwrap()
+            .spawn_info
+            .enemy_spawn_groups
+            .keys()
+            .copied()
+            .collect();
+        let got: std::collections::HashSet<_> =
+            after.inner.enemy_generated_data.keys().copied().collect();
+        assert_eq!(got, expected);
     }
 
     /// A body carrying a floor's last kill AND its `abyss_slice_completed` credits the
