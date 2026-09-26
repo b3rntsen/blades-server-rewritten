@@ -407,6 +407,11 @@ pub struct MatchInstance {
     /// One bit per fighter: its current server-authoritative profile has already been
     /// relayed to the opponent during this between-round walk.
     interround_profiles_sent: Vec<bool>,
+    /// A loadout a HUMAN fighter saved on the between-rounds `ChooseLoadout` screen,
+    /// rebuilt from its character row by the `POST /loadouts/current` handler and
+    /// waiting to be adopted at the next between-rounds beat (report #232). See
+    /// [`Self::stage_between_rounds_loadout`].
+    staged_loadouts: Vec<Option<Loadout>>,
 }
 
 impl MatchInstance {
@@ -451,6 +456,75 @@ impl MatchInstance {
             skip_state_requested: std::collections::BTreeSet::new(),
             interround_profile_round: None,
             interround_profiles_sent: vec![false; capacity],
+            staged_loadouts: vec![None; capacity],
+        }
+    }
+
+    /// The HUMAN fighter slot playing `character_uuid`, if any. Bot slots are skipped:
+    /// a bot is a copy of somebody's character, and that owner saving a loadout
+    /// elsewhere must never rewrite a copy fighting in another match.
+    pub fn human_slot_of(&self, character_uuid: &str) -> Option<usize> {
+        self.combat
+            .fighters
+            .iter()
+            .take(self.combat.expected_peers)
+            .position(|f| f.loadout.character_uuid.eq_ignore_ascii_case(character_uuid))
+    }
+
+    /// Hold a loadout for the human playing `character_uuid` (report #232).
+    ///
+    /// Between rounds the client shows `ChooseLoadout`; picking another loadout there
+    /// saves it with `POST /loadouts/current`, then the client sends op36
+    /// PlayerLoadoutReady. The server used to keep fighting with the match-start
+    /// loadout, so every ability the new loadout added was cast at rank 1 ("not in the
+    /// equipped loadout" fallback in `resolve_ability_cast`): a rank-4 Ice Spike landed
+    /// for 120 on a 3,000-HP opponent — "no damage".
+    ///
+    /// Nothing changes here. The loadout is adopted only at a between-rounds beat
+    /// ([`Self::adopt_staged_loadouts`]), so gear can never be swapped mid-round.
+    pub fn stage_between_rounds_loadout(&mut self, character_uuid: &str, lo: Loadout) -> bool {
+        let Some(slot) = self.human_slot_of(character_uuid) else {
+            return false;
+        };
+        self.staged_loadouts[slot] = Some(lo);
+        true
+    }
+
+    /// Adopt every staged loadout, but only while the between-rounds walk runs.
+    /// A fighter whose profile was already relayed during this walk has it relayed
+    /// again, so the opponent's client rebuilds the new gear.
+    fn adopt_staged_loadouts(&mut self, out: &mut Vec<(usize, Vec<u8>)>) {
+        if !matches!(self.combat.phase, FlowState::NextState) {
+            return;
+        }
+        for slot in 0..self.staged_loadouts.len() {
+            let Some(lo) = self.staged_loadouts[slot].take() else {
+                continue;
+            };
+            let Some(f) = self.combat.fighters.get_mut(slot) else {
+                continue;
+            };
+            f.adopt_between_rounds_loadout(lo);
+            info!(
+                "combat: slot {slot} adopted its between-rounds loadout for round {} — abilities [{}]",
+                self.combat.round.saturating_add(1),
+                f.loadout
+                    .abilities
+                    .iter()
+                    .map(|a| format!(
+                        "{}@{}",
+                        super::gamedata::ability(&a.instance_uuid)
+                            .map(|x| x.editor_name)
+                            .unwrap_or("?"),
+                        a.level
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            self.prepare_interround_profile_relay();
+            if self.interround_profiles_sent.get(slot).copied().unwrap_or(false) {
+                self.broadcast_profile_of(out, slot);
+            }
         }
     }
 
@@ -708,12 +782,14 @@ impl MatchInstance {
         //
         // Re-broadcast the sender's profile to its opponent so the opponent actor is
         // rebuilt for the new round. **This propagates whatever loadout the SERVER holds**;
-        // it does not adopt gear the client declares. Making a between-round change alter
-        // the fighter's actual combat numbers needs a server-authoritative re-read of the
-        // character row, which the engine has no handle for — see the PR body.
+        // it does not adopt gear the client declares. The server-authoritative re-read
+        // of the character row happens in the `POST /loadouts/current` handler, which
+        // stages the rebuilt loadout; it is adopted here first, so the relay carries
+        // the new gear (report #232, [`Self::stage_between_rounds_loadout`]).
         if messages::is_player_loadout_ready(user_data)
             && matches!(self.combat.phase, FlowState::NextState)
         {
+            self.adopt_staged_loadouts(&mut out);
             let sent = self.broadcast_interround_profile_once(&mut out, sender);
             info!(
                 "combat c2s: slot {sender} op36 PlayerLoadoutReady between rounds → {sent} op54 PROFILE re-broadcast(s)",
@@ -1233,6 +1309,7 @@ impl MatchInstance {
                         // the profile relay had exactly one caller (the `Spawning`
                         // branch), so no profile could ever be refreshed mid-match.
                         if matches!(state, MatchState::SynchronizingLoadout) {
+                            self.adopt_staged_loadouts(&mut out);
                             self.broadcast_missing_interround_profiles(&mut out);
                         }
                         self.combat.interround_step += 1;
@@ -1242,6 +1319,9 @@ impl MatchInstance {
                         // again (and bot swings resume). The op55 InRound update already
                         // went out (broadcast_match_state above).
                         if is_inround {
+                            // A loadout saved after SynchronizingLoadout still makes the
+                            // round (phase is still NextState here).
+                            self.adopt_staged_loadouts(&mut out);
                             self.combat.reset_fighters_for_next_round(now);
                             // That reset CLEARS the cooldown map, so the initial
                             // cooldowns have to be charged again for the new round.
@@ -3584,6 +3664,109 @@ pub(in crate::arena::combat) mod tests {
             vec![(0, m.combat.fighters[1].player_net_object_id as i64)],
             "the sync fallback sends only the profile not already relayed by op36"
         );
+    }
+
+    /// Cast `uuid` from slot 0 at slot 1 through the real op37 path, land it, and
+    /// return the health it took off slot 1.
+    fn cast_and_land(m: &mut MatchInstance, uuid: &str, at: Instant) -> u32 {
+        let before = m.combat.fighters[1].health;
+        let frame = messages::request_execute_ability(m.combat.fighters[0].net_object_id, uuid);
+        let ea = super::super::input::parse_execute_ability(&frame).expect("op37 parses");
+        resolve::resolve_ability_cast(&mut m.combat, 0, 1, &frame, &ea, at);
+        resolve::land_due_impacts(&mut m.combat, at + Duration::from_secs(3));
+        before - m.combat.fighters[1].health
+    }
+
+    /// **Report #232 — a loadout switched between rounds is the loadout round 2 is
+    /// fought with.**
+    ///
+    /// Prod, gsid 354f5b57: LagorPing switched to a frost loadout on the ChooseLoadout
+    /// screen (the client saved it with `POST /loadouts/current` at 08:40:28), then cast
+    /// Ice Spike and Frostbite in round 2 — at `effective_rank=1`, because the server was
+    /// still fighting with the match-start loadout. His Ice Spike is rank 4.
+    #[test]
+    fn a_loadout_switched_between_rounds_is_adopted_for_the_next_round() {
+        use super::super::state::EquippedAbility;
+        const ICE_SPIKE: &str = "cfee0b02-6d91-4d34-869c-a7e54329060d";
+        const FLAPPETY: &str = "38c987fd-c42b-4ea6-b869-c8d4c03055f9";
+        let (mut m, t) = profiled_live_inst();
+        m.combat.fighters[0].loadout.current_request_index = 77;
+        m.combat.fighters[0].loadout.hide_helmet = true;
+
+        // Round 1, the bug's shape: an ability outside the match-start loadout casts at
+        // rank 1.
+        let rank1 = cast_and_land(&mut m, ICE_SPIKE, t);
+        assert!(rank1 > 0, "the rank-1 Ice Spike lands");
+
+        let mut next = m.combat.fighters[0].loadout.clone();
+        next.abilities = vec![EquippedAbility {
+            instance_uuid: ICE_SPIKE.into(),
+            level: 4,
+            tag: super::super::loadout::ability_tag_for_template(ICE_SPIKE),
+        }];
+        next.current_request_index = 0;
+        next.hide_helmet = false;
+        next.profile_character_json =
+            format!(r#"{{"id":"{FLAPPETY}","name":"Flappety","switched":true}}"#);
+
+        // Staged while the round is live: nothing changes mid-round.
+        assert!(m.stage_between_rounds_loadout(&FLAPPETY.to_uppercase(), next));
+        m.on_tick(2, t + Duration::from_millis(1));
+        assert!(
+            m.combat.fighters[0].loadout.abilities.iter().all(|a| a.instance_uuid != ICE_SPIKE),
+            "a staged loadout must never be adopted during a live round"
+        );
+
+        let (_death, t) = swing_until_death(&mut m, 0, t + Duration::from_secs(4));
+        assert_eq!(m.phase(), FlowState::NextState);
+
+        // Walk the break; the opponent's client must be sent the NEW profile.
+        let step = Duration::from_millis(250);
+        let mut now = t;
+        let mut opponent_saw_switched_profile = false;
+        while m.phase() != FlowState::StateTimeout {
+            now += step;
+            assert!(now < t + Duration::from_secs(60), "walk never went live");
+            for (viewer, frame) in m.on_tick(2, now) {
+                if viewer == 1 && frame.windows(8).any(|w| w == b"switched") {
+                    opponent_saw_switched_profile = true;
+                }
+            }
+        }
+        assert!(opponent_saw_switched_profile, "op54 relays the switched loadout");
+
+        let f = &m.combat.fighters[0];
+        assert_eq!(f.loadout.abilities.len(), 1);
+        assert_eq!((f.loadout.abilities[0].instance_uuid.as_str(), f.loadout.abilities[0].level), (ICE_SPIKE, 4));
+        assert_eq!(f.loadout.current_request_index, 77, "match state is carried over");
+        assert!(f.loadout.hide_helmet, "the in-match hide-helmet toggle is carried over");
+        assert_eq!(f.health, f.max_health, "round 2 opens on full pools");
+
+        // Round 2: the same cast now resolves at rank 4 (196.76 vs 108.83 base damage).
+        let rank4 = cast_and_land(&mut m, ICE_SPIKE, now + Duration::from_secs(10));
+        assert!(
+            rank4 as f32 > rank1 as f32 * 1.6,
+            "rank-4 Ice Spike must hit far harder than rank 1 ({rank4} vs {rank1})"
+        );
+    }
+
+    /// A bot is a COPY of somebody's character. The owner saving a loadout must never
+    /// rewrite a copy of their character fighting in another match.
+    #[test]
+    fn a_between_rounds_loadout_is_never_staged_onto_a_bot() {
+        let now = Instant::now();
+        let mk = |uuid: &str| {
+            let mut l = crate::arena::combat::loadout::starter();
+            l.character_uuid = uuid.into();
+            l
+        };
+        let human = "38c987fd-c42b-4ea6-b869-c8d4c03055f9";
+        let copied = "7bb9fd20-8524-4fb0-b4e7-881f830b00ec";
+        let mut m = MatchInstance::new(2, 1, vec![mk(human), mk(copied)], now);
+        assert_eq!(m.human_slot_of(human), Some(0));
+        assert_eq!(m.human_slot_of(copied), None, "slot 1 is the bot");
+        assert!(!m.stage_between_rounds_loadout(copied, mk(copied)));
+        assert!(m.staged_loadouts.iter().all(Option::is_none));
     }
 
     /// Drive a between-rounds (NextState) walk to completion: tick at 250 ms until the

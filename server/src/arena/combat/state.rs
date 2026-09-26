@@ -333,6 +333,17 @@ pub struct InnateBaseResistance {
     pub factor: f32,
 }
 
+impl DamageSource {
+    /// Retail's `CombatManager.IsWeaponBased(DamageSource)` (`@0x1BD3E6C`):
+    /// `(source | 2) == 3`, i.e. exactly `Attack` (1) and `WeaponManeuver` (3).
+    /// Weapon item properties such as Weapon Ravage gate on this
+    /// (`WeaponRavageBonusInstance$$Ravage@0x1D5495C` returns early when it is false),
+    /// so a spell, a channel tick or a shield bash never carries them.
+    pub fn is_weapon_based(self) -> bool {
+        matches!(self, DamageSource::Attack | DamageSource::WeaponManeuver)
+    }
+}
+
 /// `ActorAnimation` (`BGS.Game.Animation`, `dump.cs:12812`) — the animation a
 /// maneuver plays, carried at propId 10 of op58 `PlayerManeuverStateChange`.
 ///
@@ -2030,30 +2041,65 @@ pub fn paralyze_duration_secs(rank: u8) -> f32 {
         .unwrap_or(2.0)
 }
 
+/// `(max_health, max_stamina, max_magicka)` a loadout confers.
+fn max_pools_for(loadout: &Loadout) -> (u32, u32, u32) {
+    // Arena triples HEALTH only (`ARENA_HEALTH_MULTIPLIER`), including the
+    // primary Fortify Health enchantments. Stamina/Magicka are not multiplied.
+    let max_health = ((health_for_level(loadout.level) as f32 + loadout.max_health_bonus)
+        * ARENA_HEALTH_MULTIPLIER as f32)
+        .round()
+        .max(1.0) as u32;
+    // A real character's pools come from its own attribute spend; a bot or the
+    // starter loadout has no spend to read and keeps the level approximation.
+    let (base_stamina, base_magicka) = if loadout.has_character {
+        (
+            pool_for_points(loadout.stamina_points),
+            pool_for_points(loadout.magicka_points),
+        )
+    } else {
+        (pool_for_level(loadout.level), pool_for_level(loadout.level))
+    };
+    // Primary Fortify Stamina / Magicka enchantments: a flat, unmultiplied add.
+    let max_stamina = (base_stamina as f32 + loadout.max_stamina_bonus)
+        .round()
+        .max(1.0) as u32;
+    let max_magicka = (base_magicka as f32 + loadout.max_magicka_bonus)
+        .round()
+        .max(1.0) as u32;
+    (max_health, max_stamina, max_magicka)
+}
+
 impl Fighter {
+    /// Take the loadout the player picked on the between-rounds `ChooseLoadout`
+    /// screen (report #232). Called only between rounds, before
+    /// [`MatchCombat::reset_fighters_for_next_round`], which refills every pool to the
+    /// ceilings set here.
+    ///
+    /// `next` is rebuilt from the player's own `characters` row after the client's
+    /// `POST /loadouts/current`, i.e. the same server-authoritative source as the
+    /// match-start loadout. Two fields are match state rather than character state and
+    /// are carried over: the RMS request index the match-end card echoes, and the
+    /// hide-helmet flag the client set in this match (op61).
+    pub fn adopt_between_rounds_loadout(&mut self, mut next: Loadout) {
+        next.current_request_index = self.loadout.current_request_index;
+        next.hide_helmet = self.loadout.hide_helmet;
+        let (max_health, max_stamina, max_magicka) = max_pools_for(&next);
+        self.max_health = max_health;
+        self.max_stamina = max_stamina;
+        self.max_magicka = max_magicka;
+        // Ravage never crosses a round, and this runs between rounds: nothing to give
+        // back onto the new ceilings.
+        self.ravaged_health = 0;
+        self.ravaged_stamina = 0;
+        self.ravaged_magicka = 0;
+        self.health = self.health.min(max_health);
+        self.stamina = self.stamina.min(max_stamina);
+        self.magicka = self.magicka.min(max_magicka);
+        self.loadout = next;
+    }
+
     pub fn new(slot: usize, net_object_id: i32, loadout: Loadout, now: Instant) -> Self {
-        // Arena triples HEALTH only (`ARENA_HEALTH_MULTIPLIER`), including the
-        // primary Fortify Health enchantments. Stamina/Magicka are not multiplied.
-        let max_health = ((health_for_level(loadout.level) as f32 + loadout.max_health_bonus)
-            * ARENA_HEALTH_MULTIPLIER as f32)
-            .round()
-            .max(1.0) as u32;
-        // A real character's pools come from its own attribute spend; a bot or the
-        // starter loadout has no spend to read and keeps the level approximation.
-        let (base_stamina, base_magicka) = if loadout.has_character {
-            (
-                pool_for_points(loadout.stamina_points),
-                pool_for_points(loadout.magicka_points),
-            )
-        } else {
-            (pool_for_level(loadout.level), pool_for_level(loadout.level))
-        };
-        let max_stamina = (base_stamina as f32 + loadout.max_stamina_bonus)
-            .round()
-            .max(1.0) as u32;
-        let max_magicka = (base_magicka as f32 + loadout.max_magicka_bonus)
-            .round()
-            .max(1.0) as u32;
+        let (max_health, max_stamina, max_magicka) = max_pools_for(&loadout);
         Fighter {
             slot,
             net_object_id,

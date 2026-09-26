@@ -550,7 +550,7 @@ pub async fn update_loadout(
     let globals = app_state.get_ref().clone();
     let mut conn = app_state.db_pool.get().await.unwrap();
 
-    conn.transaction(move |mut conn| {
+    let result = conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
             let mut tracker = InventoryChangeTracker::default();
@@ -597,7 +597,19 @@ pub async fn update_loadout(
         }
         .scope_boxed()
     })
-    .await
+    .await;
+    // Report #232: this is also how the between-rounds ChooseLoadout screen saves a
+    // loadout switch. After the commit, hand the rebuilt loadout to a live match.
+    if result.is_ok() {
+        crate::arena::matchmaker::stage_live_match_loadout(
+            &app_state.db_pool,
+            &app_state.arena.registry,
+            user_id,
+            character_id,
+        )
+        .await;
+    }
+    result
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
