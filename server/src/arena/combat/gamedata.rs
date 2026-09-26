@@ -45124,3 +45124,4 @@ pub fn enchant_magnitude(family_uuid: &str, tier: u8) -> Option<f32> {
     let e = ENCHANT_MAGNITUDES.iter().find(|e| e.family_uuid == family_uuid)?;
     e.tiers.get((tier as usize).min(10)).copied()
 }
+
