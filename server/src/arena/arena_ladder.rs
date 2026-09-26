@@ -525,6 +525,30 @@ pub fn trophy_delta(
     }
 }
 
+/// `[Authored — not retail]` The trophy count a **bot** opponent is priced at in
+/// [`trophy_delta`] (tracker report #224).
+///
+/// Retail had no bots, so there is no retail rule to follow here. Ours are copies of
+/// real characters, and pricing them at that character's live `pvpTrophies` broke the
+/// ladder: most copies sit at 0 because the bot side is never paid, so a 588-trophy
+/// player gained +3 for a 2-0 win and lost -87 for a 0-2 loss — a ~97% win rate just
+/// to stand still.
+///
+/// A bot is priced at its `matchmakingPvpTrophies` instead: the rating the bot draw's
+/// bracket already used to call this a fair match (`matchmaker::skill_of_row`). When
+/// that is missing or 0 — an unrated copy the bracket lets through as "unknown, don't
+/// block" — it is priced as an even match, i.e. at the player's own trophies.
+///
+/// Human-vs-human never reaches this: it keeps pricing the opponent at their live
+/// `pvpTrophies`, exactly as retail did.
+pub fn bot_opponent_trophies(own_trophies: i64, bot_matchmaking_trophies: i64) -> i64 {
+    if bot_matchmaking_trophies > 0 {
+        bot_matchmaking_trophies
+    } else {
+        own_trophies
+    }
+}
+
 /// Advance the chest meter by the rounds won this match, wrapping at
 /// [`CHEST_METER_CAPACITY`]. Returns `(new_meter, chests_filled)`.
 pub fn advance_chest_meter(meter: i64, rounds_won: u8) -> (i64, i64) {
@@ -1064,6 +1088,29 @@ mod tests {
     /// an origin. What it prevents is exactly the failure mode this file was
     /// rewritten to remove: a magic constant drifting away from its source with a
     /// comment still claiming provenance.
+    /// Report #224: which trophy count a bot is priced at, and the payouts that
+    /// follow for the reporter's 588 trophies. Before: every 0-trophy bot paid +3 / -87
+    /// (~97% win rate to break even). After: bracketed bots pay on their rating, unrated
+    /// ones pay as an even match.
+    #[test]
+    fn report_224_bot_opponent_pricing() {
+        // Rated bot → its matchmaking rating; unrated (0 / negative) → the player's own.
+        assert_eq!(bot_opponent_trophies(588, 455), 455);
+        assert_eq!(bot_opponent_trophies(588, 900), 900);
+        assert_eq!(bot_opponent_trophies(588, 0), 588);
+        assert_eq!(bot_opponent_trophies(588, -5), 588);
+
+        let win = MatchOutcome { rounds_won: 2, rounds_lost: 0, win: true };
+        let loss = MatchOutcome { rounds_won: 0, rounds_lost: 2, win: false };
+        let d = |o, opp| trophy_delta(o, 588, opp, ScoringVariant::Shipped);
+        // Before: priced at the bot's live 0.
+        assert_eq!((d(win, 0), d(loss, 0)), (3, -87));
+        // After: a bot bracketed at 455 (Meryl Andra).
+        assert_eq!((d(win, bot_opponent_trophies(588, 455)), d(loss, bot_opponent_trophies(588, 455))), (29, -61));
+        // After: an unrated bot — even match.
+        assert_eq!((d(win, bot_opponent_trophies(588, 0)), d(loss, bot_opponent_trophies(588, 0))), (45, -45));
+    }
+
     #[test]
     fn const_tables_match_the_committed_json() {
         let raw = include_str!("pvp_matchmaking.json");
