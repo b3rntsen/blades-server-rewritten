@@ -154,6 +154,12 @@ pub fn load(dir: &Path) -> StaticData {
     if global_shop_authored.is_null() {
         global_shop_authored = json!({ "globalShopOverrides": {} });
     }
+    // Retail's full shop calendar (tracker #238). Missing = the collapsed replay of
+    // `global_shop_overrides.json`, which is what ran before this file existed.
+    let mut global_shop_windows: Value = read_json(&dir.join("global_shop_windows.json"));
+    if global_shop_windows.is_null() {
+        global_shop_windows = json!({ "globalShopWindows": {} });
+    }
     let mut iap: Value = read_json(&dir.join("iap.json"));
     if iap.is_null() {
         iap = json!({ "fulfillmentOverrides": {} });
@@ -257,6 +263,7 @@ pub fn load(dir: &Path) -> StaticData {
         announcements,
         global_shop_overrides,
         global_shop_authored,
+        global_shop_windows,
         iap,
         global_shop_grants,
         global_shop_prices,
@@ -677,6 +684,12 @@ mod tests {
             }
         }
         assert!(sd.global_shop_overrides.get("globalShopOverrides").is_some());
+        assert!(
+            sd.global_shop_windows["globalShopWindows"]
+                .as_object()
+                .is_some_and(|m| m.len() > 500),
+            "global_shop_windows.json: the full retail calendar must load (#238)"
+        );
         assert!(sd.iap.get("fulfillmentOverrides").is_some());
         assert!(!sd.quest_rewards.is_empty(), "quest_rewards.json");
         assert!(!sd.abyss.fixed_slices.is_empty(), "abyss.json fixedSlices");

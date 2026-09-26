@@ -1240,6 +1240,12 @@ pub struct StaticData {
     /// shop to author one entry. Kept apart, an authored window means exactly the
     /// dates someone typed.
     pub global_shop_authored: Value,
+    /// Every global-shop window retail scheduled (`{globalShopWindows: {id: [entry…]}}`),
+    /// the ~2750-window calendar that [`Self::global_shop_overrides`] collapses to one
+    /// window per offer. The server replays THIS when it is present, because the
+    /// collapsed file shows each daily offer once per replay cycle (tracker #238).
+    /// Empty (the loader's default) keeps the older collapsed replay.
+    pub global_shop_windows: Value,
     /// The IAP fulfillment overrides (`{fulfillmentOverrides: {...}}`), served
     /// verbatim by `GET /catalogoverrides/iap`. Real-money SKUs — priced placeholders
     /// only (all `isActive:false` in captures); we never run a purchase flow.
