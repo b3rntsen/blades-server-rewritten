@@ -320,22 +320,21 @@ pub async fn dungeon_update(
     // the wrong table (`quests` instead of `event_dungeons`) and 400s with a
     // "missing dungeon_state/generated_data" error, because the real state was
     // stored under `gldQuestId` by enter, not under `quest_id`.
-    let gld_quest_id: Option<Uuid> = {
+    let row_info: Option<JsonDbWrapper<serde_json::Value>> = {
         use crate::schema::quests;
-        let row_info: Option<JsonDbWrapper<serde_json::Value>> = quests::table
+        quests::table
             .filter(quests::id.eq(quest_id))
             .filter(quests::character_id.eq(character_id))
             .select(quests::info)
             .first(&mut *conn)
             .await
-            .optional()?;
-
-        row_info.and_then(|info| {
-            info.0["gldQuestId"]
-                .as_str()
-                .and_then(|s| s.parse::<Uuid>().ok())
-        })
+            .optional()?
     };
+    let gld_quest_id: Option<Uuid> = row_info.as_ref().and_then(|info| {
+        info.0["gldQuestId"]
+            .as_str()
+            .and_then(|s| s.parse::<Uuid>().ok())
+    });
 
     let is_event = gld_quest_id
         .map(|gid| app_state.event_quests.templates.contains_key(&gid))
@@ -348,6 +347,8 @@ pub async fn dungeon_update(
             &app_state,
             character_id,
             gld_quest_id.unwrap(),
+            // Safe for the same reason: gld_quest_id came out of this row.
+            crate::dungeon::quest_row_difficulty(&row_info.as_ref().unwrap().0),
             body.0,
             validated_session,
         ).await;
@@ -548,6 +549,7 @@ async fn handle_event_dungeon_update(
     app_state: &ServerGlobal,
     character_id: Uuid,
     dungeon_id: Uuid, // This is actually the event dungeon ID
+    difficulty_level: i64,
     body: DungeonUpdateRequest,
     session: &Session,
 ) -> Result<Json<DungeonUpdateResponse>, BladeApiError> {
@@ -564,8 +566,14 @@ async fn handle_event_dungeon_update(
             let event_id = *event_template.event_ids.get(0)
                 .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
 
-            let (event_dungeon_settings_id, regenerated_data) =
-                event_dungeon_data(&app_state.game_data, dungeon_id)?;
+            // At the instance row's level, the same data `enter` stores: only used to
+            // repair an attempt whose stored data is empty (below).
+            let (event_dungeon_settings_id, regenerated_data) = event_dungeon_data(
+                &app_state.game_data,
+                dungeon_id,
+                difficulty_level,
+                &app_state.static_data.quests_daily.level_scaling,
+            )?;
 
             // No game_data.events lookup here: the event template identifies the event,
             // while parsed quest data identifies the dungeon and its spawn groups.
@@ -2054,5 +2062,137 @@ mod variant_repair_coverage_tests {
             "{runs} path(s) run dungeon actions but only {repairs} attempt the variant repair; \
              the one that does not will discard every kill a player makes in the wrong variant"
         );
+    }
+}
+
+/// What a kill in an event dungeon actually pays.
+///
+/// The attempt's generated data is where `process_dungeon_actions` reads a kill's
+/// XP and a corpse's gold from. It was generated at level 1 / 100 XP whatever the
+/// player's level, while the quest row the client drew was scaled. These drive the
+/// real action processing over a level-89 player's attempt and count the payout.
+#[cfg(test)]
+mod event_kill_rewards_tests {
+    use super::*;
+    use blades_lib::user_data::CompleteInventory;
+
+    const GOLD: Uuid = Uuid::from_u128(0xf8d27767_a85e_4fd6_a5bb_bf8a13d0daa2);
+    const CHAR: Uuid = Uuid::from_u128(0x1234_5678_9abc_def0_1234_5678_9abc_def0);
+
+    fn static_data() -> blades_lib::static_data::StaticData {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        crate::static_loader::load(&dir)
+    }
+
+    fn game_data() -> crate::GameData {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static/parsed.json");
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn character() -> CharacterDbEntryCharacterWalletInventory {
+        CharacterDbEntryCharacterWalletInventory {
+            id: Uuid::nil(),
+            user_id: Uuid::nil(),
+            character: JsonDbWrapper(Default::default()),
+            data: JsonDbWrapper(Default::default()),
+            wallet: JsonDbWrapper(Default::default()),
+            inventory: JsonDbWrapper(CompleteInventory {
+                backpack: Default::default(),
+                loadout: Default::default(),
+                treasury: Default::default(),
+                overflow_treasury: Default::default(),
+                backpack_version: 1,
+                treasury_version: 0,
+            }),
+            server_state: JsonDbWrapper(Default::default()),
+        }
+    }
+
+    /// Kill and loot every enemy in `generated`; `(xp gained, gold gained)`.
+    fn clear_the_dungeon(generated: &DungeonGeneratedData) -> (u64, u64) {
+        let mut actions = Vec::new();
+        for (group, spawners) in &generated.enemy_generated_data {
+            for (spawner, enemies) in spawners.iter().enumerate() {
+                for enemy in 0..enemies.len() {
+                    let at = serde_json::json!({
+                        "spawnGroupId": group, "spawnerIndex": spawner, "enemyIndex": enemy
+                    });
+                    let mut killed = at.clone();
+                    killed["type"] = "enemy_killed".into();
+                    killed["time"] = 1.into();
+                    // What the client claims; the server credits its own number.
+                    killed["xpReward"] = 1.0.into();
+                    let mut looted = at;
+                    looted["type"] = "enemy_loot_collected".into();
+                    actions.push(killed);
+                    actions.push(looted);
+                }
+            }
+        }
+        let req: DungeonUpdateRequest = serde_json::from_value(serde_json::json!({
+            "currentState": {"b64": ""}, "actions": actions
+        }))
+        .unwrap();
+        let mut state: DungeonState = serde_json::from_value(serde_json::json!({
+            "dungeonStatus": {
+                "dungeonSettingsIds": [], "reviveCount": 0, "level": 1, "seed": 0,
+                "currentState": {"b64": ""}, "algorithmVersion": 1, "version": 1
+            }
+        }))
+        .unwrap();
+        let mut character = character();
+        let xp_before = character.character.0.experience;
+        let mut wallet = CompleteWallet::default();
+        let mut tracker = InventoryChangeTracker::default();
+        process_dungeon_actions(&req.actions, generated, &mut state, &mut character, &mut wallet, &mut tracker);
+        let gold = wallet.0.get(&GOLD).map_or(0, |w| w.balance);
+        (character.character.0.experience - xp_before, gold)
+    }
+
+    /// A level-89 player clearing an event dungeon is paid at the level-73 row they
+    /// were shown: 258 XP a kill, gold rolled at level 73. The level-1 attempt this
+    /// replaces is run through the same processing as the control, so the test fails
+    /// on the old generation rather than merely agreeing with the new one.
+    #[test]
+    fn a_level_89_players_event_kills_pay_at_the_scaled_level() {
+        let (sd, gd) = (static_data(), game_data());
+        let scaling = &sd.quests_daily.level_scaling;
+        let now = 1_777_852_800; // inside the committed calendar
+        let minted = crate::quest::event_quests::mint(&sd, &gd, CHAR, 89, now);
+        assert!(!minted.is_empty(), "the committed calendar opens events at `now`");
+
+        for row in &minted {
+            let template = row.quest.gld_quest_id;
+            let level = row.quest.difficulty_level;
+            assert_eq!(level, 73);
+
+            let (dungeon, attempt) =
+                crate::dungeon::event_dungeon_data(&gd, template, level, scaling).unwrap();
+            let enemies = attempt.enemy_generated_data.values().flatten().flatten().count() as u64;
+            assert!(enemies > 0, "event {template} has enemies to kill");
+
+            let (xp, gold) = clear_the_dungeon(&attempt);
+            assert_eq!(xp, enemies * 258, "event {template}: 258 XP a kill");
+            assert_eq!(
+                (xp, gold),
+                clear_the_dungeon(row.dungeon.as_ref().unwrap()),
+                "event {template}: paid exactly what the row showed"
+            );
+
+            // CONTROL: the old generation, level 1 and 100 XP, through the same code.
+            let old =
+                blades_lib::util::dungeon::generate_for_dungeon(&gd, &dungeon, 1, 100).unwrap();
+            let (old_xp, old_gold) = clear_the_dungeon(&old);
+            assert_eq!(old_xp, enemies * 100, "what prod paid a level-89 player");
+            assert!(
+                gold > old_gold * 10,
+                "event {template}: gold {gold} vs level-1 gold {old_gold}"
+            );
+            eprintln!(
+                "event {template}: {enemies} enemies, level 73 pays {xp} XP / {gold} gold, \
+                 level 1 paid {old_xp} XP / {old_gold} gold"
+            );
+        }
     }
 }
