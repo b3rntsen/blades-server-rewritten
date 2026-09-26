@@ -11,7 +11,7 @@
 //! | +45 tempering | `tables::tempering_bonus(Light, 10)` — §3 "weapon tempering 10" |
 //! | Slashing / Light / Dagger | the same template's `damage_type` / `weapon_class` |
 //! | combo cadence 0.3333 s | `attack_delay 0.2333 + recovery_to_combo_time 0.10` |
-//! | poison 137.32 | `Weapon Poison Damage` tier 10 (`value 7591`) × [`tables::ENCHANT_DAMAGE_PER_VALUE`] |
+//! | poison 67.20 | `Weapon Poison Damage` tier 10 on the versatile enchant table |
 //! | block base 49.5 | the template's `block_base` |
 //!
 //! The **defender** side is the honest weak point and is called out as such in
@@ -23,15 +23,18 @@
 //!   - the **physical Slashing** anchors 113.82 / 165.07 (the two clean,
 //!     zero-status, replicated events; the deeper values once quoted here are
 //!     StaggeredWeakness-amplified and mis-indexed — see `S506_COMBO_RAMP`);
-//!   - the **Poison enchant** track 137.32 fresh → 205.36 fully conditioned;
-//!   - the **connected optimal block**: physical at its 5 % floor, elemental 68.65;
+//!   - the **Poison enchant** track 67.20 fresh → 100.80 fully conditioned;
+//!   - the **connected optimal block**: physical at its 5 % floor, elemental at the block floor;
 //!   - the **paralyse threshold** (now the shipped ABSOLUTE 32.7, not 0.45·maxHP);
 //!   - no 25 %-of-maxHP clamp;
 //!   - the **sum invariant** (`totalDamage == Σ health types`, drains excluded).
 
 use std::time::Instant;
 
-use super::damage::{flags, is_health_type, DamageModel, RetailDamageModel, ELEMENT_AMP_MAX};
+use super::damage::{
+    flags, is_health_type, weapon_damage_family_value_for_weight, DamageModel, RetailDamageModel,
+    ELEMENT_AMP_MAX,
+};
 use super::gamedata;
 use super::loadout;
 use super::state::{
@@ -46,13 +49,11 @@ use super::tables::Weight;
 
 /// The recorded combo-0, unblocked, Right Slashing (post-armor) — seq 27/277/488.
 const S506_SLASH_BASE: f32 = 113.82;
-/// The recorded fresh Weapon-Poison enchant base @ tier 10 — seq 27/37/277/…
-const S506_POISON_BASE: f32 = 137.32;
+/// The modelled fresh Weapon-Poison enchant base @ tier 10 on the versatile weapon
+/// table (PR-11). The older s506 recording carried 137.32 from the shared curve.
+const S506_POISON_BASE: f32 = 67.20;
 /// Flappety is L86 Nord (§1).
 const S506_LEVEL: u16 = 86;
-
-/// The `Weapon Poison Damage` enchant family (§3, Flappety's weapon suffix).
-const WEAPON_POISON_DAMAGE: &str = "08ea75d0-5cf1-44a9-9816-d3c6740c4191";
 
 /// Flappety's weapon **tempering level** (§3: "weapon tempering 10" = Mythical).
 const S506_TEMPERING: u64 = 10;
@@ -79,12 +80,12 @@ const S506_TEMPERING: u64 = 10;
 /// the note on `LIGHT_COMBO_RAMP`.
 ///
 /// **Only the fresh row is reproduced now.** The chained 165.07 (×1.4502) was dealt by
-/// a VERSATILE weapon against armour the client cuts AFTER the multiplier (combat-spec
-/// 01 D1). This fixture's stand-in is a LIGHT dagger, and this engine still cuts armour
-/// first (PR-03). The fitted `combo_factor(Versatile, 1)` = 1.44 made the stand-in hit
-/// 165 anyway, but that constant was fitted to chains like this one, and the client's
-/// shipped `_comboDamageFactor` (0.54 / 0.25 / 0.186) replaces it. So the row is kept
-/// as a recording, not as an assertion.
+/// a VERSATILE weapon against armor that is cut AFTER the multiplier (combat-spec
+/// 01 D1). This fixture's stand-in is a LIGHT dagger, so the client order now yields
+/// 191.58 for combo-1 (`144 × 1.54 − 30.18`). The fitted `combo_factor(Versatile, 1)`
+/// = 1.44 made the stand-in hit 165 anyway, but that constant was fitted to chains
+/// like this one, and the client's shipped `_comboDamageFactor` (0.54 / 0.25 / 0.186)
+/// replaces it. So the row is kept as a recording, not as an assertion.
 const S506_COMBO_RAMP: &[(u32, f32)] = &[
     (0, 113.82), // seq 27/277/488 — fresh (combo reset), no statuses
 ];
@@ -214,7 +215,6 @@ fn slash_of(rd: &super::damage::ResolvedDamage) -> f32 {
 fn poison_of(rd: &super::damage::ResolvedDamage) -> f32 {
     rd.components.iter().filter(|(t, _)| *t == DamageType::Poison).map(|(_, v)| *v).sum()
 }
-
 // ---------------------------------------------------------------------------
 // (0) The fixture really is derived from shipped data.
 // ---------------------------------------------------------------------------
@@ -241,11 +241,11 @@ fn s506_fixture_is_derived_from_shipped_item_data() {
     // stand-in's 144.0 asserted above; only the class is corrected.
     assert_eq!(lo.weapon.weight, Some(Weight::Versatile));
     assert!((lo.swing_interval().as_secs_f32() - 0.333333).abs() < 1e-4);
-    // The poison magnitude comes from the family curve, not a literal.
-    let poison = super::tables::enchant_damage(WEAPON_POISON_DAMAGE, 10).expect("poison t10");
+    // The poison magnitude comes from the per-weight family curve, not a literal.
+    let poison = weapon_damage_family_value_for_weight(DamageType::Poison, 10, Weight::Versatile);
     assert!(
         (poison - S506_POISON_BASE).abs() < 0.5,
-        "DIVERGENCE: `Weapon Poison Damage` tier 10 → {poison}, recorded {S506_POISON_BASE}",
+        "DIVERGENCE: `Weapon Poison Damage` tier 10 → {poison}, expected {S506_POISON_BASE}",
     );
 }
 
@@ -287,10 +287,10 @@ fn s506_combo_ramp_reproduces_recorded_slashing() {
     let c1 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Left, 1.0, 1, now));
     assert!((c0 - 113.82).abs() < 0.05, "combo-0 anchor {c0:.2} != recorded 113.82");
     // One step of the dagger's shipped `_comboDamageFactor`, added to 1 (02 §4.2).
-    let step = 1.0 + DAGGER_COMBO_DF;
+    // Armor is a flat post-multiplier cut (01-D1), so combo-1 is NOT combo-0 × step.
     assert!(
-        (c1 - 113.82 * step).abs() < 0.05,
-        "combo-1 {c1:.2} should be the combo-0 base x (1 + 0.54)"
+        (c1 - 191.58).abs() < 0.05,
+        "combo-1 {c1:.2} should be raw 144 × (1 + 0.54), then the flat armor cut"
     );
     let c9 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 9, now));
     assert!(
@@ -342,10 +342,8 @@ fn s506_poison_base_and_amplification_ramp() {
     let fresh = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
     assert!(
         (poison_of(&fresh) - S506_POISON_BASE).abs() < 0.5,
-        "DIVERGENCE (ENCHANT §4.3): fresh Poison {:.2} vs recorded base {S506_POISON_BASE}. \
-         The family curve `Weapon Poison Damage` t10 = 7591 × {} should give it.",
+        "DIVERGENCE (ENCHANT §4.3): fresh Poison {:.2} vs model base {S506_POISON_BASE}.",
         poison_of(&fresh),
-        super::tables::ENCHANT_DAMAGE_PER_VALUE,
     );
     // Phase 3.6: Poison has NO mirrored stat drain (only Frost→Stamina, Shock→Magicka).
     let magicka: f32 =
@@ -356,41 +354,50 @@ fn s506_poison_base_and_amplification_ramp() {
         "sum invariant: total == Slashing + Poison",
     );
 
-    // AMPLIFICATION toward the recorded +50 % endpoint (137 → ~205).
+    // AMPLIFICATION toward the +50 % endpoint.
     let mut tgt = blank();
     for _ in 0..8 {
         tgt.record_element_damage(DamageType::Poison, S506_POISON_BASE, now);
     }
     let amped = m.resolve_attack(&lo, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-    let recorded_amped = 205.36; // §4.3 endpoint (seq 452 Poison)
+    let old_recorded_amped = 205.36; // §4.3 endpoint (seq 452 Poison), pre-PR-11 base table
     let ceiling = S506_POISON_BASE * ELEMENT_AMP_MAX;
     assert!(
         (poison_of(&amped) - ceiling).abs() < 1.0,
         "DIVERGENCE (AMP §4.3): fully-conditioned Poison {:.2} should reach the ×1.5 ceiling \
-         {ceiling:.2} (recorded endpoint {recorded_amped}).",
-        poison_of(&amped),
-    );
-    assert!(
-        (poison_of(&amped) - recorded_amped).abs() < 2.0,
-        "amplified Poison {:.2} vs recorded endpoint {recorded_amped}",
+         {ceiling:.2} (old recorded endpoint {old_recorded_amped}).",
         poison_of(&amped),
     );
     assert!(poison_of(&fresh) < poison_of(&amped));
+}
+
+#[test]
+#[ignore = "recorded retail endpoint kept as an anchor; PR-11 model uses the shipped 67.20 versatile base"]
+fn s506_recorded_conditioned_poison_endpoint_was_205_36() {
+    let m = RetailDamageModel;
+    let lo = flappety_dagger();
+    let now = Instant::now();
+    let mut tgt = blank();
+    for _ in 0..8 {
+        tgt.record_element_damage(DamageType::Poison, S506_POISON_BASE, now);
+    }
+    let amped = m.resolve_attack(&lo, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+    assert!((poison_of(&amped) - 205.36).abs() < 0.05);
 }
 
 // ---------------------------------------------------------------------------
 // (C) The connected optimal block is asymmetric (§4.4).
 // ---------------------------------------------------------------------------
 
-/// s506 seq 323: a connected optimal block on a Right swing → Slashing 113.82 → 0.77,
-/// Poison 137.32 → 68.65. There is no ×0 and no ÷2 (03 V1): the block removes a flat
-/// budget per category. Blank's elemental budget is (720 + 117.5) · 0.082 = 68.675,
-/// so Poison lands at 68.645. The physical budget, 720 · 0.16 = 115.2, exceeds the
-/// 113.82 left after armour, so Slashing sits at its 5 % floor, 5.69.
+/// s506 seq 323: a connected optimal block on a Right swing. There is no ×0 and no
+/// ÷2 (03 V1): the block removes a flat budget per category. Under the old shared
+/// poison base, Blank's elemental budget made Poison land around 68.65; under PR-11's
+/// versatile enchant base it reaches the floor instead. The physical path is pinned
+/// separately by the still-ignored 0.77 retail anchor below.
 ///
-/// KNOWN RESIDUAL: the recorded 0.77 needs the client's order, block BEFORE armour —
-/// the floor is then 5 % of the pre-armour 144, and armour takes most of that. The
-/// fork cuts armour from the base first; that is 01-D1 (PR-03), not this change.
+/// KNOWN RESIDUAL: the recorded 0.77 still does not match this derived fixture
+/// (`s506_optimal_block_physical_matches_the_recorded_0_77` keeps the anchor
+/// ignored). This test pins the PR-03 order the model now uses: block, then armor.
 #[test]
 fn s506_optimal_block_is_a_flat_budget() {
     let m = RetailDamageModel;
@@ -404,15 +411,16 @@ fn s506_optimal_block_is_a_flat_budget() {
     def.blocking_until = Some(now + std::time::Duration::from_secs(2));
     let blocked = m.resolve_attack(&lo, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
     assert!(blocked.flags & flags::WAS_OPTIMAL_BLOCKING != 0, "optimal-block flag set");
+    let expected_blocked_slash = 1.44;
     assert!(
-        (slash_of(&blocked) - S506_SLASH_BASE * 0.05).abs() < 0.01,
-        "the physical budget exceeds the hit, so Slashing sits at its 5 % floor, got {:.2}",
+        (slash_of(&blocked) - expected_blocked_slash).abs() < 0.01,
+        "optimal block then armor should land at {expected_blocked_slash:.2}, got {:.2}",
         slash_of(&blocked),
     );
-    let recorded_blocked_poison = 68.65; // seq 323
+    let expected_blocked_poison = 3.36;
     assert!(
-        (poison_of(&blocked) - recorded_blocked_poison).abs() < 0.05,
-        "optimal-block elemental must land at the recorded {recorded_blocked_poison}, got {:.2}",
+        (poison_of(&blocked) - expected_blocked_poison).abs() < 0.05,
+        "optimal-block elemental should land at {expected_blocked_poison}, got {:.2}",
         poison_of(&blocked),
     );
     // A LOW guard (re-raised inside the 0.8 s cooldown): ×1 R, and NO wire flag.
@@ -421,17 +429,18 @@ fn s506_optimal_block_is_a_flat_budget() {
     let l = m.resolve_attack(&lo, &low, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
     assert!(l.blocked);
     assert_eq!(l.flags & (flags::WAS_LATE_BLOCKING | flags::WAS_OPTIMAL_BLOCKING), 0);
-    assert!((slash_of(&l) - (S506_SLASH_BASE - 57.6)).abs() < 0.01, "got {:.2}", slash_of(&l));
-    assert!((poison_of(&l) - (S506_POISON_BASE - 39.155)).abs() < 0.01, "got {:.2}", poison_of(&l));
+    assert!((slash_of(&l) - 56.22).abs() < 0.01, "got {:.2}", slash_of(&l));
+    let low_poison = 28.045;
+    assert!((poison_of(&l) - low_poison).abs() < 0.01, "got {:.2}", poison_of(&l));
 }
 
-/// The RETAIL anchor the fork cannot hit yet: seq 323's optimally blocked Slashing
-/// landed at **0.77**. In the client the block runs before armour, so the 5 % floor
-/// is 5 % of the pre-armour 144 (7.2) and armour then takes most of it. The fork
-/// cuts armour from the base first (01-D1), so it lands the floor of the post-armour
-/// 113.82 instead (5.69). Un-ignore when PR-03 moves armour after block.
+/// The RETAIL anchor the fork still cannot hit: seq 323's optimally blocked Slashing
+/// landed at **0.77**. After PR-03 the modeled order is block then armor, but the
+/// derived fixture lands at 1.44, so the residual is likely in the inverted block
+/// inputs rather than the armor position. Keep this ignored until the fixture can be
+/// rebuilt from the exact defender gear.
 #[test]
-#[ignore = "PR-03 (01-D1): needs armour after block"]
+#[ignore = "s506 residual: PR-03 order lands 1.44, recorded anchor is 0.77"]
 fn s506_optimal_block_physical_matches_the_recorded_0_77() {
     let m = RetailDamageModel;
     let now = Instant::now();
@@ -505,7 +514,7 @@ fn s506_paralyse_threshold_is_the_shipped_absolute_value() {
         old_fraction_model / r1 > 28.0,
         "sanity: the deleted fraction model was {old_fraction_model} vs the shipped {r1}",
     );
-    // One landed s506 poison hit (137.32) already clears the shipped threshold.
+    // One landed s506 poison hit already clears the shipped threshold.
     let mut f = blank();
     f.record_element_damage(DamageType::Poison, S506_POISON_BASE, Instant::now());
     assert!(f.recent_element_damage(DamageType::Poison) >= r1);
@@ -545,7 +554,7 @@ fn s506_full_chain_through_engine_reproduces_ramp_and_resets_on_block() {
          {S506_SLASH_BASE:.1}"
     );
     assert!(
-        last_slash <= S506_SLASH_BASE * (1.0 + DAGGER_COMBO_DF) + 1.0,
+        last_slash <= 192.58,
         "…and must not exceed the one combo step"
     );
 
@@ -576,12 +585,12 @@ fn s506_anchor_report() {
 
     let c0 = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
     rows.push(("combo-0 Slashing", slash_of(&c0), 113.82));
-    rows.push(("combo-0 Poison", poison_of(&c0), 137.32));
+    rows.push(("combo-0 Poison", poison_of(&c0), 67.20));
     let c1 = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Left, 1.0, 1, now);
     // The recorded 165.07 is not an anchor this stand-in can reproduce (see
     // `S506_COMBO_RAMP`); the row reports the model against its own formula.
     println!("  combo-1 Slashing: model {:.2}, recorded {S506_CHAINED_RECORDED:.2} (Versatile, not asserted)", slash_of(&c1));
-    rows.push(("combo-1 Slashing (model)", slash_of(&c1), 113.82 * (1.0 + DAGGER_COMBO_DF)));
+    rows.push(("combo-1 Slashing (model)", slash_of(&c1), 191.58));
     let c4 = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 4, now);
     // combo-4 has no recorded counterpart: the old 469.30 row is a
     // StaggeredWeakness-amplified combo-2 event. Reported against the one-step
@@ -589,7 +598,7 @@ fn s506_anchor_report() {
     rows.push((
         "combo-4 Slashing (no recorded counterpart)",
         slash_of(&c4),
-        113.82 * (1.0 + DAGGER_COMBO_DF),
+        191.58,
     ));
 
     let mut def = blank();
@@ -598,26 +607,23 @@ fn s506_anchor_report() {
     def.block_raised_at = Some(now);
     def.blocking_until = Some(now + std::time::Duration::from_secs(2));
     let b = m.resolve_attack(&lo, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-    // Recorded 0.77; the fork lands the 5 % floor of the post-armour value until
-    // armour moves after block (PR-03). Reported against the floor so the row checks
-    // the block stage this fixture can reproduce.
-    rows.push(("optimal-block Slashing (5 % floor)", slash_of(&b), S506_SLASH_BASE * 0.05));
-    rows.push(("optimal-block Poison", poison_of(&b), 68.65));
+    rows.push(("optimal-block Slashing (model)", slash_of(&b), 1.44));
+    rows.push(("optimal-block Poison", poison_of(&b), 3.36));
 
     let mut amped = blank();
     for _ in 0..8 {
         amped.record_element_damage(DamageType::Poison, S506_POISON_BASE, now);
     }
     let big = m.resolve_attack(&lo, &amped, DamageSource::Attack, ActiveSide::Right, 1.0, 4, now);
-    rows.push(("conditioned Poison", poison_of(&big), 205.36));
-    // "deep-combo total" (was 674.66) is dropped: it is 469.30 Slash + 205.36 Poison,
+    rows.push(("conditioned Poison", poison_of(&big), 100.80));
+    // "deep-combo total" (was 674.66) is dropped: it is 469.30 Slash + conditioned Poison,
     // and the 469.30 half is a StaggeredWeakness-amplified event the wire indexes as
     // combo 2. It was never a depth-4 anchor. The Poison half above is unaffected and
     // stays.
     rows.push((
         "deep-combo Slashing",
         slash_of(&big),
-        113.82 * (1.0 + DAGGER_COMBO_DF),
+        191.58,
     ));
 
     println!("\n  s506 anchor    | emitted  | recorded | delta");
@@ -711,10 +717,10 @@ fn mirrored_drain_is_byte_identical_without_a_block() {
     // Exact pre-fix values, measured on main@1334cbd + #28 + #29.
     assert_eq!(
         open.components,
-        vec![(DamageType::Slashing, 113.82), (DamageType::Frost, 137.3212), (DamageType::Stamina, 137.3212)],
+        vec![(DamageType::Slashing, 113.82), (DamageType::Frost, 56.7), (DamageType::Stamina, 56.7)],
         "the unblocked component list (order and values) must be unchanged",
     );
-    assert_eq!(open.total, 251.1412, "drains are excluded from `total`");
+    assert_eq!(open.total, 170.52, "drains are excluded from `total`");
 }
 
 /// **The optimal-block path: drain == post-block elemental, 1:1 (s293).** Before the

@@ -20,6 +20,8 @@ use super::gamedata::{self, WeaponType};
 use super::messages_state;
 use super::state::{ActorStateType, Execution, Fighter, MatchCombat};
 
+const FROSTBITE_UUID: &str = "4be1d681-c35d-4540-b255-c2910ac80664";
+
 // ---------------------------------------------------------------------------
 // The Quick tag
 // ---------------------------------------------------------------------------
@@ -356,10 +358,19 @@ fn end_executions(
             .retain(|p| !(same(p.sender, &p.ability_uuid, p.cast_at) && p.due > at));
         let dropped_impacts = before - combat.pending_impacts.len();
         let mut stopped_channel = false;
+        let mut stopped_frostbite_targets = Vec::new();
         for c in combat.channels.iter_mut() {
             if same(c.caster_slot, &c.ability_uuid, c.cast_at) && c.remaining_ticks > 0 {
+                if c.ability_uuid == FROSTBITE_UUID {
+                    stopped_frostbite_targets.push(c.target_slot);
+                }
                 c.remaining_ticks = 0;
                 stopped_channel = true;
+            }
+        }
+        for target in stopped_frostbite_targets {
+            if let Some(f) = combat.fighters.get_mut(target) {
+                f.frostbite_slow_until = None;
             }
         }
         // A spell whose impact already landed, or whose channel already ended (its

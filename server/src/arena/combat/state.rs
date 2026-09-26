@@ -179,6 +179,13 @@ mod report109_real_pools {
         assert_ne!(pool_for_level(89), pool_for_points(3));
     }
 
+    #[test]
+    fn wire_fraction_rounds_like_the_client() {
+        assert_eq!(wire_fraction(1, 2), 512, "1023 / 2 = 511.5 rounds up");
+        assert_eq!(wire_fraction(0, 2), 0);
+        assert_eq!(wire_fraction(2, 2), STAT_MAX);
+    }
+
     /// A fighter with no character record — a bot, or the starter loadout — must
     /// NOT be read as "spent nothing" and handed a 200 pool. It keeps the level
     /// approximation until bots get real spends of their own.
@@ -240,7 +247,9 @@ pub fn wire_fraction(cur: u32, max: u32) -> u16 {
     if max == 0 {
         return 0;
     }
-    ((cur.min(max) as u64 * STAT_MAX as u64) / max as u64) as u16
+    ((cur.min(max) as f32 * STAT_MAX as f32) / max as f32)
+        .round()
+        .clamp(0.0, STAT_MAX as f32) as u16
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +302,23 @@ pub enum DamageSource {
     EchoWeapon = 9,
     ContinuousAttack = 10,
     ShieldManeuver = 11,
+}
+
+/// A racial innate percent-damage bonus from `CharacterVisualCategory._innateBonuses`.
+#[derive(Debug, Clone)]
+pub struct InnateDamageFactor {
+    pub damage_types: Vec<DamageType>,
+    pub damage_sources: Vec<DamageSource>,
+    pub weapon_class: Option<crate::arena::combat::tables::Weight>,
+    pub factor: f32,
+}
+
+/// A racial innate base-resistance multiplier (`ResistInnateLogic`).
+#[derive(Debug, Clone)]
+pub struct InnateBaseResistance {
+    pub damage_types: Vec<DamageType>,
+    pub damage_sources: Vec<DamageSource>,
+    pub factor: f32,
 }
 
 /// `ActorAnimation` (`BGS.Game.Animation`, `dump.cs:12812`) — the animation a
@@ -361,6 +387,41 @@ pub enum DamageType {
     Stamina = 8,
     Magicka = 9,
     Health = 10,
+}
+
+impl InnateDamageFactor {
+    fn matches(
+        &self,
+        ty: DamageType,
+        source: DamageSource,
+        weapon_weight: Option<crate::arena::combat::tables::Weight>,
+    ) -> bool {
+        if !self.damage_types.is_empty() && !self.damage_types.contains(&ty) {
+            return false;
+        }
+        if !self.damage_sources.is_empty() && !self.damage_sources.contains(&source) {
+            return false;
+        }
+        if let Some(weight) = self.weapon_class {
+            if !matches!(ty, DamageType::Slashing | DamageType::Cleaving | DamageType::Bashing) {
+                return false;
+            }
+            if !matches!(source, DamageSource::Attack | DamageSource::WeaponManeuver) {
+                return false;
+            }
+            if weapon_weight != Some(weight) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl InnateBaseResistance {
+    fn matches(&self, ty: DamageType, source: DamageSource) -> bool {
+        (self.damage_types.is_empty() || self.damage_types.contains(&ty))
+            && (self.damage_sources.is_empty() || self.damage_sources.contains(&source))
+    }
 }
 
 /// `ActorStateType` — an actor's current combat animation/logic state
@@ -574,6 +635,25 @@ pub fn condition_for_element(t: DamageType) -> Option<StatusEffectType> {
         DamageType::Frost => StatusEffectType::Frozen,
         DamageType::Shock => StatusEffectType::Enervated,
         DamageType::Poison => StatusEffectType::Poisoned,
+        _ => return None,
+    })
+}
+
+pub fn weakness_status_damage_type(effect: StatusEffectType) -> Option<DamageType> {
+    Some(match effect {
+        StatusEffectType::FireWeakness => DamageType::Fire,
+        StatusEffectType::FrostWeakness => DamageType::Frost,
+        StatusEffectType::ShockWeakness => DamageType::Shock,
+        StatusEffectType::PoisonWeakness => DamageType::Poison,
+        _ => return None,
+    })
+}
+
+pub fn regen_reduction_status_stat(effect: StatusEffectType) -> Option<usize> {
+    Some(match effect {
+        StatusEffectType::HealthRegenReduction => 0,
+        StatusEffectType::StaminaRegenReduction => 1,
+        StatusEffectType::MagickaRegenReduction => 2,
         _ => return None,
     })
 }
@@ -912,6 +992,18 @@ pub struct Loadout {
     /// field zero) for a fighter with no perks, which every application site
     /// treats as a no-op.
     pub perks: super::perks::PerkBonuses,
+    /// Racial innate percent damage factors. These multiply existing damage tracks as
+    /// `x (1 + sum)`, after flat permanent bonuses and before target mitigation.
+    pub innate_damage_factors: Vec<InnateDamageFactor>,
+    /// Racial innate base-resistance cuts. These are percentage multipliers applied
+    /// before flat resistance ratings, and piercing does not reduce them.
+    pub innate_base_resistances: Vec<InnateBaseResistance>,
+    /// Racial FortifyArmor multiplier sources, summed then applied as `armor x (1+x)`.
+    pub innate_armor_multiplier: f32,
+    /// Racial Healing multiplier for non-regeneration health restoration.
+    pub innate_healing_multiplier: f32,
+    /// Racial Regeneration multipliers by stat: health, stamina, magicka.
+    pub innate_regen_multipliers: [f32; 3],
     /// Attacker-side `Fortify <Element> Damage` — a 0..1 fraction per element that
     /// raises that element track's amplification ceiling. [Phase 3.6]
     pub element_fortify: Vec<(DamageType, f32)>,
@@ -1044,6 +1136,38 @@ pub struct Loadout {
 }
 
 impl Loadout {
+    pub fn innate_damage_multiplier(&self, ty: DamageType, source: DamageSource) -> f32 {
+        let sum: f32 = self
+            .innate_damage_factors
+            .iter()
+            .filter(|f| f.matches(ty, source, self.weapon.weight))
+            .map(|f| f.factor)
+            .sum();
+        1.0 + sum
+    }
+
+    pub fn innate_base_resistance_multiplier(&self, ty: DamageType, source: DamageSource) -> f32 {
+        let sum: f32 = self
+            .innate_base_resistances
+            .iter()
+            .filter(|r| r.matches(ty, source))
+            .map(|r| r.factor)
+            .sum();
+        (1.0 - sum).max(0.0)
+    }
+
+    pub fn armor_rating_with_innates(&self) -> f32 {
+        self.armor_rating * (1.0 + self.innate_armor_multiplier.max(0.0))
+    }
+
+    pub fn healing_multiplier(&self) -> f32 {
+        1.0 + self.innate_healing_multiplier.max(0.0)
+    }
+
+    pub fn regen_multiplier(&self, stat: usize) -> f32 {
+        1.0 + self.innate_regen_multipliers.get(stat).copied().unwrap_or(0.0).max(0.0)
+    }
+
     /// The blocking item's `OptimalBlockBoost`: the shield's when a shield is
     /// equipped, otherwise the weapon's (`InventoryUtility$$GetEquippedBlockingItem
     /// @0x1e61f50`; `get_OptimalBlockBoost@0x1c5b8d8`).
@@ -1283,6 +1407,10 @@ pub struct Fighter {
     pub ravaged_stamina: u32,
     pub ravaged_magicka: u32,
     pub ravaged_health: u32,
+    /// Fractional health damage owed to this fighter. Health is stored as an integer
+    /// pool for the wire, but retail applies damage as floats and floors only the
+    /// running total, so small periodic ticks must accumulate instead of disappearing.
+    pub health_damage_carry: f32,
     pub effects: Vec<ActiveEffect>,
     /// The fighter's current animation/logic state.
     ///
@@ -1542,6 +1670,8 @@ pub struct Fighter {
     /// No magicka regenerates at all until this instant — Magicka Surge's drawback,
     /// which begins when the surge itself ends.
     pub no_magicka_regen_until: Option<Instant>,
+    /// Frostbite applies a SlowEffect while the channel is live, without an op51 status.
+    pub frostbite_slow_until: Option<Instant>,
 
     pub reckless_fury_until: Option<Instant>,
     /// Flat bonus damage Fury adds to each swing while active, chosen by the
@@ -1806,6 +1936,7 @@ impl Fighter {
             magicka_surge_until: None,
             magicka_surge_bonus: 0.0,
             no_magicka_regen_until: None,
+            frostbite_slow_until: None,
             reckless_fury_until: None,
             reckless_fury_bonus: 0.0,
             maneuver_state_until: None,
@@ -1823,6 +1954,7 @@ impl Fighter {
             ravaged_stamina: 0,
             ravaged_magicka: 0,
             ravaged_health: 0,
+            health_damage_carry: 0.0,
             effects: Vec::new(),
             // Construction, not a transition — nothing to tell a client that has no
             // avatar yet, so the field is set directly rather than via the mutator.
@@ -2079,12 +2211,20 @@ impl Fighter {
         matches!(self.staggered_until, Some(t) if now < t)
     }
 
-    /// Frozen is an elemental slow, not a stagger/paralysis input lock. The client
-    /// animates it from op51; the resolver uses this to scale weapon charge/cadence.
+    /// Frozen is an elemental slow, not a stagger/paralysis input lock.
     pub fn is_frozen(&self, now: Instant) -> bool {
         self.effects
             .iter()
             .any(|effect| effect.effect == StatusEffectType::Frozen && now < effect.expires_at)
+            || self
+                .status_timers
+                .iter()
+                .any(|(effect, expires)| *effect == StatusEffectType::Frozen && now < *expires)
+    }
+
+    /// Any active slow source: Frozen's elemental status, or Frostbite's channel-local slow.
+    pub fn is_slowed(&self, now: Instant) -> bool {
+        self.is_frozen(now) || self.frostbite_slow_until.is_some_and(|t| now < t)
     }
 
     /// Enter the staggered state for `CombatParameters.baseStaggerDuration`.
@@ -2516,6 +2656,18 @@ impl Fighter {
         self.take_damage(amount);
     }
 
+    /// Apply floating health damage with a running floor. This matches retail's
+    /// no-per-hit-rounding health path while preserving the integer pool we put on
+    /// the wire.
+    pub fn take_fractional_damage_at(&mut self, amount: f32, now: Instant) -> u32 {
+        let owed = self.health_damage_carry + amount.max(0.0);
+        let whole = (owed + 0.0001).floor();
+        self.health_damage_carry = (owed - whole).max(0.0);
+        let whole = whole.max(0.0) as u32;
+        self.take_damage_at(whole, now);
+        whole
+    }
+
     /// Apply the **non-health** damage components of a hit to their pools:
     /// `DamageType::Stamina` drains stamina and `DamageType::Magicka` drains
     /// magicka, both clamped at 0.
@@ -2674,6 +2826,12 @@ impl Fighter {
             .filter(|(t, _)| *t == ty)
             .map(|(_, v)| *v)
             .sum();
+        let alchemy: f32 = self
+            .effects
+            .iter()
+            .filter(|e| now < e.expires_at && weakness_status_damage_type(e.effect) == Some(ty))
+            .map(|e| e.value)
+            .sum();
         // `StaggeredWeakness` (Powerful Block) is TYPE-AGNOSTIC: the client's
         // `GetWeakness(DamageType)` is two instructions and never reads its argument,
         // and the capture agrees — one identical delta across Slashing, Shock and
@@ -2683,7 +2841,16 @@ impl Fighter {
         } else {
             0.0
         };
-        gear + staggered
+        gear + alchemy + staggered
+    }
+
+    /// Active alchemy regen-reduction amount for stat 0/1/2.
+    pub fn regen_reduction(&self, stat: usize, now: Instant) -> f32 {
+        self.effects
+            .iter()
+            .filter(|e| now < e.expires_at && regen_reduction_status_stat(e.effect) == Some(stat))
+            .map(|e| e.value)
+            .sum()
     }
 
     /// Combined flat resistance including transient Resist-Elements buffs (timed via
@@ -2701,7 +2868,7 @@ impl Fighter {
     /// and that multiplier is `PvpDefaultSettings.CHEAT_BASE_HEALTH_MULTIPLIER`: a
     /// pacing knob bolted onto the bar, not a change to the character's stats.
     pub fn base_max_health(&self) -> u32 {
-        self.max_health / ARENA_HEALTH_MULTIPLIER.max(1)
+        (self.max_health + self.ravaged_health) / ARENA_HEALTH_MULTIPLIER.max(1)
     }
 
     /// The per-condition land threshold (absolute HP) for `condition`: the base
@@ -2773,6 +2940,12 @@ impl Fighter {
         entries.retain(|(_, t)| now.duration_since(*t) < DAMAGE_HISTORY_WINDOW);
     }
 
+    /// Retail clears an element's conditioning history when the matching condition
+    /// lands, and new damage while that condition is active does not re-arm it.
+    pub fn clear_element_damage(&mut self, ty: DamageType) {
+        self.damage_history.remove(&ty);
+    }
+
     /// Drain the active negation pools (Ward/Absorb/Dodge, in source order) against the
     /// per-type `components` IN PLACE; expired pools are dropped first. Returns
     /// `(negated, heal)`: `negated` = the WHOLE hit's health damage was eaten (→ emit
@@ -2784,6 +2957,7 @@ impl Fighter {
         if self.negation_pools.is_empty() {
             return NegationResult {
                 negated: false,
+                absorbed: false,
                 heal: 0.0,
                 restore_magicka: 0.0,
                 restore_cooldown_secs: 0.0,
@@ -2797,6 +2971,7 @@ impl Fighter {
         if health_before <= 0.0 {
             return NegationResult {
                 negated: false,
+                absorbed: false,
                 heal: 0.0,
                 restore_magicka: 0.0,
                 restore_cooldown_secs: 0.0,
@@ -2805,6 +2980,7 @@ impl Fighter {
         let mut heal = 0.0;
         let mut restore_magicka = 0.0;
         let mut restore_cooldown_secs = 0.0;
+        let mut absorbed = false;
         for pool in self.negation_pools.iter_mut() {
             if pool.remaining <= 0.0 {
                 continue;
@@ -2832,6 +3008,7 @@ impl Fighter {
                 let eaten = eligible.min(pool.remaining);
                 *v -= eaten;
                 pool.remaining -= eaten;
+                absorbed |= eaten > 0.0;
                 heal += eaten * pool.restoration_factor;
                 if eaten > 0.0 {
                     // This pool connected: pay its one-off restoration and disarm it
@@ -2851,6 +3028,7 @@ impl Fighter {
                 for (ty, v) in components.iter_mut() {
                     if eligible_ty(*ty) && *v > 0.0 {
                         *v = 0.0;
+                        absorbed = true;
                     }
                 }
             }
@@ -2863,6 +3041,7 @@ impl Fighter {
             .sum();
         NegationResult {
             negated: health_after <= 0.0,
+            absorbed,
             heal,
             restore_magicka,
             restore_cooldown_secs,
@@ -2914,6 +3093,7 @@ pub enum RoundOutcome {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NegationResult {
     pub negated: bool,
+    pub absorbed: bool,
     pub heal: f32,
     /// Magicka restored by a dodge that actually absorbed something
     /// (Renewing Dodge's `_maximumMagickaRestored`).
@@ -3269,6 +3449,7 @@ impl MatchCombat {
             f.ravaged_stamina = 0;
             f.ravaged_magicka = 0;
             f.ravaged_health = 0;
+            f.health_damage_carry = 0.0;
             f.health = f.max_health;
             f.stamina = f.max_stamina;
             f.magicka = f.max_magicka;
@@ -3293,6 +3474,7 @@ impl MatchCombat {
             f.blocking_until = None;
             f.block_raised_at = None;
             f.last_block_dropped_at = None;
+            f.frostbite_slow_until = None;
             f.last_swing = None;
             f.charge_press_at = None;
             f.charge_side = None;
@@ -3855,6 +4037,37 @@ mod tests {
         // Elemental-Resistance-PIERCING can also be a RATING subtraction (Phase 3.4).
         assert_eq!(f.resistance_rating_against(DamageType::Poison, 0.0, 15.0), 25.0);
         assert_eq!(f.resistance_rating_against(DamageType::Poison, 0.0, 999.0), 0.0, "never negative");
+    }
+
+    #[test]
+    fn alchemy_weakness_and_regen_reduction_statuses_read_their_magnitude() {
+        let now = Instant::now();
+        let mut f = Fighter::new(0, 1, Loadout::default(), now);
+        f.effects.push(ActiveEffect {
+            effect: StatusEffectType::PoisonWeakness,
+            damage_type: DamageType::Poison,
+            value: 53.1,
+            per_tick_damage: 0.0,
+            expires_at: now + Duration::from_secs(10),
+            last_tick: now,
+            is_transient_resist: false,
+        });
+        f.effects.push(ActiveEffect {
+            effect: StatusEffectType::StaminaRegenReduction,
+            damage_type: DamageType::None,
+            value: 20.0,
+            per_tick_damage: 0.0,
+            expires_at: now + Duration::from_secs(10),
+            last_tick: now,
+            is_transient_resist: false,
+        });
+
+        assert_eq!(f.weakness_rating_against(DamageType::Poison, now), 53.1);
+        assert_eq!(f.weakness_rating_against(DamageType::Fire, now), 0.0);
+        assert_eq!(f.regen_reduction(1, now), 20.0);
+        assert_eq!(f.regen_reduction(2, now), 0.0);
+        assert_eq!(f.weakness_rating_against(DamageType::Poison, now + Duration::from_secs(11)), 0.0);
+        assert_eq!(f.regen_reduction(1, now + Duration::from_secs(11)), 0.0);
     }
 
     // -----------------------------------------------------------------------
