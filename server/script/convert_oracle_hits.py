@@ -98,8 +98,57 @@ def clean_event(event):
     for key, value in event.items():
         if key in {"ht", "t"}:
             continue
+        if key == "bonusSources" and isinstance(value, dict):
+            keep[key] = compact_bonus_sources(value)
+            continue
+        if key == "bonusSourceCounts" and isinstance(value, dict):
+            keep[key] = {
+                name: count
+                for name, count in value.items()
+                if isinstance(count, int) and count != 0
+            }
+            continue
         keep[key] = value
     return keep
+
+
+def compact_bonus_sources(lists):
+    """Keep the replay-relevant source fields from v3 attacker snapshots.
+
+    v1/v2 snapshots stored `bonusSources` as a flat count map. v3 snapshots store
+    per-list source arrays; most entries contain pointer-heavy debug context and
+    full tier curves. The oracle only needs the identity, magnitude, rank/filter
+    properties and raw stored scalar to replay the damage stages.
+    """
+
+    out = {}
+    for name, value in lists.items():
+        if isinstance(value, int):
+            out[name] = value
+            continue
+        if not isinstance(value, dict):
+            continue
+        sources = []
+        for source in value.get("sources") or []:
+            if not isinstance(source, dict):
+                continue
+            kept = {}
+            for field in (
+                "cls",
+                "propertyId",
+                "tier",
+                "staticClass",
+                "magnitude",
+                "damageType",
+                "damageTypes",
+                "damageSources",
+                "stored",
+            ):
+                if field in source:
+                    kept[field] = source[field]
+            sources.append(kept)
+        out[name] = {"count": value.get("count", len(sources)), "sources": sources}
+    return out
 
 
 def stage_key(event):
