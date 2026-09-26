@@ -453,6 +453,69 @@ where
         .collect()
 }
 
+/// The client `ItemEquipmentSlot` each ARMOUR slot takes: helmet 1, body 3, gauntlets 4,
+/// boots 7.
+///
+/// The shared slot check (`character_ops::item_allowed_in_slot`) only knows item TYPES,
+/// and all four armour slots take type 3 — so it let a cuirass into the helmet slot.
+/// Report #229 is what that looks like: "when worn it appears in the helmet slot but is
+/// applied visually as a second cuirass on the character". The template's own
+/// `equipmentSlot` (the APK's armour table, [`gamedata::armor`], 254/254 templates)
+/// says which of the four it belongs in.
+///
+/// Measured, not guessed: across the 1,018 armour pieces equipped on production on
+/// 2026-09-26, every one sat in the slot this table names — helmet 80/80, body 434/434,
+/// gauntlets 71/71, boots 433/433.
+///
+/// [`gamedata::armor`]: crate::arena::combat::gamedata::armor
+fn armour_equipment_slot_for(slot: Uuid) -> Option<u8> {
+    const MAP: [(&str, u8); 4] = [
+        ("48021ab1-a1a6-487b-80a4-ca472a4d0c77", 1),
+        ("897a600c-91d6-4449-af09-173da88a907e", 3),
+        ("58b6d121-2e23-4fa4-b892-c92ae2e2c4c5", 4),
+        ("e273a4d7-fb87-4f7e-8f1e-398be59afbcb", 7),
+    ];
+    let s = slot.as_hyphenated().to_string();
+    MAP.iter().find(|(k, _)| *k == s).map(|(_, e)| *e)
+}
+
+/// Drop every equip that would put an armour piece into another piece's slot, before
+/// anything is unequipped — the same "refuse, don't strip the slot" rule the type check
+/// follows. Unknown slots, non-armour items, unequips and ids not in the backpack pass
+/// through untouched: this refuses what it KNOWS is wrong, it is not a whitelist.
+fn without_armour_in_the_wrong_slot(
+    updates: &HashMap<Uuid, Option<Uuid>>,
+    inventory: &blades_lib::user_data::CompleteInventory,
+) -> HashMap<Uuid, Option<Uuid>> {
+    updates
+        .iter()
+        .filter(|(slot, target)| {
+            let (Some(want), Some(item_id)) = (armour_equipment_slot_for(**slot), target) else {
+                return true;
+            };
+            let Some(item) = inventory.backpack.items.0.get(item_id) else {
+                return true;
+            };
+            match crate::arena::combat::gamedata::armor(
+                &item.item_template_id.as_hyphenated().to_string(),
+            ) {
+                Some(armour) if armour.equipment_slot != want => {
+                    log::warn!(
+                        "[loadout] refusing {} ({}) in slot {slot}: it is equipment slot {}, \
+                         the slot takes {want}",
+                        item_id,
+                        armour.name,
+                        armour.equipment_slot
+                    );
+                    false
+                }
+                _ => true,
+            }
+        })
+        .map(|(k, v)| (*k, *v))
+        .collect()
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LoadoutCurrentRequest {
@@ -493,9 +556,11 @@ pub async fn update_loadout(
             let mut tracker = InventoryChangeTracker::default();
             let mut inventory_changed = false;
             if !body.equipment_updates.is_empty() {
+                let updates =
+                    without_armour_in_the_wrong_slot(&body.equipment_updates, &entry.inventory.0);
                 character_ops::apply_equipment_updates(
                     &mut entry.inventory.0,
-                    &body.equipment_updates,
+                    &updates,
                     &mut tracker,
                     Some(&globals.game_data),
                 );
@@ -543,6 +608,52 @@ pub async fn update_loadout(
 mod tests {
     use blades_lib::economy::{GEMS, GOLD};
     use super::*;
+
+    /// Report #229: "when worn it appears in the helmet slot but is applied visually as
+    /// a second cuirass". The type-only slot check let a cuirass (type 3) into the
+    /// helmet slot (type 3); the template's own equipmentSlot refuses it.
+    #[test]
+    fn a_cuirass_is_refused_in_the_helmet_slot_and_a_helmet_is_not() {
+        use blades_lib::user_data::{Backpack, CompleteInventory, Item, ItemPropertiesAll, Loadout, Treasury};
+        let u = |s: &str| Uuid::parse_str(s).unwrap();
+        let (helmet_slot, body_slot, weapon_slot) = (
+            u("48021ab1-a1a6-487b-80a4-ca472a4d0c77"),
+            u("897a600c-91d6-4449-af09-173da88a907e"),
+            u("417e79de-c810-42f8-8273-f9759df6ae25"),
+        );
+        let piece = |template: &str| Item {
+            item_template_id: u(template),
+            grade: None,
+            tempering_level: 0,
+            durability: 325.0,
+            properties: ItemPropertiesAll::default(),
+            arcane_tier: None,
+        };
+        let (helmet, cuirass) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut inv = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: Loadout::default(),
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        inv.backpack.items.0.insert(helmet, piece("d00c04af-562d-48d8-b38d-10621e55dadd")); // Dragonscale Helmet
+        inv.backpack.items.0.insert(cuirass, piece("659dd496-f71e-4cf8-aaee-8f0c4723410e")); // Dragonscale Armor
+
+        let keep = |slot: Uuid, item: Option<Uuid>| {
+            without_armour_in_the_wrong_slot(&HashMap::from([(slot, item)]), &inv).contains_key(&slot)
+        };
+        assert!(!keep(helmet_slot, Some(cuirass)), "the cuirass is refused in the helmet slot");
+        assert!(!keep(body_slot, Some(helmet)), "and the helmet in the body slot");
+        // CONTROLS: the right piece in the right slot, an unequip, a slot that is not an
+        // armour slot, and an id the backpack does not hold all pass through untouched.
+        assert!(keep(helmet_slot, Some(helmet)));
+        assert!(keep(body_slot, Some(cuirass)));
+        assert!(keep(helmet_slot, None));
+        assert!(keep(weapon_slot, Some(cuirass)), "the type check owns non-armour slots");
+        assert!(keep(helmet_slot, Some(Uuid::new_v4())));
+    }
 
     #[test]
     fn level_up_offer_gets_a_current_start_time() {

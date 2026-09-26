@@ -537,6 +537,14 @@ async fn start_craft(
     let mut entry = load_owned(conn, character_id, user_id).await?;
     let mut tracker = InventoryChangeTracker::default();
 
+    // The job's id exists BEFORE its results are minted, because the APK-output mint
+    // below derives the new item's id from it. It used to be minted from a placeholder
+    // job whose id was `Uuid::nil()`, so every such craft handed out the SAME item id
+    // (`00000000-0000-8000-8000-000000000000`); the backpack is keyed by id, so each
+    // craft silently REPLACED the previous one, and an enchant of "the helmet" rolled
+    // onto whatever the last craft had put there (report #229).
+    let job_id = Uuid::new_v4();
+
     let (results, crafting_type_id, duration_ms) = if let Some(item_id) = item_id {
         // ── temper / enchant: modify an existing backpack item ──
         let existing =
@@ -643,7 +651,7 @@ async fn start_craft(
                             });
                         let results = mint_recipe_output(
                             &CraftJob {
-                                id: Uuid::nil(),
+                                id: job_id,
                                 recipe_id,
                                 building_id,
                                 crafting_type_id,
@@ -701,7 +709,7 @@ async fn start_craft(
 
     let completed_at_ms = now_ms() + duration_ms;
     let job = CraftJob {
-        id: Uuid::new_v4(),
+        id: job_id,
         recipe_id,
         building_id,
         crafting_type_id,
@@ -830,7 +838,8 @@ async fn collect_craft(
     // `results: {}`, so collecting it granted nothing and left the player with a
     // permanently uncollectable craft.
     let (_, repaired_results) = repaired_craft_fields(&job, static_data, repair_data);
-    let reward = reward_from_results(&repaired_results);
+    let mut reward = reward_from_results(&repaired_results);
+    remint_colliding_reward_ids(&mut reward, &entry.inventory.0);
 
     let mut tracker = InventoryChangeTracker::default();
     apply_reward(
@@ -858,6 +867,37 @@ async fn collect_craft(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Give a collected item a fresh id when the one it carries is already held — in the
+/// backpack or equipped — so collecting a craft can never OVERWRITE an item.
+///
+/// The backpack is a map keyed by item id and [`apply_reward`] inserts, so a colliding
+/// id silently replaced whatever the player already had (report #229: every APK-output
+/// craft shared one id, and each new craft destroyed the last). The mint is fixed at the
+/// source in [`start_craft`]; this makes the whole class harmless for any job already
+/// stored, or any future minting mistake.
+///
+/// A temper / enchant never trips it: its item is taken OUT of the backpack when the job
+/// starts, so its own id is free again when it comes back, and it keeps that id (the
+/// client tracks the item in the smithy by it).
+fn remint_colliding_reward_ids(
+    reward: &mut RewardGrant,
+    inventory: &blades_lib::user_data::CompleteInventory,
+) {
+    for ri in &mut reward.items {
+        let held = inventory.backpack.items.0.contains_key(&ri.id)
+            || inventory.loadout.equipped_items.0.values().any(|e| e.id == ri.id);
+        if held {
+            let fresh = Uuid::new_v4();
+            log::warn!(
+                "[craft] collected item id {} is already held; minting {fresh} so it \
+                 does not overwrite the existing item",
+                ri.id
+            );
+            ri.id = fresh;
+        }
+    }
+}
 
 /// Remove and return the job `/finish` is collecting; 404 when there is none. Removing
 /// it is what makes a collected craft (and its rolled enchant) impossible to collect or
@@ -1687,6 +1727,11 @@ mod tests {
     }
 
     const MADNESS_BATTLEAXE: &str = "80344fa2-2c4a-4ef3-a5e3-7533b712a740";
+    // Report #229. The APK's items.json: the helmet is equipmentSlot 1, the armor 3.
+    const DRAGONSCALE_HELMET: &str = "d00c04af-562d-48d8-b38d-10621e55dadd";
+    const DRAGONSCALE_ARMOR: &str = "659dd496-f71e-4cf8-aaee-8f0c4723410e";
+    const DRAGONSCALE_HELMET_RECIPE: &str = "c71163af-2dad-45ce-b5d8-c64591c8c397";
+    const DRAGONSCALE_ARMOR_RECIPE: &str = "877b0423-0508-4ae8-b317-56ea8b77ff83";
     /// `Enchant.Recipe.DamageMagickaT10`, the recipe of all 34 captured arcane-2 jobs.
     const MAGICKA_DAMAGE_T10: &str = "e0d48d1a-8d8e-4c76-bfeb-970d80f9b838";
 
@@ -1971,6 +2016,42 @@ mod tests {
         assert_eq!(r.items.len(), 1);
         assert_eq!(r.items[0].id.to_string(), item_id, "finish must preserve the item id");
         assert_eq!(r.items[0].item.tempering_level, 10);
+    }
+
+    /// Report #229's data loss, at the unit level: collecting an item whose id the
+    /// player already holds used to REPLACE the held item (the backpack is keyed by id).
+    #[test]
+    fn a_collected_item_never_takes_an_id_that_is_already_held() {
+        use blades_lib::user_data::{Backpack, CompleteInventory, Loadout, SingleEquippedItem, Treasury};
+        let held_in_backpack = Uuid::new_v4();
+        let held_equipped = Uuid::new_v4();
+        let free = Uuid::new_v4();
+        let mut inv = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: Loadout::default(),
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        inv.backpack.items.0.insert(held_in_backpack, item_with(0, vec![]));
+        let slot = uuid("48021ab1-a1a6-487b-80a4-ca472a4d0c77");
+        inv.loadout.equipped_items.0.insert(
+            slot,
+            SingleEquippedItem { id: held_equipped, slot, item: item_with(0, vec![]) },
+        );
+        let mut reward = RewardGrant::default();
+        for id in [held_in_backpack, held_equipped, free] {
+            reward.items.push(RewardItem { id, item: item_with(0, vec![]) });
+        }
+
+        remint_colliding_reward_ids(&mut reward, &inv);
+
+        let ids: Vec<Uuid> = reward.items.iter().map(|r| r.id).collect();
+        assert_ne!(ids[0], held_in_backpack, "backpack collision re-minted");
+        assert_ne!(ids[1], held_equipped, "equipped collision re-minted");
+        assert_eq!(ids[2], free, "CONTROL: a free id is kept as minted");
+        assert!(!ids[..2].contains(&free));
     }
 
     #[test]
@@ -4013,6 +4094,95 @@ mod tests {
             let row = stored(&mut conn, &s).await;
             assert_eq!(gold_of(&row), 100_000 - RETAIL_MAGICKA_T10_GOLD, "a second finish charges nothing");
             assert_eq!(counts(&row.inventory.0), stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)]));
+        }
+
+        /// A plain craft body for an APK-output recipe (no itemId).
+        fn plain_request(recipe_id: &str) -> CreateCraftRequest {
+            serde_json::from_value(serde_json::json!({
+                "recipeId": recipe_id,
+                "buildingId": "561e3e1f-d941-40e2-899d-d11f125cd9ef",
+                "temperingLevel": 0,
+                "gemsPayment": false,
+                "batchSize": 1
+            }))
+            .unwrap()
+        }
+
+        fn result_item_id(craft_wire: &Value) -> Uuid {
+            craft_wire["results"]["items"][0]["id"]
+                .as_str()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| panic!("an instanced result: {craft_wire}"))
+        }
+
+        /// Report #229, end to end through the handlers' own bodies: craft a Dragonscale
+        /// Helmet, then a Dragonscale Armor. Both recipes resolve only through the APK
+        /// output table, which minted every result from a nil job id — so both carried
+        /// `00000000-0000-8000-8000-000000000000`, the second collect REPLACED the
+        /// helmet in the id-keyed backpack, and "enchanting the helmet" then rolled onto
+        /// the cuirass.
+        #[tokio::test]
+        async fn two_apk_output_crafts_get_distinct_ids_and_neither_replaces_the_other() {
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+            let s = seed(&mut conn, 0).await;
+            // Precondition: both recipes really take the APK-output path (not a captured
+            // recipe, not a smith craftable) — otherwise this proves nothing.
+            for r in [DRAGONSCALE_HELMET_RECIPE, DRAGONSCALE_ARMOR_RECIPE] {
+                let id = uuid(r);
+                assert!(!sd.recipes.contains_key(&id) && sd.smith_craftables.resolve(&id).is_none(), "{r}");
+                assert!(blades_lib::features::recipe_outputs::output_for(&id).is_some(), "{r}");
+            }
+
+            let mut crafted = Vec::new();
+            for (recipe, template) in [
+                (DRAGONSCALE_HELMET_RECIPE, DRAGONSCALE_HELMET),
+                (DRAGONSCALE_ARMOR_RECIPE, DRAGONSCALE_ARMOR),
+            ] {
+                let started = start_craft(&mut conn, &sd, rd, s.user_id, s.character_id, plain_request(recipe))
+                    .await
+                    .expect("APK-output craft starts");
+                let minted = result_item_id(&started.craft);
+                assert_eq!(started.craft["results"]["items"][0]["itemTemplateId"], template);
+                let craft_id: Uuid = started.craft["id"].as_str().unwrap().parse().unwrap();
+                let fin = collect_craft(&mut conn, &sd, rd, None, s.user_id, s.character_id, craft_id, false)
+                    .await
+                    .expect("finish");
+                assert_eq!(fin.reward.items.len(), 1);
+                assert_eq!(fin.reward.items[0].id, minted, "nothing was held at that id: kept as minted");
+                crafted.push((minted, template));
+            }
+
+            let (helmet_id, armor_id) = (crafted[0].0, crafted[1].0);
+            assert_ne!(helmet_id, armor_id, "each craft mints its own item id");
+            let row = stored(&mut conn, &s).await;
+            let items = &row.inventory.0.backpack.items.0;
+            assert_eq!(items[&helmet_id].item_template_id, uuid(DRAGONSCALE_HELMET), "the helmet is still a helmet");
+            assert_eq!(items[&armor_id].item_template_id, uuid(DRAGONSCALE_ARMOR));
+            assert_eq!(items.len(), 3, "the seeded battleaxe + both crafts: {items:?}");
+        }
+
+        /// CONTROL for the collision guard: a temper takes its item out of the backpack
+        /// at start and hands it back under the SAME id at finish (the client tracks the
+        /// item in the smithy by it). The guard must never re-mint that.
+        #[tokio::test]
+        async fn a_temper_still_returns_the_item_under_its_own_id() {
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+            let s = seed(&mut conn, 0).await;
+            start_craft(&mut conn, &sd, rd, s.user_id, s.character_id, request(s.item_id, 10))
+                .await
+                .expect("temper starts");
+            let craft_id = stored(&mut conn, &s).await.server_state.0.craft_jobs[0].id;
+            let fin = collect_craft(&mut conn, &sd, rd, None, s.user_id, s.character_id, craft_id, false)
+                .await
+                .expect("finish");
+            assert_eq!(fin.reward.items[0].id, s.item_id);
+            let row = stored(&mut conn, &s).await;
+            assert_eq!(row.inventory.0.backpack.items.0[&s.item_id].tempering_level, 10);
+            assert_eq!(row.inventory.0.backpack.items.0.len(), 1);
         }
 
         #[tokio::test]
