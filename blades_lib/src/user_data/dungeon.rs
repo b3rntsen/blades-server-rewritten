@@ -31,6 +31,10 @@ pub struct LootTableResult {
 }
 
 impl LootTableResult {
+    pub fn is_empty(&self) -> bool {
+        self.stackable_items.is_empty() && self.currencies.is_empty() && self.item.is_empty()
+    }
+
     pub fn merge(&mut self, other: LootTableResult) {
         for (uuid, amount) in other.stackable_items {
             self.stackable_items.insert(
@@ -61,10 +65,16 @@ pub struct DungeonEnemyResult {
     /// one field here that is never omitted, so skipping it when empty put our
     /// responses in a shape retail never produces.
     ///
+    /// Unlike `lootTableLoot`, this is a loot RESULT directly, not a map keyed by
+    /// table id. The 38 populated retail observations are all exactly
+    /// `{"stackableItems":{"faa3aeb3-…":1}}` (one Door Key). Modelling it as a
+    /// map made every populated retail value fail to deserialize and left the
+    /// generated field permanently empty (report #236).
+    ///
     /// It still `default`s on the way in: a field we always send is not
     /// necessarily a field every stored row already has.
     #[serde(default)]
-    pub spawn_group_loot: HashMap<Uuid, LootTableResult>,
+    pub spawn_group_loot: LootTableResult,
     /// Omitted when empty — the opposite rule to the field above, and measured
     /// the same way: of those 66,994 results, 190 omit `lootTableLoot` entirely
     /// and **not one** sends it as `{}`. Absent is retail's encoding of "no loot
@@ -78,12 +88,8 @@ pub struct DungeonEnemyResult {
 
 impl DungeonEnemyResult {
     pub fn merged_loot_table(&self) -> LootTableResult {
-        let mut result = LootTableResult::default();
-        for loot_table in self
-            .spawn_group_loot
-            .values()
-            .chain(self.loot_table_loot.values())
-        {
+        let mut result = self.spawn_group_loot.clone();
+        for loot_table in self.loot_table_loot.values() {
             result.merge(loot_table.clone());
         }
         result
@@ -529,6 +535,24 @@ mod enemy_loot_wire_shape {
             Some(&json!({})),
             "retail never omits spawnGroupLoot; got {wire}"
         );
+    }
+
+    #[test]
+    fn populated_spawn_group_loot_is_a_direct_result_and_reaches_merged_loot() {
+        // All 38 populated retail observations have this exact shape: the result
+        // directly under spawnGroupLoot, not under a UUID/table-id key. Twenty-six
+        // are EQ15's mercenary, whose key opens the door in report #236.
+        let key = "faa3aeb3-9284-4d83-8981-1af00e3a6398";
+        let e = enemy(json!({
+            "enemyLevel": 42,
+            "givenXP": 176,
+            "spawnGroupLoot": {"stackableItems": {key: 1}},
+        }));
+        assert_eq!(e.spawn_group_loot.stackable_items.len(), 1);
+        assert_eq!(e.merged_loot_table().stackable_items.len(), 1);
+
+        let wire = serde_json::to_value(&e).unwrap();
+        assert_eq!(wire["spawnGroupLoot"], json!({"stackableItems": {key: 1}}));
     }
 
     #[test]

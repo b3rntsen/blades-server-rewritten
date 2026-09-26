@@ -323,6 +323,39 @@ fn roll_loot_table(
 static ENEMY_LOOT_RAW: &str = include_str!("../enemy_loot.json");
 static ENEMY_GROUP_TABLES_RAW: &str = include_str!("../enemy_group_tables.json");
 
+/// Retail-authored loot attached directly to an enemy spawn group, outside the
+/// ordinary loot-table map.
+///
+/// There are only 38 populated `spawnGroupLoot` results across 66,994 captured
+/// enemies. All 38 are one Door Key; all are on enemy zero of spawner zero; and
+/// they belong to exactly four groups (26 observations on EQ15's mercenary and
+/// 12 on the other three). That is a complete, deterministic mapping rather
+/// than a probabilistic loot model.
+const DOOR_KEY_ITEM_ID: u128 = 0xfaa3aeb3_9284_4d83_8981_1af00e3a6398;
+const DOOR_KEY_SPAWN_GROUP_IDS: [u128; 4] = [
+    0xa91ebfe6_0167_4643_bd6f_ed27d8dfad41,
+    0x9cb35702_def0_441e_b760_9c8a23ffd8bf,
+    0x3d0a198d_6ab7_4c54_addf_1e67c55c3e78,
+    0x681c0add_1f49_46cc_bafb_e240680406e7,
+];
+
+fn spawn_group_loot(
+    spawn_group_id: &Uuid,
+    spawner_index: usize,
+    enemy_index: usize,
+) -> LootTableResult {
+    let carries_key = spawner_index == 0
+        && enemy_index == 0
+        && DOOR_KEY_SPAWN_GROUP_IDS.contains(&spawn_group_id.as_u128());
+    let mut result = LootTableResult::default();
+    if carries_key {
+        result
+            .stackable_items
+            .insert(Uuid::from_u128(DOOR_KEY_ITEM_ID), 1);
+    }
+    result
+}
+
 /// The gold table, and the fallback for a spawn group the corpus never saw.
 ///
 /// 1,066 of parsed.json's 1,956 enemy spawn groups were observed (51.6% of enemy
@@ -572,10 +605,11 @@ pub fn generate_for_dungeon(
                     enemies_info.push(vec![DungeonEnemyResult {
                         enemy_level,
                         given_xp,
-                        // Retail's own `spawnGroupLoot` is left empty deliberately:
-                        // 38 of 66,994 captured enemy results carried one and every
-                        // observation is the same single item, too little to model.
-                        spawn_group_loot: HashMap::default(),
+                        spawn_group_loot: spawn_group_loot(
+                            spawn_group_id,
+                            spawner_index,
+                            0,
+                        ),
                         loot_table_loot: roll_enemy_loot(
                             dungeon_uuid,
                             spawn_group_id,
@@ -1111,6 +1145,45 @@ mod enemy_loot_tests {
         }
         out.sort();
         out
+    }
+
+    #[test]
+    fn eq15_mercenary_carries_the_door_key() {
+        let game_data = game_data();
+        let dungeon: Uuid = "924f1147-fd7f-4736-9e2d-f33fa942dbdd".parse().unwrap();
+        let mercenary: Uuid = "a91ebfe6-0167-4643-bd6f-ed27d8dfad41".parse().unwrap();
+        let key: Uuid = "faa3aeb3-9284-4d83-8981-1af00e3a6398".parse().unwrap();
+        let generated = generate_for_dungeon(&game_data, &dungeon, 42, 176).unwrap();
+        let enemy = &generated.enemy_generated_data[&mercenary][0][0];
+
+        assert_eq!(enemy.spawn_group_loot.stackable_items.get(&key), Some(&1));
+        assert_eq!(enemy.merged_loot_table().stackable_items.get(&key), Some(&1));
+    }
+
+    #[test]
+    fn only_the_four_observed_enemy_groups_get_a_door_key() {
+        let key = Uuid::from_u128(DOOR_KEY_ITEM_ID);
+        let observed: std::collections::HashSet<Uuid> = DOOR_KEY_SPAWN_GROUP_IDS
+            .iter()
+            .copied()
+            .map(Uuid::from_u128)
+            .collect();
+        let game_data = game_data();
+        let mut found = std::collections::HashSet::new();
+
+        for (dungeon_id, group_id) in all_spawn_groups(&game_data) {
+            let generated = generate_for_dungeon(&game_data, &dungeon_id, 42, 176).unwrap();
+            for (spawner_index, enemies) in generated.enemy_generated_data[&group_id].iter().enumerate() {
+                for (enemy_index, enemy) in enemies.iter().enumerate() {
+                    if enemy.spawn_group_loot.stackable_items.contains_key(&key) {
+                        assert_eq!((spawner_index, enemy_index), (0, 0));
+                        found.insert(group_id);
+                    }
+                }
+            }
+        }
+
+        assert_eq!(found, observed);
     }
 
     /// Both corpora must actually be compiled in. Everything below is vacuous
