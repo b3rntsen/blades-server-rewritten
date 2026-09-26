@@ -477,15 +477,20 @@ pub fn roll_enemy_loot(
     };
 
     for table_id in tables {
-        let Some(entry) = enemy_loot()["tables"].get(table_id.to_string()) else {
-            // A table left out of the corpus as too thin to model. Retail keyed
-            // it on this enemy, so the key is sent, empty -- dropping the key
-            // would be a shape retail never sent.
-            out.insert(table_id, LootTableResult::default());
-            continue;
+        let results = match enemy_loot()["tables"].get(table_id.to_string()) {
+            Some(entry) => enemy_table_results(entry, enemy_level),
+            // A table left out of the ENEMY corpus as too thin to model. The
+            // floor-loot corpus may still know it: 8858f284 is the DoorKey table,
+            // 25 enemy observations (too few to keep) but 269 of 269 DoorKeys on
+            // the pots it also hangs on. Sending it empty meant the key-holder
+            // in EQ13 (101b2285) and the three in SQ205_B never dropped their key,
+            // and the door behind them never opened (report #236).
+            None => interactable_table_results(&table_id, enemy_level),
         };
         let mut result = LootTableResult::default();
-        if let Some(results) = enemy_table_results(entry, enemy_level) {
+        // Known to neither corpus: retail keyed it on this enemy, so the key is
+        // still sent, empty -- dropping the key would be a shape retail never sent.
+        if let Some(results) = results {
             if let Some(drawn) = draw_weighted(&mut rng, results) {
                 let loot = &drawn["loot"];
                 if let Some(stacks) = loot["stackableItems"].as_object() {
@@ -517,6 +522,47 @@ pub fn roll_enemy_loot(
     }
 
     out
+}
+
+// -- spawn-group loot -------------------------------------------------------
+//
+// `spawnGroupLoot` is the other half of an enemy's corpse, and it is how retail
+// handed a key-holder its key. Over 66,994 captured enemy results it was filled
+// 38 times, and every one of the 38 is the same bare result, one DoorKey. Every
+// filled one that can be attributed to a group (11 of 11 in the local capture
+// snapshot, 9 of 9 distinct rolls) is EQ15's Mercenary, and that group carried
+// it on every roll: A Battle Unceasing's boss sits behind a locked door and the
+// Mercenary holds the key. We sent `{}` because the corpus called one item "too
+// little to model" -- so the Mercenary died keyless and the quest could not be
+// finished (report #236).
+//
+// Not rolled: 9 of 9 distinct retail rolls carried it, so it is a property of
+// the group, not a draw. A group absent here sends `{}`, as retail did for the
+// other 66,956 results.
+const DOOR_KEY_ITEM_ID: u128 = 0xfaa3aeb3_9284_4d83_8981_1af00e3a6398;
+const SPAWN_GROUP_LOOT: &[(u128, u128, u64)] = &[
+    // EQ15_Stone_DungeonSettings, "Enemy.Name.Mercenary".
+    (0xa91ebfe6_0167_4643_bd6f_ed27d8dfad41, DOOR_KEY_ITEM_ID, 1),
+];
+
+/// The fixed `spawnGroupLoot` retail gave every enemy of `spawn_group_id`.
+pub fn spawn_group_loot(spawn_group_id: &Uuid) -> LootTableResult {
+    let mut out = LootTableResult::default();
+    for (group, item, quantity) in SPAWN_GROUP_LOOT {
+        if spawn_group_id.as_u128() == *group {
+            out.stackable_items.insert(Uuid::from_u128(*item), *quantity);
+        }
+    }
+    out
+}
+
+/// Is `table_id` one the enemy corpus left out, so that rows generated before
+/// report #236 carry it as an empty result by construction rather than by draw?
+///
+/// The repair of stored quest rows asks this before filling an empty result: an
+/// empty roll of a modelled table is an ordinary outcome and must stay empty.
+pub fn enemy_table_is_unmodelled(table_id: &Uuid) -> bool {
+    enemy_loot()["tables"].get(table_id.to_string()).is_none()
 }
 
 /// Which dungeon owns this enemy spawn group, if exactly one does.
@@ -572,10 +618,8 @@ pub fn generate_for_dungeon(
                     enemies_info.push(vec![DungeonEnemyResult {
                         enemy_level,
                         given_xp,
-                        // Retail's own `spawnGroupLoot` is left empty deliberately:
-                        // 38 of 66,994 captured enemy results carried one and every
-                        // observation is the same single item, too little to model.
-                        spawn_group_loot: HashMap::default(),
+                        // Retail's fixed per-group result -- the key-holder's key.
+                        spawn_group_loot: spawn_group_loot(spawn_group_id),
                         loot_table_loot: roll_enemy_loot(
                             dungeon_uuid,
                             spawn_group_id,
@@ -1744,5 +1788,150 @@ mod spawn_table_tests {
             "only {with_extra_table} spawns gained a table; the corpus adds one to 700"
         );
         assert!(paying > 600, "only {paying} floor spawns pay anything");
+    }
+}
+
+/// Report #236: "In Battle Unceasing sigil quest Merc didn't drop a key so
+/// unable to complete quest." Enemies that hold a door key.
+#[cfg(test)]
+mod key_holder_tests {
+    use super::*;
+
+    /// EQ15_Stone_DungeonSettings, the dungeon of "A Battle Unceasing".
+    const EQ15: &str = "924f1147-fd7f-4736-9e2d-f33fa942dbdd";
+    /// Its Mercenary: the enemy the key rides on.
+    const MERCENARY: &str = "a91ebfe6-0167-4643-bd6f-ed27d8dfad41";
+    const DOOR_KEY: &str = "faa3aeb3-9284-4d83-8981-1af00e3a6398";
+    const KEY_TABLE: &str = "8858f284-4f33-4da4-8085-0befa7ef2637";
+    /// The groups retail keyed the DoorKey loot TABLE on: EQ13's key-holder,
+    /// SQ201's, and three in SQ205_B.
+    const KEY_TABLE_GROUPS: [(&str, &str); 5] = [
+        ("413d5dfb-13b6-4a7c-84b1-81e008648f19", "101b2285-0679-4d5c-92d5-a34045f145ce"),
+        ("0ded6e84-d942-434b-8563-33ef301f6189", "379775a2-8015-4c8c-a503-0691597528a0"),
+        ("7f3ca11c-bfc7-40ec-bf72-7fb5c45ddbd0", "51ccfdc2-e8f5-4ff3-bc62-0d72eee97387"),
+        ("7f3ca11c-bfc7-40ec-bf72-7fb5c45ddbd0", "7c4c0cc5-4240-4676-a372-6fc06bbeb5d9"),
+        ("7f3ca11c-bfc7-40ec-bf72-7fb5c45ddbd0", "bd3eecc3-5f10-41ad-8a6f-f796e17d7d6e"),
+    ];
+
+    fn game_data() -> GameData {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+        serde_json::from_str(&std::fs::read_to_string(path).expect("read parsed.json"))
+            .expect("parse game data")
+    }
+
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).expect("uuid")
+    }
+
+    fn keys_on(enemy: &DungeonEnemyResult) -> u64 {
+        enemy
+            .merged_loot_table()
+            .stackable_items
+            .get(&uuid(DOOR_KEY))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// THE BUG. The Mercenary must die holding the key, at any level: the event
+    /// is served to level-1 and level-89 characters alike.
+    #[test]
+    fn the_eq15_mercenary_drops_the_door_key() {
+        let game_data = game_data();
+        for level in [1, 14, 89] {
+            let generated = generate_for_dungeon(&game_data, &uuid(EQ15), level, 100).unwrap();
+            let mercs = &generated.enemy_generated_data[&uuid(MERCENARY)];
+            assert_eq!(mercs.len(), 1, "one Mercenary spawner");
+            let merc = &mercs[0][0];
+            assert_eq!(keys_on(merc), 1, "level {level}: the Mercenary holds no key");
+            // Where retail put it: the bare spawnGroupLoot result.
+            assert_eq!(
+                serde_json::to_value(&merc.spawn_group_loot).unwrap(),
+                serde_json::json!({ "stackableItems": { DOOR_KEY: 1 } }),
+            );
+        }
+    }
+
+    /// CONTROL: one key, on one enemy. A key on every corpse would pass the test
+    /// above and make the locked door meaningless.
+    #[test]
+    fn no_other_eq15_enemy_holds_a_key() {
+        let game_data = game_data();
+        let generated = generate_for_dungeon(&game_data, &uuid(EQ15), 14, 100).unwrap();
+        let mut keys = 0;
+        for (group, spawners) in &generated.enemy_generated_data {
+            for enemy in spawners.iter().flatten() {
+                if *group != uuid(MERCENARY) {
+                    assert_eq!(keys_on(enemy), 0, "group {group} holds a key");
+                    assert!(enemy.spawn_group_loot.is_empty(), "group {group}");
+                }
+                keys += keys_on(enemy);
+            }
+        }
+        assert_eq!(keys, 1, "exactly one key in the dungeon");
+    }
+
+    /// CONTROL across the whole game: spawnGroupLoot is `{}` for every group but
+    /// the Mercenary, as it was on 66,956 of retail's 66,994 enemy results.
+    #[test]
+    fn spawn_group_loot_is_empty_everywhere_else() {
+        let game_data = game_data();
+        let mut filled = Vec::new();
+        for dungeon in game_data.dungeons.values() {
+            for group in dungeon.spawn_info.enemy_spawn_groups.keys() {
+                if !spawn_group_loot(group).is_empty() {
+                    filled.push(*group);
+                }
+            }
+        }
+        assert_eq!(filled, vec![uuid(MERCENARY)]);
+    }
+
+    /// The same bug by the other road. These five groups roll the DoorKey TABLE
+    /// in lootTableLoot, which the enemy corpus left out as too thin; it was sent
+    /// empty, so their keys never dropped either.
+    #[test]
+    fn enemies_on_the_key_table_drop_the_key() {
+        for (dungeon, group) in KEY_TABLE_GROUPS {
+            for level in [1, 40, 89] {
+                let loot = roll_enemy_loot(&uuid(dungeon), &uuid(group), 0, 0, level);
+                let key_roll = loot
+                    .get(&uuid(KEY_TABLE))
+                    .unwrap_or_else(|| panic!("{group} no longer rolls the key table"));
+                assert_eq!(
+                    key_roll.stackable_items.get(&uuid(DOOR_KEY)),
+                    Some(&1),
+                    "{group} at level {level}"
+                );
+                assert!(enemy_table_is_unmodelled(&uuid(KEY_TABLE)));
+            }
+        }
+    }
+
+    /// CONTROL: a table known to NEITHER corpus is still sent empty, not
+    /// invented. 2d366ee0 is one the enemy corpus also left out.
+    #[test]
+    fn a_table_no_corpus_knows_stays_empty() {
+        let unknown = uuid("2d366ee0-8087-4d1d-8161-64a7b3e14f93");
+        assert!(enemy_table_is_unmodelled(&unknown));
+        assert!(interactable_table_results(&unknown, 30).is_none());
+        let groups: Vec<Uuid> = enemy_group_tables()["groups"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(_, g)| g.to_string().contains("2d366ee0-8087-4d1d-8161-64a7b3e14f93"))
+            .map(|(id, _)| uuid(id))
+            .collect();
+        assert!(!groups.is_empty(), "the corpus keys this table on some group");
+        let game_data = game_data();
+        for group in groups {
+            let dungeon = dungeon_owning_spawn_group(&game_data, &group).unwrap_or(uuid(EQ15));
+            for spawner in 0..4 {
+                if let Some(roll) = roll_enemy_loot(&dungeon, &group, spawner, 0, 30).get(&unknown) {
+                    assert!(roll.is_empty(), "{group}: invented loot for an unknown table");
+                }
+            }
+        }
+        // And the gold table is modelled, so it is never "unmodelled".
+        assert!(!enemy_table_is_unmodelled(&Uuid::from_u128(GOLD_LOOT_TABLE_ID)));
     }
 }
