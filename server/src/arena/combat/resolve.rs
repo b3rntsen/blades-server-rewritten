@@ -3687,9 +3687,9 @@ const CONDITION_DURATION_SECS: f32 = super::gamedata::combat_params::ELEMENTAL_S
 /// | Shock | **0.0** |
 /// | Poison | 0.02 |
 ///
-/// **Phase 3.8 correction:** Frost and Shock are *control* statuses — they apply their
-/// mirrored Stamina/Magicka drain, not a damage-over-time. Fire and Poison deal the
-/// authored 2% as a total over the full condition, split across its scheduled ticks.
+/// Frost and Shock are *control* statuses — they apply their mirrored Stamina/Magicka
+/// drain, not a damage-over-time. Fire and Poison deal the authored 2% per second,
+/// ticked at the PvP 0.2s cadence (`0.004 × baseMaxHP` per tick).
 fn dot_percent_health(ty: super::state::DamageType) -> f32 {
     use super::gamedata::combat_params as cp;
     use super::state::DamageType;
@@ -3705,8 +3705,8 @@ fn dot_percent_health(ty: super::state::DamageType) -> f32 {
         .unwrap_or(0.0)
 }
 
-/// DoT tick cadence — 1 tick per second (s506 packet timestamps confirm 1s intervals).
-const DOT_TICK_INTERVAL: Duration = Duration::from_secs(1);
+/// DoT tick cadence — retail PvP ticks elemental conditions every 0.2 seconds.
+const DOT_TICK_INTERVAL: Duration = Duration::from_millis(200);
 
 fn condition_tick_count(duration_secs: f32) -> u32 {
     (duration_secs / DOT_TICK_INTERVAL.as_secs_f32()).round().max(1.0) as u32
@@ -3879,50 +3879,44 @@ fn apply_status_conditioning(
     }
 
     for (ty, amount) in &elementals {
-        combat.fighters[target_slot].record_element_damage(*ty, *amount, now);
         let Some(condition) = condition_for_element(*ty) else { continue };
+        let already = combat.fighters[target_slot]
+            .effects
+            .iter()
+            .any(|e| e.effect == condition && now < e.expires_at);
+        if already {
+            continue;
+        }
+
+        combat.fighters[target_slot].record_element_damage(*ty, *amount, now);
         let recent = combat.fighters[target_slot].recent_element_damage(*ty);
         let threshold = combat.fighters[target_slot].condition_threshold(condition);
         if recent >= threshold {
             // The elemental condition lands. Emit op51 apply to both players (the
-            // source DamageType = 0 for the elemental four). Idempotent: skip if this
-            // condition is already active on the target.
-            let already = combat.fighters[target_slot]
-                .effects
-                .iter()
-                .any(|e| e.effect == condition && now < e.expires_at);
-            if !already {
-                let base_hp = combat.fighters[target_slot].base_max_health();
-                // `_percentHealthDamage` is the TOTAL over the status, not a per-tick
-                // fraction. It is authored against the same un-cheated character pool
-                // as `_healthPercentToCauseStatus`; arena's x3 pacing bar must not
-                // triple it. Retail s506's dominant Poison tick (3.87) is the expected
-                // order of magnitude, while the old calculation produced 63 per tick
-                // at L86.
-                let total_dot = dot_percent_health(*ty) * base_hp as f32;
-                let per_tick = total_dot / condition_tick_count(CONDITION_DURATION_SECS) as f32;
-                combat.fighters[target_slot].effects.push(super::state::ActiveEffect {
-                    effect: condition,
-                    damage_type: *ty,
-                    value: per_tick,
-                    per_tick_damage: per_tick,
-                    expires_at: now + Duration::from_secs_f32(CONDITION_DURATION_SECS),
-                    last_tick: now,
-                    is_transient_resist: false,
-                });
-                let frame = messages::change_combat_status_effect(
-                    target_obj, true, condition, CONDITION_DURATION_SECS,
-                );
-                info!(
-                    "combat status: gsid={} target_slot={target_slot} target={} status={condition:?} source_element={ty:?} recent_damage={recent:.1} threshold={threshold:.1} duration={CONDITION_DURATION_SECS} dot_per_tick={per_tick:.2}",
-                    combat.game_session_id,
-                    combat.fighters[target_slot].loadout.display_name,
-                );
-                for slot in 0..combat.fighters.len() {
-                    out.push((slot, frame.clone()));
-                }
+            // source DamageType = 0 for the elemental four).
+            let base_hp = combat.fighters[target_slot].base_max_health();
+            let per_tick = dot_percent_health(*ty) * DOT_TICK_INTERVAL.as_secs_f32() * base_hp as f32;
+            combat.fighters[target_slot].effects.push(super::state::ActiveEffect {
+                effect: condition,
+                damage_type: *ty,
+                value: per_tick,
+                per_tick_damage: per_tick,
+                expires_at: now + Duration::from_secs_f32(CONDITION_DURATION_SECS),
+                last_tick: now,
+                is_transient_resist: false,
+            });
+            combat.fighters[target_slot].clear_element_damage(*ty);
+            let frame = messages::change_combat_status_effect(
+                target_obj, true, condition, CONDITION_DURATION_SECS,
+            );
+            info!(
+                "combat status: gsid={} target_slot={target_slot} target={} status={condition:?} source_element={ty:?} recent_damage={recent:.1} threshold={threshold:.1} duration={CONDITION_DURATION_SECS} dot_per_tick={per_tick:.2}",
+                combat.game_session_id,
+                combat.fighters[target_slot].loadout.display_name,
+            );
+            for slot in 0..combat.fighters.len() {
+                out.push((slot, frame.clone()));
             }
-
 
             // Frozen is not a second stagger/paralysis status. Retail's shipped
             // `slowStatusMultiplier` is 0.75 and its loading tip says Frozen slows the
@@ -4280,9 +4274,10 @@ fn emit_status_removals(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, V
 }
 
 /// Drive scheduled DoT ticks for all active elemental conditions. Fire and Poison
-/// split `_percentHealthDamage × baseMaxHP` across the five authored one-second
-/// ticks; Frost and Shock retain zero health damage and provide their control/drain
-/// effects instead. A late engine pass catches up every tick due through expiry.
+/// tick every 0.2s at `_percentHealthDamage × 0.2 × baseMaxHP`, then run through
+/// mitigation. Frost and Shock retain zero health damage and provide their
+/// control/drain effects instead. A late engine pass catches up every tick due
+/// through expiry.
 fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
     use super::state::{DamageSource as DS, StatusEffectType};
     let mut out = Vec::new();
@@ -4298,7 +4293,7 @@ fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
 
         // Collect every tick due up to the effect's expiry. Advance from the
         // SCHEDULED time rather than rebasing on a late engine tick, so scheduler
-        // jitter cannot turn a five-tick effect into four ticks.
+        // jitter cannot drop the last due tick at expiry.
         let ticking: Vec<(usize, u32, f32, super::state::DamageType)> = combat.fighters[slot]
             .effects
             .iter()
@@ -4328,13 +4323,26 @@ fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
             }
 
             for _ in 0..due {
+                let mut tick_components = vec![(dmg_type, tick_dmg)];
+                let attacker = super::state::Loadout::default();
+                let resolved = super::damage::mitigate_components(
+                    &attacker,
+                    &combat.fighters[slot],
+                    DS::StatusEffect,
+                    ActiveSide::None,
+                    ActiveSide::None,
+                    &mut tick_components,
+                    now,
+                    DOT_TICK_INTERVAL.as_secs_f32(),
+                );
+                let tick_total = resolved.total.max(0.0);
                 let hp_before = combat.fighters[slot].health;
                 let max_hp = combat.fighters[slot].max_health;
-                combat.fighters[slot].take_damage_at(tick_dmg.round().max(0.0) as u32, now);
+                combat.fighters[slot].take_damage_at(tick_total as u32, now);
                 let hp_after = combat.fighters[slot].health;
-                let pct = if max_hp > 0 { 100.0 * tick_dmg / max_hp as f32 } else { 0.0 };
+                let pct = if max_hp > 0 { 100.0 * tick_total / max_hp as f32 } else { 0.0 };
                 info!(
-                    "combat event: gsid={} target_slot={slot} target={} source=StatusEffect element={dmg_type:?} damage={tick_dmg:.2} pct_max_hp={pct:.2} hp={hp_before}->{hp_after}",
+                    "combat event: gsid={} target_slot={slot} target={} source=StatusEffect element={dmg_type:?} damage={tick_total:.2} pct_max_hp={pct:.2} hp={hp_before}->{hp_after}",
                     combat.game_session_id,
                     combat.fighters[slot].loadout.display_name,
                 );
@@ -4356,11 +4364,11 @@ fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
                     // STATE, sent on DoT frames too (03-D19, `ApplyDamage` 0x1bd2a24).
                     super::damage::flags::SHOW_DAMAGE
                         | combat.fighters[slot].optimal_block_flag(now),
-                    tick_dmg,
+                    tick_total,
                     0,
                     ActiveSide::None,
-                    super::state::DamageType::None,
-                    &[(dmg_type, tick_dmg)],
+                    resolved.most_resisted,
+                    &resolved.components,
                 );
                 for dest in 0..combat.fighters.len() {
                     out.push((dest, frame.clone()));
@@ -9622,12 +9630,11 @@ mod shipped_effects_tests {
         }
     }
 
-    /// `_percentHealthDamage` is the whole five-second condition, not an amount to
-    /// charge once per second. It is also authored against the character's own health,
-    /// not arena's x3 pacing bar. A delayed engine tick still owes all five scheduled
-    /// ticks rather than silently dropping the last one at expiry.
+    /// `_percentHealthDamage` is a per-second rate authored against the character's
+    /// own health, not arena's x3 pacing bar. A delayed engine tick still owes all
+    /// 25 scheduled 0.2s ticks rather than silently dropping the last one at expiry.
     #[test]
-    fn burning_splits_two_percent_of_base_health_across_five_ticks() {
+    fn burning_ticks_every_point_two_seconds_at_two_percent_per_second() {
         use super::super::state::DamageType;
         let now = Instant::now();
         let mut c = combat2(now);
@@ -9643,11 +9650,12 @@ mod shipped_effects_tests {
             .iter()
             .find(|e| e.effect == StatusEffectType::Burning)
             .expect("Burning must land");
-        let expected = 0.02 * c.fighters[1].base_max_health() as f32 / 5.0;
+        let expected = 0.02 * DOT_TICK_INTERVAL.as_secs_f32() * c.fighters[1].base_max_health() as f32;
         assert!(
             (effect.per_tick_damage - expected).abs() < 0.001,
-            "one tick is one fifth of the authored total",
+            "one tick is 0.004 × base max health",
         );
+        assert_eq!(condition_tick_count(CONDITION_DURATION_SECS), 25);
 
         let hp_before = c.fighters[1].health;
         let out = apply_dot_ticks(&mut c, now + Duration::from_secs(5));
@@ -9655,15 +9663,71 @@ mod shipped_effects_tests {
             let nd = arena_proto::parse_netdata(&frame[2..]);
             nd.int(3) == Some(50) && nd.int(6) == Some(4)
         }).count();
-        assert_eq!(damage_frames, 10, "five ticks, broadcast to two viewers");
+        assert_eq!(damage_frames, 50, "25 ticks, broadcast to two viewers");
         assert_eq!(
             hp_before - c.fighters[1].health,
-            expected.round() as u32 * 5,
-            "the complete condition deals 2% of base health, subject to wire rounding",
+            expected as u32 * 25,
+            "each tick is mitigated/applied independently and HP damage truncates per tick",
         );
         assert!(
             !c.fighters[1].effects.iter().any(|e| e.effect == StatusEffectType::Burning),
             "the fifth tick and expiry happen in the same boundary pass",
+        );
+    }
+
+    /// Capture-test T2: elemental DoT resistance is applied every 0.2s tick, with the
+    /// net resistance/weakness amount scaled by `0.75 × 0.2 = 0.15`.
+    #[test]
+    fn dot_tick_mitigation_uses_point_fifteen_resistance_per_tick() {
+        use super::super::state::{ActiveEffect, DamageType};
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].loadout.resistances = vec![(DamageType::Fire, 40.0)];
+        c.fighters[1].effects.push(ActiveEffect {
+            effect: StatusEffectType::Burning,
+            damage_type: DamageType::Fire,
+            value: 12.0,
+            per_tick_damage: 12.0,
+            expires_at: now + Duration::from_secs(1),
+            last_tick: now,
+            is_transient_resist: false,
+        });
+
+        let hp_before = c.fighters[1].health;
+        let out = apply_dot_ticks(&mut c, now + DOT_TICK_INTERVAL);
+        assert_eq!(hp_before - c.fighters[1].health, 6, "12 - (0.15 × 40)");
+        let frames = out
+            .iter()
+            .filter(|(_, frame)| {
+                let nd = arena_proto::parse_netdata(&frame[2..]);
+                nd.int(3) == Some(50) && nd.int(6) == Some(4)
+            })
+            .count();
+        assert_eq!(frames, 2, "one mitigated tick broadcast to both viewers");
+    }
+
+    #[test]
+    fn condition_landing_clears_history_and_active_conditions_do_not_record() {
+        use super::super::state::DamageType;
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let threshold = c.fighters[1].condition_threshold(StatusEffectType::Burning);
+
+        let first = apply_status_conditioning(&mut c, 1, &[(DamageType::Fire, threshold + 1.0)], now);
+        assert_eq!(first.len(), 2, "Burning lands once");
+        assert_eq!(c.fighters[1].recent_element_damage(DamageType::Fire), 0.0, "history clears on landing");
+
+        let again = apply_status_conditioning(
+            &mut c,
+            1,
+            &[(DamageType::Fire, threshold + 10.0)],
+            now + Duration::from_millis(100),
+        );
+        assert!(again.is_empty(), "no repeated apply while Burning is active");
+        assert_eq!(
+            c.fighters[1].recent_element_damage(DamageType::Fire),
+            0.0,
+            "damage taken while the condition is active is not counted toward the next landing",
         );
     }
 

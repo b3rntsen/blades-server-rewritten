@@ -2782,6 +2782,12 @@ impl Fighter {
         entries.retain(|(_, t)| now.duration_since(*t) < DAMAGE_HISTORY_WINDOW);
     }
 
+    /// Retail clears an element's conditioning history when the matching condition
+    /// lands, and new damage while that condition is active does not re-arm it.
+    pub fn clear_element_damage(&mut self, ty: DamageType) {
+        self.damage_history.remove(&ty);
+    }
+
     /// Drain the active negation pools (Ward/Absorb/Dodge, in source order) against the
     /// per-type `components` IN PLACE; expired pools are dropped first. Returns
     /// `(negated, heal)`: `negated` = the WHOLE hit's health damage was eaten (→ emit

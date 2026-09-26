@@ -929,10 +929,11 @@ fn soak_bound_is_derived_from_the_engine_timers() {
     eprintln!("CRE-SOAK bound: {b:?}");
 }
 
-/// Regression: this BotVsBot pairing double-KO'd every round after the first (the
-/// killing swing, then the victim's Frost Revenge on 2 HP) and the uncapped replay
-/// rule looped it past the termination bound. With one replay per match it must
-/// terminate, with exactly one replayed round and a 2-round winner.
+/// Regression: this BotVsBot pairing used to double-KO every round after the first
+/// (the killing swing, then the victim's Frost Revenge on 2 HP) and the uncapped
+/// replay rule looped it past the termination bound. Corrected damage/DoT cadence
+/// leaves it with no replayed double-KO rounds, but it still pins termination and a
+/// two-round winner for the old loop seed.
 #[test]
 fn the_double_ko_loop_seed_terminates() {
     let fx = load_fixtures();
@@ -945,7 +946,7 @@ fn the_double_ko_loop_seed_terminates() {
         match_bound(MAX_TICK),
     )
     .expect("the match terminates within the bound");
-    assert_eq!(o.double_kos, 1, "one replayed double KO, then the tiebreak decides");
+    assert_eq!(o.double_kos, 0, "corrected damage avoids the old replayed double KO");
     assert!(o.rounds <= super::super::state::MATCH_ROUND_HARD_CAP, "{} rounds", o.rounds);
     let w = o.winner.expect("a match winner");
     assert_eq!(o.rounds_won[w], 2, "{:?}", o.rounds_won);

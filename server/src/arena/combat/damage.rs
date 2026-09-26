@@ -1120,8 +1120,13 @@ pub fn mitigate_components(
         } else {
             0.0
         };
+        let effectiveness_scale = if continuous {
+            combat_params::CONTINUOUS_DAMAGE_RESISTANCE_EFFECTIVENESS * resistance_scale
+        } else {
+            resistance_scale
+        };
         let mitigated =
-            tables::apply_resistance_and_weakness(before, rating * resistance_scale, weakness, continuous, piercing);
+            tables::apply_resistance_and_weakness(before, rating, weakness, effectiveness_scale, piercing);
         let resisted = (before - mitigated).max(0.0);
         *v = mitigated;
         if resisted > 0.0 && is_elemental(*ty) {

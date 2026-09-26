@@ -283,17 +283,13 @@ pub fn apply_resistance_and_weakness(
     incoming: f32,
     resistance_rating: f32,
     weakness_rating: f32,
-    continuous: bool,
+    effectiveness_scale: f32,
     piercing_floor: f32,
 ) -> f32 {
     if incoming <= 0.0 {
         return 0.0;
     }
-    let eff = if continuous {
-        combat_params::CONTINUOUS_DAMAGE_RESISTANCE_EFFECTIVENESS
-    } else {
-        1.0
-    };
+    let eff = effectiveness_scale.max(0.0);
     let resistance = resistance_rating.max(0.0);
     let weakness = weakness_rating.max(0.0);
     let net = resistance - weakness;
@@ -668,13 +664,13 @@ mod weakness_tests {
     /// a floor so a partially pierced hit cannot fall below the pierced amount.
     #[test]
     fn resistance_weakness_net_once_and_piercing_floor() {
-        let weak = apply_resistance_and_weakness(100.0, 30.0, 50.0, false, 0.0);
+        let weak = apply_resistance_and_weakness(100.0, 30.0, 50.0, 1.0, 0.0);
         assert!((weak - 120.0).abs() < 1e-3, "100 + (50 - 30)");
 
-        let pierced = apply_resistance_and_weakness(60.0, 160.0, 0.0, false, 40.0);
+        let pierced = apply_resistance_and_weakness(60.0, 160.0, 0.0, 1.0, 40.0);
         assert!((pierced - 40.0).abs() < 1e-3, "piercing floor keeps min(pre, pierce)");
 
-        let control = apply_resistance_and_weakness(100.0, 30.0, 0.0, false, 0.0);
+        let control = apply_resistance_and_weakness(100.0, 30.0, 0.0, 1.0, 0.0);
         assert!((control - 70.0).abs() < 1e-3, "plain resistance still subtracts flat");
     }
 }
