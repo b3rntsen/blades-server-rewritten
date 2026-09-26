@@ -1876,11 +1876,12 @@ pub(super) fn resolve_ability_cast(
     // a multi-hit family (Quick Strikes' second strike) is 05-D3's business.
     // A shield bash keeps its `_blockDuration` guard phase (03), and Reckless Fury
     // ships no hit, so both stay on `ability_impact_delay`.
+    let base_delay = ability_impact_delay(&ea.ability_uuid, level);
     let delay = match maneuver_timing.and_then(|t| t.impacts.first().copied()) {
-        Some(first) if ability_impact_delay(&ea.ability_uuid, level).is_zero() => {
+        Some(first) if base_delay.is_zero() => {
             Duration::from_secs_f32(first)
         }
-        _ => ability_impact_delay(&ea.ability_uuid, level),
+        _ => base_delay,
     };
     // What a maneuver does to its own caster starts with the execution, not with the
     // hit: the dodge window (04-DG1: from BeginExecution), Indomitable Smash's cure
@@ -1888,10 +1889,39 @@ pub(super) fn resolve_ability_cast(
     if tag == AbilityTag::Maneuver {
         out.extend(apply_caster_begin_effects(combat, sender, &ea.ability_uuid, level, now));
     }
-    if delay.is_zero() {
+    if tag == AbilityTag::Maneuver && base_delay.is_zero() {
+        let impact_count = maneuver_impact_count(&ea.ability_uuid);
+        if impact_count == 0 {
+            debug!("combat: slot {sender} maneuver {} has no authored hit", ea.ability_uuid);
+        }
+        for idx in 0..impact_count {
+            let authored = maneuver_timing
+                .and_then(|t| t.impacts.get(idx).copied())
+                .unwrap_or_else(|| if idx == 0 { 0.0 } else { delay.as_secs_f32() });
+            let due = now + Duration::from_secs_f32(authored.max(0.0));
+            debug!(
+                "combat: slot {sender} maneuver {} impact {}/{} in {:?}",
+                ea.ability_uuid,
+                idx + 1,
+                impact_count,
+                due.saturating_duration_since(now)
+            );
+            combat.pending_impacts.push(super::state::PendingImpact {
+                sender,
+                target: target_slot,
+                ability_uuid: ea.ability_uuid.clone(),
+                level,
+                tag,
+                magicka_full_at_cast,
+                due,
+                cast_at: now,
+                reset_maneuver_combo_after: idx + 1 == impact_count,
+            });
+        }
+    } else if delay.is_zero() {
         out.extend(apply_ability_impact(
             combat, sender, target_slot, &ea.ability_uuid, level, tag,
-            magicka_full_at_cast, now,
+            magicka_full_at_cast, now, true,
         ));
     } else {
         debug!(
@@ -1907,6 +1937,7 @@ pub(super) fn resolve_ability_cast(
             magicka_full_at_cast,
             due: now + delay,
             cast_at: now,
+            reset_maneuver_combo_after: true,
         });
     }
     out
@@ -2018,8 +2049,8 @@ fn uuid_reckless_fury() -> &'static str {
 /// one-handed, while a quick-strikes member gets **no** bonus two-handed at all.
 /// Reckless Fury ships 0/0 — it is a buff that swings nothing.
 ///
-/// Grip follows the same rule as the weapon's own base damage:
-/// `two_handed = !has_shield` (`loadout::base_damage_in_hand`).
+/// Grip is class-specific: Light is always 1H, Heavy is always 2H, and Balanced
+/// is 1H only when a shield is equipped.
 ///
 /// CALIBRATION NOTE: the recorded s506 Middle-maneuver values (201.37 / 274.51 /
 /// 186.98) sit inside the band of a PLAIN swing (150.81..271.46 across the
@@ -2040,6 +2071,27 @@ fn maneuver_bonus_damage(rank: &super::gamedata::AbilityRank, two_handed: bool) 
     (params.bonus_damage * mult).max(0.0)
 }
 
+fn maneuver_impact_count(ability_uuid: &str) -> usize {
+    match super::gamedata::ABILITIES
+        .iter()
+        .find(|a| a.uuid == ability_uuid)
+        .map(|a| a.editor_name)
+    {
+        Some("QuickStrikes") | Some("RecoveryStrikes") => 2,
+        Some("RecklessFury") => 0,
+        _ => 1,
+    }
+}
+
+fn maneuver_uses_two_handed_grip(loadout: &super::state::Loadout) -> bool {
+    match loadout.weapon.weight {
+        Some(super::tables::Weight::Light) => false,
+        Some(super::tables::Weight::Heavy) => true,
+        Some(super::tables::Weight::Versatile) => !loadout.has_shield,
+        None => false,
+    }
+}
+
 fn apply_ability_impact(
     combat: &mut MatchCombat,
     sender: usize,
@@ -2052,6 +2104,7 @@ fn apply_ability_impact(
     // freezes it (`Actor.ExecuteAbility` folds effectiveness before `PayAbilityCost`).
     magicka_full_at_cast: bool,
     now: Instant,
+    reset_maneuver_combo_after: bool,
 ) -> Vec<(usize, Vec<u8>)> {
     use super::state::AbilityTag;
     let mut out: Vec<(usize, Vec<u8>)> = Vec::new();
@@ -2146,8 +2199,8 @@ fn apply_ability_impact(
                 // nothing read them — which is why all 17 maneuvers resolved to an
                 // identical plain weapon hit regardless of which one was cast.
                 //
-                // Grip follows the same rule as the weapon's own base damage:
-                // `two_handed = !has_shield` (see `loadout::base_damage_in_hand`).
+                // Grip is class-specific: Light is always 1H, Heavy is always 2H,
+                // and Balanced is 1H only when a shield is equipped.
                 //
                 // The three authored families (see ability-spec):
                 //   power-attack  1H 0.5 / 2H 1.0 — the bonus is the TWO-handed figure
@@ -2155,15 +2208,10 @@ fn apply_ability_impact(
                 //   bashes/dodges 1.0 / 1.0
                 // Reckless Fury ships 0/0 because it is a buff that swings nothing.
                 attacker_loadout.maneuver_bonus_damage +=
-                    maneuver_bonus_damage(&r, !attacker_loadout.has_shield) * mettle;
+                    maneuver_bonus_damage(&r, maneuver_uses_two_handed_grip(&attacker_loadout))
+                        * mettle;
                 if mettle != 1.0 {
                     debug!("combat: slot {sender} maneuver bonus scaled x{mettle:.2} by Mettle");
-                }
-                // Venom Strikes' `_poisonEffectIncrease` (0.08 → ×1.08 poison).
-                if let Some(inc) = r.get(super::gamedata::AbilityField::PoisonEffectIncrease) {
-                    if inc > 0.0 {
-                        attacker_loadout.poison_effect_multiplier = 1.0 + inc;
-                    }
                 }
             }
             // The chain is NOT reset before the hit. Recovery -> Maneuver is the one
@@ -2221,9 +2269,13 @@ fn apply_ability_impact(
             target_blocked = resolved.blocked;
             out.extend(emit_damage(combat, sender, target_slot, &resolved, now));
             // A weapon maneuver's hit increments the chain (01 F), and the maneuver's
-            // end then resets it (`ActorManeuverState$$OnExit@0x1d556b0`, 02 R9). With
-            // one impact per maneuver the two collapse into the reset.
-            combat.fighters[sender].reset_combo();
+            // end then resets it (`ActorManeuverState$$OnExit@0x1d556b0`, 02 R9).
+            if !bash {
+                combat.fighters[sender].increment_combo();
+            }
+            if reset_maneuver_combo_after {
+                combat.fighters[sender].reset_combo();
+            }
         }
         AbilityTag::Paralyze | AbilityTag::Damage | AbilityTag::Generic
             if !super::damage::ships_damage(ability_uuid, level) =>
@@ -2533,7 +2585,7 @@ pub(super) fn land_due_impacts(combat: &mut MatchCombat, now: Instant) -> Vec<(u
         }
         out.extend(apply_ability_impact(
             combat, p.sender, p.target, &p.ability_uuid, p.level, p.tag,
-            p.magicka_full_at_cast, now,
+            p.magicka_full_at_cast, now, p.reset_maneuver_combo_after,
         ));
     }
     out
@@ -2705,6 +2757,13 @@ fn apply_caster_begin_effects(
     // authored number, and is called out here rather than buried.
     if let Some(bonus) = r.get(super::gamedata::AbilityField::BonusResistance) {
         if bonus > 0.0 && caster < viewers {
+            let eff = combat.fighters[caster]
+                .loadout
+                .perks
+                .ability_multiplier(super::perks::fighter_health_is_critical(
+                    &combat.fighters[caster],
+                ));
+            let bonus = bonus * eff * eff;
             let window = super::perks::ABILITY_USE_MIN_WINDOW_SECS;
             let expires = now + Duration::from_secs_f32(window);
             combat.fighters[caster]
@@ -8657,7 +8716,11 @@ mod phase4_tests {
 #[cfg(test)]
 mod shipped_effects_tests {
     use super::*;
-    use super::super::state::{DamageNegationSource, Fighter, StatusEffectType};
+    use super::super::state::{
+        DamageNegationSource, DamageType, EquippedAbility, Fighter, StatusEffectType,
+        WeaponProfile,
+    };
+    use super::super::tables::Weight;
     use super::super::loadout;
 
     fn combat2(now: Instant) -> MatchCombat {
@@ -8724,6 +8787,169 @@ mod shipped_effects_tests {
         let qs_2h = maneuver_bonus_damage(&r("QuickStrikes"), true);
         assert!(qs_1h > 0.0, "QuickStrikes one-handed must get its bonus");
         assert_eq!(qs_2h, 0.0, "…and two-handed must get none (2H multiplier is 0)");
+    }
+
+    fn equip(c: &mut MatchCombat, editor: &str) -> &'static str {
+        let uuid = uuid_of(editor);
+        let tag = loadout::ability_tag_for_template(uuid);
+        c.fighters[0].loadout.abilities.push(EquippedAbility {
+            instance_uuid: uuid.to_string(),
+            level: 1,
+            tag,
+        });
+        uuid
+    }
+
+    fn cast_equipped(c: &mut MatchCombat, uuid: &str, now: Instant) -> Vec<(usize, Vec<u8>)> {
+        let frame = cast_frame(uuid);
+        let ea = input::parse_execute_ability(&frame).expect("synthesised op37 must parse");
+        resolve_ability_cast(c, 0, 1, &frame, &ea, now)
+    }
+
+    fn cast_frame(uuid: &str) -> Vec<u8> {
+        let mut f = vec![
+            0xBE, 0x36, 0x04, 0x1F, 0x70, 0x77, 0x0A, 0x35, 0x02, 0x00, 0x00, 0x38, 0x03, 0x25,
+            0x24, 0x00,
+        ];
+        f.extend_from_slice(uuid.as_bytes());
+        f
+    }
+
+    fn op50_count(out: &[(usize, Vec<u8>)]) -> usize {
+        out.iter()
+            .filter(|(_, f)| {
+                f.len() > 2
+                    && f[1] == 0x36
+                    && arena_proto::parse_netdata(&f[2..]).int(3) == Some(50)
+            })
+            .count()
+    }
+
+    fn physical_weapon(c: &mut MatchCombat, weight: Weight, has_shield: bool, base: f32) {
+        c.fighters[0].loadout.weapon = WeaponProfile {
+            primary_type: Some(DamageType::Slashing),
+            base_by_type: vec![(DamageType::Slashing, base)],
+            weight: Some(weight),
+        };
+        c.fighters[0].loadout.weapon_template = None;
+        c.fighters[0].loadout.has_shield = has_shield;
+        c.fighters[0].loadout.enchants.clear();
+        c.fighters[1].loadout.armor_rating = 0.0;
+    }
+
+    fn power_attack_loss(weight: Weight, has_shield: bool) -> u32 {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        physical_weapon(&mut c, weight, has_shield, 0.0);
+        let uuid = equip(&mut c, "PowerAttack");
+        let before = c.fighters[1].health;
+        let mut out = cast_equipped(&mut c, uuid, now);
+        out.extend(land_due_impacts(&mut c, now + Duration::from_secs(2)));
+        assert!(op50_count(&out) > 0, "PowerAttack must land a hit");
+        before - c.fighters[1].health
+    }
+
+    #[test]
+    fn maneuver_grip_follows_weapon_class_not_shield_alone() {
+        let light_no_shield = power_attack_loss(Weight::Light, false);
+        let heavy_with_shield = power_attack_loss(Weight::Heavy, true);
+        let balanced_with_shield = power_attack_loss(Weight::Versatile, true);
+        let balanced_no_shield = power_attack_loss(Weight::Versatile, false);
+
+        assert_eq!(
+            light_no_shield, balanced_with_shield,
+            "Light is always 1H and Balanced is 1H only with a shield",
+        );
+        assert_eq!(
+            heavy_with_shield, balanced_no_shield,
+            "Heavy is always 2H and Balanced becomes 2H without a shield",
+        );
+        assert!(
+            heavy_with_shield > light_no_shield,
+            "2H PowerAttack bonus must exceed the 1H bonus",
+        );
+    }
+
+    #[test]
+    fn quick_and_recovery_strikes_use_two_authored_impacts() {
+        for editor in ["QuickStrikes", "RecoveryStrikes"] {
+            let now = Instant::now();
+            let mut c = combat2(now);
+            physical_weapon(&mut c, Weight::Light, true, 100.0);
+            let uuid = equip(&mut c, editor);
+            let out = cast_equipped(&mut c, uuid, now);
+            assert_eq!(op50_count(&out), 0, "{editor}: cast queues impacts instead of landing inline");
+            assert_eq!(c.pending_impacts.len(), 2, "{editor}: two authored maneuver hits");
+
+            let first = land_due_impacts(&mut c, now + Duration::from_millis(250));
+            assert_eq!(op50_count(&first), 2, "{editor}: first hit to both viewers");
+            assert_eq!(c.fighters[0].combo_count, 1, "{editor}: chain stays live between hits");
+            assert_eq!(c.pending_impacts.len(), 1, "{editor}: second hit remains queued");
+
+            let second = land_due_impacts(&mut c, now + Duration::from_secs(2));
+            assert_eq!(op50_count(&second), 2, "{editor}: second hit to both viewers");
+            assert_eq!(c.fighters[0].combo_count, 0, "{editor}: final hit ends the maneuver chain");
+            assert!(c.pending_impacts.is_empty(), "{editor}: queue drained");
+        }
+    }
+
+    #[test]
+    fn other_quick_family_maneuvers_keep_one_impact() {
+        for editor in ["PiercingStrikes", "VenomStrikes"] {
+            let now = Instant::now();
+            let mut c = combat2(now);
+            let uuid = equip(&mut c, editor);
+            let _ = cast_equipped(&mut c, uuid, now);
+            assert_eq!(c.pending_impacts.len(), 1, "{editor}: only Quick/Recovery are two-hit");
+        }
+    }
+
+    #[test]
+    fn venom_strikes_does_not_multiply_direct_poison_damage() {
+        let now = Instant::now();
+        let target = Fighter::new(1, 2, loadout::starter(), now);
+        let mut baseline = loadout::starter();
+        baseline.weapon = WeaponProfile {
+            primary_type: Some(DamageType::Poison),
+            base_by_type: vec![(DamageType::Poison, 100.0)],
+            weight: Some(Weight::Light),
+        };
+        baseline.enchants.clear();
+        let mut venom = baseline.clone();
+        venom.poison_effect_multiplier = 2.0;
+
+        let base = RetailDamageModel.resolve_attack(
+            &baseline,
+            &target,
+            DamageSource::WeaponManeuver,
+            ActiveSide::Middle,
+            1.0,
+            0,
+            now,
+        );
+        let boosted = RetailDamageModel.resolve_attack(
+            &venom,
+            &target,
+            DamageSource::WeaponManeuver,
+            ActiveSide::Middle,
+            1.0,
+            0,
+            now,
+        );
+        assert_eq!(boosted.total, base.total, "Venom effect must not double direct Poison damage");
+    }
+
+    #[test]
+    fn indomitable_smash_resistance_gets_mettle_squared() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0].health = 1;
+        c.fighters[0].loadout.perks.mettle = 0.20;
+        let uuid = uuid_of("IndomitableSmash");
+        apply_caster_begin_effects(&mut c, 0, uuid, 1, now);
+        let got = c.fighters[0].transient_all_resistance[0].0;
+        let want = 250.0 * 1.2 * 1.2;
+        assert!((got - want).abs() < 0.01, "got {got}, want {want}");
     }
 
     /// Reckless Fury is a BUFF: it ships bonusDamage 0 with both multipliers 0, so it
@@ -8972,7 +9198,7 @@ mod shipped_effects_tests {
         let mut c = combat2(now);
         let u = uuid_of("Thunderstorm");
         let out = apply_ability_impact(
-            &mut c, 0, 1, u, 1, super::super::state::AbilityTag::Damage, false, now,
+            &mut c, 0, 1, u, 1, super::super::state::AbilityTag::Damage, false, now, true,
         );
         assert!(!out.is_empty(), "the first bolt lands immediately");
         let ch = c.channels.iter().find(|ch| ch.ability_uuid == u).expect("bolts scheduled");
@@ -11218,6 +11444,7 @@ mod report_31_high_block_stun {
             due: t0 + Duration::from_millis(1500),
                     magicka_full_at_cast: false,
             cast_at: t0,
+            reset_maneuver_combo_after: true,
         });
 
         c.reset_fighters_for_next_round(t0 + Duration::from_secs(1));
@@ -11814,6 +12041,7 @@ mod round_ends_once_tests {
             magicka_full_at_cast: false,
             due,
             cast_at: due,
+            reset_maneuver_combo_after: true,
         }
     }
 

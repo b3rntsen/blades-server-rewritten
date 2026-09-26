@@ -977,16 +977,8 @@ fn finish_resolved(
     //
     // `single_impact` keeps a 15-tick channel from paying it 15 times, exactly as it
     // already does for the perks.
-    // Venom Strikes makes the strike's POISON more effective (`_poisonEffectIncrease`).
-    // Applied before the flat augments so the multiplier scales the weapon/enchant
-    // poison the maneuver actually delivers, not the perk's flat top-up.
-    if attacker.poison_effect_multiplier > 1.0 {
-        for (ty, v) in components.iter_mut() {
-            if *ty == DamageType::Poison && *v > 0.0 {
-                *v *= attacker.poison_effect_multiplier;
-            }
-        }
-    }
+    // Venom Strikes boosts weapon-alchemy poison status effectiveness/duration, not
+    // Poison damage components (`VenomStrikesAbility` feeds `PoisonAlchemy`, 05 §3.5).
     if single_impact {
         for (ty, v) in components.iter_mut() {
             if is_elemental(*ty) && *v > 0.0 {

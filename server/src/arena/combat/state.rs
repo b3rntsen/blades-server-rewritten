@@ -897,15 +897,9 @@ pub struct Loadout {
     /// parsed as. Tier magnitudes 18.0 .. 50.4.
     pub powerful_block: f32,
 
-    /// Multiplier on POISON damage for the maneuver being resolved — Venom Strikes'
-    /// `_poisonEffectIncrease` (0.08 = +8%), which was read by nobody, so the
-    /// maneuver was a plain strike with a misleading name.
-    ///
-    /// Set on a clone for one cast, like `maneuver_bonus_damage`. The `Default` is
-    /// 0.0 and the applying code tests `> 1.0`, so both 0.0 and 1.0 are inert.
-    /// (`_poisonDurationIncrease` is deliberately NOT wired: it is **0 on all 13
-    /// ranks** despite a loc string existing for it. That is the data, not an
-    /// omission.)
+    /// Reserved for weapon-alchemy poison status effectiveness. Venom Strikes ships
+    /// `_poisonEffectIncrease`, but retail applies that to poison effects/duration,
+    /// not to direct Poison damage components.
     pub poison_effect_multiplier: f32,
 
     /// Resolved perk bonuses, computed once at parse time. `Default` (every
@@ -3044,6 +3038,10 @@ pub struct PendingImpact {
     /// When the cast was accepted; matches [`Execution::started_at`], so an
     /// interrupt of that execution drops this impact.
     pub cast_at: Instant,
+    /// Maneuvers increment the combo when a weapon impact lands and reset it only
+    /// when the maneuver is done. Multi-hit maneuvers therefore keep the chain
+    /// alive until their final authored impact.
+    pub reset_maneuver_combo_after: bool,
 }
 
 /// An **Echo Weapon** echo waiting to land: a flat follow-up hit `_weaponDelay`
