@@ -1,0 +1,19 @@
+{
+  "_doc": "Registry of Newblades (NON-retail) content. Everything listed here is ours, not Bethesda's: retail-fidelity checks read parsed.json and the capture corpus, never this file, and anything that asks 'is this retail?' asks blades_lib::game_data::newblades_content. Design: docs/newblades-content-system.md in dethele-com/newblades-project. Client-side edits for each entry live in that repo under newcontent/<id>.json.",
+  "prefix": "Newblades:",
+  "content": [
+    {
+      "id": "nb-draugr-proof",
+      "status": "beta-proof",
+      "requests": ["#197", "#198"],
+      "summary": "Proof that a dungeon can spawn draugr: EQ15's first skeleton group repointed to the Draugr Family client-side, quest name prefixed 'Newblades:'. Borrows a retail event slot for the proof only; no server data changes.",
+      "questIds": ["e8f3614c-8672-4f77-9dad-4b400676f4b6"],
+      "dungeonIds": ["924f1147-fd7f-4736-9e2d-f33fa942dbdd"],
+      "enemyDataIds": ["67d9e5a6-191c-4c8f-863e-4c608d7cf3d3"],
+      "loc": {
+        "EQ15_Title": "Newblades: {retail}"
+      },
+      "extraSpawnGroups": {}
+    }
+  ]
+}

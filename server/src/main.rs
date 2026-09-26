@@ -253,11 +253,27 @@ async fn main() -> Result<()> {
                 .await
                 .unwrap();
 
-            let game_data: GameData = {
+            let mut game_data: GameData = {
                 let parsed_data_path = static_data.join("parsed.json");
                 let mut game_data_file = File::open(&parsed_data_path).unwrap();
                 serde_json::from_reader(&mut game_data_file).unwrap()
             };
+            // Newblades (non-retail) content, kept out of parsed.json so that file
+            // stays pure APK output. Optional: absent or invalid means none, and
+            // never a failed start.
+            // No runtime consumer yet beyond the merged spawn groups; the log line
+            // proves which registry a running server read.
+            match blades_lib::game_data::newblades_content::load(
+                &static_data.join("newblades_content.json"),
+                &mut game_data,
+            ) {
+                Ok(Some((reg, added))) => log::info!(
+                    "[newblades] {} content entr(ies), {added} added spawn group(s)",
+                    reg.content.len()
+                ),
+                Ok(None) => {}
+                Err(e) => log::warn!("[newblades] {e}; no new content loaded"),
+            }
 
             // Repair needs each item's full durability and gold price, neither of
             // which `parsed.json` carries. Both tables are generated from the APK
