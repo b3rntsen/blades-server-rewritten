@@ -528,26 +528,32 @@ pub fn roll_enemy_loot(
 //
 // `spawnGroupLoot` is the other half of an enemy's corpse, and it is how retail
 // handed a key-holder its key. Over 66,994 captured enemy results it was filled
-// 38 times, and every one of the 38 is the same bare result, one DoorKey. Every
-// filled one that can be attributed to a group (11 of 11 in the local capture
-// snapshot, 9 of 9 distinct rolls) is EQ15's Mercenary, and that group carried
-// it on every roll: A Battle Unceasing's boss sits behind a locked door and the
-// Mercenary holds the key. We sent `{}` because the corpus called one item "too
-// little to model" -- so the Mercenary died keyless and the quest could not be
-// finished (report #236).
+// 38 times, and every one of the 38 is the same bare result, one DoorKey. The
+// complete protected corpus attributes all 38: 26 are EQ15's Mercenary and 12
+// cover exactly three other groups. Every observation is enemy zero of spawner
+// zero. A Battle Unceasing's boss sits behind a locked door and the Mercenary
+// holds the key. We sent `{}` because the corpus called one item "too little to
+// model" -- so the Mercenary died keyless and the quest could not be finished
+// (report #236).
 //
-// Not rolled: 9 of 9 distinct retail rolls carried it, so it is a property of
-// the group, not a draw. A group absent here sends `{}`, as retail did for the
-// other 66,956 results.
+// Not rolled: every observed result for these exact positions carried it. A
+// group absent here, or another spawner of one of these groups, sends `{}`, as
+// retail did for the other 66,956 results.
 const DOOR_KEY_ITEM_ID: u128 = 0xfaa3aeb3_9284_4d83_8981_1af00e3a6398;
 const SPAWN_GROUP_LOOT: &[(u128, u128, u64)] = &[
     // EQ15_Stone_DungeonSettings, "Enemy.Name.Mercenary".
     (0xa91ebfe6_0167_4643_bd6f_ed27d8dfad41, DOOR_KEY_ITEM_ID, 1),
+    (0x9cb35702_def0_441e_b760_9c8a23ffd8bf, DOOR_KEY_ITEM_ID, 1),
+    (0x3d0a198d_6ab7_4c54_addf_1e67c55c3e78, DOOR_KEY_ITEM_ID, 1),
+    (0x681c0add_1f49_46cc_bafb_e240680406e7, DOOR_KEY_ITEM_ID, 1),
 ];
 
-/// The fixed `spawnGroupLoot` retail gave every enemy of `spawn_group_id`.
-pub fn spawn_group_loot(spawn_group_id: &Uuid) -> LootTableResult {
+/// The fixed `spawnGroupLoot` retail gave the first enemy of `spawn_group_id`.
+pub fn spawn_group_loot(spawn_group_id: &Uuid, spawner_index: usize) -> LootTableResult {
     let mut out = LootTableResult::default();
+    if spawner_index != 0 {
+        return out;
+    }
     for (group, item, quantity) in SPAWN_GROUP_LOOT {
         if spawn_group_id.as_u128() == *group {
             out.stackable_items.insert(Uuid::from_u128(*item), *quantity);
@@ -619,7 +625,7 @@ pub fn generate_for_dungeon(
                         enemy_level,
                         given_xp,
                         // Retail's fixed per-group result -- the key-holder's key.
-                        spawn_group_loot: spawn_group_loot(spawn_group_id),
+                        spawn_group_loot: spawn_group_loot(spawn_group_id, spawner_index),
                         loot_table_loot: roll_enemy_loot(
                             dungeon_uuid,
                             spawn_group_id,
@@ -1870,20 +1876,31 @@ mod key_holder_tests {
         assert_eq!(keys, 1, "exactly one key in the dungeon");
     }
 
-    /// CONTROL across the whole game: spawnGroupLoot is `{}` for every group but
-    /// the Mercenary, as it was on 66,956 of retail's 66,994 enemy results.
+    /// CONTROL across the whole game: the only filled positions are the four
+    /// exact group/spawner pairs in the complete protected capture corpus.
     #[test]
     fn spawn_group_loot_is_empty_everywhere_else() {
         let game_data = game_data();
-        let mut filled = Vec::new();
+        let mut filled = std::collections::HashSet::new();
         for dungeon in game_data.dungeons.values() {
-            for group in dungeon.spawn_info.enemy_spawn_groups.keys() {
-                if !spawn_group_loot(group).is_empty() {
-                    filled.push(*group);
+            for (group, spawn) in &dungeon.spawn_info.enemy_spawn_groups {
+                for spawner_index in 0..spawn.quantity.max(1) as usize {
+                    if !spawn_group_loot(group, spawner_index).is_empty() {
+                        filled.insert((*group, spawner_index));
+                    }
                 }
             }
         }
-        assert_eq!(filled, vec![uuid(MERCENARY)]);
+        let expected = [
+            MERCENARY,
+            "9cb35702-def0-441e-b760-9c8a23ffd8bf",
+            "3d0a198d-6ab7-4c54-addf-1e67c55c3e78",
+            "681c0add-1f49-46cc-bafb-e240680406e7",
+        ]
+        .into_iter()
+        .map(|group| (uuid(group), 0))
+        .collect();
+        assert_eq!(filled, expected);
     }
 
     /// The same bug by the other road. These five groups roll the DoorKey TABLE
