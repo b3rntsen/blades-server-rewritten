@@ -6,6 +6,7 @@ use actix_web::{
     web::{self, Json},
 };
 use blades_lib::game_data::GameData;
+use blades_lib::static_data::QuestLevelScaling;
 use blades_lib::util::dungeon::generate_for_dungeon;
 use blades_lib::user_data::{
     B64EncodedData, CompleteCharacterWithIdWithoutData, DungeonGeneratedData,
@@ -495,14 +496,39 @@ fn resolve_dungeon_settings_id(
 /// generate data for that dungeon. Event quest ids and dungeon ids are different
 /// UUIDs in the retail corpus; treating them as interchangeable silently produced
 /// an empty payload and made every real spawn look stale to `dungeon_update`.
+///
+/// `difficulty_level` is the player's event quest row's own `difficultyLevel`
+/// ([`quest_row_difficulty`]). That is the level `/quests` minted the row at, through
+/// `generate_quest_data` and the shipped `levelScaling`, and the level of the
+/// `dungeonGeneratedData` the client was shown. The attempt is generated the same
+/// way, with the enemy level set to the difficulty and XP taken from
+/// `scaling.given_xp`, so what the server credits for a kill is what the client drew.
+///
+/// This used to be `generate_for_dungeon(.., 1, 100)`. A level-89 player saw
+/// level-73 enemies worth 258 XP each on the quest row, but every kill paid 100 XP,
+/// every corpse was rolled at level 1, and every chest was a level-1 chest.
 pub(crate) fn event_dungeon_data(
     game_data: &GameData,
     quest_id: Uuid,
+    difficulty_level: i64,
+    scaling: &QuestLevelScaling,
 ) -> Result<(Uuid, DungeonGeneratedData), BladeApiError> {
     let dungeon_uuid = resolve_dungeon_settings_id(game_data, quest_id, None)?;
-    let generated_data = generate_for_dungeon(game_data, &dungeon_uuid, 1, 100)
-        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
+    let enemy_level = difficulty_level.max(1);
+    let generated_data =
+        generate_for_dungeon(game_data, &dungeon_uuid, enemy_level, scaling.given_xp(enemy_level))
+            .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
     Ok((dungeon_uuid, generated_data))
+}
+
+/// The `difficultyLevel` of a stored quest row, read from its raw `info` JSON.
+///
+/// Both event handlers already hold that JSON, having read `gldQuestId` from it to
+/// route the request. A row without the field has never been written by this
+/// server, since `Quest::difficulty_level` is not optional. For one that turns up
+/// anyway, level 1 is the old behaviour and the only honest default.
+pub(crate) fn quest_row_difficulty(info: &serde_json::Value) -> i64 {
+    info["difficultyLevel"].as_i64().unwrap_or(1).max(1)
 }
 
 /// When the window of the event behind `quest_id` that is open at `now` began,
@@ -790,6 +816,7 @@ pub async fn enter_quest_dungeon(
             character_id_normal,
             gld_quest_id,
             quest_id,
+            quest_row_difficulty(&row_info.0),
             body,
             chrono::Utc::now().timestamp(),
         )
@@ -1099,7 +1126,8 @@ mod dungeon_settings_resolution {
         let quest_id = Uuid::parse_str("e8f3614c-8672-4f77-9dad-4b400676f4b6").unwrap();
         let expected_dungeon =
             Uuid::parse_str("924f1147-fd7f-4736-9e2d-f33fa942dbdd").unwrap();
-        let (dungeon_id, generated) = event_dungeon_data(&gd, quest_id)
+        let (dungeon_id, generated) =
+            event_dungeon_data(&gd, quest_id, 40, &crate::quest::shipped_scaling())
             .expect("the EQ15 event quest must generate a real dungeon payload");
 
         assert_eq!(dungeon_id, expected_dungeon);
@@ -1130,7 +1158,8 @@ mod dungeon_settings_resolution {
         assert!(!sd.event_quests.templates.is_empty());
 
         for quest_id in sd.event_quests.templates.keys() {
-            let (dungeon_id, generated) = event_dungeon_data(&gd, *quest_id)
+            let (dungeon_id, generated) =
+                event_dungeon_data(&gd, *quest_id, 40, &sd.quests_daily.level_scaling)
                 .unwrap_or_else(|e| panic!("event quest {quest_id} cannot generate: {e}"));
             let dungeon = gd.dungeons.get(&dungeon_id).expect("resolved dungeon exists");
 
@@ -1152,6 +1181,113 @@ mod dungeon_settings_resolution {
                 generated.item_generated_data.keys().copied().collect();
             assert_eq!(actual_items, expected_items, "event quest {quest_id}");
         }
+    }
+
+    // ------------------------------------------------ the attempt's level
+
+    /// Every enemy in `data`, flattened.
+    fn enemies(data: &DungeonGeneratedData) -> Vec<&blades_lib::user_data::DungeonEnemyResult> {
+        data.enemy_generated_data.values().flatten().flatten().collect()
+    }
+
+    /// An event attempt is the dungeon the client was SHOWN.
+    ///
+    /// `/quests` mints the event row at the player's scaled level and sends its
+    /// `dungeonGeneratedData`. `enter` then stored a second copy, generated at a
+    /// flat level 1 and 100 XP, and every kill was credited from that copy: a
+    /// level-89 player on prod (2026-09-26) had a row at level 73 / 258 XP per
+    /// enemy and an attempt at level 1 / 100 XP, and 6 kills paid 600 XP.
+    ///
+    /// Identity, not "close enough": the attempt must serialise to exactly the
+    /// data on the row, loot rolls included, for every event open at NOW.
+    #[test]
+    fn an_event_attempt_is_generated_at_the_level_the_client_was_shown() {
+        let (sd, gd) = (static_data(), game_data());
+        let scaling = &sd.quests_daily.level_scaling;
+        let minted = crate::quest::event_quests::mint(&sd, &gd, CHAR, 89, NOW);
+        assert!(!minted.is_empty(), "the committed calendar opens events at NOW");
+
+        for m in &minted {
+            let shown = m.dungeon.as_ref().expect("an event row carries dungeon data");
+            let level = m.quest.difficulty_level;
+            // The precondition that makes this discriminate: at level 1 the old
+            // code and the new would agree on the level.
+            assert_eq!(level, scaling.enemy_level(89));
+            assert!(level > 1, "a level-89 row must not be level 1");
+
+            let row_info = serde_json::to_value(&m.quest).unwrap();
+            assert_eq!(quest_row_difficulty(&row_info), level, "read off the stored row");
+
+            let (_, attempt) =
+                event_dungeon_data(&gd, m.quest.gld_quest_id, level, scaling).expect("generates");
+            assert_eq!(
+                serde_json::to_value(&attempt).unwrap(),
+                serde_json::to_value(shown).unwrap(),
+                "event {}: the attempt must be the dungeon the client was shown",
+                m.quest.gld_quest_id
+            );
+            for e in enemies(&attempt) {
+                assert_eq!(e.enemy_level, level);
+                assert_eq!(e.given_xp, scaling.given_xp(level));
+            }
+        }
+    }
+
+    /// The worked example from prod, pinned against the shipped tables so a change
+    /// to them is seen here rather than as a surprise in the PR's numbers.
+    #[test]
+    fn a_level_89_players_event_enemies_are_level_73_and_worth_258_xp() {
+        let (sd, gd) = (static_data(), game_data());
+        let scaling = &sd.quests_daily.level_scaling;
+        assert_eq!(scaling.enemy_level(89), 73);
+
+        // "A Battle Unceasing" (EQ15), the event the prod row was on.
+        let eq15 = Uuid::parse_str("e8f3614c-8672-4f77-9dad-4b400676f4b6").unwrap();
+        let (_, attempt) = event_dungeon_data(&gd, eq15, 73, scaling).unwrap();
+        let xp: u64 = enemies(&attempt).iter().map(|e| e.given_xp).sum();
+        assert_eq!(enemies(&attempt).len(), 14);
+        assert!(enemies(&attempt).iter().all(|e| e.enemy_level == 73 && e.given_xp == 258));
+        assert_eq!(xp, 14 * 258, "3612 XP for the whole dungeon, was 1400");
+    }
+
+    /// CONTROL: the ordinary quest path is untouched. A story quest's row is still
+    /// generated by `generate_quest_data` at the player's scaled level, and that is
+    /// the same `(enemy_level, given_xp)` pair the event attempt now uses, so the
+    /// two paths cannot drift apart without one of these tests going red.
+    #[test]
+    fn an_ordinary_quest_is_still_generated_at_the_players_scaled_level() {
+        let (sd, gd) = (static_data(), game_data());
+        let scaling = &sd.quests_daily.level_scaling;
+        let (template_id, dungeon) = gd
+            .quests
+            .iter()
+            .filter(|(id, _)| !sd.event_quests.templates.contains_key(id))
+            .find_map(|(id, q)| {
+                let d = q.dungeon_info.as_ref()?.dungeon_uuid;
+                (!d.is_nil() && gd.dungeons.contains_key(&d)).then_some((*id, d))
+            })
+            .expect("the corpus ships story quests with dungeons");
+
+        let (row, data) =
+            blades_lib::util::quest::generate_quest_data(&gd, template_id, 89, scaling).unwrap();
+        let data = data.expect("a dungeon quest carries generated data");
+        assert_eq!(row.difficulty_level, 73);
+        assert!(enemies(&data).iter().all(|e| e.enemy_level == 73 && e.given_xp == 258));
+
+        let same = generate_for_dungeon(&gd, &dungeon, 73, scaling.given_xp(73)).unwrap();
+        assert_eq!(
+            serde_json::to_value(&data).unwrap(),
+            serde_json::to_value(&same).unwrap()
+        );
+    }
+
+    /// A row the server never wrote without `difficultyLevel` keeps the old level 1
+    /// rather than failing the request.
+    #[test]
+    fn a_row_without_a_difficulty_falls_back_to_level_1() {
+        assert_eq!(quest_row_difficulty(&json!({"difficultyLevel": 73})), 73);
+        assert_eq!(quest_row_difficulty(&json!({})), 1);
+        assert_eq!(quest_row_difficulty(&json!({"difficultyLevel": 0})), 1);
     }
 
     // ---------------------------------------------------------------- the control
@@ -1338,6 +1474,7 @@ async fn handle_event_dungeon_entry(
     character_id: Uuid,
     quest_id: Uuid,
     instance_quest_id: Uuid,
+    difficulty_level: i64,
     body: EnterDungeonRequest,
     now: i64,
 ) -> Result<Json<EnterDungeonResponse>, BladeApiError> {
@@ -1357,8 +1494,16 @@ async fn handle_event_dungeon_entry(
 
     // The event quest template points to the dungeon the client loads. The quest UUID
     // itself is only the key used by the quest and event-dungeon endpoints.
-    let (dungeon_uuid, dungeon_data) = event_dungeon_data(game_data, quest_id)?;
-    let enemy_level = 1;
+    //
+    // Generated at the instance row's `difficultyLevel`, the level the client was
+    // shown, not at a flat level 1 (see `event_dungeon_data`).
+    let enemy_level = difficulty_level.max(1);
+    let (dungeon_uuid, dungeon_data) = event_dungeon_data(
+        game_data,
+        quest_id,
+        enemy_level,
+        &sd.quests_daily.level_scaling,
+    )?;
     let max_entries = 1;
 
     log::info!("[event_dungeon] Processing event quest {} with event_id {}", quest_id, actual_event_id);
@@ -1435,6 +1580,10 @@ async fn handle_event_dungeon_entry(
                     // status named the event quest UUID instead of the dungeon UUID,
                     // and their generated data was therefore empty.
                     dungeon_state_actual.dungeon_status.dungeon_settings_ids = vec![dungeon_uuid];
+                    // The generated data below is rewritten at the row's level, so the
+                    // level chests are minted at moves with it. Attempts started while
+                    // this path generated everything at level 1 are healed here too.
+                    dungeon_state_actual.dungeon_status.level = enemy_level as u64;
 
                     {
                         use crate::schema::event_dungeons::dsl::*;
@@ -1522,8 +1671,6 @@ async fn handle_event_dungeon_entry(
                 }
             }
 
-            let enemy_level_i64 = enemy_level as i64;
-
             let status = DungeonStatus {
                 dungeon_settings_ids: vec![dungeon_uuid],
                 revive_count: 0,
@@ -1532,7 +1679,7 @@ async fn handle_event_dungeon_entry(
                 collected_chests: HashSet::default(),
                 enemy_status: HashMap::default(),
                 seed: rand::random::<u32>() as i64,
-                level: enemy_level_i64 as u64,
+                level: enemy_level as u64,
                 version: 1,
             };
 
@@ -1924,6 +2071,8 @@ mod event_run_lifecycle_db {
         dungeon_instance: Option<&str>,
     ) -> Result<DungeonStatus, BladeApiError> {
         let w = world();
+        // Read off the stored row, as `enter_quest_dungeon` does.
+        let difficulty = quest_row_difficulty(&quest_info(conn, p).await);
         handle_event_dungeon_entry(
             conn,
             &w.gd,
@@ -1932,6 +2081,7 @@ mod event_run_lifecycle_db {
             p.character,
             p.template,
             p.instance,
+            difficulty,
             EnterDungeonRequest {
                 dungeon_instance: dungeon_instance.map(b64),
                 current_state: b64("SAVE-AT-ENTRY"),
@@ -2085,6 +2235,78 @@ mod event_run_lifecycle_db {
     const ENEMY: &str = "045ad56d-b171-4ae5-a661-27e4b409faeb";
 
     /// Retail's restart: the attempt lives on, from the top, and nothing is paid.
+    /// The stored attempt, which is what every kill is credited from, is the dungeon
+    /// the quest row showed the client, and the dungeon reports the row's level.
+    /// Before, the attempt was generated at level 1 / 100 XP whatever the row said.
+    #[tokio::test]
+    async fn the_attempt_is_stored_at_the_rows_level() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        let level = quest_info(&mut conn, &p).await["difficultyLevel"].as_u64().unwrap();
+        assert!(level > 1, "a level-40 row is not level 1 — otherwise this proves nothing");
+
+        let stored_sql = "SELECT generated_data AS v FROM event_dungeons \
+                          WHERE character_id = $1 AND dungeon_id = $2";
+        let row_sql = "SELECT generated_data AS v FROM quests WHERE id = $1 AND character_id = $2";
+
+        let status = enter(&mut conn, &p, Some("INSTANCE")).await.expect("enters");
+        assert_eq!(status.level, level, "the dungeon reports the row's level");
+        let stored = json_of(&mut conn, stored_sql, p.character, p.template).await.unwrap();
+        let shown = json_of(&mut conn, row_sql, p.instance, p.character).await.unwrap();
+        assert_eq!(stored, shown, "the attempt is the dungeon the client was shown");
+
+        // A resume keeps it there.
+        let status = enter(&mut conn, &p, None).await.expect("resumes");
+        assert_eq!(status.level, level);
+        let stored = json_of(&mut conn, stored_sql, p.character, p.template).await.unwrap();
+        assert_eq!(stored, shown);
+    }
+
+    /// An attempt started while entry generated everything at level 1 is healed by
+    /// its next resume: data, and the level chests are minted at.
+    #[tokio::test]
+    async fn a_resume_heals_an_attempt_stored_at_level_1() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        let level = quest_info(&mut conn, &p).await["difficultyLevel"].as_u64().unwrap();
+        enter(&mut conn, &p, Some("INSTANCE")).await.expect("enters");
+
+        // Put the row back the way the old entry left it.
+        let dungeon = resolve_dungeon_settings_id(&world().gd, p.template, None).unwrap();
+        let old = generate_for_dungeon(&world().gd, &dungeon, 1, 100).unwrap();
+        diesel::sql_query(
+            "UPDATE event_dungeons SET generated_data = $3::jsonb, \
+             dungeon_state = jsonb_set(dungeon_state, '{dungeonStatus,level}', '1') \
+             WHERE character_id = $1 AND dungeon_id = $2",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(p.character)
+        .bind::<diesel::sql_types::Uuid, _>(p.template)
+        .bind::<diesel::sql_types::Text, _>(serde_json::to_string(&old).unwrap())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+        let status = enter(&mut conn, &p, None).await.expect("resumes");
+        assert_eq!(status.level, level, "healed from 1");
+        let stored = json_of(
+            &mut conn,
+            "SELECT generated_data AS v FROM event_dungeons WHERE character_id = $1 AND dungeon_id = $2",
+            p.character,
+            p.template,
+        )
+        .await
+        .unwrap();
+        let shown = json_of(
+            &mut conn,
+            "SELECT generated_data AS v FROM quests WHERE id = $1 AND character_id = $2",
+            p.instance,
+            p.character,
+        )
+        .await
+        .unwrap();
+        assert_eq!(stored, shown);
+    }
+
     #[tokio::test]
     async fn a_restart_keeps_the_attempt_resets_it_and_pays_nothing() {
         let mut conn = db!();
