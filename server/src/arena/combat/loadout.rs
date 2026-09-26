@@ -280,12 +280,18 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
             // just as much as the weapon.
             lo.property_ids.push(prop.id);
             let before = lo.enchants.len();
+            let family = gamedata::enchant_family(&prop.id.as_hyphenated().to_string());
+            let xvalue_multiplier = if family.is_some_and(|f| enchant_logic_is_primary(f.logic)) {
+                primary_mult
+            } else {
+                1.0
+            };
             apply_enchant_with_rating_and_multiplier(
                 &mut lo,
                 &prop.id,
                 tier,
                 item_rating_for_material,
-                primary_mult,
+                xvalue_multiplier,
             );
             // Keep `enchant_property_ids` positionally aligned with `enchants`: an
             // enchant that produced a damage track records the property behind it.
@@ -704,6 +710,49 @@ fn apply_enchant_with_rating_and_multiplier(
 
         _ => {}
     }
+}
+
+fn enchant_logic_is_primary(logic: &str) -> bool {
+    matches!(
+        logic,
+        "WeaponDamageFirePropertyLogic"
+            | "WeaponDamageFrostPropertyLogic"
+            | "WeaponDamageShockPropertyLogic"
+            | "WeaponDamagePoisonPropertyLogic"
+            | "WeaponDamageStaminaPropertyLogic"
+            | "WeaponDamageMagickaPropertyLogic"
+            | "RevengeFirePropertyLogic"
+            | "RevengeFrostPropertyLogic"
+            | "RevengeShockPropertyLogic"
+            | "RevengePoisonPropertyLogic"
+            | "ResistFirePropertyLogic"
+            | "ResistFrostPropertyLogic"
+            | "ResistShockPropertyLogic"
+            | "ResistPoisonPropertyLogic"
+            | "FortifyFirePropertyLogic"
+            | "FortifyFrostPropertyLogic"
+            | "FortifyShockPropertyLogic"
+            | "FortifyPoisonPropertyLogic"
+            | "FortifyHealthPropertyLogic"
+            | "FortifyStaminaPropertyLogic"
+            | "FortifyMagickaPropertyLogic"
+            | "FortifyHealthRegenerationPropertyLogic"
+            | "FortifyStaminaRegenerationPropertyLogic"
+            | "FortifyMagickaRegenerationPropertyLogic"
+            | "AbsorbHealthPropertyLogic"
+            | "AbsorbStaminaPropertyLogic"
+            | "AbsorbMagickaPropertyLogic"
+            | "ShieldFireDamagePropertyLogic"
+            | "ShieldFrostDamagePropertyLogic"
+            | "ShieldShockDamagePropertyLogic"
+            | "ShieldPoisonDamagePropertyLogic"
+            | "ShieldStaminaDamagePropertyLogic"
+            | "ShieldMagickaDamagePropertyLogic"
+            | "HastePropertyLogic"
+            | "PowerfulBlockPropertyLogic"
+            | "FortifyComboDamagePropertyLogic"
+            | "ExtraDamageOnBlockingEnemyPropertyLogic"
+    )
 }
 
 /// Apply an item TEMPLATE's `mandatory_properties` (where every artifact effect

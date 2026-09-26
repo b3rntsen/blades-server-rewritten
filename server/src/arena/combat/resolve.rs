@@ -3967,6 +3967,9 @@ fn emit_damage(
             attacker_slot,
             now,
         ));
+        if !matches!(combat.phase, FlowState::StateTimeout) {
+            return out;
+        }
     }
 
     // ONE round end, however many fighters this hit left dead. Both dead (the target
@@ -3992,13 +3995,12 @@ fn apply_shield_enchant_retaliation(
     attacker_slot: usize,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
-    let mut out = Vec::new();
-    let entries = combat.fighters[defender_slot]
+    let mut entries = combat.fighters[defender_slot]
         .loadout
         .shield_enchant_damage
         .clone();
     if entries.is_empty() {
-        return out;
+        return Vec::new();
     }
     let total: f32 = entries
         .iter()
@@ -4006,30 +4008,17 @@ fn apply_shield_enchant_retaliation(
         .map(|(_, v)| *v)
         .sum();
     if total <= 0.0 {
-        return out;
+        return Vec::new();
     }
-    combat.fighters[attacker_slot].take_fractional_damage_at(total, now);
-    let msg = {
-        let hit = &combat.fighters[attacker_slot];
-        let other = &combat.fighters[defender_slot];
-        messages::receive_damage(
-            hit.net_object_id,
-            NetObjectType::Avatar as u8,
-            hit.packed_stats(),
-            other.packed_stats(),
-            super::state::DamageSource::ShieldManeuver,
-            super::damage::flags::SHOW_DAMAGE | super::damage::flags::HAS_ATTACKER,
-            total,
-            0,
-            ActiveSide::None,
-            super::state::DamageType::None,
-            &entries,
-        )
-    };
-    for slot in 0..combat.fighters.len() {
-        out.push((slot, msg.clone()));
-    }
-    out
+    let resolved = super::damage::resolve_generic_components(
+        &combat.fighters[defender_slot].loadout,
+        &combat.fighters[attacker_slot],
+        super::state::DamageSource::Revenge,
+        ActiveSide::None,
+        &mut entries,
+        now,
+    );
+    emit_damage(combat, defender_slot, attacker_slot, &resolved, now)
 }
 
 /// Elemental retaliation: the fighter who was just hit deals their gear's Revenge
@@ -4452,7 +4441,7 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
         if combat.channels[i].remaining_ticks == 0 {
             continue;
         }
-        let (caster, target, uuid, level, magicka_full_at_cast) = {
+        let (caster, target, uuid, level, magicka_full_at_cast, due_at) = {
             let c = &combat.channels[i];
             (
                 c.caster_slot,
@@ -4460,6 +4449,7 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
                 c.ability_uuid.clone(),
                 c.ability_level,
                 c.magicka_full_at_cast,
+                c.next_tick_at,
             )
         };
         if target >= combat.fighters.len()
@@ -4490,9 +4480,9 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
             &caster_perks,
             &combat.fighters[target],
             ActiveSide::Middle,
-            now,
+            due_at,
         );
-        out.extend(emit_damage(combat, caster, target, &resolved, now));
+        out.extend(emit_damage(combat, caster, target, &resolved, due_at));
         if i >= combat.channels.len() {
             // This tick ended the round (see the guard at the top of the loop).
             break;
@@ -4621,7 +4611,7 @@ fn apply_continuous_area_damage(combat: &mut MatchCombat, now: Instant) -> Vec<(
                 &combat.fighters[target],
                 ty,
                 rate,
-                now,
+                due,
             );
             if resolved.total <= 0.0 {
                 continue;
@@ -4630,7 +4620,7 @@ fn apply_continuous_area_damage(combat: &mut MatchCombat, now: Instant) -> Vec<(
             let whole = owed.floor();
             combat.fighters[wearer].continuous_carry = owed - whole;
             let hp_before = combat.fighters[target].health;
-            combat.fighters[target].take_damage_at(whole as u32, now);
+            combat.fighters[target].take_damage_at(whole as u32, due);
             // Rimelink's frost mirrors onto stamina like any frost damage ("to Health
             // and Stamina"), so the bars in the frame below are post-drain.
             combat.fighters[target].drain_mirrored_pools(&resolved.components);
@@ -4659,7 +4649,7 @@ fn apply_continuous_area_damage(combat: &mut MatchCombat, now: Instant) -> Vec<(
                 out.push((v, msg.clone()));
             }
             if combat.fighters[target].is_dead() {
-                out.extend(on_round_ending_death(combat, wearer, now));
+                out.extend(on_round_ending_death(combat, wearer, due));
                 return out;
             }
         }
@@ -4716,9 +4706,6 @@ fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
     let mut out = Vec::new();
 
     for slot in 0..combat.fighters.len() {
-        // Prune expired transient resistances.
-        combat.fighters[slot].prune_transient_resistances(now);
-
         let opp_slot = combat.fighters[slot].arena_target;
         if combat.fighters[slot].is_dead() {
             continue;
@@ -4750,14 +4737,15 @@ fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
             })
             .collect();
 
-        'effects: for (idx, due, tick_dmg, dmg_type) in ticking {
-            combat.fighters[slot].effects[idx].last_tick += DOT_TICK_INTERVAL * due;
-
+        for (idx, due, tick_dmg, dmg_type) in ticking {
             if tick_dmg <= 0.0 {
+                combat.fighters[slot].effects[idx].last_tick += DOT_TICK_INTERVAL * due;
                 continue;
             }
 
             for _ in 0..due {
+                combat.fighters[slot].effects[idx].last_tick += DOT_TICK_INTERVAL;
+                let tick_at = combat.fighters[slot].effects[idx].last_tick;
                 let mut tick_components = vec![(dmg_type, tick_dmg)];
                 let attacker = super::state::Loadout::default();
                 let resolved = super::damage::mitigate_components(
@@ -4767,13 +4755,13 @@ fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
                     ActiveSide::None,
                     ActiveSide::None,
                     &mut tick_components,
-                    now,
+                    tick_at,
                     DOT_TICK_INTERVAL.as_secs_f32(),
                 );
                 let tick_total = resolved.total.max(0.0);
                 let hp_before = combat.fighters[slot].health;
                 let max_hp = combat.fighters[slot].max_health;
-                combat.fighters[slot].take_fractional_damage_at(tick_total, now);
+                combat.fighters[slot].take_fractional_damage_at(tick_total, tick_at);
                 let hp_after = combat.fighters[slot].health;
                 let pct = if max_hp > 0 {
                     100.0 * tick_total / max_hp as f32
@@ -4805,7 +4793,7 @@ fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
                     // No HAS_ATTACKER for DoT. Bit 3 is the defender's optimal-guard
                     // STATE, sent on DoT frames too (03-D19, `ApplyDamage` 0x1bd2a24).
                     super::damage::flags::SHOW_DAMAGE
-                        | combat.fighters[slot].optimal_block_flag(now),
+                        | combat.fighters[slot].optimal_block_flag(tick_at),
                     tick_total,
                     0,
                     ActiveSide::None,
@@ -4818,12 +4806,13 @@ fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
 
                 if combat.fighters[slot].is_dead() {
                     // DoT killed the defender — score the round for the opponent.
-                    out.extend(on_round_ending_death(combat, opp_slot, now));
-                    break 'effects;
+                    out.extend(on_round_ending_death(combat, opp_slot, tick_at));
+                    return out;
                 }
             }
         }
         combat.fighters[slot].effects.retain(|e| now < e.expires_at);
+        combat.fighters[slot].prune_transient_resistances(now);
     }
     out
 }
@@ -6123,8 +6112,17 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
     // then diff statuses: otherwise pruning the condition would drop its fifth tick.
     // [§Mechanic-2]
     out.extend(apply_dot_ticks(combat, now));
+    if matches!(combat.phase, FlowState::RoundEnd | FlowState::NextState) {
+        return out;
+    }
     out.extend(emit_status_removals(combat, now));
+    if matches!(combat.phase, FlowState::RoundEnd | FlowState::NextState) {
+        return out;
+    }
     out.extend(apply_channel_ticks(combat, now));
+    if matches!(combat.phase, FlowState::RoundEnd | FlowState::NextState) {
+        return out;
+    }
     out.extend(apply_continuous_area_damage(combat, now));
     if matches!(combat.phase, FlowState::RoundEnd | FlowState::NextState) {
         // A DoT killing blow just ended the round — no bot swings this tick.

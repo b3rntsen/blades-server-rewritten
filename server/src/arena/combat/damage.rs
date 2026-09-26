@@ -1108,6 +1108,20 @@ fn finish_resolved(
     )
 }
 
+/// Resolve a caller-provided generic damage list through the normal attacker and
+/// defender pipeline. Used by callbacks that retail implements as
+/// `ResolveGenericDamage`, such as shield elemental retaliation.
+pub fn resolve_generic_components(
+    attacker: &Loadout,
+    target: &Fighter,
+    source: DamageSource,
+    active_side: ActiveSide,
+    components: &mut Vec<(DamageType, f32)>,
+    now: Instant,
+) -> ResolvedDamage {
+    finish_resolved(attacker, target, source, active_side, components, now, 1.0)
+}
+
 /// Steps 1-2 of [`finish_resolved`] — the DEFENDER's side of a hit: block →
 /// mirrored drain → resistance/weakness → total. No attacker bonus is added here.
 ///
