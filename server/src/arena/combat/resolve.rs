@@ -576,6 +576,7 @@ pub fn on_c2s_input(
                 let side = classified_side_for(&combat.fighters[sender], now)
                     .unwrap_or(ActiveSide::Right);
                 combat.fighters[sender].charge_side = Some(side);
+                combat.fighters[sender].clear_scheduled_states();
                 combat.fighters[sender].set_actor_state(ActorStateType::Charging, now);
                 return Vec::new();
             }
@@ -948,6 +949,7 @@ pub fn on_c2s_input(
             // swing did not.
             let side = classified_side_for(&combat.fighters[sender], now);
             combat.fighters[sender].charge_side = side;
+            combat.fighters[sender].clear_scheduled_states();
             combat.fighters[sender]
                 .set_actor_state(ActorStateType::Charging, now);
             return Vec::new();
@@ -4749,7 +4751,7 @@ fn on_round_ended(
         fighter.executions.clear();
         fighter.interrupt_pending = None;
         if !ended_by_death || slot != loser {
-            fighter.force_actor_state(ActorStateType::Idle, now);
+            fighter.force_actor_state(ActorStateType::Emote, now);
         }
     }
     if replay {
@@ -4884,7 +4886,7 @@ fn on_round_ended(
         combat.interround_step = 0;
         combat.phase = FlowState::NextState;
 
-        // Return both actors to Idle NOW, as the round ends — not six interround
+        // Return both living actors to Emote NOW, as the round ends — not six interround
         // steps later when round 2 goes live.
         //
         // `reset_fighters_for_next_round` already does this, but it runs only at
@@ -4896,9 +4898,8 @@ fn on_round_ended(
         //
         // This is additive: it tells the clients earlier and removes nothing. Retail
         // interleaves actor-state (gmid 39) with the match-state walk rather than
-        // confining it to round start — 856 gmid-39 frames sit among the 277 gmid-79
-        // state changes in session 615 — so an Idle inside the walk is the shape the
-        // client already expects.
+        // confining it to round start. The round-end neutral pose is Emote
+        // (`PvpAvatar::EndRound` / victory positioning), not Idle.
         //
         // The LOSER of a death is exempt: it stays Dead, and its op29 below must be the
         // first state frame the clients see for it (12-D5).
@@ -5357,10 +5358,9 @@ pub fn drain_state_changes_for(
 ///
 /// `PlayerAttack` (manual slash) or `PlayerAutoAttack` (fallback) now, then
 /// `PlayerFollowThrough` and `PlayerRecovery` on the capture-measured delays, then
-/// back to `Idle` at the template's
-/// `attackDelay + recoveryToNeutralTime`. A combo is legal earlier, at
-/// `attackDelay + recoveryToComboTime`, so the animation and input gates deliberately
-/// use separate values. The transitions land on the outbox;
+/// back to `Idle` after the recovery state's authored `recoveryTime`. A combo is
+/// legal earlier, at `attackDelay + recoveryToComboTime`, so the animation and input
+/// gates deliberately use separate values. The transitions land on the outbox;
 /// [`drain_state_changes`] puts them on the wire.
 ///
 /// Retail's per-session counts corroborate one of each per swing: s503 sent 330 × gmid
@@ -5372,7 +5372,13 @@ fn begin_swing_animation(
     manual_attack: Option<ManualAttackGesture>,
     now: Instant,
 ) -> Duration {
-    let neutral = combat.fighters[slot].loadout.neutral_interval();
+    let recovery_time = Duration::from_secs_f32(
+        combat.fighters[slot]
+            .loadout
+            .charge_params()
+            .recovery_time
+            .max(0.0),
+    );
     let f = &mut combat.fighters[slot];
     // A new combo may start while the previous swing is still recovering. Drop that
     // swing's pending Idle transition so it cannot interrupt the new animation.
@@ -5389,9 +5395,9 @@ fn begin_swing_animation(
         now + follow_delay + RECOVERY_DELAY,
         ActorStateType::PlayerRecovery,
     );
-    // Never idle earlier than the Recovery beat, even for a special template with
-    // unusually short authored values.
-    let idle_at = (now + neutral).max(now + follow_delay + RECOVERY_DELAY * 2);
+    // Recovery itself owns the return to Idle: retail goes Idle at
+    // release + FollowThrough delay + one frame + recoveryTime.
+    let idle_at = now + follow_delay + RECOVERY_DELAY + recovery_time;
     f.schedule_state(idle_at, ActorStateType::Idle);
     follow_delay
 }
@@ -8191,9 +8197,10 @@ mod phase4_tests {
     /// cast pose held "right through the break and up until the first strikes of the
     /// next round began".
     ///
-    /// The round end must therefore put both actors back to Idle itself.
+    /// The round end must therefore put both actors into the client's neutral Emote
+    /// pose itself.
     #[test]
-    fn a_round_ending_returns_both_actors_to_idle() {
+    fn a_round_ending_returns_both_actors_to_emote() {
         let now = Instant::now();
         let mut combat = live_combat(now);
 
@@ -8207,12 +8214,12 @@ mod phase4_tests {
 
         assert_eq!(
             combat.fighters[0].actor_state(),
-            ActorStateType::Idle,
+            ActorStateType::Emote,
             "the winner's actor must stop animating when the round ends"
         );
         assert_eq!(
             combat.fighters[1].actor_state(),
-            ActorStateType::Idle,
+            ActorStateType::Emote,
             "the loser's actor must stop animating when the round ends"
         );
 
@@ -8223,13 +8230,17 @@ mod phase4_tests {
             !frames.is_empty(),
             "the reset must emit actor-state frames, not just mutate server state"
         );
+        assert_eq!(
+            generic_state_count(&frames, ActorStateType::Emote),
+            4,
+            "two actors, two viewers each, must see round-end Emote"
+        );
     }
 
-    /// The control: an actor already Idle must not emit a redundant change. Without
-    /// this the fix would spam an op39 at every round end for a fighter that was
-    /// simply standing still, which is not what retail does.
+    /// An actor that is still logically Idle enters the round-end Emote pose; it is
+    /// visible to clients, so this is not a redundant no-op.
     #[test]
-    fn an_already_idle_actor_emits_nothing() {
+    fn an_idle_actor_enters_round_end_emote() {
         let now = Instant::now();
         let mut combat = live_combat(now);
         assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Idle);
@@ -8237,10 +8248,167 @@ mod phase4_tests {
 
         combat.reset_actor_animations(now);
         let frames = drain_state_changes(&mut combat, now);
+        assert_eq!(
+            generic_state_count(&frames, ActorStateType::Emote),
+            4,
+            "round-end neutral is Emote, not Idle"
+        );
+    }
+
+    /// The control: an actor already Emote must not emit a redundant change. Without
+    /// this the fix would spam an op39 at every round end for a fighter that was
+    /// simply standing still, which is not what retail does.
+    #[test]
+    fn an_already_emote_actor_emits_nothing() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        combat.fighters[0].force_actor_state(ActorStateType::Emote, now);
+        combat.fighters[1].force_actor_state(ActorStateType::Emote, now);
+        let _ = drain_state_changes(&mut combat, now);
+
+        combat.reset_actor_animations(now);
+        let frames = drain_state_changes(&mut combat, now);
         assert!(
             frames.is_empty(),
-            "an actor that was already Idle must not produce a state change: {frames:?}"
+            "an actor that was already Emote must not produce a state change: {frames:?}"
         );
+    }
+
+    fn generic_state_count(out: &[(usize, Vec<u8>)], state: ActorStateType) -> usize {
+        out.iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(39))
+            .filter(|(_, f)| arena_proto::parse_netdata(&f[2..]).int(6) == Some(state as i64))
+            .count()
+    }
+
+    #[test]
+    fn swing_idle_uses_the_recovery_state_clock() {
+        use super::super::tables::Weight;
+
+        let cases = [
+            (Weight::Light, 250, 617),
+            (Weight::Versatile, 350, 867),
+            (Weight::Heavy, 450, 1067),
+        ];
+        for (weight, hold_ms, idle_ms) in cases {
+            let now = Instant::now();
+            let mut combat = live_combat(now);
+            set_weapon_weight(&mut combat, 0, weight);
+
+            on_c2s_input(&mut combat, 0, &make_pos_frame(0.8, 0.5, 0.0), now);
+            on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, false), now);
+            let _ = drain_state_changes(&mut combat, now);
+
+            let release = now + Duration::from_millis(hold_ms);
+            on_c2s_input(
+                &mut combat,
+                0,
+                &make_act_frame(false, hold_ms as f32 / 1000.0, false),
+                release,
+            );
+            let commit = drain_state_changes(&mut combat, release);
+            assert_eq!(
+                commit
+                    .iter()
+                    .filter(|(_, f)| messages::user_message_gmid(f) == Some(52))
+                    .count(),
+                2,
+                "{weight:?}: release emits the AutoAttack beat"
+            );
+
+            combat.fighters[0].reconcile_scheduled_states(
+                release + Duration::from_millis(idle_ms - 10),
+            );
+            let early =
+                drain_state_changes(&mut combat, release + Duration::from_millis(idle_ms - 10));
+            assert_eq!(
+                generic_state_count(&early, ActorStateType::Idle),
+                0,
+                "{weight:?}: Idle must not fire before the recovery clock"
+            );
+
+            combat.fighters[0].reconcile_scheduled_states(
+                release + Duration::from_millis(idle_ms + 10),
+            );
+            let idle =
+                drain_state_changes(&mut combat, release + Duration::from_millis(idle_ms + 10));
+            assert_eq!(
+                generic_state_count(&idle, ActorStateType::Idle),
+                2,
+                "{weight:?}: Idle at release + follow-through + one frame + recoveryTime"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_charge_clears_the_previous_swing_idle() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+
+        on_c2s_input(&mut combat, 0, &make_pos_frame(0.8, 0.5, 0.0), now);
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, false), now);
+        let first_release = now + Duration::from_millis(250);
+        on_c2s_input(
+            &mut combat,
+            0,
+            &make_act_frame(false, 0.25, false),
+            first_release,
+        );
+        let _ = drain_state_changes(&mut combat, first_release);
+
+        let second_press = first_release + Duration::from_millis(200);
+        on_c2s_input(&mut combat, 0, &make_pos_frame(0.2, 0.5, 0.0), second_press);
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, false), second_press);
+        let second_charge = drain_state_changes(&mut combat, second_press);
+        assert_eq!(
+            second_charge
+                .iter()
+                .filter(|(_, f)| messages::user_message_gmid(f) == Some(45))
+                .count(),
+            2,
+            "the new charge is visible to both viewers"
+        );
+
+        let old_idle_due = first_release + Duration::from_millis(650);
+        combat.fighters[0].reconcile_scheduled_states(old_idle_due);
+        let mid_charge = drain_state_changes(&mut combat, old_idle_due);
+        assert_eq!(
+            generic_state_count(&mid_charge, ActorStateType::Idle),
+            0,
+            "the first swing's stale Idle must not interrupt the held charge"
+        );
+        assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Charging);
+
+        let second_release = second_press + Duration::from_millis(1000);
+        on_c2s_input(
+            &mut combat,
+            0,
+            &make_act_frame(false, 1.0, false),
+            second_release,
+        );
+        let next_commit = drain_state_changes(&mut combat, second_release);
+        assert_eq!(
+            generic_state_count(&next_commit, ActorStateType::Idle),
+            0,
+            "no 39 Idle is allowed between the second 45 and its 52"
+        );
+        assert_eq!(
+            next_commit
+                .iter()
+                .filter(|(_, f)| messages::user_message_gmid(f) == Some(52))
+                .count(),
+            2,
+            "the held charge still commits"
+        );
+    }
+
+    fn set_weapon_weight(
+        combat: &mut MatchCombat,
+        slot: usize,
+        weight: super::super::tables::Weight,
+    ) {
+        combat.fighters[slot].loadout.weapon.weight = Some(weight);
+        combat.fighters[slot].loadout.weapon_template = None;
     }
 
     fn live_combat(now: Instant) -> MatchCombat {

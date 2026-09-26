@@ -3421,12 +3421,12 @@ pub(in crate::arena::combat) mod tests {
                 !loser.contains(&39),
                 "viewer {viewer}: no 39 for the loser in the death burst, got {loser:?}"
             );
-            // Control: the WINNER is still returned to Idle at the round end.
+            // Control: the WINNER is still returned to the round-end Emote pose.
             assert!(
                 death.iter().filter(|(v, _)| *v == viewer).filter_map(|(_, b)| state_frame(b)).any(
-                    |(obj, g, s)| obj == winner_obj && g == 39 && s == Some(ActorStateType::Idle as i64)
+                    |(obj, g, s)| obj == winner_obj && g == 39 && s == Some(ActorStateType::Emote as i64)
                 ),
-                "viewer {viewer}: the winner's round-end 39 Idle must still go out"
+                "viewer {viewer}: the winner's round-end 39 Emote must still go out"
             );
         }
 

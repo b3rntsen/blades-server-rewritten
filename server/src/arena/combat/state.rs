@@ -1947,7 +1947,8 @@ impl Fighter {
 
     /// Queue a transition even when the logical state already has this value.
     /// Specialised packets such as op53 can put the client in a pose without changing
-    /// `actor_state`; round boundaries use this to reassert Idle authoritatively.
+    /// `actor_state`; round boundaries use this to reassert the client-visible
+    /// neutral pose authoritatively.
     pub fn force_actor_state(&mut self, next: ActorStateType, now: Instant) {
         let from = self.actor_state;
         let time_in_previous = self.time_in_state(now);
@@ -2033,7 +2034,7 @@ impl Fighter {
     /// End an op53 cast pose that is due. Re-asserts the logical state (Idle in
     /// practice) so the drain sends a 39 to both viewers — but only when nothing has
     /// entered a state since op53. Any later transition (a swing, a stagger, op58,
-    /// death, a round-end Idle) already took the client out of Channeling, and a
+    /// death, a round-end Emote) already took the client out of Channeling, and a
     /// second message would be a spurious one.
     pub fn reconcile_channel_pose(&mut self, now: Instant) {
         let Some((until, recorded_at)) = self.channel_pose else {
@@ -2081,7 +2082,7 @@ impl Fighter {
                 break;
             }
             self.scheduled_states.remove(0);
-            self.set_actor_state(state, now);
+            self.set_actor_state(state, when);
         }
         self.reconcile_channel_pose(now);
     }
@@ -3378,7 +3379,8 @@ impl MatchCombat {
     /// swing-throttle, actor back to Idle. The stats sequence id keeps rising
     /// (monotonic across the whole match, as the wire expects). `round` is NOT
     /// touched here — the engine bumps it when the next round goes live.
-    /// Return every fighter's ANIMATION to Idle, dropping any in-flight or scheduled
+    /// Return every fighter's ANIMATION to the round-end neutral pose, dropping any
+    /// in-flight or scheduled
     /// transition, and leave the change queued for the caller to drain.
     ///
     /// Split out of [`Self::reset_fighters_for_next_round`] because the animation and
@@ -3396,10 +3398,11 @@ impl MatchCombat {
     ///
     /// A non-final round's loser is that slot. The client shows a death only from
     /// op29, and `PvpAvatar$$CheckShouldForceServerState@0x1792864` skips op29 once a
-    /// 39 carrying the same `…, Dead` indices has already been merged — so a 39 Idle
-    /// drained ahead of op29 hid the death in rounds 1 and 2 (combat-spec 12 §7.2,
-    /// 12-D5). No client code revives the dead actor between rounds either
-    /// (`PvpAvatar$$EndRound@0x17848c0`); the loser stays Dead until
+    /// 39 carrying the same `…, Dead` indices has already been merged — so any generic
+    /// state frame drained ahead of op29 hid the death in rounds 1 and 2
+    /// (combat-spec 12 §7.2, 12-D5). The survivors go to Emote: `PvpAvatar$$EndRound`
+    /// and the victory stage force Emote client-side, and no client code revives the
+    /// dead actor between rounds. The loser stays Dead until
     /// [`Self::reset_fighters_for_next_round`] forces Idle at InRound.
     pub fn reset_actor_animations_except(&mut self, now: Instant, keep: Option<usize>) {
         for (slot, f) in self.fighters.iter_mut().enumerate() {
@@ -3410,13 +3413,13 @@ impl MatchCombat {
             f.pending_manual_attack = None;
             f.active_manual_attack = None;
             f.channel_pose = None;
-            if f.actor_state != ActorStateType::Idle {
+            if f.actor_state != ActorStateType::Emote {
                 f.pending_state_changes.clear();
-                f.set_actor_state(ActorStateType::Idle, now);
+                f.set_actor_state(ActorStateType::Emote, now);
             }
-            // An actor already logically Idle keeps its queue. At a round end that
-            // queue holds the Idle `on_round_ended` forced to end an op53 cast pose;
-            // clearing it here discarded that Idle unsent in every non-final round.
+            // An actor already logically Emote keeps its queue. At a round end that
+            // queue holds the state `on_round_ended` forced to end an op53 cast pose;
+            // clearing it here would discard that frame before it is sent.
         }
     }
 
