@@ -460,8 +460,8 @@ mod tests {
     use super::super::messages;
     use super::super::resolve::{self, drain_state_changes, on_c2s_input, on_tick};
     use super::super::state::{
-        AbilityTag, ActorStateType, DamageNegationSource, EquippedAbility, Fighter, FlowState,
-        MatchCombat,
+        AbilityTag, ActorStateType, BotObservedState, BotOpponentSnapshot, DamageNegationSource,
+        EquippedAbility, Fighter, FlowState, MatchCombat,
     };
     use super::*;
 
@@ -844,14 +844,20 @@ mod tests {
             });
         }
         c.fighters[1].cooldowns.insert(uuid_of("MagickaSurge").into(), t0 + secs(15.0));
+        let snapshot = BotOpponentSnapshot {
+            state: BotObservedState::Idle,
+            ability_uuid: None,
+        };
         assert_eq!(
-            resolve::bot_next_ready_ability(&c.fighters[1], t0).as_deref(),
+            resolve::bot_next_ready_ability(&mut c.fighters[1], "interrupt-test", 1, snapshot, t0)
+                .as_deref(),
             Some(uuid_of("Fireball")),
         );
         // A raised guard does not hide a ready ability: the bot lowers it to cast.
         c.fighters[1].set_actor_state(ActorStateType::Blocking, t0);
         assert_eq!(
-            resolve::bot_next_ready_ability(&c.fighters[1], t0).as_deref(),
+            resolve::bot_next_ready_ability(&mut c.fighters[1], "interrupt-test", 1, snapshot, t0)
+                .as_deref(),
             Some(uuid_of("Fireball")),
         );
     }

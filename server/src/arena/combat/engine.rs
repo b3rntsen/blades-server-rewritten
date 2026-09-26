@@ -4655,8 +4655,7 @@ pub(in crate::arena::combat) mod tests {
         assert_eq!(m.combat.fighters[0].actor_state(), ActorStateType::Blocking);
 
         // The swing lands 300 ms later — comfortably inside the 2 s optimal window,
-        // and about the wind-up a real attacker telegraphs (BOT_CHARGE_WINDUP 350 ms
-        // + FOLLOW_THROUGH_DELAY 50 ms = 400 ms, matching retail's 383 ms median).
+        // and about the wind-up a real attacker telegraphs.
         let swing_at = raise + Duration::from_millis(300);
         assert_eq!(
             m.combat.fighters[0].block_phase(swing_at),
