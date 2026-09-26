@@ -5120,12 +5120,8 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
         //
         // HEALING SURGE is a different thing and is applied here. It is a PERK —
         // "Increases Health regeneration while Stamina is high, by up to {0} per
-        // second" — so it pays out only for a player who bought it, at the rank they
-        // bought. That reconciles the owner's report that health regenerates in a
-        // fight with the deliberate zero above: the measured wire range across 272
-        // fighters (1.4-14.2 HP/s) sits inside this perk's shipped ceiling (8.4 at
-        // rank 1 to 15.4 at rank 8), and the fighters showing no regen are the ones
-        // without the perk.
+        // second" — so it is an additive health-regeneration source layered on top
+        // of the base in-combat health tick.
         //
         // Burning suppresses health regeneration intrinsically. `BlockHealthRegen`(50)
         // is still honoured for item-property paths, exactly as 51/52 suppress the two
@@ -5137,12 +5133,12 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
                 matches!(e.effect, StatusEffectType::BlockHealthRegen | StatusEffectType::Burning)
                     && now < e.expires_at
             });
-        if !block_health && f.health < f.damaged_max_health() && f.max_stamina > 0 {
+        if !block_health && f.health < f.damaged_max_health() && f.max_health > 0 {
             // `Stamina.BoundedPercent` — against the pool's FULL maximum, the same
             // reading Maximum Power uses (ravage does not lower `Maximum`).
             let stamina_fraction = f.stamina as f32 / f.max_stamina.max(1) as f32;
             let base = HEALTH_REGEN_RATE_PER_S * f.max_health as f32
-                / super::state::ARENA_HEALTH_MULTIPLIER as f32)
+                / super::state::ARENA_HEALTH_MULTIPLIER as f32
                 + f.loadout.health_regen
                 + f.loadout.perks.healing_surge_rate(stamina_fraction)
                 - f.regen_reduction(0, now);
@@ -5875,6 +5871,7 @@ mod tests {
     use super::super::messages::{self, frame_for_test};
     use super::super::state::{
         AbilityTag, BlockPhase, DamageType, EquippedAbility, Fighter, FlowState, MatchCombat,
+        StatusEffectType,
     };
     use arena_proto::NetDataWriter;
 
@@ -6269,7 +6266,11 @@ mod tests {
 
         let out = apply_regen_tick(&mut control, now + REGEN_TICK_INTERVAL);
         assert!(!out.is_empty(), "control Healing Surge should emit a stats update");
-        assert_eq!(control.fighters[0].health - hp_before, 12);
+        let expected = (HEALTH_REGEN_RATE_PER_S * control.fighters[0].max_health as f32
+            / super::super::state::ARENA_HEALTH_MULTIPLIER as f32
+            + 12.0)
+            .floor() as u32;
+        assert_eq!(control.fighters[0].health - hp_before, expected);
 
         let mut burning = make_live_combat(now);
         burning.fighters[0].loadout.perks.healing_surge = 12.0;
@@ -6335,6 +6336,155 @@ mod tests {
             h > 0 && s > 0 && m > 0,
             "an untouched opponent must read as full, not empty — got h={h} s={s} m={m} \
              (the old hardcoded `1` decoded to 0/0/0)",
+        );
+    }
+
+    #[test]
+    fn poisoned_ravage_regen_uses_full_maximum_and_full_max_wire() {
+        use super::super::state::{DamageType, PackedStats};
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        combat.fighters[1].max_health = 3150;
+        combat.fighters[1].health = 3150;
+        let full_max = combat.fighters[1].max_health;
+        let threshold = combat.fighters[1].condition_threshold(StatusEffectType::Poisoned);
+
+        let out = apply_status_conditioning(
+            &mut combat,
+            1,
+            &[(DamageType::Poison, threshold + 1.0)],
+            now,
+        );
+        assert_eq!(out.len(), 2, "control: Poisoned lands and is broadcast");
+
+        let want_ravage =
+            (1050.0 * super::super::gamedata::combat_params::POISONED_RAVAGE_HEALTH_PERCENT)
+                .round() as u32;
+        assert_eq!(combat.fighters[1].max_health, full_max, "Maximum stays fixed");
+        assert_eq!(combat.fighters[1].ravaged_health, want_ravage);
+        assert_eq!(
+            combat.fighters[1].damaged_max_health(),
+            full_max - want_ravage,
+            "DamagedMaximum is the ravaged ceiling"
+        );
+        combat.fighters[1].health = combat.fighters[1].damaged_max_health() - 10;
+        let before = combat.fighters[1].health;
+        combat.last_regen_tick = now;
+
+        let regen = apply_regen_tick(&mut combat, now + REGEN_TICK_INTERVAL);
+        assert!(
+            regen.iter().any(|(_, f)| messages::user_message_gmid(f) == Some(65)),
+            "regen must emit the stats update that carries the ravaged fraction"
+        );
+        let expected_regen = (HEALTH_REGEN_RATE_PER_S * full_max as f32
+            / super::super::state::ARENA_HEALTH_MULTIPLIER as f32)
+            .floor() as u32;
+        assert_eq!(combat.fighters[1].health - before, expected_regen);
+        assert!(combat.fighters[1].health < combat.fighters[1].max_health);
+
+        let (wire_h, _, _, _) = PackedStats::unpack(combat.fighters[1].packed_stats());
+        let expected_wire = (combat.fighters[1].health as u64 * super::super::state::STAT_MAX as u64
+            / full_max as u64) as u16;
+        assert_eq!(wire_h, expected_wire, "wire denominator is full Maximum");
+        assert!(
+            wire_h < super::super::state::STAT_MAX,
+            "a ravaged ceiling is not encoded as a full bar"
+        );
+
+        let mut control = make_live_combat(now);
+        control.fighters[1].max_health = full_max;
+        control.fighters[1].health = before;
+        control.last_regen_tick = now;
+        let _ = apply_regen_tick(&mut control, now + REGEN_TICK_INTERVAL);
+        assert_eq!(control.fighters[1].ravaged_health, 0);
+        assert_eq!(
+            control.fighters[1].health,
+            before + expected_regen,
+            "control: no ravage, same full-maximum base regen"
+        );
+    }
+
+    #[test]
+    fn quick_strikes_pair_runs_through_nord_frost_resist_armor_and_float_health() {
+        use super::super::state::{DamageSource, DamageType, InnateBaseResistance, WeaponProfile};
+        use super::super::tables::Weight;
+        let now = Instant::now();
+        let quick_strikes = "eb0cb7e6-47cf-48e7-8cc9-dbf80fc77f13";
+
+        let run = |mitigated: bool| {
+            let mut combat = make_live_combat(now);
+            combat.fighters[0].loadout.weapon = WeaponProfile {
+                primary_type: Some(DamageType::Slashing),
+                base_by_type: vec![(DamageType::Slashing, 100.0), (DamageType::Frost, 80.0)],
+                weight: Some(Weight::Light),
+            };
+            combat.fighters[0].loadout.weapon_template = None;
+            combat.fighters[0].loadout.enchants.clear();
+            combat.fighters[0].loadout.abilities.push(EquippedAbility {
+                instance_uuid: quick_strikes.to_string(),
+                level: 1,
+                tag: AbilityTag::Maneuver,
+            });
+            combat.fighters[0].max_stamina = 1_000;
+            combat.fighters[0].stamina = 1_000;
+            if mitigated {
+                combat.fighters[1].loadout.armor_rating = 200.0;
+                combat.fighters[1].loadout.resistances = vec![(DamageType::Frost, 15.0)];
+                combat.fighters[1]
+                    .loadout
+                    .innate_base_resistances
+                    .push(InnateBaseResistance {
+                        damage_types: vec![DamageType::Frost],
+                        damage_sources: vec![],
+                        factor: 0.15,
+                    });
+            }
+            let hp_before = combat.fighters[1].health;
+            let frame = make_ability_frame(combat.fighters[0].net_object_id, quick_strikes);
+            let mut out = on_c2s_input(&mut combat, 0, &frame, now);
+            out.extend(super::land_due_impacts(&mut combat, now + Duration::from_millis(200)));
+            out.extend(super::land_due_impacts(&mut combat, now + Duration::from_millis(720)));
+            (combat, out, hp_before)
+        };
+
+        let (combat, out, hp_before) = run(true);
+        let hits = damage_frames(&out);
+        assert_eq!(hits.len(), 4, "two Quick Strikes hits, one op50 per viewer");
+        assert!(
+            hits.iter().all(|(source, _, _)| *source == DamageSource::WeaponManeuver as u8),
+            "both hits stay on the maneuver damage source"
+        );
+        let first = &hits[0].2;
+        let second = &hits[2].2;
+        let component = |components: &[(u8, f32)], ty: DamageType| {
+            components
+                .iter()
+                .find(|(t, _)| *t == ty as u8)
+                .map(|(_, v)| *v)
+                .unwrap_or(0.0)
+        };
+
+        assert!((component(first, DamageType::Slashing) - 93.78).abs() < 0.02);
+        assert!((component(first, DamageType::Frost) - 53.0).abs() < 0.02);
+        assert!((hits[0].1 - 146.78).abs() < 0.02);
+
+        assert!((component(second, DamageType::Slashing) - 155.22).abs() < 0.02);
+        assert!((component(second, DamageType::Frost) - 89.72).abs() < 0.02);
+        assert!((hits[2].1 - 244.94).abs() < 0.02);
+        assert_eq!(
+            hp_before - combat.fighters[1].health,
+            391,
+            "float health carry floors 146.78 + 244.94 once, not per hit"
+        );
+
+        let (control, control_out, control_hp_before) = run(false);
+        let control_hits = damage_frames(&control_out);
+        assert_eq!(control_hits.len(), 4, "control: the same pair lands");
+        assert!((control_hits[0].1 - 193.78).abs() < 0.02);
+        assert_eq!(
+            control_hp_before - control.fighters[1].health,
+            492,
+            "control: no Nord resist, no Frost resistance, no armor"
         );
     }
 
@@ -9209,7 +9359,7 @@ mod shipped_effects_tests {
         let mut c = combat2(now);
         c.fighters[1].loadout.resistances = vec![(DamageType::Fire, 60.0)];
         c.fighters[1].negation_pools.push(NegationPool {
-            source: DamageNegationSource::Absorb,
+            source: DamageNegationSource::Dodge,
             remaining: 50.0,
             expires_at: now + Duration::from_secs(5),
             restoration_factor: 0.0,
@@ -9217,6 +9367,9 @@ mod shipped_effects_tests {
             elemental_only: false,
             consumes_overflow: false,
             on_absorb_restore: (0.0, 0.0, 0.0),
+            dodge_started_at: None,
+            dodge_status_expires_at: None,
+            dodge_effectiveness: 1.0,
             bypass_types: &[],
         });
         let hp_before = c.fighters[1].health;
@@ -9226,6 +9379,7 @@ mod shipped_effects_tests {
             flags: flags::SHOW_DAMAGE | flags::HAS_ATTACKER,
             pre_mitigation_components: vec![(DamageType::Fire, 100.0)],
             components: vec![(DamageType::Fire, 40.0)],
+            raw_components: vec![(DamageType::Fire, 100.0)],
             total: 40.0,
             most_resisted: DamageType::Fire,
             negated: false,
@@ -9247,8 +9401,8 @@ mod shipped_effects_tests {
         );
         assert_eq!(
             hp_before - c.fighters[1].health,
-            2,
-            "raw 100 - Absorb 50, then Fire resist 60 floors remaining 50 to 2.5 and health truncates"
+            20,
+            "dodge spends 50 raw points before mitigation, leaving half of the mitigated Fire hit"
         );
     }
 
@@ -10695,7 +10849,8 @@ mod shipped_effects_tests {
         assert_eq!(out.len(), 2, "Poisoned lands and is broadcast");
         let want = (base as f32 * super::super::gamedata::combat_params::POISONED_RAVAGE_HEALTH_PERCENT)
             .round() as u32;
-        assert_eq!(before_max - c.fighters[1].max_health, want);
+        assert_eq!(c.fighters[1].max_health, before_max, "Maximum stays fixed");
+        assert_eq!(before_max - c.fighters[1].damaged_max_health(), want);
         assert_eq!(c.fighters[1].ravaged_health, want);
     }
 
@@ -10723,7 +10878,8 @@ mod shipped_effects_tests {
         );
 
         assert_eq!(c.fighters[1].ravaged_health, 420, "two 20% landings on base 1050");
-        assert_eq!(c.fighters[1].max_health, 2730);
+        assert_eq!(c.fighters[1].max_health, 3150);
+        assert_eq!(c.fighters[1].damaged_max_health(), 2730);
     }
 
     /// 03-D19: bit 3 of op50 is the defender's `IsOptimalBlocking`, read for every

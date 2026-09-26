@@ -1451,7 +1451,6 @@ mod tests {
         assert_eq!(p.elem_resist_piercing, 0.0, "the fractional field is ability-side only");
     }
 
-    #[test]
     /// Thunderfell is the reported weapon: a Shock Mace carrying BOTH ravage
     /// suffixes at tier 10. It is versatile (`weaponClass` 2), so each reads 42.0 —
     /// the owner's number — not the 31.66 on the light table.

@@ -2927,12 +2927,11 @@ impl Fighter {
     }
 
     /// Max health WITHOUT the arena PvP health cheat — i.e. the character's own
-    /// shipped pool. `max_health` is `(health_for_level(level) + equipped Fortify
-    /// Health) × ARENA_HEALTH_MULTIPLIER`,
-    /// and that multiplier is `PvpDefaultSettings.CHEAT_BASE_HEALTH_MULTIPLIER`: a
-    /// pacing knob bolted onto the bar, not a change to the character's stats.
+    /// shipped pool. Ravage stores a destroyed portion while `max_health` stays at the
+    /// full wire denominator, so recover the character maximum from the usable ceiling
+    /// plus the destroyed portion.
     pub fn base_max_health(&self) -> u32 {
-        (self.max_health + self.ravaged_health) / ARENA_HEALTH_MULTIPLIER.max(1)
+        (self.damaged_max_health() + self.ravaged_health) / ARENA_HEALTH_MULTIPLIER.max(1)
     }
 
     /// The per-condition land threshold (absolute HP) for `condition`: the base
@@ -4008,7 +4007,6 @@ mod tests {
         assert_eq!(b.arena_target, 0);
     }
 
-    #[test]
     /// Ravage leaves Maximum fixed, raises DestroyedPortion, and clamps current to
     /// DamagedMaximum.
     #[test]
