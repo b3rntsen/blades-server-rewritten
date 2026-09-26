@@ -98,6 +98,9 @@ def clean_event(event):
     for key, value in event.items():
         if key in {"ht", "t"}:
             continue
+        if key == "activePerks" and isinstance(value, list):
+            keep[key] = compact_active_perks(value)
+            continue
         if key == "bonusSources" and isinstance(value, dict):
             keep[key] = compact_bonus_sources(value)
             continue
@@ -110,6 +113,30 @@ def clean_event(event):
             continue
         keep[key] = value
     return keep
+
+
+def compact_active_perks(perks):
+    """Keep stable identity/rank/value fields from v4 active perk snapshots."""
+
+    out = []
+    for perk in perks:
+        if not isinstance(perk, dict):
+            continue
+        key = perk.get("key") if isinstance(perk.get("key"), dict) else {}
+        magnitudes = perk.get("magnitudes") if isinstance(perk.get("magnitudes"), dict) else {}
+        kept = {}
+        for field, value in (
+            ("name", key.get("editorName")),
+            ("uid", perk.get("id") or key.get("uid")),
+            ("cls", perk.get("cls")),
+            ("rank", perk.get("rank")),
+            ("bonusValue", magnitudes.get("bonusValue")),
+        ):
+            if value is not None:
+                kept[field] = value
+        if kept:
+            out.append(kept)
+    return out
 
 
 def compact_bonus_sources(lists):
