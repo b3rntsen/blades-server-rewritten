@@ -92,7 +92,19 @@ struct InventoryOnly {
 
 #[derive(Deserialize)]
 struct LevelupRequest {
-    attribute: String,
+    #[serde(default)]
+    attribute: Option<String>,
+}
+
+fn requested_levelup_attribute(req: &LevelupRequest, current_level: u16) -> Option<Attribute> {
+    match req.attribute.as_deref().and_then(Attribute::parse) {
+        Some(attribute) => Some(attribute),
+        // Retail stops granting attribute points after level 50. At that point the
+        // client may send `null` or omit the field entirely; accept a harmless
+        // placeholder rather than refusing a level whose attribute choice is ignored.
+        None if current_level >= character_ops::MAX_ATTRIBUTE_POINT_LEVEL => Some(Attribute::Stamina),
+        None => None,
+    }
 }
 
 fn set_level_up_offer(
@@ -131,8 +143,7 @@ pub async fn levelup(
     let session = session.get_session_or_error()?;
     let user_id = session.session.user_id;
     let character_id = path.into_inner();
-    let attribute = Attribute::parse(&body.attribute)
-        .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, CHAR_OPS_SERVICE_ID, 1))?;
+    let body = body.into_inner();
     let app_state_clone = app_state.into_inner().clone();
     let db_pool = app_state_clone.db_pool.clone();
     let mut conn = db_pool.get().await.unwrap();
@@ -140,6 +151,8 @@ pub async fn levelup(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
+            let attribute = requested_levelup_attribute(&body, entry.character.0.level)
+                .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, CHAR_OPS_SERVICE_ID, 1))?;
 
             // Refuse before anything is written: an unearned level must leave the
             // character exactly as it was, not half-applied.
@@ -756,6 +769,45 @@ mod tests {
     fn an_absent_field_is_still_an_empty_map() {
         let req: LoadoutCurrentRequest = serde_json::from_str(r#"{}"#).unwrap();
         assert!(req.equipment_updates.is_empty());
+    }
+
+    // ── /levelup request attribute after the retail cap ─────────────────────
+
+    fn levelup_req(json: &str) -> LevelupRequest {
+        serde_json::from_str(json).expect("levelup request parses")
+    }
+
+    #[test]
+    fn levelup_still_honors_an_explicit_attribute_before_the_cap() {
+        let req = levelup_req(r#"{"attribute":"MAGICKA"}"#);
+        assert_eq!(requested_levelup_attribute(&req, 49), Some(Attribute::Magicka));
+    }
+
+    #[test]
+    fn levelup_accepts_missing_or_null_attribute_once_it_no_longer_matters() {
+        let missing = levelup_req(r#"{}"#);
+        let null = levelup_req(r#"{"attribute":null}"#);
+
+        assert_eq!(
+            requested_levelup_attribute(&missing, 58),
+            Some(Attribute::Stamina),
+            "level 58 -> 59 grants no attribute point, so an omitted field is harmless"
+        );
+        assert_eq!(
+            requested_levelup_attribute(&null, 50),
+            Some(Attribute::Stamina),
+            "level 50 -> 51 is the first post-cap level"
+        );
+    }
+
+    #[test]
+    fn levelup_still_rejects_missing_attribute_while_it_changes_state() {
+        let req = levelup_req(r#"{}"#);
+        assert_eq!(
+            requested_levelup_attribute(&req, 49),
+            None,
+            "level 49 -> 50 still awards an attribute point"
+        );
     }
 
     // ── /levelup's response shape ────────────────────────────────────────────
