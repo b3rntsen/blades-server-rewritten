@@ -21,6 +21,7 @@
 
 use std::{
     borrow::Cow,
+    collections::HashMap,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -50,6 +51,7 @@ use crate::{
     BladeApiError, ServerGlobal, json_db::JsonDbWrapper,
     models::CharacterDbEntryEconomy, session::SessionLookedUpMaybe,
 };
+use blades_lib::game_data::GameDataItem;
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -276,7 +278,19 @@ fn is_stuck_finished(
     owned_buildings: &std::collections::HashSet<Uuid>,
     now_ms: i64,
 ) -> bool {
-    owned_buildings.contains(&job.building_id) && job.completed_at_ms <= now_ms
+    !is_enchant_job(job) && owned_buildings.contains(&job.building_id) && job.completed_at_ms <= now_ms
+}
+
+fn is_enchant_job(job: &CraftJob) -> bool {
+    job.crafting_type_id == item_mod_crafting_type(0)
+}
+
+fn should_detach_from_owned_building(
+    crafting_type_id: Uuid,
+    building_id: Uuid,
+    owned_buildings: &std::collections::HashSet<Uuid>,
+) -> bool {
+    crafting_type_id != item_mod_crafting_type(0) && owned_buildings.contains(&building_id)
 }
 
 /// A stable stand-in id that cannot name a real building.
@@ -402,6 +416,12 @@ pub async fn get_crafts(
             // bricked this way; one of them crafted once on 2026-08-26 and never
             // got back in.
             //
+            // Enchanting is the exception. Retail `GET /crafts` shows the in-flight
+            // enchant on its real Enchanter building after the start response removed
+            // the input item. If a connection drops between those two calls, hiding or
+            // auto-collecting that job leaves the client with neither the backpack item
+            // nor a station job to finish.
+            //
             // So until the client-side mechanism is understood, DETACH rather
             // than drop: the job, its results and its timer stay in the database
             // untouched, and the player keeps whatever they crafted. What they
@@ -413,7 +433,11 @@ pub async fn get_crafts(
             if !owned_buildings.is_empty() {
                 let mut detached = 0usize;
                 for w in wires.iter_mut() {
-                    if owned_buildings.contains(&w.building_id) {
+                    if should_detach_from_owned_building(
+                        w.crafting_type_id,
+                        w.building_id,
+                        &owned_buildings,
+                    ) {
                         w.building_id = detached_building_id(w.building_id);
                         detached += 1;
                     }
@@ -497,9 +521,17 @@ pub async fn create_craft(
 
     conn.transaction(move |conn| {
         async move {
-            start_craft(conn, &globals.static_data, &globals.repair_data, user_id, character_id, req)
-                .await
-                .map(Json)
+            start_craft(
+                conn,
+                &globals.static_data,
+                &globals.repair_data,
+                &globals.game_data.items_template,
+                user_id,
+                character_id,
+                req,
+            )
+            .await
+            .map(Json)
         }
         .scope_boxed()
     })
@@ -513,6 +545,7 @@ async fn start_craft(
     conn: &mut diesel_async::AsyncPgConnection,
     static_data: &blades_lib::static_data::StaticData,
     repair_data: &RepairData,
+    game_items: &HashMap<Uuid, GameDataItem>,
     user_id: Uuid,
     character_id: Uuid,
     req: CreateCraftRequest,
@@ -570,6 +603,7 @@ async fn start_craft(
             recipe_id,
             mod_recipe.as_ref(),
             &static_data.enchanting,
+            game_items,
             &mut rand::rng(),
         );
         entry.inventory.0.backpack_version += 1;
@@ -1485,6 +1519,7 @@ fn apply_item_mod<R: Rng + ?Sized>(
     recipe_id: Uuid,
     captured: Option<&ItemModRecipe>,
     enchanting: &EnchantingData,
+    game_items: &HashMap<Uuid, GameDataItem>,
     rng: &mut R,
 ) -> Item {
     let mut item = existing.clone();
@@ -1504,6 +1539,7 @@ fn apply_item_mod<R: Rng + ?Sized>(
         let idx = rng.random_range(0..rec.outcomes.len());
         item.properties.enchanting = rec.outcomes[idx].enchanting.clone();
     }
+    crate::jewelry_grade::grade_if_bare(&mut item, game_items, rng);
     item
 }
 
@@ -1722,6 +1758,22 @@ mod tests {
         })
     }
 
+    fn no_game_items() -> &'static HashMap<Uuid, GameDataItem> {
+        static I: std::sync::OnceLock<HashMap<Uuid, GameDataItem>> = std::sync::OnceLock::new();
+        I.get_or_init(HashMap::new)
+    }
+
+    fn deploy_items() -> &'static HashMap<Uuid, GameDataItem> {
+        static I: std::sync::OnceLock<HashMap<Uuid, GameDataItem>> = std::sync::OnceLock::new();
+        I.get_or_init(|| {
+            let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../deploy/static/parsed.json");
+            let gd: blades_lib::game_data::GameData =
+                serde_json::from_slice(&std::fs::read(p).expect("parsed.json")).expect("parses");
+            gd.items_template
+        })
+    }
+
     fn uuid(s: &str) -> Uuid {
         Uuid::parse_str(s).unwrap()
     }
@@ -1749,7 +1801,7 @@ mod tests {
     #[test]
     fn temper_sets_level_and_keeps_enchants() {
         let existing = item_with(0, vec![prop(1), prop(2)]);
-        let out = apply_item_mod(&existing, 10, ANY_RECIPE, None, deploy_enchanting(), &mut seeded(1));
+        let out = apply_item_mod(&existing, 10, ANY_RECIPE, None, deploy_enchanting(), no_game_items(), &mut seeded(1));
         assert_eq!(out.tempering_level, 10);
         assert_eq!(out.properties.enchanting.len(), 2, "existing enchants preserved");
         assert_eq!(out.durability, 300.0);
@@ -1767,7 +1819,7 @@ mod tests {
         }]);
         let none = EnchantingData::default();
         let plain = item_with(5, vec![]);
-        let out = apply_item_mod(&plain, 0, ANY_RECIPE, Some(&recipe), &none, &mut seeded(1));
+        let out = apply_item_mod(&plain, 0, ANY_RECIPE, Some(&recipe), &none, no_game_items(), &mut seeded(1));
         assert_eq!(out.properties.enchanting.len(), 3, "enchants applied from outcome");
         assert_eq!(out.tempering_level, 5, "tempering preserved on enchant");
         assert_eq!(out.arcane_tier, None, "a plain item must not turn arcane");
@@ -1775,8 +1827,54 @@ mod tests {
         assert!(!j.contains("arcaneTier"), "absent arcane tier must be omitted: {j}");
 
         let arcane = Item { arcane_tier: Some(1), ..item_with(5, vec![]) };
-        let out = apply_item_mod(&arcane, 0, ANY_RECIPE, Some(&recipe), &none, &mut seeded(1));
+        let out = apply_item_mod(&arcane, 0, ANY_RECIPE, Some(&recipe), &none, no_game_items(), &mut seeded(1));
         assert_eq!(out.arcane_tier, Some(1), "the item's own tier survives");
+    }
+
+    /// Rings and necklaces are always graded in retail (see `jewelry_grade`'s
+    /// 1,121-item audit). If a legacy bare jewelry item reaches enchanting, the result
+    /// still has to carry the ability affixes the UI displays beside the enchant.
+    #[test]
+    fn enchanting_bare_jewelry_adds_grade_and_grading() {
+        const FIRE_RING: &str = "3833ad47-86c6-427a-b30e-8d3e1f27b1d7";
+        let mut ring = item_with(0, vec![]);
+        ring.item_template_id = uuid(FIRE_RING);
+
+        let out = apply_item_mod(
+            &ring,
+            0,
+            uuid(MAGICKA_DAMAGE_T10),
+            None,
+            deploy_enchanting(),
+            deploy_items(),
+            &mut seeded(264),
+        );
+
+        assert!(!out.properties.enchanting.is_empty(), "the enchant itself is present");
+        let grade = out.grade.expect("enchanted ring must carry a grade");
+        assert!(!out.properties.grading.is_empty(), "enchanted ring must carry ability GRADING");
+        assert_eq!(grade, out.properties.grading.iter().map(|p| p.tier).sum::<u64>());
+        assert_eq!(out.tempering_level, 0, "graded jewelry has no wear fields on the wire");
+        assert_eq!(out.durability, 0.0, "graded jewelry has no durability");
+    }
+
+    /// Negative control: the same enchant on ordinary gear must not invent jewelry-only
+    /// ability affixes or a grade.
+    #[test]
+    fn enchanting_gear_does_not_add_jewelry_grading() {
+        let out = apply_item_mod(
+            &madness_battleaxe(None),
+            0,
+            uuid(MAGICKA_DAMAGE_T10),
+            None,
+            deploy_enchanting(),
+            deploy_items(),
+            &mut seeded(264),
+        );
+        assert!(!out.properties.enchanting.is_empty(), "control enchant should still apply");
+        assert_eq!(out.grade, None);
+        assert!(out.properties.grading.is_empty());
+        assert!(out.durability > 0.0, "gear keeps durability");
     }
 
     /// `reward_from_results` hand-rolls an `Item` out of the stored results `Value`, so it
@@ -1825,7 +1923,7 @@ mod tests {
         let mut rng = seeded(7);
         let lens: std::collections::HashSet<usize> = (0..64)
             .map(|_| {
-                apply_item_mod(&existing, 0, ANY_RECIPE, Some(&recipe), &none, &mut rng)
+                apply_item_mod(&existing, 0, ANY_RECIPE, Some(&recipe), &none, no_game_items(), &mut rng)
                     .properties
                     .enchanting
                     .len()
@@ -1833,15 +1931,15 @@ mod tests {
             .collect();
         assert_eq!(lens.len(), 2, "one item must reach both outcomes: {lens:?}");
         // Control: the same seed reproduces the same roll.
-        let a = apply_item_mod(&existing, 0, ANY_RECIPE, Some(&recipe), &none, &mut seeded(3));
-        let b = apply_item_mod(&existing, 0, ANY_RECIPE, Some(&recipe), &none, &mut seeded(3));
+        let a = apply_item_mod(&existing, 0, ANY_RECIPE, Some(&recipe), &none, no_game_items(), &mut seeded(3));
+        let b = apply_item_mod(&existing, 0, ANY_RECIPE, Some(&recipe), &none, no_game_items(), &mut seeded(3));
         assert_eq!(a.properties.enchanting, b.properties.enchanting);
     }
 
     #[test]
     fn enchant_without_recipe_is_lenient_noop() {
         let existing = item_with(3, vec![prop(1)]);
-        let out = apply_item_mod(&existing, 0, ANY_RECIPE, None, deploy_enchanting(), &mut seeded(1));
+        let out = apply_item_mod(&existing, 0, ANY_RECIPE, None, deploy_enchanting(), no_game_items(), &mut seeded(1));
         assert_eq!(out.tempering_level, 3);
         assert_eq!(out.properties.enchanting.len(), 1, "unchanged when no recipe");
     }
@@ -1853,7 +1951,7 @@ mod tests {
         let mut rng = seeded(seed);
         (0..n)
             .map(|_| {
-                apply_item_mod(&item, 0, uuid(MAGICKA_DAMAGE_T10), None, e, &mut rng)
+                apply_item_mod(&item, 0, uuid(MAGICKA_DAMAGE_T10), None, e, no_game_items(), &mut rng)
                     .properties
                     .enchanting
             })
@@ -1977,6 +2075,7 @@ mod tests {
             uuid(MAGICKA_DAMAGE_T10),
             None,
             e,
+            no_game_items(),
             &mut seeded(11),
         );
         let results = serde_json::json!({ "items": [RewardItem { id: item_id, item: rolled.clone() }] });
@@ -4058,7 +4157,7 @@ mod tests {
             let rd = repair_data_from_deploy();
             let s = seed(&mut conn, 100_000).await;
 
-            let resp = start_craft(&mut conn, &sd, rd, s.user_id, s.character_id, request(s.item_id, 0))
+            let resp = start_craft(&mut conn, &sd, rd, deploy_items(), s.user_id, s.character_id, request(s.item_id, 0))
                 .await
                 .expect("affordable enchant starts");
             // The response carries the charged wallet and the material diff.
@@ -4140,7 +4239,7 @@ mod tests {
                 (DRAGONSCALE_HELMET_RECIPE, DRAGONSCALE_HELMET),
                 (DRAGONSCALE_ARMOR_RECIPE, DRAGONSCALE_ARMOR),
             ] {
-                let started = start_craft(&mut conn, &sd, rd, s.user_id, s.character_id, plain_request(recipe))
+                let started = start_craft(&mut conn, &sd, rd, deploy_items(), s.user_id, s.character_id, plain_request(recipe))
                     .await
                     .expect("APK-output craft starts");
                 let minted = result_item_id(&started.craft);
@@ -4172,7 +4271,7 @@ mod tests {
             let sd = static_data_from_deploy();
             let rd = repair_data_from_deploy();
             let s = seed(&mut conn, 0).await;
-            start_craft(&mut conn, &sd, rd, s.user_id, s.character_id, request(s.item_id, 10))
+            start_craft(&mut conn, &sd, rd, deploy_items(), s.user_id, s.character_id, request(s.item_id, 10))
                 .await
                 .expect("temper starts");
             let craft_id = stored(&mut conn, &s).await.server_state.0.craft_jobs[0].id;
@@ -4193,7 +4292,7 @@ mod tests {
             let s = seed(&mut conn, RETAIL_MAGICKA_T10_GOLD - 1).await;
             let before = stored(&mut conn, &s).await;
 
-            let err = start_craft(&mut conn, &sd, rd, s.user_id, s.character_id, request(s.item_id, 0))
+            let err = start_craft(&mut conn, &sd, rd, deploy_items(), s.user_id, s.character_id, request(s.item_id, 0))
                 .await
                 .err()
                 .expect("one gold short is refused");
@@ -4209,7 +4308,7 @@ mod tests {
 
             // Control: the same character with one more gold starts fine.
             let s2 = seed(&mut conn, RETAIL_MAGICKA_T10_GOLD).await;
-            start_craft(&mut conn, &sd, rd, s2.user_id, s2.character_id, request(s2.item_id, 0))
+            start_craft(&mut conn, &sd, rd, deploy_items(), s2.user_id, s2.character_id, request(s2.item_id, 0))
                 .await
                 .expect("exactly affordable");
             assert_eq!(gold_of(&stored(&mut conn, &s2).await), 0);
@@ -4225,14 +4324,14 @@ mod tests {
             let rd = repair_data_from_deploy();
 
             let refused = seed_short(&mut conn, 100_000, Some(MAT_4)).await;
-            let err = start_craft(&mut conn, &sd, rd, refused.user_id, refused.character_id, request(refused.item_id, 0))
+            let err = start_craft(&mut conn, &sd, rd, deploy_items(), refused.user_id, refused.character_id, request(refused.item_id, 0))
                 .await
                 .err()
                 .expect("short, no gems offered");
             assert_eq!(err.to_string(), "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 4 }");
 
             let s = seed_short(&mut conn, 100_000, Some(MAT_4)).await;
-            let resp = start_craft(&mut conn, &sd, rd, s.user_id, s.character_id, request_paying(s.item_id, 0, true))
+            let resp = start_craft(&mut conn, &sd, rd, deploy_items(), s.user_id, s.character_id, request_paying(s.item_id, 0, true))
                 .await
                 .expect("gems buy the missing soul gem");
             assert_eq!(resp.wallet.balance(GEMS), 500 - 16);
@@ -4266,7 +4365,7 @@ mod tests {
             let s = seed(&mut conn, 100_000).await;
             let before = stored(&mut conn, &s).await;
 
-            start_craft(&mut conn, &sd, rd, s.user_id, s.character_id, request(s.item_id, 10))
+            start_craft(&mut conn, &sd, rd, deploy_items(), s.user_id, s.character_id, request(s.item_id, 10))
                 .await
                 .expect("temper starts");
             let after = stored(&mut conn, &s).await;
@@ -4360,6 +4459,13 @@ mod stuck_craft_tests {
         }
     }
 
+    fn enchant_job(building: Uuid, completed_at_ms: i64) -> CraftJob {
+        CraftJob {
+            crafting_type_id: item_mod_crafting_type(0),
+            ..job(building, completed_at_ms)
+        }
+    }
+
     const NOW: i64 = 1_000_000;
 
     /// A FINISHED job on one of the player's own buildings is collectable.
@@ -4377,6 +4483,24 @@ mod stuck_craft_tests {
         assert!(is_stuck_finished(&job(b, NOW), &owned, NOW), "exactly due counts as finished");
     }
 
+    /// Retail restart recovery for enchants: `POST /crafts` removes the input item, and
+    /// `GET /crafts` shows the enchant job on the real Enchanter building. A reconnect
+    /// must therefore leave even a finished enchant visible for the client to collect.
+    #[test]
+    fn an_enchant_job_on_an_owned_building_stays_visible() {
+        let b = Uuid::from_u128(0xB1);
+        let owned = std::collections::HashSet::from([b]);
+        let job = enchant_job(b, NOW - 1);
+        assert!(
+            !is_stuck_finished(&job, &owned, NOW),
+            "GET /crafts must not auto-collect an enchant behind the client's back"
+        );
+        assert!(
+            !should_detach_from_owned_building(job.crafting_type_id, job.building_id, &owned),
+            "GET /crafts must keep the real Enchanter building id for restart recovery"
+        );
+    }
+
     /// THE CONTROL, and the one that matters: this must NOT loosen the containment.
     ///
     /// The detach exists because a job whose `buildingId` resolves to a real
@@ -4390,6 +4514,10 @@ mod stuck_craft_tests {
         assert!(
             !is_stuck_finished(&job(b, NOW + 1), &owned, NOW),
             "a job that has not finished must not be collected early"
+        );
+        assert!(
+            should_detach_from_owned_building(job(b, NOW + 1).crafting_type_id, b, &owned),
+            "negative control: non-enchant jobs still use the town-hang detach containment"
         );
     }
 
