@@ -8,6 +8,7 @@
 //! period math is the pure [`blades_lib::features::daily_reward`] layer.
 
 use std::{
+    collections::HashMap,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -17,9 +18,10 @@ use actix_web::{
     post,
     web::{self, Json},
 };
-use blades_lib::economy::{RewardChest, RewardGrant, apply_reward, grant_chest};
+use blades_lib::economy::{RewardGrant, apply_reward};
+use blades_lib::features::chests;
 use blades_lib::features::daily_reward::{self, DailyRewardPayload};
-use blades_lib::user_data::{CompleteInventoryUpdate, InventoryChangeTracker};
+use blades_lib::user_data::{CompleteInventoryUpdate, CompleteWallet, InventoryChangeTracker};
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use serde::Serialize;
@@ -112,8 +114,88 @@ pub async fn get_daily_reward(
 #[serde(rename_all = "camelCase")]
 struct CollectResponse {
     reward: RewardGrant,
-    daily_reward_status: DailyRewardStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wallet: Option<CompleteWallet>,
+    daily_reward_status: CollectDailyRewardStatus,
     inventory: CompleteInventoryUpdate,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectDailyRewardStatus {
+    reward_uid: Uuid,
+    until: i64,
+    daily_reward: RewardGrant,
+    collected: bool,
+}
+
+fn merge_reward(into: &mut RewardGrant, extra: &RewardGrant) {
+    for (currency, amount) in &extra.currencies {
+        *into.currencies.entry(*currency).or_insert(0) += amount;
+    }
+    for (item, count) in &extra.stackable_items {
+        *into.stackable_items.entry(*item).or_insert(0) += count;
+    }
+    into.items.extend(extra.items.iter().cloned());
+    into.chests.extend(extra.chests.iter().cloned());
+    into.character_xp += extra.character_xp;
+    into.town_xp += extra.town_xp;
+}
+
+fn remint_reward_items(reward: &mut RewardGrant) {
+    for item in &mut reward.items {
+        item.id = Uuid::new_v4();
+    }
+}
+
+fn collect_reward_for(
+    payload: &DailyRewardPayload,
+    chest_loots: &blades_lib::features::chests::ChestLootTables,
+    reward_uid: Uuid,
+) -> RewardGrant {
+    let mut reward = RewardGrant {
+        stackable_items: payload.stackable_items.clone(),
+        ..Default::default()
+    };
+
+    // Retail advertises chest days as `dailyReward.chests` in the status endpoint,
+    // but collect opens that chest immediately and returns the loot bundle. Nine
+    // distinct captured chest-daily collect responses all omit `reward.chests` and
+    // instead carry `items`, `stackableItems` and `currencies`.
+    for (idx, chest) in payload.chests.iter().enumerate() {
+        let key = format!("daily:{reward_uid}:{idx}:{}:{}", chest.tier, chest.level);
+        if let Some(loot) = chests::pick_loot(chest_loots, chest.tier, chest.level, &key) {
+            merge_reward(&mut reward, loot);
+        }
+    }
+    remint_reward_items(&mut reward);
+    reward
+}
+
+fn collected_status(
+    period: i64,
+    reward_uid: Uuid,
+    daily_reward: RewardGrant,
+) -> CollectDailyRewardStatus {
+    CollectDailyRewardStatus {
+        reward_uid,
+        until: daily_reward::until_ms(period),
+        daily_reward,
+        collected: true,
+    }
+}
+
+fn credited_wallet(wallet: &CompleteWallet, reward: &RewardGrant) -> Option<CompleteWallet> {
+    if reward.currencies.is_empty() {
+        return None;
+    }
+    let mut out = HashMap::new();
+    for currency in reward.currencies.keys() {
+        if let Some(entry) = wallet.0.get(currency) {
+            out.insert(*currency, entry.clone());
+        }
+    }
+    Some(CompleteWallet(out))
 }
 
 #[post(
@@ -150,39 +232,22 @@ pub async fn collect_daily_reward(
             let already = entry.server_state.0.daily_reward.collected_period == Some(period);
 
             let mut reward = RewardGrant::default();
+            let mut reward_uid = Uuid::nil();
+            let mut status_reward = RewardGrant::default();
             let mut tracker = InventoryChangeTracker::default();
 
-            if !already {
-                if let Some(def) = daily_reward::reward_for_period(
-                    &globals.static_data.daily_rewards,
-                    period,
-                ) {
-                    // The reward the client is TOLD about has to be the reward it
-                    // actually got — chests included.
-                    //
-                    // This used to copy only `stackable_items` onto `reward` and
-                    // grant the chests straight off `def`, so on a day whose reward
-                    // is a chest and nothing else, `RewardGrant` stayed empty and
-                    // (every field being skip-if-empty) serialized as `"reward": {}`.
-                    // The chest did land in the treasury; the client was simply told
-                    // it had collected nothing, and sat there waiting for a reward to
-                    // present. That is report #161, whose pasted body shows exactly
-                    // that pair: `"reward": {}` beside a treasury holding the tier-2
-                    // level-86 chest it had just been given.
-                    //
-                    // `complete_quest` has always done it this way — chests live ON
-                    // the grant and are granted FROM it — so this is the daily path
-                    // catching up, not a new convention.
-                    reward.stackable_items = def.daily_reward.stackable_items.clone();
-                    // `ChestDef` (tier/level) → `RewardChest`, which also carries the
-                    // capture's chest id. `id: None` is correct: the treasury assigns a
-                    // fresh numeric id on grant, so naming one here would collide.
-                    reward.chests = def
-                        .daily_reward
-                        .chests
-                        .iter()
-                        .map(|c| RewardChest { id: None, tier: c.tier, level: c.level })
-                        .collect();
+            if let Some(def) =
+                daily_reward::reward_for_period(&globals.static_data.daily_rewards, period)
+            {
+                reward_uid = def.reward_uid;
+                let collect_reward = collect_reward_for(
+                    &def.daily_reward,
+                    &globals.static_data.chest_loots,
+                    def.reward_uid,
+                );
+                status_reward = collect_reward.clone();
+                if !already {
+                    reward = collect_reward;
                     apply_reward(
                         &reward,
                         &mut entry.wallet.0,
@@ -190,25 +255,23 @@ pub async fn collect_daily_reward(
                         &mut entry.character.0,
                         &mut tracker,
                     );
-                    if !reward.stackable_items.is_empty() {
+                    if !reward.stackable_items.is_empty() || !reward.items.is_empty() {
                         entry.inventory.0.backpack_version += 1;
                     }
-                    if !reward.chests.is_empty() {
-                        for chest in &reward.chests {
-                            grant_chest(&mut entry.inventory.0, chest.tier, chest.level, &mut tracker);
-                        }
-                        entry.inventory.0.treasury_version += 1;
-                    }
                 }
+            }
+            if !already {
                 entry.server_state.0.daily_reward.collected_period = Some(period);
             }
 
-            let status = status_for(&globals, period, true);
+            let wallet = credited_wallet(&entry.wallet.0, &reward);
+            let status = collected_status(period, reward_uid, status_reward);
             let inventory = entry.inventory.0.generate_client_update(&tracker);
             write_back(&mut conn, entry).await?;
 
             Ok::<_, BladeApiError>(Json(CollectResponse {
                 reward,
+                wallet,
                 daily_reward_status: status,
                 inventory,
             }))
@@ -234,30 +297,43 @@ async fn write_back(
 #[cfg(test)]
 mod collect_response_tests {
     use super::*;
-    use blades_lib::economy::RewardGrant;
+    use blades_lib::{
+        economy::{GOLD, RewardGrant},
+        features::chests::{ChestLootSample, ChestLootTables},
+    };
+    use std::collections::{BTreeMap, HashMap};
 
     /// Build the `reward` exactly as `collect_daily_reward` does, for one day's
     /// definition. Kept beside the handler so the two cannot drift silently.
     fn reward_for(payload: &blades_lib::features::daily_reward::DailyRewardPayload) -> RewardGrant {
-        let mut reward = RewardGrant::default();
-        reward.stackable_items = payload.stackable_items.clone();
-        reward.chests = payload
-            .chests
-            .iter()
-            .map(|c| RewardChest { id: None, tier: c.tier, level: c.level })
-            .collect();
-        reward
+        collect_reward_for(payload, &loot_tables(), Uuid::from_u128(0xDA11A))
     }
 
-    /// THE regression, in the reporter's own numbers.
-    ///
-    /// Report #161 pasted a collect response with `"reward": {}` sitting beside a
-    /// treasury holding the tier-2 level-86 chest it had just been granted. Every
-    /// `RewardGrant` field is skip-if-empty, so a chest-only day serialized as an
-    /// empty object: the chest arrived, and the client was told it had collected
-    /// nothing and hung waiting for something to present.
+    fn loot_tables() -> ChestLootTables {
+        ChestLootTables {
+            tiers: BTreeMap::from([(
+                2,
+                vec![ChestLootSample {
+                    chest_level: 86,
+                    reward: RewardGrant {
+                        currencies: HashMap::from([(GOLD, 2218)]),
+                        stackable_items: HashMap::from([(
+                            "42d91529-c88b-4c5b-815b-b55508b4e7ef".parse().unwrap(),
+                            7,
+                        )]),
+                        ..Default::default()
+                    },
+                }],
+            )]),
+            ..Default::default()
+        }
+    }
+
+    /// Retail's daily-reward status advertises chest days as `dailyReward.chests`,
+    /// but all nine distinct captured chest-day collect responses omit chests and
+    /// return opened chest loot instead.
     #[test]
-    fn a_chest_only_day_still_reports_the_chest() {
+    fn a_chest_only_day_collects_as_opened_loot_not_a_treasury_chest() {
         let payload: blades_lib::features::daily_reward::DailyRewardPayload =
             serde_json::from_value(serde_json::json!({
                 "chests": [{ "tier": 2, "level": 86 }]
@@ -266,9 +342,9 @@ mod collect_response_tests {
         let reward = reward_for(&payload);
 
         assert!(!reward.is_empty(), "the reward must not be empty");
-        assert_eq!(reward.chests.len(), 1);
-        assert_eq!(reward.chests[0].tier, 2);
-        assert_eq!(reward.chests[0].level, 86);
+        assert!(reward.chests.is_empty(), "collect opens the chest immediately");
+        assert_eq!(reward.currencies.get(&GOLD), Some(&2218));
+        assert_eq!(reward.stackable_items.values().copied().sum::<u64>(), 7);
 
         let json = serde_json::to_value(&reward).expect("serializes");
         assert_ne!(
@@ -276,11 +352,15 @@ mod collect_response_tests {
             serde_json::json!({}),
             "`reward: {{}}` is the bug — the client reads this to present the reward"
         );
-        assert!(json.get("chests").is_some(), "the chest must reach the wire");
+        assert!(
+            json.get("chests").is_none(),
+            "daily collect should not hand over an unopened chest"
+        );
+        assert!(json.get("currencies").is_some(), "opened loot reaches the wire");
     }
 
-    /// The control: a stackables-only day must be unchanged. The fix adds chests to
-    /// the grant and must not disturb the path that already worked.
+    /// The control: a stackables-only day must be unchanged. Opening chest rewards
+    /// must not disturb the path that already worked.
     #[test]
     fn a_stackable_only_day_is_unchanged() {
         let payload: blades_lib::features::daily_reward::DailyRewardPayload =
@@ -300,19 +380,19 @@ mod collect_response_tests {
         );
     }
 
-    /// A day carrying both must report both — the two branches are independent and
-    /// an `else` between them would have passed the first test.
+    /// A mixed day keeps its authored stackables and adds opened chest loot.
     #[test]
-    fn a_day_with_both_reports_both() {
+    fn a_day_with_both_reports_stackables_and_opened_chest_loot() {
         let payload: blades_lib::features::daily_reward::DailyRewardPayload =
             serde_json::from_value(serde_json::json!({
                 "stackableItems": { "e7193116-d761-479b-8a20-5633737977f5": 25 },
-                "chests": [{ "tier": 1, "level": 40 }]
+                "chests": [{ "tier": 2, "level": 86 }]
             }))
             .expect("a mixed day must deserialize");
         let reward = reward_for(&payload);
-        assert_eq!(reward.chests.len(), 1);
-        assert_eq!(reward.stackable_items.len(), 1);
+        assert!(reward.chests.is_empty());
+        assert_eq!(reward.currencies.get(&GOLD), Some(&2218));
+        assert_eq!(reward.stackable_items.values().copied().sum::<u64>(), 32);
     }
 
     /// An empty day stays empty — `reward: {}` is correct when there is genuinely
