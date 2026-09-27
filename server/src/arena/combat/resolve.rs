@@ -1440,22 +1440,6 @@ pub(super) fn resolve_ability_cast(
     ea: &input::ExecuteAbility,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
-    // `Actor.CanCast`'s state gate, for BOTS only (07-D7). A bot has no client, and
-    // without this it cast under Reckless Fury ("stops them from … using skills"),
-    // mid-swing and mid-maneuver. Humans keep only the measured paralysis and stagger
-    // gates in `on_c2s_input`: the server's view of a human's swing and maneuver
-    // phases can lag the client's, and a refusal there is silent.
-    if sender >= combat.expected_peers {
-        if let Some(reason) =
-            super::interrupts::cast_refusal(&combat.fighters[sender], &ea.ability_uuid, now)
-        {
-            debug!(
-                "combat: bot slot {sender} ability {} refused ({reason:?})",
-                ea.ability_uuid
-            );
-            return Vec::new();
-        }
-    }
     // Cooldown gate (per ability instance).
     if let Some(&until) = combat.fighters[sender].cooldowns.get(&ea.ability_uuid) {
         if now < until {
@@ -1497,6 +1481,25 @@ pub(super) fn resolve_ability_cast(
             );
             (1, tag)
         });
+
+    // `Actor.CanCast`'s state gate (07-D7): Dead, Reckless Fury and the current actor
+    // state can refuse a cast, with the shipped Quick tag skipping only the state
+    // check. This used to run for bots only, leaving human players able to server-cast
+    // non-Quick spells during Charging/swing beats/maneuvers even though the client
+    // gate would have refused them. Human maneuvers keep the existing maneuver timing
+    // path: tests below pin Recovery→Maneuver combo chaining and high-block
+    // interruption, while the player report is about spells remaining castable.
+    if sender >= combat.expected_peers || tag != super::state::AbilityTag::Maneuver {
+        if let Some(reason) =
+            super::interrupts::cast_refusal(&combat.fighters[sender], &ea.ability_uuid, now)
+        {
+            debug!(
+                "combat: slot {sender} ability {} refused by CanCast ({reason:?})",
+                ea.ability_uuid
+            );
+            return Vec::new();
+        }
+    }
 
     // Resource gate (spec §1, bug 2): reject the cast (no effect, no cooldown set,
     // no damage) if the caster lacks the required stamina (maneuvers) or magicka

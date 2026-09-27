@@ -947,13 +947,39 @@ mod tests {
         assert_eq!(cast_refusal(&c.fighters[1], uuid_of("Ward"), t0), Some(CastRefusal::Dead));
     }
 
-    /// A human is not state-gated by the server: the same Fury cast is answered.
+    /// A human is state-gated by the same retail `Actor.CanCast` rule as a bot.
+    ///
+    /// This is the report #264 regression: `resolve_ability_cast` applied the gate to
+    /// bots only, so a human could server-cast Fireball during Reckless Fury,
+    /// Charging, a swing beat or a maneuver. Reverting the fix makes the Fireball
+    /// assertions below go red.
     #[test]
-    fn a_human_cast_is_not_state_gated_server_side() {
+    fn a_human_non_quick_cast_is_state_gated_server_side() {
         let t0 = Instant::now();
         let mut c = combat(t0, 1);
         c.fighters[0].reckless_fury_until = Some(t0 + secs(5.0));
-        assert_eq!(count(&cast(&mut c, 0, "Fireball", AbilityTag::Damage, t0 + secs(1.0)), 38), 2);
+        assert!(cast(&mut c, 0, "Fireball", AbilityTag::Damage, t0 + secs(1.0)).is_empty());
+
+        let mut c = combat(t0, 1);
+        c.fighters[0].set_actor_state(ActorStateType::Charging, t0);
+        assert!(cast(&mut c, 0, "Fireball", AbilityTag::Damage, t0).is_empty());
+        assert_eq!(
+            count(&cast(&mut c, 0, "Ward", AbilityTag::Ward, t0), 38),
+            2,
+            "control: Quick abilities still skip the state gate"
+        );
+
+        let mut c = combat(t0, 1);
+        assert_eq!(count(&cast(&mut c, 0, "PowerAttack", AbilityTag::Maneuver, t0), 38), 2);
+        assert!(
+            cast(&mut c, 0, "Fireball", AbilityTag::Damage, t0 + secs(0.3)).is_empty(),
+            "a non-Quick spell is refused while the maneuver is still active"
+        );
+        assert_eq!(
+            count(&cast(&mut c, 0, "Fireball", AbilityTag::Damage, t0 + secs(0.95)), 38),
+            2,
+            "control: after OnManeuverEnded the same spell is accepted"
+        );
     }
 
     /// Mid-maneuver a bot may cast only a Quick ability.
