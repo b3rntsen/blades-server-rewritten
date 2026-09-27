@@ -533,6 +533,10 @@ struct LoadoutCurrentRequest {
     equipped_consumables: Option<Vec<Uuid>>,
 }
 
+fn should_stage_live_match_loadout(body: &LoadoutCurrentRequest) -> bool {
+    !body.equipment_updates.is_empty() || body.ability_updates.is_object()
+}
+
 /// `POST /loadouts/current` — equip/unequip gear and/or set equipped-ability slots.
 #[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/loadouts/current")]
 pub async fn update_loadout(
@@ -545,6 +549,7 @@ pub async fn update_loadout(
     let user_id = session.session.user_id;
     let character_id = path.into_inner();
     let body = body.into_inner();
+    let stage_live_match_loadout = should_stage_live_match_loadout(&body);
     // Cloned before the closure so the slot check can read game data inside it
     // without borrowing `app_state` across the `conn` borrow (E0505).
     let globals = app_state.get_ref().clone();
@@ -600,7 +605,9 @@ pub async fn update_loadout(
     .await;
     // Report #232: this is also how the between-rounds ChooseLoadout screen saves a
     // loadout switch. After the commit, hand the rebuilt loadout to a live match.
-    if result.is_ok() {
+    // A pure potion swap is not a combat loadout/profile change: retail declares the
+    // equipped consumable to the arena host with op56 `EquipAbilitiesAndConsumables`.
+    if result.is_ok() && stage_live_match_loadout {
         crate::arena::matchmaker::stage_live_match_loadout(
             &app_state.db_pool,
             &app_state.arena.registry,
@@ -620,6 +627,45 @@ pub async fn update_loadout(
 mod tests {
     use blades_lib::economy::{GEMS, GOLD};
     use super::*;
+
+    #[test]
+    fn a_consumable_only_loadout_save_does_not_stage_arena_gear() {
+        let body = LoadoutCurrentRequest {
+            equipment_updates: HashMap::new(),
+            ability_updates: Value::Null,
+            equipped_consumables: Some(vec![Uuid::nil()]),
+        };
+
+        assert!(
+            !should_stage_live_match_loadout(&body),
+            "potion swaps are carried to the arena by op56, not by a full profile relay"
+        );
+    }
+
+    #[test]
+    fn gear_or_ability_saves_still_stage_arena_loadouts() {
+        let slot = Uuid::nil();
+        let item = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let mut equipment_updates = HashMap::new();
+        equipment_updates.insert(slot, Some(item));
+
+        let gear = LoadoutCurrentRequest {
+            equipment_updates,
+            ability_updates: Value::Null,
+            equipped_consumables: None,
+        };
+        assert!(should_stage_live_match_loadout(&gear), "gear changes rebuild the combat loadout");
+
+        let abilities = LoadoutCurrentRequest {
+            equipment_updates: HashMap::new(),
+            ability_updates: serde_json::json!({ "0": item }),
+            equipped_consumables: Some(vec![item]),
+        };
+        assert!(
+            should_stage_live_match_loadout(&abilities),
+            "ability changes still stage even when a potion also changes"
+        );
+    }
 
     /// Report #229: "when worn it appears in the helmet slot but is applied visually as
     /// a second cuirass". The type-only slot check let a cuirass (type 3) into the
