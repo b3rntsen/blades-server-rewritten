@@ -4006,7 +4006,10 @@ fn emit_damage_with_outcome(
         now,
     ));
     if !matches!(combat.phase, FlowState::StateTimeout) {
-        return out;
+        return EmittedDamage {
+            frames: out,
+            health_damage: total,
+        };
     }
     if shield_retaliates {
         out.extend(apply_shield_enchant_retaliation(
@@ -4016,7 +4019,10 @@ fn emit_damage_with_outcome(
             now,
         ));
         if !matches!(combat.phase, FlowState::StateTimeout) {
-            return out;
+            return EmittedDamage {
+                frames: out,
+                health_damage: total,
+            };
         }
     }
 
