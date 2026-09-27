@@ -26,6 +26,7 @@
 
 use blades_lib::user_data::{CompleteCharacter, CompleteInventory};
 use serde_json::Value;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use super::gamedata;
@@ -204,18 +205,40 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         ..Default::default()
     };
 
-    let mut weapon: Option<(&'static gamedata::WeaponStats, u64)> = None;
-
-    // (equipment_slot, armor_set) per equipped armour piece — Matching Set needs
-    // all four slots to agree on a set, so the test cannot be done per-item.
+    // Prepass: Synergy and perk ranks both need actor-wide information before any
+    // property's xValue is resolved.
     let mut armor_pieces: Vec<(u8, u8)> = Vec::new();
+    let mut grade_bonus: HashMap<String, u16> = HashMap::new();
+    let mut property_counts: HashMap<Uuid, usize> = HashMap::new();
+    for eq in inventory.loadout.equipped_items.0.values() {
+        let template = eq.item.item_template_id.as_hyphenated().to_string();
+        if let Some(a) = gamedata::armor(&template) {
+            armor_pieces.push((a.equipment_slot, a.armor_set));
+        }
+        collect_grade_bonus(&eq.item.properties.grading, &mut grade_bonus);
+        for (property_uuid, _) in gamedata::mandatory_properties(&template)
+            .iter()
+            .chain(super::artifact_properties::mandatory_properties(&template))
+        {
+            if let Ok(id) = Uuid::parse_str(property_uuid) {
+                *property_counts.entry(id).or_default() += 1;
+            }
+        }
+        for prop in &eq.item.properties.enchanting {
+            *property_counts.entry(prop.id).or_default() += 1;
+        }
+    }
 
-    // ability uuid -> total bonus ranks from jewellery, summed across slots
+    lo.abilities = parse_equipped_abilities(&character.equipped_abilities, &character.abilities);
+    apply_grade_bonuses(&mut lo.abilities, &grade_bonus);
+    let mut learned = learned_perks(&character.abilities);
+    apply_grade_bonuses(&mut learned, &grade_bonus);
+    lo.perks = super::perks::PerkBonuses::resolve(
+        &learned,
+        super::perks::matched_armor_set(&armor_pieces),
+    );
 
-    let mut grade_bonus: std::collections::HashMap<String, u16> =
-
-        std::collections::HashMap::new();
-
+    let mut weapon: Option<(&'static gamedata::WeaponStats, u64)> = None;
 
     for eq in inventory.loadout.equipped_items.0.values() {
         let template = eq.item.item_template_id.as_hyphenated().to_string();
@@ -232,16 +255,10 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         } else if let Some(a) = gamedata::armor(&template) {
             lo.armor_rating += a.armor_rating;
             item_rating_for_material = Some(a.armor_rating);
-            armor_pieces.push((a.equipment_slot, a.armor_set));
         } else if let Some(s) = gamedata::shield(&template) {
             install_shield(&mut lo, s, eq.item.tempering_level);
             item_rating_for_material = Some(blocking_item_rating(&template, s.block_base, eq.item.tempering_level));
         }
-
-        // --- jewellery GRADING affixes: +N ranks to a named ability ------------
-        // Collected here and applied AFTER `parse_equipped_abilities` below, because
-        // the abilities they raise do not exist on the loadout yet at this point.
-        collect_grade_bonus(&eq.item.properties.grading, &mut grade_bonus);
 
         // --- the TEMPLATE's mandatory properties -------------------------------
         //
@@ -257,7 +274,12 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         // new is modelled here; the properties simply arrive. A property whose logic
         // has no arm yet still falls through `apply_enchant`'s `_ => {}` exactly as
         // before, so this cannot switch on anything unmodelled by accident.
-        apply_template_properties_with_rating(&mut lo, &template, item_rating_for_material);
+        apply_template_properties_with_context(
+            &mut lo,
+            &template,
+            item_rating_for_material,
+            &property_counts,
+        );
 
         // --- enchantments, dispatched on the family's LOGIC CLASS (Phase 3.6/3.7) ---
         let primary_mult = 1.0 + eq
@@ -281,11 +303,14 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
             lo.property_ids.push(prop.id);
             let before = lo.enchants.len();
             let family = gamedata::enchant_family(&prop.id.as_hyphenated().to_string());
-            let xvalue_multiplier = if family.is_some_and(|f| enchant_logic_is_primary(f.logic)) {
-                primary_mult
-            } else {
-                1.0
-            };
+            let xvalue_multiplier = family
+                .map(|f| item_property_xvalue_multiplier(
+                    f.logic,
+                    primary_mult,
+                    lo.perks.enchantment_synergy,
+                    property_counts.get(&prop.id).copied().unwrap_or(0),
+                ))
+                .unwrap_or(1.0);
             apply_enchant_with_rating_and_multiplier(
                 &mut lo,
                 &prop.id,
@@ -306,16 +331,6 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         None => lo.weapon = fallback_weapon_profile(character.level),
     }
 
-    lo.abilities = parse_equipped_abilities(&character.equipped_abilities, &character.abilities);
-
-    // Gear-granted ability ranks. Until this existed EVERY ability resolved at its
-    // base rank — a ~2.3x damage shortfall. The owner's Frostbite produced rank-4
-    // numbers on the wire while his skills menu read 4+10.
-    //
-    // Additive across slots (the same ring in both hands gives +5+5), clamped to the
-    // ability's own `maximum_level`.
-    apply_grade_bonuses(&mut lo.abilities, &grade_bonus);
-
     // PERKS come from the LEARNED abilities, not the equip slots.
     //
     // The client registers every learned perk (`LearnedAbilitiesHandler$$
@@ -330,12 +345,6 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
     // `min(_maximumLevel, learnedRank + Σ gear bonus ranks)` — the same
     // `apply_grade_bonuses` the equipped abilities use, after grading, so a perk
     // raised by jewellery pays out at the raised rank.
-    let mut learned = learned_perks(&character.abilities);
-    apply_grade_bonuses(&mut learned, &grade_bonus);
-    lo.perks = super::perks::PerkBonuses::resolve(
-        &learned,
-        super::perks::matched_armor_set(&armor_pieces),
-    );
     if !learned.is_empty() {
         // One line per fighter per match: the only evidence on prod that perks are
         // reaching the arena at all (the defect this replaces was silent).
@@ -776,6 +785,30 @@ fn enchant_logic_is_primary(logic: &str) -> bool {
     )
 }
 
+fn enchant_logic_is_material(logic: &str) -> bool {
+    logic.contains("MaterialPropertyLogic")
+}
+
+fn item_property_xvalue_multiplier(
+    logic: &str,
+    primary_mult: f32,
+    synergy: f32,
+    matching_property_count: usize,
+) -> f32 {
+    if enchant_logic_is_material(logic) || logic == "FortifyPrimaryEnchantPropertyLogic" {
+        return 1.0;
+    }
+    let mut mult = if enchant_logic_is_primary(logic) {
+        primary_mult
+    } else {
+        1.0
+    };
+    if synergy > 0.0 && matching_property_count > 1 {
+        mult += synergy;
+    }
+    mult
+}
+
 /// Apply an item TEMPLATE's `mandatory_properties` (where every artifact effect
 /// lives) through [`apply_enchant`].
 /// `MultiplyHealthRegenOnCriticalPropertyLogic._xValueByTier[0]` — Savior's Hide's
@@ -793,6 +826,15 @@ pub(crate) fn apply_template_properties_with_rating(
     template: &str,
     item_rating: Option<f32>,
 ) {
+    apply_template_properties_with_context(lo, template, item_rating, &HashMap::new());
+}
+
+fn apply_template_properties_with_context(
+    lo: &mut Loadout,
+    template: &str,
+    item_rating: Option<f32>,
+    property_counts: &HashMap<Uuid, usize>,
+) {
     for (property_uuid, tier) in gamedata::mandatory_properties(template)
         .iter()
         .chain(super::artifact_properties::mandatory_properties(template))
@@ -801,7 +843,23 @@ pub(crate) fn apply_template_properties_with_rating(
         // `Uuid`. A malformed one is skipped rather than panicking — a bad row in a
         // 37k-line generated file must not take the arena down.
         if let Ok(id) = uuid::Uuid::parse_str(property_uuid) {
-            apply_enchant_with_rating(lo, &id, *tier, item_rating);
+            lo.property_ids.push(id);
+            let family = gamedata::enchant_family(property_uuid);
+            let xvalue_multiplier = family
+                .map(|f| item_property_xvalue_multiplier(
+                    f.logic,
+                    1.0,
+                    lo.perks.enchantment_synergy,
+                    property_counts.get(&id).copied().unwrap_or(0),
+                ))
+                .unwrap_or(1.0);
+            apply_enchant_with_rating_and_multiplier(
+                lo,
+                &id,
+                *tier,
+                item_rating,
+                xvalue_multiplier,
+            );
         }
     }
 }
@@ -2239,14 +2297,21 @@ mod two_handed_tests {
 #[cfg(test)]
 mod learned_perk_tests {
     use super::*;
+    use super::super::damage::{DamageModel, RetailDamageModel};
+    use super::super::state::{ActiveSide, DamageSource, Fighter};
     use blades_lib::user_data::{
         Backpack, Item, ItemPropertiesAll, ItemSingleProperty, SingleEquippedItem, Treasury,
     };
     use serde_json::json;
+    use std::time::Instant;
 
     const SCOUT: &str = "11ebd583-fc0c-44f0-8dbf-5c7207526064";
     /// `ScoutBonusRanks` — a Necklace grading affix that raises Scout.
     const SCOUT_BONUS_RANKS: &str = "33f0477b-704c-48a3-a4f1-6ab1a9a1916b";
+    const AUGMENTED_SHOCK: &str = "3c0510d4-84ef-40b6-b0f4-2b096ae89860";
+    const ENCHANTMENT_SYNERGY: &str = "780b82d1-a371-4454-baea-e18389f315e5";
+    const WEAPON_SHOCK: &str = "139024a7-3965-4e90-a4c1-60e3d7ca3133";
+    const FORTIFY_SHOCK: &str = "848e02b4-32ae-4e1b-809c-83bca039542a";
 
     fn inventory(items: Vec<Item>) -> CompleteInventory {
         let mut lo = blades_lib::user_data::Loadout::default();
@@ -2278,6 +2343,26 @@ mod learned_perk_tests {
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-3
+    }
+
+    fn item_with_enchants(template: Uuid, enchants: &[(&str, u64)]) -> Item {
+        Item {
+            item_template_id: template,
+            tempering_level: 0,
+            durability: 75.0,
+            grade: None,
+            arcane_tier: None,
+            properties: ItemPropertiesAll {
+                enchanting: enchants
+                    .iter()
+                    .map(|(id, tier)| ItemSingleProperty {
+                        id: Uuid::parse_str(id).unwrap(),
+                        tier: *tier,
+                    })
+                    .collect(),
+                grading: vec![],
+            },
+        }
     }
 
     /// A REAL prod row (`characters.character`, read-only SELECT, 2026-09-25): the
@@ -2348,6 +2433,84 @@ mod learned_perk_tests {
         // Not learned by this character: must stay zero.
         assert_eq!(p.max_power, 0.0, "MaximumPower is not in the learned map");
         assert_eq!(p.conservationist, 0.0, "Conservationist is not in the learned map");
+    }
+
+    #[test]
+    fn enchantment_synergy_matches_oracle_v4_stacked_fortify_scope() {
+        let weapon = item_with_enchants(
+            Uuid::parse_str(gamedata::ids::DRAGONBONE_DAGGER).unwrap(),
+            &[(WEAPON_SHOCK, 10)],
+        );
+        let fortify_piece =
+            |n: u128| item_with_enchants(Uuid::from_u128(9000 + n), &[(FORTIFY_SHOCK, 10)]);
+        let learned = json!({
+            AUGMENTED_SHOCK: 5,
+            ENCHANTMENT_SYNERGY: 7,
+        });
+        let lo = from_character(
+            &character(Value::Null, learned.clone()),
+            &inventory(vec![weapon, fortify_piece(1), fortify_piece(2), fortify_piece(3)]),
+        );
+
+        assert!(close(lo.perks.enchantment_synergy, 0.25), "Synergy rank 7");
+        assert_eq!(lo.enchants, vec![(DamageType::Shock, 10)]);
+        let fortify_total: f32 = lo
+            .element_fortify
+            .iter()
+            .filter(|(ty, _)| *ty == DamageType::Shock)
+            .map(|(_, v)| *v)
+            .sum();
+        assert!(
+            close(fortify_total, 3.0 * 9.66 * 1.25),
+            "three stacked Fortify Shock properties get +25%, got {fortify_total}",
+        );
+
+        let target = Fighter::new(1, 565, Loadout { level: 100, ..Default::default() }, Instant::now());
+        let hit = RetailDamageModel.resolve_attack(
+            &lo,
+            &target,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            Instant::now(),
+        );
+        let shock: f32 = hit
+            .components
+            .iter()
+            .filter(|(ty, _)| *ty == DamageType::Shock)
+            .map(|(_, v)| *v)
+            .sum();
+        let want = 48.31 + 15.19 + (3.0 * 9.66 * 1.25);
+        assert!(
+            close(shock, want),
+            "oracle v4 D1 Shock should be the spec value {want}, got {shock}",
+        );
+
+        let single_weapon = item_with_enchants(
+            Uuid::parse_str(gamedata::ids::DRAGONBONE_DAGGER).unwrap(),
+            &[(WEAPON_SHOCK, 10)],
+        );
+        let control = from_character(&character(Value::Null, learned), &inventory(vec![single_weapon]));
+        let control_hit = RetailDamageModel.resolve_attack(
+            &control,
+            &target,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            Instant::now(),
+        );
+        let control_shock: f32 = control_hit
+            .components
+            .iter()
+            .filter(|(ty, _)| *ty == DamageType::Shock)
+            .map(|(_, v)| *v)
+            .sum();
+        assert!(
+            close(control_shock, 48.31 + 15.19),
+            "a single Weapon Shock enchant must not receive Synergy, got {control_shock}",
+        );
     }
 
     /// Control for the test above: a perk that is NOT learned does not resolve,

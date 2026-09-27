@@ -23,8 +23,9 @@ use serde_json::Value;
 
 use super::damage::{
     attack_type_multiplier, is_elemental, is_health_type, is_physical, mirrored_drain,
+    DamageModel, RetailDamageModel,
 };
-use super::state::{DamageSource, DamageType};
+use super::state::{ActiveSide, DamageSource, DamageType, Fighter, Loadout, WeaponProfile};
 use super::{gamedata, tables};
 
 const ABS_TOLERANCE: f32 = 0.01;
@@ -452,16 +453,50 @@ fn oracle_v4_enchantment_synergy_multiplies_stacked_fortify_element() {
 }
 
 #[test]
-#[ignore = "FORK-FINDING: production arena code applies Enchantment Synergy only to weapon-enchant damage tracks; client also applies it to stacked FortifyElement item properties"]
 fn oracle_v4_fork_finding_synergy_scope() {
     let client = 48.31 + 15.19 + (3.0 * 9.66 * 1.25);
     let fork_scope = 48.31 + 15.19 + (3.0 * 9.66);
     assert!(
-        close(client, fork_scope),
+        !close(client, fork_scope),
+        "control: the documented fork scope must stay distinguishable"
+    );
+
+    let mut attacker = Loadout {
+        weapon: WeaponProfile {
+            primary_type: Some(DamageType::Cleaving),
+            base_by_type: vec![(DamageType::Cleaving, 0.0)],
+            weight: Some(tables::Weight::Light),
+        },
+        enchants: vec![(DamageType::Shock, 10)],
+        element_fortify: vec![(DamageType::Shock, 3.0 * 9.66 * 1.25)],
+        ..Default::default()
+    };
+    attacker
+        .perks
+        .element_damage
+        .push((DamageType::Shock, 15.19));
+    let target = Fighter::new(1, 565, Loadout { level: 100, ..Default::default() }, std::time::Instant::now());
+    let got = RetailDamageModel.resolve_attack(
+        &attacker,
+        &target,
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        0,
+        std::time::Instant::now(),
+    );
+    let shock: f32 = got
+        .components
+        .iter()
+        .filter(|(ty, _)| *ty == DamageType::Shock)
+        .map(|(_, v)| *v)
+        .sum();
+    assert!(
+        close(shock, client),
         "FORK-FINDING Enchantment Synergy scope: client D1 Shock {client:.3}, \
-         fork-scope replay {fork_scope:.3}; missing {missing:.3} from three \
-         stacked FortifyElement properties receiving +25%",
-        missing = client - fork_scope
+         arena pipeline {shock:.3}; old fork scope {fork_scope:.3} missed {missing:.3} \
+         from three stacked FortifyElement properties receiving +25%",
+        missing = client - fork_scope,
     );
 }
 
