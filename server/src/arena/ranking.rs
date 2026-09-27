@@ -783,10 +783,7 @@ async fn load_h2h_replay_rows(conn: &mut AsyncPgConnection) -> Result<Vec<H2hRep
                  ORDER BY s.starts_at DESC LIMIT 1 \
              ) s ON true \
              WHERE r.opponent_character_id IS NOT NULL \
-               AND EXISTS ( \
-                   SELECT 1 FROM arena_matches m \
-                   WHERE m.game_session_id = r.game_session_id AND m.paired = true \
-               ) \
+               AND r.is_h2h = true \
          ), replay_rows AS ( \
              SELECT DISTINCT ON (game_session_id, character_id, opponent_character_id) \
                     season_id, character_id, opponent_character_id, rounds_won, rounds_lost, \
@@ -1207,6 +1204,10 @@ mod tests {
         use super::*;
         use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 
+        const H2H_FLAG_MIGRATION_UP: &str = include_str!(
+            "../../../migrations/2026-09-28-000000-0000_add_arena_match_results_h2h_flag/up.sql"
+        );
+
         const SCHEMA: [&str; 6] = [
             "CREATE TABLE arena_seasons ( \
                  id UUID PRIMARY KEY, number INTEGER NOT NULL, name TEXT NOT NULL, \
@@ -1224,7 +1225,8 @@ mod tests {
                  character_xp BIGINT NOT NULL DEFAULT 0, trophy_delta BIGINT NOT NULL DEFAULT 0, \
                  trophies_after BIGINT NOT NULL DEFAULT 0, matchmaking_trophies_after BIGINT NOT NULL DEFAULT 0, \
                  arena INTEGER NOT NULL DEFAULT 1, arena_level INTEGER NOT NULL DEFAULT 1, \
-                 chest_meter BIGINT NOT NULL DEFAULT 0, recorded_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+                 chest_meter BIGINT NOT NULL DEFAULT 0, recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(), \
+                 is_h2h BOOLEAN NOT NULL DEFAULT false)",
             "CREATE TABLE arena_h2h_ratings ( \
                  character_id UUID PRIMARY KEY, rating INTEGER NOT NULL, wins INTEGER NOT NULL DEFAULT 0, \
                  losses INTEGER NOT NULL DEFAULT 0, ties INTEGER NOT NULL DEFAULT 0, \
@@ -1265,6 +1267,14 @@ mod tests {
             matches: i32,
         }
 
+        #[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
+        struct H2hFlagRow {
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            character_id: Uuid,
+            #[diesel(sql_type = diesel::sql_types::Bool)]
+            is_h2h: bool,
+        }
+
         async fn fixture() -> Option<AsyncPgConnection> {
             let url = std::env::var("TEST_DATABASE_URL").ok()?;
             let mut conn = AsyncPgConnection::establish(&url)
@@ -1284,6 +1294,46 @@ mod tests {
                 diesel::sql_query(stmt).execute(&mut conn).await.unwrap();
             }
             Some(conn)
+        }
+
+        async fn pre_h2h_flag_fixture() -> Option<AsyncPgConnection> {
+            let url = std::env::var("TEST_DATABASE_URL").ok()?;
+            let mut conn = AsyncPgConnection::establish(&url)
+                .await
+                .expect("TEST_DATABASE_URL is set but unreachable");
+            conn.begin_test_transaction().await.expect("test transaction");
+            let schema = format!("t{}", Uuid::new_v4().simple());
+            diesel::sql_query(format!("CREATE SCHEMA {schema}"))
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            diesel::sql_query(format!("SET LOCAL search_path TO {schema}"))
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            for stmt in [
+                "CREATE TABLE arena_matches ( \
+                     ticket_id UUID PRIMARY KEY, user_id UUID NOT NULL, status TEXT NOT NULL, \
+                     game_session_id UUID, paired BOOLEAN NOT NULL DEFAULT FALSE, \
+                     recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(), resolved_at TIMESTAMPTZ)",
+                "CREATE TABLE arena_match_results ( \
+                     id UUID PRIMARY KEY, character_id UUID NOT NULL, opponent_character_id UUID, \
+                     game_session_id UUID, win BOOLEAN NOT NULL, rounds_won INTEGER NOT NULL DEFAULT 0, \
+                     rounds_lost INTEGER NOT NULL DEFAULT 0, recorded_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+                "CREATE TABLE characters (id UUID PRIMARY KEY, character JSONB NOT NULL)",
+            ] {
+                diesel::sql_query(stmt).execute(&mut conn).await.unwrap();
+            }
+            Some(conn)
+        }
+
+        async fn run_h2h_flag_migration(conn: &mut AsyncPgConnection) {
+            for stmt in H2H_FLAG_MIGRATION_UP.split(';') {
+                let stmt = stmt.trim();
+                if !stmt.is_empty() {
+                    diesel::sql_query(stmt).execute(&mut *conn).await.unwrap();
+                }
+            }
         }
 
         async fn seed_character(conn: &mut AsyncPgConnection, id: Uuid) {
@@ -1315,6 +1365,7 @@ mod tests {
             b: Uuid,
             at: &str,
             paired: bool,
+            is_h2h: bool,
             score: (i32, i32),
         ) {
             diesel::sql_query(
@@ -1334,8 +1385,8 @@ mod tests {
             ] {
                 diesel::sql_query(
                     "INSERT INTO arena_match_results \
-                     (id, character_id, opponent_character_id, game_session_id, win, rounds_won, rounds_lost, recorded_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz)",
+                     (id, character_id, opponent_character_id, game_session_id, win, rounds_won, rounds_lost, recorded_at, is_h2h) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9)",
                 )
                 .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
                 .bind::<diesel::sql_types::Uuid, _>(character_id)
@@ -1345,6 +1396,7 @@ mod tests {
                 .bind::<diesel::sql_types::Integer, _>(rounds_won)
                 .bind::<diesel::sql_types::Integer, _>(rounds_lost)
                 .bind::<diesel::sql_types::Text, _>(at)
+                .bind::<diesel::sql_types::Bool, _>(is_h2h)
                 .execute(&mut *conn)
                 .await
                 .unwrap();
@@ -1358,6 +1410,7 @@ mod tests {
             opponent_character_id: Uuid,
             at: &str,
             paired: bool,
+            is_h2h: bool,
             score: (i32, i32),
         ) {
             diesel::sql_query(
@@ -1373,8 +1426,8 @@ mod tests {
             .unwrap();
             diesel::sql_query(
                 "INSERT INTO arena_match_results \
-                 (id, character_id, opponent_character_id, game_session_id, win, rounds_won, rounds_lost, recorded_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz)",
+                 (id, character_id, opponent_character_id, game_session_id, win, rounds_won, rounds_lost, recorded_at, is_h2h) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9)",
             )
             .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
             .bind::<diesel::sql_types::Uuid, _>(character_id)
@@ -1384,6 +1437,7 @@ mod tests {
             .bind::<diesel::sql_types::Integer, _>(score.0)
             .bind::<diesel::sql_types::Integer, _>(score.1)
             .bind::<diesel::sql_types::Text, _>(at)
+            .bind::<diesel::sql_types::Bool, _>(is_h2h)
             .execute(&mut *conn)
             .await
             .unwrap();
@@ -1409,6 +1463,60 @@ mod tests {
             .unwrap()
         }
 
+        async fn h2h_flags(conn: &mut AsyncPgConnection) -> Vec<H2hFlagRow> {
+            diesel::sql_query(
+                "SELECT character_id, is_h2h FROM arena_match_results ORDER BY character_id",
+            )
+            .get_results(conn)
+            .await
+            .unwrap()
+        }
+
+        async fn seed_match_ticket_count(
+            conn: &mut AsyncPgConnection,
+            gsid: Uuid,
+            paired: bool,
+            tickets: usize,
+        ) {
+            for _ in 0..tickets {
+                diesel::sql_query(
+                    "INSERT INTO arena_matches (ticket_id, user_id, status, game_session_id, paired) \
+                     VALUES ($1, $2, 'matched', $3, $4)",
+                )
+                .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+                .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+                .bind::<diesel::sql_types::Uuid, _>(gsid)
+                .bind::<diesel::sql_types::Bool, _>(paired)
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+            }
+        }
+
+        async fn seed_pre_flag_audit(
+            conn: &mut AsyncPgConnection,
+            gsid: Uuid,
+            character_id: Uuid,
+            opponent_character_id: Uuid,
+            score: (i32, i32),
+        ) {
+            diesel::sql_query(
+                "INSERT INTO arena_match_results \
+                 (id, character_id, opponent_character_id, game_session_id, win, rounds_won, rounds_lost) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+            .bind::<diesel::sql_types::Uuid, _>(character_id)
+            .bind::<diesel::sql_types::Uuid, _>(opponent_character_id)
+            .bind::<diesel::sql_types::Uuid, _>(gsid)
+            .bind::<diesel::sql_types::Bool, _>(score.0 > score.1)
+            .bind::<diesel::sql_types::Integer, _>(score.0)
+            .bind::<diesel::sql_types::Integer, _>(score.1)
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        }
+
         #[tokio::test]
         async fn startup_reconcile_fills_empty_tables_and_is_idempotent() {
             let Some(mut conn) = fixture().await else {
@@ -1430,6 +1538,7 @@ mod tests {
                 b,
                 "2023-11-14 22:13:20+00",
                 true,
+                true,
                 (2, 0),
             )
             .await;
@@ -1440,6 +1549,7 @@ mod tests {
                 c,
                 "2023-11-15 22:13:20+00",
                 true,
+                true,
                 (1, 1),
             )
             .await;
@@ -1449,6 +1559,7 @@ mod tests {
                 a,
                 c,
                 "2023-11-16 22:13:20+00",
+                false,
                 false,
                 (2, 0),
             )
@@ -1486,6 +1597,109 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn replay_uses_durable_h2h_flag_not_paired_marker() {
+            let Some(mut conn) = fixture().await else {
+                eprintln!("SKIP: TEST_DATABASE_URL unset — h2h reconcile SQL not verified");
+                return;
+            };
+            let season = Uuid::from_u128(1000);
+            seed_season(&mut conn, season, 1_700_000_000, 1_700_086_400).await;
+            let (a, b, c, d) = (
+                Uuid::from_u128(1),
+                Uuid::from_u128(2),
+                Uuid::from_u128(3),
+                Uuid::from_u128(4),
+            );
+            for id in [a, b, c, d] {
+                seed_character(&mut conn, id).await;
+            }
+
+            seed_match(
+                &mut conn,
+                Uuid::from_u128(20),
+                a,
+                b,
+                "2023-11-14 22:13:20+00",
+                false,
+                true,
+                (2, 0),
+            )
+            .await;
+            seed_match(
+                &mut conn,
+                Uuid::from_u128(21),
+                c,
+                d,
+                "2023-11-14 22:14:20+00",
+                true,
+                false,
+                (2, 0),
+            )
+            .await;
+
+            let cfg = H2hRatingConfig::default();
+            let report = reconcile_h2h_ratings_with_config(&mut conn, &cfg, false)
+                .await
+                .unwrap();
+            assert_eq!(report, H2hReconcileReport { characters: 2, matches: 1 });
+            let rows = all_time(&mut conn).await;
+            assert_eq!(rows.len(), 2);
+            assert!(rows.iter().any(|r| r.character_id == a));
+            assert!(rows.iter().any(|r| r.character_id == b));
+            assert!(
+                rows.iter().all(|r| r.character_id != c && r.character_id != d),
+                "paired=true cannot make an AI/non-h2h audit row enter replay"
+            );
+        }
+
+        #[tokio::test]
+        async fn h2h_flag_migration_backfills_paired_and_reciprocal_human_rows_only() {
+            let Some(mut conn) = pre_h2h_flag_fixture().await else {
+                eprintln!("SKIP: TEST_DATABASE_URL unset — h2h migration SQL not verified");
+                return;
+            };
+            let paired_a = Uuid::from_u128(1);
+            let paired_b = Uuid::from_u128(2);
+            let reciprocal_a = Uuid::from_u128(3);
+            let reciprocal_b = Uuid::from_u128(4);
+            let ai_human = Uuid::from_u128(5);
+            let ai_copy = Uuid::from_u128(6);
+            for id in [paired_a, paired_b, reciprocal_a, reciprocal_b, ai_human, ai_copy] {
+                seed_character(&mut conn, id).await;
+            }
+
+            let paired_gsid = Uuid::from_u128(30);
+            seed_match_ticket_count(&mut conn, paired_gsid, true, 2).await;
+            seed_pre_flag_audit(&mut conn, paired_gsid, paired_a, paired_b, (2, 0)).await;
+
+            let reciprocal_gsid = Uuid::from_u128(31);
+            seed_match_ticket_count(&mut conn, reciprocal_gsid, false, 2).await;
+            seed_pre_flag_audit(&mut conn, reciprocal_gsid, reciprocal_a, reciprocal_b, (2, 0))
+                .await;
+            seed_pre_flag_audit(&mut conn, reciprocal_gsid, reciprocal_b, reciprocal_a, (0, 2))
+                .await;
+
+            let ai_gsid = Uuid::from_u128(32);
+            seed_match_ticket_count(&mut conn, ai_gsid, false, 1).await;
+            seed_pre_flag_audit(&mut conn, ai_gsid, ai_human, ai_copy, (2, 0)).await;
+            seed_pre_flag_audit(&mut conn, ai_gsid, ai_copy, ai_human, (0, 2)).await;
+
+            run_h2h_flag_migration(&mut conn).await;
+
+            assert_eq!(
+                h2h_flags(&mut conn).await,
+                vec![
+                    H2hFlagRow { character_id: paired_a, is_h2h: true },
+                    H2hFlagRow { character_id: reciprocal_a, is_h2h: true },
+                    H2hFlagRow { character_id: reciprocal_b, is_h2h: true },
+                    H2hFlagRow { character_id: ai_human, is_h2h: false },
+                    H2hFlagRow { character_id: ai_copy, is_h2h: false },
+                ],
+                "paired history and reciprocal two-ticket human history are h2h; solo AI stays out"
+            );
+        }
+
+        #[tokio::test]
         async fn reconcile_replays_surviving_higher_uuid_audit_row_in_canonical_order() {
             let Some(mut conn) = fixture().await else {
                 eprintln!("SKIP: TEST_DATABASE_URL unset — h2h reconcile SQL not verified");
@@ -1505,6 +1719,7 @@ mod tests {
                 higher,
                 lower,
                 "2023-11-14 22:13:20+00",
+                true,
                 true,
                 (0, 2),
             )

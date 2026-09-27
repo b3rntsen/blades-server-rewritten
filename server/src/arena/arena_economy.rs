@@ -445,9 +445,8 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
 
     // Phase 2 — the audit row, OUTSIDE the reward transaction above (see the doc
     // comment: a missing table would otherwise roll the reward back). Failure
-    // only logs. H2H rows additionally share reconcile's advisory lock so a
-    // rebuild cannot absorb an audit row while the matching incremental update
-    // is still pending.
+    // only logs. H2H rating writes are deliberately best-effort after the audit
+    // commits; reconcile can repair from the durable row.
     if outcome.h2h
         && let Some(opponent_id) = outcome.opponent_character_id
     {
@@ -455,7 +454,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
         let audit = persist_h2h_audit_and_rating(&mut conn, &cfg, outcome, &a, opponent_id).await;
         if let Err(e) = audit {
             warn!(
-                "arena h2h audit/rating: locked update failed for {} vs {} in {:?}; \
+                "arena h2h audit: insert failed for {} vs {} in {:?}; \
                  the REWARD IS SAFE (it committed in its own transaction): {e}",
                 outcome.character_id, opponent_id, outcome.game_session_id
             );
@@ -484,8 +483,10 @@ async fn insert_match_audit(
         "INSERT INTO arena_match_results \
          (id, character_id, opponent_character_id, game_session_id, win, \
           rounds_won, rounds_lost, gold, character_xp, trophy_delta, \
-          trophies_after, matchmaking_trophies_after, arena, arena_level, chest_meter, recorded_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, to_timestamp($16))",
+          trophies_after, matchmaking_trophies_after, arena, arena_level, chest_meter, \
+          recorded_at, is_h2h) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
+                 to_timestamp($16), $17)",
     )
     .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
     .bind::<diesel::sql_types::Uuid, _>(a.character_id)
@@ -503,6 +504,7 @@ async fn insert_match_audit(
     .bind::<diesel::sql_types::Integer, _>(a.arena_level)
     .bind::<diesel::sql_types::BigInt, _>(a.meter)
     .bind::<diesel::sql_types::BigInt, _>(outcome.completed_at_secs)
+    .bind::<diesel::sql_types::Bool, _>(outcome.h2h)
     .execute(conn)
     .await?;
     Ok(())
@@ -603,20 +605,32 @@ async fn persist_h2h_audit_and_rating(
 ) -> Result<(), anyhow::Error> {
     let cfg = cfg.clone();
     let outcome = outcome.clone();
-    let applied = applied.clone();
 
-    conn.transaction::<_, anyhow::Error, _>(|mut conn| {
-        async move {
-            ranking::lock_h2h_rating_transaction(&mut conn).await?;
-            insert_match_audit(&mut conn, &outcome, &applied).await?;
-            if outcome.character_id.as_u128() < opponent_id.as_u128() {
+    insert_match_audit(conn, &outcome, applied).await?;
+    if outcome.character_id.as_u128() >= opponent_id.as_u128() {
+        return Ok(());
+    }
+
+    let character_id = outcome.character_id;
+    let game_session_id = outcome.game_session_id;
+    let rating = conn
+        .transaction::<_, anyhow::Error, _>(|mut conn| {
+            async move {
+                ranking::lock_h2h_rating_transaction(&mut conn).await?;
                 persist_h2h_rating_pair_locked(&mut conn, &cfg, &outcome, opponent_id).await?;
+                Ok(())
             }
-            Ok(())
-        }
-        .scope_boxed()
-    })
-    .await
+            .scope_boxed()
+        })
+        .await;
+    if let Err(e) = rating {
+        warn!(
+            "arena h2h rating: best-effort update failed for {} vs {} in {:?}; \
+             audit row is durable and reconcile will repair it: {e}",
+            character_id, opponent_id, game_session_id
+        );
+    }
+    Ok(())
 }
 
 async fn persist_h2h_rating_pair_locked(
@@ -709,10 +723,7 @@ async fn h2h_replay_match_count(
                  ORDER BY s.starts_at DESC LIMIT 1 \
              ) s ON true \
              WHERE r.opponent_character_id IS NOT NULL \
-               AND EXISTS ( \
-                   SELECT 1 FROM arena_matches m \
-                   WHERE m.game_session_id = r.game_session_id AND m.paired = true \
-               ) \
+               AND r.is_h2h = true \
          ), replay_rows AS ( \
              SELECT DISTINCT ON (game_session_id, character_id, opponent_character_id) \
                     season_id, character_id, opponent_character_id, recorded_at, id \
@@ -892,7 +903,8 @@ mod tests {
                  character_xp BIGINT NOT NULL DEFAULT 0, trophy_delta BIGINT NOT NULL DEFAULT 0, \
                  trophies_after BIGINT NOT NULL DEFAULT 0, matchmaking_trophies_after BIGINT NOT NULL DEFAULT 0, \
                  arena INTEGER NOT NULL DEFAULT 1, arena_level INTEGER NOT NULL DEFAULT 1, \
-                 chest_meter BIGINT NOT NULL DEFAULT 0, recorded_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+                 chest_meter BIGINT NOT NULL DEFAULT 0, recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(), \
+                 is_h2h BOOLEAN NOT NULL DEFAULT false)",
             "CREATE TABLE arena_h2h_ratings ( \
                  character_id UUID PRIMARY KEY, rating INTEGER NOT NULL, wins INTEGER NOT NULL DEFAULT 0, \
                  losses INTEGER NOT NULL DEFAULT 0, ties INTEGER NOT NULL DEFAULT 0, \
@@ -959,6 +971,14 @@ mod tests {
         matches: i32,
     }
 
+    #[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
+    struct TestAuditRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        character_id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        is_h2h: bool,
+    }
+
     async fn test_ratings(conn: &mut AsyncPgConnection) -> Vec<TestRatingRow> {
         diesel::sql_query(
             "SELECT character_id, rating, wins, losses, matches \
@@ -967,6 +987,124 @@ mod tests {
         .get_results(conn)
         .await
         .unwrap()
+    }
+
+    async fn test_audit_rows(conn: &mut AsyncPgConnection) -> Vec<TestAuditRow> {
+        diesel::sql_query(
+            "SELECT character_id, is_h2h FROM arena_match_results ORDER BY character_id",
+        )
+        .get_results(conn)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn audit_insert_persists_the_live_h2h_flag() {
+        let Some(mut conn) = h2h_fixture().await else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — h2h audit SQL not verified");
+            return;
+        };
+        let human = Uuid::from_u128(1);
+        let opponent = Uuid::from_u128(2);
+        let bot_fight = Uuid::from_u128(3);
+
+        insert_match_audit(
+            &mut conn,
+            &h2h_outcome(human, opponent, Uuid::from_u128(90), true),
+            &applied(human),
+        )
+        .await
+        .unwrap();
+        let mut ai_outcome = h2h_outcome(bot_fight, opponent, Uuid::from_u128(91), true);
+        ai_outcome.h2h = ranking::is_h2h_match(2, 2, true);
+        insert_match_audit(&mut conn, &ai_outcome, &applied(bot_fight))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            test_audit_rows(&mut conn).await,
+            vec![
+                TestAuditRow {
+                    character_id: human,
+                    is_h2h: true,
+                },
+                TestAuditRow {
+                    character_id: bot_fight,
+                    is_h2h: false,
+                },
+            ],
+            "replay consumes the same durable flag that live match end stores"
+        );
+    }
+
+    #[tokio::test]
+    async fn h2h_audit_survives_rating_update_failure_and_reconcile_repairs_board() {
+        let Some(mut conn) = h2h_fixture().await else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — h2h audit failure SQL not verified");
+            return;
+        };
+        let cfg = ranking::H2hRatingConfig::default();
+        let season = Uuid::from_u128(10);
+        let lower = Uuid::from_u128(1);
+        let higher = Uuid::from_u128(2);
+        let game_session_id = Uuid::from_u128(99);
+
+        diesel::sql_query(
+            "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at) \
+             VALUES ($1, 1, 'test', 1700000000, 1700002000)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(season)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        diesel::sql_query("DROP TABLE arena_h2h_ratings")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        let lower_win = h2h_outcome(lower, higher, game_session_id, true);
+        persist_h2h_audit_and_rating(&mut conn, &cfg, &lower_win, &applied(lower), higher)
+            .await
+            .unwrap();
+        assert_eq!(
+            test_audit_rows(&mut conn).await,
+            vec![TestAuditRow { character_id: lower, is_h2h: true }],
+            "rating table failure must not roll back the audit row"
+        );
+
+        diesel::sql_query(
+            "CREATE TABLE arena_h2h_ratings ( \
+                 character_id UUID PRIMARY KEY, rating INTEGER NOT NULL, wins INTEGER NOT NULL DEFAULT 0, \
+                 losses INTEGER NOT NULL DEFAULT 0, ties INTEGER NOT NULL DEFAULT 0, \
+                 matches INTEGER NOT NULL DEFAULT 0, last_match_at TIMESTAMPTZ)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        ranking::reconcile_h2h_ratings_with_config(&mut conn, &cfg, false)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            test_ratings(&mut conn).await,
+            vec![
+                TestRatingRow {
+                    character_id: lower,
+                    rating: 1024,
+                    wins: 1,
+                    losses: 0,
+                    matches: 1,
+                },
+                TestRatingRow {
+                    character_id: higher,
+                    rating: 976,
+                    wins: 0,
+                    losses: 1,
+                    matches: 1,
+                },
+            ],
+            "reconcile must rebuild the board from the surviving audit row"
+        );
     }
 
     #[tokio::test]

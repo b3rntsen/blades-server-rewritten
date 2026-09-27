@@ -1119,9 +1119,8 @@ async fn recent_bot_opponents(
     diesel::sql_query(
         "SELECT r.opponent_character_id \
          FROM arena_match_results r \
-         LEFT JOIN arena_matches m ON m.game_session_id = r.game_session_id \
          WHERE r.character_id = $1 AND r.opponent_character_id IS NOT NULL \
-           AND COALESCE(m.paired, false) = false \
+           AND r.is_h2h = false \
          ORDER BY r.recorded_at DESC, r.id DESC LIMIT $2",
     )
     .bind::<diesel::sql_types::Uuid, _>(human_id)
@@ -1147,9 +1146,9 @@ async fn pair_daily_h2h_count(db: &Option<DbPool>, a: &str, b: &str) -> usize {
     let count = diesel::sql_query(
         "SELECT COUNT(DISTINCT r.game_session_id) AS count \
          FROM arena_match_results r \
-         INNER JOIN arena_matches m ON m.game_session_id = r.game_session_id AND m.paired = true \
          WHERE ((r.character_id = $1 AND r.opponent_character_id = $2) \
              OR (r.character_id = $2 AND r.opponent_character_id = $1)) \
+           AND r.is_h2h = true \
            AND r.recorded_at >= (date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')",
     )
     .bind::<diesel::sql_types::Uuid, _>(a)

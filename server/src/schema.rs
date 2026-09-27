@@ -67,6 +67,7 @@ diesel::table! {
         arena_level -> Int4,
         chest_meter -> Int8,
         recorded_at -> Timestamptz,
+        is_h2h -> Bool,
     }
 }
 
