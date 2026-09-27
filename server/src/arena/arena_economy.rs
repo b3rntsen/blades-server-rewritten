@@ -42,6 +42,7 @@ use uuid::Uuid;
 use crate::DbPool;
 use crate::arena::arena_ladder;
 use crate::arena::combat::messages::ARENA_GOLD_CURRENCY_UUID;
+use crate::arena::ranking;
 use crate::models::CharacterDbEntryEconomy;
 
 /// One finished match, from ONE player's point of view, queued for persistence.
@@ -73,6 +74,9 @@ pub struct MatchEconomyOutcome {
     pub completed_at_secs: i64,
     /// The opponent's character id, for the audit row.
     pub opponent_character_id: Option<Uuid>,
+    /// True only for paired human-vs-human matches. AI fights never touch the
+    /// human-only public rating board.
+    pub h2h: bool,
 }
 
 /// The queue endpoint. `None` until [`install`] runs — which is the normal state
@@ -471,6 +475,107 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
         );
     }
 
+    if outcome.h2h
+        && let Some(opponent_id) = outcome.opponent_character_id
+        && outcome.character_id.as_u128() < opponent_id.as_u128()
+    {
+        let cfg = ranking::load(pool).await.config.h2h_rating;
+        if let Err(e) = persist_h2h_rating_pair(&mut conn, &cfg, outcome, opponent_id).await {
+            warn!(
+                "arena h2h rating: update failed for {} vs {} in {:?}: {e}",
+                outcome.character_id, opponent_id, outcome.game_session_id
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(diesel::QueryableByName)]
+struct H2hRatingRow {
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    rating: i32,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    wins: i32,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    losses: i32,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    ties: i32,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    matches: i32,
+}
+
+impl H2hRatingRow {
+    fn state(self) -> ranking::H2hRatingState {
+        ranking::H2hRatingState {
+            rating: self.rating as i64,
+            wins: self.wins as i64,
+            losses: self.losses as i64,
+            ties: self.ties as i64,
+            matches: self.matches as i64,
+        }
+    }
+}
+
+async fn h2h_state(
+    conn: &mut diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>,
+    character_id: Uuid,
+    start: i64,
+) -> Result<ranking::H2hRatingState, anyhow::Error> {
+    let row: Option<H2hRatingRow> = diesel::sql_query(
+        "SELECT rating, wins, losses, ties, matches \
+         FROM arena_h2h_ratings WHERE character_id = $1",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .get_result(conn)
+    .await
+    .optional()?;
+    Ok(row.map(H2hRatingRow::state).unwrap_or_else(|| ranking::H2hRatingState::new(start)))
+}
+
+async fn persist_h2h_rating_pair(
+    conn: &mut diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>,
+    cfg: &ranking::H2hRatingConfig,
+    outcome: &MatchEconomyOutcome,
+    opponent_id: Uuid,
+) -> Result<(), anyhow::Error> {
+    let a = h2h_state(conn, outcome.character_id, cfg.start).await?;
+    let b = h2h_state(conn, opponent_id, cfg.start).await?;
+    let a_outcome = arena_ladder::MatchOutcome {
+        rounds_won: outcome.rounds_won,
+        rounds_lost: outcome.rounds_lost,
+        win: outcome.win,
+    };
+    let (a, b) = ranking::apply_h2h_rating(cfg, a, b, a_outcome);
+    upsert_h2h_state(conn, outcome.character_id, a, outcome.completed_at_secs).await?;
+    upsert_h2h_state(conn, opponent_id, b, outcome.completed_at_secs).await?;
+    Ok(())
+}
+
+async fn upsert_h2h_state(
+    conn: &mut diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>,
+    character_id: Uuid,
+    state: ranking::H2hRatingState,
+    completed_at_secs: i64,
+) -> Result<(), anyhow::Error> {
+    diesel::sql_query(
+        "INSERT INTO arena_h2h_ratings \
+         (character_id, rating, wins, losses, ties, matches, last_match_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, to_timestamp($7)) \
+         ON CONFLICT (character_id) DO UPDATE SET \
+             rating = EXCLUDED.rating, wins = EXCLUDED.wins, losses = EXCLUDED.losses, \
+             ties = EXCLUDED.ties, matches = EXCLUDED.matches, \
+             last_match_at = EXCLUDED.last_match_at",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Integer, _>(state.rating as i32)
+    .bind::<diesel::sql_types::Integer, _>(state.wins as i32)
+    .bind::<diesel::sql_types::Integer, _>(state.losses as i32)
+    .bind::<diesel::sql_types::Integer, _>(state.ties as i32)
+    .bind::<diesel::sql_types::Integer, _>(state.matches as i32)
+    .bind::<diesel::sql_types::BigInt, _>(completed_at_secs)
+    .execute(conn)
+    .await?;
     Ok(())
 }
 
@@ -517,6 +622,7 @@ mod tests {
             win: true,
             completed_at_secs: 1_700_000_000,
             opponent_character_id: None,
+            h2h: false,
         });
     }
 

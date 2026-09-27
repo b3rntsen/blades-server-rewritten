@@ -39,6 +39,7 @@ use crate::{
         config::ArenaConfig,
         key_submit::{KeySubmitConfig, KeySubmitter},
         match_registry::MatchRegistry,
+        ranking::{self, MatchRankingContext, RankingConfig},
         season_store,
     },
     models::CharacterDbEntryCharacterWalletInventory,
@@ -1050,6 +1051,107 @@ fn mark_loadout_as_bot(lo: &mut crate::arena::combat::Loadout) {
     }
 }
 
+fn price_bot_profile_for_match(
+    lo: &mut crate::arena::combat::Loadout,
+    config: &RankingConfig,
+    human: Option<Skill>,
+    gsid: Uuid,
+) {
+    let Some(human) = human else { return };
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&lo.profile_character_json) else {
+        return;
+    };
+    let mimic_matchmaking = v
+        .get("matchmakingPvpTrophies")
+        .and_then(|x| x.as_i64())
+        .unwrap_or(0);
+    let price = ranking::bot_pricing_trophies(config, human.trophies, mimic_matchmaking, gsid, 0);
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("pvpTrophies".into(), serde_json::Value::from(price));
+        obj.insert("matchmakingPvpTrophies".into(), serde_json::Value::from(price));
+    }
+    lo.profile_character_json = v.to_string();
+}
+
+fn apply_recent_bot_avoidance(
+    rows: &mut Vec<CharacterDbEntryCharacterWalletInventory>,
+    human_char_uuid: &str,
+    avoid_recent: usize,
+    recent: &[Uuid],
+) {
+    if avoid_recent == 0 || recent.is_empty() {
+        return;
+    }
+    let eligible = rows
+        .iter()
+        .filter(|r| row_has_customization(r) && !is_self_match(human_char_uuid, &r.id.to_string()))
+        .count();
+    if eligible <= avoid_recent {
+        return;
+    }
+    rows.retain(|r| !recent.contains(&r.id));
+}
+
+async fn recent_bot_opponents(
+    conn: &mut PooledConnection<'_, AsyncPgConnection>,
+    human_char_uuid: &str,
+    limit: usize,
+) -> Vec<Uuid> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let Ok(human_id) = Uuid::parse_str(human_char_uuid) else {
+        return Vec::new();
+    };
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        opponent_character_id: Uuid,
+    }
+    diesel::sql_query(
+        "SELECT r.opponent_character_id \
+         FROM arena_match_results r \
+         LEFT JOIN arena_matches m ON m.game_session_id = r.game_session_id \
+         WHERE r.character_id = $1 AND r.opponent_character_id IS NOT NULL \
+           AND COALESCE(m.paired, false) = false \
+         ORDER BY r.recorded_at DESC, r.id DESC LIMIT $2",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(human_id)
+    .bind::<diesel::sql_types::BigInt, _>(limit as i64)
+    .get_results::<Row>(conn)
+    .await
+    .map(|rows| rows.into_iter().map(|r| r.opponent_character_id).collect())
+    .unwrap_or_default()
+}
+
+async fn pair_daily_h2h_count(db: &Option<DbPool>, a: &str, b: &str) -> usize {
+    let (Some(db), Ok(a), Ok(b)) = (db, Uuid::parse_str(a), Uuid::parse_str(b)) else {
+        return 0;
+    };
+    let Ok(mut conn) = db.get().await else {
+        return 0;
+    };
+    #[derive(diesel::QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        count: i64,
+    }
+    let count = diesel::sql_query(
+        "SELECT COUNT(DISTINCT r.game_session_id) AS count \
+         FROM arena_match_results r \
+         INNER JOIN arena_matches m ON m.game_session_id = r.game_session_id AND m.paired = true \
+         WHERE r.character_id = $1 AND r.opponent_character_id = $2 \
+           AND r.recorded_at >= (date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(a)
+    .bind::<diesel::sql_types::Uuid, _>(b)
+    .get_result::<CountRow>(&mut conn)
+    .await
+    .map(|r| r.count.max(0) as usize)
+    .unwrap_or(0);
+    count
+}
+
 /// Load a bot opponent and ALWAYS mark it. A thin wrapper over
 /// [`pick_bot_loadout`] for one reason: that function has four return paths
 /// (no DB, no connection, a picked row, the starter fallback) and an unmarked one
@@ -1060,12 +1162,14 @@ async fn load_bot_loadout(
     human_char_uuid: &str,
     human: Option<Skill>,
     config: &ArenaConfig,
+    ranking_config: &RankingConfig,
     gsid: Uuid,
     // Characters currently inside a live match — never drawn as a bot.
     busy: &std::collections::HashSet<String>,
 ) -> crate::arena::combat::Loadout {
     let mut lo = pick_bot_loadout(db, human_char_uuid, human, config, gsid, busy).await;
     mark_loadout_as_bot(&mut lo);
+    price_bot_profile_for_match(&mut lo, ranking_config, human, gsid);
     lo
 }
 
@@ -1124,6 +1228,13 @@ async fn pick_bot_loadout(
     // the bracket and then be discarded, leaving a worse fight than the pool
     // could have given.
     rows.retain(|r| !busy.contains(&r.id.to_string().to_lowercase()));
+    let ranking_config = ranking::load(db).await.config;
+    apply_recent_bot_avoidance(
+        &mut rows,
+        human_char_uuid,
+        ranking_config.bot.avoid_recent_opponents,
+        &recent_bot_opponents(&mut conn, human_char_uuid, ranking_config.bot.avoid_recent_opponents).await,
+    );
 
     let mut candidates: Vec<BotCandidate> = rows.iter().map(candidate_of_row).collect();
     let mut draw = pick_bot_index(&candidates, human_char_uuid, human, gsid);
@@ -1148,6 +1259,12 @@ async fn pick_bot_loadout(
     if should_widen(source, human, draw) {
         let mut wide_rows = load_wide_pool(&mut conn, human_char_uuid).await;
         wide_rows.retain(|r| !busy.contains(&r.id.to_string().to_lowercase()));
+        apply_recent_bot_avoidance(
+            &mut wide_rows,
+            human_char_uuid,
+            ranking_config.bot.avoid_recent_opponents,
+            &recent_bot_opponents(&mut conn, human_char_uuid, ranking_config.bot.avoid_recent_opponents).await,
+        );
         let wide_candidates: Vec<BotCandidate> = wide_rows.iter().map(candidate_of_row).collect();
         if let Some(d) = pick_bot_index(&wide_candidates, human_char_uuid, human, gsid)
             && d.step.is_some()
@@ -1991,6 +2108,33 @@ mod human_priority_tests {
 mod bot_pick_tests {
     use super::*;
 
+    fn renderable_row(id: Uuid) -> CharacterDbEntryCharacterWalletInventory {
+        use crate::json_db::JsonDbWrapper;
+        let mut character = blades_lib::user_data::CompleteCharacter::default();
+        character.level = 50;
+        character.matchmaking_pvp_trophies = 500;
+        CharacterDbEntryCharacterWalletInventory {
+            id,
+            user_id: Uuid::new_v4(),
+            character: JsonDbWrapper(character),
+            data: JsonDbWrapper(blades_lib::user_data::CompleteCharacterData {
+                customization: serde_json::json!({"CharacterUID": id.to_string()}),
+                new_flags: serde_json::json!({}),
+                dialog: serde_json::json!({}),
+            }),
+            wallet: JsonDbWrapper(Default::default()),
+            inventory: JsonDbWrapper(blades_lib::user_data::CompleteInventory {
+                backpack: Default::default(),
+                loadout: Default::default(),
+                treasury: Default::default(),
+                overflow_treasury: Default::default(),
+                backpack_version: 1,
+                treasury_version: 0,
+            }),
+            server_state: JsonDbWrapper(Default::default()),
+        }
+    }
+
     /// A bot opponent must be identifiable as one, in BOTH places the client
     /// reads a name. Requested 2026-08-03: a solo match loads a real character
     /// from the bot roster, so without this the opponent wears a real player's
@@ -2049,6 +2193,7 @@ mod bot_pick_tests {
                 "00000000-0000-0000-0000-000000000000",
                 None,
                 &config,
+                &RankingConfig::default(),
                 Uuid::nil(),
                 &std::collections::HashSet::new(),
             ));
@@ -2057,6 +2202,21 @@ mod bot_pick_tests {
             "a bot loaded without a database must still be marked, got {:?}",
             lo.display_name
         );
+    }
+
+    #[test]
+    fn avoid_recent_removes_recent_bots_only_when_the_pool_can_spare_them() {
+        let recent = Uuid::from_u128(1);
+        let keep = Uuid::from_u128(2);
+        let other = Uuid::from_u128(3);
+        let mut rows = vec![renderable_row(recent), renderable_row(keep), renderable_row(other)];
+        apply_recent_bot_avoidance(&mut rows, "00000000-0000-0000-0000-000000000000", 1, &[recent]);
+        let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
+        assert_eq!(ids, vec![keep, other]);
+
+        let mut tiny = vec![renderable_row(recent)];
+        apply_recent_bot_avoidance(&mut tiny, "00000000-0000-0000-0000-000000000000", 1, &[recent]);
+        assert_eq!(tiny.len(), 1, "a one-entry pool cannot avoid its only opponent");
     }
 
     /// `load_bot_loadout` has several return paths and could grow another. Marking
@@ -3678,6 +3838,10 @@ async fn resolve(
 ) {
     let game_session_id = Uuid::new_v4();
     let paired = tickets.len() >= 2;
+    let ranking_config = match db {
+        Some(pool) => ranking::load(pool).await.config,
+        None => RankingConfig::default(),
+    };
     // playerSessionId shape (retail GameLift, capture-confirmed s506
     // `psess-0a7c4b72-0a1c-b2c9-6599-05c28c5ed98e`): the first three UUID groups are
     // DERIVED FROM the shared `gameSessionId`, so paired players' psess share a common
@@ -3823,6 +3987,7 @@ async fn resolve(
                     &human_char_uuid,
                     human_skill,
                     config,
+                    &ranking_config,
                     game_session_id,
                     &registry.characters_in_live_matches(),
                 ),
@@ -3950,12 +4115,21 @@ async fn resolve(
 
     let expected_udp_ips: Vec<Option<IpAddr>> =
         tickets.iter().map(|ticket| ticket.expected_udp_ip).collect();
+    let h2h_pair_matches_today = if paired && bots == 0 && loadouts.len() >= 2 {
+        pair_daily_h2h_count(db, &loadouts[0].character_uuid, &loadouts[1].character_uuid).await
+    } else {
+        0
+    };
     if !registry.allocate_with_bots_and_peer_ips(
         &psids,
         loadouts,
         game_session_id,
         bots,
         &expected_udp_ips,
+        MatchRankingContext {
+            config: ranking_config,
+            h2h_pair_matches_today,
+        },
     ) {
         for t in tickets {
             warn!(
