@@ -92,6 +92,8 @@ struct Stage {
     #[serde(default, deserialize_with = "bonus_counts")]
     #[serde(rename = "attackerPiercingSources")]
     attacker_piercing_sources: BTreeMap<String, u32>,
+    #[serde(default, rename = "activePerks")]
+    active_perks: Vec<ActivePerk>,
     #[serde(default)]
     status: SnapshotStatus,
     #[serde(default)]
@@ -122,6 +124,20 @@ struct BonusSource {
     damage_sources: Vec<String>,
     #[serde(default)]
     stored: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ActivePerk {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    uid: String,
+    #[serde(default)]
+    cls: String,
+    #[serde(default)]
+    rank: u16,
+    #[serde(default, rename = "bonusValue")]
+    bonus_value: Option<f32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -202,7 +218,7 @@ fn oracle_v2_independent_replay_snapshot_clean_hits() {
 
     for hit in hits
         .iter()
-        .filter(|hit| hit.attacker_snapshot.is_some() && !is_v3_hit(hit))
+        .filter(|hit| hit.attacker_snapshot.is_some() && !is_v3_hit(hit) && !is_v4_hit(hit))
     {
         match compare_v2_hit(hit, &mut stats) {
             Ok(()) => replayed += 1,
@@ -354,6 +370,101 @@ fn oracle_v3_known_enchantment_synergy_source_gap() {
     );
 }
 
+#[test]
+fn oracle_v4_active_perks_are_replayed() {
+    let hits = load_hits();
+    let mut stats: BTreeMap<&'static str, StageStats> = BTreeMap::new();
+    let mut replayed = 0usize;
+    let mut fully_matched = 0usize;
+    let mut skipped: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut first_mismatch_stage: BTreeMap<&'static str, usize> = BTreeMap::new();
+
+    for hit in hits
+        .iter()
+        .filter(|hit| hit.attacker_snapshot.is_some() && is_v4_hit(hit))
+    {
+        let mut hit_stats = BTreeMap::new();
+        match compare_v2_hit(hit, &mut hit_stats) {
+            Ok(()) => {
+                replayed += 1;
+                if let Some(stage) = first_pipeline_mismatch(&hit_stats) {
+                    *first_mismatch_stage.entry(stage).or_default() += 1;
+                } else {
+                    fully_matched += 1;
+                }
+                merge_stats(&mut stats, hit_stats);
+            }
+            Err(skip) => {
+                *skipped.entry(skip.class).or_default() += 1;
+            }
+        }
+    }
+
+    assert_eq!(
+        replayed, 30,
+        "v4 fixture should load and replay all real hits"
+    );
+    assert!(skipped.is_empty(), "v4 replay should not skip: {skipped:?}");
+    assert_eq!(fully_matched, 30, "unexpected v4 full-match count");
+    assert!(
+        first_mismatch_stage.is_empty(),
+        "unexpected v4 mismatch bucket: {first_mismatch_stage:?}"
+    );
+    if std::env::var_os("ORACLE_PRINT").is_some() {
+        eprintln!("v4_replayed,{replayed}");
+        eprintln!("v4_fully_matched,{fully_matched}");
+        eprintln!("v4_skipped,{skipped:?}");
+        eprintln!("v4_first_mismatch_stage,{first_mismatch_stage:?}");
+        eprintln!("stage,matches,mismatches,first_mismatch");
+        for (stage, stat) in stats {
+            eprintln!(
+                "{stage},{},{},{}",
+                stat.matches,
+                stat.mismatches.len(),
+                stat.mismatches.first().map(String::as_str).unwrap_or("")
+            );
+        }
+    }
+}
+
+#[test]
+fn oracle_v4_enchantment_synergy_multiplies_stacked_fortify_element() {
+    let hit = load_hits()
+        .into_iter()
+        .find(|hit| hit.run == "20260926T202537Z-oracle-dungeon-1" && hit.hit == 3)
+        .expect("v4 synergy fixture");
+    let attacker = hit.attacker_snapshot.as_ref().expect("attacker snapshot");
+    let got = apply_permanent_damage_bonuses(&attacker.list, attacker, &hit.source);
+    let want = stage_list(&hit, "D1-permanent");
+    let mut stats = BTreeMap::new();
+
+    compare_map("synergy D1", got.clone(), &want, &hit, &mut stats);
+    assert!(
+        stats
+            .get("synergy D1")
+            .is_some_and(|stat| stat.mismatches.is_empty()),
+        "synergy D1 mismatch: {:?}",
+        stats.get("synergy D1")
+    );
+    let shock = *got.get("Shock").expect("Shock");
+    assert!(close(shock, 99.725));
+    assert!(close(48.31 + 15.19 + (3.0 * 9.66 * 1.25), shock));
+}
+
+#[test]
+#[ignore = "FORK-FINDING: production arena code applies Enchantment Synergy only to weapon-enchant damage tracks; client also applies it to stacked FortifyElement item properties"]
+fn oracle_v4_fork_finding_synergy_scope() {
+    let client = 48.31 + 15.19 + (3.0 * 9.66 * 1.25);
+    let fork_scope = 48.31 + 15.19 + (3.0 * 9.66);
+    assert!(
+        close(client, fork_scope),
+        "FORK-FINDING Enchantment Synergy scope: client D1 Shock {client:.3}, \
+         fork-scope replay {fork_scope:.3}; missing {missing:.3} from three \
+         stacked FortifyElement properties receiving +25%",
+        missing = client - fork_scope
+    );
+}
+
 fn load_hits() -> Vec<OracleHit> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/arena/combat/testdata/oracle");
     let mut paths: Vec<_> = fs::read_dir(&dir)
@@ -376,7 +487,11 @@ fn load_hits() -> Vec<OracleHit> {
 }
 
 fn is_v3_hit(hit: &OracleHit) -> bool {
-    hit.run.starts_with("20260926T19") || hit.run.starts_with("20260926T20")
+    hit.run.starts_with("20260926T19") || hit.run == "20260926T200038Z-oracle-dungeon-8"
+}
+
+fn is_v4_hit(hit: &OracleHit) -> bool {
+    hit.run.starts_with("20260926T202") || hit.run.starts_with("20260926T203")
 }
 
 fn merge_stats(
@@ -728,6 +843,46 @@ impl Stage {
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }
+
+    fn perk_value(&self, bonus: &BonusSource) -> Option<f32> {
+        self.active_perks
+            .iter()
+            .find(|perk| perk.cls == bonus.cls)
+            .and_then(|perk| perk.bonus_value)
+            .or_else(|| bonus.perk_value())
+    }
+
+    fn magnitude_with_item_multiplier(&self, bonus: &BonusSource) -> Option<f32> {
+        let magnitude = bonus.magnitude?;
+        Some(magnitude * self.item_property_multiplier(bonus))
+    }
+
+    fn item_property_multiplier(&self, bonus: &BonusSource) -> f32 {
+        if bonus.property_id.is_empty()
+            || bonus.property_id.starts_with("Ability.Perk.")
+            || self.matching_property_count(&bonus.property_id) <= 1
+        {
+            return 1.0;
+        }
+        1.0 + self.enchantment_synergy_value()
+    }
+
+    fn matching_property_count(&self, property_id: &str) -> usize {
+        self.bonus_sources
+            .lists
+            .values()
+            .flat_map(|sources| sources.iter())
+            .filter(|source| source.property_id == property_id)
+            .count()
+    }
+
+    fn enchantment_synergy_value(&self) -> f32 {
+        self.active_perks
+            .iter()
+            .find(|perk| perk.cls == "EnchantmentSynergyPerk")
+            .and_then(|perk| perk.bonus_value)
+            .unwrap_or(0.0)
+    }
 }
 
 fn apply_permanent_damage_bonuses(input: &DamageMap, attacker: &Stage, source: &str) -> DamageMap {
@@ -739,7 +894,10 @@ fn apply_permanent_damage_bonuses(input: &DamageMap, attacker: &Stage, source: &
             continue;
         }
         if bonus.cls == "ElementalDamageBonusInstance" {
-            if let (Some(magnitude), Some(ty)) = (bonus.magnitude, bonus.damage_type()) {
+            if let (Some(magnitude), Some(ty)) = (
+                attacker.magnitude_with_item_multiplier(bonus),
+                bonus.damage_type(),
+            ) {
                 *out.entry(format_damage_type(ty).to_string()).or_default() += magnitude;
             }
         }
@@ -752,19 +910,27 @@ fn apply_permanent_damage_bonuses(input: &DamageMap, attacker: &Stage, source: &
         }
         match bonus.cls.as_str() {
             "ScoutPerk" if attacker.weapon.weapon_class == "Light" => {
-                apply_first_physical_perk(&mut out, bonus, &mut weapon_perk_applied);
+                apply_first_physical_perk(&mut out, attacker, bonus, &mut weapon_perk_applied);
             }
             "ArmsmanPerk" if attacker.weapon.weapon_class == "Balanced" => {
-                apply_first_physical_perk(&mut out, bonus, &mut weapon_perk_applied);
+                apply_first_physical_perk(&mut out, attacker, bonus, &mut weapon_perk_applied);
             }
             "BarbarianPerk" if attacker.weapon.weapon_class == "Heavy" => {
-                apply_first_physical_perk(&mut out, bonus, &mut weapon_perk_applied);
+                apply_first_physical_perk(&mut out, attacker, bonus, &mut weapon_perk_applied);
             }
-            "AugmentedFlamesPerk" => add_to_type_from_perk(&mut out, DamageType::Fire, bonus),
-            "AugmentedFrostPerk" => add_to_type_from_perk(&mut out, DamageType::Frost, bonus),
-            "AugmentedShockPerk" => add_to_type_from_perk(&mut out, DamageType::Shock, bonus),
-            "AugmentedPoisonPerk" => add_to_type_from_perk(&mut out, DamageType::Poison, bonus),
-            "FortifyElementBonusInstance" => apply_fortify_element_bonus(&mut out, bonus),
+            "AugmentedFlamesPerk" => {
+                add_to_type_from_perk(&mut out, attacker, DamageType::Fire, bonus);
+            }
+            "AugmentedFrostPerk" => {
+                add_to_type_from_perk(&mut out, attacker, DamageType::Frost, bonus);
+            }
+            "AugmentedShockPerk" => {
+                add_to_type_from_perk(&mut out, attacker, DamageType::Shock, bonus);
+            }
+            "AugmentedPoisonPerk" => {
+                add_to_type_from_perk(&mut out, attacker, DamageType::Poison, bonus);
+            }
+            "FortifyElementBonusInstance" => apply_fortify_element_bonus(&mut out, attacker, bonus),
             _ => {}
         }
     }
@@ -838,11 +1004,16 @@ fn apply_situational_damage_bonuses(
     retain_nonzero(out)
 }
 
-fn apply_first_physical_perk(out: &mut DamageMap, bonus: &BonusSource, already_applied: &mut bool) {
+fn apply_first_physical_perk(
+    out: &mut DamageMap,
+    attacker: &Stage,
+    bonus: &BonusSource,
+    already_applied: &mut bool,
+) {
     if *already_applied {
         return;
     }
-    let Some(value) = bonus.perk_value() else {
+    let Some(value) = attacker.perk_value(bonus) else {
         return;
     };
     if let Some(key) = out
@@ -855,17 +1026,22 @@ fn apply_first_physical_perk(out: &mut DamageMap, bonus: &BonusSource, already_a
     }
 }
 
-fn add_to_type_from_perk(out: &mut DamageMap, ty: DamageType, bonus: &BonusSource) {
+fn add_to_type_from_perk(
+    out: &mut DamageMap,
+    attacker: &Stage,
+    ty: DamageType,
+    bonus: &BonusSource,
+) {
     if out.get(format_damage_type(ty)).copied().unwrap_or(0.0) <= 0.0 {
         return;
     }
-    if let Some(value) = bonus.perk_value() {
+    if let Some(value) = attacker.perk_value(bonus) {
         *out.entry(format_damage_type(ty).to_string()).or_default() += value;
     }
 }
 
-fn apply_fortify_element_bonus(out: &mut DamageMap, bonus: &BonusSource) {
-    let Some(magnitude) = bonus.magnitude else {
+fn apply_fortify_element_bonus(out: &mut DamageMap, attacker: &Stage, bonus: &BonusSource) {
+    let Some(magnitude) = attacker.magnitude_with_item_multiplier(bonus) else {
         return;
     };
     if let Some(ty) = bonus.damage_type().filter(|ty| is_elemental(*ty)) {
