@@ -85,6 +85,9 @@ struct PlayerConn {
     /// match. A rebind resets ENet reliability, so the current replicated MatchState
     /// has to be replayed on the replacement peer.
     rebind_count: u32,
+    /// Smoothed ENet RTT for this live peer. Stored on the connection until the
+    /// authoritative fighter slot is known, then mirrored into the combat instance.
+    rtt_ewma: Option<Duration>,
 }
 
 /// A live match: up to `capacity` players sharing one authoritative instance and
@@ -197,6 +200,14 @@ impl Match {
             return false;
         }
         self.peer_to_slot.insert(peer, slot);
+        if let Some(rtt) = self
+            .players
+            .iter()
+            .find(|p| p.addr == peer)
+            .and_then(|p| p.rtt_ewma)
+        {
+            self.instance.set_slot_rtt(slot, rtt);
+        }
         info!(
             "match registry: match {} — peer {peer} → fighter slot {slot} ({how}) [{}/{} bound]",
             self.game_session_id,
@@ -681,6 +692,7 @@ impl MatchRegistry {
             last_user_message_gmid: None,
             last_match_state_ack: None,
             rebind_count: 0,
+            rtt_ewma: None,
         });
         if m.players.len() >= m.capacity {
             m.reached_capacity = true;
@@ -746,6 +758,7 @@ impl MatchRegistry {
             last_user_message_gmid: None,
             last_match_state_ack: None,
             rebind_count: 0,
+            rtt_ewma: None,
         });
         if m.players.len() >= m.capacity {
             m.reached_capacity = true;
@@ -790,6 +803,32 @@ impl MatchRegistry {
             Some(m.game_session_id) != current
                 && m.accepts_new_connection()
         })
+    }
+
+    /// Update the smoothed RTT for a live ENet peer and mirror it onto the peer's
+    /// fighter slot once that slot is authoritative.
+    pub fn observe_peer_rtt(&self, peer: SocketAddr, sample: Duration) {
+        let Some(gsid) = self.addr_index.lock().unwrap().get(&peer).copied() else {
+            return;
+        };
+        let mut matches = self.matches.lock().unwrap();
+        let Some(m) = matches.get_mut(&gsid) else {
+            return;
+        };
+        let Some(player) = m.players.iter_mut().find(|p| p.addr == peer) else {
+            return;
+        };
+        let smoothed = match player.rtt_ewma {
+            Some(prev) => {
+                let ms = ((prev.as_millis() * 7) + sample.as_millis() + 7) / 8;
+                Duration::from_millis(ms.min(u64::MAX as u128) as u64)
+            }
+            None => sample,
+        };
+        player.rtt_ewma = Some(smoothed);
+        if let Some(slot) = m.peer_to_slot.get(&peer).copied() {
+            m.instance.set_slot_rtt(slot, smoothed);
+        }
     }
 
     /// Raw-socket dev path ([`udp::UdpServer`]). The whole ENet datagram is walked
