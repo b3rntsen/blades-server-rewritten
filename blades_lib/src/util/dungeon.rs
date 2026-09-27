@@ -217,22 +217,56 @@ fn interactable_loot() -> &'static serde_json::Value {
     })
 }
 
+#[derive(Clone, Copy)]
+struct LootSeedContext {
+    dungeon_uuid: Uuid,
+    run_seed: u64,
+}
+
+fn default_seed_context(dungeon_uuid: &Uuid) -> LootSeedContext {
+    LootSeedContext {
+        dungeon_uuid: *dungeon_uuid,
+        run_seed: 0,
+    }
+}
+
+fn seeded_context(dungeon_uuid: &Uuid, run_seed: u64) -> LootSeedContext {
+    LootSeedContext {
+        dungeon_uuid: *dungeon_uuid,
+        run_seed,
+    }
+}
+
+fn mix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = x;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Stable loot seed for one run of a repeatable quest instance.
+pub fn run_loot_seed(instance_id: &Uuid, run_index: u64) -> u64 {
+    mix64(
+        (instance_id.as_u128() as u64)
+            ^ ((instance_id.as_u128() >> 64) as u64).rotate_left(17)
+            ^ run_index.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+    )
+}
+
 /// Deterministic per (dungeon, spawn, table) so a re-fetch of the same dungeon
 /// yields the same contents -- the client is told once what a barrel holds and
 /// must still find it there when it breaks it.
-fn loot_seed(dungeon_uuid: &Uuid, spawn_id: &Uuid, table_id: &Uuid, result_index: usize) -> u64 {
-    let mut x = dungeon_uuid.as_u128() as u64
+fn loot_seed(ctx: LootSeedContext, spawn_id: &Uuid, table_id: &Uuid, result_index: usize) -> u64 {
+    let dungeon_uuid = &ctx.dungeon_uuid;
+    let x = dungeon_uuid.as_u128() as u64
         ^ (spawn_id.as_u128() as u64).rotate_left(21)
         ^ (table_id.as_u128() as u64).rotate_left(42)
+        ^ ctx.run_seed.rotate_left(7)
         // Without this every result in a pile of seven would be the same draw,
         // which turns "seven results" into "one stack, seven times".
         ^ (result_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    // splitmix64 finaliser
-    x = x.wrapping_add(0x9E3779B97F4A7C15);
-    let mut z = x;
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
-    z ^ (z >> 31)
+    mix64(x)
 }
 
 /// One roll of a loot table, weighted by how often retail produced each outcome.
@@ -249,8 +283,8 @@ fn loot_seed(dungeon_uuid: &Uuid, spawn_id: &Uuid, table_id: &Uuid, result_index
 ///
 /// `enemy_level` picks the level band where the table has one (see
 /// `INTERACTABLE_LOOT_BY_LEVEL_RAW`); the seed does not depend on it.
-fn roll_loot_table(
-    dungeon_uuid: &Uuid,
+fn roll_loot_table_with_context(
+    ctx: LootSeedContext,
     spawn_id: &Uuid,
     table_id: &Uuid,
     result_index: usize,
@@ -270,7 +304,7 @@ fn roll_loot_table(
         return out;
     }
 
-    let mut pick = loot_seed(dungeon_uuid, spawn_id, table_id, result_index) % total;
+    let mut pick = loot_seed(ctx, spawn_id, table_id, result_index) % total;
     for r in results {
         let n = r.get("n").and_then(|v| v.as_u64()).unwrap_or(0);
         if pick >= n {
@@ -295,6 +329,23 @@ fn roll_loot_table(
         return out;
     }
     out
+}
+
+#[cfg(test)]
+fn roll_loot_table(
+    dungeon_uuid: &Uuid,
+    spawn_id: &Uuid,
+    table_id: &Uuid,
+    result_index: usize,
+    enemy_level: i64,
+) -> LootTableResult {
+    roll_loot_table_with_context(
+        default_seed_context(dungeon_uuid),
+        spawn_id,
+        table_id,
+        result_index,
+        enemy_level,
+    )
 }
 
 // -- enemy loot -------------------------------------------------------------
@@ -381,15 +432,17 @@ impl LootRng {
 }
 
 fn enemy_rng(
-    dungeon_uuid: &Uuid,
+    ctx: LootSeedContext,
     spawn_group_id: &Uuid,
     spawner_index: usize,
     enemy_index: usize,
 ) -> LootRng {
+    let dungeon_uuid = &ctx.dungeon_uuid;
     LootRng(
         (dungeon_uuid.as_u128() as u64)
             ^ (spawn_group_id.as_u128() as u64).rotate_left(21)
             ^ ((dungeon_uuid.as_u128() >> 64) as u64).rotate_left(11)
+            ^ ctx.run_seed.rotate_left(29)
             ^ (spawner_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
             ^ (enemy_index as u64).rotate_left(37),
     )
@@ -463,7 +516,23 @@ pub fn roll_enemy_loot(
     enemy_index: usize,
     enemy_level: i64,
 ) -> HashMap<Uuid, LootTableResult> {
-    let mut rng = enemy_rng(dungeon_uuid, spawn_group_id, spawner_index, enemy_index);
+    roll_enemy_loot_with_context(
+        default_seed_context(dungeon_uuid),
+        spawn_group_id,
+        spawner_index,
+        enemy_index,
+        enemy_level,
+    )
+}
+
+fn roll_enemy_loot_with_context(
+    ctx: LootSeedContext,
+    spawn_group_id: &Uuid,
+    spawner_index: usize,
+    enemy_index: usize,
+    enemy_level: i64,
+) -> HashMap<Uuid, LootTableResult> {
+    let mut rng = enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index);
     let mut out = HashMap::new();
 
     let group = enemy_group_tables()["groups"].get(spawn_group_id.to_string());
@@ -611,6 +680,38 @@ pub fn generate_for_dungeon(
     enemy_level: i64,
     given_xp: u64,
 ) -> Option<DungeonGeneratedData> {
+    generate_for_dungeon_inner(
+        game_data,
+        dungeon_uuid,
+        default_seed_context(dungeon_uuid),
+        enemy_level,
+        given_xp,
+    )
+}
+
+pub fn generate_for_dungeon_with_seed(
+    game_data: &GameData,
+    dungeon_uuid: &Uuid,
+    run_seed: u64,
+    enemy_level: i64,
+    given_xp: u64,
+) -> Option<DungeonGeneratedData> {
+    generate_for_dungeon_inner(
+        game_data,
+        dungeon_uuid,
+        seeded_context(dungeon_uuid, run_seed),
+        enemy_level,
+        given_xp,
+    )
+}
+
+fn generate_for_dungeon_inner(
+    game_data: &GameData,
+    dungeon_uuid: &Uuid,
+    seed_context: LootSeedContext,
+    enemy_level: i64,
+    given_xp: u64,
+) -> Option<DungeonGeneratedData> {
     let dungeon = game_data.dungeons.get(dungeon_uuid)?;
 
     Some(DungeonGeneratedData {
@@ -626,8 +727,8 @@ pub fn generate_for_dungeon(
                         given_xp,
                         // Retail's fixed per-group result -- the key-holder's key.
                         spawn_group_loot: spawn_group_loot(spawn_group_id, spawner_index),
-                        loot_table_loot: roll_enemy_loot(
-                            dungeon_uuid,
+                        loot_table_loot: roll_enemy_loot_with_context(
+                            seed_context,
                             spawn_group_id,
                             spawner_index,
                             0,
@@ -681,8 +782,8 @@ pub fn generate_for_dungeon(
                             .map(|k| {
                                 (
                                     *k,
-                                    roll_loot_table(
-                                        dungeon_uuid,
+                                    roll_loot_table_with_context(
+                                        seed_context,
                                         item_spawn_id,
                                         k,
                                         result_index,
@@ -1568,6 +1669,37 @@ mod floor_pile_tests {
             }
         }
         assert!(compared > 1_000, "only {compared} floor results compared");
+    }
+
+    #[test]
+    fn a_run_seed_changes_the_described_loot_but_stays_stable() {
+        let game_data = game_data();
+        let instance = Uuid::from_u128(0x2500_0000_0000_0000_0000_0000_0000_0252);
+        let seed_a = run_loot_seed(&instance, 0);
+        let seed_b = run_loot_seed(&instance, 1);
+        let mut found_seeded_loot = false;
+
+        for dungeon_id in game_data.dungeons.keys() {
+            let a = generate_for_dungeon_with_seed(&game_data, dungeon_id, seed_a, 20, 5).unwrap();
+            let a_again =
+                generate_for_dungeon_with_seed(&game_data, dungeon_id, seed_a, 20, 5).unwrap();
+            assert_eq!(
+                serde_json::to_value(&a).unwrap(),
+                serde_json::to_value(&a_again).unwrap(),
+                "the same run seed must describe the same dungeon"
+            );
+
+            let b = generate_for_dungeon_with_seed(&game_data, dungeon_id, seed_b, 20, 5).unwrap();
+            if serde_json::to_value(&a).unwrap() != serde_json::to_value(&b).unwrap() {
+                found_seeded_loot = true;
+                break;
+            }
+        }
+
+        assert!(
+            found_seeded_loot,
+            "changing the run seed never changed any generated dungeon loot"
+        );
     }
 }
 

@@ -3479,13 +3479,32 @@ pub(crate) mod event_quests {
         let quest_id = instance_quest_id(character_id, &instance_id);
 
         // Resolve the body through the TEMPLATE id — `def.quest_id` is the gldQuestId.
-        let (mut quest, dungeon) = generate_quest_data(
+        let (mut quest, mut dungeon) = generate_quest_data(
             game_data,
             def.quest_id,
             player_level,
             &static_data.quests_daily.level_scaling,
         )
         .ok()?;
+        if dungeon.is_some() {
+            let dungeon_id = game_data
+                .quests
+                .get(&def.quest_id)?
+                .dungeon_info
+                .as_ref()?
+                .dungeon_uuid;
+            let enemy_level = static_data
+                .quests_daily
+                .level_scaling
+                .enemy_level(player_level);
+            dungeon = blades_lib::util::dungeon::generate_for_dungeon_with_seed(
+                game_data,
+                &dungeon_id,
+                blades_lib::util::dungeon::run_loot_seed(&quest_id, 0),
+                enemy_level,
+                static_data.quests_daily.level_scaling.given_xp(enemy_level),
+            );
+        }
 
         quest.r#type = QuestType::GameEvent;
         quest.gld_quest_id = def.quest_id;

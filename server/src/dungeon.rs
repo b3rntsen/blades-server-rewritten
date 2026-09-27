@@ -7,7 +7,9 @@ use actix_web::{
 };
 use blades_lib::game_data::GameData;
 use blades_lib::static_data::QuestLevelScaling;
-use blades_lib::util::dungeon::generate_for_dungeon;
+use blades_lib::util::dungeon::{
+    generate_for_dungeon, generate_for_dungeon_with_seed, run_loot_seed,
+};
 use blades_lib::user_data::{
     B64EncodedData, CompleteCharacterWithIdWithoutData, DungeonGeneratedData,
     DungeonGeneratedDataWithId, DungeonState, DungeonStatus, ObjectiveStatus, Quest, QuestStatus,
@@ -26,7 +28,7 @@ use crate::{
     event_quests::{EventCompletion, EventQuestData},
     BladeApiError, ServerGlobal,
     json_db::JsonDbWrapper,
-    models::{QuestDbEntry, QuestDbEntryDungeonStateAndInitialState, QuestDbEntryInfo},
+    models::{QuestDbEntry, QuestDbEntryDungeonStateAndInitialState},
     quest::jobs_gen,
     session::SessionLookedUpMaybe,
     util::check_permission_for_character_and_get_it,
@@ -305,6 +307,7 @@ pub async fn exit_quest_dungeon(
                 // quest row and the client's completedQuests mirror.
                 event_dungeon_exit(
                     conn,
+                    &globals.game_data,
                     &globals.static_data,
                     char_id,
                     gld_quest_id,
@@ -521,6 +524,27 @@ pub(crate) fn event_dungeon_data(
     Ok((dungeon_uuid, generated_data))
 }
 
+pub(crate) fn event_dungeon_data_for_run(
+    game_data: &GameData,
+    quest_id: Uuid,
+    difficulty_level: i64,
+    scaling: &QuestLevelScaling,
+    instance_quest_id: Uuid,
+    completion_count: u64,
+) -> Result<(Uuid, DungeonGeneratedData), BladeApiError> {
+    let dungeon_uuid = resolve_dungeon_settings_id(game_data, quest_id, None)?;
+    let enemy_level = difficulty_level.max(1);
+    let generated_data = generate_for_dungeon_with_seed(
+        game_data,
+        &dungeon_uuid,
+        run_loot_seed(&instance_quest_id, completion_count),
+        enemy_level,
+        scaling.given_xp(enemy_level),
+    )
+    .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
+    Ok((dungeon_uuid, generated_data))
+}
+
 /// The `difficultyLevel` of a stored quest row, read from its raw `info` JSON.
 ///
 /// Both event handlers already hold that JSON, having read `gldQuestId` from it to
@@ -620,6 +644,7 @@ pub(crate) fn reset_event_instance_for_next_run(info: &mut Quest) {
 /// `quest::complete_quest_in_tx`.
 pub(crate) async fn event_dungeon_exit(
     conn: &mut AsyncPgConnection,
+    game_data: &GameData,
     sd: &blades_lib::static_data::StaticData,
     char_id: Uuid,
     template_id: Uuid,
@@ -713,16 +738,6 @@ pub(crate) async fn event_dungeon_exit(
     }
     let mut row = quest_row.expect("`completed` is only true for a loaded row");
     reset_event_instance_for_next_run(&mut row.info.0);
-    {
-        use crate::schema::quests::dsl as q;
-        diesel::update(q::quests.filter(q::id.eq(instance_id).and(q::character_id.eq(owner))))
-            .set(QuestDbEntryInfo {
-                info: JsonDbWrapper(row.info.0.clone()),
-            })
-            .execute(conn)
-            .await?;
-    }
-
     // Finished or not is read off the counter `/complete` just advanced: retail's
     // `gameEventQuestFinished` carries exactly 5 (56/56), a live `gameEventQuest` 1-4.
     let completion = event_completion_in_window(conn, sd, char_id, template_id, now).await?;
@@ -739,6 +754,27 @@ pub(crate) async fn event_dungeon_exit(
         completion.completion_count,
         milestones,
     );
+    if !exhausted {
+        let (_, next_data) = event_dungeon_data_for_run(
+            game_data,
+            template_id,
+            row.info.0.difficulty_level,
+            &sd.quests_daily.level_scaling,
+            instance_id,
+            completion.completion_count as u64,
+        )?;
+        row.generated_data.0 = Some(next_data);
+    }
+    {
+        use crate::schema::quests::dsl as q;
+        diesel::update(q::quests.filter(q::id.eq(instance_id).and(q::character_id.eq(owner))))
+            .set((
+                q::info.eq(JsonDbWrapper(row.info.0.clone())),
+                q::generated_data.eq(JsonDbWrapper(row.generated_data.0.clone())),
+            ))
+            .execute(conn)
+            .await?;
+    }
 
     let character = release_current_dungeon(conn, char_id).await?;
     let quest = QuestWithId {
@@ -1218,8 +1254,15 @@ mod dungeon_settings_resolution {
             let row_info = serde_json::to_value(&m.quest).unwrap();
             assert_eq!(quest_row_difficulty(&row_info), level, "read off the stored row");
 
-            let (_, attempt) =
-                event_dungeon_data(&gd, m.quest.gld_quest_id, level, scaling).expect("generates");
+            let (_, attempt) = event_dungeon_data_for_run(
+                &gd,
+                m.quest.gld_quest_id,
+                level,
+                scaling,
+                m.quest_id,
+                0,
+            )
+            .expect("generates");
             assert_eq!(
                 serde_json::to_value(&attempt).unwrap(),
                 serde_json::to_value(shown).unwrap(),
@@ -1248,6 +1291,35 @@ mod dungeon_settings_resolution {
         assert_eq!(enemies(&attempt).len(), 14);
         assert!(enemies(&attempt).iter().all(|e| e.enemy_level == 73 && e.given_xp == 258));
         assert_eq!(xp, 14 * 258, "3612 XP for the whole dungeon, was 1400");
+    }
+
+    #[test]
+    fn event_tiers_do_not_reuse_the_same_generated_loot() {
+        let (sd, gd) = (static_data(), game_data());
+        let scaling = &sd.quests_daily.level_scaling;
+        let wrath = Uuid::parse_str("26eb6ab5-2d8c-4993-820e-ada79f6f00a8").unwrap();
+        let instance = Uuid::from_u128(0x2520_0000_0000_0000_0000_0000_0000_0252);
+        let level = scaling.enemy_level(89);
+
+        let (_, tier_one) =
+            event_dungeon_data_for_run(&gd, wrath, level, scaling, instance, 0).unwrap();
+        let (_, retry) = event_dungeon_data_for_run(&gd, wrath, level, scaling, instance, 0).unwrap();
+        assert_eq!(
+            serde_json::to_value(&tier_one).unwrap(),
+            serde_json::to_value(&retry).unwrap(),
+            "retrying the same event tier must not move loot already shown to the client"
+        );
+
+        let mut described = Vec::new();
+        for tier in 0..5 {
+            let (_, generated) =
+                event_dungeon_data_for_run(&gd, wrath, level, scaling, instance, tier).unwrap();
+            described.push(serde_json::to_value(&generated).unwrap());
+        }
+        assert!(
+            described.iter().any(|v| v != &described[0]),
+            "tiers 1-5 still describe identical loot"
+        );
     }
 
     /// CONTROL: the ordinary quest path is untouched. A story quest's row is still
@@ -1497,13 +1569,6 @@ async fn handle_event_dungeon_entry(
     //
     // Generated at the instance row's `difficultyLevel`, the level the client was
     // shown, not at a flat level 1 (see `event_dungeon_data`).
-    let enemy_level = difficulty_level.max(1);
-    let (dungeon_uuid, dungeon_data) = event_dungeon_data(
-        game_data,
-        quest_id,
-        enemy_level,
-        &sd.quests_daily.level_scaling,
-    )?;
     let max_entries = 1;
 
     log::info!("[event_dungeon] Processing event quest {} with event_id {}", quest_id, actual_event_id);
@@ -1513,6 +1578,15 @@ async fn handle_event_dungeon_entry(
     // per-window tiers, so finishing an event locks the player out of it for ever.
     let completion = event_completion_in_window(conn, sd, character_id, quest_id, now).await?;
     let completion_count = completion.completion_count as usize;
+    let enemy_level = difficulty_level.max(1);
+    let (dungeon_uuid, dungeon_data) = event_dungeon_data_for_run(
+        game_data,
+        quest_id,
+        enemy_level,
+        &sd.quests_daily.level_scaling,
+        instance_quest_id,
+        completion.completion_count as u64,
+    )?;
 
     // Has the character already completed all tiers? Only a NEW attempt is refused
     // on this: a live one (say, restarted after the last tier's `/complete`) must
@@ -1660,12 +1734,18 @@ async fn handle_event_dungeon_entry(
                     .await?
                     .into_iter()
                     .next();
-                if let Some(mut row) = row.filter(|r| r.info.0.completed) {
-                    reset_event_instance_for_next_run(&mut row.info.0);
+                if let Some(mut row) = row {
+                    if row.info.0.completed {
+                        reset_event_instance_for_next_run(&mut row.info.0);
+                    }
+                    row.generated_data.0 = Some(dungeon_data.clone());
                     diesel::update(
                         q::quests.filter(q::id.eq(instance_quest_id).and(q::character_id.eq(owner_id))),
                     )
-                    .set(QuestDbEntryInfo { info: row.info })
+                    .set((
+                        q::info.eq(row.info),
+                        q::generated_data.eq(row.generated_data),
+                    ))
                     .execute(&mut conn)
                     .await?;
                 }
@@ -2095,6 +2175,7 @@ mod event_run_lifecycle_db {
     async fn exit(conn: &mut AsyncPgConnection, p: &Player, restart: bool) -> Value {
         let r = event_dungeon_exit(
             conn,
+            &world().gd,
             &world().sd,
             p.character,
             p.template,
