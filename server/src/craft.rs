@@ -290,7 +290,7 @@ fn detached_building_id(real: Uuid) -> Uuid {
 
 /// `GET /crafts` — returns the character's active craft jobs.
 /// The repair gate reads this list; an empty list unblocks repair.
-#[get("blades.bgs.services/api/game/v1/public/characters/{character_id}/crafts")]
+#[get("/blades.bgs.services/api/game/v1/public/characters/{character_id}/crafts")]
 pub async fn get_crafts(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
