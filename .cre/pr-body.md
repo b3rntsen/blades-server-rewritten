@@ -1,17 +1,13 @@
 ## Summary
 
-Implements arena ranking v2 for the fork: versioned ranking config, configurable bot/human trophy deltas, h2h-only Elo ratings, bot opponent cup pricing, recent bot avoidance, and token-gated dev endpoints for config/history/top/seasons/rebuild.
+Fixes Enchantment Synergy scope in arena loadout parsing. The xValue multiplier now uses actor-wide repeated property IDs, so stacked FortifyElement properties receive the learned Synergy rank while a single weapon enchant does not.
 
-The h2h board now keeps an all-time rating plus per-season ratings. New seasons start from the configured h2h baseline while old season boards remain frozen and queryable.
+Players with repeated Fortify Fire/Frost/Shock/Poison item properties and Enchantment Synergy will notice higher matching elemental damage. Single weapon enchant builds should not move from this fix.
 
-Tests added cover contract default JSON, validation failures, the +1/-80 compatibility mode, default AI progression, h2h flat awards and daily cap, h2h Elo provisional K, rebuild ordering, avoid-recent filtering, season mapping/all-time replay, fresh season baselines, season selection parsing, rebuild parity, and the 60% AI climb simulation.
+## Validation
 
-## Before merging
-
-- Apply `migrations/2026-09-27-000000-0000_add_arena_ranking_v2/up.sql` on existing boxes before deploying the binary. It creates `arena_ranking_config` and the all-time `arena_h2h_ratings`, plus supporting indexes.
-- Apply `migrations/2026-09-27-010000-0000_add_arena_h2h_season_ratings/up.sql` as well. It creates the per-season h2h board and a season-boundary lookup index.
-- Existing installs may need the migration run manually because this repo's migrate one-shot skips once `users` exists.
-- After deploy, the server uses built-in defaults until an `arena_ranking_config` row is written. Config changes are cached for up to 30 seconds.
-- Use `POST /blades.bgs.services/api/dev/v1/arena-ranking/h2h-rebuild` with `{ "dryRun": false }` to rebuild both all-time and per-season h2h boards from historical paired match results.
+- Oracle v4 fork-finding Synergy scope test is live and passing.
+- Added a spec-loadout unit test for the 99.725 Shock D1 example and the single-weapon-enchant control.
+- `SOAK_SCALE=5` soak reports 1200 matches, 0 failed.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
