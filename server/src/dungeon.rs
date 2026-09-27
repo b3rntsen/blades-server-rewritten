@@ -1330,15 +1330,23 @@ mod dungeon_settings_resolution {
     fn an_ordinary_quest_is_still_generated_at_the_players_scaled_level() {
         let (sd, gd) = (static_data(), game_data());
         let scaling = &sd.quests_daily.level_scaling;
-        let (template_id, dungeon) = gd
+        // Deterministic pick of a SINGLE-stage story quest: HashMap order is random,
+        // and a multi-stage quest's generated data merges its sibling stages (#260),
+        // so comparing it with one `generate_for_dungeon` would fail by construction.
+        let mut candidates: Vec<(Uuid, Uuid)> = gd
             .quests
             .iter()
             .filter(|(id, _)| !sd.event_quests.templates.contains_key(id))
-            .find_map(|(id, q)| {
+            .filter_map(|(id, q)| {
                 let d = q.dungeon_info.as_ref()?.dungeon_uuid;
-                (!d.is_nil() && gd.dungeons.contains_key(&d)).then_some((*id, d))
+                let single = blades_lib::util::quest::quest_dungeon_family_ids(&gd, &d)
+                    .is_some_and(|family| family == vec![d]);
+                (!d.is_nil() && single).then_some((*id, d))
             })
-            .expect("the corpus ships story quests with dungeons");
+            .collect();
+        candidates.sort();
+        assert!(!candidates.is_empty(), "the corpus ships single-stage story quests with dungeons");
+        let (template_id, dungeon) = candidates[0];
 
         let (row, data) =
             blades_lib::util::quest::generate_quest_data(&gd, template_id, 89, scaling).unwrap();

@@ -124,7 +124,9 @@ fn generate_for_quest_dungeon(
     Some(out)
 }
 
-fn quest_dungeon_family_ids(game_data: &GameData, dungeon_uuid: &Uuid) -> Option<Vec<Uuid>> {
+/// Every dungeon a quest's generated data covers: the dungeon itself, or its whole
+/// variant family (`*_A`/`*_1` entrypoints) in handle order (#260).
+pub fn quest_dungeon_family_ids(game_data: &GameData, dungeon_uuid: &Uuid) -> Option<Vec<Uuid>> {
     let dungeon = game_data.dungeons.get(dungeon_uuid)?;
     let Some(prefix) = first_variant_family_prefix(&dungeon.handle) else {
         return Some(vec![*dungeon_uuid]);
