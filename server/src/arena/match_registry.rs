@@ -34,6 +34,7 @@ use arena_proto::{
 
 use crate::arena::combat::{Loadout, MatchInstance};
 use crate::arena::key_submit::KeySubmitter;
+use crate::arena::ranking::MatchRankingContext;
 
 /// A match whose clients never finish connecting holds its capacity permit
 /// (acquired by the matchmaker in `allocate`); without a sweep that slot leaks
@@ -549,6 +550,7 @@ impl MatchRegistry {
             game_session_id,
             bots,
             &[],
+            MatchRankingContext::default(),
         )
     }
 
@@ -561,6 +563,7 @@ impl MatchRegistry {
         game_session_id: Uuid,
         bots: usize,
         expected_peer_ips: &[Option<IpAddr>],
+        ranking: MatchRankingContext,
     ) -> bool {
         let permit = match self.semaphore.clone().try_acquire_owned() {
             Ok(p) => p,
@@ -580,7 +583,8 @@ impl MatchRegistry {
         let order = self
             .next_order
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut instance = MatchInstance::new(fighters, capacity, loadouts, Instant::now());
+        let mut instance =
+            MatchInstance::new_with_ranking_context(fighters, capacity, loadouts, Instant::now(), ranking);
         // The Match net-object propId9 = gameSessionId (s506 obj 123 carried the
         // match's UUID here). Cosmetic to the binding gate (propId5 MatchState), but
         // sent for fidelity.
@@ -2134,6 +2138,7 @@ mod tests {
             gsid,
             0,
             &[Some(vpn_ip), Some(public_ip)],
+            MatchRankingContext::default(),
         ));
 
         let public_peer: SocketAddr = "93.165.250.244:33565".parse().unwrap();

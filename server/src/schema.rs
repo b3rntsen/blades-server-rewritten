@@ -25,6 +25,31 @@ diesel::table! {
 }
 
 diesel::table! {
+    arena_h2h_ratings (character_id) {
+        character_id -> Uuid,
+        rating -> Int4,
+        wins -> Int4,
+        losses -> Int4,
+        ties -> Int4,
+        matches -> Int4,
+        last_match_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    arena_h2h_season_ratings (season_id, character_id) {
+        season_id -> Uuid,
+        character_id -> Uuid,
+        rating -> Int4,
+        wins -> Int4,
+        losses -> Int4,
+        ties -> Int4,
+        matches -> Int4,
+        last_match_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     arena_match_results (id) {
         id -> Uuid,
         character_id -> Uuid,
@@ -54,6 +79,17 @@ diesel::table! {
         paired -> Bool,
         recorded_at -> Timestamptz,
         resolved_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    arena_ranking_config (id) {
+        id -> Uuid,
+        version -> Int4,
+        config -> Jsonb,
+        updated_by -> Nullable<Text>,
+        updated_at -> Timestamptz,
+        note -> Nullable<Text>,
     }
 }
 
@@ -342,6 +378,9 @@ diesel::table! {
 
 diesel::joinable!(arena_ai_mimics -> characters (character_id));
 diesel::joinable!(arena_credentials -> users (user_id));
+diesel::joinable!(arena_h2h_ratings -> characters (character_id));
+diesel::joinable!(arena_h2h_season_ratings -> arena_seasons (season_id));
+diesel::joinable!(arena_h2h_season_ratings -> characters (character_id));
 diesel::joinable!(arena_match_results -> characters (character_id));
 diesel::joinable!(arena_matches -> users (user_id));
 diesel::joinable!(arena_season_awards -> arena_seasons (season_id));
@@ -358,8 +397,11 @@ diesel::allow_tables_to_appear_in_same_query!(
     arena_ai_mimic_control,
     arena_ai_mimics,
     arena_credentials,
+    arena_h2h_ratings,
+    arena_h2h_season_ratings,
     arena_match_results,
     arena_matches,
+    arena_ranking_config,
     arena_season_awards,
     arena_season_guild_standings,
     arena_season_standings,

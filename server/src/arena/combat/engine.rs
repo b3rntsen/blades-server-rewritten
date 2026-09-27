@@ -24,6 +24,7 @@ use log::{debug, info};
 use super::messages;
 use super::resolve;
 use super::state::{Fighter, FlowState, Loadout, MatchCombat, MatchState, NetRole};
+use crate::arena::ranking::{self, MatchRankingContext};
 
 /// DIAGNOSTIC: lowercase-hex a byte slice for the op58/op54 wire-byte logging.
 fn hex_lower(bytes: &[u8]) -> String {
@@ -357,6 +358,7 @@ fn void_ai_match_result(player_sent_anything: bool, opponent_is_bot: bool) -> bo
 
 pub struct MatchInstance {
     combat: MatchCombat,
+    ranking: MatchRankingContext,
     /// Whether each slot has EVER sent us a c2s message in this match.
     ///
     /// Recorded at the one inbound seam, for the same reason the trace is:
@@ -438,6 +440,22 @@ impl MatchInstance {
     /// starts (== capacity for PvP; 1 for a solo-vs-bot match, whose 2nd fighter is
     /// a server-driven bot with no peer).
     pub fn new(capacity: usize, expected_peers: usize, loadouts: Vec<Loadout>, now: Instant) -> Self {
+        Self::new_with_ranking_context(
+            capacity,
+            expected_peers,
+            loadouts,
+            now,
+            MatchRankingContext::default(),
+        )
+    }
+
+    pub fn new_with_ranking_context(
+        capacity: usize,
+        expected_peers: usize,
+        loadouts: Vec<Loadout>,
+        now: Instant,
+        ranking: MatchRankingContext,
+    ) -> Self {
         let mut combat = MatchCombat::new(capacity, expected_peers, now);
         for slot in 0..capacity {
             let net_object_id = combat.alloc_net_object_id();
@@ -463,6 +481,7 @@ impl MatchInstance {
         MatchInstance {
             saw_c2s: [false; 2],
             combat,
+            ranking,
             s2c_seq: 0,
             last_heartbeat: now,
             // Read the DEBUG-HOLD flag once at construction. Off (false) when the
@@ -1602,7 +1621,6 @@ impl MatchInstance {
     fn broadcast_match_end_results(&self, out: &mut Vec<(usize, Vec<u8>)>) {
         use crate::arena::arena_economy::{self, MatchEconomyOutcome};
         use crate::arena::arena_ladder::{self, MatchOutcome};
-        use crate::arena::arena_season;
 
         let (winner_uuid, loser_uuid) = self.combat.winner_loser_uuids();
         let game_session_id = uuid::Uuid::parse_str(&self.combat.game_session_id).ok();
@@ -1626,16 +1644,29 @@ impl MatchInstance {
                 PrePvpState::from_profile(&f.loadout.profile_character_json, f.loadout.level)
             })
             .collect();
+        let is_bot_slot: Vec<bool> = (0..n)
+            .map(|slot| crate::arena::matchmaker::is_bot_loadout(&self.combat.fighters[slot].loadout))
+            .collect();
+        let h2h_match = n == 2 && !is_bot_slot.iter().any(|x| *x);
 
-        // What each slot's Elo swing is priced against. Computed once so the card
+        // What each slot's trophy swing is priced against. Computed once so the card
         // preview below and the persisted payout in the main loop cannot disagree.
-        let elo_opponent: Vec<i64> = (0..n)
+        let priced_opponent: Vec<i64> = (0..n)
             .map(|slot| {
-                let opponent = (0..n).find(|&o| o != slot).map(|o| {
-                    let is_bot = crate::arena::matchmaker::is_bot_loadout(&self.combat.fighters[o].loadout);
-                    (&pre[o], is_bot)
-                });
-                elo_opponent_trophies(&pre[slot], opponent)
+                let Some(o) = (0..n).find(|&o| o != slot) else {
+                    return pre[slot].trophies;
+                };
+                if is_bot_slot[o] {
+                    ranking::bot_pricing_trophies(
+                        &self.ranking.config,
+                        pre[slot].trophies,
+                        pre[o].matchmaking,
+                        game_session_id.unwrap_or_else(uuid::Uuid::nil),
+                        slot,
+                    )
+                } else {
+                    pre[o].trophies
+                }
             })
             .collect();
 
@@ -1651,15 +1682,22 @@ impl MatchInstance {
                 let p = pre[slot];
                 let is_winner = self.combat.winner == Some(slot);
                 let opponent = (0..n).find(|&o| o != slot);
-                let opponent_trophies = elo_opponent[slot];
+                let opponent_trophies = priced_opponent[slot];
                 let rounds_won = self.combat.rounds_won.get(slot).copied().unwrap_or(0);
                 let rounds_lost = opponent
                     .and_then(|o| self.combat.rounds_won.get(o).copied())
                     .unwrap_or(0);
                 let outcome = MatchOutcome { rounds_won, rounds_lost, win: is_winner };
-                let scoring = arena_season::active_scoring();
-                let trophy_delta =
-                    arena_ladder::trophy_delta(outcome, p.trophies, opponent_trophies, scoring);
+                let trophy_delta = ranking::trophy_delta(
+                    &self.ranking.config,
+                    ranking::TrophyDeltaInput {
+                        outcome,
+                        own_trophies: p.trophies,
+                        opponent_trophies_for_pricing: opponent_trophies,
+                        h2h: h2h_match,
+                        h2h_pair_matches_today: self.ranking.h2h_pair_matches_today,
+                    },
+                );
                 (p.trophies + trophy_delta).max(0)
             })
             .collect();
@@ -1669,7 +1707,7 @@ impl MatchInstance {
             let is_winner = self.combat.winner == Some(slot);
             let p = pre[slot];
             let opponent = (0..n).find(|&o| o != slot);
-            let opponent_trophies = elo_opponent[slot];
+            let opponent_trophies = priced_opponent[slot];
 
             // Round score from the authoritative match state (best-of-3). It is the
             // sole driver of the reward multiplier, and that is capture-proven: the
@@ -1689,9 +1727,16 @@ impl MatchInstance {
             // match does not retroactively raise its own payout.
             let arena = arena_ladder::tier_for_trophies(p.high_water).arena;
             let payout = arena_ladder::match_reward(level, outcome, arena);
-            let scoring = arena_season::active_scoring();
-            let trophy_delta =
-                arena_ladder::trophy_delta(outcome, p.trophies, opponent_trophies, scoring);
+            let trophy_delta = ranking::trophy_delta(
+                &self.ranking.config,
+                ranking::TrophyDeltaInput {
+                    outcome,
+                    own_trophies: p.trophies,
+                    opponent_trophies_for_pricing: opponent_trophies,
+                    h2h: h2h_match,
+                    h2h_pair_matches_today: self.ranking.h2h_pair_matches_today,
+                },
+            );
 
             // Post-match counters, computed once so the card and the durable write are
             // literally the same numbers.
@@ -1947,6 +1992,7 @@ impl MatchInstance {
                     opponent_character_id: opponent.and_then(|o| {
                         uuid::Uuid::parse_str(&self.combat.fighters[o].loadout.character_uuid).ok()
                     }),
+                    h2h: h2h_match,
                 });
             }
         }
@@ -4666,53 +4712,30 @@ pub(in crate::arena::combat) mod tests {
         l
     }
 
-    fn two_nil_win() -> crate::arena::arena_ladder::MatchOutcome {
-        crate::arena::arena_ladder::MatchOutcome { rounds_won: 2, rounds_lost: 0, win: true }
-    }
-
-    /// Report #224 CONTROL: human-vs-human is priced at the opponent's LIVE
-    /// `pvpTrophies`, exactly as before — a `matchmakingPvpTrophies` on a HUMAN
-    /// opponent is ignored, so the bot rule cannot leak into PvP.
+    /// Ranking v2 default: human-vs-human pays the flat participation award,
+    /// win or lose. A `matchmakingPvpTrophies` on the opponent no longer changes
+    /// the trophy award in the default mode.
     #[test]
-    fn report_224_human_opponent_still_pays_on_live_trophies() {
-        use crate::arena::{arena_ladder, arena_season};
+    fn h2h_default_pays_the_flat_award() {
         let got = human_post_trophies_after_2_0_win(opponent_loadout("Meryl Andra", Some(455)), 2);
-        let scoring = arena_season::active_scoring();
-        assert_eq!(got, 588 + arena_ladder::trophy_delta(two_nil_win(), 588, 0, scoring));
-        assert_ne!(
-            got,
-            588 + arena_ladder::trophy_delta(two_nil_win(), 588, 455, scoring),
-            "a human opponent must NOT be priced at matchmakingPvpTrophies"
-        );
+        assert_eq!(got, 588 + 50);
     }
 
-    /// Report #224: a BOT is priced at its `matchmakingPvpTrophies` (the rating the
-    /// bracket used), not its live 0. Same profile as the control above, only the
-    /// " (AI)" marker differs, so the difference is the rule and nothing else.
+    /// Ranking v2 default: bot matches use the fixed AI award, so the copied
+    /// character's old live/matchmaking trophy spread cannot recreate the +1 bug.
     #[test]
-    fn report_224_bot_pays_on_its_matchmaking_trophies() {
-        use crate::arena::{arena_ladder, arena_season};
+    fn bot_default_uses_fixed_ai_award() {
         let got = human_post_trophies_after_2_0_win(opponent_loadout("Meryl Andra (AI)", Some(455)), 1);
-        let scoring = arena_season::active_scoring();
-        assert_eq!(got, 588 + arena_ladder::trophy_delta(two_nil_win(), 588, 455, scoring));
-        assert_ne!(
-            got,
-            588 + arena_ladder::trophy_delta(two_nil_win(), 588, 0, scoring),
-            "CONTROL: the old live-trophy pricing gives a different number"
-        );
+        assert_eq!(got, 588 + 32);
     }
 
-    /// Report #224: a bot with no rating (key missing, or 0 — an unrated copy) is an
-    /// even match: priced at the human's own trophies.
+    /// The fixed default also covers unrated copies; missing mimic trophies must
+    /// not drop a win back to the old tiny Elo payout.
     #[test]
-    fn report_224_unrated_bot_pays_as_an_even_match() {
-        use crate::arena::{arena_ladder, arena_season};
-        let scoring = arena_season::active_scoring();
-        let even = 588 + arena_ladder::trophy_delta(two_nil_win(), 588, 588, scoring);
-        assert_ne!(even, 588 + arena_ladder::trophy_delta(two_nil_win(), 588, 0, scoring));
+    fn unrated_bot_still_uses_fixed_ai_award() {
         for mm in [None, Some(0)] {
             let got = human_post_trophies_after_2_0_win(opponent_loadout("Meryl Andra (AI)", mm), 1);
-            assert_eq!(got, even, "matchmakingPvpTrophies {mm:?} must price as an even match");
+            assert_eq!(got, 588 + 32, "matchmakingPvpTrophies {mm:?} must not affect fixed mode");
         }
     }
 

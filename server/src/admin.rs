@@ -28,10 +28,11 @@ use std::{
 };
 
 use actix_web::{
-    HttpRequest,
+    HttpRequest, HttpResponse,
     get,
     http::StatusCode,
     post,
+    put,
     web::{self, Json},
 };
 use blades_lib::{
@@ -52,7 +53,7 @@ use uuid::Uuid;
 use crate::{
     BladeApiError, ServerGlobal,
     arena::arena_season::{self, SeasonConfig},
-    arena::{season_rewards, season_store},
+    arena::{ranking, season_rewards, season_store},
     credentials,
     arena::matchmaker::{RecentTicketView, query_recent_matches},
     json_db::JsonDbWrapper,
@@ -61,7 +62,8 @@ use crate::{
         CharacterDbEntryEconomy, QuestDbEntry, UserDBEntry,
     },
     schema::{
-        arena_ai_mimic_control, arena_ai_mimics, arena_seasons, characters, quests, users,
+        arena_ai_mimic_control, arena_ai_mimics, arena_ranking_config, arena_seasons, characters,
+        quests, users,
     },
 };
 
@@ -714,6 +716,479 @@ pub async fn list_ai_mimics(
         })
         .collect();
     Ok(Json(ListAiMimicsResponse { managed, mimics }))
+}
+
+// ------------------------------------------------------ arena ranking v2
+
+#[derive(Serialize)]
+pub struct RankingConfigResponse {
+    pub version: i32,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub updated_by: Option<String>,
+    pub note: Option<String>,
+    pub config: ranking::RankingConfig,
+    pub defaults: ranking::RankingConfig,
+}
+
+#[get("/blades.bgs.services/api/dev/v1/arena-ranking/config")]
+pub async fn get_arena_ranking_config(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+) -> Result<Json<RankingConfigResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let loaded = ranking::load(&app_state.db_pool).await;
+    Ok(Json(RankingConfigResponse {
+        version: loaded.version,
+        updated_at: loaded.updated_at,
+        updated_by: loaded.updated_by,
+        note: loaded.note,
+        config: loaded.config,
+        defaults: ranking::RankingConfig::default(),
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct PutRankingConfigRequest {
+    pub config: serde_json::Value,
+    #[serde(default)]
+    pub updated_by: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct RankingValidationErrorResponse {
+    pub errors: ranking::ValidationErrors,
+}
+
+#[put("/blades.bgs.services/api/dev/v1/arena-ranking/config")]
+pub async fn put_arena_ranking_config(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    body: web::Json<PutRankingConfigRequest>,
+) -> Result<HttpResponse, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let body = body.into_inner();
+    let config = match serde_json::from_value::<ranking::RankingConfig>(body.config) {
+        Ok(config) => config,
+        Err(e) => {
+            let mut errors = ranking::ValidationErrors::new();
+            errors.insert("config".into(), e.to_string());
+            return Ok(HttpResponse::BadRequest().json(RankingValidationErrorResponse { errors }));
+        }
+    };
+    if let Err(errors) = config.validate() {
+        return Ok(HttpResponse::BadRequest().json(RankingValidationErrorResponse { errors }));
+    }
+    let config_value = serde_json::to_value(&config)
+        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 80))?;
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    let created: RankingConfigRow = conn
+        .transaction::<_, BladeApiError, _>(|mut conn| {
+            async move {
+                let next_version: i32 = arena_ranking_config::table
+                    .select(diesel::dsl::max(arena_ranking_config::version))
+                    .first::<Option<i32>>(&mut conn)
+                    .await?
+                    .unwrap_or(0)
+                    + 1;
+                let row = diesel::insert_into(arena_ranking_config::table)
+                    .values((
+                        arena_ranking_config::id.eq(Uuid::new_v4()),
+                        arena_ranking_config::version.eq(next_version),
+                        arena_ranking_config::config.eq(config_value),
+                        arena_ranking_config::updated_by.eq(body.updated_by),
+                        arena_ranking_config::note.eq(body.note),
+                    ))
+                    .returning(RankingConfigRow::as_returning())
+                    .get_result(&mut conn)
+                    .await?;
+                Ok(row)
+            }
+            .scope_boxed()
+        })
+        .await?;
+    ranking::invalidate_cache();
+    Ok(HttpResponse::Ok().json(RankingConfigResponse {
+        version: created.version,
+        updated_at: Some(created.updated_at),
+        updated_by: created.updated_by,
+        note: created.note,
+        config,
+        defaults: ranking::RankingConfig::default(),
+    }))
+}
+
+#[derive(diesel::Queryable, diesel::Selectable)]
+#[diesel(table_name = crate::schema::arena_ranking_config)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct RankingConfigRow {
+    pub id: Uuid,
+    pub version: i32,
+    pub config: JsonDbWrapper<Value>,
+    pub updated_by: Option<String>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub note: Option<String>,
+}
+
+#[derive(Serialize, diesel::QueryableByName)]
+pub struct RankingConfigHistoryEntry {
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    pub version: i32,
+    #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    pub updated_by: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    pub note: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct LimitQuery {
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct H2hTopQuery {
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub season: Option<String>,
+}
+
+#[get("/blades.bgs.services/api/dev/v1/arena-ranking/config/history")]
+pub async fn get_arena_ranking_config_history(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    query: web::Query<LimitQuery>,
+) -> Result<Json<Vec<RankingConfigHistoryEntry>>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let limit = query.limit.unwrap_or(20).clamp(1, 100);
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    let rows = diesel::sql_query(
+        "SELECT version, updated_at, updated_by, note \
+         FROM arena_ranking_config ORDER BY version DESC LIMIT $1",
+    )
+    .bind::<diesel::sql_types::BigInt, _>(limit)
+    .get_results(&mut conn)
+    .await?;
+    Ok(Json(rows))
+}
+
+#[derive(Serialize, diesel::QueryableByName)]
+pub struct H2hTopEntry {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub rank: i64,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    pub character_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub name: String,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub level: i64,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    pub rating: i32,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    pub wins: i32,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    pub losses: i32,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    pub ties: i32,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    pub matches: i32,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>)]
+    pub last_match_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, diesel::QueryableByName)]
+pub struct H2hSeasonSummary {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    pub id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub name: String,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub starts_at: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub ends_at: i64,
+}
+
+#[derive(Serialize, diesel::QueryableByName)]
+pub struct H2hSeasonListEntry {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    pub id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub name: String,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub starts_at: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub ends_at: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub players: i64,
+}
+
+#[derive(Serialize)]
+pub struct H2hTopResponse {
+    pub season: Option<H2hSeasonSummary>,
+    pub rows: Vec<H2hTopEntry>,
+}
+
+#[get("/blades.bgs.services/api/dev/v1/arena-ranking/h2h-top")]
+pub async fn get_arena_h2h_top(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    query: web::Query<H2hTopQuery>,
+) -> Result<Json<H2hTopResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let loaded = ranking::load(&app_state.db_pool).await;
+    let min_games = loaded.config.h2h_rating.min_games_listed as i32;
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    let selection = ranking::parse_h2h_season_selection(query.season.as_deref())
+        .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 81))?;
+    let (season, rows) = match selection {
+        ranking::H2hSeasonSelection::AllTime => {
+            let rows = diesel::sql_query(
+                "SELECT row_number() OVER (ORDER BY r.rating DESC, r.matches DESC, r.character_id) AS rank, \
+                        r.character_id, COALESCE(c.character ->> 'name', '') AS name, \
+                        COALESCE((c.character ->> 'level')::bigint, 0) AS level, \
+                        r.rating, r.wins, r.losses, r.ties, r.matches, r.last_match_at \
+                 FROM arena_h2h_ratings r \
+                 INNER JOIN characters c ON c.id = r.character_id \
+                 WHERE r.matches >= $1 \
+                 ORDER BY r.rating DESC, r.matches DESC, r.character_id LIMIT $2",
+            )
+            .bind::<diesel::sql_types::Integer, _>(min_games)
+            .bind::<diesel::sql_types::BigInt, _>(limit)
+            .get_results(&mut conn)
+            .await?;
+            (None, rows)
+        }
+        ranking::H2hSeasonSelection::Current => {
+            let season: Option<H2hSeasonSummary> = diesel::sql_query(
+                "SELECT id, name, starts_at, ends_at \
+                 FROM arena_seasons WHERE status = 'active' ORDER BY starts_at DESC LIMIT 1",
+            )
+            .get_result(&mut conn)
+            .await
+            .optional()?;
+            let rows = if let Some(season) = season.as_ref() {
+                h2h_top_for_season(&mut conn, season.id, min_games, limit).await?
+            } else {
+                Vec::new()
+            };
+            (season, rows)
+        }
+        ranking::H2hSeasonSelection::Season(season_id) => {
+            let season: H2hSeasonSummary =
+                diesel::sql_query("SELECT id, name, starts_at, ends_at FROM arena_seasons WHERE id = $1")
+                    .bind::<diesel::sql_types::Uuid, _>(season_id)
+                    .get_result(&mut conn)
+                    .await
+                    .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 82))?;
+            let rows = h2h_top_for_season(&mut conn, season.id, min_games, limit).await?;
+            (Some(season), rows)
+        }
+    };
+    Ok(Json(H2hTopResponse { season, rows }))
+}
+
+async fn h2h_top_for_season(
+    conn: &mut diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>,
+    season_id: Uuid,
+    min_games: i32,
+    limit: i64,
+) -> Result<Vec<H2hTopEntry>, BladeApiError> {
+    let rows = diesel::sql_query(
+        "SELECT row_number() OVER (ORDER BY r.rating DESC, r.matches DESC, r.character_id) AS rank, \
+                r.character_id, COALESCE(c.character ->> 'name', '') AS name, \
+                COALESCE((c.character ->> 'level')::bigint, 0) AS level, \
+                r.rating, r.wins, r.losses, r.ties, r.matches, r.last_match_at \
+         FROM arena_h2h_season_ratings r \
+         INNER JOIN characters c ON c.id = r.character_id \
+         WHERE r.season_id = $1 AND r.matches >= $2 \
+         ORDER BY r.rating DESC, r.matches DESC, r.character_id LIMIT $3",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(season_id)
+    .bind::<diesel::sql_types::Integer, _>(min_games)
+    .bind::<diesel::sql_types::BigInt, _>(limit)
+    .get_results(conn)
+    .await?;
+    Ok(rows)
+}
+
+#[get("/blades.bgs.services/api/dev/v1/arena-ranking/h2h-seasons")]
+pub async fn list_arena_h2h_seasons(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+) -> Result<Json<Vec<H2hSeasonListEntry>>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    let rows = diesel::sql_query(
+        "SELECT s.id, s.name, s.starts_at, s.ends_at, COUNT(r.character_id)::bigint AS players \
+         FROM arena_h2h_season_ratings r \
+         INNER JOIN arena_seasons s ON s.id = r.season_id \
+         GROUP BY s.id, s.name, s.starts_at, s.ends_at \
+         HAVING COUNT(r.character_id) > 0 \
+         ORDER BY s.starts_at DESC, s.id",
+    )
+    .get_results(&mut conn)
+    .await?;
+    Ok(Json(rows))
+}
+
+#[derive(Deserialize)]
+pub struct H2hRebuildRequest {
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+#[derive(Serialize)]
+pub struct H2hRebuildResponse {
+    pub characters: usize,
+    pub matches: usize,
+}
+
+#[derive(diesel::QueryableByName)]
+struct H2hReplayRow {
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+    season_id: Option<Uuid>,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    character_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    opponent_character_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    rounds_won: i32,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    rounds_lost: i32,
+    #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+    recorded_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[post("/blades.bgs.services/api/dev/v1/arena-ranking/h2h-rebuild")]
+pub async fn rebuild_arena_h2h_ratings(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    body: Option<web::Json<H2hRebuildRequest>>,
+) -> Result<Json<H2hRebuildResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let dry_run = body.map(|b| b.into_inner().dry_run).unwrap_or(true);
+    let cfg = ranking::load(&app_state.db_pool).await.config.h2h_rating;
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    let rows: Vec<H2hReplayRow> = diesel::sql_query(
+        "SELECT s.id AS season_id, r.character_id, r.opponent_character_id, \
+                r.rounds_won, r.rounds_lost, r.recorded_at \
+         FROM arena_match_results r \
+         LEFT JOIN LATERAL ( \
+             SELECT id FROM arena_seasons s \
+             WHERE r.recorded_at >= to_timestamp(s.starts_at) \
+               AND r.recorded_at < to_timestamp(s.ends_at) \
+             ORDER BY s.starts_at DESC LIMIT 1 \
+         ) s ON true \
+         WHERE r.opponent_character_id IS NOT NULL \
+           AND r.character_id::text < r.opponent_character_id::text \
+           AND EXISTS ( \
+               SELECT 1 FROM arena_matches m \
+               WHERE m.game_session_id = r.game_session_id AND m.paired = true \
+           ) \
+         ORDER BY r.recorded_at, r.id",
+    )
+    .get_results(&mut conn)
+    .await?;
+    let last_seen = rows
+        .iter()
+        .flat_map(|r| [(r.character_id, r.recorded_at), (r.opponent_character_id, r.recorded_at)])
+        .fold(HashMap::<Uuid, chrono::DateTime<chrono::Utc>>::new(), |mut acc, (id, at)| {
+            acc.entry(id).and_modify(|old| *old = (*old).max(at)).or_insert(at);
+            acc
+        });
+    let season_last_seen = rows
+        .iter()
+        .filter_map(|r| r.season_id.map(|season_id| (season_id, r)))
+        .flat_map(|(season_id, r)| {
+            [
+                ((season_id, r.character_id), r.recorded_at),
+                ((season_id, r.opponent_character_id), r.recorded_at),
+            ]
+        })
+        .fold(
+            HashMap::<(Uuid, Uuid), chrono::DateTime<chrono::Utc>>::new(),
+            |mut acc, (key, at)| {
+                acc.entry(key).and_modify(|old| *old = (*old).max(at)).or_insert(at);
+                acc
+            },
+        );
+    let ratings = ranking::replay_h2h_ratings_by_season(
+        &cfg,
+        rows.iter().map(|r| {
+            (
+                r.season_id,
+                r.character_id,
+                r.opponent_character_id,
+                crate::arena::arena_ladder::MatchOutcome::new(
+                    r.rounds_won.max(0) as u8,
+                    r.rounds_lost.max(0) as u8,
+                ),
+            )
+        }),
+    );
+    if !dry_run {
+        conn.transaction::<_, BladeApiError, _>(|mut conn| {
+            let ratings = ratings.clone();
+            let last_seen = last_seen.clone();
+            let season_last_seen = season_last_seen.clone();
+            async move {
+                diesel::sql_query("DELETE FROM arena_h2h_ratings")
+                    .execute(&mut conn)
+                    .await?;
+                diesel::sql_query("DELETE FROM arena_h2h_season_ratings")
+                    .execute(&mut conn)
+                    .await?;
+                for (character_id, state) in ratings.all_time {
+                    diesel::sql_query(
+                        "INSERT INTO arena_h2h_ratings \
+                         (character_id, rating, wins, losses, ties, matches, last_match_at) \
+                         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    )
+                    .bind::<diesel::sql_types::Uuid, _>(character_id)
+                    .bind::<diesel::sql_types::Integer, _>(state.rating as i32)
+                    .bind::<diesel::sql_types::Integer, _>(state.wins as i32)
+                    .bind::<diesel::sql_types::Integer, _>(state.losses as i32)
+                    .bind::<diesel::sql_types::Integer, _>(state.ties as i32)
+                    .bind::<diesel::sql_types::Integer, _>(state.matches as i32)
+                    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, _>(
+                        last_seen.get(&character_id).copied(),
+                    )
+                    .execute(&mut conn)
+                    .await?;
+                }
+                for (season_id, season_ratings) in ratings.seasons {
+                    for (character_id, state) in season_ratings {
+                        diesel::sql_query(
+                            "INSERT INTO arena_h2h_season_ratings \
+                             (season_id, character_id, rating, wins, losses, ties, matches, last_match_at) \
+                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                        )
+                        .bind::<diesel::sql_types::Uuid, _>(season_id)
+                        .bind::<diesel::sql_types::Uuid, _>(character_id)
+                        .bind::<diesel::sql_types::Integer, _>(state.rating as i32)
+                        .bind::<diesel::sql_types::Integer, _>(state.wins as i32)
+                        .bind::<diesel::sql_types::Integer, _>(state.losses as i32)
+                        .bind::<diesel::sql_types::Integer, _>(state.ties as i32)
+                        .bind::<diesel::sql_types::Integer, _>(state.matches as i32)
+                        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, _>(
+                            season_last_seen.get(&(season_id, character_id)).copied(),
+                        )
+                        .execute(&mut conn)
+                        .await?;
+                    }
+                }
+                Ok(())
+            }
+            .scope_boxed()
+        })
+        .await?;
+    }
+    Ok(Json(H2hRebuildResponse { characters: ratings.all_time.len(), matches: rows.len() }))
 }
 
 #[derive(Deserialize)]
