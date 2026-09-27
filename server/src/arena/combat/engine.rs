@@ -1653,7 +1653,8 @@ impl MatchInstance {
         let is_bot_slot: Vec<bool> = (0..n)
             .map(|slot| crate::arena::matchmaker::is_bot_loadout(&self.combat.fighters[slot].loadout))
             .collect();
-        let h2h_match = n == 2 && !is_bot_slot.iter().any(|x| *x);
+        let h2h_match =
+            ranking::is_h2h_match(n, self.combat.expected_peers(), is_bot_slot.iter().any(|x| *x));
 
         // What each slot's trophy swing is priced against. Computed once so the card
         // preview below and the persisted payout in the main loop cannot disagree.
