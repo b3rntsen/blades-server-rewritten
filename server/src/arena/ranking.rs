@@ -14,6 +14,7 @@ use crate::DbPool;
 use crate::arena::arena_ladder::{ELO_LOGISTIC_SCALE, MatchOutcome};
 
 const CACHE_TTL: Duration = Duration::from_secs(30);
+const H2H_RATING_ADVISORY_LOCK_ID: i64 = 7_202_409_280_001;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -723,47 +724,79 @@ pub async fn reconcile_h2h_ratings_with_config(
     cfg: &H2hRatingConfig,
     dry_run: bool,
 ) -> Result<H2hReconcileReport, anyhow::Error> {
-    let rows = load_h2h_replay_rows(conn).await?;
-    let last_seen = h2h_last_seen(&rows);
-    let season_last_seen = h2h_season_last_seen(&rows);
-    let ratings = replay_h2h_ratings_by_season(
-        cfg,
-        rows.iter().map(|r| {
-            (
-                r.season_id,
-                r.character_id,
-                r.opponent_character_id,
-                MatchOutcome::new(r.rounds_won.max(0) as u8, r.rounds_lost.max(0) as u8),
-            )
-        }),
-    );
-    let report = H2hReconcileReport { characters: ratings.all_time.len(), matches: rows.len() };
+    conn.transaction::<_, anyhow::Error, _>(|mut conn| {
+        async move {
+            lock_h2h_rating_transaction(&mut conn).await?;
+            let rows = load_h2h_replay_rows(&mut conn).await?;
+            let last_seen = h2h_last_seen(&rows);
+            let season_last_seen = h2h_season_last_seen(&rows);
+            let ratings = replay_h2h_ratings_by_season(
+                cfg,
+                rows.iter().map(|r| {
+                    (
+                        r.season_id,
+                        r.character_id,
+                        r.opponent_character_id,
+                        MatchOutcome::new(r.rounds_won.max(0) as u8, r.rounds_lost.max(0) as u8),
+                    )
+                }),
+            );
+            let report = H2hReconcileReport { characters: ratings.all_time.len(), matches: rows.len() };
 
-    if !dry_run {
-        write_h2h_ratings(conn, ratings, last_seen, season_last_seen).await?;
-    }
+            if !dry_run {
+                write_h2h_ratings(&mut conn, ratings, last_seen, season_last_seen).await?;
+            }
 
-    Ok(report)
+            Ok(report)
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+pub async fn lock_h2h_rating_transaction(
+    conn: &mut AsyncPgConnection,
+) -> Result<(), anyhow::Error> {
+    diesel::sql_query("SELECT pg_advisory_xact_lock($1)")
+        .bind::<diesel::sql_types::BigInt, _>(H2H_RATING_ADVISORY_LOCK_ID)
+        .execute(conn)
+        .await?;
+    Ok(())
 }
 
 async fn load_h2h_replay_rows(conn: &mut AsyncPgConnection) -> Result<Vec<H2hReplayRow>, anyhow::Error> {
     let rows = diesel::sql_query(
-        "SELECT s.id AS season_id, r.character_id, r.opponent_character_id, \
-                r.rounds_won, r.rounds_lost, r.recorded_at \
-         FROM arena_match_results r \
-         LEFT JOIN LATERAL ( \
-             SELECT id FROM arena_seasons s \
-             WHERE r.recorded_at >= to_timestamp(s.starts_at) \
-               AND r.recorded_at < to_timestamp(s.ends_at) \
-             ORDER BY s.starts_at DESC LIMIT 1 \
-         ) s ON true \
-         WHERE r.opponent_character_id IS NOT NULL \
-           AND r.character_id::text < r.opponent_character_id::text \
-           AND EXISTS ( \
-               SELECT 1 FROM arena_matches m \
-               WHERE m.game_session_id = r.game_session_id AND m.paired = true \
-           ) \
-         ORDER BY r.recorded_at, r.id",
+        "WITH candidates AS ( \
+             SELECT s.id AS season_id, \
+                    LEAST(r.character_id, r.opponent_character_id) AS character_id, \
+                    GREATEST(r.character_id, r.opponent_character_id) AS opponent_character_id, \
+                    CASE WHEN r.character_id = LEAST(r.character_id, r.opponent_character_id) \
+                         THEN r.rounds_won ELSE r.rounds_lost END AS rounds_won, \
+                    CASE WHEN r.character_id = LEAST(r.character_id, r.opponent_character_id) \
+                         THEN r.rounds_lost ELSE r.rounds_won END AS rounds_lost, \
+                    r.recorded_at, r.id, r.game_session_id \
+             FROM arena_match_results r \
+             LEFT JOIN LATERAL ( \
+                 SELECT id FROM arena_seasons s \
+                 WHERE r.recorded_at >= to_timestamp(s.starts_at) \
+                   AND r.recorded_at < to_timestamp(s.ends_at) \
+                 ORDER BY s.starts_at DESC LIMIT 1 \
+             ) s ON true \
+             WHERE r.opponent_character_id IS NOT NULL \
+               AND EXISTS ( \
+                   SELECT 1 FROM arena_matches m \
+                   WHERE m.game_session_id = r.game_session_id AND m.paired = true \
+               ) \
+         ), replay_rows AS ( \
+             SELECT DISTINCT ON (game_session_id, character_id, opponent_character_id) \
+                    season_id, character_id, opponent_character_id, rounds_won, rounds_lost, \
+                    recorded_at, id \
+             FROM candidates \
+             ORDER BY game_session_id, character_id, opponent_character_id, recorded_at, id \
+         ) \
+         SELECT season_id, character_id, opponent_character_id, rounds_won, rounds_lost, recorded_at \
+         FROM replay_rows \
+         ORDER BY recorded_at, id",
     )
     .get_results(conn)
     .await?;
@@ -800,58 +833,48 @@ async fn write_h2h_ratings(
     last_seen: HashMap<Uuid, DateTime<Utc>>,
     season_last_seen: HashMap<(Uuid, Uuid), DateTime<Utc>>,
 ) -> Result<(), anyhow::Error> {
-    conn.transaction::<_, anyhow::Error, _>(|mut conn| {
-        async move {
-            diesel::sql_query("DELETE FROM arena_h2h_ratings")
-                .execute(&mut conn)
-                .await?;
-            diesel::sql_query("DELETE FROM arena_h2h_season_ratings")
-                .execute(&mut conn)
-                .await?;
-            for (character_id, state) in ratings.all_time {
-                diesel::sql_query(
-                    "INSERT INTO arena_h2h_ratings \
-                     (character_id, rating, wins, losses, ties, matches, last_match_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                )
-                .bind::<diesel::sql_types::Uuid, _>(character_id)
-                .bind::<diesel::sql_types::Integer, _>(state.rating as i32)
-                .bind::<diesel::sql_types::Integer, _>(state.wins as i32)
-                .bind::<diesel::sql_types::Integer, _>(state.losses as i32)
-                .bind::<diesel::sql_types::Integer, _>(state.ties as i32)
-                .bind::<diesel::sql_types::Integer, _>(state.matches as i32)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, _>(
-                    last_seen.get(&character_id).copied(),
-                )
-                .execute(&mut conn)
-                .await?;
-            }
-            for (season_id, season_ratings) in ratings.seasons {
-                for (character_id, state) in season_ratings {
-                    diesel::sql_query(
-                        "INSERT INTO arena_h2h_season_ratings \
-                         (season_id, character_id, rating, wins, losses, ties, matches, last_match_at) \
-                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-                    )
-                    .bind::<diesel::sql_types::Uuid, _>(season_id)
-                    .bind::<diesel::sql_types::Uuid, _>(character_id)
-                    .bind::<diesel::sql_types::Integer, _>(state.rating as i32)
-                    .bind::<diesel::sql_types::Integer, _>(state.wins as i32)
-                    .bind::<diesel::sql_types::Integer, _>(state.losses as i32)
-                    .bind::<diesel::sql_types::Integer, _>(state.ties as i32)
-                    .bind::<diesel::sql_types::Integer, _>(state.matches as i32)
-                    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, _>(
-                        season_last_seen.get(&(season_id, character_id)).copied(),
-                    )
-                    .execute(&mut conn)
-                    .await?;
-                }
-            }
-            Ok(())
+    diesel::sql_query("DELETE FROM arena_h2h_ratings").execute(&mut *conn).await?;
+    diesel::sql_query("DELETE FROM arena_h2h_season_ratings").execute(&mut *conn).await?;
+    for (character_id, state) in ratings.all_time {
+        diesel::sql_query(
+            "INSERT INTO arena_h2h_ratings \
+             (character_id, rating, wins, losses, ties, matches, last_match_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(character_id)
+        .bind::<diesel::sql_types::Integer, _>(state.rating as i32)
+        .bind::<diesel::sql_types::Integer, _>(state.wins as i32)
+        .bind::<diesel::sql_types::Integer, _>(state.losses as i32)
+        .bind::<diesel::sql_types::Integer, _>(state.ties as i32)
+        .bind::<diesel::sql_types::Integer, _>(state.matches as i32)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, _>(
+            last_seen.get(&character_id).copied(),
+        )
+        .execute(&mut *conn)
+        .await?;
+    }
+    for (season_id, season_ratings) in ratings.seasons {
+        for (character_id, state) in season_ratings {
+            diesel::sql_query(
+                "INSERT INTO arena_h2h_season_ratings \
+                 (season_id, character_id, rating, wins, losses, ties, matches, last_match_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(season_id)
+            .bind::<diesel::sql_types::Uuid, _>(character_id)
+            .bind::<diesel::sql_types::Integer, _>(state.rating as i32)
+            .bind::<diesel::sql_types::Integer, _>(state.wins as i32)
+            .bind::<diesel::sql_types::Integer, _>(state.losses as i32)
+            .bind::<diesel::sql_types::Integer, _>(state.ties as i32)
+            .bind::<diesel::sql_types::Integer, _>(state.matches as i32)
+            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, _>(
+                season_last_seen.get(&(season_id, character_id)).copied(),
+            )
+            .execute(&mut *conn)
+            .await?;
         }
-        .scope_boxed()
-    })
-    .await
+    }
+    Ok(())
 }
 
 pub fn spawn_h2h_reconcile_task(pool: DbPool) {
@@ -1328,6 +1351,44 @@ mod tests {
             }
         }
 
+        async fn seed_one_sided_match_result(
+            conn: &mut AsyncPgConnection,
+            gsid: Uuid,
+            character_id: Uuid,
+            opponent_character_id: Uuid,
+            at: &str,
+            paired: bool,
+            score: (i32, i32),
+        ) {
+            diesel::sql_query(
+                "INSERT INTO arena_matches (ticket_id, user_id, status, game_session_id, paired) \
+                 VALUES ($1, $2, 'matched', $3, $4)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+            .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+            .bind::<diesel::sql_types::Uuid, _>(gsid)
+            .bind::<diesel::sql_types::Bool, _>(paired)
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+            diesel::sql_query(
+                "INSERT INTO arena_match_results \
+                 (id, character_id, opponent_character_id, game_session_id, win, rounds_won, rounds_lost, recorded_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+            .bind::<diesel::sql_types::Uuid, _>(character_id)
+            .bind::<diesel::sql_types::Uuid, _>(opponent_character_id)
+            .bind::<diesel::sql_types::Uuid, _>(gsid)
+            .bind::<diesel::sql_types::Bool, _>(score.0 > score.1)
+            .bind::<diesel::sql_types::Integer, _>(score.0)
+            .bind::<diesel::sql_types::Integer, _>(score.1)
+            .bind::<diesel::sql_types::Text, _>(at)
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        }
+
         async fn all_time(conn: &mut AsyncPgConnection) -> Vec<RatingRow> {
             diesel::sql_query(
                 "SELECT character_id, rating, wins, losses, ties, matches \
@@ -1422,6 +1483,60 @@ mod tests {
             assert_eq!(second, report);
             assert_eq!(all_time(&mut conn).await, first_all);
             assert_eq!(seasonal(&mut conn).await, first_seasons);
+        }
+
+        #[tokio::test]
+        async fn reconcile_replays_surviving_higher_uuid_audit_row_in_canonical_order() {
+            let Some(mut conn) = fixture().await else {
+                eprintln!("SKIP: TEST_DATABASE_URL unset — h2h reconcile SQL not verified");
+                return;
+            };
+            let season = Uuid::from_u128(1000);
+            let lower = Uuid::from_u128(1);
+            let higher = Uuid::from_u128(2);
+            seed_season(&mut conn, season, 1_700_000_000, 1_700_086_400).await;
+            for id in [lower, higher] {
+                seed_character(&mut conn, id).await;
+            }
+
+            seed_one_sided_match_result(
+                &mut conn,
+                Uuid::from_u128(20),
+                higher,
+                lower,
+                "2023-11-14 22:13:20+00",
+                true,
+                (0, 2),
+            )
+            .await;
+
+            let cfg = H2hRatingConfig::default();
+            let report = reconcile_h2h_ratings_with_config(&mut conn, &cfg, false)
+                .await
+                .unwrap();
+            assert_eq!(report, H2hReconcileReport { characters: 2, matches: 1 });
+            assert_eq!(
+                all_time(&mut conn).await,
+                vec![
+                    RatingRow {
+                        character_id: lower,
+                        rating: 1024,
+                        wins: 1,
+                        losses: 0,
+                        ties: 0,
+                        matches: 1,
+                    },
+                    RatingRow {
+                        character_id: higher,
+                        rating: 976,
+                        wins: 0,
+                        losses: 1,
+                        ties: 0,
+                        matches: 1,
+                    },
+                ]
+            );
+            assert_eq!(seasonal(&mut conn).await.len(), 2);
         }
     }
 

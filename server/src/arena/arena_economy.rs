@@ -34,7 +34,7 @@ use std::sync::OnceLock;
 use blades_lib::economy::{RewardGrant, apply_reward, grant_chest};
 use blades_lib::user_data::InventoryChangeTracker;
 use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper};
-use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use log::{error, info, warn};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use uuid::Uuid;
@@ -447,8 +447,8 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
         "INSERT INTO arena_match_results \
          (id, character_id, opponent_character_id, game_session_id, win, \
           rounds_won, rounds_lost, gold, character_xp, trophy_delta, \
-          trophies_after, matchmaking_trophies_after, arena, arena_level, chest_meter) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+          trophies_after, matchmaking_trophies_after, arena, arena_level, chest_meter, recorded_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, to_timestamp($16))",
     )
     .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
     .bind::<diesel::sql_types::Uuid, _>(a.character_id)
@@ -465,6 +465,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
     .bind::<diesel::sql_types::Integer, _>(a.arena)
     .bind::<diesel::sql_types::Integer, _>(a.arena_level)
     .bind::<diesel::sql_types::BigInt, _>(a.meter)
+    .bind::<diesel::sql_types::BigInt, _>(outcome.completed_at_secs)
     .execute(&mut conn)
     .await;
     if let Err(e) = audit {
@@ -518,7 +519,7 @@ impl H2hRatingRow {
 }
 
 async fn h2h_state(
-    conn: &mut diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>,
+    conn: &mut AsyncPgConnection,
     character_id: Uuid,
     start: i64,
 ) -> Result<ranking::H2hRatingState, anyhow::Error> {
@@ -534,7 +535,7 @@ async fn h2h_state(
 }
 
 async fn h2h_season_state(
-    conn: &mut diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>,
+    conn: &mut AsyncPgConnection,
     season_id: Uuid,
     character_id: Uuid,
     start: i64,
@@ -558,7 +559,7 @@ struct H2hSeasonAtRow {
 }
 
 async fn h2h_season_at(
-    conn: &mut diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>,
+    conn: &mut AsyncPgConnection,
     completed_at_secs: i64,
 ) -> Result<Option<Uuid>, anyhow::Error> {
     let row: Option<H2hSeasonAtRow> = diesel::sql_query(
@@ -579,31 +580,42 @@ async fn persist_h2h_rating_pair(
     outcome: &MatchEconomyOutcome,
     opponent_id: Uuid,
 ) -> Result<(), anyhow::Error> {
-    let a = h2h_state(conn, outcome.character_id, cfg.start).await?;
-    let b = h2h_state(conn, opponent_id, cfg.start).await?;
+    let cfg = cfg.clone();
+    let character_id = outcome.character_id;
+    let completed_at_secs = outcome.completed_at_secs;
     let a_outcome = arena_ladder::MatchOutcome {
         rounds_won: outcome.rounds_won,
         rounds_lost: outcome.rounds_lost,
         win: outcome.win,
     };
-    let (a, b) = ranking::apply_h2h_rating(cfg, a, b, a_outcome);
-    upsert_h2h_state(conn, outcome.character_id, a, outcome.completed_at_secs).await?;
-    upsert_h2h_state(conn, opponent_id, b, outcome.completed_at_secs).await?;
 
-    if let Some(season_id) = h2h_season_at(conn, outcome.completed_at_secs).await? {
-        let a = h2h_season_state(conn, season_id, outcome.character_id, cfg.start).await?;
-        let b = h2h_season_state(conn, season_id, opponent_id, cfg.start).await?;
-        let (a, b) = ranking::apply_h2h_rating(cfg, a, b, a_outcome);
-        upsert_h2h_season_state(conn, season_id, outcome.character_id, a, outcome.completed_at_secs)
-            .await?;
-        upsert_h2h_season_state(conn, season_id, opponent_id, b, outcome.completed_at_secs)
-            .await?;
-    }
-    Ok(())
+    conn.transaction::<_, anyhow::Error, _>(|mut conn| {
+        async move {
+            ranking::lock_h2h_rating_transaction(&mut conn).await?;
+            let a = h2h_state(&mut conn, character_id, cfg.start).await?;
+            let b = h2h_state(&mut conn, opponent_id, cfg.start).await?;
+            let (a, b) = ranking::apply_h2h_rating(&cfg, a, b, a_outcome);
+            upsert_h2h_state(&mut conn, character_id, a, completed_at_secs).await?;
+            upsert_h2h_state(&mut conn, opponent_id, b, completed_at_secs).await?;
+
+            if let Some(season_id) = h2h_season_at(&mut conn, completed_at_secs).await? {
+                let a = h2h_season_state(&mut conn, season_id, character_id, cfg.start).await?;
+                let b = h2h_season_state(&mut conn, season_id, opponent_id, cfg.start).await?;
+                let (a, b) = ranking::apply_h2h_rating(&cfg, a, b, a_outcome);
+                upsert_h2h_season_state(&mut conn, season_id, character_id, a, completed_at_secs)
+                    .await?;
+                upsert_h2h_season_state(&mut conn, season_id, opponent_id, b, completed_at_secs)
+                    .await?;
+            }
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await
 }
 
 async fn upsert_h2h_state(
-    conn: &mut diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>,
+    conn: &mut AsyncPgConnection,
     character_id: Uuid,
     state: ranking::H2hRatingState,
     completed_at_secs: i64,
@@ -630,7 +642,7 @@ async fn upsert_h2h_state(
 }
 
 async fn upsert_h2h_season_state(
-    conn: &mut diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>,
+    conn: &mut AsyncPgConnection,
     season_id: Uuid,
     character_id: Uuid,
     state: ranking::H2hRatingState,
