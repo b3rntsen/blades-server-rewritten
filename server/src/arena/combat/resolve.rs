@@ -4763,6 +4763,10 @@ fn emit_status_removals(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, V
 /// through expiry.
 fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
     use super::state::{DamageSource as DS, StatusEffectType};
+    if !matches!(combat.phase, FlowState::StateTimeout) {
+        return Vec::new();
+    }
+
     let mut out = Vec::new();
 
     for slot in 0..combat.fighters.len() {
@@ -5112,6 +5116,13 @@ fn on_round_ended(
         // Nothing is left to interrupt, and a maneuver lock must not outlive it.
         fighter.executions.clear();
         fighter.interrupt_pending = None;
+        // Status lifetimes are round-scoped. Once the result burst moves the Match
+        // object to PostRound, no Burning/Frozen/Poisoned tick may survive to bill a
+        // fighter during the round-end walk or the final match-end sequence.
+        fighter.effects.clear();
+        fighter.status_timers.clear();
+        fighter.transient_resistances.clear();
+        fighter.health_damage_carry = 0.0;
         if !ended_by_death || slot != loser {
             fighter.force_actor_state(ActorStateType::Emote, now);
         }
@@ -10151,7 +10162,8 @@ mod shipped_effects_tests {
     use super::super::damage::flags;
     use super::super::loadout;
     use super::super::state::{
-        AbilityTag, DamageNegationSource, DamageType, EquippedAbility, Fighter, NegationPool,
+        AbilityTag, ActiveEffect, DamageNegationSource, DamageType, EquippedAbility, Fighter,
+        NegationPool,
         StatusEffectType, WeaponProfile,
     };
     use super::super::tables::Weight;
@@ -11905,7 +11917,6 @@ mod shipped_effects_tests {
     /// net resistance/weakness amount scaled by `0.75 × 0.2 = 0.15`.
     #[test]
     fn dot_tick_mitigation_uses_point_fifteen_resistance_per_tick() {
-        use super::super::state::{ActiveEffect, DamageType};
         let now = Instant::now();
         let mut c = combat2(now);
         c.fighters[1].loadout.resistances = vec![(DamageType::Fire, 40.0)];
@@ -11930,6 +11941,79 @@ mod shipped_effects_tests {
             })
             .count();
         assert_eq!(frames, 2, "one mitigated tick broadcast to both viewers");
+    }
+
+    fn burning_effect(now: Instant, per_tick_damage: f32, ticks: u32) -> ActiveEffect {
+        ActiveEffect {
+            effect: StatusEffectType::Burning,
+            damage_type: DamageType::Fire,
+            value: per_tick_damage,
+            per_tick_damage,
+            expires_at: now + DOT_TICK_INTERVAL * ticks,
+            last_tick: now,
+            is_transient_resist: false,
+        }
+    }
+
+    /// Report #265: once the round is decided, old status ticks must not keep running
+    /// through PostRound and kill the winner. The defensive direct-call assertion is
+    /// intentional: reverting either the phase guard or the round-end cleanup lets this
+    /// private helper bill slot 0 after `on_round_ending_death`.
+    #[test]
+    fn round_end_clears_lingering_dot_and_postround_ticks_do_nothing() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0].effects.push(burning_effect(now, 50.0, 10));
+        c.fighters[0].status_timers.push((
+            StatusEffectType::Frozen,
+            now + Duration::from_secs(5),
+        ));
+        c.fighters[0].transient_resistances.push((
+            DamageType::Fire,
+            10.0,
+            now + Duration::from_secs(5),
+        ));
+        c.fighters[0].health_damage_carry = 0.75;
+
+        let hp_before = c.fighters[0].health;
+        let _ = on_round_ending_death(&mut c, 0, now);
+
+        assert!(
+            !matches!(c.phase, FlowState::StateTimeout),
+            "the round is no longer live"
+        );
+        assert!(c.fighters.iter().all(|f| f.effects.is_empty()));
+        assert!(c.fighters.iter().all(|f| f.status_timers.is_empty()));
+        assert!(c.fighters.iter().all(|f| f.transient_resistances.is_empty()));
+        assert!(c.fighters.iter().all(|f| f.health_damage_carry == 0.0));
+
+        let out = apply_dot_ticks(&mut c, now + DOT_TICK_INTERVAL * 2);
+        assert!(out.is_empty(), "no post-round DoT frames");
+        assert_eq!(c.fighters[0].health, hp_before, "the winner keeps their HP");
+    }
+
+    /// Control: the guard above is not a blanket DoT disable. The same Burning tick
+    /// still damages and emits op50 while the match is live.
+    #[test]
+    fn control_live_round_dot_still_ticks() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0].effects.push(burning_effect(now, 12.0, 1));
+        let hp_before = c.fighters[0].health;
+
+        let out = apply_dot_ticks(&mut c, now + DOT_TICK_INTERVAL);
+
+        assert!(c.fighters[0].health < hp_before);
+        assert_eq!(
+            out.iter()
+                .filter(|(_, frame)| {
+                    let nd = arena_proto::parse_netdata(&frame[2..]);
+                    nd.int(3) == Some(50) && nd.int(6) == Some(4)
+                })
+                .count(),
+            2,
+            "one live DoT frame per viewer"
+        );
     }
 
     #[test]
