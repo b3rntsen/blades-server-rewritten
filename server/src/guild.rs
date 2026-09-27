@@ -64,13 +64,15 @@ use actix_web::{
     post, put,
     web::{self, Json},
 };
-use blades_lib::economy::{apply_reward, consume_stackable, RewardGrant};
+use blades_lib::economy::{RewardGrant, apply_reward, consume_stackable};
 use blades_lib::user_data::{
     CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
     InventoryChangeTracker,
 };
 use diesel::prelude::*;
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
+use diesel_async::{
+    AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -145,16 +147,46 @@ struct GuildMemberRow {
     join_date: i64,
 }
 
-impl GuildMemberRow {
-    /// The member's rank as a typed value.
-    ///
-    /// A row whose rank string does not parse is a corrupt record, not a
-    /// low-privilege member: returning an error beats silently treating it as
-    /// `MEMBER`, which would let a mangled GRANDMASTER row quietly lose the guild
-    /// its only administrator.
+#[derive(QueryableByName, Clone)]
+struct LoadedGuildMemberRow {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    guild_id: String,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    stored_user_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    user_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    rank: String,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    join_date: i64,
+}
+
+impl LoadedGuildMemberRow {
+    fn from_stored(row: GuildMemberRow) -> Self {
+        Self {
+            guild_id: row.guild_id,
+            stored_user_id: row.user_id,
+            user_id: row.user_id,
+            rank: row.rank,
+            join_date: row.join_date,
+        }
+    }
+
+    #[cfg(test)]
+    fn from_stored_with_current_user(row: GuildMemberRow, current_user_id: Option<Uuid>) -> Self {
+        Self {
+            guild_id: row.guild_id,
+            stored_user_id: row.user_id,
+            user_id: current_user_id.unwrap_or(row.user_id),
+            rank: row.rank,
+            join_date: row.join_date,
+        }
+    }
+
     fn parsed_rank(&self) -> Result<GuildRank, BladeApiError> {
-        GuildRank::from_wire(&self.rank)
-            .ok_or_else(|| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, GUILD_SERVICE_ID, 50))
+        GuildRank::from_wire(&self.rank).ok_or_else(|| {
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, GUILD_SERVICE_ID, 50)
+        })
     }
 }
 
@@ -269,6 +301,15 @@ impl MemberWire {
             join_date: row.join_date,
         }
     }
+
+    fn from_loaded_row(row: &LoadedGuildMemberRow) -> Self {
+        MemberWire {
+            user_id: row.user_id,
+            guild_id: row.guild_id.clone(),
+            rank: row.rank.clone(),
+            join_date: row.join_date,
+        }
+    }
 }
 
 /// The member rows as the client will read them.
@@ -283,8 +324,8 @@ impl MemberWire {
 /// behind and started doing the very harm it was added to prevent: the client's
 /// own id matched no row, it could not find its membership, and the guild menu
 /// sat on its initial spinner. A bridge outlives the gap it spans.
-fn current_guild_members(members: &[GuildMemberRow]) -> Vec<MemberWire> {
-    members.iter().map(MemberWire::from_row).collect()
+fn current_guild_members(members: &[LoadedGuildMemberRow]) -> Vec<MemberWire> {
+    members.iter().map(MemberWire::from_loaded_row).collect()
 }
 
 #[derive(Serialize)]
@@ -436,18 +477,30 @@ async fn application_counts_by_guild(
     Ok(rows.into_iter().collect())
 }
 
+const MEMBER_SELECT_SQL: &str = "
+    SELECT gm.guild_id,
+           gm.user_id AS stored_user_id,
+           COALESCE(c.user_id, gm.user_id) AS user_id,
+           gm.rank,
+           gm.join_date
+      FROM guild_members gm
+      LEFT JOIN characters c ON c.id = gm.character_id
+";
+
 async fn find_membership(
     conn: &mut AsyncPgConnection,
     uid: Uuid,
-) -> Result<Option<GuildMemberRow>, BladeApiError> {
-    use crate::schema::guild_members::dsl::*;
-    Ok(guild_members
-        .filter(user_id.eq(uid))
-        .select(GuildMemberRow::as_select())
-        .load(conn)
-        .await?
-        .into_iter()
-        .next())
+) -> Result<Option<LoadedGuildMemberRow>, BladeApiError> {
+    let rows: Vec<LoadedGuildMemberRow> = diesel::sql_query(format!(
+        "{MEMBER_SELECT_SQL}
+         WHERE gm.user_id = $1 OR c.user_id = $1
+         ORDER BY CASE WHEN c.user_id = $1 THEN 0 ELSE 1 END, gm.join_date ASC
+         LIMIT 1"
+    ))
+    .bind::<diesel::sql_types::Uuid, _>(uid)
+    .load(conn)
+    .await?;
+    Ok(rows.into_iter().next())
 }
 
 /// The requester's membership, or a 403. Used by every "must be in a guild"
@@ -455,23 +508,24 @@ async fn find_membership(
 async fn require_membership(
     conn: &mut AsyncPgConnection,
     uid: Uuid,
-) -> Result<GuildMemberRow, BladeApiError> {
+) -> Result<LoadedGuildMemberRow, BladeApiError> {
     find_membership(conn, uid).await?.ok_or_else(not_a_member)
 }
 
 async fn load_members(
     conn: &mut AsyncPgConnection,
     gid: &str,
-) -> Result<Vec<GuildMemberRow>, BladeApiError> {
-    use crate::schema::guild_members::dsl::*;
-    Ok(guild_members
-        .filter(guild_id.eq(gid))
-        // Rank ascending puts GRANDMASTER first (retail's enum numbers it 0), then
-        // oldest members first — the order the captured member arrays arrive in.
-        .order((rank.asc(), join_date.asc()))
-        .select(GuildMemberRow::as_select())
-        .load(conn)
-        .await?)
+) -> Result<Vec<LoadedGuildMemberRow>, BladeApiError> {
+    // Rank ascending preserves the ordering this handler used before member ids
+    // were resolved through the character row; oldest members break ties.
+    Ok(diesel::sql_query(format!(
+        "{MEMBER_SELECT_SQL}
+         WHERE gm.guild_id = $1
+         ORDER BY gm.rank ASC, gm.join_date ASC"
+    ))
+    .bind::<diesel::sql_types::Text, _>(gid)
+    .load(conn)
+    .await?)
 }
 
 async fn load_guild(
@@ -568,10 +622,7 @@ async fn has_any_application(
 /// Retail gates this client-side (the Join button simply is not offered below
 /// level 5), so no capture shows the server refusing it. We check anyway: a client
 /// is not a security boundary.
-async fn character_level(
-    conn: &mut AsyncPgConnection,
-    cid: Uuid,
-) -> Result<u16, BladeApiError> {
+async fn character_level(conn: &mut AsyncPgConnection, cid: Uuid) -> Result<u16, BladeApiError> {
     use crate::schema::characters::dsl as c;
     let rows: Vec<JsonDbWrapper<blades_lib::user_data::CompleteCharacter>> = c::characters
         .filter(c::id.eq(cid))
@@ -650,16 +701,17 @@ pub async fn get_current_guild(
             Some(g) => {
                 let members = load_members(&mut conn, &g.id).await?;
                 let wire = GuildWire::from_row(&g, members.len() as i64);
-                (
-                    Some(wire),
-                    current_guild_members(&members),
-                )
+                (Some(wire), current_guild_members(&members))
             }
             None => (None, Vec::new()),
         },
         None => (None, Vec::new()),
     };
-    Ok(Json(CurrentGuildResponse { guild, members, wallet: None }))
+    Ok(Json(CurrentGuildResponse {
+        guild,
+        members,
+        wallet: None,
+    }))
 }
 
 /// `GET /guilds/{id}` -> `{"applicationStatus": ..., "guild": ..., "members": [...]}`.
@@ -694,7 +746,9 @@ pub async fn get_guild(
     let mut conn = app_state.db_pool.get().await.unwrap();
     check_permission_for_character_and_get_it(&mut conn, &session.session, character_id).await?;
 
-    let g = load_guild(&mut conn, &gid).await?.ok_or_else(guild_not_found)?;
+    let g = load_guild(&mut conn, &gid)
+        .await?
+        .ok_or_else(guild_not_found)?;
     let members = load_members(&mut conn, &g.id).await?;
     let applications = application_count(&mut conn, &g.id).await?;
     let wire = GuildWire::from_row(&g, members.len() as i64);
@@ -704,7 +758,7 @@ pub async fn get_guild(
             max_applications_reached: applications >= MAX_APPLICATIONS,
         },
         guild: Some(wire),
-        members: members.iter().map(MemberWire::from_row).collect(),
+        members: current_guild_members(&members),
     }))
 }
 
@@ -784,9 +838,8 @@ pub async fn search_guilds(
         if let Some(t) = q.guild_type.as_deref() {
             // An unrecognised type would otherwise match nothing silently; reject
             // it so a client bug surfaces as an error rather than "no guilds".
-            let parsed = GuildType::from_wire(t).ok_or_else(|| {
-                BladeApiError::new(StatusCode::BAD_REQUEST, GUILD_SERVICE_ID, 61)
-            })?;
+            let parsed = GuildType::from_wire(t)
+                .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, GUILD_SERVICE_ID, 61))?;
             sql = sql.filter(guild_type.eq(parsed.as_wire()));
         }
         if let Some(r) = unset_i32(q.region_index) {
@@ -815,7 +868,11 @@ pub async fn search_guilds(
     let members = member_counts_by_guild(&mut conn).await?;
     let applications = application_counts_by_guild(&mut conn).await?;
 
-    let limit = q.limit.filter(|n| *n > 0).unwrap_or(SEARCH_LIMIT).min(SEARCH_LIMIT) as usize;
+    let limit = q
+        .limit
+        .filter(|n| *n > 0)
+        .unwrap_or(SEARCH_LIMIT)
+        .min(SEARCH_LIMIT) as usize;
     let out: Vec<GuildWire> = rows
         .iter()
         .filter_map(|g| {
@@ -1318,7 +1375,7 @@ async fn update_guild_impl(
     let members = load_members(&mut conn, &guild.id).await?;
     Ok(Json(CurrentGuildResponse {
         guild: Some(GuildWire::from_row(&guild, members.len() as i64)),
-        members: members.iter().map(MemberWire::from_row).collect(),
+        members: current_guild_members(&members),
         wallet: None,
     }))
 }
@@ -1700,7 +1757,7 @@ pub async fn deny_application(
 async fn remove_member_and_succeed(
     conn: &mut AsyncPgConnection,
     gid: &str,
-    departing: Uuid,
+    departing_stored_user_id: Uuid,
     departing_rank: GuildRank,
     ts: i64,
 ) -> Result<Option<Uuid>, BladeApiError> {
@@ -1709,7 +1766,7 @@ async fn remove_member_and_succeed(
         diesel::delete(
             gm::guild_members
                 .filter(gm::guild_id.eq(gid))
-                .filter(gm::user_id.eq(departing)),
+                .filter(gm::user_id.eq(departing_stored_user_id)),
         )
         .execute(conn)
         .await?;
@@ -1727,12 +1784,17 @@ async fn remove_member_and_succeed(
 
     match successor(&handles) {
         Some(heir) => {
+            let heir_stored_user_id = remaining
+                .iter()
+                .find(|m| m.user_id == heir)
+                .map(|m| m.stored_user_id)
+                .unwrap_or(heir);
             {
                 use crate::schema::guild_members::dsl as gm;
                 diesel::update(
                     gm::guild_members
                         .filter(gm::guild_id.eq(gid))
-                        .filter(gm::user_id.eq(heir)),
+                        .filter(gm::user_id.eq(heir_stored_user_id)),
                 )
                 .set(gm::rank.eq(GuildRank::Grandmaster.as_wire()))
                 .execute(conn)
@@ -1835,7 +1897,8 @@ pub async fn leave_guild(
             // The LEAVE entry goes on the board BEFORE the guild might be deleted,
             // so it is not orphaned by the teardown below.
             append_message(conn, &gid, user_id, character_id, "LEAVE", json!({})).await?;
-            let heir = remove_member_and_succeed(conn, &gid, user_id, my_rank, ts).await?;
+            let heir =
+                remove_member_and_succeed(conn, &gid, me.stored_user_id, my_rank, ts).await?;
             if let Some(heir) = heir {
                 append_promote_message(conn, &gid, user_id, character_id, heir).await?;
             }
@@ -1898,15 +1961,15 @@ async fn remove_other_member(
                 actor_user,
                 actor_character,
                 message_type,
-                json!({ "type": message_type, key: target_user }),
+                json!({ "type": message_type, key: target.user_id }),
             )
             .await?;
             // A kicked member is never the Grand Master (nothing outranks that
             // rank), so no succession can be triggered here — but route through
             // the same helper so that stays true by construction rather than by
             // assumption.
-            remove_member_and_succeed(conn, &gid, target_user, target_rank, ts).await?;
-            record_removal(conn, &gid, target_user, ts, ban).await?;
+            remove_member_and_succeed(conn, &gid, target.stored_user_id, target_rank, ts).await?;
+            record_removal(conn, &gid, target.user_id, ts, ban).await?;
             Ok::<_, BladeApiError>(())
         }
         .scope_boxed()
@@ -2160,9 +2223,17 @@ struct GuildExchangeWire {
 
 impl GuildExchangeWire {
     fn from_row(row: &GuildExchangeRow, include_donations: bool) -> Self {
+        Self::from_row_with_requester(row, include_donations, row.requester_user_id)
+    }
+
+    fn from_row_with_requester(
+        row: &GuildExchangeRow,
+        include_donations: bool,
+        requester_user_id: Uuid,
+    ) -> Self {
         GuildExchangeWire {
             guild_id: row.guild_id.clone(),
-            requester_user_id: row.requester_user_id,
+            requester_user_id,
             requester_character_id: row.requester_character_id,
             item_template_id: row.item_template_id,
             requested_amount: row.requested_amount,
@@ -2190,6 +2261,19 @@ async fn load_exchanges(
         .select(GuildExchangeRow::as_select())
         .load(conn)
         .await?)
+}
+
+async fn current_users_for_characters(
+    conn: &mut AsyncPgConnection,
+    character_ids: &[Uuid],
+) -> Result<HashMap<Uuid, Uuid>, BladeApiError> {
+    use crate::schema::characters::dsl as c;
+    let rows: Vec<(Uuid, Uuid)> = c::characters
+        .filter(c::id.eq_any(character_ids))
+        .select((c::id, c::user_id))
+        .load(conn)
+        .await?;
+    Ok(rows.into_iter().collect())
 }
 
 /// Load economy entry for the session character (must be owned by the session user).
@@ -2234,9 +2318,7 @@ struct ExchangeListResponse {
 
 /// `GET /guilds/current/exchanges` — list all active (non-redeemed) exchanges in
 /// the caller's guild.
-#[get(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/exchanges"
-)]
+#[get("/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/exchanges")]
 pub async fn list_exchanges(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -2252,9 +2334,20 @@ pub async fn list_exchanges(
         .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, GUILD_SERVICE_ID, 1))?;
 
     let rows = load_exchanges(&mut conn, &m.guild_id).await?;
+    let requester_ids: Vec<Uuid> = rows.iter().map(|r| r.requester_character_id).collect();
+    let current_requesters = current_users_for_characters(&mut conn, &requester_ids).await?;
     let wires = rows
         .iter()
-        .map(|r| GuildExchangeWire::from_row(r, true))
+        .map(|r| {
+            GuildExchangeWire::from_row_with_requester(
+                r,
+                true,
+                current_requesters
+                    .get(&r.requester_character_id)
+                    .copied()
+                    .unwrap_or(r.requester_user_id),
+            )
+        })
         .collect();
     Ok(Json(ExchangeListResponse {
         guild_exchanges: wires,
@@ -2267,10 +2360,25 @@ struct CreateExchangeRequest {
     item_template_id: Uuid,
 }
 
-
 #[cfg(test)]
 mod exchange_amount_tests {
     use super::*;
+
+    fn exchange_row(requester_user_id: Uuid, requester_character_id: Uuid) -> GuildExchangeRow {
+        GuildExchangeRow {
+            id: "exchange-1".into(),
+            guild_id: "guild-a".into(),
+            requester_user_id,
+            requester_character_id,
+            item_template_id: Uuid::from_u128(0x1234),
+            requested_amount: 10,
+            max_donation_amount: 5,
+            donations: JsonDbWrapper(vec![]),
+            donation_sum: 0,
+            creation_time: 1,
+            redeemed: false,
+        }
+    }
 
     /// The amounts must come from the retail table, not a hardcoded 10/5. Asserted
     /// differentially across several items so it cannot pass on a constant.
@@ -2278,13 +2386,25 @@ mod exchange_amount_tests {
     fn exchange_amounts_are_item_specific() {
         let u = |s: &str| uuid::Uuid::parse_str(s).unwrap();
         // Transcendent Soul Gem: one, donated one at a time.
-        assert_eq!(exchange_amounts_for(u("d94bab85-53d5-4c9c-a637-acd94fc66c98")), (1, 1));
+        assert_eq!(
+            exchange_amounts_for(u("d94bab85-53d5-4c9c-a637-acd94fc66c98")),
+            (1, 1)
+        );
         // Iron Ingot.
-        assert_eq!(exchange_amounts_for(u("55e82826-2d68-469c-8870-753665ca62cd")), (3, 1));
+        assert_eq!(
+            exchange_amounts_for(u("55e82826-2d68-469c-8870-753665ca62cd")),
+            (3, 1)
+        );
         // Limestone — the big town-building material.
-        assert_eq!(exchange_amounts_for(u("fd67bbc6-20f4-44a3-9614-28265ebb8c67")), (50, 10));
+        assert_eq!(
+            exchange_amounts_for(u("fd67bbc6-20f4-44a3-9614-28265ebb8c67")),
+            (50, 10)
+        );
         // Honeycomb keeps the common 10/5.
-        assert_eq!(exchange_amounts_for(u("7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50")), (10, 5));
+        assert_eq!(
+            exchange_amounts_for(u("7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50")),
+            (10, 5)
+        );
     }
 
     /// An item retail never showed us falls back to the corpus's modal pair rather
@@ -2305,13 +2425,37 @@ mod exchange_amount_tests {
         for (t, req, max) in EXCHANGE_AMOUNTS {
             assert!(*req > 0, "{t} requests {req}");
             assert!(*max > 0, "{t} allows a {max} donation");
-            assert!(max <= req, "{t}: one donation ({max}) exceeds the whole request ({req})");
+            assert!(
+                max <= req,
+                "{t}: one donation ({max}) exceeds the whole request ({req})"
+            );
             assert!(
                 uuid::Uuid::parse_str(t).is_ok(),
                 "{t} is not a uuid — the table was generated wrong"
             );
         }
-        assert_eq!(EXCHANGE_AMOUNTS.len(), 36, "36 templates were mined from retail");
+        assert_eq!(
+            EXCHANGE_AMOUNTS.len(),
+            36,
+            "36 templates were mined from retail"
+        );
+    }
+
+    #[test]
+    fn exchange_wire_can_publish_the_requesters_current_owner() {
+        let stale_user = Uuid::from_u128(0x101);
+        let current_user = Uuid::from_u128(0x202);
+        let requester_character = Uuid::from_u128(0x303);
+        let row = exchange_row(stale_user, requester_character);
+
+        let wire = GuildExchangeWire::from_row_with_requester(&row, true, current_user);
+
+        assert_eq!(wire.requester_user_id, current_user);
+        assert_ne!(
+            wire.requester_user_id, stale_user,
+            "negative control: stored requester ids break follow-up donate requests"
+        );
+        assert_eq!(wire.requester_character_id, requester_character);
     }
 }
 
@@ -2340,37 +2484,37 @@ const EXCHANGE_AMOUNTS: &[(&str, i64, i64)] = &[
     ("7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50", 10, 5), // Honeycomb
     ("fd67bbc6-20f4-44a3-9614-28265ebb8c67", 50, 10), // Limestone
     ("e7193116-d761-479b-8a20-5633737977f5", 50, 10), // Lumber
-    ("f9181a67-b094-4c37-a145-ced9dfe610d6", 5, 1), // Daedra Heart
-    ("d94bab85-53d5-4c9c-a637-acd94fc66c98", 1, 1), // Transcendent Soul Gem
+    ("f9181a67-b094-4c37-a145-ced9dfe610d6", 5, 1),  // Daedra Heart
+    ("d94bab85-53d5-4c9c-a637-acd94fc66c98", 1, 1),  // Transcendent Soul Gem
     ("42d91529-c88b-4c5b-815b-b55508b4e7ef", 30, 6), // Copper
     ("07f380dd-f123-4ef7-9b12-8b9fdb03c3e1", 10, 5), // Imp Stool
-    ("89ece62c-9ff6-470a-a152-d45ef4e0c222", 3, 1), // Pearl
-    ("d523932f-8c7f-4192-9112-5dbd60883c2b", 5, 1), // Dragon Bones
+    ("89ece62c-9ff6-470a-a152-d45ef4e0c222", 3, 1),  // Pearl
+    ("d523932f-8c7f-4192-9112-5dbd60883c2b", 5, 1),  // Dragon Bones
     ("fe3567e0-ec8e-4f41-8e77-a56f861ab898", 10, 5), // Daedroth Tooth
     ("8b7d0044-3a38-4ee0-af45-d2892b0f508d", 10, 5), // Deathbell
-    ("a4d5e792-5a27-4bb3-851f-e0917c0962db", 8, 4), // Giant's Toe
+    ("a4d5e792-5a27-4bb3-851f-e0917c0962db", 8, 4),  // Giant's Toe
     ("f1c5c03c-5297-48fb-a9d2-5f32bffb467c", 10, 5), // Fire Salts
-    ("34ddfe0e-5119-4e52-8eef-a77b6bc810a7", 5, 1), // Dragon Scales
-    ("bafe6ed5-6473-4a4c-aef5-421d3af5c8cb", 1, 1), // Glorious Soul Gem
-    ("68d7941e-8c8d-47bf-9f66-becb058f1817", 1, 1), // Grand Soul Gem
-    ("55e82826-2d68-469c-8870-753665ca62cd", 3, 1), // Iron Ingot
-    ("74f091b5-fd88-464b-a98a-f60a5e8a0f25", 3, 1), // Orichalcum Ingot
-    ("70f2c013-813e-4f63-8b29-7a54a13b5e58", 1, 1), // Faerite
-    ("e80bee76-f92c-4005-9eff-20d1e8c64d24", 4, 1), // Quicksilver Ingot
-    ("8ac9076c-cba9-4cf4-a8a5-d2303aab22b0", 2, 1), // Crystal
-    ("9d9732a5-cd1c-4a93-8755-0bf92ee65d64", 3, 1), // Leather
-    ("75112030-b248-49b0-9c70-0da8dea150d1", 5, 1), // Ebony Ingot
-    ("b81952e0-c3c8-4a5c-92c0-8215d3eb71af", 3, 1), // Steel Ingot
+    ("34ddfe0e-5119-4e52-8eef-a77b6bc810a7", 5, 1),  // Dragon Scales
+    ("bafe6ed5-6473-4a4c-aef5-421d3af5c8cb", 1, 1),  // Glorious Soul Gem
+    ("68d7941e-8c8d-47bf-9f66-becb058f1817", 1, 1),  // Grand Soul Gem
+    ("55e82826-2d68-469c-8870-753665ca62cd", 3, 1),  // Iron Ingot
+    ("74f091b5-fd88-464b-a98a-f60a5e8a0f25", 3, 1),  // Orichalcum Ingot
+    ("70f2c013-813e-4f63-8b29-7a54a13b5e58", 1, 1),  // Faerite
+    ("e80bee76-f92c-4005-9eff-20d1e8c64d24", 4, 1),  // Quicksilver Ingot
+    ("8ac9076c-cba9-4cf4-a8a5-d2303aab22b0", 2, 1),  // Crystal
+    ("9d9732a5-cd1c-4a93-8755-0bf92ee65d64", 3, 1),  // Leather
+    ("75112030-b248-49b0-9c70-0da8dea150d1", 5, 1),  // Ebony Ingot
+    ("b81952e0-c3c8-4a5c-92c0-8215d3eb71af", 3, 1),  // Steel Ingot
     ("9687d83c-aa7b-4cf3-a69f-0bba8204fa61", 10, 5), // Glow Dust
-    ("16e102fb-b1c0-42de-8106-0aa27e77f7f0", 1, 1), // Diamond
+    ("16e102fb-b1c0-42de-8106-0aa27e77f7f0", 1, 1),  // Diamond
     ("f00f350d-97c2-47cd-a554-e1a37c9ff7f2", 10, 5), // Lavender
-    ("51f7612f-a797-4417-8a92-493b0aae7f45", 3, 1), // Pelt
-    ("a3351353-f613-4368-bac7-05783f857b07", 1, 1), // Elevated Soul Gem
-    ("4312b0ed-e397-4815-9693-a511ecda71de", 4, 1), // Moonstone Ingot
+    ("51f7612f-a797-4417-8a92-493b0aae7f45", 3, 1),  // Pelt
+    ("a3351353-f613-4368-bac7-05783f857b07", 1, 1),  // Elevated Soul Gem
+    ("4312b0ed-e397-4815-9693-a511ecda71de", 4, 1),  // Moonstone Ingot
     ("10c54e43-a2a1-4833-9491-4c19149f43b5", 10, 5), // Void Salts
-    ("85ed5500-3581-4699-8095-4b5ff6514355", 4, 1), // Malachite Ingot
-    ("9df9233f-e7b9-47e8-bc75-f37707917759", 3, 1), // Garnet
-    ("b94c2028-dba7-44bd-b6f9-6f85ab0195b6", 3, 1), // Seeds
+    ("85ed5500-3581-4699-8095-4b5ff6514355", 4, 1),  // Malachite Ingot
+    ("9df9233f-e7b9-47e8-bc75-f37707917759", 3, 1),  // Garnet
+    ("b94c2028-dba7-44bd-b6f9-6f85ab0195b6", 3, 1),  // Seeds
 ];
 
 /// The `(requestedAmount, maxDonationAmount)` for an item, or the 10/5 default for a
@@ -2517,13 +2661,16 @@ pub async fn donate_exchange(
             // Checked against the REQUEST rather than any candidate row, since
             // it is a property of who is asking, not of which row wins below.
             if req.requester_user_id == donor_user_id {
-                return Err(BladeApiError::new(StatusCode::CONFLICT, GUILD_SERVICE_ID, 14));
+                return Err(BladeApiError::new(
+                    StatusCode::CONFLICT,
+                    GUILD_SERVICE_ID,
+                    14,
+                ));
             }
 
             use crate::schema::guild_exchanges::dsl as ge;
             let candidates: Vec<GuildExchangeRow> = ge::guild_exchanges
                 .filter(ge::guild_id.eq(&m.guild_id))
-                .filter(ge::requester_user_id.eq(req.requester_user_id))
                 .filter(ge::requester_character_id.eq(req.requester_character_id))
                 .filter(ge::item_template_id.eq(req.item_template_id))
                 .filter(ge::redeemed.eq(false))
@@ -2533,7 +2680,11 @@ pub async fn donate_exchange(
                 .load(conn)
                 .await?;
             if candidates.is_empty() {
-                return Err(BladeApiError::new(StatusCode::NOT_FOUND, GUILD_SERVICE_ID, 11));
+                return Err(BladeApiError::new(
+                    StatusCode::NOT_FOUND,
+                    GUILD_SERVICE_ID,
+                    11,
+                ));
             }
             // Oldest request this donor can still give to. Falling back to the
             // first candidate keeps the existing refusal codes meaningful: with
@@ -2560,7 +2711,11 @@ pub async fn donate_exchange(
                 .iter()
                 .any(|d| d.donator_user_id == donor_user_id)
             {
-                return Err(BladeApiError::new(StatusCode::CONFLICT, GUILD_SERVICE_ID, 12));
+                return Err(BladeApiError::new(
+                    StatusCode::CONFLICT,
+                    GUILD_SERVICE_ID,
+                    12,
+                ));
             }
 
             // Never donate more than the request still needs. The amount was always
@@ -2569,11 +2724,19 @@ pub async fn donate_exchange(
             // redeem, since redemption is capped at `requestedAmount`.
             let remaining = (exchange.requested_amount - exchange.donation_sum).max(0);
             if remaining == 0 {
-                return Err(BladeApiError::new(StatusCode::CONFLICT, GUILD_SERVICE_ID, 13));
+                return Err(BladeApiError::new(
+                    StatusCode::CONFLICT,
+                    GUILD_SERVICE_ID,
+                    13,
+                ));
             }
             let donate_amount = exchange.max_donation_amount.min(remaining).max(0) as u64;
             if donate_amount == 0 {
-                return Err(BladeApiError::new(StatusCode::CONFLICT, GUILD_SERVICE_ID, 13));
+                return Err(BladeApiError::new(
+                    StatusCode::CONFLICT,
+                    GUILD_SERVICE_ID,
+                    13,
+                ));
             }
 
             // Debit the donor's stackable.
@@ -2702,7 +2865,6 @@ pub async fn redeem_exchange(
             // Load all non-redeemed exchanges for this user with sum > 0.
             use crate::schema::guild_exchanges::dsl as ge;
             let exchanges: Vec<GuildExchangeRow> = ge::guild_exchanges
-                .filter(ge::requester_user_id.eq(user_id))
                 .filter(ge::requester_character_id.eq(character_id))
                 .filter(ge::redeemed.eq(false))
                 .filter(ge::donation_sum.gt(0))
@@ -2732,9 +2894,7 @@ pub async fn redeem_exchange(
                     &mut entry.character.0,
                     &mut tracker,
                 );
-                *reward_stackables
-                    .entry(ex.item_template_id)
-                    .or_insert(0) += ex.donation_sum;
+                *reward_stackables.entry(ex.item_template_id).or_insert(0) += ex.donation_sum;
             }
             entry.inventory.0.backpack_version += 1;
 
@@ -2800,7 +2960,6 @@ mod tests {
     }
 }
 
-
 /// The create-guild wire, against the two captured retail creations.
 #[cfg(test)]
 mod create_wire {
@@ -2853,7 +3012,10 @@ mod create_wire {
         let another = Uuid::from_u128(0x789);
         let session = Session::new(private_id, secret_id, Duration::from_secs(60));
 
-        let rows = vec![member_row(private_id), member_row(another)];
+        let rows = vec![
+            LoadedGuildMemberRow::from_stored(member_row(private_id)),
+            LoadedGuildMemberRow::from_stored(member_row(another)),
+        ];
         let wire = current_guild_members(&rows);
 
         assert_eq!(
@@ -2870,8 +3032,44 @@ mod create_wire {
     fn a_member_row_never_carries_the_login_secret() {
         let private_id = Uuid::from_u128(0x123);
         let secret_id = Uuid::from_u128(0x456);
-        let wire = current_guild_members(&[member_row(private_id)]);
+        let wire =
+            current_guild_members(&[LoadedGuildMemberRow::from_stored(member_row(private_id))]);
         assert_ne!(wire[0].user_id, secret_id);
+    }
+
+    /// Character transfers move `characters.user_id`; an old membership row may
+    /// still be keyed by the previous user. Roster JSON must name the current
+    /// owner or the client's follow-up `/social/characters?userIds=...` cannot
+    /// resolve the member.
+    #[test]
+    fn a_stale_member_row_publishes_the_characters_current_owner() {
+        let stale_user = Uuid::from_u128(0x123);
+        let current_user = Uuid::from_u128(0x456);
+        let row = LoadedGuildMemberRow::from_stored_with_current_user(
+            member_row(stale_user),
+            Some(current_user),
+        );
+
+        let wire = current_guild_members(&[row]);
+
+        assert_eq!(wire[0].user_id, current_user);
+        assert_ne!(
+            wire[0].user_id, stale_user,
+            "negative control: serialising guild_members.user_id strands moved characters"
+        );
+    }
+
+    /// If the character row is gone, there is no current owner to join to; keep
+    /// the stored membership id rather than erasing the member from the roster.
+    #[test]
+    fn a_missing_character_falls_back_to_the_stored_member_user() {
+        let stored_user = Uuid::from_u128(0x123);
+        let row =
+            LoadedGuildMemberRow::from_stored_with_current_user(member_row(stored_user), None);
+
+        let wire = current_guild_members(&[row]);
+
+        assert_eq!(wire[0].user_id, stored_user);
     }
 
     /// Retail's guild object carries thirteen fields; we were sending twelve.
@@ -2881,9 +3079,19 @@ mod create_wire {
         let v = serde_json::to_value(GuildWire::from_row(&guild_row(), 1)).unwrap();
         let obj = v.as_object().expect("guild object");
         for key in [
-            "id", "name", "tagId", "type", "shortDescription", "longDescription",
-            "badgeIconIndex", "memberCount", "regionIndex", "guildExchangeDonationCount",
-            "pvpTrophies", "pvpSeasonId", "grandmasterSinceSecs",
+            "id",
+            "name",
+            "tagId",
+            "type",
+            "shortDescription",
+            "longDescription",
+            "badgeIconIndex",
+            "memberCount",
+            "regionIndex",
+            "guildExchangeDonationCount",
+            "pvpTrophies",
+            "pvpSeasonId",
+            "grandmasterSinceSecs",
         ] {
             assert!(
                 obj.contains_key(key),
@@ -2922,6 +3130,105 @@ mod create_wire {
         // control: the rest of the response is still there, so the assertion
         // above is about the wallet key and not an empty object.
         assert!(v.get("guild").is_some());
+    }
+}
+
+#[cfg(test)]
+mod stale_member_db_tests {
+    use super::*;
+    use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+
+    async fn fixture() -> Option<AsyncPgConnection> {
+        let Some(url) = std::env::var("TEST_DATABASE_URL").ok() else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — stale guild membership SQL not verified");
+            return None;
+        };
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction()
+            .await
+            .expect("could not open a test transaction");
+        let test_schema = format!("t{}", Uuid::new_v4().simple());
+        diesel::sql_query(format!("CREATE SCHEMA {test_schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        diesel::sql_query(format!("SET LOCAL search_path TO {test_schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        diesel::sql_query(
+            "CREATE TABLE characters (
+                 id UUID PRIMARY KEY,
+                 user_id UUID NOT NULL,
+                 character JSONB NOT NULL DEFAULT '{}')",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        diesel::sql_query(
+            "CREATE TABLE guild_members (
+                 guild_id TEXT NOT NULL,
+                 user_id UUID NOT NULL,
+                 character_id UUID NOT NULL,
+                 rank TEXT NOT NULL,
+                 join_date BIGINT NOT NULL,
+                 PRIMARY KEY (guild_id, user_id))",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        Some(conn)
+    }
+
+    #[tokio::test]
+    async fn member_reads_resolve_current_character_owner_and_fallback() {
+        let Some(mut conn) = fixture().await else {
+            return;
+        };
+
+        let guild = "guild-a";
+        let stale_user = Uuid::from_u128(0x101);
+        let current_user = Uuid::from_u128(0x202);
+        let stale_character = Uuid::from_u128(0x303);
+        let missing_user = Uuid::from_u128(0x404);
+        let missing_character = Uuid::from_u128(0x505);
+
+        diesel::sql_query("INSERT INTO characters (id, user_id) VALUES ($1, $2)")
+            .bind::<diesel::sql_types::Uuid, _>(stale_character)
+            .bind::<diesel::sql_types::Uuid, _>(current_user)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        for (stored_user, character, join_date) in [
+            (stale_user, stale_character, 1_i64),
+            (missing_user, missing_character, 2_i64),
+        ] {
+            diesel::sql_query(
+                "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date)
+                 VALUES ($1, $2, $3, 'MEMBER', $4)",
+            )
+            .bind::<diesel::sql_types::Text, _>(guild)
+            .bind::<diesel::sql_types::Uuid, _>(stored_user)
+            .bind::<diesel::sql_types::Uuid, _>(character)
+            .bind::<diesel::sql_types::BigInt, _>(join_date)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        }
+
+        let members = load_members(&mut conn, guild).await.unwrap();
+        assert_eq!(members[0].stored_user_id, stale_user);
+        assert_eq!(members[0].user_id, current_user);
+        assert_eq!(members[1].user_id, missing_user);
+
+        let found = find_membership(&mut conn, current_user)
+            .await
+            .unwrap()
+            .expect("current owner should find the moved character's guild");
+        assert_eq!(found.guild_id, guild);
+        assert_eq!(found.stored_user_id, stale_user);
     }
 }
 
@@ -3090,6 +3397,19 @@ mod self_donation_is_refused {
         assert!(
             check < query,
             "the self-donation check must precede the candidate lookup"
+        );
+    }
+
+    #[test]
+    fn the_candidate_query_keys_on_character_not_stale_user() {
+        let body = donate_body();
+        assert!(
+            body.contains("ge::requester_character_id.eq(req.requester_character_id)"),
+            "donate lookup must follow the requester character id"
+        );
+        assert!(
+            !body.contains("ge::requester_user_id.eq(req.requester_user_id)"),
+            "donate lookup must not require a possibly stale guild_exchanges.requester_user_id"
         );
     }
 
