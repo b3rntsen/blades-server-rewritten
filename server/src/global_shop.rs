@@ -8,7 +8,10 @@
 //! count. IAP (real money) is a priced placeholder only — there is no fulfillment
 //! route. See [`blades_lib::features::global_shop`].
 
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use actix_web::{
     get,
@@ -477,6 +480,53 @@ struct GlobalShopForCharacterResponse {
     global_shop: GlobalShopState,
 }
 
+fn current_window_purchase_tracking_ids(
+    static_data: &blades_lib::static_data::StaticData,
+    now: i64,
+) -> HashSet<String> {
+    current_catalog(static_data, now)
+        .get("globalShopOverrides")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .flat_map(|(_, entry)| {
+            entry
+                .get("maxPurchaseLimits")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter_map(|limit| {
+            let tid = limit.get("purchaseTrackingId")?.as_str()?;
+            let capped = limit.get("limit").and_then(Value::as_u64).unwrap_or(0) > 0;
+            let windowed = tid
+                .rsplit("::")
+                .next()
+                .is_some_and(|tail| !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()));
+            (capped && windowed).then(|| tid.to_string())
+        })
+        .collect()
+}
+
+fn purchases_list_with_window_counts(
+    product_counts: &HashMap<Uuid, u64>,
+    window_counts: &HashMap<String, u64>,
+    visible_window_ids: &HashSet<String>,
+) -> Vec<PurchaseEntry> {
+    let mut list = global_shop::purchases_list(product_counts);
+    list.extend(
+        window_counts
+            .iter()
+            .filter(|(id, quantity)| **quantity > 0 && visible_window_ids.contains(*id))
+            .map(|(id, quantity)| PurchaseEntry {
+                id: id.clone(),
+                quantity: *quantity,
+            }),
+    );
+    list.sort_by(|a, b| a.id.cmp(&b.id));
+    list
+}
+
 /// `GET /…/globalshops/current` — this character's per-product purchase counts.
 #[get("/blades.bgs.services/api/game/v1/public/characters/{character_id}/globalshops/current")]
 pub async fn get_global_shop_for_character(
@@ -486,6 +536,11 @@ pub async fn get_global_shop_for_character(
 ) -> Result<Json<GlobalShopForCharacterResponse>, BladeApiError> {
     let session = session.get_session_or_error()?;
     let character_id = path.into_inner();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let visible_window_ids = current_window_purchase_tracking_ids(&app_state.static_data, now);
     let mut conn = app_state.db_pool.get().await.unwrap();
 
     let rows = {
@@ -500,8 +555,10 @@ pub async fn get_global_shop_for_character(
     let entry = get_only_single_character_and_check_permission(rows, &session.session)?;
     Ok(Json(GlobalShopForCharacterResponse {
         global_shop: GlobalShopState {
-            global_shop_purchases: global_shop::purchases_list(
+            global_shop_purchases: purchases_list_with_window_counts(
                 &entry.server_state.0.global_shop_purchases,
+                &entry.server_state.0.global_shop_window_purchases,
+                &visible_window_ids,
             ),
         },
     }))
@@ -961,6 +1018,7 @@ pub async fn purchase_global_shop(
     // Resolved here, not inside the transaction: the closure takes `app_state`.
     let lifetime_cap = lifetime_purchase_cap(&app_state.static_data, product_id, now);
     let window_cap = window_purchase_cap(&app_state.static_data, product_id, now);
+    let visible_window_ids = current_window_purchase_tracking_ids(&app_state.static_data, now);
     let mut conn = app_state.db_pool.get().await.unwrap();
 
     conn.transaction(move |mut conn| {
@@ -1121,8 +1179,11 @@ pub async fn purchase_global_shop(
 
             let inventory = entry.inventory.0.generate_client_update(&tracker);
             let wallet = entry.wallet.0.clone();
-            let global_shop_purchases =
-                global_shop::purchases_list(&entry.server_state.0.global_shop_purchases);
+            let global_shop_purchases = purchases_list_with_window_counts(
+                &entry.server_state.0.global_shop_purchases,
+                &entry.server_state.0.global_shop_window_purchases,
+                &visible_window_ids,
+            );
 
             {
                 use crate::schema::characters;
@@ -1800,6 +1861,71 @@ mod replay_tests {
             window_purchase_cap(&sd, uncapped, now),
             None,
             "an uncapped offer must not be given a cap"
+        );
+    }
+
+    /// The client decides that a limited-time offer is sold out by comparing the
+    /// offer's `maxPurchaseLimits[].purchaseTrackingId` with the character's
+    /// `globalShop.globalShopPurchases`. We enforced the per-window cap but only
+    /// returned the lifetime product id here, so the offer stayed buyable-looking
+    /// until the doomed purchase 400'd and the client reloaded.
+    #[test]
+    fn character_purchase_state_includes_the_current_window_tracking_id() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let sd = crate::static_loader::load(&dir);
+        let now = 1_783_000_000 + 400 * 86_400;
+
+        let product = Uuid::parse_str("6ec8f67f-2cef-41aa-a7fc-f46237ae809c").unwrap();
+        let (window_key, cap) =
+            window_purchase_cap(&sd, product, now).expect("incident product still has a cap");
+        assert_eq!(cap, 3);
+
+        let visible = current_window_purchase_tracking_ids(&sd, now);
+        assert!(
+            visible.contains(&window_key),
+            "the key the purchase handler enforces must be visible to the client"
+        );
+
+        let product_counts = HashMap::from([(product, 2)]);
+        let window_counts = HashMap::from([(window_key.clone(), 3)]);
+        let list = purchases_list_with_window_counts(&product_counts, &window_counts, &visible);
+
+        assert!(
+            list.iter().any(|e| e.id == product.to_string() && e.quantity == 2),
+            "control: ordinary lifetime product counts still go out"
+        );
+        assert!(
+            list.iter().any(|e| e.id == window_key && e.quantity == 3),
+            "the current window count must go out so the capped offer reads sold out"
+        );
+    }
+
+    /// Negative control: old replay-window keys must not leak back to the client.
+    /// Their timestamp no longer appears in the served catalogue, so sending them
+    /// cannot sell anything out and only grows the payload forever.
+    #[test]
+    fn character_purchase_state_omits_stale_window_tracking_ids() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let sd = crate::static_loader::load(&dir);
+        let now = 1_783_000_000 + 400 * 86_400;
+
+        let product = Uuid::parse_str("6ec8f67f-2cef-41aa-a7fc-f46237ae809c").unwrap();
+        let (window_key, _) =
+            window_purchase_cap(&sd, product, now).expect("incident product still has a cap");
+        let stale_key = window_key
+            .rsplit_once("::")
+            .map(|(head, _)| format!("{head}::1"))
+            .expect("window key has a timestamp");
+        assert_ne!(stale_key, window_key);
+
+        let visible = current_window_purchase_tracking_ids(&sd, now);
+        let product_counts = HashMap::new();
+        let window_counts = HashMap::from([(stale_key.clone(), 99)]);
+        let list = purchases_list_with_window_counts(&product_counts, &window_counts, &visible);
+
+        assert!(
+            !list.iter().any(|e| e.id == stale_key),
+            "stale replay-window counts must not be advertised"
         );
     }
 
