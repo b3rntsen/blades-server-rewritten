@@ -536,8 +536,8 @@ mod tests {
 
             let mut wrong: Vec<String> = Vec::new();
             for entry in &block.item_pool {
-                match manifest.get(&entry.bundle_id.to_string()).and_then(|v| v.as_str()) {
-                    Some(m) if m == merchant => {}
+                match manifest.get(&entry.bundle_id.to_string()) {
+                    Some(v) if merchant_manifest_allows(v, merchant) => {}
                     // A bundle the manifest does not know is NOT a pass: the
                     // manifest covers every town-merchant bundle, so an unknown
                     // id means the pool holds something that is not town stock.
@@ -552,6 +552,14 @@ mod tests {
                 wrong.len(),
                 &wrong[..wrong.len().min(5)]
             );
+        }
+    }
+
+    fn merchant_manifest_allows(v: &serde_json::Value, merchant: &str) -> bool {
+        match v {
+            serde_json::Value::String(s) => s == merchant,
+            serde_json::Value::Array(list) => list.iter().any(|x| x.as_str() == Some(merchant)),
+            _ => false,
         }
     }
 }

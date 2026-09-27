@@ -3216,6 +3216,27 @@
           "minQuantity": 1,
           "tier": 9,
           "weight": 10
+        },
+        {
+          "bundleId": "74a7c3fb-6524-46a9-ab9a-50b4977e630e",
+          "maxQuantity": 4,
+          "minQuantity": 1,
+          "tier": 8,
+          "weight": 10
+        },
+        {
+          "bundleId": "76889fa6-4f69-4425-be4a-81ff991903aa",
+          "maxQuantity": 4,
+          "minQuantity": 1,
+          "tier": 8,
+          "weight": 10
+        },
+        {
+          "bundleId": "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
+          "maxQuantity": 4,
+          "minQuantity": 1,
+          "tier": 8,
+          "weight": 10
         }
       ],
       "levels": {

@@ -33,8 +33,8 @@
 //!
 //! Unchanged in shape, two tiers best-first:
 //! 1. **Authored per-level generation** ([`crate::shop_gen`]) — the `shop_id` is the
-//!    character's building INSTANCE id, so we resolve its `typeId` + `level` from
-//!    the stored town and roll a level-appropriate catalog from `shop_stock.json`.
+//!    character's building INSTANCE id, so we resolve its `typeId` + town-building
+//!    level from the stored town, but pick the stock band from the character level.
 //! 2. **Capture-derived template** fallback — if the shop isn't one of the 4
 //!    crafting vendors, or the town/level can't be resolved, or the config lacks
 //!    that building/level, we serve a captured template. A vendor is thus NEVER
@@ -185,17 +185,18 @@ fn window_to_wire(shop_id: Uuid, window: &MerchantWindow) -> OpenShopResponse {
 
 /// Roll a fresh window for a shop, or reuse the live one.
 ///
-/// `building` = the resolved `(typeId, level)` when `shop_id` is one of the
-/// character's crafting-vendor buildings; `None` when it couldn't be resolved.
-/// Tier 1 rolls generated, level-appropriate stock plus the level's measured gold
-/// band. Tier 2 falls back to the capture-derived template so a vendor is never
-/// empty — including its captured `wallet`, which is real retail merchant gold.
+/// `building` = the resolved `(typeId, building_level, stock_level)` when `shop_id`
+/// is one of the character's crafting-vendor buildings; `None` when it couldn't be
+/// resolved. Tier 1 rolls generated, player-level-appropriate stock plus the town
+/// building level's measured gold band. Tier 2 falls back to the capture-derived
+/// template so a vendor is never empty — including its captured `wallet`, which is
+/// real retail merchant gold.
 ///
 /// `force_reroll` is set by `/auth/refreshloot`, the client's explicit restock.
 fn window_for(
     app_state: &ServerGlobal,
     shop_id: Uuid,
-    building: Option<(Uuid, u64)>,
+    building: Option<(Uuid, u64, u64)>,
     existing: Option<&MerchantWindow>,
     now: i64,
     force_reroll: bool,
@@ -227,26 +228,31 @@ fn window_for(
     };
 
     // Tier 1 — authored per-level generation (crafting vendors we can resolve).
-    if let Some((type_id, level)) = building {
+    if let Some((type_id, building_level, stock_level)) = building {
         let refresh_s = app_state
             .shop_stock
-            .refresh_seconds(&type_id, level)
+            .refresh_seconds(&type_id, building_level)
             .unwrap_or(CATALOG_WINDOW_MS / 1000);
         window.expiration_ms = ((start + refresh_s * 1000) / 1000) * 1000;
         let win_index = shop_gen::window_index(start, refresh_s);
-        let bundles =
-            shop_gen::generate_catalog(&app_state.shop_stock, &type_id, level, &shop_id, win_index);
+        let bundles = shop_gen::generate_catalog(
+            &app_state.shop_stock,
+            &type_id,
+            stock_level,
+            &shop_id,
+            win_index,
+        );
         if !bundles.is_empty() {
             window.template_id = type_id;
             window.bundles = bundles.into_iter().map(|b| (b.id, b.quantity)).collect();
             window.wallet_gold = app_state
                 .shop_stock
-                .merchant_gold(&type_id, level)
+                .merchant_gold(&type_id, building_level)
                 .map(|band| band.roll(&shop_id, start))
                 .unwrap_or(0);
             if window.wallet_gold == 0 {
                 log::warn!(
-                    "[shop] no merchantGold band for building {type_id} level {level}; \
+                    "[shop] no merchantGold band for building {type_id} level {building_level}; \
                      the vendor will pay 0 for the player's items"
                 );
             }
@@ -276,6 +282,25 @@ fn window_for(
         .map(|w| w.balance.max(0) as u64)
         .unwrap_or(0);
     window
+}
+
+fn stock_level_for_player_level(player_level: u16) -> u64 {
+    if player_level == 0 {
+        return 0;
+    }
+    (((u64::from(player_level) - 1) / 10) + 1).min(9)
+}
+
+fn stock_building_for(entry: &CharacterDbEntryShop, shop_id: Uuid) -> Option<(Uuid, u64, u64)> {
+    let (type_id, building_level) = entry
+        .town
+        .as_ref()
+        .and_then(|t| find_building_type_level(&t.0, shop_id))?;
+    Some((
+        type_id,
+        building_level,
+        stock_level_for_player_level(entry.character.0.level),
+    ))
 }
 
 /// Walk `town.districts[].segments{}.buildings{}` for the building whose `id` equals
@@ -325,10 +350,7 @@ async fn open_or_refresh(
         conn.transaction(move |mut conn| {
             async move {
                 let mut entry = load_owned(&mut conn, character_id, user_id).await?;
-                let building = entry
-                    .town
-                    .as_ref()
-                    .and_then(|t| find_building_type_level(&t.0, shop_id));
+                let building = stock_building_for(&entry, shop_id);
                 let window = window_for(
                     &globals,
                     shop_id,
@@ -530,10 +552,7 @@ pub async fn buy_from_shop(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
-            let building = entry
-                .town
-                .as_ref()
-                .and_then(|t| find_building_type_level(&t.0, shop_id));
+            let building = stock_building_for(&entry, shop_id);
             let mut window = window_for(
                 &globals,
                 shop_id,
@@ -709,10 +728,7 @@ pub async fn open_social_shop(
     conn.transaction(move |mut conn| {
         async move {
             let mut owner = load_other(&mut conn, owner_character_id, owner_user_id).await?;
-            let building = owner
-                .town
-                .as_ref()
-                .and_then(|t| find_building_type_level(&t.0, shop_id));
+            let building = stock_building_for(&owner, shop_id);
             let window = window_for(
                 &globals,
                 shop_id,
@@ -774,10 +790,7 @@ pub async fn buy_from_social_shop(
             let mut owner = load_other(&mut conn, owner_character_id, owner_user_id).await?;
             let mut visitor = load_owned(&mut conn, visitor_character_id, user_id).await?;
 
-            let building = owner
-                .town
-                .as_ref()
-                .and_then(|t| find_building_type_level(&t.0, shop_id));
+            let building = stock_building_for(&owner, shop_id);
             let mut window = window_for(
                 &globals,
                 shop_id,
@@ -919,10 +932,7 @@ pub async fn buy_back_from_shop(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
-            let building = entry
-                .town
-                .as_ref()
-                .and_then(|t| find_building_type_level(&t.0, shop_id));
+            let building = stock_building_for(&entry, shop_id);
             // `false`: never reroll the catalogue on a buyback. Rerolling would
             // discard the very slot being claimed.
             let mut window = window_for(
@@ -1004,10 +1014,7 @@ pub async fn sell_to_shop(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
-            let building = entry
-                .town
-                .as_ref()
-                .and_then(|t| find_building_type_level(&t.0, shop_id));
+            let building = stock_building_for(&entry, shop_id);
             let mut window = window_for(
                 &globals,
                 shop_id,
@@ -1153,6 +1160,30 @@ mod tests {
         });
         let (_ty, level) = find_building_type_level(&town, bid).unwrap();
         assert_eq!(level, 0);
+    }
+
+    #[test]
+    fn player_level_selects_the_stock_band() {
+        assert_eq!(stock_level_for_player_level(1), 1, "control: level 1 uses stock band 1");
+        assert_eq!(stock_level_for_player_level(9), 1);
+        assert_eq!(stock_level_for_player_level(10), 1);
+        assert_eq!(stock_level_for_player_level(11), 2);
+        assert_eq!(
+            stock_level_for_player_level(74),
+            8,
+            "a level-74 character must not be limited by a low-level town building"
+        );
+        assert_eq!(stock_level_for_player_level(86), 9);
+        assert_eq!(stock_level_for_player_level(100), 9);
+    }
+
+    #[test]
+    fn zero_player_level_has_no_authored_stock_band() {
+        assert_eq!(
+            stock_level_for_player_level(0),
+            0,
+            "negative control: level 0 stays on the special captured/seeded band"
+        );
     }
 
     /// The open/refresh wire must always advertise the merchant's gold — an empty
