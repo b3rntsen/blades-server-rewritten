@@ -3981,6 +3981,9 @@ fn emit_damage(
         &components,
         now,
     ));
+    if !matches!(combat.phase, FlowState::StateTimeout) {
+        return out;
+    }
     if shield_retaliates {
         out.extend(apply_shield_enchant_retaliation(
             combat,
@@ -4067,22 +4070,30 @@ fn apply_revenge(
     if defender_slot == attacker_slot {
         return out;
     }
-    // A one-hit Attack, Spell or Maneuver may trigger. A channeled spell/condition is
-    // not “one-hit”; captures contain no Revenge after ContinuousSpell or StatusEffect
-    // frames. A channeled Frostbite can therefore provoke at most its initial hit,
-    // never one retaliation per 0.2 s tick.
-    if matches!(
-        triggering_source,
-        super::state::DamageSource::ContinuousSpell
-            | super::state::DamageSource::StatusEffect
-            | super::state::DamageSource::Revenge
-    ) {
+    // Retail gates ElementalRevenge with `IsDirectDamage` and then excludes Revenge
+    // itself. That admits Attack, Spell, WeaponManeuver, EchoWeapon and
+    // ShieldManeuver; it rejects channel ticks, statuses, traps and area effects.
+    if triggering_source == super::state::DamageSource::Revenge
+        || !triggering_source.is_direct_damage()
+    {
         return out;
     }
     let entries = match combat.fighters.get(defender_slot) {
-        Some(f) if !f.loadout.revenge.is_empty() => f.loadout.revenge.clone(),
-        _ => return out,
+        Some(f) => {
+            let mut entries = f.loadout.revenge.clone();
+            if triggering_source == super::state::DamageSource::Spell {
+                entries.extend(f.loadout.spell_revenge.iter().copied());
+                if f.guard_up(now) {
+                    entries.extend(f.loadout.block_spell_revenge.iter().copied());
+                }
+            }
+            entries
+        }
+        None => return out,
     };
+    if entries.is_empty() {
+        return out;
+    }
 
     for (ty, raw) in entries {
         if raw <= 0.0 {
@@ -4090,49 +4101,41 @@ fn apply_revenge(
         }
         let suffered_same_element = triggering_components
             .iter()
-            .any(|(incoming_ty, damage)| *incoming_ty == ty && *damage > 0.0);
-        if !suffered_same_element {
+            .filter(|(incoming_ty, damage)| *incoming_ty == ty && *damage > 0.0)
+            .map(|(_, damage)| *damage)
+            .sum::<f32>();
+        let capped = raw.min(suffered_same_element);
+        if capped <= 0.0 {
             continue;
         }
-        // Resistance is the attacker's, and it is what explains the gap between the
-        // shipped 137.32 and the 137.21 seen on the wire.
-        let resisted = {
-            let a = &combat.fighters[attacker_slot];
-            // No elemental piercing: that is a property of an ATTACK, and Revenge is
-            // gear firing on its own, not a swing the wearer aimed.
-            (raw - a.total_resistance_against(ty, 0.0, now)).max(0.0)
-        };
-        if resisted <= 0.0 {
+        let mut components = vec![(ty, capped)];
+        let resolved = super::damage::resolve_generic_components(
+            &combat.fighters[defender_slot].loadout,
+            &combat.fighters[attacker_slot],
+            super::state::DamageSource::Revenge,
+            ActiveSide::None,
+            &mut components,
+            now,
+        );
+        if resolved.total <= 0.0 {
             continue;
         }
-        combat.fighters[attacker_slot].take_damage_at(resisted.round().max(0.0) as u32, now);
-        let msg = {
-            let hit = &combat.fighters[attacker_slot];
-            let other = &combat.fighters[defender_slot];
-            messages::receive_damage(
-                hit.net_object_id,
-                NetObjectType::Avatar as u8,
-                hit.packed_stats(),
-                other.packed_stats(),
-                super::state::DamageSource::Revenge,
-                super::damage::flags::SHOW_DAMAGE
-                    | super::damage::flags::HAS_ATTACKER
-                    | hit.optimal_block_flag(now),
-                resisted,
-                0,
-                ActiveSide::None,
-                super::state::DamageType::None,
-                &[(ty, resisted)],
-            )
-        };
         info!(
-            "combat event: gsid={} attacker_slot={defender_slot} attacker={} target_slot={attacker_slot} target={} source=Revenge element={ty:?} damage={resisted:.2} trigger_source={triggering_source:?}",
+            "combat event: gsid={} attacker_slot={defender_slot} attacker={} target_slot={attacker_slot} target={} source=Revenge element={ty:?} cap={capped:.2} total={:.2} trigger_source={triggering_source:?}",
             combat.game_session_id,
             combat.fighters[defender_slot].loadout.display_name,
             combat.fighters[attacker_slot].loadout.display_name,
+            resolved.total,
         );
-        for v in 0..combat.fighters.len() {
-            out.push((v, msg.clone()));
+        out.extend(emit_damage(
+            combat,
+            defender_slot,
+            attacker_slot,
+            &resolved,
+            now,
+        ));
+        if !matches!(combat.phase, FlowState::StateTimeout) {
+            return out;
         }
     }
     out
@@ -13518,6 +13521,8 @@ mod report_31_high_block_stun {
         for source in [
             super::super::state::DamageSource::ContinuousSpell,
             super::super::state::DamageSource::StatusEffect,
+            super::super::state::DamageSource::AreaEffect,
+            super::super::state::DamageSource::Trap,
         ] {
             let mut c = combat(now, 2);
             c.fighters[1].loadout.revenge = vec![(super::super::state::DamageType::Fire, 43.68)];
@@ -13535,6 +13540,56 @@ mod report_31_high_block_stun {
                 c.fighters[0].health, hp,
                 "{source:?} must deal no retaliation"
             );
+        }
+    }
+
+    #[test]
+    fn revenge_caps_at_suffered_element_and_uses_generic_mitigation() {
+        let now = Instant::now();
+        let mut c = combat(now, 2);
+        let fire = super::super::state::DamageType::Fire;
+        c.fighters[1].loadout.revenge = vec![(fire, 100.0)];
+        c.fighters[0].loadout.resistances = vec![(fire, 9.0)];
+        let hp = c.fighters[0].health;
+
+        let out = super::apply_revenge(
+            &mut c,
+            1,
+            0,
+            super::super::state::DamageSource::Attack,
+            &[(fire, 10.0)],
+            now,
+        );
+
+        assert!(
+            out.iter().any(|(_s, b)| {
+                b.len() > 2
+                    && b[1] == 0x36
+                    && arena_proto::parse_netdata(&b[2..]).int(6) == Some(6)
+            }),
+            "the capped hit still emits as Revenge"
+        );
+        assert_eq!(
+            hp - c.fighters[0].health,
+            1,
+            "generic resistance keeps the 5 percent floor: min(10, 100) vs 9 resist"
+        );
+    }
+
+    #[test]
+    fn spell_revenge_answers_spells_only() {
+        let now = Instant::now();
+        let fire = super::super::state::DamageType::Fire;
+        for (source, should_fire) in [
+            (super::super::state::DamageSource::Attack, false),
+            (super::super::state::DamageSource::Spell, true),
+        ] {
+            let mut c = combat(now, 2);
+            c.fighters[1].loadout.spell_revenge = vec![(fire, 28.08)];
+            let hp = c.fighters[0].health;
+            let out = super::apply_revenge(&mut c, 1, 0, source, &[(fire, 20.0)], now);
+            assert_eq!(!out.is_empty(), should_fire, "{source:?}");
+            assert_eq!(c.fighters[0].health < hp, should_fire, "{source:?}");
         }
     }
 
@@ -17038,6 +17093,46 @@ mod double_ko_cap_tests {
             assert_eq!(nd.string(6), Some(l));
             assert_eq!(nd.string(12), Some(w));
         }
+    }
+
+    #[test]
+    fn same_millisecond_revenge_ko_uses_level_not_causal_order() {
+        let now = Instant::now();
+        let mut c = live(now);
+        c.fighters[0].loadout.level = 50;
+        c.fighters[1].loadout.level = 10;
+        c.fighters[1].loadout.revenge =
+            vec![(super::super::state::DamageType::Fire, 10_000.0)];
+
+        let hit = ResolvedDamage {
+            source: super::super::state::DamageSource::Attack,
+            active_side: ActiveSide::Right,
+            flags: super::super::damage::flags::SHOW_DAMAGE
+                | super::super::damage::flags::HAS_ATTACKER,
+            pre_mitigation_components: vec![(super::super::state::DamageType::Fire, 10_000.0)],
+            components: vec![(super::super::state::DamageType::Fire, 10_000.0)],
+            raw_components: vec![(super::super::state::DamageType::Fire, 10_000.0)],
+            total: 10_000.0,
+            most_resisted: super::super::state::DamageType::None,
+            negated: false,
+            heal: 0.0,
+            block_physical: 1.0,
+            blocked: false,
+            resistance_scale: 1.0,
+        };
+        let out = emit_damage(&mut c, 0, 1, &hit, now);
+
+        assert!(c.fighters[0].is_dead(), "Revenge killed the primary attacker");
+        assert!(c.fighters[1].is_dead(), "the primary hit killed the defender");
+        assert_eq!(
+            c.round_winners,
+            vec![Some(1)],
+            "same-ms retaliation double KO uses lower level, not hit causality"
+        );
+        assert_eq!(c.rounds_won, [0, 1]);
+        let nd = op48(&out);
+        assert_eq!(nd.string(5), Some(B));
+        assert_eq!(nd.string(6), Some(A));
     }
 
     #[test]

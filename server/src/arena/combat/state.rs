@@ -332,6 +332,19 @@ impl DamageSource {
     pub fn is_weapon_based(self) -> bool {
         matches!(self, DamageSource::Attack | DamageSource::WeaponManeuver)
     }
+
+    /// Retail's `Damage.IsDirectDamage` (`@0x1BD4C8C`): Attack, Spell,
+    /// WeaponManeuver, EchoWeapon and ShieldManeuver.
+    pub fn is_direct_damage(self) -> bool {
+        matches!(
+            self,
+            DamageSource::Attack
+                | DamageSource::Spell
+                | DamageSource::WeaponManeuver
+                | DamageSource::EchoWeapon
+                | DamageSource::ShieldManeuver
+        )
+    }
 }
 
 /// `ActorAnimation` (`BGS.Game.Animation`, `dump.cs:12812`) — the animation a
@@ -1041,15 +1054,16 @@ pub struct Loadout {
     /// Attacker-side `Fortify <Element> Damage` — a 0..1 fraction per element that
     /// raises that element track's amplification ceiling. [Phase 3.6]
     pub element_fortify: Vec<(DamageType, f32)>,
-    /// Elemental RETALIATION from gear: when this fighter is hit, each entry deals
-    /// that much of that damage type back at the attacker (`DamageSource::Revenge`).
-    ///
-    /// Capture-measured, not inferred: across 203 Revenge frames in s615/s616 the
-    /// damage type varies per wearer (Frost / Fire / Poison), the magnitudes repeat
-    /// from a small fixed set, and they do NOT scale with the incoming hit — 105.0
-    /// followed a blocked 54.3 and again a blocked 23.8. It is the wearer's gear
-    /// hitting back, not a block-punish.
+    /// Elemental retaliation from ordinary `Revenge*` gear. Each entry caps at the
+    /// post-mitigation same-element damage just suffered, then resolves as generic
+    /// `DamageSource::Revenge` back into the attacker.
     pub revenge: Vec<(DamageType, f32)>,
+    /// `SpellRevenge*` artifact powers: same cap and generic Revenge path, but only
+    /// when the triggering direct damage source is `Spell`.
+    pub spell_revenge: Vec<(DamageType, f32)>,
+    /// `BlockSpellRevenge*` artifact powers: Spell-only, and only while guarding.
+    /// No shipped item currently carries these, but the logic is live.
+    pub block_spell_revenge: Vec<(DamageType, f32)>,
     /// Gear that damages the wearer's OPPONENT continuously, whether or not anyone
     /// swings: `ContinuousPoisonDamagePropertyLogic` (Ebony Mail) and
     /// `ContinuousFrostDamagePropertyLogic` (Rimelink). Each entry is a damage type

@@ -588,18 +588,22 @@ fn apply_enchant_with_rating_and_multiplier(
         "ShieldMagickaDamagePropertyLogic" => lo.shield_enchant_damage.push((DamageType::Magicka, magnitude)),
 
         // ---- elemental retaliation (Revenge) -------------------------------
-        // Only these FOUR ship values. All nine `SpellRevenge*` /
-        // `BlockSpellRevenge*` / Templar variants are zero at every tier in the
-        // shipped data, so they are deliberately not wired: they would add
-        // dispatch for a mechanic that does nothing.
-        //
-        // `magnitude` is validated against the wire: Frost Revenge t10 is
-        // 7591 * ENCHANT_DAMAGE_PER_VALUE = 137.32, and 137.21 is an observed
-        // value in s615 — the remainder being the target's resistance.
+        // These families cap at the post-mitigation same-element damage suffered
+        // and then resolve through generic Revenge damage. SpellRevenge is live on
+        // Warlock's Ring; BlockSpellRevenge has no shipped carrier, but the asset
+        // values are non-zero and the trigger is modelled.
         "RevengeFirePropertyLogic" => lo.revenge.push((DamageType::Fire, magnitude)),
         "RevengeFrostPropertyLogic" => lo.revenge.push((DamageType::Frost, magnitude)),
         "RevengeShockPropertyLogic" => lo.revenge.push((DamageType::Shock, magnitude)),
         "RevengePoisonPropertyLogic" => lo.revenge.push((DamageType::Poison, magnitude)),
+        "SpellRevengeFirePropertyLogic" => lo.spell_revenge.push((DamageType::Fire, magnitude)),
+        "SpellRevengeFrostPropertyLogic" => lo.spell_revenge.push((DamageType::Frost, magnitude)),
+        "SpellRevengeShockPropertyLogic" => lo.spell_revenge.push((DamageType::Shock, magnitude)),
+        "SpellRevengePoisonPropertyLogic" => lo.spell_revenge.push((DamageType::Poison, magnitude)),
+        "BlockSpellRevengeFirePropertyLogic" => lo.block_spell_revenge.push((DamageType::Fire, magnitude)),
+        "BlockSpellRevengeFrostPropertyLogic" => lo.block_spell_revenge.push((DamageType::Frost, magnitude)),
+        "BlockSpellRevengeShockPropertyLogic" => lo.block_spell_revenge.push((DamageType::Shock, magnitude)),
+        "BlockSpellRevengePoisonPropertyLogic" => lo.block_spell_revenge.push((DamageType::Poison, magnitude)),
 
         // ---- resistance ratings (Phase 3.4) --------------------------------
         "ResistFirePropertyLogic" => push_resist(lo, DamageType::Fire, magnitude),
@@ -725,6 +729,14 @@ fn enchant_logic_is_primary(logic: &str) -> bool {
             | "RevengeFrostPropertyLogic"
             | "RevengeShockPropertyLogic"
             | "RevengePoisonPropertyLogic"
+            | "SpellRevengeFirePropertyLogic"
+            | "SpellRevengeFrostPropertyLogic"
+            | "SpellRevengeShockPropertyLogic"
+            | "SpellRevengePoisonPropertyLogic"
+            | "BlockSpellRevengeFirePropertyLogic"
+            | "BlockSpellRevengeFrostPropertyLogic"
+            | "BlockSpellRevengeShockPropertyLogic"
+            | "BlockSpellRevengePoisonPropertyLogic"
             | "ResistFirePropertyLogic"
             | "ResistFrostPropertyLogic"
             | "ResistShockPropertyLogic"
@@ -772,7 +784,10 @@ pub(crate) fn apply_template_properties_with_rating(
     template: &str,
     item_rating: Option<f32>,
 ) {
-    for (property_uuid, tier) in gamedata::mandatory_properties(template) {
+    for (property_uuid, tier) in gamedata::mandatory_properties(template)
+        .iter()
+        .chain(super::artifact_properties::mandatory_properties(template))
+    {
         // The generated table stores the uuid as a string; `apply_enchant` keys on
         // `Uuid`. A malformed one is skipped rather than panicking — a bad row in a
         // 37k-line generated file must not take the arena down.
@@ -1499,18 +1514,30 @@ mod tests {
         );
     }
 
-    /// The nine zero-valued Revenge variants must not register a retaliation.
+    /// SpellRevenge powers are live on Warlock's Ring at tier 5. Their zero in
+    /// `enchantments.json` is the artifact price curve, not the combat magnitude.
     #[test]
-    fn the_vs_spell_revenge_variants_are_inert() {
+    fn warlocks_ring_registers_spell_revenge() {
+        use super::super::state::DamageType;
         let mut lo = starter();
         lo.revenge.clear();
-        // "Frost Revenge Vs Spell" — 0.0 at every one of its ten tiers.
-        let id = Uuid::parse_str("18ef65f2-7585-401b-b7a4-3fe66a830721").unwrap();
-        super::apply_enchant(&mut lo, &id, 10);
-        assert!(
-            lo.revenge.iter().all(|(_t, m)| *m > 0.0),
-            "a zero-magnitude family must not add a retaliation entry",
-        );
+        lo.spell_revenge.clear();
+        lo.block_spell_revenge.clear();
+
+        super::apply_template_properties(&mut lo, "23607f09-a103-4ed3-a0de-33e0498f8018");
+
+        assert!(lo.revenge.is_empty(), "Warlock's Ring carries SpellRevenge, not ordinary Revenge");
+        assert!(lo.block_spell_revenge.is_empty(), "no Warlock block-only SpellRevenge");
+        assert_eq!(lo.spell_revenge.len(), 4);
+        let has = |ty: DamageType, want: f32| {
+            lo.spell_revenge
+                .iter()
+                .any(|(got_ty, got)| *got_ty == ty && (*got - want).abs() < 0.01)
+        };
+        assert!(has(DamageType::Fire, 28.08));
+        assert!(has(DamageType::Poison, 28.08));
+        assert!(has(DamageType::Frost, 23.69));
+        assert!(has(DamageType::Shock, 23.69));
     }
     use super::*;
     use serde_json::json;
