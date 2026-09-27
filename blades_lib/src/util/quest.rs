@@ -44,7 +44,10 @@ pub fn generate_quest_data(
     // A quest without a `dungeon_info` block carries no objectives/dungeon; treat it as a
     // dialogue quest (no dungeon data) rather than panicking on `.unwrap()`.
     let Some(dungeon_info) = quest_data.dungeon_info.as_ref() else {
-        return Ok((dialogue_quest(quest_id, 0, HashMap::new(), player_level, scaling), None));
+        return Ok((
+            dialogue_quest(quest_id, 0, HashMap::new(), player_level, scaling),
+            None,
+        ));
     };
 
     let difficulty_level = scaling.enemy_level(player_level);
@@ -86,7 +89,6 @@ pub fn generate_quest_data(
         return Ok((quest, None));
     }
 
-
     let enemy_level = scaling.enemy_level(player_level);
     let given_xp = scaling.given_xp(enemy_level);
 
@@ -94,10 +96,79 @@ pub fn generate_quest_data(
     // own hard-coded copy of this shape, which served floor 1's spawn groups on
     // every floor and hung every deeper run.
     let generated_dungeon_data =
-        crate::util::dungeon::generate_for_dungeon(game_data, &dungeon_info.dungeon_uuid, enemy_level, given_xp)
-            .ok_or(GenerateQuestDataError::DungeonNotFound(dungeon_info.dungeon_uuid))?;
+        generate_for_quest_dungeon(game_data, &dungeon_info.dungeon_uuid, enemy_level, given_xp)
+            .ok_or(GenerateQuestDataError::DungeonNotFound(
+                dungeon_info.dungeon_uuid,
+            ))?;
 
     Ok((quest, Some(generated_dungeon_data)))
+}
+
+fn generate_for_quest_dungeon(
+    game_data: &GameData,
+    dungeon_uuid: &Uuid,
+    enemy_level: i64,
+    given_xp: u64,
+) -> Option<DungeonGeneratedData> {
+    let mut ids = quest_dungeon_family_ids(game_data, dungeon_uuid)?;
+    let first = ids.remove(0);
+    let mut out =
+        crate::util::dungeon::generate_for_dungeon(game_data, &first, enemy_level, given_xp)?;
+
+    for id in ids {
+        let extra =
+            crate::util::dungeon::generate_for_dungeon(game_data, &id, enemy_level, given_xp)?;
+        merge_dungeon_generated_data(&mut out, extra);
+    }
+
+    Some(out)
+}
+
+/// Every dungeon a quest's generated data covers: the dungeon itself, or its whole
+/// variant family (`*_A`/`*_1` entrypoints) in handle order (#260).
+pub fn quest_dungeon_family_ids(game_data: &GameData, dungeon_uuid: &Uuid) -> Option<Vec<Uuid>> {
+    let dungeon = game_data.dungeons.get(dungeon_uuid)?;
+    let Some(prefix) = first_variant_family_prefix(&dungeon.handle) else {
+        return Some(vec![*dungeon_uuid]);
+    };
+
+    let mut variants: Vec<(String, Uuid)> = game_data
+        .dungeons
+        .iter()
+        .filter_map(|(id, candidate)| {
+            (variant_family_prefix(&candidate.handle) == Some(prefix))
+                .then(|| (candidate.handle.clone(), *id))
+        })
+        .collect();
+    variants.sort_by(|a, b| a.0.cmp(&b.0));
+
+    Some(variants.into_iter().map(|(_, id)| id).collect())
+}
+
+fn first_variant_family_prefix(handle: &str) -> Option<&str> {
+    let prefix = handle
+        .strip_suffix("_A")
+        .or_else(|| handle.strip_suffix("_1"))?;
+    prefix.ends_with("DungeonSettings").then_some(prefix)
+}
+
+fn variant_family_prefix(handle: &str) -> Option<&str> {
+    ["_A", "_B", "_C", "_D", "_1", "_2", "_3", "_4"]
+        .iter()
+        .find_map(|suffix| handle.strip_suffix(suffix))
+        .filter(|prefix| prefix.ends_with("DungeonSettings"))
+}
+
+fn merge_dungeon_generated_data(out: &mut DungeonGeneratedData, extra: DungeonGeneratedData) {
+    for (id, data) in extra.enemy_generated_data {
+        out.enemy_generated_data.entry(id).or_insert(data);
+    }
+    for (id, data) in extra.item_generated_data {
+        out.item_generated_data.entry(id).or_insert(data);
+    }
+    for (id, data) in extra.chest_generated_data {
+        out.chest_generated_data.entry(id).or_insert(data);
+    }
 }
 
 /// A dialogue / no-dungeon quest body (no dungeon data). Used for a quest whose
@@ -130,6 +201,24 @@ mod tests {
     use super::*;
     use crate::static_data::{EnemyLevelScaling, QuestLevelScaling};
 
+    const POOL_OF_DESPAIR: &str = "c178813f-ea7c-4732-aba0-a5c8d8767ec9";
+    const SQ201_1: &str = "da0a20c9-bbca-46bf-8f14-fead50f50675";
+    const SQ201_2: &str = "0ded6e84-d942-434b-8563-33ef301f6189";
+    const SQ201_KEY_HOLDER: &str = "379775a2-8015-4c8c-a503-0691597528a0";
+    const DOOR_KEY: &str = "faa3aeb3-9284-4d83-8981-1af00e3a6398";
+    const EQ15_QUEST: &str = "e8f3614c-8672-4f77-9dad-4b400676f4b6";
+    const EQ15_DUNGEON: &str = "924f1147-fd7f-4736-9e2d-f33fa942dbdd";
+
+    fn game_data() -> GameData {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+        serde_json::from_str(&std::fs::read_to_string(path).expect("read parsed.json"))
+            .expect("parse game data")
+    }
+
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).expect("uuid")
+    }
+
     /// A scaling table like `quests_daily.json`: default skull (2) → offset 0.
     fn scaling() -> QuestLevelScaling {
         QuestLevelScaling {
@@ -140,6 +229,64 @@ mod tests {
             // No measured curve: this fixture exercises the skull-offset fallback.
             measured: Default::default(),
         }
+    }
+
+    #[test]
+    fn pool_of_despair_generates_both_sq201_stages_and_the_key_holder() {
+        let game_data = game_data();
+        let (_, generated) = generate_quest_data(&game_data, uuid(POOL_OF_DESPAIR), 13, &scaling())
+            .expect("Pool of Despair exists");
+        let generated = generated.expect("Pool of Despair has dungeon data");
+
+        let stage_1 = &game_data.dungeons[&uuid(SQ201_1)];
+        let stage_2 = &game_data.dungeons[&uuid(SQ201_2)];
+        assert_eq!(
+            generated.enemy_generated_data.len(),
+            stage_1.spawn_info.enemy_spawn_groups.len()
+                + stage_2.spawn_info.enemy_spawn_groups.len(),
+            "retail sent generated data for both SQ201_DungeonSettings_1 and _2"
+        );
+
+        let holder = &generated.enemy_generated_data[&uuid(SQ201_KEY_HOLDER)][0][0];
+        assert_eq!(
+            holder
+                .merged_loot_table()
+                .stackable_items
+                .get(&uuid(DOOR_KEY))
+                .copied(),
+            Some(1),
+            "SQ201_DungeonSettings_2's key-holder must be present and carry the door key"
+        );
+    }
+
+    #[test]
+    fn non_variant_quest_stays_on_its_single_dungeon() {
+        let game_data = game_data();
+        assert_eq!(
+            game_data.dungeons[&uuid(EQ15_DUNGEON)].handle.as_str(),
+            "EQ15_Stone_DungeonSettings"
+        );
+
+        let (_, generated) =
+            generate_quest_data(&game_data, uuid(EQ15_QUEST), 14, &scaling()).expect("EQ15 exists");
+        let generated = generated.expect("EQ15 has dungeon data");
+
+        assert_eq!(
+            generated.enemy_generated_data.len(),
+            game_data.dungeons[&uuid(EQ15_DUNGEON)]
+                .spawn_info
+                .enemy_spawn_groups
+                .len()
+        );
+    }
+
+    #[test]
+    fn later_variant_is_not_a_family_entrypoint() {
+        let game_data = game_data();
+        assert_eq!(
+            quest_dungeon_family_ids(&game_data, &uuid(SQ201_2)),
+            Some(vec![uuid(SQ201_2)])
+        );
     }
 
     #[test]

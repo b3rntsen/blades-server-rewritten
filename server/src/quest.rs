@@ -309,6 +309,43 @@ fn add_missing_item_tables(
     changed
 }
 
+/// Add generated dungeon sections a stored row predates (#260).
+///
+/// Retail generated every stage of a multi-part quest at accept time. Rows
+/// minted before we knew that can be missing an entire sibling dungeon's spawn
+/// groups, so later repairs that only touch existing groups can never add the
+/// key-holder. Only absent spawn groups are inserted; existing rolls stay as the
+/// player already saw them, and captured/imported version-1 rows are left alone.
+fn add_missing_dungeon_sections(
+    stored: &mut DungeonGeneratedData,
+    fresh: &DungeonGeneratedData,
+) -> bool {
+    if stored.version != 0 {
+        return false;
+    }
+
+    let mut changed = false;
+    for (group, enemies) in &fresh.enemy_generated_data {
+        if !stored.enemy_generated_data.contains_key(group) {
+            stored.enemy_generated_data.insert(*group, enemies.clone());
+            changed = true;
+        }
+    }
+    for (spawn, items) in &fresh.item_generated_data {
+        if !stored.item_generated_data.contains_key(spawn) {
+            stored.item_generated_data.insert(*spawn, items.clone());
+            changed = true;
+        }
+    }
+    for (spawn, chests) in &fresh.chest_generated_data {
+        if !stored.chest_generated_data.contains_key(spawn) {
+            stored.chest_generated_data.insert(*spawn, chests.clone());
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// Give a stored row the key a key-holder enemy should carry (#236).
 ///
 /// Rows generated before report #236 have the right enemies but no key: the
@@ -644,6 +681,92 @@ mod report192_missing_table_tests {
 }
 
 #[cfg(test)]
+mod report260_variant_family_repair_tests {
+    use super::*;
+
+    const POOL_OF_DESPAIR: &str = "c178813f-ea7c-4732-aba0-a5c8d8767ec9";
+    const SQ201_2: &str = "0ded6e84-d942-434b-8563-33ef301f6189";
+    const SQ201_KEY_HOLDER: &str = "379775a2-8015-4c8c-a503-0691597528a0";
+    const DOOR_KEY: &str = "faa3aeb3-9284-4d83-8981-1af00e3a6398";
+
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+
+    fn fresh(level: i64) -> DungeonGeneratedData {
+        let game_data = super::report85_job_generated_data_tests::game_data();
+        let (_, generated) = generate_quest_data(
+            &game_data,
+            uuid(POOL_OF_DESPAIR),
+            level,
+            &blades_lib::static_data::QuestLevelScaling::default(),
+        )
+        .expect("Pool of Despair exists");
+        generated.expect("it has a dungeon")
+    }
+
+    fn remove_sq201_stage_2(data: &mut DungeonGeneratedData) {
+        let game_data = super::report85_job_generated_data_tests::game_data();
+        let stage_2 = &game_data.dungeons[&uuid(SQ201_2)];
+        for group in stage_2.spawn_info.enemy_spawn_groups.keys() {
+            data.enemy_generated_data.remove(group);
+        }
+        for spawn in stage_2.spawn_info.item.keys() {
+            data.item_generated_data.remove(spawn);
+        }
+        for spawn in stage_2.spawn_info.chest.keys() {
+            data.chest_generated_data.remove(spawn);
+        }
+    }
+
+    fn keys(data: &DungeonGeneratedData) -> u64 {
+        data.enemy_generated_data
+            .get(&uuid(SQ201_KEY_HOLDER))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| e.merged_loot_table().stackable_items.get(&uuid(DOOR_KEY)).copied())
+            .sum()
+    }
+
+    #[test]
+    fn accepted_pool_rows_gain_the_missing_second_stage_and_key_holder() {
+        let fresh = fresh(13);
+        let mut stored = fresh.clone();
+        remove_sq201_stage_2(&mut stored);
+        let before = serde_json::to_value(&stored).unwrap();
+        assert_eq!(keys(&stored), 0, "the pre-fix row lacks the key-holder");
+
+        assert!(add_missing_dungeon_sections(&mut stored, &fresh));
+
+        assert_eq!(keys(&stored), 1, "the SQ201 stage-2 key-holder was not restored");
+        let mut after = serde_json::to_value(&stored).unwrap();
+        for section in ["enemyGeneratedData", "itemGeneratedData", "chestGeneratedData"] {
+            let Some(obj) = after[section].as_object_mut() else {
+                continue;
+            };
+            let Some(fresh_obj) = serde_json::to_value(&fresh).unwrap()[section].as_object().cloned() else {
+                continue;
+            };
+            obj.retain(|id, _| !fresh_obj.contains_key(id) || before[section].get(id).is_some());
+        }
+        assert_eq!(after, before, "existing generated data was rewritten");
+    }
+
+    #[test]
+    fn captured_rows_do_not_grow_missing_variant_stages() {
+        let fresh = fresh(13);
+        let mut stored = fresh.clone();
+        remove_sq201_stage_2(&mut stored);
+        stored.version = 1;
+        let before = serde_json::to_value(&stored).unwrap();
+
+        assert!(!add_missing_dungeon_sections(&mut stored, &fresh));
+        assert_eq!(serde_json::to_value(&stored).unwrap(), before);
+    }
+}
+
+#[cfg(test)]
 mod report152_stale_story_loot_tests {
     use super::*;
     use blades_lib::static_data::QuestLevelScaling;
@@ -661,7 +784,11 @@ mod report152_stale_story_loot_tests {
         .expect("Haunted Forest exists");
         let fresh = fresh.expect("Haunted Forest has a dungeon");
 
-        assert_eq!(fresh.item_generated_data.len(), 8, "all eight item spawns");
+        assert_eq!(
+            fresh.item_generated_data.len(),
+            41,
+            "all floor spawns from MQ16_DungeonSettings_A and _B"
+        );
         let paying_spawns = fresh
             .item_generated_data
             .values()
@@ -674,7 +801,7 @@ mod report152_stale_story_loot_tests {
                 })
             })
             .count();
-        assert_eq!(paying_spawns, 7, "the capture-derived deterministic rolls");
+        assert_eq!(paying_spawns, 37, "the capture-derived deterministic rolls");
 
         // Exact shape of the reporter's durable pre-fix row: spawn/table ids exist,
         // but every result is empty. Preserve the enemy/chest sections verbatim.
@@ -1091,6 +1218,7 @@ pub async fn get_quests(
                 ) else {
                     continue;
                 };
+                let expanded = !is_event && add_missing_dungeon_sections(stored, &fresh);
                 let refreshed = !is_event && refresh_empty_item_loot(stored, fresh.clone());
                 let grew = !is_event && add_missing_item_tables(stored, &fresh);
                 let keyed = add_missing_enemy_key_loot(stored, &fresh);
@@ -1102,7 +1230,7 @@ pub async fn get_quests(
                         character_id_var
                     );
                 }
-                if refreshed || grew || keyed {
+                if expanded || refreshed || grew || keyed {
                     use crate::schema::quests;
                     diesel::update(
                         quests::table
