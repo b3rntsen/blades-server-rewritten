@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS arena_h2h_ratings (
 CREATE INDEX IF NOT EXISTS arena_h2h_ratings_top_idx
     ON arena_h2h_ratings (rating DESC, matches DESC);
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS arena_match_results_h2h_rebuild_idx
+-- Not CONCURRENTLY: the box's deploy helper accepts only up.sql/down.sql in a
+-- migration (no metadata.toml to opt out of the transaction), and the table is small.
+CREATE INDEX IF NOT EXISTS arena_match_results_h2h_rebuild_idx
     ON arena_match_results (game_session_id, recorded_at, id)
     WHERE opponent_character_id IS NOT NULL;
