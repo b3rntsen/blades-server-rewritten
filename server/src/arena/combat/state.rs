@@ -23,18 +23,8 @@ pub const ARENA_HEALTH_MULTIPLIER: u32 = 3;
 /// match; before that, a round-ending death loops to the next round.
 pub const ROUND_WINS_TO_WIN_MATCH: u8 = 2;
 
-/// How many double-KO rounds a match may REPLAY. **AUTHORED, not capture-derived**
-/// (no recorded match has a double KO). After one replay, the next double KO is
-/// decided by [`MatchCombat::draw_tiebreak_winner`] like a timed-out round. Uncapped,
-/// two phase-locked fighters whose killing blow and Revenge retaliation land in the
-/// same step replay the identical round forever (CRE-SOAK seed 0x4d4e3b4e79f4ca03).
-pub const MAX_DOUBLE_KO_REPLAYS: u8 = 1;
-
-/// Hard backstop on rounds played in one match: best-of-3 plus the replays above.
-/// With the replay cap a match cannot legitimately reach it undecided; if it ever
-/// does, the match ends on the round tally (see `resolve::on_round_ended`).
-pub const MATCH_ROUND_HARD_CAP: usize =
-    (2 * ROUND_WINS_TO_WIN_MATCH as usize - 1) + MAX_DOUBLE_KO_REPLAYS as usize;
+/// Hard backstop on rounds played in one match: retail-style best-of-3.
+pub const MATCH_ROUND_HARD_CAP: usize = 2 * ROUND_WINS_TO_WIN_MATCH as usize - 1;
 
 /// Base max-Health from the shipped `PlayerStatsData._playerStats._healthBase`.
 pub const HEALTH_BASE: u32 = 200;
@@ -341,6 +331,19 @@ impl DamageSource {
     /// so a spell, a channel tick or a shield bash never carries them.
     pub fn is_weapon_based(self) -> bool {
         matches!(self, DamageSource::Attack | DamageSource::WeaponManeuver)
+    }
+
+    /// Retail's `Damage.IsDirectDamage` (`@0x1BD4C8C`): Attack, Spell,
+    /// WeaponManeuver, EchoWeapon and ShieldManeuver.
+    pub fn is_direct_damage(self) -> bool {
+        matches!(
+            self,
+            DamageSource::Attack
+                | DamageSource::Spell
+                | DamageSource::WeaponManeuver
+                | DamageSource::EchoWeapon
+                | DamageSource::ShieldManeuver
+        )
     }
 }
 
@@ -1051,15 +1054,16 @@ pub struct Loadout {
     /// Attacker-side `Fortify <Element> Damage` — a 0..1 fraction per element that
     /// raises that element track's amplification ceiling. [Phase 3.6]
     pub element_fortify: Vec<(DamageType, f32)>,
-    /// Elemental RETALIATION from gear: when this fighter is hit, each entry deals
-    /// that much of that damage type back at the attacker (`DamageSource::Revenge`).
-    ///
-    /// Capture-measured, not inferred: across 203 Revenge frames in s615/s616 the
-    /// damage type varies per wearer (Frost / Fire / Poison), the magnitudes repeat
-    /// from a small fixed set, and they do NOT scale with the incoming hit — 105.0
-    /// followed a blocked 54.3 and again a blocked 23.8. It is the wearer's gear
-    /// hitting back, not a block-punish.
+    /// Elemental retaliation from ordinary `Revenge*` gear. Each entry caps at the
+    /// post-mitigation same-element damage just suffered, then resolves as generic
+    /// `DamageSource::Revenge` back into the attacker.
     pub revenge: Vec<(DamageType, f32)>,
+    /// `SpellRevenge*` artifact powers: same cap and generic Revenge path, but only
+    /// when the triggering direct damage source is `Spell`.
+    pub spell_revenge: Vec<(DamageType, f32)>,
+    /// `BlockSpellRevenge*` artifact powers: Spell-only, and only while guarding.
+    /// No shipped item currently carries these, but the logic is live.
+    pub block_spell_revenge: Vec<(DamageType, f32)>,
     /// Gear that damages the wearer's OPPONENT continuously, whether or not anyone
     /// swings: `ContinuousPoisonDamagePropertyLogic` (Ebony Mail) and
     /// `ContinuousFrostDamagePropertyLogic` (Rimelink). Each entry is a damage type
@@ -1081,6 +1085,9 @@ pub struct Loadout {
     ///
     /// A shield has no weapon weight, so these ship a single curve — 52.66 at tier 10.
     pub shield_ravage: Vec<(DamageType, f32)>,
+    /// Shield elemental/stamina/magicka damage enchants. They ride the owner's shield
+    /// bash and retaliate on an optimal blocked weapon/bash hit.
+    pub shield_enchant_damage: Vec<(DamageType, f32)>,
     /// Display name + character UUID for the round-start op50 spawn. Empty for the
     /// starter loadout (no character row); set by `loadout::from_character` + the
     /// matchmaker's character load.
@@ -1122,11 +1129,11 @@ pub struct Loadout {
     /// `blockBase`, ceiled (`get_EquippedBlockRating@0x1c54420`). See
     /// [`crate::arena::combat::loadout::blocking_item_rating`].
     pub block_rating: f32,
-    /// Flat Block Reduction enchant rating. It adds to `R` AFTER the optimal boost
-    /// (`Actor$$ResolveBlocking@0x1c54284` boosts the equipped rating only, then the
-    /// `BlockRatingMethod` sources add). Type-agnostic for now; the per-type split is
-    /// a separate gap (03-D11).
+    /// Legacy flat Block Reduction enchant rating, retained for hand-built tests.
     pub block_rating_bonus: f32,
+    /// Per-type Block Reduction enchant ratings. These add to `R` only for matching
+    /// component types, after the equipped blocking item boost.
+    pub block_rating_bonuses: Vec<(DamageType, f32)>,
     /// The shield's `optimalBlockBoost` as shipped (1.0 on all 51 shields).
     pub shield_optimal_block_boost: f32,
     /// The equipped shield's `_damageBase`: a shield bash's base damage, all of it
@@ -1137,6 +1144,18 @@ pub struct Loadout {
     /// attacker's enchants — subtracted from the defender's resistance rating before
     /// the reduction is computed. [Phase 3.4]
     pub elem_resist_piercing_rating: f32,
+    /// Damage conversion suffixes: up to this much physical damage is moved into the
+    /// target element at D2 for Attack, WeaponManeuver and ShieldManeuver sources.
+    pub convert_damage: Vec<(DamageType, f32)>,
+    /// Haste sources as speed reductions. The shipped table is raw weapon-speed
+    /// multiplier (0.88..0.70), so this stores `1 - raw`.
+    pub haste: f32,
+    /// Ebony Blade-style cooldown penalty, seconds added to the victim's active spell
+    /// and maneuver cooldowns on landed weapon hits.
+    pub cooldown_penalty_secs: f32,
+    /// Shorten Stagger sources on the wearer. Applied when this fighter receives a
+    /// Staggered status.
+    pub shorten_stagger: f32,
     /// **PDOC / EDOC** — `Opportunist{Physical,Elemental}PropertyLogic`, flat damage
     /// "against targets suffering a condition".
     ///
@@ -1171,11 +1190,14 @@ pub struct Loadout {
     /// Attacker-side **Elemental Resistance Piercing** (fraction 0..1): the defender's
     /// elemental resistance is scaled by `(1 − elem_resist_piercing)` before applying.
     pub elem_resist_piercing: f32,
-    /// Per-condition threshold BUMP (fraction): "Fortify Poisoned/Burning/Frozen/
-    /// Enervated" raise that condition's land threshold by this fraction of max HP.
-    pub status_resist: Vec<(StatusEffectType, f32)>,
-    /// "Shorten/Extend Elemental Statuses" → multiply status `_duration` by this (1.0 =
-    /// none). Parsed but not yet applied to DoT timers (informational).
+    /// Attacker-side Fortify<Condition>: flat damage added to matching elemental
+    /// hits when accumulating status conditioning.
+    pub status_fortify: Vec<(StatusEffectType, f32)>,
+    /// Victim-side Shorten Elemental Statuses amount, summed as 0.15 per piece.
+    pub status_shorten: f32,
+    /// Attacker-side Extend Elemental Statuses amount, summed as 0.15 per piece.
+    pub status_extend: f32,
+    /// Legacy condition duration multiplier, retained for old fixtures.
     pub status_dur_mult: f32,
 }
 
@@ -1226,6 +1248,15 @@ impl Loadout {
         } else {
             self.weapon_optimal_block_boost
         }
+    }
+
+    pub fn weapon_speed_multiplier(&self, slowed: bool) -> f32 {
+        let slow = if slowed {
+            crate::arena::combat::gamedata::combat_params::SLOW_STATUS_MULTIPLIER
+        } else {
+            0.0
+        };
+        (1.0 - self.haste + slow).max(0.05)
     }
 
     /// Commit-to-commit swing cadence (Phase 3.12): the equipped template's own
@@ -1515,6 +1546,8 @@ pub struct Fighter {
     /// Raw pools (hundreds-to-thousands; Health is ×3 in arena). The WIRE packs a
     /// FRACTION of max — see `packed_stats` / `wire_fraction`, not these raw values.
     pub health: u32,
+    /// Exact landing time of the hit/tick that first killed this fighter this round.
+    pub death_at: Option<Instant>,
     pub stamina: u32,
     pub magicka: u32,
     pub max_health: u32,
@@ -2130,6 +2163,7 @@ impl Fighter {
             player_net_object_id: 0,  // assigned by MatchInstance::new
             ability_net_object_id: 0, // assigned by MatchInstance::new
             health: max_health,
+            death_at: None,
             stamina: max_stamina,
             magicka: max_magicka,
             max_health,
@@ -2405,6 +2439,17 @@ impl Fighter {
         boosted + self.loadout.block_rating_bonus
     }
 
+    pub fn block_rating_against(&self, optimal: bool, ty: DamageType) -> f32 {
+        let typed: f32 = self
+            .loadout
+            .block_rating_bonuses
+            .iter()
+            .filter(|(t, _)| *t == ty)
+            .map(|(_, v)| *v)
+            .sum();
+        self.block_rating(optimal) + typed
+    }
+
     /// True iff this fighter is currently staggered. [Phase 3.13]
     pub fn is_staggered(&self, now: Instant) -> bool {
         matches!(self.staggered_until, Some(t) if now < t)
@@ -2474,7 +2519,9 @@ impl Fighter {
         if !self.is_staggered(now) {
             self.weakness_rating = 0.0;
         }
-        self.staggered_until = Some(now + std::time::Duration::from_secs_f32(secs.max(0.05)));
+        let shorten = self.loadout.shorten_stagger.max(0.0);
+        let duration = secs * (1.0 - shorten).max(0.0);
+        self.staggered_until = Some(now + std::time::Duration::from_secs_f32(duration.max(0.05)));
         // A re-stagger does not change the state, so the seam in `force_actor_state`
         // does not see it; it still interrupts a maneuver started from the first
         // stagger (Recovery Strikes, a dodge).
@@ -2863,6 +2910,7 @@ impl Fighter {
     /// rather than 0 — the fighter survives the window and dies normally afterwards
     /// if the damage keeps coming.
     pub fn take_damage_at(&mut self, amount: u32, now: Instant) {
+        let was_alive = !self.is_dead();
         if self.has_reckless_fury(now) {
             let floor = 1;
             self.health = self
@@ -2873,6 +2921,9 @@ impl Fighter {
             return;
         }
         self.take_damage(amount);
+        if was_alive && self.is_dead() {
+            self.death_at = Some(now);
+        }
     }
 
     /// Apply floating health damage with a running floor. This matches retail's
@@ -3071,6 +3122,32 @@ impl Fighter {
         rating.max(0.0)
     }
 
+    pub fn resistance_rating_against_source(
+        &self,
+        ty: DamageType,
+        source: DamageSource,
+        pierce_frac: f32,
+        pierce_rating: f32,
+    ) -> f32 {
+        let mut rating = self.resistance_rating_against(ty, pierce_frac, pierce_rating);
+        if matches!(
+            source,
+            DamageSource::Spell
+                | DamageSource::ContinuousSpell
+                | DamageSource::AreaEffect
+                | DamageSource::EchoWeapon
+        ) {
+            rating += self
+                .loadout
+                .resistances
+                .iter()
+                .filter(|(t, _)| *t == DamageType::None)
+                .map(|(_, v)| *v)
+                .sum::<f32>();
+        }
+        rating
+    }
+
     /// The **Weakness Rating** this fighter suffers for an incoming `ty` component —
     /// a flat damage INCREASE (`increasePerWeaknessRating`), capped at
     /// `maximumWeaknessEffect`. Kept separate from resistance: netting the two (as the
@@ -3133,8 +3210,7 @@ impl Fighter {
     }
 
     /// The per-condition land threshold (absolute HP) for `condition`: the base
-    /// `HEALTH_PERCENT_TO_CAUSE_STATUS × base_max_health`, RAISED by any matching
-    /// `status_resist` ("Fortify Poisoned/…") bump. [§5.2 + §5.5]
+    /// `HEALTH_PERCENT_TO_CAUSE_STATUS × base_max_health`.
     ///
     /// **Tracker #31.** This used `max_health`, i.e. the arena-TRIPLED bar, which
     /// made every elemental condition need 3× the shipped damage to land. The repo
@@ -3160,19 +3236,9 @@ impl Fighter {
     /// magnitude without inventing a number; pinning the exact rule needs a
     /// dedicated pass over the capture corpus.
     pub fn condition_threshold(&self, condition: StatusEffectType) -> f32 {
-        // Both terms are fractions of the SAME pool — the Fortify bump used to be a
-        // fraction of the tripled bar while the base was too, so they matched; now
-        // that the base is the un-cheated pool the bump follows it.
         let pool = self.base_max_health() as f32;
-        let base = HEALTH_PERCENT_TO_CAUSE_STATUS * pool;
-        let bump: f32 = self
-            .loadout
-            .status_resist
-            .iter()
-            .filter(|(c, _)| *c == condition)
-            .map(|(_, frac)| *frac * pool)
-            .sum();
-        base + bump
+        let _ = condition;
+        HEALTH_PERCENT_TO_CAUSE_STATUS * pool
     }
 
     /// The elemental amplification factor for an attacker's `ty` enchant track against
@@ -3504,8 +3570,7 @@ pub enum RoundOutcome {
     Ongoing,
     /// Exactly one fighter died — `winner` scores the round.
     Win { winner: usize },
-    /// **Both** fighters hit 0 HP in the same resolution step: no score, the round
-    /// is replayed. [Phase 3.14 — AUTHORED, no capture evidence]
+    /// **Both** fighters hit 0 HP before the round closes.
     DoubleKo,
 }
 
@@ -3592,16 +3657,9 @@ pub struct MatchCombat {
     /// captured op48 frames fills (5,6),(7,8),(9,10) for rounds 1..N and sets
     /// propId 11 = N-1. See `messages::match_post_round_info`.
     ///
-    /// `None` is a REPLAYED double KO: a round that happened but that nobody won. The
-    /// client models exactly that: `RoundInfo$$IsTied@0x2071a74` and
-    /// `MatchPostRoundInfoMessage$$IsTied@0x1cebbd0` are "winner id and loser id both
-    /// empty", and `MatchEndMatchMessage$$GetNumberOfRoundsWonBy@0x1cea200` counts
-    /// round entries whose winner id equals the player. So a tied round is sent with
-    /// empty ids and left out of the per-round arrays ([`Self::decided_round_results`]),
-    /// which keeps the client's tally equal to `rounds_won`.
+    /// Double KOs are decided immediately and recorded as `Some(winner)`, so the
+    /// client's tally from op48/op49 stays equal to `rounds_won`.
     pub round_winners: Vec<Option<usize>>,
-    /// Double-KO rounds replayed so far this match (capped by [`MAX_DOUBLE_KO_REPLAYS`]).
-    pub double_ko_replays: u8,
     /// When the current flow phase started (drives StateTimeout heartbeat /
     /// round timers from the tick).
     pub phase_entered: Instant,
@@ -3712,7 +3770,6 @@ impl MatchCombat {
             round: 0,
             rounds_won: [0; 2],
             round_winners: Vec::new(),
-            double_ko_replays: 0,
             phase_entered: now,
             winner: None,
             matchend_step: 0,
@@ -3765,7 +3822,6 @@ impl MatchCombat {
             1 => RoundOutcome::Win {
                 winner: self.opponent_of(dead[0]).unwrap_or(dead[0]),
             },
-            // Simultaneous 0 HP: nobody scores, the round is replayed.
             _ => RoundOutcome::DoubleKo,
         }
     }
@@ -3799,6 +3855,53 @@ impl MatchCombat {
             return if trophies.0 < trophies.1 { 0 } else { 1 };
         }
         0
+    }
+
+    /// Owner decision, 2026-09-26: a double KO is decided immediately.
+    ///
+    /// First key: whose killing impact landed first, at millisecond precision. If the
+    /// lethal landing times are equal to the millisecond (or unavailable in a direct
+    /// unit-test fixture), lower character level wins, then lower XP, then a seeded
+    /// per-match coin flip.
+    pub fn double_ko_winner(&self) -> usize {
+        if self.fighters.len() < 2 {
+            return 0;
+        }
+        match (self.fighters[0].death_at, self.fighters[1].death_at) {
+            (Some(a), Some(b)) => {
+                let delta = if a >= b {
+                    a.duration_since(b)
+                } else {
+                    b.duration_since(a)
+                };
+                if delta >= std::time::Duration::from_millis(1) {
+                    return if a < b { 1 } else { 0 };
+                }
+            }
+            (Some(_), None) => return 1,
+            (None, Some(_)) => return 0,
+            (None, None) => {}
+        }
+
+        let level0 = self.fighters[0].loadout.level;
+        let level1 = self.fighters[1].loadout.level;
+        if level0 != level1 {
+            return if level0 < level1 { 0 } else { 1 };
+        }
+
+        let xp0 = self.fighters[0].loadout.character_experience;
+        let xp1 = self.fighters[1].loadout.character_experience;
+        if xp0 != xp1 {
+            return if xp0 < xp1 { 0 } else { 1 };
+        }
+
+        let mut seed = 0xcbf2_9ce4_8422_2325u64;
+        for b in self.game_session_id.as_bytes() {
+            seed ^= *b as u64;
+            seed = seed.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        seed ^= (self.round_winners.len() as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        BotRng::new(seed).chance_half() as usize
     }
 
     /// Charge every equipped ability's **initial cooldown** for the round that is
@@ -3908,6 +4011,7 @@ impl MatchCombat {
             f.magicka_surge_bonus = 0.0;
             f.no_magicka_regen_until = None;
             f.health = f.max_health;
+            f.death_at = None;
             f.stamina = f.max_stamina;
             f.magicka = f.max_magicka;
             f.stats_seq = f.stats_seq.wrapping_add(1);
@@ -4565,8 +4669,8 @@ mod tests {
             "physical is not conditioned"
         );
 
-        // Base Poisoned threshold = 25% of the character's OWN max HP; Fortify-Poisoned
-        // raises it. Tracker #31: the arena `CHEAT_BASE_HEALTH_MULTIPLIER` must NOT
+        // Base Poisoned threshold = 25% of the character's OWN max HP. Tracker #31:
+        // the arena `CHEAT_BASE_HEALTH_MULTIPLIER` must NOT
         // inflate it — under the old reading every elemental condition needed 3× the
         // shipped damage and Frostbite could never freeze anyone.
         let base_hp = f.base_max_health() as f32;
@@ -4583,12 +4687,11 @@ mod tests {
             base < HEALTH_PERCENT_TO_CAUSE_STATUS * max,
             "the arena health cheat does not raise it"
         );
-        f.loadout.status_resist = vec![(StatusEffectType::Poisoned, 0.10)];
-        let bumped = f.condition_threshold(StatusEffectType::Poisoned);
-        assert!(bumped > base, "Fortify Poisoned raises the threshold");
-        assert!(
-            (bumped - (HEALTH_PERCENT_TO_CAUSE_STATUS + 0.10) * base_hp).abs() < 1e-2,
-            "the Fortify bump is a fraction of the same un-cheated pool"
+        f.loadout.status_fortify = vec![(StatusEffectType::Poisoned, 16.8)];
+        assert_eq!(
+            f.condition_threshold(StatusEffectType::Poisoned),
+            base,
+            "Fortify<Condition> belongs to the attacker, not the victim threshold"
         );
     }
 

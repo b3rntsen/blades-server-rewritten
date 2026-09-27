@@ -57,11 +57,9 @@ const FROSTBITE_UUID: &str = "4be1d681-c35d-4540-b255-c2910ac80664";
 /// plus its 0.100 s combo-recovery gate. The old use of full `recoveryTime` imposed
 /// 0.783 s and rejected retail-paced releases observed at 0.372–0.668 s.
 fn charge_speed_multiplier(fighter: &super::state::Fighter, now: Instant) -> f32 {
-    if fighter.is_slowed(now) {
-        1.0 + super::gamedata::combat_params::SLOW_STATUS_MULTIPLIER
-    } else {
-        1.0
-    }
+    fighter
+        .loadout
+        .weapon_speed_multiplier(fighter.is_slowed(now))
 }
 
 fn swing_cooldown_for(fighter: &super::state::Fighter, now: Instant) -> Duration {
@@ -1239,10 +1237,11 @@ fn land_due_hits(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)
     if combat.pending_hits.is_empty() {
         return Vec::new();
     }
-    let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut combat.pending_hits)
+    let (mut due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut combat.pending_hits)
         .into_iter()
         .partition(|h| now >= h.due);
     combat.pending_hits = waiting;
+    due.sort_by_key(|h| h.due);
 
     let mut out = Vec::new();
     for h in due {
@@ -1262,11 +1261,11 @@ fn land_due_hits(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)
         // (`_bonusDamages`: Light 11.24 / Versatile 14.17 / Heavy 17.86 at rank 1).
         // Ride the maneuver channel — same "flat additive on the physical base"
         // treatment, on a clone so it expires with the buff rather than sticking.
-        if combat.fighters[h.sender].has_reckless_fury(now) {
+        if combat.fighters[h.sender].has_reckless_fury(h.due) {
             attacker_loadout.maneuver_bonus_damage += combat.fighters[h.sender].reckless_fury_bonus;
         }
-        // The count this hit reads is the attacker's count NOW, before this hit's own
-        // increment (`CalculateAttackTypeFactor@0x1bd3df0` reads `_comboCount`, and
+        // The count this hit reads at its landing, before this hit's own increment
+        // (`CalculateAttackTypeFactor@0x1bd3df0` reads `_comboCount`, and
         // `IncrementCombo` follows `ReceiveDamage`).
         let combo_count = combat.fighters[h.sender].combo_count;
         let resolved = RetailDamageModel.resolve_attack(
@@ -1276,7 +1275,7 @@ fn land_due_hits(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)
             h.side,
             h.swing_factor,
             combo_count,
-            now,
+            h.due,
         );
         // A connected OPTIMAL block on the target RESETS the attacker's combo (§4.2: a
         // block breaks the chain — the next swing starts fresh at ×1.0) **and STUNS the
@@ -1286,7 +1285,7 @@ fn land_due_hits(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)
         if blocked_high {
             combat.fighters[h.sender].reset_combo();
         }
-        out.extend(emit_damage(combat, h.sender, h.target, &resolved, now));
+        out.extend(emit_damage(combat, h.sender, h.target, &resolved, h.due));
         // The hit connected, so the chain advances, blocked or negated alike (02 §4.1,
         // X8). A swing that never landed (target dead, round over) does not reach here.
         // An optimal block's stagger resets it again at once (R6).
@@ -2647,7 +2646,7 @@ fn land_due_echoes(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
             "combat: slot {} ECHO landed {:.1} on slot {}",
             e.sender, e.damage, e.target
         );
-        out.extend(emit_damage(combat, e.sender, e.target, &resolved, now));
+        out.extend(emit_damage(combat, e.sender, e.target, &resolved, e.due));
     }
     out
 }
@@ -2657,10 +2656,17 @@ pub(super) fn land_due_impacts(combat: &mut MatchCombat, now: Instant) -> Vec<(u
     let mut out = Vec::new();
     // One impact at a time, interrupts first: an impact that lands can stagger or
     // paralyse a caster whose own impact is due in the same tick, and that one must
-    // then not land (06-D1). Queue order is kept.
+    // then not land (06-D1). Due impacts land in scheduled-time order, matching
+    // `land_due_hits` and the double-KO landing rule.
     loop {
         out.extend(super::interrupts::process_interrupts(combat, now));
-        let Some(i) = combat.pending_impacts.iter().position(|p| now >= p.due) else {
+        let Some((i, _)) = combat
+            .pending_impacts
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| now >= p.due)
+            .min_by_key(|(_, p)| p.due)
+        else {
             break;
         };
         let p = combat.pending_impacts.remove(i);
@@ -2686,7 +2692,7 @@ pub(super) fn land_due_impacts(combat: &mut MatchCombat, now: Instant) -> Vec<(u
             p.level,
             p.tag,
             p.magicka_full_at_cast,
-            now,
+            p.due,
             p.reset_maneuver_combo_after,
         ));
     }
@@ -3776,6 +3782,27 @@ fn emit_damage(
     // frame reports. [Fighter::drain_mirrored_pools]
     let (drained_stam, drained_mag) =
         combat.fighters[target_slot].drain_mirrored_pools(&components);
+    if resolved.source.is_weapon_based()
+        && combat.fighters[attacker_slot].loadout.cooldown_penalty_secs > 0.0
+    {
+        let secs = combat.fighters[attacker_slot].loadout.cooldown_penalty_secs;
+        let mut extended_any = false;
+        for until in combat.fighters[target_slot].cooldowns.values_mut() {
+            if *until > now {
+                *until += Duration::from_secs_f32(secs);
+                extended_any = true;
+            }
+        }
+        if extended_any {
+            out.push((
+                target_slot,
+                messages::modify_ability_cooldowns(
+                    combat.fighters[target_slot].net_object_id,
+                    secs,
+                ),
+            ));
+        }
+    }
     // RAVAGE — a flat cut to the victim's MAXIMUM pools, taken per landed weapon hit
     // and given back at the round boundary. It is not scaled by block: the
     // `damageGiven` hook fires when a weapon hit applies non-zero health damage, so
@@ -3808,7 +3835,15 @@ fn emit_damage(
     // The defender's shield ravages whoever swung into the guard, so it is applied to
     // the ATTACKER, and only when the guard actually took the hit (`blocked`), at
     // full whatever the block let through.
-    let (sr_s, sr_m, sr_h) = if blocked {
+    let shield_retaliates = blocked
+        && (flags & super::damage::flags::WAS_OPTIMAL_BLOCKING) != 0
+        && matches!(
+            resolved.source,
+            super::state::DamageSource::Attack
+                | super::state::DamageSource::WeaponManeuver
+                | super::state::DamageSource::ShieldManeuver
+        );
+    let (sr_s, sr_m, sr_h) = if shield_retaliates {
         let shield = combat.fighters[target_slot].loadout.shield_ravage.clone();
         combat.fighters[attacker_slot].apply_ravage(&shield, 1.0)
     } else {
@@ -3946,6 +3981,20 @@ fn emit_damage(
         &components,
         now,
     ));
+    if !matches!(combat.phase, FlowState::StateTimeout) {
+        return out;
+    }
+    if shield_retaliates {
+        out.extend(apply_shield_enchant_retaliation(
+            combat,
+            target_slot,
+            attacker_slot,
+            now,
+        ));
+        if !matches!(combat.phase, FlowState::StateTimeout) {
+            return out;
+        }
+    }
 
     // ONE round end, however many fighters this hit left dead. Both dead (the target
     // died and Reflecting Bash / Revenge killed the attacker) is a double KO, which
@@ -3962,6 +4011,38 @@ fn emit_damage(
         out.extend(on_round_ending_death(combat, winner, now));
     }
     out
+}
+
+fn apply_shield_enchant_retaliation(
+    combat: &mut MatchCombat,
+    defender_slot: usize,
+    attacker_slot: usize,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    let mut entries = combat.fighters[defender_slot]
+        .loadout
+        .shield_enchant_damage
+        .clone();
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let total: f32 = entries
+        .iter()
+        .filter(|(ty, _)| super::damage::is_health_type(*ty))
+        .map(|(_, v)| *v)
+        .sum();
+    if total <= 0.0 {
+        return Vec::new();
+    }
+    let resolved = super::damage::resolve_generic_components(
+        &combat.fighters[defender_slot].loadout,
+        &combat.fighters[attacker_slot],
+        super::state::DamageSource::Revenge,
+        ActiveSide::None,
+        &mut entries,
+        now,
+    );
+    emit_damage(combat, defender_slot, attacker_slot, &resolved, now)
 }
 
 /// Elemental retaliation: the fighter who was just hit deals their gear's Revenge
@@ -3989,22 +4070,30 @@ fn apply_revenge(
     if defender_slot == attacker_slot {
         return out;
     }
-    // A one-hit Attack, Spell or Maneuver may trigger. A channeled spell/condition is
-    // not “one-hit”; captures contain no Revenge after ContinuousSpell or StatusEffect
-    // frames. A channeled Frostbite can therefore provoke at most its initial hit,
-    // never one retaliation per 0.2 s tick.
-    if matches!(
-        triggering_source,
-        super::state::DamageSource::ContinuousSpell
-            | super::state::DamageSource::StatusEffect
-            | super::state::DamageSource::Revenge
-    ) {
+    // Retail gates ElementalRevenge with `IsDirectDamage` and then excludes Revenge
+    // itself. That admits Attack, Spell, WeaponManeuver, EchoWeapon and
+    // ShieldManeuver; it rejects channel ticks, statuses, traps and area effects.
+    if triggering_source == super::state::DamageSource::Revenge
+        || !triggering_source.is_direct_damage()
+    {
         return out;
     }
     let entries = match combat.fighters.get(defender_slot) {
-        Some(f) if !f.loadout.revenge.is_empty() => f.loadout.revenge.clone(),
-        _ => return out,
+        Some(f) => {
+            let mut entries = f.loadout.revenge.clone();
+            if triggering_source == super::state::DamageSource::Spell {
+                entries.extend(f.loadout.spell_revenge.iter().copied());
+                if f.guard_up(now) {
+                    entries.extend(f.loadout.block_spell_revenge.iter().copied());
+                }
+            }
+            entries
+        }
+        None => return out,
     };
+    if entries.is_empty() {
+        return out;
+    }
 
     for (ty, raw) in entries {
         if raw <= 0.0 {
@@ -4012,49 +4101,41 @@ fn apply_revenge(
         }
         let suffered_same_element = triggering_components
             .iter()
-            .any(|(incoming_ty, damage)| *incoming_ty == ty && *damage > 0.0);
-        if !suffered_same_element {
+            .filter(|(incoming_ty, damage)| *incoming_ty == ty && *damage > 0.0)
+            .map(|(_, damage)| *damage)
+            .sum::<f32>();
+        let capped = raw.min(suffered_same_element);
+        if capped <= 0.0 {
             continue;
         }
-        // Resistance is the attacker's, and it is what explains the gap between the
-        // shipped 137.32 and the 137.21 seen on the wire.
-        let resisted = {
-            let a = &combat.fighters[attacker_slot];
-            // No elemental piercing: that is a property of an ATTACK, and Revenge is
-            // gear firing on its own, not a swing the wearer aimed.
-            (raw - a.total_resistance_against(ty, 0.0, now)).max(0.0)
-        };
-        if resisted <= 0.0 {
+        let mut components = vec![(ty, capped)];
+        let resolved = super::damage::resolve_generic_components(
+            &combat.fighters[defender_slot].loadout,
+            &combat.fighters[attacker_slot],
+            super::state::DamageSource::Revenge,
+            ActiveSide::None,
+            &mut components,
+            now,
+        );
+        if resolved.total <= 0.0 {
             continue;
         }
-        combat.fighters[attacker_slot].take_damage_at(resisted.round().max(0.0) as u32, now);
-        let msg = {
-            let hit = &combat.fighters[attacker_slot];
-            let other = &combat.fighters[defender_slot];
-            messages::receive_damage(
-                hit.net_object_id,
-                NetObjectType::Avatar as u8,
-                hit.packed_stats(),
-                other.packed_stats(),
-                super::state::DamageSource::Revenge,
-                super::damage::flags::SHOW_DAMAGE
-                    | super::damage::flags::HAS_ATTACKER
-                    | hit.optimal_block_flag(now),
-                resisted,
-                0,
-                ActiveSide::None,
-                super::state::DamageType::None,
-                &[(ty, resisted)],
-            )
-        };
         info!(
-            "combat event: gsid={} attacker_slot={defender_slot} attacker={} target_slot={attacker_slot} target={} source=Revenge element={ty:?} damage={resisted:.2} trigger_source={triggering_source:?}",
+            "combat event: gsid={} attacker_slot={defender_slot} attacker={} target_slot={attacker_slot} target={} source=Revenge element={ty:?} cap={capped:.2} total={:.2} trigger_source={triggering_source:?}",
             combat.game_session_id,
             combat.fighters[defender_slot].loadout.display_name,
             combat.fighters[attacker_slot].loadout.display_name,
+            resolved.total,
         );
-        for v in 0..combat.fighters.len() {
-            out.push((v, msg.clone()));
+        out.extend(emit_damage(
+            combat,
+            defender_slot,
+            attacker_slot,
+            &resolved,
+            now,
+        ));
+        if !matches!(combat.phase, FlowState::StateTimeout) {
+            return out;
         }
     }
     out
@@ -4213,7 +4294,14 @@ fn apply_status_conditioning(
             continue;
         }
 
-        combat.fighters[target_slot].record_element_damage(*ty, *amount, now);
+        let fortify: f32 = combat.fighters[1 - target_slot]
+            .loadout
+            .status_fortify
+            .iter()
+            .filter(|(c, _)| *c == condition)
+            .map(|(_, v)| *v)
+            .sum();
+        combat.fighters[target_slot].record_element_damage(*ty, *amount + fortify, now);
         let recent = combat.fighters[target_slot].recent_element_damage(*ty);
         let threshold = combat.fighters[target_slot].condition_threshold(condition);
         if recent >= threshold {
@@ -4222,6 +4310,10 @@ fn apply_status_conditioning(
             let base_hp = combat.fighters[target_slot].base_max_health();
             let per_tick =
                 dot_percent_health(*ty) * DOT_TICK_INTERVAL.as_secs_f32() * base_hp as f32;
+            let duration_secs = condition_duration_secs(
+                &combat.fighters[1 - target_slot],
+                &combat.fighters[target_slot],
+            );
             combat.fighters[target_slot]
                 .effects
                 .push(super::state::ActiveEffect {
@@ -4229,7 +4321,7 @@ fn apply_status_conditioning(
                     damage_type: *ty,
                     value: per_tick,
                     per_tick_damage: per_tick,
-                    expires_at: now + Duration::from_secs_f32(CONDITION_DURATION_SECS),
+                    expires_at: now + Duration::from_secs_f32(duration_secs),
                     last_tick: now,
                     is_transient_resist: false,
                 });
@@ -4247,10 +4339,10 @@ fn apply_status_conditioning(
                 target_obj,
                 true,
                 condition,
-                CONDITION_DURATION_SECS,
+                duration_secs,
             );
             info!(
-                "combat status: gsid={} target_slot={target_slot} target={} status={condition:?} source_element={ty:?} recent_damage={recent:.1} threshold={threshold:.1} duration={CONDITION_DURATION_SECS} dot_per_tick={per_tick:.2} poisoned_ravage_hp={poisoned_ravage}",
+                "combat status: gsid={} target_slot={target_slot} target={} status={condition:?} source_element={ty:?} recent_damage={recent:.1} threshold={threshold:.1} duration={duration_secs} dot_per_tick={per_tick:.2} poisoned_ravage_hp={poisoned_ravage}",
                 combat.game_session_id, combat.fighters[target_slot].loadout.display_name,
             );
             for slot in 0..combat.fighters.len() {
@@ -4298,6 +4390,12 @@ fn apply_status_conditioning(
         }
     }
     out
+}
+
+fn condition_duration_secs(attacker: &super::state::Fighter, victim: &super::state::Fighter) -> f32 {
+    CONDITION_DURATION_SECS
+        * (1.0 + attacker.loadout.status_extend.max(0.0))
+        * (1.0 - victim.loadout.status_shorten.max(0.0)).max(0.0)
 }
 
 /// Clear a lapsed `Paralyzed` actor-state back to Idle once the paralyse duration
@@ -4367,7 +4465,7 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
         if combat.channels[i].remaining_ticks == 0 {
             continue;
         }
-        let (caster, target, uuid, level, magicka_full_at_cast) = {
+        let (caster, target, uuid, level, magicka_full_at_cast, due_at) = {
             let c = &combat.channels[i];
             (
                 c.caster_slot,
@@ -4375,6 +4473,7 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
                 c.ability_uuid.clone(),
                 c.ability_level,
                 c.magicka_full_at_cast,
+                c.next_tick_at,
             )
         };
         if target >= combat.fighters.len()
@@ -4405,9 +4504,9 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
             &caster_perks,
             &combat.fighters[target],
             ActiveSide::Middle,
-            now,
+            due_at,
         );
-        out.extend(emit_damage(combat, caster, target, &resolved, now));
+        out.extend(emit_damage(combat, caster, target, &resolved, due_at));
         if i >= combat.channels.len() {
             // This tick ended the round (see the guard at the top of the loop).
             break;
@@ -4536,7 +4635,7 @@ fn apply_continuous_area_damage(combat: &mut MatchCombat, now: Instant) -> Vec<(
                 &combat.fighters[target],
                 ty,
                 rate,
-                now,
+                due,
             );
             if resolved.total <= 0.0 {
                 continue;
@@ -4545,7 +4644,7 @@ fn apply_continuous_area_damage(combat: &mut MatchCombat, now: Instant) -> Vec<(
             let whole = owed.floor();
             combat.fighters[wearer].continuous_carry = owed - whole;
             let hp_before = combat.fighters[target].health;
-            combat.fighters[target].take_damage_at(whole as u32, now);
+            combat.fighters[target].take_damage_at(whole as u32, due);
             // Rimelink's frost mirrors onto stamina like any frost damage ("to Health
             // and Stamina"), so the bars in the frame below are post-drain.
             combat.fighters[target].drain_mirrored_pools(&resolved.components);
@@ -4574,7 +4673,7 @@ fn apply_continuous_area_damage(combat: &mut MatchCombat, now: Instant) -> Vec<(
                 out.push((v, msg.clone()));
             }
             if combat.fighters[target].is_dead() {
-                out.extend(on_round_ending_death(combat, wearer, now));
+                out.extend(on_round_ending_death(combat, wearer, due));
                 return out;
             }
         }
@@ -4631,9 +4730,6 @@ fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
     let mut out = Vec::new();
 
     for slot in 0..combat.fighters.len() {
-        // Prune expired transient resistances.
-        combat.fighters[slot].prune_transient_resistances(now);
-
         let opp_slot = combat.fighters[slot].arena_target;
         if combat.fighters[slot].is_dead() {
             continue;
@@ -4665,14 +4761,15 @@ fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
             })
             .collect();
 
-        'effects: for (idx, due, tick_dmg, dmg_type) in ticking {
-            combat.fighters[slot].effects[idx].last_tick += DOT_TICK_INTERVAL * due;
-
+        for (idx, due, tick_dmg, dmg_type) in ticking {
             if tick_dmg <= 0.0 {
+                combat.fighters[slot].effects[idx].last_tick += DOT_TICK_INTERVAL * due;
                 continue;
             }
 
             for _ in 0..due {
+                combat.fighters[slot].effects[idx].last_tick += DOT_TICK_INTERVAL;
+                let tick_at = combat.fighters[slot].effects[idx].last_tick;
                 let mut tick_components = vec![(dmg_type, tick_dmg)];
                 let attacker = super::state::Loadout::default();
                 let resolved = super::damage::mitigate_components(
@@ -4682,13 +4779,13 @@ fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
                     ActiveSide::None,
                     ActiveSide::None,
                     &mut tick_components,
-                    now,
+                    tick_at,
                     DOT_TICK_INTERVAL.as_secs_f32(),
                 );
                 let tick_total = resolved.total.max(0.0);
                 let hp_before = combat.fighters[slot].health;
                 let max_hp = combat.fighters[slot].max_health;
-                combat.fighters[slot].take_fractional_damage_at(tick_total, now);
+                combat.fighters[slot].take_fractional_damage_at(tick_total, tick_at);
                 let hp_after = combat.fighters[slot].health;
                 let pct = if max_hp > 0 {
                     100.0 * tick_total / max_hp as f32
@@ -4720,7 +4817,7 @@ fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
                     // No HAS_ATTACKER for DoT. Bit 3 is the defender's optimal-guard
                     // STATE, sent on DoT frames too (03-D19, `ApplyDamage` 0x1bd2a24).
                     super::damage::flags::SHOW_DAMAGE
-                        | combat.fighters[slot].optimal_block_flag(now),
+                        | combat.fighters[slot].optimal_block_flag(tick_at),
                     tick_total,
                     0,
                     ActiveSide::None,
@@ -4733,12 +4830,13 @@ fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
 
                 if combat.fighters[slot].is_dead() {
                     // DoT killed the defender — score the round for the opponent.
-                    out.extend(on_round_ending_death(combat, opp_slot, now));
-                    break 'effects;
+                    out.extend(on_round_ending_death(combat, opp_slot, tick_at));
+                    return out;
                 }
             }
         }
         combat.fighters[slot].effects.retain(|e| now < e.expires_at);
+        combat.fighters[slot].prune_transient_resistances(now);
     }
     out
 }
@@ -4954,23 +5052,15 @@ fn on_round_ended(
     now: Instant,
     ended_by_death: bool,
 ) -> Vec<(usize, Vec<u8>)> {
-    use super::state::{MATCH_ROUND_HARD_CAP, MAX_DOUBLE_KO_REPLAYS};
+    use super::state::MATCH_ROUND_HARD_CAP;
     let mut out = Vec::new();
-    // **Phase 3.14 — DOUBLE-KO.** Both fighters at 0 HP in the same resolution step.
-    // AUTHORED, not capture-derived — no recorded match ends this way, so this is a
-    // designed rule: the FIRST double KO of a match is replayed with no score; any
-    // later one is decided like a timed-out round, by `draw_tiebreak_winner` (both
-    // fractions are 0, so the lower `pvpTrophies`, then slot 0). A double KO that
-    // would reach `MATCH_ROUND_HARD_CAP` is never replayed either. Without the cap two
-    // phase-locked fighters replayed the identical round forever (CRE-SOAK seed
-    // 0x4d4e3b4e79f4ca03: a killing swing plus the victim's Frost Revenge, every round).
+    // Owner decision, 2026-09-26 — DOUBLE-KO. Both fighters at 0 HP is a decided
+    // round immediately: earliest lethal landing time at millisecond precision wins,
+    // then lower level, lower XP, then a seeded per-match coin flip.
     let double_ko =
         ended_by_death && combat.round_outcome() == super::state::RoundOutcome::DoubleKo;
-    let replay = double_ko
-        && combat.double_ko_replays < MAX_DOUBLE_KO_REPLAYS
-        && combat.round_winners.len() + 1 < MATCH_ROUND_HARD_CAP;
-    let winner = if double_ko && !replay {
-        combat.draw_tiebreak_winner(super::engine::pvp_trophies(combat))
+    let winner = if double_ko {
+        combat.double_ko_winner()
     } else {
         winner
     };
@@ -4990,27 +5080,18 @@ fn on_round_ended(
             fighter.force_actor_state(ActorStateType::Emote, now);
         }
     }
-    if replay {
-        combat.double_ko_replays += 1;
-        info!("combat: DOUBLE-KO — both fighters at 0 HP, round is replayed (no score)");
-    } else {
-        if double_ko {
-            info!(
-                "combat: DOUBLE-KO after {} replay(s) — decided by the draw tiebreak → slot {winner}",
-                combat.double_ko_replays,
-            );
-        }
-        if winner < combat.rounds_won.len() {
-            combat.rounds_won[winner] += 1;
-        }
+    if double_ko {
+        info!("combat: DOUBLE-KO — both fighters at 0 HP, decided immediately → slot {winner}");
     }
-    // Record THIS round's outcome (`None` = the replayed tie). op48 is cumulative —
-    // the client tallies the score from the whole round-by-round list, so every
-    // decided round must be present in order (capture-pinned, 375 frames).
-    combat.round_winners.push((!replay).then_some(winner));
+    if winner < combat.rounds_won.len() {
+        combat.rounds_won[winner] += 1;
+    }
+    // Record THIS decided round. op48 is cumulative — the client tallies the score
+    // from the whole round-by-round list, so every decided round must be present in
+    // order (capture-pinned, 375 frames).
+    combat.round_winners.push(Some(winner));
     // The backstop: a match that has played `MATCH_ROUND_HARD_CAP` rounds ends now,
-    // on the round tally (a tie there goes to this round's winner). Unreachable while
-    // the replay cap holds; it exists so no future rule can loop a match forever.
+    // on the round tally.
     let hard_capped = !combat.match_is_won() && combat.round_winners.len() >= MATCH_ROUND_HARD_CAP;
     let match_won = combat.match_is_won() || hard_capped;
     let match_winner = match combat.rounds_won {
@@ -5089,24 +5170,15 @@ fn on_round_ended(
     //    matchId = the gameSessionId (the Match net-object's propId9). Carries the ACTUAL
     //    round number (so the client scores THIS round, not a fixed round-3 frame) and
     //    `is_match_ended` = whether this death won the match (best-of-3). [bug-1 fix]
-    // Send the cumulative array of DECIDED rounds; a replayed tie goes out with empty
-    // ids (`messages::match_post_tied_round_info`).
+    // Send the cumulative array of decided rounds.
     let round_results = combat.decided_round_results();
-    let result_frame = if replay {
-        messages::match_post_tied_round_info(
-            combat.match_net_object_id,
-            &round_results,
-            &combat.game_session_id,
-        )
-    } else {
-        messages::match_post_round_info(
-            combat.match_net_object_id,
-            &round_results,
-            &combat.game_session_id,
-            match_won,
-            false, // a death, not a concession
-        )
-    };
+    let result_frame = messages::match_post_round_info(
+        combat.match_net_object_id,
+        &round_results,
+        &combat.game_session_id,
+        match_won,
+        false, // a death, not a concession
+    );
     // 4) Match net-object → PostRound(14), timeout 3.0 (s506 obj 123 round end).
     let post_round_update = messages::update_match(
         combat.match_net_object_id,
@@ -6064,8 +6136,17 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
     // then diff statuses: otherwise pruning the condition would drop its fifth tick.
     // [§Mechanic-2]
     out.extend(apply_dot_ticks(combat, now));
+    if matches!(combat.phase, FlowState::RoundEnd | FlowState::NextState) {
+        return out;
+    }
     out.extend(emit_status_removals(combat, now));
+    if matches!(combat.phase, FlowState::RoundEnd | FlowState::NextState) {
+        return out;
+    }
     out.extend(apply_channel_ticks(combat, now));
+    if matches!(combat.phase, FlowState::RoundEnd | FlowState::NextState) {
+        return out;
+    }
     out.extend(apply_continuous_area_damage(combat, now));
     if matches!(combat.phase, FlowState::RoundEnd | FlowState::NextState) {
         // A DoT killing blow just ended the round — no bot swings this tick.
@@ -9982,10 +10063,10 @@ mod phase4_tests {
         assert_eq!(f.actor_state(), super::super::state::ActorStateType::Idle);
     }
 
-    /// Phase 3.14: a simultaneous double-KO scores nothing; a 1-1 draw at the final
-    /// round is broken on remaining HP fraction, then on the lower `pvpTrophies`.
+    /// Phase 3.14: a double-KO is decided immediately by lethal landing time, then
+    /// lower level, then lower XP, then the seeded match fallback.
     #[test]
-    fn double_ko_scores_nothing_and_the_draw_tiebreak_is_ordered() {
+    fn double_ko_is_decided_immediately() {
         use super::super::state::RoundOutcome;
         let now = Instant::now();
         let mut combat = MatchCombat::new(2, 2, now);
@@ -10004,17 +10085,21 @@ mod phase4_tests {
         combat.fighters[0].take_damage(u32::MAX);
         assert_eq!(combat.round_outcome(), RoundOutcome::DoubleKo);
 
-        // Neither side scores on a double-KO.
-        let before = combat.rounds_won;
+        combat.fighters[0].loadout.level = 10;
+        combat.fighters[1].loadout.level = 20;
         let _ = on_round_ending_death(&mut combat, 0, now);
-        assert_eq!(combat.rounds_won, before, "a double-KO scores nothing");
+        assert_eq!(
+            combat.rounds_won,
+            [1, 0],
+            "lower-level slot 0 wins equal-time double KO"
+        );
 
-        // Tiebreak: higher remaining HP fraction first.
-        combat.reset_fighters_for_next_round(now);
+        // Control: timeout tiebreak still uses higher remaining HP fraction first.
+        combat.reset_fighters_for_next_round(now + Duration::from_secs(1));
         combat.fighters[1].take_damage(100);
         assert_eq!(combat.draw_tiebreak_winner((0, 0)), 0, "more HP left wins");
         // Equal HP → the LOWER pvpTrophies (the underdog) wins.
-        combat.reset_fighters_for_next_round(now);
+        combat.reset_fighters_for_next_round(now + Duration::from_secs(2));
         assert_eq!(combat.draw_tiebreak_winner((900, 100)), 1);
         assert_eq!(combat.draw_tiebreak_winner((100, 900)), 0);
         assert_eq!(
@@ -11845,6 +11930,186 @@ mod shipped_effects_tests {
     }
 
     #[test]
+    fn attacker_fortify_condition_counts_toward_landing() {
+        use super::super::state::DamageType;
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let threshold = c.fighters[1].condition_threshold(StatusEffectType::Poisoned);
+        c.fighters[0].loadout.status_fortify = vec![(StatusEffectType::Poisoned, 16.8)];
+
+        let just_short =
+            apply_status_conditioning(&mut c, 1, &[(DamageType::Poison, threshold - 10.0)], now);
+        assert_eq!(just_short.len(), 2, "attacker Fortify Poisoned pushes it over");
+
+        let mut control = combat2(now);
+        control.fighters[1].loadout.status_fortify = vec![(StatusEffectType::Poisoned, 16.8)];
+        let none = apply_status_conditioning(
+            &mut control,
+            1,
+            &[(DamageType::Poison, threshold - 10.0)],
+            now,
+        );
+        assert!(
+            none.is_empty(),
+            "control: defender-side Fortify Poisoned does not raise or lower the landing gate"
+        );
+    }
+
+    #[test]
+    fn elemental_condition_duration_uses_attacker_extend_and_victim_shorten() {
+        use super::super::state::DamageType;
+        let now = Instant::now();
+        let cases = [
+            (0.0, 0.15, 4.25),
+            (0.15, 0.15, 4.888),
+            (0.15, 0.0, 5.75),
+            (0.15, 0.375, 3.594),
+            (0.0, 0.375, 3.125),
+            (0.0, 0.497, 2.516),
+            (0.0, 0.5625, 2.188),
+        ];
+        for (extend, shorten, want) in cases {
+            let mut c = combat2(now);
+            c.fighters[0].loadout.status_extend = extend;
+            c.fighters[1].loadout.status_shorten = shorten;
+            let threshold = c.fighters[1].condition_threshold(StatusEffectType::Burning);
+            let out =
+                apply_status_conditioning(&mut c, 1, &[(DamageType::Fire, threshold + 1.0)], now);
+            assert_eq!(out.len(), 2);
+            let effect = c.fighters[1]
+                .effects
+                .iter()
+                .find(|e| e.effect == StatusEffectType::Burning)
+                .expect("Burning lands");
+            let got = effect.expires_at.duration_since(now).as_secs_f32();
+            assert!(
+                (got - want).abs() < 0.006,
+                "extend {extend} shorten {shorten}: got {got}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn haste_shortens_charge_thresholds_and_shorten_stagger_reduces_stun() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let normal_plateau = c.fighters[0].loadout.charge_params().attack_delay
+            + c.fighters[0].loadout.charge_params().backswing_time
+            + c.fighters[0].loadout.charge_params().max_damage_time * 0.5;
+        assert!(
+            super::charge_swing_factor(&c.fighters[0], normal_plateau, now).is_some(),
+            "control: normal hold reaches the plateau"
+        );
+
+        c.fighters[0].loadout.haste = 0.24;
+        assert!(
+            super::charge_swing_factor(&c.fighters[0], normal_plateau * 0.76, now).is_some(),
+            "Warlock's Ring t7 haste reaches the same threshold at x0.76"
+        );
+
+        c.fighters[1].loadout.shorten_stagger = 0.20;
+        assert!(c.fighters[1].apply_stagger_for(now, 2.5));
+        assert!(c.fighters[1].is_staggered(now + Duration::from_millis(1900)));
+        assert!(
+            !c.fighters[1].is_staggered(now + Duration::from_millis(2050)),
+            "Shorten Stagger t10 makes 2.5s become 2.0s"
+        );
+    }
+
+    #[test]
+    fn cooldown_penalty_extends_active_target_cooldowns_on_weapon_hits() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let spell = uuid_of("Fireball").to_string();
+        c.fighters[0].loadout.cooldown_penalty_secs = 1.0;
+        c.fighters[1]
+            .cooldowns
+            .insert(spell.clone(), now + Duration::from_secs(5));
+        let hit = ResolvedDamage {
+            source: DamageSource::Attack,
+            active_side: ActiveSide::Right,
+            flags: flags::SHOW_DAMAGE | flags::HAS_ATTACKER,
+            pre_mitigation_components: vec![(DamageType::Slashing, 10.0)],
+            components: vec![(DamageType::Slashing, 10.0)],
+            raw_components: vec![(DamageType::Slashing, 10.0)],
+            total: 10.0,
+            most_resisted: DamageType::None,
+            negated: false,
+            heal: 0.0,
+            block_physical: 1.0,
+            blocked: false,
+            resistance_scale: 1.0,
+        };
+        let out = emit_damage(&mut c, 0, 1, &hit, now);
+        assert_eq!(
+            c.fighters[1].cooldowns.get(&spell).copied(),
+            Some(now + Duration::from_secs(6))
+        );
+        let op83 = messages::modify_ability_cooldowns(c.fighters[1].net_object_id, 1.0);
+        assert!(
+            out.iter()
+                .any(|(viewer, frame)| *viewer == 1 && *frame == op83),
+            "Cooldown Penalty must send op83 to the victim so the HUD cooldown moves"
+        );
+
+        let mut control = combat2(now);
+        control.fighters[0].loadout.cooldown_penalty_secs = 1.0;
+        control
+            .fighters[1]
+            .cooldowns
+            .insert(spell.clone(), now + Duration::from_secs(5));
+        let mut spell_hit = hit.clone();
+        spell_hit.source = DamageSource::Spell;
+        let control_out = emit_damage(&mut control, 0, 1, &spell_hit, now);
+        assert_eq!(
+            control.fighters[1].cooldowns.get(&spell).copied(),
+            Some(now + Duration::from_secs(5)),
+            "control: spells do not carry the weapon cooldown penalty"
+        );
+        assert!(
+            !control_out.iter().any(|(_, frame)| *frame == op83),
+            "control: non-weapon hits must not emit Cooldown Penalty op83"
+        );
+    }
+
+    #[test]
+    fn shield_retaliation_requires_an_optimal_block() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].loadout.shield_ravage = vec![(DamageType::Stamina, 42.0)];
+        c.fighters[1].loadout.shield_enchant_damage = vec![(DamageType::Fire, 20.0)];
+        let hit = ResolvedDamage {
+            source: DamageSource::Attack,
+            active_side: ActiveSide::Right,
+            flags: flags::SHOW_DAMAGE | flags::HAS_ATTACKER,
+            pre_mitigation_components: vec![(DamageType::Slashing, 10.0)],
+            components: vec![(DamageType::Slashing, 10.0)],
+            raw_components: vec![(DamageType::Slashing, 10.0)],
+            total: 10.0,
+            most_resisted: DamageType::None,
+            negated: false,
+            heal: 0.0,
+            block_physical: 1.0,
+            blocked: true,
+            resistance_scale: 1.0,
+        };
+        let hp_before = c.fighters[0].health;
+        let _ = emit_damage(&mut c, 0, 1, &hit, now);
+        assert_eq!(c.fighters[0].ravaged_stamina, 0, "low block control");
+        assert_eq!(c.fighters[0].health, hp_before, "low block has no shield damage");
+
+        let mut opt = combat2(now);
+        opt.fighters[1].loadout.shield_ravage = vec![(DamageType::Stamina, 42.0)];
+        opt.fighters[1].loadout.shield_enchant_damage = vec![(DamageType::Fire, 20.0)];
+        let mut high = hit.clone();
+        high.flags |= flags::WAS_OPTIMAL_BLOCKING;
+        let hp_before = opt.fighters[0].health;
+        let _ = emit_damage(&mut opt, 0, 1, &high, now);
+        assert_eq!(opt.fighters[0].ravaged_stamina, 42);
+        assert_eq!(hp_before - opt.fighters[0].health, 20);
+    }
+
+    #[test]
     fn poisoned_landing_ravages_twenty_percent_of_base_max_health() {
         use super::super::state::DamageType;
         let now = Instant::now();
@@ -13256,6 +13521,8 @@ mod report_31_high_block_stun {
         for source in [
             super::super::state::DamageSource::ContinuousSpell,
             super::super::state::DamageSource::StatusEffect,
+            super::super::state::DamageSource::AreaEffect,
+            super::super::state::DamageSource::Trap,
         ] {
             let mut c = combat(now, 2);
             c.fighters[1].loadout.revenge = vec![(super::super::state::DamageType::Fire, 43.68)];
@@ -13273,6 +13540,56 @@ mod report_31_high_block_stun {
                 c.fighters[0].health, hp,
                 "{source:?} must deal no retaliation"
             );
+        }
+    }
+
+    #[test]
+    fn revenge_caps_at_suffered_element_and_uses_generic_mitigation() {
+        let now = Instant::now();
+        let mut c = combat(now, 2);
+        let fire = super::super::state::DamageType::Fire;
+        c.fighters[1].loadout.revenge = vec![(fire, 100.0)];
+        c.fighters[0].loadout.resistances = vec![(fire, 9.0)];
+        let hp = c.fighters[0].health;
+
+        let out = super::apply_revenge(
+            &mut c,
+            1,
+            0,
+            super::super::state::DamageSource::Attack,
+            &[(fire, 10.0)],
+            now,
+        );
+
+        assert!(
+            out.iter().any(|(_s, b)| {
+                b.len() > 2
+                    && b[1] == 0x36
+                    && arena_proto::parse_netdata(&b[2..]).int(6) == Some(6)
+            }),
+            "the capped hit still emits as Revenge"
+        );
+        assert_eq!(
+            hp - c.fighters[0].health,
+            1,
+            "generic resistance keeps the 5 percent floor: min(10, 100) vs 9 resist"
+        );
+    }
+
+    #[test]
+    fn spell_revenge_answers_spells_only() {
+        let now = Instant::now();
+        let fire = super::super::state::DamageType::Fire;
+        for (source, should_fire) in [
+            (super::super::state::DamageSource::Attack, false),
+            (super::super::state::DamageSource::Spell, true),
+        ] {
+            let mut c = combat(now, 2);
+            c.fighters[1].loadout.spell_revenge = vec![(fire, 28.08)];
+            let hp = c.fighters[0].health;
+            let out = super::apply_revenge(&mut c, 1, 0, source, &[(fire, 20.0)], now);
+            assert_eq!(!out.is_empty(), should_fire, "{source:?}");
+            assert_eq!(c.fighters[0].health < hp, should_fire, "{source:?}");
         }
     }
 
@@ -14828,6 +15145,73 @@ mod round_ends_once_tests {
         );
     }
 
+    /// If multiple lethal swings are overdue on one server tick, the scheduled landing
+    /// time decides the round, not queue insertion order.
+    #[test]
+    fn due_hits_land_by_scheduled_time_not_insertion_order() {
+        let now = Instant::now();
+        let early = now + Duration::from_millis(10);
+        let late = now + Duration::from_millis(20);
+        let mut c = live(now);
+        c.fighters[0].health = 1;
+        c.fighters[1].health = 1;
+        c.pending_hits.push(PendingHit {
+            sender: 1,
+            target: 0,
+            side: super::super::state::ActiveSide::Right,
+            swing_factor: 1.0,
+            due: late,
+        });
+        c.pending_hits.push(PendingHit {
+            sender: 0,
+            target: 1,
+            side: super::super::state::ActiveSide::Right,
+            swing_factor: 1.0,
+            due: early,
+        });
+
+        let out = land_due_hits(&mut c, now + Duration::from_millis(30));
+
+        assert_eq!(
+            c.round_winners,
+            vec![Some(0)],
+            "the earlier scheduled lethal hit must win even when inserted second"
+        );
+        assert_eq!(c.rounds_won, [1, 0]);
+        assert!(
+            !c.fighters[0].is_dead(),
+            "the later queued hit must not land after the round ends"
+        );
+        assert_eq!(op48_count(&out), 1);
+    }
+
+    /// Spells and maneuvers use the same landing-order rule as weapon swings.
+    #[test]
+    fn due_impacts_land_by_scheduled_time_not_insertion_order() {
+        let now = Instant::now();
+        let early = now + Duration::from_millis(10);
+        let late = now + Duration::from_millis(20);
+        let mut c = live(now);
+        c.fighters[0].health = 1;
+        c.fighters[1].health = 1;
+        c.pending_impacts.push(impact(1, late));
+        c.pending_impacts.push(impact(0, early));
+
+        let out = land_due_impacts(&mut c, now + Duration::from_millis(30));
+
+        assert_eq!(
+            c.round_winners,
+            vec![Some(0)],
+            "the earlier scheduled lethal impact must win even when inserted second"
+        );
+        assert_eq!(c.rounds_won, [1, 0]);
+        assert!(
+            !c.fighters[0].is_dead(),
+            "the later queued impact must not land after the round ends"
+        );
+        assert_eq!(op48_count(&out), 1);
+    }
+
     /// The match-ending variant: the winner must stay the fighter who got the kill.
     #[test]
     fn the_match_winner_cannot_flip_on_a_trailing_impact() {
@@ -14876,6 +15260,8 @@ mod round_ends_once_tests {
     fn a_hit_that_kills_both_fighters_ends_the_round_once() {
         let now = Instant::now();
         let mut c = live(now);
+        c.fighters[0].loadout.level = 1;
+        c.fighters[1].loadout.level = 2;
         c.fighters[0].health = 1;
         c.fighters[1].health = 1;
         c.fighters[1].reflect_until = Some(now + Duration::from_secs(5));
@@ -14894,7 +15280,11 @@ mod round_ends_once_tests {
             c.fighters[0].is_dead() && c.fighters[1].is_dead(),
             "fixture: both must die"
         );
-        assert_eq!(c.rounds_won, [0, 0], "a double KO scores nothing");
+        assert_eq!(
+            c.rounds_won,
+            [1, 0],
+            "equal-ms double KO is decided immediately"
+        );
         assert_eq!(
             c.round_winners.len(),
             1,
@@ -16603,19 +16993,13 @@ mod sprint1_integration_tests {
     }
 }
 
-/// The double-KO replay cap and the match-level round cap (Sprint 1 integration,
-/// CRE-SOAK seed 0x4d4e3b4e79f4ca03). The rule is AUTHORED; the client side it has to
-/// agree with is read from the binary: a tied round is one whose winner and loser ids
-/// are both empty (`RoundInfo$$IsTied@0x2071a74`,
-/// `MatchPostRoundInfoMessage$$IsTied@0x1cebbd0`), and the per-player score is the
-/// count of round entries naming that player the winner
-/// (`MatchEndMatchMessage$$GetNumberOfRoundsWonBy@0x1cea200`).
+/// Owner decision, 2026-09-26: a double KO is a decided round immediately.
 #[cfg(test)]
 mod double_ko_cap_tests {
     use std::time::{Duration, Instant};
 
     use super::super::loadout::starter;
-    use super::super::state::{Fighter, FlowState, MATCH_ROUND_HARD_CAP, MatchCombat};
+    use super::super::state::{Fighter, FlowState, MatchCombat};
     use super::*;
 
     const A: &str = "aaaaaaaa-0000-4000-8000-000000000001";
@@ -16636,11 +17020,8 @@ mod double_ko_cap_tests {
         c
     }
 
-    /// Kill both fighters and end the round as `emit_damage` does (the killing
-    /// attacker, slot 0, is passed as the provisional winner).
+    /// Kill both fighters and end the round as `emit_damage` does.
     fn double_ko(c: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
-        c.fighters[0].take_damage(u32::MAX);
-        c.fighters[1].take_damage(u32::MAX);
         assert_eq!(
             c.round_outcome(),
             super::super::state::RoundOutcome::DoubleKo
@@ -16668,132 +17049,133 @@ mod double_ko_cap_tests {
         matches!(nd.get(15), Some(arena_proto::NetDataValue::Bool(true)))
     }
 
-    /// Control: the FIRST double KO of a match is still replayed. Nobody scores, the
-    /// match loops to the next round, and op48 describes a tied round (empty ids at
-    /// 12/13) with no decided round in the array, so the client's tally stays 0-0.
     #[test]
-    fn the_first_double_ko_is_replayed_as_a_tied_round() {
+    fn the_earliest_killing_landing_wins_the_double_ko() {
         let now = Instant::now();
         let mut c = live(now);
+        c.fighters[0].take_damage_at(u32::MAX, now + Duration::from_millis(7));
+        c.fighters[1].take_damage_at(u32::MAX, now + Duration::from_millis(5));
         let out = double_ko(&mut c, now);
-        assert_eq!(c.rounds_won, [0, 0], "a replayed double KO scores nothing");
-        assert_eq!(
-            c.round_winners,
-            vec![None],
-            "one round played, nobody won it"
-        );
-        assert_eq!(c.double_ko_replays, 1);
-        assert_eq!(c.phase, FlowState::NextState, "the match loops to a replay");
+        assert_eq!(c.rounds_won, [1, 0], "slot 0 killed slot 1 first");
+        assert_eq!(c.round_winners, vec![Some(0)]);
+        assert_eq!(c.phase, FlowState::NextState);
         let nd = op48(&out);
-        assert_eq!(nd.string(12), Some(""), "tied: no latest winner");
-        assert_eq!(nd.string(13), Some(""), "tied: no latest loser");
-        assert_eq!(nd.string(5), Some(""), "no decided round in the array");
+        assert_eq!(nd.string(5), Some(A));
+        assert_eq!(nd.string(6), Some(B));
+        assert_eq!(nd.string(12), Some(A), "latest winner is populated");
         assert!(!ended(&nd));
     }
 
-    /// The SECOND double KO is decided by `draw_tiebreak_winner`: both fractions are
-    /// 0, so the lower `pvpTrophies` wins it. It scores, and op48 carries it as a real
-    /// round. Control on the key: with the trophies swapped the other slot wins.
     #[test]
-    fn a_second_double_ko_is_decided_by_the_draw_tiebreak() {
-        for (trophies, want) in [((900, 100), 1usize), ((100, 900), 0usize)] {
+    fn equal_millisecond_double_ko_uses_lower_level_then_lower_xp() {
+        for (levels, xps, want) in [
+            ((50, 49), (10_000, 1), 1usize),
+            ((50, 50), (10_000, 1), 1usize),
+            ((12, 50), (99_000, 1), 0usize),
+        ] {
             let now = Instant::now();
             let mut c = live(now);
-            c.fighters[0].loadout.profile_character_json =
-                format!("{{\"pvpTrophies\":{}}}", trophies.0);
-            c.fighters[1].loadout.profile_character_json =
-                format!("{{\"pvpTrophies\":{}}}", trophies.1);
-            let _ = double_ko(&mut c, now);
-            c.reset_fighters_for_next_round(now + Duration::from_secs(10));
-            c.phase = FlowState::StateTimeout;
-            let out = double_ko(&mut c, now + Duration::from_secs(20));
+            c.fighters[0].loadout.level = levels.0;
+            c.fighters[1].loadout.level = levels.1;
+            c.fighters[0].loadout.character_experience = xps.0;
+            c.fighters[1].loadout.character_experience = xps.1;
+            c.fighters[0].take_damage_at(u32::MAX, now + Duration::from_millis(5));
+            c.fighters[1].take_damage_at(u32::MAX, now + Duration::from_millis(5));
+            let out = double_ko(&mut c, now);
 
             let mut score = [0u8; 2];
             score[want] = 1;
-            assert_eq!(
-                c.rounds_won, score,
-                "trophies {trophies:?}: the lower-trophy slot takes it"
-            );
-            assert_eq!(c.round_winners, vec![None, Some(want)]);
-            assert_eq!(c.double_ko_replays, 1, "no second replay");
+            assert_eq!(c.rounds_won, score, "levels {levels:?}, xp {xps:?}");
+            assert_eq!(c.round_winners, vec![Some(want)]);
             let nd = op48(&out);
             let (w, l) = if want == 0 { (A, B) } else { (B, A) };
-            assert_eq!(
-                nd.string(5),
-                Some(w),
-                "the decided round is the array's first entry"
-            );
+            assert_eq!(nd.string(5), Some(w));
             assert_eq!(nd.string(6), Some(l));
-            assert_eq!(nd.string(12), Some(w), "latest = the tiebreak winner");
-            assert_eq!(nd.int(11), Some(0), "one decided round");
-            assert!(!ended(&nd), "1-0 does not end a best-of-3");
+            assert_eq!(nd.string(12), Some(w));
         }
     }
 
-    /// A 1-1 match whose deciding round is a double KO, after the one replay was spent:
-    /// the tiebreak decides the MATCH, which ends 2-1 in `RoundEnd`, and op48 carries
-    /// the three decided rounds with IsMatchEnded.
     #[test]
-    fn a_deciding_double_ko_after_the_replay_ends_the_match() {
+    fn same_millisecond_revenge_ko_uses_level_not_causal_order() {
         let now = Instant::now();
         let mut c = live(now);
-        c.round_winners = vec![Some(0), None, Some(1)];
-        c.rounds_won = [1, 1];
-        c.double_ko_replays = 1;
-        let out = double_ko(&mut c, now);
+        c.fighters[0].loadout.level = 50;
+        c.fighters[1].loadout.level = 10;
+        c.fighters[1].loadout.revenge =
+            vec![(super::super::state::DamageType::Fire, 10_000.0)];
+
+        let hit = ResolvedDamage {
+            source: super::super::state::DamageSource::Attack,
+            active_side: ActiveSide::Right,
+            flags: super::super::damage::flags::SHOW_DAMAGE
+                | super::super::damage::flags::HAS_ATTACKER,
+            pre_mitigation_components: vec![(super::super::state::DamageType::Fire, 10_000.0)],
+            components: vec![(super::super::state::DamageType::Fire, 10_000.0)],
+            raw_components: vec![(super::super::state::DamageType::Fire, 10_000.0)],
+            total: 10_000.0,
+            most_resisted: super::super::state::DamageType::None,
+            negated: false,
+            heal: 0.0,
+            block_physical: 1.0,
+            blocked: false,
+            resistance_scale: 1.0,
+        };
+        let out = emit_damage(&mut c, 0, 1, &hit, now);
+
+        assert!(c.fighters[0].is_dead(), "Revenge killed the primary attacker");
+        assert!(c.fighters[1].is_dead(), "the primary hit killed the defender");
         assert_eq!(
-            c.rounds_won,
-            [2, 1],
-            "equal trophies → slot 0 by the tiebreak"
+            c.round_winners,
+            vec![Some(1)],
+            "same-ms retaliation double KO uses lower level, not hit causality"
         );
+        assert_eq!(c.rounds_won, [0, 1]);
+        let nd = op48(&out);
+        assert_eq!(nd.string(5), Some(B));
+        assert_eq!(nd.string(6), Some(A));
+    }
+
+    #[test]
+    fn full_tie_uses_seeded_per_match_rng() {
+        let run = |seed: &str| {
+            let now = Instant::now();
+            let mut c = live(now);
+            c.game_session_id = seed.to_string();
+            c.fighters[0].loadout.level = 50;
+            c.fighters[1].loadout.level = 50;
+            c.fighters[0].loadout.character_experience = 123;
+            c.fighters[1].loadout.character_experience = 123;
+            c.fighters[0].take_damage_at(u32::MAX, now);
+            c.fighters[1].take_damage_at(u32::MAX, now);
+            let _ = double_ko(&mut c, now);
+            c.round_winners[0].unwrap()
+        };
+        assert_eq!(run("double-ko-seed"), run("double-ko-seed"));
+    }
+
+    #[test]
+    fn a_deciding_double_ko_ends_the_match_and_fills_op48() {
+        let now = Instant::now();
+        let mut c = live(now);
+        c.round_winners = vec![Some(0), Some(1)];
+        c.rounds_won = [1, 1];
+        c.fighters[0].loadout.level = 1;
+        c.fighters[1].loadout.level = 2;
+        c.fighters[0].take_damage_at(u32::MAX, now);
+        c.fighters[1].take_damage_at(u32::MAX, now);
+        let out = double_ko(&mut c, now);
+        assert_eq!(c.rounds_won, [2, 1], "equal-ms double KO uses lower level");
         assert_eq!(c.phase, FlowState::RoundEnd, "the match is over");
         assert_eq!(c.winner, Some(0));
         let nd = op48(&out);
         assert!(ended(&nd));
-        assert_eq!(
-            nd.int(11),
-            Some(2),
-            "three decided rounds, the tie left out"
-        );
+        assert_eq!(nd.int(11), Some(2), "three decided rounds");
         assert_eq!(
             (nd.string(5), nd.string(7), nd.string(9)),
             (Some(A), Some(B), Some(A)),
             "the client's per-player count (2-1) equals rounds_won",
         );
         assert_eq!(nd.string(16), Some(A), "MatchWinnerPlayerId");
-    }
-
-    /// The backstop: even if the replay allowance were somehow unspent, a match that
-    /// reaches `MATCH_ROUND_HARD_CAP` (4) rounds never replays again and ends on the
-    /// tally. Control: one round short of the cap, the same double KO replays.
-    #[test]
-    fn the_match_round_cap_ends_the_match_whatever_the_replay_count() {
-        assert_eq!(MATCH_ROUND_HARD_CAP, 4, "best-of-3 plus one replay");
-        let now = Instant::now();
-        let mut c = live(now);
-        c.round_winners = vec![None; MATCH_ROUND_HARD_CAP - 1];
-        c.double_ko_replays = 0; // an unspent allowance, which the cap must override
-        let out = double_ko(&mut c, now);
-        assert_eq!(c.round_winners.len(), MATCH_ROUND_HARD_CAP);
-        assert_eq!(
-            c.round_winners.last(),
-            Some(&Some(0)),
-            "decided, not replayed"
-        );
-        assert_eq!(c.phase, FlowState::RoundEnd, "the cap ends the match");
-        assert_eq!(c.winner, Some(0), "1-0 on the tally");
-        assert!(ended(&op48(&out)));
-
-        let mut c = live(now);
-        c.round_winners = vec![None; MATCH_ROUND_HARD_CAP - 2];
-        c.double_ko_replays = 0;
-        let _ = double_ko(&mut c, now);
-        assert_eq!(
-            c.round_winners.last(),
-            Some(&None),
-            "control: below the cap it replays"
-        );
-        assert_eq!(c.phase, FlowState::NextState);
     }
 }
 

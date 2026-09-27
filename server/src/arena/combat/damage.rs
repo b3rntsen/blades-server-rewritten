@@ -201,6 +201,7 @@ pub struct BlockOutcome {
     /// `R` for this hit before piercing: the blocking item's rating, boosted when
     /// optimal, plus the flat Block Reduction enchants ([`Fighter::block_rating`]).
     pub rating: f32,
+    pub typed_rating_bonus: [(DamageType, f32); 7],
     /// Attacker's flat block piercing, subtracted from `R` in
     /// [`BlockOutcome::rating_for`] — physical and elemental respectively. The client
     /// subtracts it from the already-boosted `R` for every blocked component, so it
@@ -224,6 +225,15 @@ impl BlockOutcome {
         optimal: false,
         blocking: false,
         rating: 0.0,
+        typed_rating_bonus: [
+            (DamageType::Slashing, 0.0),
+            (DamageType::Cleaving, 0.0),
+            (DamageType::Bashing, 0.0),
+            (DamageType::Fire, 0.0),
+            (DamageType::Frost, 0.0),
+            (DamageType::Shock, 0.0),
+            (DamageType::Poison, 0.0),
+        ],
         block_piercing: 0.0,
         elem_block_piercing: 0.0,
         elem_rating_bonus: 0.0,
@@ -236,6 +246,21 @@ impl BlockOutcome {
             (self.rating - self.block_piercing).max(0.0)
         } else {
             (self.rating + self.elem_rating_bonus - self.elem_block_piercing).max(0.0)
+        }
+    }
+
+    pub fn rating_for_type(&self, ty: DamageType) -> f32 {
+        let physical = is_physical(ty);
+        let typed = self
+            .typed_rating_bonus
+            .iter()
+            .filter(|(t, _)| *t == ty)
+            .map(|(_, v)| *v)
+            .sum::<f32>();
+        if physical {
+            (self.rating + typed - self.block_piercing).max(0.0)
+        } else {
+            (self.rating + typed + self.elem_rating_bonus - self.elem_block_piercing).max(0.0)
         }
     }
 
@@ -269,15 +294,15 @@ impl BlockOutcome {
         } else {
             1.0
         };
-        let phys_r = self.rating_for(true) * scale;
-        let elem_r = self.rating_for(false) * scale;
         for (ty, v) in components.iter_mut() {
             *v = match *ty {
                 DamageType::Stamina | DamageType::Magicka => 0.0,
                 t if is_physical(t) => {
+                    let phys_r = self.rating_for_type(t) * scale;
                     tables::block_cut(*v, phys_total, phys_r, tables::pvp_block_rating_factor(true))
                 }
                 t if is_elemental(t) => {
+                    let elem_r = self.rating_for_type(t) * scale;
                     tables::block_cut(*v, elem_total, elem_r, tables::pvp_block_rating_factor(false))
                 }
                 // Raw Health / None: not a category the block budget covers.
@@ -330,6 +355,7 @@ pub fn block_outcome(
         optimal,
         blocking: true,
         rating: target.block_rating(optimal),
+        typed_rating_bonus: typed_block_bonuses(target, optimal),
         block_piercing: attacker.block_piercing_rating,
         elem_block_piercing: attacker.elem_block_piercing_rating,
         // "while blocking with a shield" — a two-handed guard gets nothing.
@@ -339,6 +365,18 @@ pub fn block_outcome(
             0.0
         },
     }
+}
+
+fn typed_block_bonuses(target: &Fighter, optimal: bool) -> [(DamageType, f32); 7] {
+    [
+        (DamageType::Slashing, target.block_rating_against(optimal, DamageType::Slashing) - target.block_rating(optimal)),
+        (DamageType::Cleaving, target.block_rating_against(optimal, DamageType::Cleaving) - target.block_rating(optimal)),
+        (DamageType::Bashing, target.block_rating_against(optimal, DamageType::Bashing) - target.block_rating(optimal)),
+        (DamageType::Fire, target.block_rating_against(optimal, DamageType::Fire) - target.block_rating(optimal)),
+        (DamageType::Frost, target.block_rating_against(optimal, DamageType::Frost) - target.block_rating(optimal)),
+        (DamageType::Shock, target.block_rating_against(optimal, DamageType::Shock) - target.block_rating(optimal)),
+        (DamageType::Poison, target.block_rating_against(optimal, DamageType::Poison) - target.block_rating(optimal)),
+    ]
 }
 
 /// The damage model the arena uses.
@@ -519,6 +557,10 @@ impl RetailDamageModel {
         for (ty, base) in Self::physical_base_components(attacker, target, source, now) {
             components.push((ty, base * scale));
         }
+        if source == DamageSource::ShieldManeuver {
+            components.extend(attacker.shield_enchant_damage.iter().copied());
+        }
+        apply_damage_conversion(attacker, source, &mut components);
         // A shield bash carries no weapon enchantment damage: the enchant tracks are
         // weapon-based (`Damage$$IsWeaponBased@0x1bd3e6c` excludes source 11), and
         // the weapon's alchemy poison does not ride a bash either (05 §3.11).
@@ -603,6 +645,45 @@ fn enchant_tracks(attacker: &Loadout) -> Vec<(DamageType, f32)> {
         .iter()
         .map(|(ty, tier)| (*ty, weapon_damage_family_value_for_weight(*ty, *tier, weight)))
         .collect()
+}
+
+fn apply_damage_conversion(
+    attacker: &Loadout,
+    source: DamageSource,
+    components: &mut Vec<(DamageType, f32)>,
+) {
+    if !matches!(
+        source,
+        DamageSource::Attack | DamageSource::WeaponManeuver | DamageSource::ShieldManeuver
+    ) {
+        return;
+    }
+    for (target_ty, amount) in attacker.convert_damage.iter().copied() {
+        if amount <= 0.0 {
+            continue;
+        }
+        let mut remaining = amount;
+        let mut moved = 0.0;
+        for (ty, v) in components.iter_mut() {
+            if remaining <= 0.0 {
+                break;
+            }
+            if is_physical(*ty) && *v > 0.0 {
+                let take = remaining.min(*v);
+                *v -= take;
+                moved += take;
+                remaining -= take;
+            }
+        }
+        if moved > 0.0 {
+            if let Some((_, v)) = components.iter_mut().find(|(ty, _)| *ty == target_ty) {
+                *v += moved;
+            } else {
+                components.push((target_ty, moved));
+            }
+        }
+    }
+    components.retain(|(_, v)| *v > 0.0);
 }
 
 /// The shipped `Weapon <Element> Damage` family for an element.
@@ -1027,6 +1108,20 @@ fn finish_resolved(
     )
 }
 
+/// Resolve a caller-provided generic damage list through the normal attacker and
+/// defender pipeline. Used by callbacks that retail implements as
+/// `ResolveGenericDamage`, such as shield elemental retaliation.
+pub fn resolve_generic_components(
+    attacker: &Loadout,
+    target: &Fighter,
+    source: DamageSource,
+    active_side: ActiveSide,
+    components: &mut Vec<(DamageType, f32)>,
+    now: Instant,
+) -> ResolvedDamage {
+    finish_resolved(attacker, target, source, active_side, components, now, 1.0)
+}
+
 /// Steps 1-2 of [`finish_resolved`] — the DEFENDER's side of a hit: block →
 /// mirrored drain → resistance/weakness → total. No attacker bonus is added here.
 ///
@@ -1130,8 +1225,9 @@ pub fn mitigate_components(
         if before <= 0.0 {
             continue;
         }
-        let rating = target.resistance_rating_against(
+        let rating = target.resistance_rating_against_source(
             *ty,
+            source,
             attacker.elem_resist_piercing,
             attacker.elem_resist_piercing_rating,
         ) + target.transient_resistance_against(*ty, now);
@@ -1503,6 +1599,69 @@ mod tests {
 
     fn comp(rd: &ResolvedDamage, ty: DamageType) -> f32 {
         rd.components.iter().filter(|(t, _)| *t == ty).map(|(_, v)| *v).sum()
+    }
+
+    #[test]
+    fn convert_damage_moves_physical_damage_before_mitigation() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let mut a = plain_blade(Weight::Light);
+        a.convert_damage = vec![(DamageType::Fire, 42.0)];
+        let hit = m.resolve_attack(
+            &a,
+            &target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        assert!((comp(&hit, DamageType::Slashing) - 58.0).abs() < 0.01);
+        assert!((comp(&hit, DamageType::Fire) - 42.0).abs() < 0.01);
+
+        let spell = m.resolve_attack(
+            &a,
+            &target(),
+            DamageSource::Spell,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        assert!((comp(&spell, DamageType::Slashing) - 100.0).abs() < 0.01);
+        assert_eq!(comp(&spell, DamageType::Fire), 0.0);
+    }
+
+    #[test]
+    fn resist_spells_is_source_gated() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let mut def = target();
+        def.loadout.resistances = vec![(DamageType::None, 16.8)];
+        let mut fire = plain_blade(Weight::Light);
+        fire.weapon.base_by_type = vec![(DamageType::Fire, 100.0)];
+
+        let spell = m.resolve_attack(
+            &fire,
+            &def,
+            DamageSource::Spell,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        assert!((comp(&spell, DamageType::Fire) - 83.2).abs() < 0.01);
+
+        let attack = m.resolve_attack(
+            &fire,
+            &def,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        assert!((comp(&attack, DamageType::Fire) - 100.0).abs() < 0.01);
     }
 
     /// 01 D3 / 02 X3: the attack-type factor is ONE sum, `1 + [combo>=1]*comboDF +
@@ -1928,6 +2087,33 @@ mod tests {
         let mut enchanted = steel.clone();
         enchanted.loadout.block_rating_bonus = 50.0;
         assert_eq!(enchanted.block_rating(true), 282.0);
+    }
+
+    #[test]
+    fn block_reduction_enchants_are_per_type() {
+        let now = Instant::now();
+        let mut def = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, false);
+        def.loadout.block_rating_bonuses = vec![(DamageType::Fire, 100.0)];
+        let b = block_outcome(&def, &Loadout::default(), ActiveSide::Right, now);
+        assert_eq!(b.rating_for_type(DamageType::Slashing), b.rating_for(true));
+        assert_eq!(b.rating_for_type(DamageType::Frost), b.rating_for(false));
+        assert_eq!(b.rating_for_type(DamageType::Fire), b.rating_for(false) + 100.0);
+
+        let out = apply(
+            &b,
+            &[(DamageType::Slashing, 200.0), (DamageType::Fire, 200.0)],
+        );
+        let control = {
+            let plain = block_outcome(
+                &guarding(now, Some((LEATHER_SHIELD_247, 10)), None, false),
+                &Loadout::default(),
+                ActiveSide::Right,
+                now,
+            );
+            apply(&plain, &[(DamageType::Slashing, 200.0), (DamageType::Fire, 200.0)])
+        };
+        assert_eq!(out[0].1, control[0].1, "Slashing is unchanged");
+        assert!(out[1].1 < control[1].1, "Fire receives the extra block rating");
     }
 
     /// Optimal eligibility is LATCHED when the guard goes up

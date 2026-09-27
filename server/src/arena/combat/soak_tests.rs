@@ -513,8 +513,8 @@ fn run_match(
                     o.round_results_sent += 1;
                     // The client tallies the score from op48's per-round array
                     // (`GetNumberOfRoundsWonBy@0x1cea200` counts entries naming the
-                    // winner; a tied round has empty ids). So the decided entries must
-                    // equal the server's score after every round end, replays included.
+                    // winner). The decided entries must equal the server's score after
+                    // every round end.
                     let nd = arena_proto::parse_netdata(&frame[2..]);
                     let decided = [5u8, 7, 9]
                         .iter()
@@ -557,8 +557,6 @@ fn run_match(
             }
             internal.push(st);
         }
-        // A round recorded with no score change is a DOUBLE KO: the authored rule
-        // replays it, so it legitimately adds a round beyond three.
         let score: u8 = m.combat.rounds_won.iter().sum();
         if m.combat.round_winners.len() > o.seen_round_ends {
             if score == o.seen_score {
@@ -567,7 +565,7 @@ fn run_match(
             o.seen_round_ends = m.combat.round_winners.len();
             o.seen_score = score;
         }
-        if m.combat.round as usize > 3 + o.double_kos || m.combat.round_winners.len() > 3 + o.double_kos {
+        if m.combat.round as usize > 3 || m.combat.round_winners.len() > 3 {
             return Err(format!(
                 "more than 3 rounds: round {} winners {:?} score {:?} ({} double KO)",
                 m.combat.round, m.combat.round_winners, m.combat.rounds_won, o.double_kos
@@ -863,7 +861,7 @@ fn soak_240_full_matches_terminate_cleanly() {
         casts[0],
         casts[1],
     );
-    eprintln!("CRE-SOAK   double-KO replays (authored rule, extra round): {}", double_ko_matches.len());
+    eprintln!("CRE-SOAK   scoreless round regressions: {}", double_ko_matches.len());
     for d in double_ko_matches.iter().take(20) {
         eprintln!("CRE-SOAK     {d}");
     }
@@ -933,10 +931,8 @@ fn soak_bound_is_derived_from_the_engine_timers() {
 }
 
 /// Regression: this BotVsBot pairing used to double-KO every round after the first
-/// (the killing swing, then the victim's Frost Revenge on 2 HP) and the uncapped
-/// replay rule looped it past the termination bound. Timing fixes may avoid that
-/// exact collision, but the seed must still terminate with no more than the authored
-/// single replay and a 2-round winner.
+/// (the killing swing, then the victim's Frost Revenge on 2 HP) and the old replay
+/// rule looped it past the termination bound. Double KOs are now decided immediately.
 #[test]
 fn the_double_ko_loop_seed_terminates() {
     let fx = load_fixtures();
@@ -949,7 +945,7 @@ fn the_double_ko_loop_seed_terminates() {
         match_bound(MAX_TICK),
     )
     .expect("the match terminates within the bound");
-    assert!(o.double_kos <= 1, "double-KO replays must stay capped: {}", o.double_kos);
+    assert_eq!(o.double_kos, 0, "double-KO rounds must be decided, not replayed");
     assert!(o.rounds <= super::super::state::MATCH_ROUND_HARD_CAP, "{} rounds", o.rounds);
     let w = o.winner.expect("a match winner");
     assert_eq!(o.rounds_won[w], 2, "{:?}", o.rounds_won);

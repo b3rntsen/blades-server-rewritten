@@ -45,6 +45,7 @@
 
 pub mod trace;
 pub mod ability_tags;
+pub mod artifact_properties;
 pub mod damage;
 pub mod engine;
 pub mod gamedata;
