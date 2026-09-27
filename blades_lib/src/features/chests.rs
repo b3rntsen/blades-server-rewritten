@@ -109,11 +109,32 @@ pub fn pick_loot<'a>(
     Some(&candidates[(hash as usize) % candidates.len()].reward)
 }
 
+fn stable_nonce(key: &str) -> u64 {
+    key.bytes().fold(0xCBF2_9CE4_8422_2325, |acc, b| {
+        (acc ^ b as u64).wrapping_mul(0x0000_0100_0000_01B3)
+    })
+}
+
+/// Roll the grant for a chest open.
+///
+/// Tier-5 treasury captures are too sparse to use directly (one opening), while
+/// the retail Legendary chest corpus has thousands of same-shaped chest rewards.
+/// Other tiers stay on the capture-derived treasury table.
+pub fn roll_loot(
+    tables: &ChestLootTables,
+    tier: u64,
+    level: u64,
+    chest_key: &str,
+) -> Option<RewardGrant> {
+    crate::features::store_bundles::roll_treasury_chest(tier, level, stable_nonce(chest_key))
+        .or_else(|| pick_loot(tables, tier, level, chest_key).cloned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::economy::GOLD;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     fn sample(chest_level: u64, gold: u64) -> ChestLootSample {
         ChestLootSample {
@@ -131,7 +152,10 @@ mod tests {
                 (1, vec![sample(1, 100), sample(90, 900)]),
                 (2, vec![sample(1, 200), sample(90, 2000)]),
             ]),
-            provisional_tiers: BTreeMap::from([(4, vec![sample(80, 20000)])]),
+            provisional_tiers: BTreeMap::from([
+                (4, vec![sample(80, 20000)]),
+                (5, vec![sample(90, 5)]),
+            ]),
         }
     }
 
@@ -181,5 +205,32 @@ mod tests {
     #[test]
     fn empty_tables_yield_none() {
         assert!(pick_loot(&ChestLootTables::default(), 1, 1, "1").is_none());
+    }
+
+    #[test]
+    fn legendary_chests_use_the_large_retail_corpus() {
+        let t = tables();
+        assert_eq!(
+            pick_loot(&t, 5, 90, "anything").unwrap().currencies[&GOLD],
+            5,
+            "control: the provisional tier-5 treasury table is a one-roll trap"
+        );
+
+        let mut seen = HashSet::new();
+        for i in 0..40 {
+            let reward = roll_loot(&t, 5, 90, &format!("legendary-{i}")).unwrap();
+            seen.insert(serde_json::to_string(&reward).unwrap());
+        }
+        assert!(
+            seen.len() > 5,
+            "40 Legendary chests only produced {} distinct rewards",
+            seen.len()
+        );
+    }
+
+    #[test]
+    fn lower_tiers_still_use_the_treasury_table() {
+        let t = tables();
+        assert_eq!(roll_loot(&t, 1, 1, "1").unwrap().currencies[&GOLD], 100);
     }
 }

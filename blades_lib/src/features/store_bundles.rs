@@ -134,6 +134,9 @@ const STORE_CHEST_ALIASES: [(Uuid, Uuid); 3] = [
     ),
 ];
 
+const LEGENDARY_CHEST_PRODUCT_ID: Uuid =
+    Uuid::from_u128(0x1275d959_bbe5_460d_8f6a_1c31106a8eb2);
+
 /// The mined product that backs `product_id`: its own, else its promo twin's.
 fn corpus_product(product_id: &Uuid) -> Option<&'static Product> {
     let mined_as = STORE_CHEST_ALIASES
@@ -215,6 +218,15 @@ pub fn roll_bundle(product_id: &Uuid, buyer_level: u64, nonce: u64) -> Option<Re
         });
     }
     Some(grant)
+}
+
+/// Roll a treasury chest through the retail store-chest corpus when the treasury
+/// table is too thin to model the tier. Tier 5 has one captured treasury open but
+/// 4,697 retail Legendary chest purchases with the same reward shape.
+pub fn roll_treasury_chest(tier: u64, chest_level: u64, nonce: u64) -> Option<RewardGrant> {
+    (tier == 5)
+        .then(|| roll_bundle(&LEGENDARY_CHEST_PRODUCT_ID, chest_level, nonce))
+        .flatten()
 }
 
 #[cfg(test)]

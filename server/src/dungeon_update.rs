@@ -2051,10 +2051,13 @@ mod variant_repair_coverage_tests {
     #[test]
     fn every_dungeon_update_path_attempts_the_variant_repair() {
         let src = include_str!("dungeon_update.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
 
-        let runs = src.matches("process_dungeon_actions(\n").count();
-        let repairs = src.matches("repair_variant_mismatch(").count()
-            - src.matches("fn repair_variant_mismatch(").count();
+        let runs = production
+            .matches("let currency_moved = process_dungeon_actions(")
+            .count();
+        let repairs = production.matches("match repair_variant_mismatch(").count()
+            + production.matches("repair_variant_mismatch(&").count();
 
         assert!(runs >= 2, "expected the quest and event paths, found {runs}");
         assert_eq!(
@@ -2167,8 +2170,15 @@ mod event_kill_rewards_tests {
             let level = row.quest.difficulty_level;
             assert_eq!(level, 73);
 
-            let (dungeon, attempt) =
-                crate::dungeon::event_dungeon_data(&gd, template, level, scaling).unwrap();
+            let (dungeon, attempt) = crate::dungeon::event_dungeon_data_for_run(
+                &gd,
+                template,
+                level,
+                scaling,
+                row.quest_id,
+                0,
+            )
+            .unwrap();
             let enemies = attempt.enemy_generated_data.values().flatten().flatten().count() as u64;
             assert!(enemies > 0, "event {template} has enemies to kill");
 
