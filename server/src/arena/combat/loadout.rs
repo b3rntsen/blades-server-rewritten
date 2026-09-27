@@ -528,12 +528,21 @@ fn apply_enchant_with_rating_and_multiplier(
         "FortifyMagickaPropertyLogic" => lo.max_magicka_bonus += magnitude,
 
         // ---- regeneration -------------------------------------------------
-        // These are flat points per second, summed only during combat regen. The
-        // material-regeneration families are intentionally left out until their item
-        // scaling is settled.
+        // Flat families are points per second. Material families use the same
+        // `GetRawXValue` shape as material resistances: the shipped per-family
+        // magnitude times this armour/shield item's rating.
         "FortifyHealthRegenerationPropertyLogic" => lo.health_regen += magnitude,
+        "FortifyHealthRegenerationMaterialPropertyLogic" => {
+            lo.health_regen += material_magnitude(magnitude, item_rating)
+        }
         "FortifyStaminaRegenerationPropertyLogic" => lo.stamina_regen += magnitude,
+        "FortifyStaminaRegenerationMaterialPropertyLogic" => {
+            lo.stamina_regen += material_magnitude(magnitude, item_rating)
+        }
         "FortifyMagickaRegenerationPropertyLogic" => lo.magicka_regen += magnitude,
+        "FortifyMagickaRegenerationMaterialPropertyLogic" => {
+            lo.magicka_regen += material_magnitude(magnitude, item_rating)
+        }
 
         // Savior's Hide: "+{0} Health regeneration per second while Health is
         // critical" (tracker #231). `MultiplyRegenerationBonusInstance.GetRegenerationBonus`
@@ -2405,6 +2414,133 @@ mod learned_perk_tests {
         let got = learned_perks(&json!({ SCOUT: 250 }));
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].level, 11);
+    }
+}
+
+/// Reports #259/#265: Elven material bonuses regenerate Magicka from item rating.
+#[cfg(test)]
+mod report_259_material_regen_tests {
+    use super::*;
+    use blades_lib::user_data::{
+        Backpack, Item, ItemPropertiesAll, ItemSingleProperty, SingleEquippedItem, Treasury,
+    };
+
+    const ELVEN_HELMET: &str = "9dd7847c-47c5-41ec-9348-cadbbfe9eb3d";
+    const ELVEN_ARMOR: &str = "c27073f5-a144-4c3a-a950-ad207e6ba94b";
+    const ELVEN_BOOTS: &str = "c3ef8fda-5698-468e-9553-7a84f8cd9418";
+    const ELVEN_GAUNTLETS: &str = "d0da3047-a813-412a-a16f-d42585110828";
+    const ELVEN_SHIELD: &str = "e225e0bf-1fbb-432a-a118-e94a70507203";
+    const FORTIFY_MAGICKA_REGEN: &str = "04228b59-5718-4b55-acb3-5557726a6df9";
+
+    fn item(template: &str, tempering_level: u64) -> Item {
+        Item {
+            item_template_id: Uuid::parse_str(template).unwrap(),
+            tempering_level,
+            durability: 100.0,
+            grade: None,
+            arcane_tier: None,
+            properties: ItemPropertiesAll::default(),
+        }
+    }
+
+    fn enchanted_necklace() -> Item {
+        Item {
+            item_template_id: Uuid::from_u128(999),
+            tempering_level: 0,
+            durability: 100.0,
+            grade: None,
+            arcane_tier: None,
+            properties: ItemPropertiesAll {
+                enchanting: vec![ItemSingleProperty {
+                    id: Uuid::parse_str(FORTIFY_MAGICKA_REGEN).unwrap(),
+                    tier: 10,
+                }],
+                grading: vec![],
+            },
+        }
+    }
+
+    fn inventory(items: Vec<Item>) -> CompleteInventory {
+        let mut lo = blades_lib::user_data::Loadout::default();
+        for (i, item) in items.into_iter().enumerate() {
+            let slot = Uuid::from_u128(0x2590 + i as u128);
+            lo.equipped_items.0.insert(
+                slot,
+                SingleEquippedItem {
+                    id: Uuid::from_u128(0x2650 + i as u128),
+                    slot,
+                    item,
+                },
+            );
+        }
+        CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: lo,
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        }
+    }
+
+    fn character() -> CompleteCharacter {
+        CompleteCharacter {
+            level: 50,
+            ..Default::default()
+        }
+    }
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    #[test]
+    fn control_non_material_gear_does_not_add_regeneration() {
+        let lo = from_character(
+            &character(),
+            &inventory(vec![item(gamedata::ids::DRAGONBONE_DAGGER, 10)]),
+        );
+
+        assert_eq!(lo.health_regen, 0.0);
+        assert_eq!(lo.stamina_regen, 0.0);
+        assert_eq!(lo.magicka_regen, 0.0);
+    }
+
+    #[test]
+    fn elven_set_and_tempered_shield_add_material_magicka_regeneration() {
+        let lo = from_character(
+            &character(),
+            &inventory(vec![
+                item(ELVEN_HELMET, 0),
+                item(ELVEN_ARMOR, 0),
+                item(ELVEN_BOOTS, 0),
+                item(ELVEN_GAUNTLETS, 0),
+                item(ELVEN_SHIELD, 10),
+            ]),
+        );
+
+        // Material Fortify Magicka Regeneration ships 0.035 per rating point.
+        // Tier-6 Elven armour base ratings: 75.6 + 132.3 + 53.55 + 53.55.
+        // Tier-6 Elven Shield at tempering 10 uses the shipped block temper row: 270.
+        let expected = (75.6 + 132.3 + 53.55 + 53.55 + 270.0) * 0.035;
+        assert!(
+            close(lo.magicka_regen, expected),
+            "expected {expected}, got {}",
+            lo.magicka_regen
+        );
+        assert_eq!(lo.stamina_regen, 0.0);
+        assert_eq!(lo.health_regen, 0.0);
+    }
+
+    #[test]
+    fn negative_control_flat_necklace_regeneration_stays_flat() {
+        let lo = from_character(&character(), &inventory(vec![enchanted_necklace()]));
+
+        assert!(
+            close(lo.magicka_regen, 16.6),
+            "T10 flat Fortify Magicka Regeneration is 16.6/s, got {}",
+            lo.magicka_regen,
+        );
     }
 }
 
