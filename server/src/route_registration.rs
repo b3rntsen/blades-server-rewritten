@@ -78,6 +78,28 @@ mod tests {
         found
     }
 
+    fn attributed_route_literals() -> Vec<(String, String)> {
+        let mut files = Vec::new();
+        rs_files(&src_dir(), &mut files);
+        let mut found = Vec::new();
+        for f in files {
+            let module = f.file_stem().unwrap().to_string_lossy().to_string();
+            let src = fs::read_to_string(&f).unwrap_or_default();
+            for attr in ["#[get(", "#[post(", "#[put(", "#[delete("] {
+                let mut rest = src.as_str();
+                while let Some(i) = rest.find(attr) {
+                    rest = &rest[i + attr.len()..];
+                    if let Some(after_quote) = rest.strip_prefix('"') {
+                        if let Some(end) = after_quote.find('"') {
+                            found.push((module.clone(), after_quote[..end].to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        found
+    }
+
     /// Names passed to `.service(...)` in `main.rs`, ignoring the module path.
     fn registered() -> BTreeSet<String> {
         let main = fs::read_to_string(src_dir().join("main.rs")).expect("read main.rs");
@@ -134,6 +156,18 @@ mod tests {
         assert!(
             registered().contains("levelup"),
             "POST /levelup 404s: character_ops::levelup is implemented but not registered"
+        );
+    }
+
+    #[test]
+    fn host_prefixed_routes_start_with_a_slash() {
+        let bad: Vec<_> = attributed_route_literals()
+            .into_iter()
+            .filter(|(_, route)| route.starts_with("blades.bgs.services/"))
+            .collect();
+        assert!(
+            bad.is_empty(),
+            "Actix route literals missing their leading slash: {bad:?}"
         );
     }
 }
