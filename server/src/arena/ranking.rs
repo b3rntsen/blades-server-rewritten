@@ -859,30 +859,42 @@ mod tests {
     }
 
     #[test]
-    fn h2h_season_rebuild_matches_incremental_updates() {
+    fn h2h_season_rebuild_has_independent_expected_ratings() {
         let season = Uuid::from_u128(10);
         let a = Uuid::from_u128(1);
         let b = Uuid::from_u128(2);
         let c = Uuid::from_u128(3);
         let cfg = H2hRatingConfig::default();
-        let rows = [
+        let replayed = replay_h2h_ratings_by_season(&cfg, [
             (Some(season), a, b, win20()),
             (Some(season), b, c, win20()),
             (None, c, a, win20()),
-        ];
-        let replayed = replay_h2h_ratings_by_season(&cfg, rows);
+        ]);
 
-        let mut all_time = BTreeMap::new();
-        let mut seasons: BTreeMap<Uuid, BTreeMap<Uuid, H2hRatingState>> = BTreeMap::new();
-        for (season_id, a_id, b_id, outcome) in rows {
-            apply_h2h_row(&cfg, &mut all_time, a_id, b_id, outcome);
-            if let Some(season_id) = season_id {
-                apply_h2h_row(&cfg, seasons.entry(season_id).or_default(), a_id, b_id, outcome);
-            }
-        }
-
-        assert_eq!(replayed.all_time, all_time);
-        assert_eq!(replayed.seasons, seasons);
+        assert_eq!(
+            replayed.all_time[&a],
+            H2hRatingState { rating: 997, wins: 1, losses: 1, ties: 0, matches: 2 }
+        );
+        assert_eq!(
+            replayed.all_time[&b],
+            H2hRatingState { rating: 1002, wins: 1, losses: 1, ties: 0, matches: 2 }
+        );
+        assert_eq!(
+            replayed.all_time[&c],
+            H2hRatingState { rating: 1001, wins: 1, losses: 1, ties: 0, matches: 2 }
+        );
+        assert_eq!(
+            replayed.seasons[&season][&a],
+            H2hRatingState { rating: 1024, wins: 1, losses: 0, ties: 0, matches: 1 }
+        );
+        assert_eq!(
+            replayed.seasons[&season][&b],
+            H2hRatingState { rating: 1002, wins: 1, losses: 1, ties: 0, matches: 2 }
+        );
+        assert_eq!(
+            replayed.seasons[&season][&c],
+            H2hRatingState { rating: 974, wins: 0, losses: 1, ties: 0, matches: 1 }
+        );
     }
 
     #[test]

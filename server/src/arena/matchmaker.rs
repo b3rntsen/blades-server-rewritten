@@ -1055,6 +1055,7 @@ fn price_bot_profile_for_match(
     lo: &mut crate::arena::combat::Loadout,
     config: &RankingConfig,
     human: Option<Skill>,
+    human_live_trophies: Option<i64>,
     gsid: Uuid,
 ) {
     let Some(human) = human else { return };
@@ -1065,12 +1066,19 @@ fn price_bot_profile_for_match(
         .get("matchmakingPvpTrophies")
         .and_then(|x| x.as_i64())
         .unwrap_or(0);
-    let price = ranking::bot_pricing_trophies(config, human.trophies, mimic_matchmaking, gsid, 0);
+    let own_trophies = human_live_trophies.unwrap_or(human.trophies);
+    let price = ranking::bot_pricing_trophies(config, own_trophies, mimic_matchmaking, gsid, 0);
     if let Some(obj) = v.as_object_mut() {
         obj.insert("pvpTrophies".into(), serde_json::Value::from(price));
         obj.insert("matchmakingPvpTrophies".into(), serde_json::Value::from(price));
     }
     lo.profile_character_json = v.to_string();
+}
+
+fn live_pvp_trophies_from_loadout(lo: &crate::arena::combat::Loadout) -> Option<i64> {
+    serde_json::from_str::<serde_json::Value>(&lo.profile_character_json)
+        .ok()
+        .and_then(|v| v.get("pvpTrophies").and_then(|x| x.as_i64()))
 }
 
 fn apply_recent_bot_avoidance(
@@ -1140,7 +1148,8 @@ async fn pair_daily_h2h_count(db: &Option<DbPool>, a: &str, b: &str) -> usize {
         "SELECT COUNT(DISTINCT r.game_session_id) AS count \
          FROM arena_match_results r \
          INNER JOIN arena_matches m ON m.game_session_id = r.game_session_id AND m.paired = true \
-         WHERE r.character_id = $1 AND r.opponent_character_id = $2 \
+         WHERE ((r.character_id = $1 AND r.opponent_character_id = $2) \
+             OR (r.character_id = $2 AND r.opponent_character_id = $1)) \
            AND r.recorded_at >= (date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')",
     )
     .bind::<diesel::sql_types::Uuid, _>(a)
@@ -1163,13 +1172,14 @@ async fn load_bot_loadout(
     human: Option<Skill>,
     config: &ArenaConfig,
     ranking_config: &RankingConfig,
+    human_live_trophies: Option<i64>,
     gsid: Uuid,
     // Characters currently inside a live match — never drawn as a bot.
     busy: &std::collections::HashSet<String>,
 ) -> crate::arena::combat::Loadout {
     let mut lo = pick_bot_loadout(db, human_char_uuid, human, config, gsid, busy).await;
     mark_loadout_as_bot(&mut lo);
-    price_bot_profile_for_match(&mut lo, ranking_config, human, gsid);
+    price_bot_profile_for_match(&mut lo, ranking_config, human, human_live_trophies, gsid);
     lo
 }
 
@@ -2194,6 +2204,7 @@ mod bot_pick_tests {
                 None,
                 &config,
                 &RankingConfig::default(),
+                None,
                 Uuid::nil(),
                 &std::collections::HashSet::new(),
             ));
@@ -2202,6 +2213,36 @@ mod bot_pick_tests {
             "a bot loaded without a database must still be marked, got {:?}",
             lo.display_name
         );
+    }
+
+    #[test]
+    fn bot_profile_pricing_uses_live_human_trophies_not_matchmaking_high_water() {
+        let mut lo = crate::arena::combat::loadout::starter();
+        lo.profile_character_json =
+            r#"{"name":"Blank","pvpTrophies":40,"matchmakingPvpTrophies":700}"#.to_string();
+        let human = Some(Skill { level: 86, trophies: 2500 });
+
+        price_bot_profile_for_match(&mut lo, &RankingConfig::default(), human, Some(120), Uuid::nil());
+
+        let v: serde_json::Value = serde_json::from_str(&lo.profile_character_json).unwrap();
+        assert_eq!(v["pvpTrophies"], 120);
+        assert_eq!(v["matchmakingPvpTrophies"], 120);
+    }
+
+    #[test]
+    fn debug_ghost_path_marks_and_prices_the_injected_bot() {
+        let src = include_str!("matchmaker.rs");
+        let debug_body = src
+            .split("if bots > 0 {\n        if let Some(ghost_id) = config.debug_ghost_user_id")
+            .nth(1)
+            .expect("debug ghost branch exists")
+            .split("// PRODUCTION BOT FILL")
+            .next()
+            .expect("debug ghost branch is before production bot fill");
+        assert!(debug_body.contains("mark_loadout_as_bot(&mut lo)"));
+        assert!(debug_body.contains("price_bot_profile_for_match("));
+        assert!(debug_body.contains("human_live_trophies"));
+        assert!(debug_body.contains("loadouts.push(lo)"));
     }
 
     #[test]
@@ -3915,8 +3956,10 @@ async fn resolve(
             // (Index, not `.first()`: diesel's `QueryDsl` is in scope and shadows the
             // slice method on `Vec`.)
             let human_char_uuid: Option<String> = loadouts.get(0).map(|l| l.character_uuid.clone());
+            let human_live_trophies = loadouts.get(0).and_then(live_pvp_trophies_from_loadout);
+            let human_skill = tickets.first().and_then(|t| t.skill);
             for i in 0..bots {
-                let lo = match tokio::time::timeout(
+                let mut lo = match tokio::time::timeout(
                     std::time::Duration::from_millis(1500),
                     load_loadout(db, ghost_id, None),
                 )
@@ -3948,6 +3991,14 @@ async fn resolve(
                         continue;
                     }
                 }
+                mark_loadout_as_bot(&mut lo);
+                price_bot_profile_for_match(
+                    &mut lo,
+                    &ranking_config,
+                    human_skill,
+                    human_live_trophies,
+                    game_session_id,
+                );
                 info!(
                     "matchmaker: DEBUG ghost — injected bot slot {} loadout for user {ghost_id} \
                      (\"{}\", char {}, profile_character_json {} B → opponent op54 PROFILE will broadcast)",
@@ -3979,6 +4030,7 @@ async fn resolve(
         // `load_skill`; `None` when that lookup failed, which `pick_bot_index`
         // degrades to "any eligible bot" rather than refusing to start a match.
         let human_skill = tickets.first().and_then(|t| t.skill);
+        let human_live_trophies = loadouts.get(0).and_then(live_pvp_trophies_from_loadout);
         while loadouts.len() < tickets.len() + bots {
             let bot = match tokio::time::timeout(
                 std::time::Duration::from_millis(1500),
@@ -3988,6 +4040,7 @@ async fn resolve(
                     human_skill,
                     config,
                     &ranking_config,
+                    human_live_trophies,
                     game_session_id,
                     &registry.characters_in_live_matches(),
                 ),

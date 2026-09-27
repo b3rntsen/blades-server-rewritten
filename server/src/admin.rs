@@ -721,7 +721,6 @@ pub async fn list_ai_mimics(
 // ------------------------------------------------------ arena ranking v2
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RankingConfigResponse {
     pub version: i32,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -749,7 +748,6 @@ pub async fn get_arena_ranking_config(
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct PutRankingConfigRequest {
     pub config: serde_json::Value,
     #[serde(default)]
@@ -834,7 +832,6 @@ pub struct RankingConfigRow {
 }
 
 #[derive(Serialize, diesel::QueryableByName)]
-#[serde(rename_all = "camelCase")]
 pub struct RankingConfigHistoryEntry {
     #[diesel(sql_type = diesel::sql_types::Integer)]
     pub version: i32,
@@ -880,7 +877,6 @@ pub async fn get_arena_ranking_config_history(
 }
 
 #[derive(Serialize, diesel::QueryableByName)]
-#[serde(rename_all = "camelCase")]
 pub struct H2hTopEntry {
     #[diesel(sql_type = diesel::sql_types::BigInt)]
     pub rank: i64,
@@ -905,7 +901,6 @@ pub struct H2hTopEntry {
 }
 
 #[derive(Debug, Clone, Serialize, diesel::QueryableByName)]
-#[serde(rename_all = "camelCase")]
 pub struct H2hSeasonSummary {
     #[diesel(sql_type = diesel::sql_types::Uuid)]
     pub id: Uuid,
@@ -918,7 +913,6 @@ pub struct H2hSeasonSummary {
 }
 
 #[derive(Serialize, diesel::QueryableByName)]
-#[serde(rename_all = "camelCase")]
 pub struct H2hSeasonListEntry {
     #[diesel(sql_type = diesel::sql_types::Uuid)]
     pub id: Uuid,
@@ -933,7 +927,6 @@ pub struct H2hSeasonListEntry {
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct H2hTopResponse {
     pub season: Option<H2hSeasonSummary>,
     pub rows: Vec<H2hTopEntry>,
@@ -1044,7 +1037,6 @@ pub async fn list_arena_h2h_seasons(
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct H2hRebuildRequest {
     #[serde(default)]
     pub dry_run: bool,
