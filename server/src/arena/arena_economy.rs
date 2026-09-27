@@ -34,7 +34,9 @@ use std::sync::OnceLock;
 use blades_lib::economy::{RewardGrant, apply_reward, grant_chest};
 use blades_lib::user_data::InventoryChangeTracker;
 use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper};
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
+use diesel_async::{
+    AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt,
+};
 use log::{error, info, warn};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use uuid::Uuid;
@@ -441,9 +443,44 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
         );
     }
 
-    // Phase 2 — the audit row, OUTSIDE the transaction above (see the doc comment:
-    // a missing table would otherwise roll the reward back). Failure only logs.
-    let audit = diesel::sql_query(
+    // Phase 2 — the audit row, OUTSIDE the reward transaction above (see the doc
+    // comment: a missing table would otherwise roll the reward back). Failure
+    // only logs. H2H rows additionally share reconcile's advisory lock so a
+    // rebuild cannot absorb an audit row while the matching incremental update
+    // is still pending.
+    if outcome.h2h
+        && let Some(opponent_id) = outcome.opponent_character_id
+    {
+        let cfg = ranking::load(pool).await.config.h2h_rating;
+        let audit = persist_h2h_audit_and_rating(&mut conn, &cfg, outcome, &a, opponent_id).await;
+        if let Err(e) = audit {
+            warn!(
+                "arena h2h audit/rating: locked update failed for {} vs {} in {:?}; \
+                 the REWARD IS SAFE (it committed in its own transaction): {e}",
+                outcome.character_id, opponent_id, outcome.game_session_id
+            );
+        }
+        return Ok(());
+    }
+
+    let audit = insert_match_audit(&mut conn, outcome, &a).await;
+    if let Err(e) = audit {
+        warn!(
+            "arena economy: audit insert into arena_match_results failed — the REWARD \
+             IS SAFE (it committed in its own transaction), only the audit row is \
+             missing. Is the Phase-5.4 migration applied on this box? {e}"
+        );
+    }
+
+    Ok(())
+}
+
+async fn insert_match_audit(
+    conn: &mut AsyncPgConnection,
+    outcome: &MatchEconomyOutcome,
+    a: &AppliedOutcome,
+) -> Result<(), anyhow::Error> {
+    diesel::sql_query(
         "INSERT INTO arena_match_results \
          (id, character_id, opponent_character_id, game_session_id, win, \
           rounds_won, rounds_lost, gold, character_xp, trophy_delta, \
@@ -466,29 +503,8 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
     .bind::<diesel::sql_types::Integer, _>(a.arena_level)
     .bind::<diesel::sql_types::BigInt, _>(a.meter)
     .bind::<diesel::sql_types::BigInt, _>(outcome.completed_at_secs)
-    .execute(&mut conn)
-    .await;
-    if let Err(e) = audit {
-        warn!(
-            "arena economy: audit insert into arena_match_results failed — the REWARD \
-             IS SAFE (it committed in its own transaction), only the audit row is \
-             missing. Is the Phase-5.4 migration applied on this box? {e}"
-        );
-    }
-
-    if outcome.h2h
-        && let Some(opponent_id) = outcome.opponent_character_id
-        && outcome.character_id.as_u128() < opponent_id.as_u128()
-    {
-        let cfg = ranking::load(pool).await.config.h2h_rating;
-        if let Err(e) = persist_h2h_rating_pair(&mut conn, &cfg, outcome, opponent_id).await {
-            warn!(
-                "arena h2h rating: update failed for {} vs {} in {:?}: {e}",
-                outcome.character_id, opponent_id, outcome.game_session_id
-            );
-        }
-    }
-
+    .execute(conn)
+    .await?;
     Ok(())
 }
 
@@ -531,7 +547,9 @@ async fn h2h_state(
     .get_result(conn)
     .await
     .optional()?;
-    Ok(row.map(H2hRatingRow::state).unwrap_or_else(|| ranking::H2hRatingState::new(start)))
+    Ok(row
+        .map(H2hRatingRow::state)
+        .unwrap_or_else(|| ranking::H2hRatingState::new(start)))
 }
 
 async fn h2h_season_state(
@@ -549,7 +567,9 @@ async fn h2h_season_state(
     .get_result(conn)
     .await
     .optional()?;
-    Ok(row.map(H2hRatingRow::state).unwrap_or_else(|| ranking::H2hRatingState::new(start)))
+    Ok(row
+        .map(H2hRatingRow::state)
+        .unwrap_or_else(|| ranking::H2hRatingState::new(start)))
 }
 
 #[derive(diesel::QueryableByName)]
@@ -574,13 +594,37 @@ async fn h2h_season_at(
     Ok(row.map(|r| r.id))
 }
 
-async fn persist_h2h_rating_pair(
-    conn: &mut diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>,
+async fn persist_h2h_audit_and_rating(
+    conn: &mut AsyncPgConnection,
+    cfg: &ranking::H2hRatingConfig,
+    outcome: &MatchEconomyOutcome,
+    applied: &AppliedOutcome,
+    opponent_id: Uuid,
+) -> Result<(), anyhow::Error> {
+    let cfg = cfg.clone();
+    let outcome = outcome.clone();
+    let applied = applied.clone();
+
+    conn.transaction::<_, anyhow::Error, _>(|mut conn| {
+        async move {
+            ranking::lock_h2h_rating_transaction(&mut conn).await?;
+            insert_match_audit(&mut conn, &outcome, &applied).await?;
+            if outcome.character_id.as_u128() < opponent_id.as_u128() {
+                persist_h2h_rating_pair_locked(&mut conn, &cfg, &outcome, opponent_id).await?;
+            }
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+async fn persist_h2h_rating_pair_locked(
+    conn: &mut AsyncPgConnection,
     cfg: &ranking::H2hRatingConfig,
     outcome: &MatchEconomyOutcome,
     opponent_id: Uuid,
 ) -> Result<(), anyhow::Error> {
-    let cfg = cfg.clone();
     let character_id = outcome.character_id;
     let completed_at_secs = outcome.completed_at_secs;
     let a_outcome = arena_ladder::MatchOutcome {
@@ -589,29 +633,102 @@ async fn persist_h2h_rating_pair(
         win: outcome.win,
     };
 
-    conn.transaction::<_, anyhow::Error, _>(|mut conn| {
-        async move {
-            ranking::lock_h2h_rating_transaction(&mut conn).await?;
-            let a = h2h_state(&mut conn, character_id, cfg.start).await?;
-            let b = h2h_state(&mut conn, opponent_id, cfg.start).await?;
-            let (a, b) = ranking::apply_h2h_rating(&cfg, a, b, a_outcome);
-            upsert_h2h_state(&mut conn, character_id, a, completed_at_secs).await?;
-            upsert_h2h_state(&mut conn, opponent_id, b, completed_at_secs).await?;
+    let a = h2h_state(conn, character_id, cfg.start).await?;
+    let b = h2h_state(conn, opponent_id, cfg.start).await?;
+    if h2h_needs_increment(conn, None, [(&a, character_id), (&b, opponent_id)]).await? {
+        let (a, b) = ranking::apply_h2h_rating(cfg, a, b, a_outcome);
+        upsert_h2h_state(conn, character_id, a, completed_at_secs).await?;
+        upsert_h2h_state(conn, opponent_id, b, completed_at_secs).await?;
+    } else {
+        log::debug!(
+            "arena h2h rating: {:?} already covered by reconcile; skipping all-time increment",
+            outcome.game_session_id
+        );
+    }
 
-            if let Some(season_id) = h2h_season_at(&mut conn, completed_at_secs).await? {
-                let a = h2h_season_state(&mut conn, season_id, character_id, cfg.start).await?;
-                let b = h2h_season_state(&mut conn, season_id, opponent_id, cfg.start).await?;
-                let (a, b) = ranking::apply_h2h_rating(&cfg, a, b, a_outcome);
-                upsert_h2h_season_state(&mut conn, season_id, character_id, a, completed_at_secs)
-                    .await?;
-                upsert_h2h_season_state(&mut conn, season_id, opponent_id, b, completed_at_secs)
-                    .await?;
-            }
-            Ok(())
+    if let Some(season_id) = h2h_season_at(conn, completed_at_secs).await? {
+        let a = h2h_season_state(conn, season_id, character_id, cfg.start).await?;
+        let b = h2h_season_state(conn, season_id, opponent_id, cfg.start).await?;
+        if h2h_needs_increment(
+            conn,
+            Some(season_id),
+            [(&a, character_id), (&b, opponent_id)],
+        )
+        .await?
+        {
+            let (a, b) = ranking::apply_h2h_rating(cfg, a, b, a_outcome);
+            upsert_h2h_season_state(conn, season_id, character_id, a, completed_at_secs).await?;
+            upsert_h2h_season_state(conn, season_id, opponent_id, b, completed_at_secs).await?;
+        } else {
+            log::debug!(
+                "arena h2h rating: {:?} already covered by reconcile; skipping season increment",
+                outcome.game_session_id
+            );
         }
-        .scope_boxed()
-    })
-    .await
+    }
+
+    Ok(())
+}
+
+async fn h2h_needs_increment(
+    conn: &mut AsyncPgConnection,
+    season_id: Option<Uuid>,
+    states: [(&ranking::H2hRatingState, Uuid); 2],
+) -> Result<bool, anyhow::Error> {
+    for (state, character_id) in states {
+        let replay_matches = h2h_replay_match_count(conn, character_id, season_id).await?;
+        if state.matches < replay_matches {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[derive(diesel::QueryableByName)]
+struct H2hReplayCountRow {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    matches: i64,
+}
+
+async fn h2h_replay_match_count(
+    conn: &mut AsyncPgConnection,
+    character_id: Uuid,
+    season_id: Option<Uuid>,
+) -> Result<i64, anyhow::Error> {
+    let row: H2hReplayCountRow = diesel::sql_query(
+        "WITH candidates AS ( \
+             SELECT s.id AS season_id, \
+                    LEAST(r.character_id, r.opponent_character_id) AS character_id, \
+                    GREATEST(r.character_id, r.opponent_character_id) AS opponent_character_id, \
+                    r.recorded_at, r.id, r.game_session_id \
+             FROM arena_match_results r \
+             LEFT JOIN LATERAL ( \
+                 SELECT id FROM arena_seasons s \
+                 WHERE r.recorded_at >= to_timestamp(s.starts_at) \
+                   AND r.recorded_at < to_timestamp(s.ends_at) \
+                 ORDER BY s.starts_at DESC LIMIT 1 \
+             ) s ON true \
+             WHERE r.opponent_character_id IS NOT NULL \
+               AND EXISTS ( \
+                   SELECT 1 FROM arena_matches m \
+                   WHERE m.game_session_id = r.game_session_id AND m.paired = true \
+               ) \
+         ), replay_rows AS ( \
+             SELECT DISTINCT ON (game_session_id, character_id, opponent_character_id) \
+                    season_id, character_id, opponent_character_id, recorded_at, id \
+             FROM candidates \
+             ORDER BY game_session_id, character_id, opponent_character_id, recorded_at, id \
+         ) \
+         SELECT COUNT(*) AS matches \
+         FROM replay_rows \
+         WHERE ($2 IS NULL OR season_id = $2) \
+           AND (character_id = $1 OR opponent_character_id = $1)",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(season_id)
+    .get_result(conn)
+    .await?;
+    Ok(row.matches)
 }
 
 async fn upsert_h2h_state(
@@ -672,6 +789,7 @@ async fn upsert_h2h_season_state(
 
 /// What phase 1 committed — carried out of the transaction so the audit row can be
 /// written separately without risking a rollback of the reward.
+#[derive(Clone)]
 struct AppliedOutcome {
     character_id: Uuid,
     pre_trophies: i64,
@@ -696,6 +814,7 @@ static ARENA_GOLD_CURRENCY_UUID_PARSED: std::sync::LazyLock<Uuid> =
 #[cfg(test)]
 mod tests {
     use super::*;
+    use diesel_async::{AsyncConnection, RunQueryDsl};
 
     #[test]
     fn record_without_install_is_a_no_op() {
@@ -736,6 +855,183 @@ mod tests {
                 .stackable_items
                 .get(&Uuid::parse_str("d94bab85-53d5-4c9c-a637-acd94fc66c98").unwrap()),
             Some(&3)
+        );
+    }
+
+    async fn h2h_fixture() -> Option<AsyncPgConnection> {
+        let url = std::env::var("TEST_DATABASE_URL").ok()?;
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction()
+            .await
+            .expect("test transaction");
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        diesel::sql_query(format!("CREATE SCHEMA {schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        diesel::sql_query(format!("SET LOCAL search_path TO {schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        for stmt in [
+            "CREATE TABLE arena_seasons ( \
+                 id UUID PRIMARY KEY, number INTEGER NOT NULL, name TEXT NOT NULL, \
+                 starts_at BIGINT NOT NULL, ends_at BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'scheduled', \
+                 scoring TEXT NOT NULL DEFAULT 'shipped', reset_rule TEXT NOT NULL DEFAULT 'hard_reset', \
+                 created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM now())::bigint, ended_at BIGINT)",
+            "CREATE TABLE arena_matches ( \
+                 ticket_id UUID PRIMARY KEY, user_id UUID NOT NULL, status TEXT NOT NULL, \
+                 game_session_id UUID, paired BOOLEAN NOT NULL DEFAULT FALSE, \
+                 recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(), resolved_at TIMESTAMPTZ)",
+            "CREATE TABLE arena_match_results ( \
+                 id UUID PRIMARY KEY, character_id UUID NOT NULL, opponent_character_id UUID, \
+                 game_session_id UUID, win BOOLEAN NOT NULL, rounds_won INTEGER NOT NULL DEFAULT 0, \
+                 rounds_lost INTEGER NOT NULL DEFAULT 0, gold BIGINT NOT NULL DEFAULT 0, \
+                 character_xp BIGINT NOT NULL DEFAULT 0, trophy_delta BIGINT NOT NULL DEFAULT 0, \
+                 trophies_after BIGINT NOT NULL DEFAULT 0, matchmaking_trophies_after BIGINT NOT NULL DEFAULT 0, \
+                 arena INTEGER NOT NULL DEFAULT 1, arena_level INTEGER NOT NULL DEFAULT 1, \
+                 chest_meter BIGINT NOT NULL DEFAULT 0, recorded_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+            "CREATE TABLE arena_h2h_ratings ( \
+                 character_id UUID PRIMARY KEY, rating INTEGER NOT NULL, wins INTEGER NOT NULL DEFAULT 0, \
+                 losses INTEGER NOT NULL DEFAULT 0, ties INTEGER NOT NULL DEFAULT 0, \
+                 matches INTEGER NOT NULL DEFAULT 0, last_match_at TIMESTAMPTZ)",
+            "CREATE TABLE arena_h2h_season_ratings ( \
+                 season_id UUID NOT NULL, character_id UUID NOT NULL, rating INTEGER NOT NULL, \
+                 wins INTEGER NOT NULL DEFAULT 0, losses INTEGER NOT NULL DEFAULT 0, \
+                 ties INTEGER NOT NULL DEFAULT 0, matches INTEGER NOT NULL DEFAULT 0, \
+                 last_match_at TIMESTAMPTZ, PRIMARY KEY (season_id, character_id))",
+        ] {
+            diesel::sql_query(stmt).execute(&mut conn).await.unwrap();
+        }
+        Some(conn)
+    }
+
+    fn applied(character_id: Uuid) -> AppliedOutcome {
+        AppliedOutcome {
+            character_id,
+            pre_trophies: 100,
+            post_trophies: 124,
+            post_high_water: 124,
+            arena: 1,
+            arena_level: 1,
+            meter: 2,
+            granted: 0,
+            promotion_stackables: 0,
+            giveaway_gems: 0,
+        }
+    }
+
+    fn h2h_outcome(
+        character_id: Uuid,
+        opponent_id: Uuid,
+        game_session_id: Uuid,
+        win: bool,
+    ) -> MatchEconomyOutcome {
+        MatchEconomyOutcome {
+            character_id,
+            game_session_id: Some(game_session_id),
+            level: 1,
+            gold: 0,
+            character_xp: 0,
+            trophy_delta: if win { 24 } else { -24 },
+            rounds_won: if win { 2 } else { 0 },
+            rounds_lost: if win { 0 } else { 2 },
+            win,
+            completed_at_secs: 1_700_000_100,
+            opponent_character_id: Some(opponent_id),
+            h2h: true,
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
+    struct TestRatingRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        character_id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Integer)]
+        rating: i32,
+        #[diesel(sql_type = diesel::sql_types::Integer)]
+        wins: i32,
+        #[diesel(sql_type = diesel::sql_types::Integer)]
+        losses: i32,
+        #[diesel(sql_type = diesel::sql_types::Integer)]
+        matches: i32,
+    }
+
+    async fn test_ratings(conn: &mut AsyncPgConnection) -> Vec<TestRatingRow> {
+        diesel::sql_query(
+            "SELECT character_id, rating, wins, losses, matches \
+             FROM arena_h2h_ratings ORDER BY character_id",
+        )
+        .get_results(conn)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn canonical_h2h_increment_skips_match_already_absorbed_by_reconcile() {
+        let Some(mut conn) = h2h_fixture().await else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — h2h audit race SQL not verified");
+            return;
+        };
+        let cfg = ranking::H2hRatingConfig::default();
+        let season = Uuid::from_u128(10);
+        let lower = Uuid::from_u128(1);
+        let higher = Uuid::from_u128(2);
+        let game_session_id = Uuid::from_u128(99);
+
+        diesel::sql_query(
+            "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at) \
+             VALUES ($1, 1, 'test', 1700000000, 1700002000)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(season)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        diesel::sql_query(
+            "INSERT INTO arena_matches (ticket_id, user_id, status, game_session_id, paired) \
+             VALUES ($1, $2, 'matched', $3, true)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+        .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+        .bind::<diesel::sql_types::Uuid, _>(game_session_id)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+        let higher_loss = h2h_outcome(higher, lower, game_session_id, false);
+        persist_h2h_audit_and_rating(&mut conn, &cfg, &higher_loss, &applied(higher), lower)
+            .await
+            .unwrap();
+        ranking::reconcile_h2h_ratings_with_config(&mut conn, &cfg, false)
+            .await
+            .unwrap();
+
+        let lower_win = h2h_outcome(lower, higher, game_session_id, true);
+        persist_h2h_audit_and_rating(&mut conn, &cfg, &lower_win, &applied(lower), higher)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            test_ratings(&mut conn).await,
+            vec![
+                TestRatingRow {
+                    character_id: lower,
+                    rating: 1024,
+                    wins: 1,
+                    losses: 0,
+                    matches: 1,
+                },
+                TestRatingRow {
+                    character_id: higher,
+                    rating: 976,
+                    wins: 0,
+                    losses: 1,
+                    matches: 1,
+                },
+            ],
+            "the canonical incremental path must not double-apply a match that reconcile already absorbed"
         );
     }
 }
