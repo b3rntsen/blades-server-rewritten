@@ -6,7 +6,7 @@
 //! partially mapped it is marked `// …` — extend as more values are confirmed.
 
 use std::collections::{HashMap, VecDeque};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Max value of a **packed wire stat** — 10 bits each (Health/Stamina/Magicka pack
 /// into the low 30 bits of the `ReceiveDamage` stats ULong). NOTE: the wire field is
@@ -25,6 +25,9 @@ pub const ROUND_WINS_TO_WIN_MATCH: u8 = 2;
 
 /// Hard backstop on rounds played in one match: retail-style best-of-3.
 pub const MATCH_ROUND_HARD_CAP: usize = 2 * ROUND_WINS_TO_WIN_MATCH as usize - 1;
+/// Bot attacks against a human are delayed by that human's measured RTT, capped so
+/// a broken path cannot make the bot visibly idle for seconds.
+pub const BOT_LATENCY_COMPENSATION_CAP: Duration = Duration::from_millis(400);
 
 /// Base max-Health from the shipped `PlayerStatsData._playerStats._healthBase`.
 pub const HEALTH_BASE: u32 = 200;
@@ -3689,6 +3692,9 @@ pub struct MatchCombat {
     pub pending_echoes: Vec<PendingEcho>,
     /// Casts waiting on their shipped wind-up. See [`PendingImpact`].
     pub pending_impacts: Vec<PendingImpact>,
+    /// Smoothed ENet RTT per fighter slot. Bot slots remain zero; human slots are
+    /// updated by the match registry as packets arrive.
+    pub slot_rtt: Vec<Duration>,
 }
 
 /// A committed swing whose damage has not been applied yet.
@@ -3778,6 +3784,7 @@ impl MatchCombat {
             pending_hits: Vec::new(),
             pending_echoes: Vec::new(),
             pending_impacts: Vec::new(),
+            slot_rtt: vec![Duration::ZERO; capacity],
         }
     }
 
@@ -4100,6 +4107,42 @@ impl MatchCombat {
     /// match has `capacity` 2 but `expected_peers` 1.
     pub fn expected_peers(&self) -> usize {
         self.expected_peers
+    }
+
+    pub fn set_slot_rtt(&mut self, slot: usize, rtt: Duration) {
+        if let Some(v) = self.slot_rtt.get_mut(slot) {
+            *v = rtt;
+        }
+    }
+
+    pub fn slot_rtt(&self, slot: usize) -> Duration {
+        self.slot_rtt.get(slot).copied().unwrap_or(Duration::ZERO)
+    }
+
+    pub fn bot_latency_compensation(&self, bot_slot: usize, human_slot: usize) -> Duration {
+        if bot_slot < self.expected_peers || human_slot >= self.expected_peers {
+            return Duration::ZERO;
+        }
+        self.slot_rtt(human_slot).min(BOT_LATENCY_COMPENSATION_CAP)
+    }
+
+    pub fn log_bot_latency_compensation(&self) {
+        if self.expected_peers == 0 || self.expected_peers >= self.fighters.len() {
+            return;
+        }
+        let parts: Vec<String> = (0..self.expected_peers)
+            .map(|slot| {
+                let rtt = self.slot_rtt(slot);
+                let comp = rtt.min(BOT_LATENCY_COMPENSATION_CAP);
+                format!("slot {slot}: rtt={}ms comp={}ms", rtt.as_millis(), comp.as_millis())
+            })
+            .collect();
+        log::info!(
+            "combat: match {} round {} bot latency compensation — {}",
+            self.game_session_id,
+            self.round.saturating_add(1),
+            parts.join(", "),
+        );
     }
 
     pub fn phase_name(&self) -> &'static str {

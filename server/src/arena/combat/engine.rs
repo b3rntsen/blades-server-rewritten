@@ -571,6 +571,10 @@ impl MatchInstance {
         self.combat.game_session_id = game_session_id.into();
     }
 
+    pub fn set_slot_rtt(&mut self, slot: usize, rtt: Duration) {
+        self.combat.set_slot_rtt(slot, rtt);
+    }
+
     pub fn next_seq(&mut self) -> u16 {
         let s = self.s2c_seq;
         self.s2c_seq = self.s2c_seq.wrapping_add(1);
@@ -1170,6 +1174,7 @@ impl MatchInstance {
                     // Round 1 is a round start too: charge the first-use delays before
                     // anyone can act, or the opener is ungated exactly as round 2 was.
                     self.combat.charge_initial_cooldowns(now);
+                    self.combat.log_bot_latency_compensation();
                     self.combat.phase = FlowState::StateTimeout;
                     self.combat.phase_entered = now;
                     self.last_heartbeat = now;
@@ -1362,6 +1367,7 @@ impl MatchInstance {
                             // That reset CLEARS the cooldown map, so the initial
                             // cooldowns have to be charged again for the new round.
                             self.combat.charge_initial_cooldowns(now);
+                            self.combat.log_bot_latency_compensation();
                             self.combat.phase = FlowState::StateTimeout;
                             self.combat.phase_entered = now;
                             self.last_heartbeat = now;

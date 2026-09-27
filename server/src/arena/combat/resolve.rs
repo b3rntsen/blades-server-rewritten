@@ -1636,17 +1636,24 @@ pub(super) fn resolve_ability_cast(
             f.set_actor_state(ActorStateType::Idle, now);
         }
     }
+    let bot_maneuver_latency_comp = if tag == AbilityTag::Maneuver {
+        combat.bot_latency_compensation(sender, target_slot)
+    } else {
+        Duration::ZERO
+    };
     let interruptible_secs = match maneuver_timing {
         Some(t) => t.end,
         None if tag == AbilityTag::Maneuver => 0.0,
         None => super::interrupts::spell_interruptible_secs(&ea.ability_uuid, level),
     };
+    let interruptible_duration =
+        Duration::from_secs_f32(interruptible_secs.max(0.0)) + bot_maneuver_latency_comp;
     super::interrupts::begin_execution(
         &mut combat.fighters[sender],
         super::state::Execution {
             ability_uuid: ea.ability_uuid.clone(),
             started_at: now,
-            until: now + Duration::from_secs_f32(interruptible_secs.max(0.0)),
+            until: now + interruptible_duration,
             cooldown,
             is_maneuver: tag == AbilityTag::Maneuver,
         },
@@ -1872,7 +1879,12 @@ pub(super) fn resolve_ability_cast(
             })
             .unwrap_or(0.0)
             .max(super::perks::ABILITY_USE_MIN_WINDOW_SECS);
-        let expires = now + Duration::from_secs_f32(window);
+        let latency_comp = if matches!(kind, Some(super::gamedata::AbilityKind::Maneuver)) {
+            bot_maneuver_latency_comp
+        } else {
+            Duration::ZERO
+        };
+        let expires = now + Duration::from_secs_f32(window) + latency_comp;
         let f = &mut combat.fighters[sender];
         match kind {
             Some(super::gamedata::AbilityKind::Maneuver) => {
@@ -1927,7 +1939,8 @@ pub(super) fn resolve_ability_cast(
             let authored = maneuver_timing
                 .and_then(|t| t.impacts.get(idx).copied())
                 .unwrap_or_else(|| if idx == 0 { 0.0 } else { delay.as_secs_f32() });
-            let due = now + Duration::from_secs_f32(authored.max(0.0));
+            let due =
+                now + Duration::from_secs_f32(authored.max(0.0)) + bot_maneuver_latency_comp;
             debug!(
                 "combat: slot {sender} maneuver {} impact {}/{} in {:?}",
                 ea.ability_uuid,
@@ -1971,7 +1984,7 @@ pub(super) fn resolve_ability_cast(
             level,
             tag,
             magicka_full_at_cast,
-            due: now + delay,
+            due: now + delay + bot_maneuver_latency_comp,
             cast_at: now,
             reset_maneuver_combo_after: true,
         });
@@ -6247,8 +6260,10 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
         }
 
         if combat.fighters[bot].bot_ai.next_decision_at.is_none() {
+            let latency_comp = combat.bot_latency_compensation(bot, target);
             let first = combat.phase_entered
-                + bot_reaction_time(&mut combat.fighters[bot], &game_session_id, bot);
+                + bot_reaction_time(&mut combat.fighters[bot], &game_session_id, bot)
+                + latency_comp;
             combat.fighters[bot].bot_ai.next_decision_at = Some(first);
         }
         if combat.fighters[bot]
@@ -6333,7 +6348,8 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
             combat.fighters[bot].charge_began_at = Some(now);
             combat.fighters[bot].set_actor_state(ActorStateType::Charging, now);
             combat.fighters[bot].bot_ai.pending_swing_factor = factor;
-            combat.fighters[bot].bot_swing_at = Some(now + hold);
+            let latency_comp = combat.bot_latency_compensation(bot, target);
+            combat.fighters[bot].bot_swing_at = Some(now + hold + latency_comp);
         } else {
             bot_schedule_next_decision(&mut combat.fighters[bot], &game_session_id, bot, now);
         }
@@ -14544,6 +14560,144 @@ mod report_31_high_block_stun {
         assert!(c.fighters[1].bot_swing_at.is_none());
         super::on_tick(&mut c, now + t + Duration::from_millis(1), false);
         assert!(c.fighters[1].bot_swing_at.is_some());
+    }
+
+    #[test]
+    fn zero_rtt_keeps_bot_opening_and_windup_timing_unchanged() {
+        let now = Instant::now();
+        let mut control = combat(now, 1);
+        let mut zero = combat(now, 1);
+        control.game_session_id = "zero-rtt-control".into();
+        zero.game_session_id = "zero-rtt-control".into();
+        zero.set_slot_rtt(0, Duration::ZERO);
+
+        let gsid = control.game_session_id.clone();
+        let t = super::bot_reaction_time(&mut control.fighters[1], &gsid, 1);
+        let due = now + t + Duration::from_millis(1);
+        super::on_tick(&mut control, due, false);
+        super::on_tick(&mut zero, due, false);
+
+        assert_eq!(
+            zero.fighters[1].bot_swing_at,
+            control.fighters[1].bot_swing_at,
+            "an explicit 0 ms RTT is bit-for-bit today's bot timing",
+        );
+    }
+
+    #[test]
+    fn bot_opening_decision_is_delayed_by_the_human_rtt() {
+        let now = Instant::now();
+        let mut c = combat(now, 1);
+        c.game_session_id = "opener-latency".into();
+        c.set_slot_rtt(0, Duration::from_millis(300));
+        let gsid = c.game_session_id.clone();
+        let t = super::bot_reaction_time(&mut c.fighters[1], &gsid, 1);
+
+        super::on_tick(&mut c, now + t + Duration::from_millis(299), false);
+        assert!(
+            c.fighters[1].bot_swing_at.is_none(),
+            "the old opener instant is still too early under 300 ms compensation",
+        );
+        super::on_tick(&mut c, now + t + Duration::from_millis(301), false);
+        assert!(
+            c.fighters[1].bot_swing_at.is_some(),
+            "the opener is available once the RTT-compensated clock elapses",
+        );
+    }
+
+    #[test]
+    fn bot_swing_release_is_delayed_by_the_human_rtt() {
+        let now = Instant::now();
+        let release_after_decision = |rtt: Duration| {
+            let mut c = combat(now, 1);
+            c.game_session_id = "swing-latency".into();
+            c.set_slot_rtt(0, rtt);
+            let gsid = c.game_session_id.clone();
+            let t = super::bot_reaction_time(&mut c.fighters[1], &gsid, 1);
+            let decision = now + t + rtt.min(super::super::state::BOT_LATENCY_COMPENSATION_CAP)
+                + Duration::from_millis(1);
+            super::on_tick(&mut c, decision, false);
+            c.fighters[1]
+                .bot_swing_at
+                .expect("bot starts a wind-up")
+                .duration_since(decision)
+        };
+
+        let control = release_after_decision(Duration::ZERO);
+        let delayed = release_after_decision(Duration::from_millis(300));
+        assert_eq!(
+            delayed.saturating_sub(control),
+            Duration::from_millis(300),
+            "the visible Charging wind-up is extended by the human RTT",
+        );
+    }
+
+    #[test]
+    fn bot_maneuver_impact_is_delayed_by_the_human_rtt() {
+        let now = Instant::now();
+        let impact_delay = |rtt: Duration| {
+            let mut c = combat(now, 1);
+            c.game_session_id = "maneuver-latency".into();
+            c.set_slot_rtt(0, rtt);
+            c.fighters[1].stamina = 100_000;
+            let uuid = uuid_of("PowerAttack");
+            let frame = messages::request_execute_ability(c.fighters[1].net_object_id, uuid);
+            let ea = input::parse_execute_ability(&frame).expect("synthetic cast parses");
+            let out = super::resolve_ability_cast(&mut c, 1, 0, &frame, &ea, now);
+            assert!(!out.is_empty(), "the maneuver cast is accepted");
+            c.pending_impacts
+                .first()
+                .expect("Power Attack queues an authored impact")
+                .due
+                .duration_since(now)
+        };
+
+        let control = impact_delay(Duration::ZERO);
+        let delayed = impact_delay(Duration::from_millis(300));
+        assert_eq!(
+            delayed.saturating_sub(control),
+            Duration::from_millis(300),
+            "bot maneuver impact timing is extended by the human RTT",
+        );
+    }
+
+    #[test]
+    fn bot_latency_compensation_is_capped_at_400ms() {
+        let now = Instant::now();
+        let mut c = combat(now, 1);
+        c.game_session_id = "latency-cap".into();
+        c.set_slot_rtt(0, Duration::from_millis(2_000));
+        assert_eq!(
+            c.bot_latency_compensation(1, 0),
+            Duration::from_millis(400),
+            "large RTT samples are capped before they reach bot timing",
+        );
+        let gsid = c.game_session_id.clone();
+        let t = super::bot_reaction_time(&mut c.fighters[1], &gsid, 1);
+        super::on_tick(&mut c, now + t + Duration::from_millis(399), false);
+        assert!(c.fighters[1].bot_swing_at.is_none());
+        super::on_tick(&mut c, now + t + Duration::from_millis(401), false);
+        assert!(c.fighters[1].bot_swing_at.is_some());
+    }
+
+    #[test]
+    fn human_vs_human_swing_timing_ignores_slot_rtt() {
+        let now = Instant::now();
+        let mut c = combat(now, 2);
+        c.set_slot_rtt(0, Duration::from_millis(300));
+
+        let _ = super::resolve_swing(&mut c, 1, 0, 1.0, now);
+
+        assert_eq!(
+            c.bot_latency_compensation(1, 0),
+            Duration::ZERO,
+            "slot 1 is human in a PvP match, so no bot compensation applies",
+        );
+        assert_eq!(
+            c.pending_hits[0].due,
+            now + super::FOLLOW_THROUGH_DELAY,
+            "human-vs-human hit timing remains the retail follow-through timing",
+        );
     }
 
     #[test]

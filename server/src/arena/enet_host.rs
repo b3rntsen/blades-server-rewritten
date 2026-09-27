@@ -260,7 +260,7 @@ fn pump(
         Ok(Some(Event::Connect { peer, .. })) => Act::Connect(peer.id(), peer.address()),
         Ok(Some(Event::Disconnect { peer, .. })) => Act::Disconnect(peer.id(), peer.address()),
         Ok(Some(Event::Receive { peer, packet, .. })) => {
-            Act::Receive(peer.id(), peer.address(), packet.data().to_vec())
+            Act::Receive(peer.id(), peer.address(), peer.round_trip_time(), packet.data().to_vec())
         }
         Ok(None) => return false,
         Err(e) => {
@@ -308,11 +308,12 @@ fn pump(
                 peer_at.remove(&addr);
             }
         }
-        Act::Receive(pid, Some(addr), data) => {
+        Act::Receive(pid, Some(addr), rtt, data) => {
             peer_at.insert(addr, pid);
+            registry.observe_peer_rtt(addr, rtt);
             handle_packet(host, registry, peer_at, addr, &data);
         }
-        Act::Receive(_, None, _) => {
+        Act::Receive(_, None, _, _) => {
             debug!("arena-enet: receive from a peer with no address; dropping");
         }
     }
@@ -322,7 +323,7 @@ fn pump(
 enum Act {
     Connect(PeerID, Option<std::net::SocketAddr>),
     Disconnect(PeerID, Option<std::net::SocketAddr>),
-    Receive(PeerID, Option<std::net::SocketAddr>, Vec<u8>),
+    Receive(PeerID, Option<std::net::SocketAddr>, Duration, Vec<u8>),
 }
 
 /// Whether a disconnect event still belongs to the peer currently registered at an
