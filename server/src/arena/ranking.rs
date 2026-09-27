@@ -590,19 +590,73 @@ where
 {
     let mut ratings = BTreeMap::new();
     for (a_id, b_id, outcome) in rows {
-        let a = ratings
-            .get(&a_id)
-            .copied()
-            .unwrap_or_else(|| H2hRatingState::new(config.start));
-        let b = ratings
-            .get(&b_id)
-            .copied()
-            .unwrap_or_else(|| H2hRatingState::new(config.start));
-        let (a, b) = apply_h2h_rating(config, a, b, outcome);
-        ratings.insert(a_id, a);
-        ratings.insert(b_id, b);
+        apply_h2h_row(config, &mut ratings, a_id, b_id, outcome);
     }
     ratings
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SeasonedH2hRatings {
+    pub all_time: BTreeMap<Uuid, H2hRatingState>,
+    pub seasons: BTreeMap<Uuid, BTreeMap<Uuid, H2hRatingState>>,
+}
+
+pub fn replay_h2h_ratings_by_season<I>(
+    config: &H2hRatingConfig,
+    rows: I,
+) -> SeasonedH2hRatings
+where
+    I: IntoIterator<Item = (Option<Uuid>, Uuid, Uuid, MatchOutcome)>,
+{
+    let mut ratings = SeasonedH2hRatings::default();
+    for (season_id, a_id, b_id, outcome) in rows {
+        apply_h2h_row(config, &mut ratings.all_time, a_id, b_id, outcome);
+        if let Some(season_id) = season_id {
+            apply_h2h_row(
+                config,
+                ratings.seasons.entry(season_id).or_default(),
+                a_id,
+                b_id,
+                outcome,
+            );
+        }
+    }
+    ratings
+}
+
+fn apply_h2h_row(
+    config: &H2hRatingConfig,
+    ratings: &mut BTreeMap<Uuid, H2hRatingState>,
+    a_id: Uuid,
+    b_id: Uuid,
+    outcome: MatchOutcome,
+) {
+    let a = ratings
+        .get(&a_id)
+        .copied()
+        .unwrap_or_else(|| H2hRatingState::new(config.start));
+    let b = ratings
+        .get(&b_id)
+        .copied()
+        .unwrap_or_else(|| H2hRatingState::new(config.start));
+    let (a, b) = apply_h2h_rating(config, a, b, outcome);
+    ratings.insert(a_id, a);
+    ratings.insert(b_id, b);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum H2hSeasonSelection {
+    Current,
+    AllTime,
+    Season(Uuid),
+}
+
+pub fn parse_h2h_season_selection(value: Option<&str>) -> Result<H2hSeasonSelection, uuid::Error> {
+    match value.unwrap_or("current") {
+        "current" | "" => Ok(H2hSeasonSelection::Current),
+        "all" => Ok(H2hSeasonSelection::AllTime),
+        raw => Uuid::parse_str(raw).map(H2hSeasonSelection::Season),
+    }
 }
 
 #[cfg(test)]
@@ -751,6 +805,84 @@ mod tests {
         assert_eq!(ratings[&b].matches, 2);
         assert_eq!(ratings[&a].wins, 1);
         assert_eq!(ratings[&b].wins, 1);
+    }
+
+    #[test]
+    fn h2h_replay_maps_match_to_season_and_all_time() {
+        let season = Uuid::from_u128(10);
+        let other_season = Uuid::from_u128(11);
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let cfg = H2hRatingConfig::default();
+        let ratings = replay_h2h_ratings_by_season(&cfg, [(Some(season), a, b, win20())]);
+        assert_eq!(ratings.all_time[&a].matches, 1);
+        assert_eq!(ratings.seasons[&season][&a].matches, 1);
+        assert!(!ratings.seasons.contains_key(&other_season));
+    }
+
+    #[test]
+    fn h2h_new_season_starts_fresh_and_old_stays_frozen() {
+        let old = Uuid::from_u128(10);
+        let new = Uuid::from_u128(11);
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let cfg = H2hRatingConfig::default();
+        let ratings = replay_h2h_ratings_by_season(
+            &cfg,
+            [(Some(old), a, b, win20()), (Some(new), b, a, win20())],
+        );
+        assert_eq!(ratings.seasons[&old][&a].rating, 1024);
+        assert_eq!(ratings.seasons[&old][&b].rating, 976);
+        assert_eq!(ratings.seasons[&new][&b].rating, 1024);
+        assert_eq!(ratings.seasons[&new][&a].rating, 976);
+        assert_eq!(ratings.seasons[&old][&a].matches, 1);
+        assert_eq!(ratings.seasons[&new][&a].matches, 1);
+        assert_eq!(ratings.all_time[&a].matches, 2);
+    }
+
+    #[test]
+    fn h2h_season_selection_defaults_to_current() {
+        let season = Uuid::from_u128(42);
+        assert_eq!(
+            parse_h2h_season_selection(None).unwrap(),
+            H2hSeasonSelection::Current
+        );
+        assert_eq!(
+            parse_h2h_season_selection(Some("all")).unwrap(),
+            H2hSeasonSelection::AllTime
+        );
+        assert_eq!(
+            parse_h2h_season_selection(Some(&season.to_string())).unwrap(),
+            H2hSeasonSelection::Season(season)
+        );
+        assert!(parse_h2h_season_selection(Some("definitely-not-a-season")).is_err());
+    }
+
+    #[test]
+    fn h2h_season_rebuild_matches_incremental_updates() {
+        let season = Uuid::from_u128(10);
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let c = Uuid::from_u128(3);
+        let cfg = H2hRatingConfig::default();
+        let rows = [
+            (Some(season), a, b, win20()),
+            (Some(season), b, c, win20()),
+            (None, c, a, win20()),
+        ];
+        let replayed = replay_h2h_ratings_by_season(&cfg, rows);
+
+        let mut all_time = BTreeMap::new();
+        let mut seasons: BTreeMap<Uuid, BTreeMap<Uuid, H2hRatingState>> = BTreeMap::new();
+        for (season_id, a_id, b_id, outcome) in rows {
+            apply_h2h_row(&cfg, &mut all_time, a_id, b_id, outcome);
+            if let Some(season_id) = season_id {
+                apply_h2h_row(&cfg, seasons.entry(season_id).or_default(), a_id, b_id, outcome);
+            }
+        }
+
+        assert_eq!(replayed.all_time, all_time);
+        assert_eq!(replayed.seasons, seasons);
     }
 
     #[test]

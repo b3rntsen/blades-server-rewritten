@@ -746,6 +746,7 @@ async fn main() -> Result<()> {
                     .service(admin::put_arena_ranking_config)
                     .service(admin::get_arena_ranking_config_history)
                     .service(admin::get_arena_h2h_top)
+                    .service(admin::list_arena_h2h_seasons)
                     .service(admin::rebuild_arena_h2h_ratings)
                     .service(admin::get_current_character)
                     .service(admin::recent_matches)

@@ -533,6 +533,46 @@ async fn h2h_state(
     Ok(row.map(H2hRatingRow::state).unwrap_or_else(|| ranking::H2hRatingState::new(start)))
 }
 
+async fn h2h_season_state(
+    conn: &mut diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>,
+    season_id: Uuid,
+    character_id: Uuid,
+    start: i64,
+) -> Result<ranking::H2hRatingState, anyhow::Error> {
+    let row: Option<H2hRatingRow> = diesel::sql_query(
+        "SELECT rating, wins, losses, ties, matches \
+         FROM arena_h2h_season_ratings WHERE season_id = $1 AND character_id = $2",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(season_id)
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .get_result(conn)
+    .await
+    .optional()?;
+    Ok(row.map(H2hRatingRow::state).unwrap_or_else(|| ranking::H2hRatingState::new(start)))
+}
+
+#[derive(diesel::QueryableByName)]
+struct H2hSeasonAtRow {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    id: Uuid,
+}
+
+async fn h2h_season_at(
+    conn: &mut diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>,
+    completed_at_secs: i64,
+) -> Result<Option<Uuid>, anyhow::Error> {
+    let row: Option<H2hSeasonAtRow> = diesel::sql_query(
+        "SELECT id FROM arena_seasons \
+         WHERE starts_at <= $1 AND ends_at > $1 \
+         ORDER BY starts_at DESC LIMIT 1",
+    )
+    .bind::<diesel::sql_types::BigInt, _>(completed_at_secs)
+    .get_result(conn)
+    .await
+    .optional()?;
+    Ok(row.map(|r| r.id))
+}
+
 async fn persist_h2h_rating_pair(
     conn: &mut diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>,
     cfg: &ranking::H2hRatingConfig,
@@ -549,6 +589,16 @@ async fn persist_h2h_rating_pair(
     let (a, b) = ranking::apply_h2h_rating(cfg, a, b, a_outcome);
     upsert_h2h_state(conn, outcome.character_id, a, outcome.completed_at_secs).await?;
     upsert_h2h_state(conn, opponent_id, b, outcome.completed_at_secs).await?;
+
+    if let Some(season_id) = h2h_season_at(conn, outcome.completed_at_secs).await? {
+        let a = h2h_season_state(conn, season_id, outcome.character_id, cfg.start).await?;
+        let b = h2h_season_state(conn, season_id, opponent_id, cfg.start).await?;
+        let (a, b) = ranking::apply_h2h_rating(cfg, a, b, a_outcome);
+        upsert_h2h_season_state(conn, season_id, outcome.character_id, a, outcome.completed_at_secs)
+            .await?;
+        upsert_h2h_season_state(conn, season_id, opponent_id, b, outcome.completed_at_secs)
+            .await?;
+    }
     Ok(())
 }
 
@@ -567,6 +617,35 @@ async fn upsert_h2h_state(
              ties = EXCLUDED.ties, matches = EXCLUDED.matches, \
              last_match_at = EXCLUDED.last_match_at",
     )
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Integer, _>(state.rating as i32)
+    .bind::<diesel::sql_types::Integer, _>(state.wins as i32)
+    .bind::<diesel::sql_types::Integer, _>(state.losses as i32)
+    .bind::<diesel::sql_types::Integer, _>(state.ties as i32)
+    .bind::<diesel::sql_types::Integer, _>(state.matches as i32)
+    .bind::<diesel::sql_types::BigInt, _>(completed_at_secs)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+async fn upsert_h2h_season_state(
+    conn: &mut diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>,
+    season_id: Uuid,
+    character_id: Uuid,
+    state: ranking::H2hRatingState,
+    completed_at_secs: i64,
+) -> Result<(), anyhow::Error> {
+    diesel::sql_query(
+        "INSERT INTO arena_h2h_season_ratings \
+         (season_id, character_id, rating, wins, losses, ties, matches, last_match_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8)) \
+         ON CONFLICT (season_id, character_id) DO UPDATE SET \
+             rating = EXCLUDED.rating, wins = EXCLUDED.wins, losses = EXCLUDED.losses, \
+             ties = EXCLUDED.ties, matches = EXCLUDED.matches, \
+             last_match_at = EXCLUDED.last_match_at",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(season_id)
     .bind::<diesel::sql_types::Uuid, _>(character_id)
     .bind::<diesel::sql_types::Integer, _>(state.rating as i32)
     .bind::<diesel::sql_types::Integer, _>(state.wins as i32)
