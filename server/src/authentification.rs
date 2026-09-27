@@ -352,10 +352,7 @@ async fn resolve_link(
     // not be faster than a wrong password, or this endpoint enumerates players.
     let (user_id, hash) = match found {
         Some(row) => (Some(row.user_id), row.password_hash),
-        None => (
-            None,
-            crate::credentials::ENUMERATION_DUMMY_HASH.to_string(),
-        ),
+        None => (None, crate::credentials::ENUMERATION_DUMMY_HASH.to_string()),
     };
     let ok = crate::credentials::verify_password(password, &hash);
     let Some(user_id) = user_id.filter(|_| ok) else {
@@ -501,7 +498,11 @@ async fn bnet_link(
         // Secret ids, in the same currency as `selectedUserId`; the row id is
         // never something the client has seen.
         let mut ids = Vec::new();
-        if let Some(sel) = body.selected_user_id.as_deref().and_then(|s| Uuid::parse_str(s).ok()) {
+        if let Some(sel) = body
+            .selected_user_id
+            .as_deref()
+            .and_then(|s| Uuid::parse_str(s).ok())
+        {
             ids.push(sel.to_string());
         }
         ids.push(secret_id.to_string());
@@ -606,7 +607,6 @@ fn forced_link_may_park(
     !(discord_owned(played_user_id) && discord_owned(linked_user_id))
 }
 
-
 fn is_unplayed_starter(name: Option<&str>, level: i32) -> bool {
     name == Some(crate::character::STARTER_NAME) && level <= 1
 }
@@ -632,6 +632,35 @@ async fn character_name_level(
     )
     .bind::<diesel::sql_types::Uuid, _>(character_id)
     .get_result(conn)
+    .await
+}
+
+/// Keep guild membership's denormalised owner beside the character owner.
+///
+/// `guild_members` is keyed by `(guild_id, user_id)`, so a moved character cannot
+/// blindly update into a user who already has a row in the same guild. In that
+/// collision case the read side still resolves through `character_id`, and the
+/// stale row is left alone instead of violating the primary key.
+async fn update_guild_membership_owner(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    new_user_id: Uuid,
+) -> Result<usize, diesel::result::Error> {
+    diesel::sql_query(
+        "UPDATE guild_members gm
+            SET user_id = $2
+          WHERE gm.character_id = $1
+            AND gm.user_id <> $2
+            AND NOT EXISTS (
+                SELECT 1
+                  FROM guild_members other
+                 WHERE other.guild_id = gm.guild_id
+                   AND other.user_id = $2
+            )",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Uuid, _>(new_user_id)
+    .execute(conn)
     .await
 }
 
@@ -689,6 +718,7 @@ async fn swap_character_ownership(
             .set(ch::user_id.eq(linked_user_id))
             .execute(conn)
             .await?;
+        update_guild_membership_owner(conn, played, linked_user_id).await?;
         return Ok((adopted, 0));
     };
 
@@ -754,10 +784,12 @@ async fn swap_character_ownership(
         .set(ch::user_id.eq(linked_user_id))
         .execute(conn)
         .await?;
+    update_guild_membership_owner(conn, played, linked_user_id).await?;
     let moved_aside = diesel::update(ch::characters.filter(ch::id.eq(displaced)))
         .set(ch::user_id.eq(played_user_id))
         .execute(conn)
         .await?;
+    update_guild_membership_owner(conn, displaced, played_user_id).await?;
     diesel::delete(u::users.filter(u::id.eq(parking_user_id)))
         .execute(conn)
         .await?;
@@ -775,15 +807,17 @@ async fn apply_forced_link_changes(
     linked_user_id: Uuid,
     keep_played: bool,
 ) -> Result<(usize, (usize, usize)), diesel::result::Error> {
-    conn.transaction(move |mut conn| Box::pin(async move {
-        let rebound = bind_linked_devices(&mut conn, source_user_id, linked_user_id).await?;
-        let moved = if keep_played {
-            swap_character_ownership(&mut conn, source_user_id, linked_user_id).await?
-        } else {
-            (0, 0)
-        };
-        Ok((rebound, moved))
-    }))
+    conn.transaction(move |mut conn| {
+        Box::pin(async move {
+            let rebound = bind_linked_devices(&mut conn, source_user_id, linked_user_id).await?;
+            let moved = if keep_played {
+                swap_character_ownership(&mut conn, source_user_id, linked_user_id).await?
+            } else {
+                (0, 0)
+            };
+            Ok((rebound, moved))
+        })
+    })
     .await
 }
 
@@ -838,7 +872,11 @@ async fn bnet_link_force(
     log::info!(
         "account link (forced): user {source_user_id} kept {}; rebound {rebound} device(s); \
          adopted {} character(s), parked {} (#185)",
-        if keep_played { "the character they were playing" } else { "the linked account" },
+        if keep_played {
+            "the character they were playing"
+        } else {
+            "the linked account"
+        },
         moved.0,
         moved.1,
     );
@@ -880,7 +918,8 @@ async fn anon_log_in(
         .and_then(|v| v.to_str().ok())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
-    let effective_device_id: Option<String> = info.0.device_id.clone().or_else(|| source_wg_ip.clone());
+    let effective_device_id: Option<String> =
+        info.0.device_id.clone().or_else(|| source_wg_ip.clone());
     // ONE line per anon login saying how (and whether) this client can be
     // recognised. Without it a player reporting "it gives me a new character
     // every launch" is indistinguishable from one whose game never reached us at
@@ -900,12 +939,24 @@ async fn anon_log_in(
             (None, Some(_)) => "wg peer ip",
             (None, None) => "none — this client cannot be recognised next launch",
         },
-        if info.0.device_id.is_some() { "yes" } else { "null" },
-        if source_wg_ip.is_some() { "present" } else { "absent" },
+        if info.0.device_id.is_some() {
+            "yes"
+        } else {
+            "null"
+        },
+        if source_wg_ip.is_some() {
+            "present"
+        } else {
+            "absent"
+        },
         // Whether the client re-presented the secret it was handed last launch.
         // "none … userId: absent" is a client that kept nothing; "userId:
         // present" means the secret path below will recognise it regardless.
-        if info.0.user_id.is_some() { "present" } else { "absent" },
+        if info.0.user_id.is_some() {
+            "present"
+        } else {
+            "absent"
+        },
     );
     if let Some(device_id_val) = effective_device_id {
         let mut conn = app_state.db_pool.get().await.unwrap();
@@ -920,7 +971,9 @@ async fn anon_log_in(
              source_wg_ip = COALESCE(EXCLUDED.source_wg_ip, device_bindings.source_wg_ip)",
         )
         .bind::<diesel::sql_types::Text, _>(device_id_val.clone())
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some(info.0.platform.clone()))
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some(
+            info.0.platform.clone(),
+        ))
         .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(source_wg_ip.clone())
         .execute(&mut conn)
         .await;
@@ -962,7 +1015,8 @@ async fn anon_log_in(
                         "device_bindings: WG-IP fallback resolved {} via source_wg_ip {} \
                          (primary key miss — device reconnected with null deviceId after \
                          being bound under a stable hash; Fix 1 systemic binding fix)",
-                        device_id_val, wg_ip
+                        device_id_val,
+                        wg_ip
                     );
                 }
                 secondary
@@ -973,7 +1027,10 @@ async fn anon_log_in(
             bound
         };
         if let Some(b) = bound {
-            log::info!("anon login: device is CLAIMED → resolving to user {}", b.user_id);
+            log::info!(
+                "anon login: device is CLAIMED → resolving to user {}",
+                b.user_id
+            );
             let result = users
                 .select(UserDBEntry::as_select())
                 .filter(id.eq(b.user_id))
@@ -987,14 +1044,15 @@ async fn anon_log_in(
                     app_state.session_store.ttl,
                 ));
                 let session_id = app_state.session_store.store_new_session(session.clone());
-                crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
-    crate::session::claim_account_for_this_device(
-        &app_state.session_store,
-        &app_state.db_pool,
-        session.user_id,
-        session_id,
-    )
-    .await;
+                crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref())
+                    .await;
+                crate::session::claim_account_for_this_device(
+                    &app_state.session_store,
+                    &app_state.db_pool,
+                    session.user_id,
+                    session_id,
+                )
+                .await;
                 // Every exit from anon_log_in goes through this. Our APK has the FTUE
                 // patched out, so a player with no character never gets offered creation —
                 // it asks for its characters, gets an empty list and sits on the loading
@@ -1003,8 +1061,14 @@ async fn anon_log_in(
                 // putting it on every path costs nothing and heals the accounts already
                 // stranded — 118 of 282 when this was found.
                 // Best-effort: a failure here must never break the login itself.
-                if let Err(e) = crate::character::ensure_starter_character(&app_state, session.user_id).await {
-                    log::warn!("could not provision a starter character for {}: {}", session.user_id, e);
+                if let Err(e) =
+                    crate::character::ensure_starter_character(&app_state, session.user_id).await
+                {
+                    log::warn!(
+                        "could not provision a starter character for {}: {}",
+                        session.user_id,
+                        e
+                    );
                 }
                 return Ok(web::Json(SessionResponse {
                     session: SessionResponseInner::from_session(session_id, session.as_ref()),
@@ -1037,17 +1101,23 @@ async fn anon_log_in(
         ));
         let session_id = app_state.session_store.store_new_session(session.clone());
         crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
-    crate::session::claim_account_for_this_device(
-        &app_state.session_store,
-        &app_state.db_pool,
-        session.user_id,
-        session_id,
-    )
-    .await;
+        crate::session::claim_account_for_this_device(
+            &app_state.session_store,
+            &app_state.db_pool,
+            session.user_id,
+            session_id,
+        )
+        .await;
 
         // Same as above: never leave an anon login without a character.
-        if let Err(e) = crate::character::ensure_starter_character(&app_state, session.user_id).await {
-            log::warn!("could not provision a starter character for {}: {}", session.user_id, e);
+        if let Err(e) =
+            crate::character::ensure_starter_character(&app_state, session.user_id).await
+        {
+            log::warn!(
+                "could not provision a starter character for {}: {}",
+                session.user_id,
+                e
+            );
         }
         return Ok(web::Json(SessionResponse {
             session: SessionResponseInner::from_session(session_id, session.as_ref()),
@@ -1093,17 +1163,23 @@ async fn anon_log_in(
         ));
         let session_id = app_state.session_store.store_new_session(session.clone());
         crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
-    crate::session::claim_account_for_this_device(
-        &app_state.session_store,
-        &app_state.db_pool,
-        session.user_id,
-        session_id,
-    )
-    .await;
+        crate::session::claim_account_for_this_device(
+            &app_state.session_store,
+            &app_state.db_pool,
+            session.user_id,
+            session_id,
+        )
+        .await;
 
         // Same as above: never leave an anon login without a character.
-        if let Err(e) = crate::character::ensure_starter_character(&app_state, session.user_id).await {
-            log::warn!("could not provision a starter character for {}: {}", session.user_id, e);
+        if let Err(e) =
+            crate::character::ensure_starter_character(&app_state, session.user_id).await
+        {
+            log::warn!(
+                "could not provision a starter character for {}: {}",
+                session.user_id,
+                e
+            );
         }
         return Ok(web::Json(SessionResponse {
             session: SessionResponseInner::from_session(session_id, session.as_ref()),
@@ -1160,10 +1236,8 @@ async fn anon_log_in(
             let existing: Vec<UserDBEntry> = users
                 .select(UserDBEntry::as_select())
                 .filter(
-                    diesel::dsl::sql::<diesel::sql_types::Bool>(
-                        "data->'gp_deviceids' @> ",
-                    )
-                    .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!([this_device])),
+                    diesel::dsl::sql::<diesel::sql_types::Bool>("data->'gp_deviceids' @> ")
+                        .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!([this_device])),
                 )
                 .load(&mut conn)
                 .await
@@ -1199,8 +1273,14 @@ async fn anon_log_in(
                 // through creates a second user for the same device and returns
                 // that new identity instead of the session we just persisted.
                 // Same as above: never leave an anon login without a character.
-                if let Err(e) = crate::character::ensure_starter_character(&app_state, session.user_id).await {
-                    log::warn!("could not provision a starter character for {}: {}", session.user_id, e);
+                if let Err(e) =
+                    crate::character::ensure_starter_character(&app_state, session.user_id).await
+                {
+                    log::warn!(
+                        "could not provision a starter character for {}: {}",
+                        session.user_id,
+                        e
+                    );
                 }
                 return Ok(web::Json(SessionResponse {
                     session: SessionResponseInner::from_session(session_id, session.as_ref()),
@@ -1252,17 +1332,23 @@ async fn anon_log_in(
         ));
         let session_id = app_state.session_store.store_new_session(session.clone());
         crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
-    crate::session::claim_account_for_this_device(
-        &app_state.session_store,
-        &app_state.db_pool,
-        session.user_id,
-        session_id,
-    )
-    .await;
+        crate::session::claim_account_for_this_device(
+            &app_state.session_store,
+            &app_state.db_pool,
+            session.user_id,
+            session_id,
+        )
+        .await;
 
         // Same as above: never leave an anon login without a character.
-        if let Err(e) = crate::character::ensure_starter_character(&app_state, session.user_id).await {
-            log::warn!("could not provision a starter character for {}: {}", session.user_id, e);
+        if let Err(e) =
+            crate::character::ensure_starter_character(&app_state, session.user_id).await
+        {
+            log::warn!(
+                "could not provision a starter character for {}: {}",
+                session.user_id,
+                e
+            );
         }
         return Ok(web::Json(SessionResponse {
             session: SessionResponseInner::from_session(session_id, session.as_ref()),
@@ -1307,7 +1393,10 @@ mod link_tests {
 
         assert_eq!(response.login_token, account.to_string());
         assert_ne!(response.login_token, session.generate_token(&session_id));
-        assert!(Uuid::parse_str(&response.login_token).is_ok(), "retail loginToken is a UUID");
+        assert!(
+            Uuid::parse_str(&response.login_token).is_ok(),
+            "retail loginToken is a UUID"
+        );
     }
 
     /// Report #125: the normal anonymous-to-real-account link reports a
@@ -1340,18 +1429,38 @@ mod link_tests {
     #[test]
     fn a_device_is_only_reused_when_it_names_exactly_one_user() {
         #[derive(Debug, PartialEq)]
-        enum Outcome { Create, Reuse, DoNotGuess }
-
-        fn decide(matches: usize) -> Outcome {
-            if matches == 1 { Outcome::Reuse }
-            else if matches > 1 { Outcome::DoNotGuess }
-            else { Outcome::Create }
+        enum Outcome {
+            Create,
+            Reuse,
+            DoNotGuess,
         }
 
-        assert_eq!(decide(0), Outcome::Create, "an unseen device gets a new account");
-        assert_eq!(decide(1), Outcome::Reuse, "a returning device keeps its account");
+        fn decide(matches: usize) -> Outcome {
+            if matches == 1 {
+                Outcome::Reuse
+            } else if matches > 1 {
+                Outcome::DoNotGuess
+            } else {
+                Outcome::Create
+            }
+        }
+
+        assert_eq!(
+            decide(0),
+            Outcome::Create,
+            "an unseen device gets a new account"
+        );
+        assert_eq!(
+            decide(1),
+            Outcome::Reuse,
+            "a returning device keeps its account"
+        );
         // the 2-user and 12-user devices measured on prod
-        assert_eq!(decide(2), Outcome::DoNotGuess, "ambiguous devices must not be guessed");
+        assert_eq!(
+            decide(2),
+            Outcome::DoNotGuess,
+            "ambiguous devices must not be guessed"
+        );
         assert_eq!(decide(12), Outcome::DoNotGuess);
     }
 
@@ -1544,10 +1653,17 @@ mod link_tests {
 
         let ids = build(Some(&selected.to_string()), linked);
         assert_eq!(ids.len(), 2, "the picker needs a row per profile");
-        assert_eq!(ids[0], selected.to_string(), "the current profile comes first");
+        assert_eq!(
+            ids[0],
+            selected.to_string(),
+            "the current profile comes first"
+        );
         assert_eq!(ids[1], linked.to_string());
         // Retail's ids are plain 36-character UUID strings.
-        assert!(ids.iter().all(|i| i.len() == 36), "must be bare uuid strings");
+        assert!(
+            ids.iter().all(|i| i.len() == 36),
+            "must be bare uuid strings"
+        );
 
         // With nothing usable from the client, one row is still better than a
         // dialog that cannot be dismissed — but it must never be zero.
@@ -1563,7 +1679,10 @@ mod link_tests {
     #[test]
     fn case_does_not_change_the_answer() {
         let secret = Uuid::from_u128(0xABCDEF);
-        assert!(is_same_account(Some(&secret.to_string().to_uppercase()), secret));
+        assert!(is_same_account(
+            Some(&secret.to_string().to_uppercase()),
+            secret
+        ));
     }
 }
 
@@ -1582,7 +1701,10 @@ mod anon_login_diagnostics_tests {
         // Everything before the first test MODULE — newline-anchored, so an indented
         // attribute above the guarded code cannot cut the shipped path out of the
         // haystack and leave the guard inspecting nothing.
-        let code = src.split("\n#[cfg(test)]").next().expect("source has a body");
+        let code = src
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("source has a body");
 
         for needle in [
             "anon login: device identity",
@@ -1688,7 +1810,10 @@ mod report185_link_choice_tests {
     /// could not get his character onto an account holding a default level 48.
     #[test]
     fn choosing_the_played_character_is_recognised() {
-        assert!(keeps_the_played_character(Some(&PLAYED.to_string()), CREDENTIAL));
+        assert!(keeps_the_played_character(
+            Some(&PLAYED.to_string()),
+            CREDENTIAL
+        ));
     }
 
     /// CONTROL, and the half that must not change: choosing the linked account
@@ -1697,7 +1822,10 @@ mod report185_link_choice_tests {
     /// anyone who answered the other way.
     #[test]
     fn choosing_the_linked_account_moves_nothing() {
-        assert!(!keeps_the_played_character(Some(&CREDENTIAL.to_string()), CREDENTIAL));
+        assert!(!keeps_the_played_character(
+            Some(&CREDENTIAL.to_string()),
+            CREDENTIAL
+        ));
     }
 
     /// An absent or unparseable answer must not move a character. The client
@@ -1720,8 +1848,14 @@ mod report185_link_choice_tests {
         assert_ne!(row_id, CREDENTIAL);
         // The same string that means "keep the linked account" against the
         // secret id would mean the opposite against the row id.
-        assert!(!keeps_the_played_character(Some(&CREDENTIAL.to_string()), CREDENTIAL));
-        assert!(keeps_the_played_character(Some(&CREDENTIAL.to_string()), row_id));
+        assert!(!keeps_the_played_character(
+            Some(&CREDENTIAL.to_string()),
+            CREDENTIAL
+        ));
+        assert!(keeps_the_played_character(
+            Some(&CREDENTIAL.to_string()),
+            row_id
+        ));
     }
 
     /// WolfWalker, 2026-09-23: a device sent `deviceId: null`, was minted a fresh
@@ -1750,10 +1884,13 @@ mod report185_link_choice_tests {
     /// statement and the handler nevertheless returned success.
     struct ForcedLinkOutcome {
         result: (usize, (usize, usize)),
+        source_user: Uuid,
+        linked_user: Uuid,
         played_character: Uuid,
         displaced_character: Uuid,
         linked_holds: Uuid,
         source_holds: Uuid,
+        played_membership_owner: Uuid,
         users_left: usize,
     }
 
@@ -1813,6 +1950,18 @@ mod report185_link_choice_tests {
         .execute(&mut conn)
         .await
         .unwrap();
+        diesel::sql_query(
+            "CREATE TABLE guild_members ( \
+                 guild_id TEXT NOT NULL, \
+                 user_id UUID NOT NULL REFERENCES users(id), \
+                 character_id UUID NOT NULL, \
+                 rank TEXT NOT NULL, \
+                 join_date BIGINT NOT NULL, \
+                 PRIMARY KEY (guild_id, user_id))",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
 
         let source = Uuid::new_v4();
         let linked = Uuid::new_v4();
@@ -1834,19 +1983,30 @@ mod report185_link_choice_tests {
             (played_character, source, played_doc),
             (displaced_character, linked, displaced_doc),
         ] {
-            diesel::sql_query("INSERT INTO characters (id, user_id, character) VALUES ($1, $2, $3)")
-                .bind::<diesel::sql_types::Uuid, _>(id)
-                .bind::<diesel::sql_types::Uuid, _>(owner)
-                .bind::<diesel::sql_types::Jsonb, _>(doc)
-                .execute(&mut conn)
-                .await
-                .unwrap();
+            diesel::sql_query(
+                "INSERT INTO characters (id, user_id, character) VALUES ($1, $2, $3)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .bind::<diesel::sql_types::Uuid, _>(owner)
+            .bind::<diesel::sql_types::Jsonb, _>(doc)
+            .execute(&mut conn)
+            .await
+            .unwrap();
         }
         diesel::sql_query("INSERT INTO device_bindings (device_id, user_id) VALUES ('phone', $1)")
             .bind::<diesel::sql_types::Uuid, _>(source)
             .execute(&mut conn)
             .await
             .unwrap();
+        diesel::sql_query(
+            "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date)
+             VALUES ('guild-a', $1, $2, 'MEMBER', 1)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(source)
+        .bind::<diesel::sql_types::Uuid, _>(played_character)
+        .execute(&mut conn)
+        .await
+        .unwrap();
 
         let result = apply_forced_link_changes(&mut conn, source, linked, true)
             .await
@@ -1865,9 +2025,23 @@ mod report185_link_choice_tests {
                 .unwrap()
                 .id
         }
+        #[derive(diesel::QueryableByName)]
+        struct UserRow {
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            user_id: Uuid,
+        }
+        async fn membership_owner(conn: &mut AsyncPgConnection, character: Uuid) -> Uuid {
+            diesel::sql_query("SELECT user_id FROM guild_members WHERE character_id = $1")
+                .bind::<diesel::sql_types::Uuid, _>(character)
+                .get_result::<UserRow>(conn)
+                .await
+                .unwrap()
+                .user_id
+        }
 
         let linked_holds = character_for(&mut conn, linked).await;
         let source_holds = character_for(&mut conn, source).await;
+        let played_membership_owner = membership_owner(&mut conn, played_character).await;
         let users_left = diesel::sql_query("SELECT id FROM users")
             .load::<IdRow>(&mut conn)
             .await
@@ -1875,10 +2049,13 @@ mod report185_link_choice_tests {
             .len();
         Some(ForcedLinkOutcome {
             result,
+            source_user: source,
+            linked_user: linked,
             played_character,
             displaced_character,
             linked_holds,
             source_holds,
+            played_membership_owner,
             users_left,
         })
     }
@@ -1899,7 +2076,14 @@ mod report185_link_choice_tests {
         assert_eq!(o.result, (1, (1, 1)));
         assert_eq!(o.linked_holds, o.played_character);
         assert_eq!(o.source_holds, o.displaced_character);
-        assert_eq!(o.users_left, 2, "the transaction-local parking user must be removed");
+        assert_eq!(
+            o.played_membership_owner, o.linked_user,
+            "the moved character's guild_members row must follow its new owner"
+        );
+        assert_eq!(
+            o.users_left, 2,
+            "the transaction-local parking user must be removed"
+        );
     }
 
     /// WolfWalker, 2026-09-23. The played side is the starter minted seconds
@@ -1915,9 +2099,17 @@ mod report185_link_choice_tests {
         else {
             return;
         };
-        assert_eq!(o.result, (1, (0, 0)), "devices still rebind; no character moves");
-        assert_eq!(o.linked_holds, o.displaced_character, "the real character stays put");
+        assert_eq!(
+            o.result,
+            (1, (0, 0)),
+            "devices still rebind; no character moves"
+        );
+        assert_eq!(
+            o.linked_holds, o.displaced_character,
+            "the real character stays put"
+        );
         assert_eq!(o.source_holds, o.played_character);
+        assert_eq!(o.played_membership_owner, o.source_user);
         assert_eq!(o.users_left, 2);
     }
 
@@ -1936,6 +2128,78 @@ mod report185_link_choice_tests {
         assert_eq!(o.linked_holds, o.played_character);
     }
 
+    #[tokio::test]
+    async fn guild_membership_owner_update_skips_existing_guild_member_pk() {
+        use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+
+        let Some(url) = std::env::var("TEST_DATABASE_URL").ok() else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — guild membership owner guard not verified");
+            return;
+        };
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction().await.unwrap();
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        diesel::sql_query(format!("CREATE SCHEMA {schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        diesel::sql_query(format!("SET LOCAL search_path TO {schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        diesel::sql_query(
+            "CREATE TABLE guild_members (
+                 guild_id TEXT NOT NULL,
+                 user_id UUID NOT NULL,
+                 character_id UUID NOT NULL,
+                 rank TEXT NOT NULL,
+                 join_date BIGINT NOT NULL,
+                 PRIMARY KEY (guild_id, user_id))",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+        let old_user = Uuid::from_u128(0x101);
+        let new_user = Uuid::from_u128(0x202);
+        let moved_character = Uuid::from_u128(0x303);
+        let other_character = Uuid::from_u128(0x404);
+        for (user, character, join_date) in [
+            (old_user, moved_character, 1_i64),
+            (new_user, other_character, 2_i64),
+        ] {
+            diesel::sql_query(
+                "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date)
+                 VALUES ('guild-a', $1, $2, 'MEMBER', $3)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(user)
+            .bind::<diesel::sql_types::Uuid, _>(character)
+            .bind::<diesel::sql_types::BigInt, _>(join_date)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        }
+
+        let changed = update_guild_membership_owner(&mut conn, moved_character, new_user)
+            .await
+            .unwrap();
+        assert_eq!(changed, 0, "the PK guard should skip the conflicting row");
+
+        #[derive(diesel::QueryableByName)]
+        struct Owner {
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            user_id: Uuid,
+        }
+        let owner = diesel::sql_query("SELECT user_id FROM guild_members WHERE character_id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(moved_character)
+            .get_result::<Owner>(&mut conn)
+            .await
+            .unwrap()
+            .user_id;
+        assert_eq!(owner, old_user);
+    }
 }
 
 #[cfg(test)]
@@ -1969,8 +2233,14 @@ mod anon_device_memory_tests {
             .expect("TEST_DATABASE_URL is set but unreachable");
         conn.begin_test_transaction().await.unwrap();
         let schema = format!("t{}", Uuid::new_v4().simple());
-        diesel::sql_query(format!("CREATE SCHEMA {schema}")).execute(&mut conn).await.unwrap();
-        diesel::sql_query(format!("SET LOCAL search_path TO {schema}")).execute(&mut conn).await.unwrap();
+        diesel::sql_query(format!("CREATE SCHEMA {schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        diesel::sql_query(format!("SET LOCAL search_path TO {schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
         diesel::sql_query(
             "CREATE TABLE users (id UUID PRIMARY KEY, secret_id UUID NOT NULL UNIQUE, data JSONB NOT NULL)",
         )
@@ -1996,19 +2266,39 @@ mod anon_device_memory_tests {
     /// later launch that lost the secret is recognised instead of minting.
     #[tokio::test]
     async fn a_proven_login_remembers_its_device() {
-        let Some(mut conn) = users_table().await else { return };
+        let Some(mut conn) = users_table().await else {
+            return;
+        };
         let me = add_user(&mut conn, serde_json::json!([])).await;
-        assert_eq!(remember_device_on_account(&mut conn, me, "abc123").await.unwrap(), 1);
-        assert_eq!(devices_of(&mut conn, me).await, serde_json::json!(["abc123"]));
+        assert_eq!(
+            remember_device_on_account(&mut conn, me, "abc123")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            devices_of(&mut conn, me).await,
+            serde_json::json!(["abc123"])
+        );
     }
 
     /// CONTROL: a device already on the account is not appended twice.
     #[tokio::test]
     async fn a_known_device_is_not_duplicated() {
-        let Some(mut conn) = users_table().await else { return };
+        let Some(mut conn) = users_table().await else {
+            return;
+        };
         let me = add_user(&mut conn, serde_json::json!(["abc123"])).await;
-        assert_eq!(remember_device_on_account(&mut conn, me, "abc123").await.unwrap(), 0);
-        assert_eq!(devices_of(&mut conn, me).await, serde_json::json!(["abc123"]));
+        assert_eq!(
+            remember_device_on_account(&mut conn, me, "abc123")
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            devices_of(&mut conn, me).await,
+            serde_json::json!(["abc123"])
+        );
     }
 
     /// CONTROL: never give a device a second holder. Two holders is the case
@@ -2016,18 +2306,30 @@ mod anon_device_memory_tests {
     /// one that mints on every launch.
     #[tokio::test]
     async fn a_device_held_by_someone_else_is_left_alone() {
-        let Some(mut conn) = users_table().await else { return };
+        let Some(mut conn) = users_table().await else {
+            return;
+        };
         let other = add_user(&mut conn, serde_json::json!(["abc123"])).await;
         let me = add_user(&mut conn, serde_json::json!([])).await;
-        assert_eq!(remember_device_on_account(&mut conn, me, "abc123").await.unwrap(), 0);
+        assert_eq!(
+            remember_device_on_account(&mut conn, me, "abc123")
+                .await
+                .unwrap(),
+            0
+        );
         assert_eq!(devices_of(&mut conn, me).await, serde_json::json!([]));
-        assert_eq!(devices_of(&mut conn, other).await, serde_json::json!(["abc123"]));
+        assert_eq!(
+            devices_of(&mut conn, other).await,
+            serde_json::json!(["abc123"])
+        );
     }
 
     /// A user row with no `gp_deviceids` key at all still gets the device.
     #[tokio::test]
     async fn an_account_with_no_device_list_gets_one() {
-        let Some(mut conn) = users_table().await else { return };
+        let Some(mut conn) = users_table().await else {
+            return;
+        };
         let id = Uuid::new_v4();
         diesel::sql_query("INSERT INTO users (id, secret_id, data) VALUES ($1, $2, '{}'::jsonb)")
             .bind::<diesel::sql_types::Uuid, _>(id)
@@ -2035,8 +2337,16 @@ mod anon_device_memory_tests {
             .execute(&mut conn)
             .await
             .unwrap();
-        assert_eq!(remember_device_on_account(&mut conn, id, "abc123").await.unwrap(), 1);
-        assert_eq!(devices_of(&mut conn, id).await, serde_json::json!(["abc123"]));
+        assert_eq!(
+            remember_device_on_account(&mut conn, id, "abc123")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            devices_of(&mut conn, id).await,
+            serde_json::json!(["abc123"])
+        );
     }
 
     /// The entry log says whether the client re-presented its secret, and the
@@ -2044,8 +2354,14 @@ mod anon_device_memory_tests {
     #[test]
     fn the_secret_path_remembers_and_the_log_says_so() {
         let src = include_str!("authentification.rs");
-        let code = src.split("\n#[cfg(test)]").next().expect("source has a body");
-        assert!(code.contains("wg header: {}, userId: {})"), "entry log must report userId presence");
+        let code = src
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("source has a body");
+        assert!(
+            code.contains("wg header: {}, userId: {})"),
+            "entry log must report userId presence"
+        );
         let secret_path = code
             .split("if let Some(private_user_id) = info.0.user_id")
             .nth(1)
@@ -2071,7 +2387,12 @@ mod forced_link_parking_rule {
     fn two_discord_accounts_never_trade_real_characters() {
         // 2026-09-25: Huge Goober's LLoyd (L65) was parked on SpaceMunk.
         assert!(!forced_link_may_park(SPACEMUNK, GOOBER, Some("LLoyd"), 65));
-        assert!(!forced_link_may_park(GOOBER, SPACEMUNK, Some("Adventurer"), 48));
+        assert!(!forced_link_may_park(
+            GOOBER,
+            SPACEMUNK,
+            Some("Adventurer"),
+            48
+        ));
     }
 
     #[test]
@@ -2083,6 +2404,11 @@ mod forced_link_parking_rule {
 
     #[test]
     fn an_unplayed_starter_may_always_be_moved_aside() {
-        assert!(forced_link_may_park(SPACEMUNK, GOOBER, Some("Adventurer"), 1));
+        assert!(forced_link_may_park(
+            SPACEMUNK,
+            GOOBER,
+            Some("Adventurer"),
+            1
+        ));
     }
 }

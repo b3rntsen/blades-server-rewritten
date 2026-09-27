@@ -44,11 +44,7 @@ use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{
-    BladeApiError, ServerGlobal,
-    admin::check_import_token,
-    guild_policy::GuildRank,
-};
+use crate::{BladeApiError, ServerGlobal, admin::check_import_token, guild_policy::GuildRank};
 
 /// Same out-of-band envelope id the rest of the dev surface uses.
 const GUILD_ADMIN_SERVICE_ID: u64 = 9002;
@@ -218,7 +214,6 @@ pub struct SetGrandmasterResponse {
     pub change: GmChange,
 }
 
-
 /// `POST /…/guilds/{guild_id}/name` — rename a guild from the support console.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -288,10 +283,13 @@ pub async fn list_guilds(
 ) -> Result<Json<Vec<GuildSummary>>, BladeApiError> {
     check_import_token(&app_state, &req)?;
     let mut conn = db(&app_state).await?;
-    let rows: Vec<GuildRow> = sql_query(GUILD_LIST_SQL).get_results(&mut conn).await.map_err(|e| {
-        warn!("guild console: list failed: {e}");
-        err(StatusCode::INTERNAL_SERVER_ERROR, 10)
-    })?;
+    let rows: Vec<GuildRow> = sql_query(GUILD_LIST_SQL)
+        .get_results(&mut conn)
+        .await
+        .map_err(|e| {
+            warn!("guild console: list failed: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, 10)
+        })?;
     Ok(Json(rows.into_iter().map(to_summary).collect()))
 }
 
@@ -321,8 +319,10 @@ pub async fn get_guild_detail(
     let guild = to_summary(guilds.remove(0));
 
     let members: Vec<MemberRow> = sql_query(
-        "SELECT character_id, user_id, rank, join_date
-           FROM guild_members WHERE guild_id = $1
+        "SELECT gm.character_id, COALESCE(c.user_id, gm.user_id) AS user_id, gm.rank, gm.join_date
+           FROM guild_members gm
+           LEFT JOIN characters c ON c.id = gm.character_id
+          WHERE gm.guild_id = $1
           ORDER BY CASE rank WHEN 'GRANDMASTER' THEN 0 WHEN 'MASTER' THEN 1
                              WHEN 'ELDER' THEN 2 ELSE 3 END, join_date ASC",
     )
@@ -365,15 +365,19 @@ pub async fn set_grandmaster(
     let body = body.into_inner();
     let mut conn = db(&app_state).await?;
 
-    let rows: Vec<MemberRow> =
-        sql_query("SELECT character_id, user_id, rank, join_date FROM guild_members WHERE guild_id = $1")
-            .bind::<Text, _>(&guild_id)
-            .get_results(&mut conn)
-            .await
-            .map_err(|e| {
-                warn!("guild console: roster read failed for {guild_id}: {e}");
-                err(StatusCode::INTERNAL_SERVER_ERROR, 14)
-            })?;
+    let rows: Vec<MemberRow> = sql_query(
+        "SELECT gm.character_id, COALESCE(c.user_id, gm.user_id) AS user_id, gm.rank, gm.join_date
+               FROM guild_members gm
+               LEFT JOIN characters c ON c.id = gm.character_id
+              WHERE gm.guild_id = $1",
+    )
+    .bind::<Text, _>(&guild_id)
+    .get_results(&mut conn)
+    .await
+    .map_err(|e| {
+        warn!("guild console: roster read failed for {guild_id}: {e}");
+        err(StatusCode::INTERNAL_SERVER_ERROR, 14)
+    })?;
 
     // An unrecognised rank string is REFUSED, not quietly read as MEMBER.
     //
@@ -388,7 +392,10 @@ pub async fn set_grandmaster(
     let mut slots: Vec<MemberSlot> = Vec::with_capacity(rows.len());
     for r in &rows {
         match GuildRank::from_wire(&r.rank) {
-            Some(rank) => slots.push(MemberSlot { character_id: r.character_id, rank }),
+            Some(rank) => slots.push(MemberSlot {
+                character_id: r.character_id,
+                rank,
+            }),
             None => {
                 warn!(
                     "guild console: {} holds unknown rank {:?} in guild {} — refusing; \
@@ -400,12 +407,11 @@ pub async fn set_grandmaster(
         }
     }
 
-    let change = plan_grandmaster_change(&slots, body.character_id).map_err(|refusal| {
-        match refusal {
+    let change =
+        plan_grandmaster_change(&slots, body.character_id).map_err(|refusal| match refusal {
             GmRefusal::EmptyGuild => err(StatusCode::CONFLICT, 15),
             GmRefusal::NotAMember => err(StatusCode::BAD_REQUEST, 16),
-        }
-    })?;
+        })?;
 
     if body.apply && !change.already_grandmaster {
         let now = now_unix();
@@ -455,9 +461,12 @@ pub async fn set_grandmaster(
         change.already_grandmaster,
     );
 
-    Ok(Json(SetGrandmasterResponse { applied: body.apply, guild_id, change }))
+    Ok(Json(SetGrandmasterResponse {
+        applied: body.apply,
+        guild_id,
+        change,
+    }))
 }
-
 
 /// One guild's text, for validating a rename against the whole row.
 #[derive(QueryableByName)]
@@ -514,16 +523,15 @@ pub async fn set_guild_name(
     let body = body.into_inner();
     let mut conn = db(&app_state).await?;
 
-    let rows: Vec<GuildTextRow> = sql_query(
-        "SELECT name, short_description, long_description FROM guilds WHERE id = $1",
-    )
-    .bind::<Text, _>(&guild_id)
-    .get_results(&mut conn)
-    .await
-    .map_err(|e| {
-        warn!("guild console: name read failed for {guild_id}: {e}");
-        err(StatusCode::INTERNAL_SERVER_ERROR, 22)
-    })?;
+    let rows: Vec<GuildTextRow> =
+        sql_query("SELECT name, short_description, long_description FROM guilds WHERE id = $1")
+            .bind::<Text, _>(&guild_id)
+            .get_results(&mut conn)
+            .await
+            .map_err(|e| {
+                warn!("guild console: name read failed for {guild_id}: {e}");
+                err(StatusCode::INTERNAL_SERVER_ERROR, 22)
+            })?;
 
     // 404 with an envelope, so the caller can tell "no such guild" from actix's
     // BODILESS 404 for a route that does not exist. The console distinguishes
@@ -605,8 +613,10 @@ fn now_unix() -> i64 {
 
 async fn db(
     app_state: &ServerGlobal,
-) -> Result<diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>, BladeApiError>
-{
+) -> Result<
+    diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>,
+    BladeApiError,
+> {
     app_state.db_pool.get().await.map_err(|e| {
         warn!("guild console: no db connection: {e}");
         err(StatusCode::SERVICE_UNAVAILABLE, 20)
@@ -657,7 +667,10 @@ mod tests {
     }
 
     fn slot(n: u128, rank: GuildRank) -> MemberSlot {
-        MemberSlot { character_id: id(n), rank }
+        MemberSlot {
+            character_id: id(n),
+            rank,
+        }
     }
 
     /// The repair this console exists for: a guild with nobody holding
@@ -699,14 +712,20 @@ mod tests {
     #[test]
     fn a_non_member_is_refused() {
         let members = [slot(1, GuildRank::Grandmaster)];
-        assert_eq!(plan_grandmaster_change(&members, id(99)), Err(GmRefusal::NotAMember));
+        assert_eq!(
+            plan_grandmaster_change(&members, id(99)),
+            Err(GmRefusal::NotAMember)
+        );
     }
 
     /// An empty guild is refused distinctly from a bad id, so the console can
     /// tell the operator to delete it rather than hunt for the right character.
     #[test]
     fn an_empty_guild_is_refused_distinctly() {
-        assert_eq!(plan_grandmaster_change(&[], id(1)), Err(GmRefusal::EmptyGuild));
+        assert_eq!(
+            plan_grandmaster_change(&[], id(1)),
+            Err(GmRefusal::EmptyGuild)
+        );
     }
 
     /// Guards the handler's demote step. If a guild somehow holds two
@@ -754,8 +773,16 @@ mod tests {
     /// would find nobody to step down — leaving two.
     #[test]
     fn the_pre_retail_rank_is_not_silently_a_member() {
-        assert_eq!(GuildRank::from_wire("LEADER"), None, "'LEADER' is not a retail rank");
-        assert_eq!(GuildRank::from_wire("OFFICER"), None, "'OFFICER' is not a retail rank");
+        assert_eq!(
+            GuildRank::from_wire("LEADER"),
+            None,
+            "'LEADER' is not a retail rank"
+        );
+        assert_eq!(
+            GuildRank::from_wire("OFFICER"),
+            None,
+            "'OFFICER' is not a retail rank"
+        );
         // The four that ARE retail.
         for (wire, rank) in [
             ("GRANDMASTER", GuildRank::Grandmaster),
@@ -782,7 +809,10 @@ mod tests {
         );
         // Read correctly, the sitting holder is found and steps down.
         let correct = [slot(1, GuildRank::Grandmaster), slot(2, GuildRank::Member)];
-        assert_eq!(plan_grandmaster_change(&correct, id(2)).unwrap().demote, Some(id(1)));
+        assert_eq!(
+            plan_grandmaster_change(&correct, id(2)).unwrap().demote,
+            Some(id(1))
+        );
     }
 
     /// `characterId` has no default: omitting it must be a 400 from serde
@@ -872,8 +902,14 @@ mod renaming_a_guild {
     fn the_name_is_trimmed_before_it_is_measured() {
         let short = "a real description";
         assert!(!guild_text_ok("   ", short, ""), "whitespace is not a name");
-        assert!(!guild_text_ok("  ab  ", short, ""), "2 code points after trim");
-        assert!(guild_text_ok("  abc  ", short, ""), "3 after trim is the minimum");
+        assert!(
+            !guild_text_ok("  ab  ", short, ""),
+            "2 code points after trim"
+        );
+        assert!(
+            guild_text_ok("  abc  ", short, ""),
+            "3 after trim is the minimum"
+        );
 
         assert!(guild_text_ok(&"x".repeat(NAME_MAX_LEN), short, ""));
         assert!(!guild_text_ok(&"x".repeat(NAME_MAX_LEN + 1), short, ""));
@@ -929,7 +965,8 @@ mod renaming_a_guild {
              validator — otherwise the row and the reported `to` disagree"
         );
         assert!(
-            body.contains("&current.short_description") && body.contains("&current.long_description"),
+            body.contains("&current.short_description")
+                && body.contains("&current.long_description"),
             "validate against the guild's OWN descriptions, so a rename cannot \
              leave a row the in-game editor would refuse"
         );
