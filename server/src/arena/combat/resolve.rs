@@ -2312,9 +2312,10 @@ fn apply_ability_impact(
                 if bash { "shield" } else { "weapon" },
                 resolved.total,
             );
-            last_hit_total = resolved.total;
             target_blocked = resolved.blocked;
-            out.extend(emit_damage(combat, sender, target_slot, &resolved, now));
+            let emitted = emit_damage_with_outcome(combat, sender, target_slot, &resolved, now);
+            last_hit_total = emitted.health_damage;
+            out.extend(emitted.frames);
             // A weapon maneuver's hit increments the chain (01 F), and the maneuver's
             // end then resets it (`ActorManeuverState$$OnExit@0x1d556b0`, 02 R9).
             if !bash {
@@ -2358,9 +2359,10 @@ fn apply_ability_impact(
                 ActiveSide::Middle,
                 now,
             );
-            last_hit_total = resolved.total;
             target_blocked = resolved.blocked;
-            out.extend(emit_damage(combat, sender, target_slot, &resolved, now));
+            let emitted = emit_damage_with_outcome(combat, sender, target_slot, &resolved, now);
+            last_hit_total = emitted.health_damage;
+            out.extend(emitted.frames);
             // THUNDERSTORM is not a DoT — it ships `_numberOfBolts` (3) over a
             // `_duration` (9 s) and a per-BOLT `_damage`, so `channel_ticks` (which
             // keys off `_damagePerSecond`) never saw it and it landed as one
@@ -3652,6 +3654,12 @@ fn emit_destroyed_stat_updates(
 /// Apply a resolved hit: drain negation, decrement the target (unless wholly negated),
 /// record elemental conditioning + land status effects, build the `ReceiveDamage` (or
 /// `DamageNegated`) for both players, and end the match if the target died.
+struct EmittedDamage {
+    frames: Vec<(usize, Vec<u8>)>,
+    /// Health-type damage after block, resistance, Ward/Absorb/Dodge, and overflow.
+    health_damage: f32,
+}
+
 fn emit_damage(
     combat: &mut MatchCombat,
     attacker_slot: usize,
@@ -3659,6 +3667,16 @@ fn emit_damage(
     resolved: &ResolvedDamage,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
+    emit_damage_with_outcome(combat, attacker_slot, target_slot, resolved, now).frames
+}
+
+fn emit_damage_with_outcome(
+    combat: &mut MatchCombat,
+    attacker_slot: usize,
+    target_slot: usize,
+    resolved: &ResolvedDamage,
+    now: Instant,
+) -> EmittedDamage {
     let mut out = Vec::new();
 
     // Finish the mitigation pipeline: dodge drains against raw incoming components,
@@ -3760,7 +3778,10 @@ fn emit_damage(
             resolved.source,
             now,
         ));
-        return out;
+        return EmittedDamage {
+            frames: out,
+            health_damage: 0.0,
+        };
     }
     let total: f32 = components
         .iter()
@@ -3927,7 +3948,10 @@ fn emit_damage(
         now,
     ));
     if !matches!(combat.phase, FlowState::StateTimeout) {
-        return out;
+        return EmittedDamage {
+            frames: out,
+            health_damage: total,
+        };
     }
 
     // REFLECTING BASH: send part of what just landed back at the attacker, capped by
@@ -4010,7 +4034,10 @@ fn emit_damage(
         };
         out.extend(on_round_ending_death(combat, winner, now));
     }
-    out
+    EmittedDamage {
+        frames: out,
+        health_damage: total,
+    }
 }
 
 fn apply_shield_enchant_retaliation(
@@ -10115,8 +10142,8 @@ mod shipped_effects_tests {
     use super::super::damage::flags;
     use super::super::loadout;
     use super::super::state::{
-        DamageNegationSource, DamageType, EquippedAbility, Fighter, NegationPool, StatusEffectType,
-        WeaponProfile,
+        AbilityTag, DamageNegationSource, DamageType, EquippedAbility, Fighter, NegationPool,
+        StatusEffectType, WeaponProfile,
     };
     use super::super::tables::Weight;
     use super::*;
@@ -12442,6 +12469,74 @@ mod shipped_effects_tests {
             "a hit under the threshold does not"
         );
         assert_eq!(status_frames(&out, StatusEffectType::Staggered), 0);
+    }
+
+    /// Report #249: Ice Spike's text says "Enemies that suffer more than {1}
+    /// damage are stunned." A Dodge negation pool means the target suffered zero
+    /// health damage, even though the pre-negation spell damage exceeded the
+    /// threshold. This drives the real cast path; with the old pre-negation
+    /// `last_hit_total = resolved.total` assignment, the dodged case still
+    /// emitted Staggered.
+    #[test]
+    fn a_dodged_ice_spike_does_not_stagger() {
+        use super::super::state::StatusEffectType;
+
+        fn cast_ice_spike(with_dodge: bool) -> (MatchCombat, Vec<(usize, Vec<u8>)>, Instant) {
+            let now = Instant::now();
+            let mut c = combat2(now);
+            let u = uuid_of("IceSpike");
+            c.fighters[0].magicka = 10_000;
+            c.fighters[0].loadout.abilities = vec![EquippedAbility {
+                instance_uuid: u.into(),
+                level: 1,
+                tag: AbilityTag::Damage,
+            }];
+            if with_dodge {
+                c.fighters[1].negation_pools.push(NegationPool {
+                    source: DamageNegationSource::Dodge,
+                    remaining: 500.0,
+                    expires_at: now + Duration::from_secs(5),
+                    restoration_factor: 0.0,
+                    absorb_fraction: 1.0,
+                    elemental_only: false,
+                    consumes_overflow: false,
+                    on_absorb_restore: (0.0, 0.0, 0.0),
+                    dodge_started_at: Some(now),
+                    dodge_status_expires_at: Some(now + Duration::from_secs(1)),
+                    dodge_effectiveness: 1.0,
+                    bypass_types: &[],
+                });
+            }
+
+            let frame = messages::request_execute_ability(c.fighters[0].net_object_id, u);
+            let ea = input::parse_execute_ability(&frame).expect("synthetic cast parses");
+            let mut out = resolve_ability_cast(&mut c, 0, 1, &frame, &ea, now);
+            let impact_at = now + Duration::from_millis(1200);
+            out.extend(land_due_impacts(&mut c, impact_at));
+            (c, out, impact_at)
+        }
+
+        let (control, control_out, impact_at) = cast_ice_spike(false);
+        assert!(
+            control.fighters[1].is_staggered(impact_at),
+            "control: Ice Spike over its shipped threshold still staggers"
+        );
+        assert_eq!(
+            status_frames(&control_out, StatusEffectType::Staggered),
+            control.fighters.len(),
+            "control: op51 Staggered reaches both viewers"
+        );
+
+        let (dodged, dodged_out, impact_at) = cast_ice_spike(true);
+        assert!(
+            !dodged.fighters[1].is_staggered(impact_at),
+            "negative control: a fully dodged Ice Spike dealt zero health damage"
+        );
+        assert_eq!(
+            status_frames(&dodged_out, StatusEffectType::Staggered),
+            0,
+            "no Staggered op51 after a full dodge"
+        );
     }
 
     /// A self-buff arm sets `last_hit_total = 0.0`. StaggeringBash's threshold is
