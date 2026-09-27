@@ -56,6 +56,7 @@ mod guild_admin;
 mod guild_policy;
 mod inventory;
 mod json_db;
+mod jewelry_grade;
 pub mod models;
 mod quest;
 mod repair;

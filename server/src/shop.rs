@@ -449,6 +449,35 @@ struct BuyResponse {
     wallet: CompleteWallet,
 }
 
+/// What `qty` units of a merchant bundle put in the buyer's backpack.
+///
+/// Stackables multiply. Instanced gear gets a fresh instance id per unit (the
+/// static definition carries a placeholder — same as chests.rs), and a ring or
+/// necklace gets its grade rolled per unit (#240): the APK authors no
+/// enhancement for any merchant jewellery bundle, and retail rolled one at
+/// purchase — see [`crate::jewelry_grade`].
+fn mint_bundle<R: rand::Rng + ?Sized>(
+    grant: &blades_lib::economy::RewardGrant,
+    qty: u64,
+    items: &HashMap<Uuid, blades_lib::game_data::GameDataItem>,
+    rng: &mut R,
+) -> blades_lib::economy::RewardGrant {
+    let mut reward = grant.clone();
+    for v in reward.stackable_items.values_mut() {
+        *v = v.saturating_mul(qty);
+    }
+    reward.items.clear();
+    for _ in 0..qty {
+        for item in &grant.items {
+            let mut fresh = item.clone();
+            fresh.id = Uuid::new_v4();
+            crate::jewelry_grade::grade_if_bare(&mut fresh.item, items, rng);
+            reward.items.push(fresh);
+        }
+    }
+    reward
+}
+
 /// The `shop` block for a buy/sell response: cumulative sales + revenue for the
 /// window, matching the captured shape (capture 5027 showed `sales: [{id, 18}]`
 /// and `revenue: [{gold, +4500}]` after buying 18 units).
@@ -539,21 +568,12 @@ pub async fn buy_from_shop(
                     .debit(currency, cost)
                     .map_err(BladeApiError::from_economy)?;
 
-                let mut reward = def.grant.clone();
-                for v in reward.stackable_items.values_mut() {
-                    *v = v.saturating_mul(qty);
-                }
-                // Instanced gear needs a fresh instance id per purchase (the static
-                // definition carries a placeholder) — same as chests.rs.
-                let unit_items = reward.items.clone();
-                reward.items.clear();
-                for _ in 0..qty {
-                    for item in &unit_items {
-                        let mut fresh = item.clone();
-                        fresh.id = Uuid::new_v4();
-                        reward.items.push(fresh);
-                    }
-                }
+                let reward = mint_bundle(
+                    &def.grant,
+                    qty,
+                    &globals.game_data.items_template,
+                    &mut rand::rng(),
+                );
                 apply_reward(
                     &reward,
                     &mut entry.wallet.0,
@@ -787,19 +807,12 @@ pub async fn buy_from_social_shop(
                     .debit(currency, cost)
                     .map_err(BladeApiError::from_economy)?;
 
-                let mut reward = def.grant.clone();
-                for v in reward.stackable_items.values_mut() {
-                    *v = v.saturating_mul(qty);
-                }
-                let unit_items = reward.items.clone();
-                reward.items.clear();
-                for _ in 0..qty {
-                    for item in &unit_items {
-                        let mut fresh = item.clone();
-                        fresh.id = Uuid::new_v4();
-                        reward.items.push(fresh);
-                    }
-                }
+                let reward = mint_bundle(
+                    &def.grant,
+                    qty,
+                    &globals.game_data.items_template,
+                    &mut rand::rng(),
+                );
                 apply_reward(
                     &reward,
                     &mut visitor.wallet.0,
@@ -1309,5 +1322,136 @@ mod tests {
             body["social"].get("catalog").is_none(),
             "the purchase response carries the shop's ledger, not its catalog"
         );
+    }
+
+    // ── #240: merchant jewellery is graded at purchase ────────────────────────
+
+    fn deploy_items() -> &'static HashMap<Uuid, blades_lib::game_data::GameDataItem> {
+        static T: std::sync::OnceLock<HashMap<Uuid, blades_lib::game_data::GameDataItem>> =
+            std::sync::OnceLock::new();
+        T.get_or_init(|| {
+            let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+            let gd: blades_lib::game_data::GameData =
+                serde_json::from_str(&std::fs::read_to_string(p).expect("parsed.json"))
+                    .expect("game data");
+            gd.items_template
+        })
+    }
+
+    fn deploy_bundle(id: &str) -> blades_lib::static_data::ShopBundle {
+        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/shop_bundles.json");
+        let all: serde_json::Map<String, Value> =
+            serde_json::from_str(&std::fs::read_to_string(p).expect("shop_bundles.json"))
+                .expect("parses");
+        serde_json::from_value(all[id].clone()).expect("bundle parses")
+    }
+
+    /// The two bundles the reporter bought, which retail sold graded.
+    const GOLD_EMERALD_RING: &str = "01ada486-b642-43b2-8776-e444dbe9343e";
+    const GOLD_EMERALD_NECKLACE: &str = "ee486683-c721-4bd6-8619-78cc00e34acc";
+
+    fn slot_pool(slot: &str) -> std::collections::HashSet<Uuid> {
+        crate::arena::combat::gamedata::GRADE_PROPERTIES
+            .iter()
+            .filter(|g| g.slot == slot)
+            .map(|g| Uuid::parse_str(g.uuid).unwrap())
+            .collect()
+    }
+
+    /// THE BUG: a merchant ring or necklace arrived with no grade and no GRADING.
+    #[test]
+    fn merchant_jewellery_is_minted_graded() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(240);
+        for (bundle, slot) in [(GOLD_EMERALD_RING, "Ring"), (GOLD_EMERALD_NECKLACE, "Necklace")] {
+            let def = deploy_bundle(bundle);
+            let own = slot_pool(slot);
+            // CONTROL: the static definition really is bare, so a graded result
+            // can only have come from the purchase path.
+            assert!(def.grant.items[0].item.grade.is_none(), "{bundle}: fixture must be bare");
+            let reward = mint_bundle(&def.grant, 3, deploy_items(), &mut rng);
+            assert_eq!(reward.items.len(), 3, "one instance per unit");
+            for ri in &reward.items {
+                let it = &ri.item;
+                let grade = it.grade.expect("merchant jewellery must carry a grade");
+                assert!(!it.properties.grading.is_empty(), "{bundle}: no GRADING");
+                assert_eq!(grade, it.properties.grading.iter().map(|p| p.tier).sum::<u64>());
+                assert!(it.properties.grading.iter().all(|p| own.contains(&p.id)), "{bundle}: wrong slot");
+                assert!(it.properties.enchanting.is_empty(), "retail merchant jewellery had no ENCHANTING");
+                assert_eq!(it.arcane_tier, None);
+                // The wire shape retail sent: grade, never temperingLevel/durability.
+                let wire = serde_json::to_value(ri).unwrap();
+                assert!(wire.get("grade").is_some(), "{wire}");
+                assert!(wire.get("durability").is_none() && wire.get("temperingLevel").is_none(), "{wire}");
+            }
+            let ids: std::collections::HashSet<_> = reward.items.iter().map(|i| i.id).collect();
+            assert_eq!(ids.len(), 3, "fresh instance ids");
+        }
+    }
+
+    /// Retail rolled per purchase: the same bundle came out at grade 1 and grade 3.
+    #[test]
+    fn buying_the_same_ring_twice_can_give_two_grades() {
+        use rand::SeedableRng;
+        let def = deploy_bundle(GOLD_EMERALD_RING);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(9);
+        let grades: std::collections::HashSet<u64> = (0..200)
+            .map(|_| mint_bundle(&def.grant, 1, deploy_items(), &mut rng).items[0].item.grade.unwrap())
+            .collect();
+        assert_eq!(grades, (1..=6).collect(), "every grade must be reachable");
+    }
+
+    /// NEGATIVE CONTROL: gear that wears is never graded, and keeps its durability.
+    #[test]
+    fn merchant_weapons_and_stackables_are_untouched() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+        let items = deploy_items();
+        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/shop_bundles.json");
+        let all: serde_json::Map<String, Value> =
+            serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+        let (mut gear, mut stacks) = (0, 0);
+        for (id, raw) in &all {
+            let Ok(def) = serde_json::from_value::<blades_lib::static_data::ShopBundle>(raw.clone()) else {
+                continue;
+            };
+            let reward = mint_bundle(&def.grant, 2, items, &mut rng);
+            assert_eq!(reward.stackable_items.len(), def.grant.stackable_items.len());
+            for (t, n) in &def.grant.stackable_items {
+                assert_eq!(reward.stackable_items[t], n * 2, "{id}: stackables multiply");
+                stacks += 1;
+            }
+            for (ri, src) in reward.items.iter().zip(def.grant.items.iter().cycle()) {
+                let ty = items.get(&ri.item.item_template_id).map(|t| t.r#type);
+                if matches!(ty, Some(10) | Some(11)) {
+                    continue;
+                }
+                gear += 1;
+                assert_eq!(ri.item.grade, None, "{id}: non-jewellery graded");
+                assert!(ri.item.properties.grading.is_empty(), "{id}: GRADING on gear");
+                assert_eq!(ri.item.durability, src.item.durability, "{id}: durability changed");
+            }
+        }
+        assert!(gear > 100 && stacks > 100, "the sweep must cover real data: {gear} gear, {stacks} stacks");
+    }
+
+    /// NEGATIVE CONTROL: an item that already carries a grade (authored or
+    /// captured) is what retail sent, and must pass through verbatim.
+    #[test]
+    fn an_already_graded_item_is_not_rerolled() {
+        use rand::SeedableRng;
+        let mut def = deploy_bundle(GOLD_EMERALD_RING);
+        let authored = blades_lib::user_data::ItemSingleProperty {
+            id: Uuid::parse_str("b442ea19-02cb-4825-aa13-2f2f14ccd338").unwrap(),
+            tier: 1,
+        };
+        def.grant.items[0].item.grade = Some(1);
+        def.grant.items[0].item.properties.grading = vec![authored.clone()];
+        let mut rng = rand::rngs::StdRng::seed_from_u64(3);
+        for _ in 0..50 {
+            let r = mint_bundle(&def.grant, 1, deploy_items(), &mut rng);
+            assert_eq!(r.items[0].item.grade, Some(1));
+            assert_eq!(r.items[0].item.properties.grading, vec![authored.clone()]);
+        }
     }
 }
