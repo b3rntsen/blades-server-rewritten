@@ -651,6 +651,8 @@ async fn start_craft(
                     )),
                     batch_size,
                 );
+                let results =
+                    grade_bare_jewelry_results(results, game_items, &mut rand::rng());
                 (results, recipe.crafting_type_id, recipe.duration_ms)
             }
             None => {
@@ -674,6 +676,8 @@ async fn start_craft(
                         mint_smith_craftable(craftable, tempering_level),
                         batch_size,
                     );
+                    let results =
+                        grade_bare_jewelry_results(results, game_items, &mut rand::rng());
                     (results, crafting_type_id, craftable.duration_ms)
                 } else {
                     // The APK says what this recipe makes. 898 recipes
@@ -709,6 +713,8 @@ async fn start_craft(
                             ),
                             batch_size,
                         );
+                        let results =
+                            grade_bare_jewelry_results(results, game_items, &mut rand::rng());
                         (results, crafting_type_id, 0)
                     } else {
                     // Not a smith craftable, and not in the APK recipe table.
@@ -1514,6 +1520,26 @@ fn apply_batch_size_to_results(mut results: Value, batch_size: u32) -> Value {
     results
 }
 
+fn grade_bare_jewelry_results<R: Rng + ?Sized>(
+    mut results: Value,
+    game_items: &HashMap<Uuid, GameDataItem>,
+    rng: &mut R,
+) -> Value {
+    let Some(items) = results.get_mut("items").and_then(Value::as_array_mut) else {
+        return results;
+    };
+    for raw in items.iter_mut() {
+        let Ok(mut reward_item) = serde_json::from_value::<RewardItem>(raw.clone()) else {
+            continue;
+        };
+        crate::jewelry_grade::grade_if_bare(&mut reward_item.item, game_items, rng);
+        if let Ok(graded) = serde_json::to_value(reward_item) {
+            *raw = graded;
+        }
+    }
+    results
+}
+
 /// Apply the requested `tempering_level` to every item in an `{"items":[...]}` results
 /// object. Stackable results are returned unchanged.
 fn apply_tempering_to_results(results: &Value, tempering_level: u64) -> Value {
@@ -1832,6 +1858,7 @@ mod tests {
     const DRAGONSCALE_ARMOR: &str = "659dd496-f71e-4cf8-aaee-8f0c4723410e";
     const DRAGONSCALE_HELMET_RECIPE: &str = "c71163af-2dad-45ce-b5d8-c64591c8c397";
     const DRAGONSCALE_ARMOR_RECIPE: &str = "877b0423-0508-4ae8-b317-56ea8b77ff83";
+    const GOLD_EMERALD_RING: &str = "d408a912-3a4f-4b2a-bf4d-a55b78910f08";
     /// `Enchant.Recipe.DamageMagickaT10`, the recipe of all 34 captured arcane-2 jobs.
     const MAGICKA_DAMAGE_T10: &str = "e0d48d1a-8d8e-4c76-bfeb-970d80f9b838";
 
@@ -2258,6 +2285,51 @@ mod tests {
             1,
             "negative control: one weapon craft is still one job result"
         );
+    }
+
+    #[test]
+    fn crafted_jewelry_results_get_a_grade() {
+        let item_id = Uuid::new_v4();
+        let results = serde_json::json!({"items":[{
+            "id": item_id,
+            "itemTemplateId": GOLD_EMERALD_RING,
+            "temperingLevel": 0,
+            "durability": 150.0
+        }]});
+        let graded =
+            grade_bare_jewelry_results(results, deploy_items(), &mut seeded(391));
+        let reward: RewardItem =
+            serde_json::from_value(graded["items"][0].clone()).expect("reward item");
+
+        assert_eq!(reward.id, item_id);
+        assert_eq!(reward.item.item_template_id, uuid(GOLD_EMERALD_RING));
+        let grade = reward.item.grade.expect("crafted jewelry is graded");
+        assert!(
+            !reward.item.properties.grading.is_empty(),
+            "grade must be backed by GRADING properties"
+        );
+        assert_eq!(
+            grade,
+            reward.item.properties.grading.iter().map(|p| p.tier).sum::<u64>()
+        );
+    }
+
+    #[test]
+    fn crafted_non_jewelry_results_stay_ungraded() {
+        let results = serde_json::json!({"items":[{
+            "id": Uuid::new_v4(),
+            "itemTemplateId": DRAGONSCALE_ARMOR,
+            "temperingLevel": 0,
+            "durability": 150.0
+        }]});
+        let graded =
+            grade_bare_jewelry_results(results, deploy_items(), &mut seeded(391));
+        let reward: RewardItem =
+            serde_json::from_value(graded["items"][0].clone()).expect("reward item");
+
+        assert_eq!(reward.item.item_template_id, uuid(DRAGONSCALE_ARMOR));
+        assert_eq!(reward.item.grade, None, "negative control: armor is not jewelry");
+        assert!(reward.item.properties.grading.is_empty());
     }
 
     /// An unknown plain-craft recipe (e.g. an un-captured alchemy brew) must NOT get
