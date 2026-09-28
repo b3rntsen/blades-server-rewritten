@@ -91,6 +91,7 @@ impl<'a> CraftJobWire<'a> {
         repair_data: &RepairData,
     ) -> Self {
         let (crafting_type_id, results) = repaired_craft_fields(job, static_data, repair_data);
+        let batch_size = batch_size_from_results(results.as_ref());
         CraftJobWire {
             id: job.id,
             user_id,
@@ -99,7 +100,7 @@ impl<'a> CraftJobWire<'a> {
             recipe_id: job.recipe_id,
             crafting_type_id,
             completed_at: job.completed_at_ms,
-            batch_size: 1,
+            batch_size,
             results,
             version: 1,
         }
@@ -566,6 +567,7 @@ async fn start_craft(
     let building_id = req.building_id;
     let tempering_level: u64 = req.tempering_level;
     let item_id = req.item_id;
+    let batch_size = req.batch_size.max(1);
 
     let mut entry = load_owned(conn, character_id, user_id).await?;
     let mut tracker = InventoryChangeTracker::default();
@@ -642,8 +644,12 @@ async fn start_craft(
             Some(recipe) => {
                 // Mint fresh, unique item ids now (the recipe's are shared
                 // placeholders); finish preserves whatever id is stored.
-                let results = remint_result_item_ids(
-                    apply_tempering_to_results(&recipe.results, tempering_level),
+                let results = apply_batch_size_to_results(
+                    remint_result_item_ids(apply_tempering_to_results(
+                        &recipe.results,
+                        tempering_level,
+                    )),
+                    batch_size,
                 );
                 (results, recipe.crafting_type_id, recipe.duration_ms)
             }
@@ -664,7 +670,10 @@ async fn start_craft(
                     let crafting_type_id =
                         apk_crafting_type(&recipe_id, static_data)
                             .unwrap_or_else(|| smithing_crafting_type(static_data));
-                    let results = mint_smith_craftable(craftable, tempering_level);
+                    let results = apply_batch_size_to_results(
+                        mint_smith_craftable(craftable, tempering_level),
+                        batch_size,
+                    );
                     (results, crafting_type_id, craftable.duration_ms)
                 } else {
                     // The APK says what this recipe makes. 898 recipes
@@ -683,19 +692,22 @@ async fn start_craft(
                             .unwrap_or_else(|| {
                                 derive_plain_craft_type(building_id, static_data)
                             });
-                        let results = mint_recipe_output(
-                            &CraftJob {
-                                id: job_id,
-                                recipe_id,
-                                building_id,
+                        let results = apply_batch_size_to_results(
+                            mint_recipe_output(
+                                &CraftJob {
+                                    id: job_id,
+                                    recipe_id,
+                                    building_id,
+                                    crafting_type_id,
+                                    completed_at_ms: 0,
+                                    results: serde_json::json!({}),
+                                },
+                                out.output_item_template_id,
                                 crafting_type_id,
-                                completed_at_ms: 0,
-                                results: serde_json::json!({}),
-                            },
-                            out.output_item_template_id,
-                            crafting_type_id,
-                            static_data,
-                            repair_data,
+                                static_data,
+                                repair_data,
+                            ),
+                            batch_size,
                         );
                         (results, crafting_type_id, 0)
                     } else {
@@ -1466,6 +1478,42 @@ fn item_mod_crafting_type(tempering_level: u64) -> Uuid {
     }
 }
 
+fn batch_size_from_results(results: &Value) -> u32 {
+    let from_stackables = results
+        .get("stackableItems")
+        .and_then(Value::as_object)
+        .and_then(|items| items.values().filter_map(Value::as_u64).max())
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|n| *n > 0);
+    if let Some(batch_size) = from_stackables {
+        return batch_size;
+    }
+    results
+        .get("items")
+        .and_then(Value::as_array)
+        .and_then(|items| u32::try_from(items.len()).ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(1)
+}
+
+fn apply_batch_size_to_results(mut results: Value, batch_size: u32) -> Value {
+    let multiplier = u64::from(batch_size.max(1));
+    if multiplier <= 1 {
+        return results;
+    }
+    if let Some(stackables) = results
+        .get_mut("stackableItems")
+        .and_then(Value::as_object_mut)
+    {
+        for count in stackables.values_mut() {
+            if let Some(n) = count.as_u64() {
+                *count = Value::from(n.saturating_mul(multiplier));
+            }
+        }
+    }
+    results
+}
+
 /// Apply the requested `tempering_level` to every item in an `{"items":[...]}` results
 /// object. Stackable results are returned unchanged.
 fn apply_tempering_to_results(results: &Value, tempering_level: u64) -> Value {
@@ -2166,6 +2214,50 @@ mod tests {
         let idb = b["items"][0]["id"].as_str().unwrap();
         assert_ne!(ida, idb, "each craft gets a unique id");
         assert_ne!(ida, "00000000-0000-0000-0000-000000000001", "placeholder replaced");
+    }
+
+    #[test]
+    fn stackable_plain_craft_batch_is_minted_and_advertised() {
+        let template = Uuid::from_u128(0xA1C0);
+        let results = apply_batch_size_to_results(
+            serde_json::json!({ "stackableItems": { template.to_string(): 1 } }),
+            5,
+        );
+        assert_eq!(results["stackableItems"][template.to_string()], 5);
+
+        let job = CraftJob {
+            id: Uuid::new_v4(),
+            recipe_id: Uuid::new_v4(),
+            building_id: Uuid::new_v4(),
+            crafting_type_id: Uuid::parse_str(ALCHEMY_CRAFTING_TYPE_ID).unwrap(),
+            completed_at_ms: 12_345,
+            results,
+        };
+        let wire = CraftJobWire::from_job(
+            &job,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            &blades_lib::static_data::StaticData::default(),
+            repair_data_from_deploy(),
+        );
+        assert_eq!(wire.batch_size, 5, "wire reflects the stored multi-craft batch");
+    }
+
+    #[test]
+    fn batch_size_does_not_clone_instanced_craft_results() {
+        let results = apply_batch_size_to_results(
+            serde_json::json!({"items":[{
+                "id": "00000000-0000-0000-0000-000000000001",
+                "itemTemplateId": "616b64ef-4184-4efb-af55-1a3f122431dc"
+            }]}),
+            5,
+        );
+        assert_eq!(results["items"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            batch_size_from_results(&results),
+            1,
+            "negative control: one weapon craft is still one job result"
+        );
     }
 
     /// An unknown plain-craft recipe (e.g. an un-captured alchemy brew) must NOT get
