@@ -46,6 +46,8 @@ impl Default for BotMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HumanMode {
+    /// Human-vs-human pays the configured normal human fixed delta plus a flat
+    /// participation award while the pair is under `pair_daily_cap`.
     Flat,
     Fixed,
     Elo,
@@ -174,8 +176,12 @@ impl Default for BotConfig {
 pub struct HumanConfig {
     #[serde(default)]
     pub mode: HumanMode,
+    /// Extra h2h trophies added in `Flat` mode while the pair is under
+    /// `pair_daily_cap`; the normal match delta still applies.
     #[serde(default = "default_flat_award")]
     pub flat_award: i64,
+    /// Number of daily h2h matches per pair that receive `flat_award` in `Flat`
+    /// mode. At and after this count, `Flat` mode is plain `fixed`.
     #[serde(default = "default_pair_daily_cap")]
     pub pair_daily_cap: usize,
     #[serde(default = "FixedDeltas::human_default")]
@@ -454,11 +460,12 @@ pub fn trophy_delta(config: &RankingConfig, input: TrophyDeltaInput) -> i64 {
     if input.h2h {
         return match config.human.mode {
             HumanMode::Flat => {
-                if input.h2h_pair_matches_today < config.human.pair_daily_cap {
+                let award = if input.h2h_pair_matches_today < config.human.pair_daily_cap {
                     config.human.flat_award
                 } else {
                     0
-                }
+                };
+                config.human.fixed.delta(input.outcome) + award
             }
             HumanMode::Fixed => config.human.fixed.delta(input.outcome),
             HumanMode::Elo => elo_delta(&config.elo, input.outcome, input.own_trophies, input.opponent_trophies_for_pricing),
@@ -1020,15 +1027,32 @@ mod tests {
     }
 
     #[test]
-    fn h2h_flat_awards_both_sides_and_daily_cap_stops_it() {
+    fn h2h_flat_adds_award_to_normal_win_and_loss_under_daily_cap() {
         let cfg = RankingConfig::default();
-        let before_cap = trophy_delta(&cfg, TrophyDeltaInput {
+        let winner = trophy_delta(&cfg, TrophyDeltaInput {
+            outcome: win20(),
+            own_trophies: 100,
+            opponent_trophies_for_pricing: 300,
+            h2h: true,
+            h2h_pair_matches_today: 2,
+        });
+        let loser = trophy_delta(&cfg, TrophyDeltaInput {
             outcome: loss02(),
             own_trophies: 100,
             opponent_trophies_for_pricing: 300,
             h2h: true,
             h2h_pair_matches_today: 2,
         });
+        assert_eq!(winner, cfg.human.fixed.win_2_0 + cfg.human.flat_award);
+        assert_eq!(loser, cfg.human.fixed.loss_0_2 + cfg.human.flat_award);
+        assert!(winner > cfg.human.flat_award);
+        assert!(loser < winner);
+        assert!(loser > 0);
+    }
+
+    #[test]
+    fn h2h_flat_daily_cap_falls_back_to_plain_normal_delta() {
+        let cfg = RankingConfig::default();
         let after_cap = trophy_delta(&cfg, TrophyDeltaInput {
             outcome: win20(),
             own_trophies: 100,
@@ -1036,8 +1060,25 @@ mod tests {
             h2h: true,
             h2h_pair_matches_today: 3,
         });
-        assert_eq!(before_cap, 50);
-        assert_eq!(after_cap, 0);
+        assert_eq!(after_cap, cfg.human.fixed.win_2_0);
+    }
+
+    #[test]
+    fn h2h_flat_zero_award_is_identical_to_plain_normal_delta() {
+        let cfg = RankingConfig {
+            human: HumanConfig { flat_award: 0, ..HumanConfig::default() },
+            ..RankingConfig::default()
+        };
+        for outcome in [win20(), loss02()] {
+            let got = trophy_delta(&cfg, TrophyDeltaInput {
+                outcome,
+                own_trophies: 100,
+                opponent_trophies_for_pricing: 300,
+                h2h: true,
+                h2h_pair_matches_today: 0,
+            });
+            assert_eq!(got, cfg.human.fixed.delta(outcome));
+        }
     }
 
     #[test]
