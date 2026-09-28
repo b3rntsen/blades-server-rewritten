@@ -18,9 +18,16 @@ pub struct StackableLoot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CurrencyLoot {
+    pub currency_uuid: &'static str,
+    pub quantity: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PromotionLootBand {
     pub loot_table: &'static str,
     pub min_character_level: u16,
+    pub currencies: &'static [CurrencyLoot],
     pub stackables: &'static [StackableLoot],
 }
 
@@ -28,16 +35,19 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel1",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel2",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel3",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Iron Ingot
             StackableLoot { template_uuid: "55e82826-2d68-469c-8870-753665ca62cd", quantity: 10 },
@@ -48,6 +58,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel3",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Steel Ingot
             StackableLoot { template_uuid: "b81952e0-c3c8-4a5c-92c0-8215d3eb71af", quantity: 10 },
@@ -58,6 +69,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel3",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Potion of Healing
             StackableLoot { template_uuid: "819094ad-e749-4c02-9210-38c3bb1ec535", quantity: 3 },
@@ -68,6 +80,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel3",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Orichalcum Ingot
             StackableLoot { template_uuid: "74f091b5-fd88-464b-a98a-f60a5e8a0f25", quantity: 10 },
@@ -78,6 +91,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel3",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Dwarven Metal Ingot
             StackableLoot { template_uuid: "f11fb90b-b441-4d72-a33f-50d14d3d6778", quantity: 10 },
@@ -88,6 +102,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel3",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Potion of Plentiful Healing
             StackableLoot { template_uuid: "21e6557f-17ca-4bd3-9379-00184efe0edc", quantity: 3 },
@@ -98,6 +113,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel3",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Potion of Vigorous Healing
             StackableLoot { template_uuid: "1c5c5ce3-178b-4938-89f3-faf3fa7f0664", quantity: 3 },
@@ -108,6 +124,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel3",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Potion of Intense Healing
             StackableLoot { template_uuid: "605786d6-1b00-48ec-b765-eb81c5e4a1df", quantity: 3 },
@@ -118,6 +135,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel3",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Potion of Extreme Healing
             StackableLoot { template_uuid: "61b31323-8ba2-49f2-befe-f43111c6e2c7", quantity: 3 },
@@ -128,6 +146,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel3",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Potion of Ultimate Healing
             StackableLoot { template_uuid: "c2139cd9-1d9d-4d4e-80b2-133e07440158", quantity: 3 },
@@ -138,11 +157,13 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel4",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel5",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Petty Soul Gem
             StackableLoot { template_uuid: "19ce1a65-057f-4f34-a0ed-27de7c085662", quantity: 3 },
@@ -151,6 +172,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel5",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Lesser Soul Gem
             StackableLoot { template_uuid: "790a188b-3fa0-4f38-99d9-bc8d3675bc46", quantity: 3 },
@@ -159,6 +181,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel5",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Middling Soul Gem
             StackableLoot { template_uuid: "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029", quantity: 3 },
@@ -167,6 +190,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel5",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Common Soul Gem
             StackableLoot { template_uuid: "1ba210b4-8cca-4f2f-b942-8fab80a52fd8", quantity: 3 },
@@ -175,6 +199,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel5",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Exceptional Soul Gem
             StackableLoot { template_uuid: "3932e499-441e-4c6d-b671-9a03131ebe6f", quantity: 3 },
@@ -183,6 +208,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel5",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Greater Soul Gem
             StackableLoot { template_uuid: "a1d41da0-51e0-4a80-ba9a-b8e9046be27e", quantity: 3 },
@@ -191,6 +217,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel5",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Elevated Soul Gem
             StackableLoot { template_uuid: "a3351353-f613-4368-bac7-05783f857b07", quantity: 3 },
@@ -199,6 +226,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel5",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Grand Soul Gem
             StackableLoot { template_uuid: "68d7941e-8c8d-47bf-9f66-becb058f1817", quantity: 3 },
@@ -207,6 +235,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel5",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Glorious Soul Gem
             StackableLoot { template_uuid: "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb", quantity: 3 },
@@ -215,6 +244,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel5",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Transcendent Soul Gem
             StackableLoot { template_uuid: "d94bab85-53d5-4c9c-a637-acd94fc66c98", quantity: 3 },
@@ -223,11 +253,13 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel6",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel7",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Potion of Minor Stamina
             StackableLoot { template_uuid: "42a22694-40eb-4c34-a267-c9aef2d96f56", quantity: 3 },
@@ -238,6 +270,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel7",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Potion of Light Stamina
             StackableLoot { template_uuid: "979f5025-b9b8-4b1e-b312-f96f294f97ae", quantity: 3 },
@@ -248,6 +281,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel7",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Silver Ingot
             StackableLoot { template_uuid: "b74a5c55-a687-4604-aa59-ba3ddfddcd2a", quantity: 10 },
@@ -258,6 +292,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel7",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Potion of Strong Stamina
             StackableLoot { template_uuid: "45fbef4d-9244-456e-8fc0-f23f0750b3fa", quantity: 3 },
@@ -268,6 +303,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel7",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Potion of Major Stamina
             StackableLoot { template_uuid: "1e12dc39-9029-4cfa-a7f1-9eebfbe240cf", quantity: 3 },
@@ -278,6 +314,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel7",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Potion of Plentiful Stamina
             StackableLoot { template_uuid: "34988d74-de88-43af-adea-445def4949be", quantity: 3 },
@@ -288,6 +325,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel7",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Malachite Ingot
             StackableLoot { template_uuid: "85ed5500-3581-4699-8095-4b5ff6514355", quantity: 10 },
@@ -298,6 +336,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel7",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Ebony Ingot
             StackableLoot { template_uuid: "75112030-b248-49b0-9c70-0da8dea150d1", quantity: 10 },
@@ -308,6 +347,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel7",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Potion of Extreme Stamina
             StackableLoot { template_uuid: "52e2f139-fd26-4707-8a96-8e823de59a66", quantity: 3 },
@@ -318,6 +358,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel7",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Potion of Ultimate Stamina
             StackableLoot { template_uuid: "8da5101c-2e7c-446b-b3bd-d1b9aa5c44f6", quantity: 3 },
@@ -328,11 +369,13 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel8",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel9",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Pearl
             StackableLoot { template_uuid: "89ece62c-9ff6-470a-a152-d45ef4e0c222", quantity: 10 },
@@ -341,6 +384,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel9",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Topaz
             StackableLoot { template_uuid: "3ca59113-a093-4cc8-8389-0f578ad94851", quantity: 10 },
@@ -349,6 +393,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel9",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Garnet
             StackableLoot { template_uuid: "9df9233f-e7b9-47e8-bc75-f37707917759", quantity: 10 },
@@ -357,6 +402,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel9",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Amethyst
             StackableLoot { template_uuid: "3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5", quantity: 10 },
@@ -365,6 +411,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel9",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Ruby
             StackableLoot { template_uuid: "cf4b1b42-a736-4aa1-99b8-baca9f9c2276", quantity: 10 },
@@ -373,6 +420,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel9",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Sapphire
             StackableLoot { template_uuid: "014606cd-8898-4c1d-8029-63220a179c47", quantity: 10 },
@@ -381,6 +429,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel9",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Emerald
             StackableLoot { template_uuid: "4d1231be-d3fa-4282-81b2-0f7bed4aabff", quantity: 10 },
@@ -389,6 +438,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel9",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Diamond
             StackableLoot { template_uuid: "16e102fb-b1c0-42de-8106-0aa27e77f7f0", quantity: 10 },
@@ -397,6 +447,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel9",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Atronite
             StackableLoot { template_uuid: "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95", quantity: 10 },
@@ -405,6 +456,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena1_ArenaLevel9",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Faerite
             StackableLoot { template_uuid: "70f2c013-813e-4f63-8b29-7a54a13b5e58", quantity: 10 },
@@ -413,16 +465,22 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel1",
         min_character_level: 1,
+        currencies: &[
+            // Gem
+            CurrencyLoot { currency_uuid: "470c8f58-a8dd-4c07-8c92-843b785e1139", quantity: 50 },
+        ],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel2",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel3",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Iron Ingot
             StackableLoot { template_uuid: "55e82826-2d68-469c-8870-753665ca62cd", quantity: 10 },
@@ -433,6 +491,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel3",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Steel Ingot
             StackableLoot { template_uuid: "b81952e0-c3c8-4a5c-92c0-8215d3eb71af", quantity: 10 },
@@ -443,6 +502,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel3",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Potion of Healing
             StackableLoot { template_uuid: "819094ad-e749-4c02-9210-38c3bb1ec535", quantity: 3 },
@@ -453,6 +513,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel3",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Orichalcum Ingot
             StackableLoot { template_uuid: "74f091b5-fd88-464b-a98a-f60a5e8a0f25", quantity: 10 },
@@ -463,6 +524,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel3",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Dwarven Metal Ingot
             StackableLoot { template_uuid: "f11fb90b-b441-4d72-a33f-50d14d3d6778", quantity: 10 },
@@ -473,6 +535,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel3",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Potion of Plentiful Healing
             StackableLoot { template_uuid: "21e6557f-17ca-4bd3-9379-00184efe0edc", quantity: 3 },
@@ -483,6 +546,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel3",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Potion of Vigorous Healing
             StackableLoot { template_uuid: "1c5c5ce3-178b-4938-89f3-faf3fa7f0664", quantity: 3 },
@@ -493,6 +557,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel3",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Potion of Intense Healing
             StackableLoot { template_uuid: "605786d6-1b00-48ec-b765-eb81c5e4a1df", quantity: 3 },
@@ -503,6 +568,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel3",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Potion of Extreme Healing
             StackableLoot { template_uuid: "61b31323-8ba2-49f2-befe-f43111c6e2c7", quantity: 3 },
@@ -513,6 +579,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel3",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Potion of Ultimate Healing
             StackableLoot { template_uuid: "c2139cd9-1d9d-4d4e-80b2-133e07440158", quantity: 3 },
@@ -523,11 +590,13 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel4",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel5",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Petty Soul Gem
             StackableLoot { template_uuid: "19ce1a65-057f-4f34-a0ed-27de7c085662", quantity: 3 },
@@ -536,6 +605,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel5",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Lesser Soul Gem
             StackableLoot { template_uuid: "790a188b-3fa0-4f38-99d9-bc8d3675bc46", quantity: 3 },
@@ -544,6 +614,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel5",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Middling Soul Gem
             StackableLoot { template_uuid: "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029", quantity: 3 },
@@ -552,6 +623,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel5",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Common Soul Gem
             StackableLoot { template_uuid: "1ba210b4-8cca-4f2f-b942-8fab80a52fd8", quantity: 3 },
@@ -560,6 +632,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel5",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Exceptional Soul Gem
             StackableLoot { template_uuid: "3932e499-441e-4c6d-b671-9a03131ebe6f", quantity: 3 },
@@ -568,6 +641,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel5",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Greater Soul Gem
             StackableLoot { template_uuid: "a1d41da0-51e0-4a80-ba9a-b8e9046be27e", quantity: 3 },
@@ -576,6 +650,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel5",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Elevated Soul Gem
             StackableLoot { template_uuid: "a3351353-f613-4368-bac7-05783f857b07", quantity: 3 },
@@ -584,6 +659,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel5",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Grand Soul Gem
             StackableLoot { template_uuid: "68d7941e-8c8d-47bf-9f66-becb058f1817", quantity: 3 },
@@ -592,6 +668,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel5",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Glorious Soul Gem
             StackableLoot { template_uuid: "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb", quantity: 3 },
@@ -600,6 +677,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel5",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Transcendent Soul Gem
             StackableLoot { template_uuid: "d94bab85-53d5-4c9c-a637-acd94fc66c98", quantity: 3 },
@@ -608,11 +686,13 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel6",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel7",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Potion of Minor Stamina
             StackableLoot { template_uuid: "42a22694-40eb-4c34-a267-c9aef2d96f56", quantity: 3 },
@@ -623,6 +703,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel7",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Potion of Light Stamina
             StackableLoot { template_uuid: "979f5025-b9b8-4b1e-b312-f96f294f97ae", quantity: 3 },
@@ -633,6 +714,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel7",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Silver Ingot
             StackableLoot { template_uuid: "b74a5c55-a687-4604-aa59-ba3ddfddcd2a", quantity: 10 },
@@ -643,6 +725,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel7",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Potion of Strong Stamina
             StackableLoot { template_uuid: "45fbef4d-9244-456e-8fc0-f23f0750b3fa", quantity: 3 },
@@ -653,6 +736,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel7",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Potion of Major Stamina
             StackableLoot { template_uuid: "1e12dc39-9029-4cfa-a7f1-9eebfbe240cf", quantity: 3 },
@@ -663,6 +747,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel7",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Potion of Plentiful Stamina
             StackableLoot { template_uuid: "34988d74-de88-43af-adea-445def4949be", quantity: 3 },
@@ -673,6 +758,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel7",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Malachite Ingot
             StackableLoot { template_uuid: "85ed5500-3581-4699-8095-4b5ff6514355", quantity: 10 },
@@ -683,6 +769,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel7",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Ebony Ingot
             StackableLoot { template_uuid: "75112030-b248-49b0-9c70-0da8dea150d1", quantity: 10 },
@@ -693,6 +780,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel7",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Potion of Extreme Stamina
             StackableLoot { template_uuid: "52e2f139-fd26-4707-8a96-8e823de59a66", quantity: 3 },
@@ -703,6 +791,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel7",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Potion of Ultimate Stamina
             StackableLoot { template_uuid: "8da5101c-2e7c-446b-b3bd-d1b9aa5c44f6", quantity: 3 },
@@ -713,11 +802,13 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel8",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel9",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Pearl
             StackableLoot { template_uuid: "89ece62c-9ff6-470a-a152-d45ef4e0c222", quantity: 10 },
@@ -726,6 +817,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel9",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Topaz
             StackableLoot { template_uuid: "3ca59113-a093-4cc8-8389-0f578ad94851", quantity: 10 },
@@ -734,6 +826,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel9",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Garnet
             StackableLoot { template_uuid: "9df9233f-e7b9-47e8-bc75-f37707917759", quantity: 10 },
@@ -742,6 +835,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel9",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Amethyst
             StackableLoot { template_uuid: "3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5", quantity: 10 },
@@ -750,6 +844,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel9",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Ruby
             StackableLoot { template_uuid: "cf4b1b42-a736-4aa1-99b8-baca9f9c2276", quantity: 10 },
@@ -758,6 +853,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel9",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Sapphire
             StackableLoot { template_uuid: "014606cd-8898-4c1d-8029-63220a179c47", quantity: 10 },
@@ -766,6 +862,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel9",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Emerald
             StackableLoot { template_uuid: "4d1231be-d3fa-4282-81b2-0f7bed4aabff", quantity: 10 },
@@ -774,6 +871,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel9",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Diamond
             StackableLoot { template_uuid: "16e102fb-b1c0-42de-8106-0aa27e77f7f0", quantity: 10 },
@@ -782,6 +880,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel9",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Atronite
             StackableLoot { template_uuid: "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95", quantity: 10 },
@@ -790,6 +889,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena2_ArenaLevel9",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Faerite
             StackableLoot { template_uuid: "70f2c013-813e-4f63-8b29-7a54a13b5e58", quantity: 10 },
@@ -798,16 +898,22 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel1",
         min_character_level: 1,
+        currencies: &[
+            // Gem
+            CurrencyLoot { currency_uuid: "470c8f58-a8dd-4c07-8c92-843b785e1139", quantity: 100 },
+        ],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel2",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel3",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Iron Ingot
             StackableLoot { template_uuid: "55e82826-2d68-469c-8870-753665ca62cd", quantity: 10 },
@@ -818,6 +924,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel3",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Steel Ingot
             StackableLoot { template_uuid: "b81952e0-c3c8-4a5c-92c0-8215d3eb71af", quantity: 10 },
@@ -828,6 +935,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel3",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Potion of Healing
             StackableLoot { template_uuid: "819094ad-e749-4c02-9210-38c3bb1ec535", quantity: 3 },
@@ -838,6 +946,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel3",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Orichalcum Ingot
             StackableLoot { template_uuid: "74f091b5-fd88-464b-a98a-f60a5e8a0f25", quantity: 10 },
@@ -848,6 +957,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel3",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Dwarven Metal Ingot
             StackableLoot { template_uuid: "f11fb90b-b441-4d72-a33f-50d14d3d6778", quantity: 10 },
@@ -858,6 +968,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel3",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Potion of Plentiful Healing
             StackableLoot { template_uuid: "21e6557f-17ca-4bd3-9379-00184efe0edc", quantity: 3 },
@@ -868,6 +979,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel3",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Potion of Vigorous Healing
             StackableLoot { template_uuid: "1c5c5ce3-178b-4938-89f3-faf3fa7f0664", quantity: 3 },
@@ -878,6 +990,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel3",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Potion of Intense Healing
             StackableLoot { template_uuid: "605786d6-1b00-48ec-b765-eb81c5e4a1df", quantity: 3 },
@@ -888,6 +1001,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel3",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Potion of Extreme Healing
             StackableLoot { template_uuid: "61b31323-8ba2-49f2-befe-f43111c6e2c7", quantity: 3 },
@@ -898,6 +1012,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel3",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Potion of Ultimate Healing
             StackableLoot { template_uuid: "c2139cd9-1d9d-4d4e-80b2-133e07440158", quantity: 3 },
@@ -908,11 +1023,13 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel4",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel5",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Petty Soul Gem
             StackableLoot { template_uuid: "19ce1a65-057f-4f34-a0ed-27de7c085662", quantity: 3 },
@@ -921,6 +1038,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel5",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Lesser Soul Gem
             StackableLoot { template_uuid: "790a188b-3fa0-4f38-99d9-bc8d3675bc46", quantity: 3 },
@@ -929,6 +1047,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel5",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Middling Soul Gem
             StackableLoot { template_uuid: "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029", quantity: 3 },
@@ -937,6 +1056,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel5",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Common Soul Gem
             StackableLoot { template_uuid: "1ba210b4-8cca-4f2f-b942-8fab80a52fd8", quantity: 3 },
@@ -945,6 +1065,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel5",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Exceptional Soul Gem
             StackableLoot { template_uuid: "3932e499-441e-4c6d-b671-9a03131ebe6f", quantity: 3 },
@@ -953,6 +1074,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel5",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Greater Soul Gem
             StackableLoot { template_uuid: "a1d41da0-51e0-4a80-ba9a-b8e9046be27e", quantity: 3 },
@@ -961,6 +1083,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel5",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Elevated Soul Gem
             StackableLoot { template_uuid: "a3351353-f613-4368-bac7-05783f857b07", quantity: 3 },
@@ -969,6 +1092,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel5",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Grand Soul Gem
             StackableLoot { template_uuid: "68d7941e-8c8d-47bf-9f66-becb058f1817", quantity: 3 },
@@ -977,6 +1101,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel5",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Glorious Soul Gem
             StackableLoot { template_uuid: "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb", quantity: 3 },
@@ -985,6 +1110,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel5",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Transcendent Soul Gem
             StackableLoot { template_uuid: "d94bab85-53d5-4c9c-a637-acd94fc66c98", quantity: 3 },
@@ -993,11 +1119,13 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel6",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel7",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Potion of Minor Stamina
             StackableLoot { template_uuid: "42a22694-40eb-4c34-a267-c9aef2d96f56", quantity: 3 },
@@ -1008,6 +1136,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel7",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Potion of Light Stamina
             StackableLoot { template_uuid: "979f5025-b9b8-4b1e-b312-f96f294f97ae", quantity: 3 },
@@ -1018,6 +1147,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel7",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Silver Ingot
             StackableLoot { template_uuid: "b74a5c55-a687-4604-aa59-ba3ddfddcd2a", quantity: 10 },
@@ -1028,6 +1158,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel7",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Potion of Strong Stamina
             StackableLoot { template_uuid: "45fbef4d-9244-456e-8fc0-f23f0750b3fa", quantity: 3 },
@@ -1038,6 +1169,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel7",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Potion of Major Stamina
             StackableLoot { template_uuid: "1e12dc39-9029-4cfa-a7f1-9eebfbe240cf", quantity: 3 },
@@ -1048,6 +1180,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel7",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Potion of Plentiful Stamina
             StackableLoot { template_uuid: "34988d74-de88-43af-adea-445def4949be", quantity: 3 },
@@ -1058,6 +1191,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel7",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Malachite Ingot
             StackableLoot { template_uuid: "85ed5500-3581-4699-8095-4b5ff6514355", quantity: 10 },
@@ -1068,6 +1202,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel7",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Ebony Ingot
             StackableLoot { template_uuid: "75112030-b248-49b0-9c70-0da8dea150d1", quantity: 10 },
@@ -1078,6 +1213,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel7",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Potion of Extreme Stamina
             StackableLoot { template_uuid: "52e2f139-fd26-4707-8a96-8e823de59a66", quantity: 3 },
@@ -1088,6 +1224,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel7",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Potion of Ultimate Stamina
             StackableLoot { template_uuid: "8da5101c-2e7c-446b-b3bd-d1b9aa5c44f6", quantity: 3 },
@@ -1098,16 +1235,19 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel8",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel9",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel9",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Topaz
             StackableLoot { template_uuid: "3ca59113-a093-4cc8-8389-0f578ad94851", quantity: 10 },
@@ -1116,6 +1256,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel9",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Garnet
             StackableLoot { template_uuid: "9df9233f-e7b9-47e8-bc75-f37707917759", quantity: 10 },
@@ -1124,6 +1265,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel9",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Amethyst
             StackableLoot { template_uuid: "3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5", quantity: 10 },
@@ -1132,6 +1274,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel9",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Ruby
             StackableLoot { template_uuid: "cf4b1b42-a736-4aa1-99b8-baca9f9c2276", quantity: 10 },
@@ -1140,6 +1283,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel9",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Sapphire
             StackableLoot { template_uuid: "014606cd-8898-4c1d-8029-63220a179c47", quantity: 10 },
@@ -1148,6 +1292,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel9",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Emerald
             StackableLoot { template_uuid: "4d1231be-d3fa-4282-81b2-0f7bed4aabff", quantity: 10 },
@@ -1156,6 +1301,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel9",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Diamond
             StackableLoot { template_uuid: "16e102fb-b1c0-42de-8106-0aa27e77f7f0", quantity: 10 },
@@ -1164,6 +1310,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel9",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Atronite
             StackableLoot { template_uuid: "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95", quantity: 10 },
@@ -1172,6 +1319,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena3_ArenaLevel9",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Faerite
             StackableLoot { template_uuid: "70f2c013-813e-4f63-8b29-7a54a13b5e58", quantity: 10 },
@@ -1180,16 +1328,22 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel1",
         min_character_level: 1,
+        currencies: &[
+            // Gem
+            CurrencyLoot { currency_uuid: "470c8f58-a8dd-4c07-8c92-843b785e1139", quantity: 150 },
+        ],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel2",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel3",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Iron Ingot
             StackableLoot { template_uuid: "55e82826-2d68-469c-8870-753665ca62cd", quantity: 10 },
@@ -1200,6 +1354,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel3",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Steel Ingot
             StackableLoot { template_uuid: "b81952e0-c3c8-4a5c-92c0-8215d3eb71af", quantity: 10 },
@@ -1210,6 +1365,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel3",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Potion of Healing
             StackableLoot { template_uuid: "819094ad-e749-4c02-9210-38c3bb1ec535", quantity: 3 },
@@ -1220,6 +1376,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel3",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Orichalcum Ingot
             StackableLoot { template_uuid: "74f091b5-fd88-464b-a98a-f60a5e8a0f25", quantity: 10 },
@@ -1230,6 +1387,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel3",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Dwarven Metal Ingot
             StackableLoot { template_uuid: "f11fb90b-b441-4d72-a33f-50d14d3d6778", quantity: 10 },
@@ -1240,6 +1398,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel3",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Potion of Plentiful Healing
             StackableLoot { template_uuid: "21e6557f-17ca-4bd3-9379-00184efe0edc", quantity: 3 },
@@ -1250,6 +1409,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel3",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Potion of Vigorous Healing
             StackableLoot { template_uuid: "1c5c5ce3-178b-4938-89f3-faf3fa7f0664", quantity: 3 },
@@ -1260,6 +1420,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel3",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Potion of Intense Healing
             StackableLoot { template_uuid: "605786d6-1b00-48ec-b765-eb81c5e4a1df", quantity: 3 },
@@ -1270,6 +1431,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel3",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Potion of Extreme Healing
             StackableLoot { template_uuid: "61b31323-8ba2-49f2-befe-f43111c6e2c7", quantity: 3 },
@@ -1280,6 +1442,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel3",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Potion of Ultimate Healing
             StackableLoot { template_uuid: "c2139cd9-1d9d-4d4e-80b2-133e07440158", quantity: 3 },
@@ -1290,11 +1453,13 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel4",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel5",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Petty Soul Gem
             StackableLoot { template_uuid: "19ce1a65-057f-4f34-a0ed-27de7c085662", quantity: 3 },
@@ -1303,6 +1468,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel5",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Lesser Soul Gem
             StackableLoot { template_uuid: "790a188b-3fa0-4f38-99d9-bc8d3675bc46", quantity: 3 },
@@ -1311,6 +1477,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel5",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Middling Soul Gem
             StackableLoot { template_uuid: "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029", quantity: 3 },
@@ -1319,6 +1486,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel5",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Common Soul Gem
             StackableLoot { template_uuid: "1ba210b4-8cca-4f2f-b942-8fab80a52fd8", quantity: 3 },
@@ -1327,6 +1495,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel5",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Exceptional Soul Gem
             StackableLoot { template_uuid: "3932e499-441e-4c6d-b671-9a03131ebe6f", quantity: 3 },
@@ -1335,6 +1504,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel5",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Greater Soul Gem
             StackableLoot { template_uuid: "a1d41da0-51e0-4a80-ba9a-b8e9046be27e", quantity: 3 },
@@ -1343,6 +1513,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel5",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Elevated Soul Gem
             StackableLoot { template_uuid: "a3351353-f613-4368-bac7-05783f857b07", quantity: 3 },
@@ -1351,6 +1522,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel5",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Grand Soul Gem
             StackableLoot { template_uuid: "68d7941e-8c8d-47bf-9f66-becb058f1817", quantity: 3 },
@@ -1359,6 +1531,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel5",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Glorious Soul Gem
             StackableLoot { template_uuid: "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb", quantity: 3 },
@@ -1367,6 +1540,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel5",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Transcendent Soul Gem
             StackableLoot { template_uuid: "d94bab85-53d5-4c9c-a637-acd94fc66c98", quantity: 3 },
@@ -1375,11 +1549,13 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel6",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel7",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Potion of Minor Stamina
             StackableLoot { template_uuid: "42a22694-40eb-4c34-a267-c9aef2d96f56", quantity: 3 },
@@ -1390,6 +1566,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel7",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Potion of Light Stamina
             StackableLoot { template_uuid: "979f5025-b9b8-4b1e-b312-f96f294f97ae", quantity: 3 },
@@ -1400,6 +1577,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel7",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Silver Ingot
             StackableLoot { template_uuid: "b74a5c55-a687-4604-aa59-ba3ddfddcd2a", quantity: 10 },
@@ -1410,6 +1588,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel7",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Potion of Strong Stamina
             StackableLoot { template_uuid: "45fbef4d-9244-456e-8fc0-f23f0750b3fa", quantity: 3 },
@@ -1420,6 +1599,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel7",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Potion of Major Stamina
             StackableLoot { template_uuid: "1e12dc39-9029-4cfa-a7f1-9eebfbe240cf", quantity: 3 },
@@ -1430,6 +1610,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel7",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Potion of Plentiful Stamina
             StackableLoot { template_uuid: "34988d74-de88-43af-adea-445def4949be", quantity: 3 },
@@ -1440,6 +1621,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel7",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Malachite Ingot
             StackableLoot { template_uuid: "85ed5500-3581-4699-8095-4b5ff6514355", quantity: 10 },
@@ -1450,6 +1632,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel7",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Ebony Ingot
             StackableLoot { template_uuid: "75112030-b248-49b0-9c70-0da8dea150d1", quantity: 10 },
@@ -1460,6 +1643,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel7",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Potion of Extreme Stamina
             StackableLoot { template_uuid: "52e2f139-fd26-4707-8a96-8e823de59a66", quantity: 3 },
@@ -1470,6 +1654,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel7",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Potion of Ultimate Stamina
             StackableLoot { template_uuid: "8da5101c-2e7c-446b-b3bd-d1b9aa5c44f6", quantity: 3 },
@@ -1480,11 +1665,13 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel8",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel9",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Pearl
             StackableLoot { template_uuid: "89ece62c-9ff6-470a-a152-d45ef4e0c222", quantity: 10 },
@@ -1493,6 +1680,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel9",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Topaz
             StackableLoot { template_uuid: "3ca59113-a093-4cc8-8389-0f578ad94851", quantity: 10 },
@@ -1501,6 +1689,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel9",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Garnet
             StackableLoot { template_uuid: "9df9233f-e7b9-47e8-bc75-f37707917759", quantity: 10 },
@@ -1509,6 +1698,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel9",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Amethyst
             StackableLoot { template_uuid: "3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5", quantity: 10 },
@@ -1517,6 +1707,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel9",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Ruby
             StackableLoot { template_uuid: "cf4b1b42-a736-4aa1-99b8-baca9f9c2276", quantity: 10 },
@@ -1525,6 +1716,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel9",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Sapphire
             StackableLoot { template_uuid: "014606cd-8898-4c1d-8029-63220a179c47", quantity: 10 },
@@ -1533,6 +1725,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel9",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Emerald
             StackableLoot { template_uuid: "4d1231be-d3fa-4282-81b2-0f7bed4aabff", quantity: 10 },
@@ -1541,6 +1734,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel9",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Diamond
             StackableLoot { template_uuid: "16e102fb-b1c0-42de-8106-0aa27e77f7f0", quantity: 10 },
@@ -1549,6 +1743,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel9",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Atronite
             StackableLoot { template_uuid: "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95", quantity: 10 },
@@ -1557,6 +1752,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena4_ArenaLevel9",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Faerite
             StackableLoot { template_uuid: "70f2c013-813e-4f63-8b29-7a54a13b5e58", quantity: 10 },
@@ -1565,16 +1761,22 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel1",
         min_character_level: 1,
+        currencies: &[
+            // Gem
+            CurrencyLoot { currency_uuid: "470c8f58-a8dd-4c07-8c92-843b785e1139", quantity: 200 },
+        ],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel2",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel3",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Iron Ingot
             StackableLoot { template_uuid: "55e82826-2d68-469c-8870-753665ca62cd", quantity: 10 },
@@ -1585,6 +1787,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel3",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Steel Ingot
             StackableLoot { template_uuid: "b81952e0-c3c8-4a5c-92c0-8215d3eb71af", quantity: 10 },
@@ -1595,6 +1798,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel3",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Potion of Healing
             StackableLoot { template_uuid: "819094ad-e749-4c02-9210-38c3bb1ec535", quantity: 3 },
@@ -1605,6 +1809,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel3",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Orichalcum Ingot
             StackableLoot { template_uuid: "74f091b5-fd88-464b-a98a-f60a5e8a0f25", quantity: 10 },
@@ -1615,6 +1820,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel3",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Dwarven Metal Ingot
             StackableLoot { template_uuid: "f11fb90b-b441-4d72-a33f-50d14d3d6778", quantity: 10 },
@@ -1625,6 +1831,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel3",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Potion of Plentiful Healing
             StackableLoot { template_uuid: "21e6557f-17ca-4bd3-9379-00184efe0edc", quantity: 3 },
@@ -1635,6 +1842,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel3",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Potion of Vigorous Healing
             StackableLoot { template_uuid: "1c5c5ce3-178b-4938-89f3-faf3fa7f0664", quantity: 3 },
@@ -1645,6 +1853,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel3",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Potion of Intense Healing
             StackableLoot { template_uuid: "605786d6-1b00-48ec-b765-eb81c5e4a1df", quantity: 3 },
@@ -1655,6 +1864,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel3",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Potion of Extreme Healing
             StackableLoot { template_uuid: "61b31323-8ba2-49f2-befe-f43111c6e2c7", quantity: 3 },
@@ -1665,6 +1875,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel3",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Potion of Ultimate Healing
             StackableLoot { template_uuid: "c2139cd9-1d9d-4d4e-80b2-133e07440158", quantity: 3 },
@@ -1675,11 +1886,13 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel4",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel5",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Petty Soul Gem
             StackableLoot { template_uuid: "19ce1a65-057f-4f34-a0ed-27de7c085662", quantity: 3 },
@@ -1688,6 +1901,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel5",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Lesser Soul Gem
             StackableLoot { template_uuid: "790a188b-3fa0-4f38-99d9-bc8d3675bc46", quantity: 3 },
@@ -1696,6 +1910,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel5",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Middling Soul Gem
             StackableLoot { template_uuid: "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029", quantity: 3 },
@@ -1704,6 +1919,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel5",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Common Soul Gem
             StackableLoot { template_uuid: "1ba210b4-8cca-4f2f-b942-8fab80a52fd8", quantity: 3 },
@@ -1712,6 +1928,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel5",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Exceptional Soul Gem
             StackableLoot { template_uuid: "3932e499-441e-4c6d-b671-9a03131ebe6f", quantity: 3 },
@@ -1720,6 +1937,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel5",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Greater Soul Gem
             StackableLoot { template_uuid: "a1d41da0-51e0-4a80-ba9a-b8e9046be27e", quantity: 3 },
@@ -1728,6 +1946,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel5",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Elevated Soul Gem
             StackableLoot { template_uuid: "a3351353-f613-4368-bac7-05783f857b07", quantity: 3 },
@@ -1736,6 +1955,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel5",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Grand Soul Gem
             StackableLoot { template_uuid: "68d7941e-8c8d-47bf-9f66-becb058f1817", quantity: 3 },
@@ -1744,6 +1964,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel5",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Glorious Soul Gem
             StackableLoot { template_uuid: "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb", quantity: 3 },
@@ -1752,6 +1973,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel5",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Transcendent Soul Gem
             StackableLoot { template_uuid: "d94bab85-53d5-4c9c-a637-acd94fc66c98", quantity: 3 },
@@ -1760,11 +1982,13 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel6",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel7",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Potion of Minor Stamina
             StackableLoot { template_uuid: "42a22694-40eb-4c34-a267-c9aef2d96f56", quantity: 3 },
@@ -1775,6 +1999,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel7",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Potion of Light Stamina
             StackableLoot { template_uuid: "979f5025-b9b8-4b1e-b312-f96f294f97ae", quantity: 3 },
@@ -1785,6 +2010,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel7",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Silver Ingot
             StackableLoot { template_uuid: "b74a5c55-a687-4604-aa59-ba3ddfddcd2a", quantity: 10 },
@@ -1795,6 +2021,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel7",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Potion of Strong Stamina
             StackableLoot { template_uuid: "45fbef4d-9244-456e-8fc0-f23f0750b3fa", quantity: 3 },
@@ -1805,6 +2032,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel7",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Potion of Major Stamina
             StackableLoot { template_uuid: "1e12dc39-9029-4cfa-a7f1-9eebfbe240cf", quantity: 3 },
@@ -1815,6 +2043,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel7",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Potion of Plentiful Stamina
             StackableLoot { template_uuid: "34988d74-de88-43af-adea-445def4949be", quantity: 3 },
@@ -1825,6 +2054,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel7",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Malachite Ingot
             StackableLoot { template_uuid: "85ed5500-3581-4699-8095-4b5ff6514355", quantity: 10 },
@@ -1835,6 +2065,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel7",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Ebony Ingot
             StackableLoot { template_uuid: "75112030-b248-49b0-9c70-0da8dea150d1", quantity: 10 },
@@ -1845,6 +2076,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel7",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Potion of Extreme Stamina
             StackableLoot { template_uuid: "52e2f139-fd26-4707-8a96-8e823de59a66", quantity: 3 },
@@ -1855,6 +2087,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel7",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Potion of Ultimate Stamina
             StackableLoot { template_uuid: "8da5101c-2e7c-446b-b3bd-d1b9aa5c44f6", quantity: 3 },
@@ -1865,11 +2098,13 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel8",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[],
     },
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel9",
         min_character_level: 1,
+        currencies: &[],
         stackables: &[
             // Pearl
             StackableLoot { template_uuid: "89ece62c-9ff6-470a-a152-d45ef4e0c222", quantity: 10 },
@@ -1878,6 +2113,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel9",
         min_character_level: 5,
+        currencies: &[],
         stackables: &[
             // Topaz
             StackableLoot { template_uuid: "3ca59113-a093-4cc8-8389-0f578ad94851", quantity: 10 },
@@ -1886,6 +2122,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel9",
         min_character_level: 10,
+        currencies: &[],
         stackables: &[
             // Garnet
             StackableLoot { template_uuid: "9df9233f-e7b9-47e8-bc75-f37707917759", quantity: 10 },
@@ -1894,6 +2131,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel9",
         min_character_level: 15,
+        currencies: &[],
         stackables: &[
             // Amethyst
             StackableLoot { template_uuid: "3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5", quantity: 10 },
@@ -1902,6 +2140,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel9",
         min_character_level: 20,
+        currencies: &[],
         stackables: &[
             // Ruby
             StackableLoot { template_uuid: "cf4b1b42-a736-4aa1-99b8-baca9f9c2276", quantity: 10 },
@@ -1910,6 +2149,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel9",
         min_character_level: 25,
+        currencies: &[],
         stackables: &[
             // Sapphire
             StackableLoot { template_uuid: "014606cd-8898-4c1d-8029-63220a179c47", quantity: 10 },
@@ -1918,6 +2158,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel9",
         min_character_level: 30,
+        currencies: &[],
         stackables: &[
             // Emerald
             StackableLoot { template_uuid: "4d1231be-d3fa-4282-81b2-0f7bed4aabff", quantity: 10 },
@@ -1926,6 +2167,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel9",
         min_character_level: 35,
+        currencies: &[],
         stackables: &[
             // Diamond
             StackableLoot { template_uuid: "16e102fb-b1c0-42de-8106-0aa27e77f7f0", quantity: 10 },
@@ -1934,6 +2176,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel9",
         min_character_level: 40,
+        currencies: &[],
         stackables: &[
             // Atronite
             StackableLoot { template_uuid: "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95", quantity: 10 },
@@ -1942,6 +2185,7 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena5_ArenaLevel9",
         min_character_level: 45,
+        currencies: &[],
         stackables: &[
             // Faerite
             StackableLoot { template_uuid: "70f2c013-813e-4f63-8b29-7a54a13b5e58", quantity: 10 },
@@ -1950,6 +2194,10 @@ pub const PROMOTION_LOOT_BANDS: [PromotionLootBand; 226] = [
     PromotionLootBand {
         loot_table: "LootTable_Arena6_ArenaLevel1",
         min_character_level: 1,
+        currencies: &[
+            // Gem
+            CurrencyLoot { currency_uuid: "470c8f58-a8dd-4c07-8c92-843b785e1139", quantity: 300 },
+        ],
         stackables: &[],
     },
 ];
@@ -1962,6 +2210,15 @@ pub fn stackables_for(loot_table: &str, level: u16) -> &'static [StackableLoot] 
         .filter(|band| band.loot_table == loot_table && band.min_character_level <= level)
         .max_by_key(|band| band.min_character_level)
         .map(|band| band.stackables)
+        .unwrap_or(&[])
+}
+
+pub fn currencies_for(loot_table: &str, level: u16) -> &'static [CurrencyLoot] {
+    PROMOTION_LOOT_BANDS
+        .iter()
+        .filter(|band| band.loot_table == loot_table && band.min_character_level <= level)
+        .max_by_key(|band| band.min_character_level)
+        .map(|band| band.currencies)
         .unwrap_or(&[])
 }
 
@@ -1979,6 +2236,29 @@ mod tests {
     }
 
     #[test]
+    fn new_arena_level_one_tables_award_fixed_gems() {
+        let gems = "470c8f58-a8dd-4c07-8c92-843b785e1139";
+        for (table, quantity) in [
+            ("LootTable_Arena2_ArenaLevel1", 50),
+            ("LootTable_Arena3_ArenaLevel1", 100),
+            ("LootTable_Arena4_ArenaLevel1", 150),
+            ("LootTable_Arena5_ArenaLevel1", 200),
+            ("LootTable_Arena6_ArenaLevel1", 300),
+        ] {
+            let loot = currencies_for(table, 1);
+            assert_eq!(loot, &[CurrencyLoot { currency_uuid: gems, quantity }]);
+        }
+    }
+
+    #[test]
+    fn disabled_gem_rows_are_not_granted() {
+        // Retail loot.json also contains Gem rows with _dropRate = 0
+        // (Arena1Level7/Arena2Level2). Those are authored non-rewards.
+        assert!(currencies_for("LootTable_Arena1_ArenaLevel7", 45).is_empty());
+        assert!(currencies_for("LootTable_Arena2_ArenaLevel2", 1).is_empty());
+    }
+
+    #[test]
     fn level_bands_do_not_bleed_into_each_other() {
         let glorious = stackables_for("LootTable_Arena1_ArenaLevel5", 44);
         assert_eq!(glorious[0].template_uuid, "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb");
@@ -1991,6 +2271,9 @@ mod tests {
         for band in PROMOTION_LOOT_BANDS {
             for item in band.stackables {
                 Uuid::parse_str(item.template_uuid).unwrap();
+            }
+            for item in band.currencies {
+                Uuid::parse_str(item.currency_uuid).unwrap();
             }
         }
     }
