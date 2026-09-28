@@ -230,17 +230,19 @@ const RANKED_CTE: &str = "
                         WHERE live.user_id = v.user_id
                           AND live.source_alt_uuid = v.source_alt_uuid
                   )
-                  AND COALESCE((v.character ->> 'pvpTrophies')::bigint, 0) > 0
                   AND (
                         v.character ->> 'pvpSeasonId' IS NULL
                      OR v.character ->> 'pvpSeasonId' = '00000000-0000-0000-0000-000000000000'
                      OR v.character ->> 'pvpSeasonId' = s.id::text
                   )
+                -- The NEWEST snapshot, not the best: an alt that lost cups after
+                -- its peak ranks on what it holds now. The > 0 filter is applied
+                -- after the pick for the same reason.
                 ORDER BY v.user_id,
                          v.source_alt_uuid,
-                         COALESCE((v.character ->> 'pvpTrophies')::bigint, 0) DESC,
                          v.saved_at DESC
             ) saved
+            WHERE saved.score > 0
         ) e
     )
 ";
