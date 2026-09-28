@@ -10,6 +10,7 @@ use actix_web::{
     get, post,
     web::{self, Json},
 };
+use blades_lib::features::character_ops;
 use blades_lib::user_data::{
     Backpack, CompleteCharacter, CompleteCharacterData, CompleteCharacterWithIdAndData,
     CompleteInventory, CompleteWallet, EquippedItems, Item, ItemPropertiesAll, Loadout,
@@ -50,9 +51,11 @@ async fn list_characters(
 
     let mut result = Vec::with_capacity(query_result.len());
     for character in query_result.iter() {
+        let mut served_character = character.character.0.clone();
+        character_ops::normalize_loadout_profiles_for_retail(&mut served_character);
         result.push(CompleteCharacterWithIdAndData {
             id: character.id,
-            character: character.character.0.clone(),
+            character: served_character,
             data: character.data.0.clone(),
         });
     }
@@ -89,7 +92,11 @@ async fn get_character(
     Ok(Json(CompleteCharacterWithIdAndDataContainer {
         character: CompleteCharacterWithIdAndData {
             id: character_id,
-            character: character.character.0.clone(),
+            character: {
+                let mut served_character = character.character.0.clone();
+                character_ops::normalize_loadout_profiles_for_retail(&mut served_character);
+                served_character
+            },
             data: character.data.0.clone(),
         },
     }))

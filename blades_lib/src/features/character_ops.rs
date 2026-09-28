@@ -112,6 +112,7 @@ pub fn set_equipped_abilities(ch: &mut CompleteCharacter, updates: &Value) {
 
 /// Store a named loadout profile at `index` in `character.loadoutProfiles` (an array).
 pub fn set_loadout_profile(ch: &mut CompleteCharacter, index: usize, profile: Value) {
+    let profile = normalize_loadout_profile(profile);
     if !ch.loadout_profiles.is_array() {
         ch.loadout_profiles = json!([]);
     }
@@ -121,6 +122,35 @@ pub fn set_loadout_profile(ch: &mut CompleteCharacter, index: usize, profile: Va
     }
     arr[index] = profile;
     ch.version += 1;
+}
+
+/// Retail saved loadout profiles never carry equipped consumables. Across 35,779
+/// captured profile objects, the keysets are:
+///
+/// * `name`, `iconIndex`, `colorIndex`, `keepShield`, `equippedItems`
+/// * the same plus `equippedAbilities`
+///
+/// The live loadout endpoint has an `equippedConsumables` field, but persisting that
+/// field into `character.loadoutProfiles` creates a profile JSON shape the Loadouts UI
+/// never saw in retail. Drop only that non-retail profile member; leave null gaps,
+/// empty slots, unknown future fields, and every retail member untouched.
+pub fn normalize_loadout_profile(mut profile: Value) -> Value {
+    if let Some(obj) = profile.as_object_mut() {
+        obj.remove("equippedConsumables");
+    }
+    profile
+}
+
+/// Normalize every saved loadout profile on a character before serving or rewriting it.
+pub fn normalize_loadout_profiles_for_retail(ch: &mut CompleteCharacter) {
+    let Some(profiles) = ch.loadout_profiles.as_array_mut() else {
+        return;
+    };
+    for profile in profiles {
+        if let Some(obj) = profile.as_object_mut() {
+            obj.remove("equippedConsumables");
+        }
+    }
 }
 
 /// Destroy instanced backpack items by id (no-op for ids not present).
@@ -430,7 +460,6 @@ mod tests {
         it
     }
 
-    use super::*;
     use crate::user_data::{Backpack, Item, ItemPropertiesAll, Loadout, Treasury};
 
     fn inv() -> CompleteInventory {
@@ -491,6 +520,65 @@ mod tests {
         set_loadout_profile(&mut ch, 2, json!({ "name": "clutch" }));
         assert_eq!(ch.loadout_profiles[2]["name"], "clutch");
         assert!(ch.loadout_profiles[0].is_null(), "gaps padded with null");
+    }
+
+    #[test]
+    fn loadout_profile_save_strips_nonretail_consumables_field() {
+        let mut ch = CompleteCharacter::default();
+        set_loadout_profile(
+            &mut ch,
+            0,
+            json!({
+                "name": "clutch",
+                "iconIndex": 1,
+                "colorIndex": 2,
+                "keepShield": true,
+                "equippedItems": [
+                    { "slot": "417e79de-c810-42f8-8273-f9759df6ae25", "itemId": "" }
+                ],
+                "equippedConsumables": []
+            }),
+        );
+
+        let profile = &ch.loadout_profiles[0];
+        assert!(profile.get("equippedConsumables").is_none());
+        assert_eq!(profile["equippedItems"][0]["itemId"], "");
+        assert_eq!(profile["keepShield"], true);
+    }
+
+    #[test]
+    fn loadout_profile_normalization_preserves_retail_shape_and_gaps() {
+        let mut ch = CompleteCharacter::default();
+        ch.loadout_profiles = json!([
+            null,
+            {
+                "name": "retail",
+                "iconIndex": 0,
+                "colorIndex": 0,
+                "keepShield": false,
+                "equippedItems": [
+                    { "slot": "862605de-c67f-4bce-b527-4e5fb6f25162" }
+                ],
+                "equippedAbilities": [
+                    { "slot": "abilitySlot0", "itemId": "91078132-ef5c-492a-97f2-ac69be5140a8" }
+                ],
+                "note": "leave unknown profile fields alone"
+            },
+            {
+                "name": "dirty",
+                "equippedConsumables": [
+                    "00000000-0000-0000-0000-000000000001"
+                ]
+            }
+        ]);
+
+        normalize_loadout_profiles_for_retail(&mut ch);
+
+        assert!(ch.loadout_profiles[0].is_null(), "null profile gaps are retail");
+        assert_eq!(ch.loadout_profiles[1]["equippedItems"][0]["slot"], "862605de-c67f-4bce-b527-4e5fb6f25162");
+        assert_eq!(ch.loadout_profiles[1]["equippedAbilities"][0]["slot"], "abilitySlot0");
+        assert_eq!(ch.loadout_profiles[1]["note"], "leave unknown profile fields alone");
+        assert!(ch.loadout_profiles[2].get("equippedConsumables").is_none());
     }
 
     #[test]
