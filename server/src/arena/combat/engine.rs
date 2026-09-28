@@ -4673,23 +4673,33 @@ pub(in crate::arena::combat) mod tests {
         );
     }
 
-    /// Drive a 2-0 win for a 588-trophy human (slot 0) against `opponent` (slot 1) and
-    /// return the human's own post-match `pvpTrophies` from their ResultsJSON — the
-    /// value `arena_economy` persists. `peers` is 1 for the solo/bot shape, 2 for PvP.
-    fn human_post_trophies_after_2_0_win(opponent: Loadout, peers: usize) -> i64 {
+    /// Drive a 2-0 match for or against the human (slot 0) and return the human's own
+    /// post-match `pvpTrophies` from their ResultsJSON — the value `arena_economy`
+    /// persists. `peers` is 1 for the solo/bot shape, 2 for PvP.
+    fn human_post_trophies_after_match(
+        opponent: Loadout,
+        peers: usize,
+        human_trophies: i64,
+        human_wins: bool,
+        ranking: crate::arena::ranking::MatchRankingContext,
+    ) -> i64 {
         let now = Instant::now();
         let mut human = crate::arena::combat::loadout::starter();
         human.display_name = "LagorPing".into();
         human.character_uuid = "38c987fd-c42b-4ea6-b869-c8d4c03055f9".into();
-        human.profile_character_json = r#"{"id":"38c987fd-c42b-4ea6-b869-c8d4c03055f9","name":"LagorPing","level":86,"pvpTrophies":588,"matchmakingPvpTrophies":588}"#.into();
+        human.profile_character_json = format!(
+            r#"{{"id":"38c987fd-c42b-4ea6-b869-c8d4c03055f9","name":"LagorPing","level":86,"pvpTrophies":{human_trophies},"matchmakingPvpTrophies":{human_trophies}}}"#
+        );
         human.profile_equipped_json = r#"{"equippedItems":{}}"#.into();
 
-        let mut m = MatchInstance::new(2, peers, vec![human, opponent], now);
+        let mut m = MatchInstance::new_with_ranking_context(2, peers, vec![human, opponent], now, ranking);
         let live = drive_to_live(&mut m, 2, now);
-        let (_d1, t1) = swing_until_death(&mut m, 0, live);
+        let attacker = usize::from(!human_wins);
+        let (_d1, t1) = swing_until_death(&mut m, attacker, live);
         let (_s1, live2) = drive_interround_to_live(&mut m, t1);
-        let (_d2, t) = swing_until_death(&mut m, 0, live2);
-        assert_eq!(m.combat.rounds_won, [2, 0], "precondition: the human won 2-0");
+        let (_d2, t) = swing_until_death(&mut m, attacker, live2);
+        let expected_rounds = if human_wins { [2, 0] } else { [0, 2] };
+        assert_eq!(m.combat.rounds_won, expected_rounds, "precondition: drove the requested 2-0 result");
 
         let step = Duration::from_millis(250);
         for i in 1..=80u32 {
@@ -4706,6 +4716,16 @@ pub(in crate::arena::combat) mod tests {
         panic!("no op49 reached the human");
     }
 
+    fn human_post_trophies_after_2_0_win(opponent: Loadout, peers: usize) -> i64 {
+        human_post_trophies_after_match(
+            opponent,
+            peers,
+            588,
+            true,
+            crate::arena::ranking::MatchRankingContext::default(),
+        )
+    }
+
     /// An opponent at 0 live trophies but bracketed at `matchmaking` — the Meryl Andra
     /// shape from report #224 (bracketed at 455, paid out as if 0).
     fn opponent_loadout(name: &str, matchmaking: Option<i64>) -> Loadout {
@@ -4719,13 +4739,29 @@ pub(in crate::arena::combat) mod tests {
         l
     }
 
-    /// Ranking v2 default: human-vs-human pays the flat participation award,
-    /// win or lose. A `matchmakingPvpTrophies` on the opponent no longer changes
-    /// the trophy award in the default mode.
+    /// Ranking v2 default: human-vs-human pays the normal fixed human delta plus
+    /// the flat participation award while the pair is under the daily cap. A
+    /// `matchmakingPvpTrophies` on the opponent no longer changes the trophy award
+    /// in the default mode.
     #[test]
     fn h2h_default_pays_the_flat_award() {
         let got = human_post_trophies_after_2_0_win(opponent_loadout("Meryl Andra", Some(455)), 2);
-        assert_eq!(got, 588 + 50);
+        assert_eq!(got, 588 + 40 + 50);
+    }
+
+    #[test]
+    fn h2h_flat_final_trophies_still_floor_at_zero() {
+        let got = human_post_trophies_after_match(
+            opponent_loadout("Meryl Andra", Some(455)),
+            2,
+            5,
+            false,
+            crate::arena::ranking::MatchRankingContext {
+                config: crate::arena::ranking::RankingConfig::default(),
+                h2h_pair_matches_today: 3,
+            },
+        );
+        assert_eq!(got, 0);
     }
 
     /// Ranking v2 default: bot matches use the fixed AI award, so the copied
