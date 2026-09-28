@@ -166,6 +166,14 @@ fn add_promotion_currencies(
     promo.currencies.iter().map(|(_, n)| n).sum()
 }
 
+fn promotion_needs_loot_marker(promo: &arena_ladder::PromotionRewards) -> bool {
+    !promo.loot_thresholds.is_empty()
+}
+
+fn promotion_changes_backpack(promo: &arena_ladder::PromotionRewards) -> bool {
+    !promo.stackable_items.is_empty()
+}
+
 /// Apply one match outcome durably: PvP counters + wallet + XP + any promotion
 /// chests and fixed stackables. One transaction, row-locked, so two matches ending
 /// at the same instant for the same character cannot interleave.
@@ -296,8 +304,10 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                     &mut entry.character.0,
                     &mut tracker,
                 );
-                if !promo.stackable_items.is_empty() {
+                if promotion_changes_backpack(&promo) {
                     entry.inventory.0.backpack_version += 1;
+                }
+                if promotion_needs_loot_marker(&promo) {
                     entry
                         .server_state
                         .0
@@ -895,12 +905,21 @@ mod tests {
         let mut reward = RewardGrant::default();
         assert_eq!(add_promotion_currencies(&mut reward, &promo), 50);
         assert_eq!(reward.currencies.get(&blades_lib::economy::GEMS), Some(&50));
+        assert!(
+            promotion_needs_loot_marker(&promo),
+            "gem-only arena promotions still need the durable per-threshold marker"
+        );
+        assert!(
+            !promotion_changes_backpack(&promo),
+            "wallet-only promotion loot must not bump the backpack version"
+        );
 
         // Negative control: a disabled Gem row in loot.json does not become a grant.
         let disabled = arena_ladder::promotion_rewards(549, 550, 86);
         let mut reward = RewardGrant::default();
         assert_eq!(add_promotion_currencies(&mut reward, &disabled), 0);
         assert!(!reward.currencies.contains_key(&blades_lib::economy::GEMS));
+        assert!(!promotion_needs_loot_marker(&disabled));
     }
 
     async fn h2h_fixture() -> Option<AsyncPgConnection> {
@@ -1103,7 +1122,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             test_audit_rows(&mut conn).await,
-            vec![TestAuditRow { character_id: lower, is_h2h: true }],
+            vec![TestAuditRow {
+                character_id: lower,
+                is_h2h: true
+            }],
             "rating table failure must not roll back the audit row"
         );
 

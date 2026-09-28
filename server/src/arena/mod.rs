@@ -17,6 +17,7 @@ pub mod match_registry;
 pub mod matchmaker;
 pub mod matchmaking;
 pub mod presence;
+pub mod promotion_gem_backfill;
 pub mod pvp_tuning;
 pub mod ranking;
 pub mod udp;

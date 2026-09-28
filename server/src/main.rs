@@ -1,7 +1,7 @@
 use std::{
     fs::File,
     path::PathBuf,
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     sync::{Arc, atomic::Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -106,6 +106,18 @@ enum Commands {
         port: u16,
         #[arg(long)]
         static_data: PathBuf,
+    },
+    /// Backfill fixed Gems for arena promotions reached before #413 deployed.
+    BackfillArenaPromotionGems {
+        /// Database connection string.
+        #[arg(short, long, env = "ARENA_DATABASE_URL", hide_env_values = true)]
+        connection_string: String,
+        /// Write the grants. Omit for a dry-run report.
+        #[arg(long)]
+        apply: bool,
+        /// Unix seconds when the live arena-promotion Gem grant first deployed.
+        #[arg(long, default_value_t = arena::promotion_gem_backfill::DEFAULT_LIVE_GRANT_START_SECS)]
+        live_grant_start_secs: i64,
     },
 }
 
@@ -790,6 +802,31 @@ async fn main() -> Result<()> {
             .await
             .context("running the server")?;
         }
+        Commands::BackfillArenaPromotionGems {
+            connection_string,
+            apply,
+            live_grant_start_secs,
+        } => {
+            let db_pool = Pool::builder()
+                .max_size(2)
+                .build(AsyncDieselConnectionManager::<AsyncPgConnection>::new(
+                    connection_string,
+                ))
+                .await
+                .context("building database pool")?;
+            let options = arena::promotion_gem_backfill::BackfillOptions {
+                apply: *apply,
+                live_grant_start_secs: *live_grant_start_secs,
+                bot_user_ids: arena::config::ArenaConfig::from_env()
+                    .bot_user_ids
+                    .into_iter()
+                    .collect::<BTreeSet<_>>(),
+            };
+            let report = arena::promotion_gem_backfill::run(&db_pool, options)
+                .await
+                .context("running arena promotion Gem backfill")?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
     }
 
     Ok(())
@@ -830,8 +867,14 @@ mod cli_tests {
         }
 
         let cli = parsed.expect("the env var must satisfy --connection-string");
-        let Commands::Run { connection_string, .. } = cli.command;
-        assert_eq!(connection_string, "postgres://u:p@h:5432/db");
+        match cli.command {
+            Commands::Run { connection_string, .. } => {
+                assert_eq!(connection_string, "postgres://u:p@h:5432/db");
+            }
+            Commands::BackfillArenaPromotionGems { .. } => {
+                panic!("expected the run subcommand");
+            }
+        }
     }
 
     /// With neither the flag nor the variable it must still refuse to start.
