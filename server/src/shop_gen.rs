@@ -45,6 +45,12 @@ pub struct BuildingGeneration {
     /// The weighted draw pool for this shop type.
     #[serde(default, rename = "itemPool")]
     pub item_pool: Vec<PoolEntry>,
+    /// Capture-measured pools for specific building levels. These override the
+    /// broad authored tier pool when present, because retail's stock quantities
+    /// are level-specific: the same bundle can be 1..4 in the approximation but
+    /// 18..22 in a high-level captured catalog.
+    #[serde(default, rename = "levelPools")]
+    pub level_pools: HashMap<String, Vec<PoolEntry>>,
     /// Per-level generation parameters, keyed by the level number as a string
     /// (`"0"`..`"9"`, matching the JSON object keys).
     #[serde(default)]
@@ -190,14 +196,20 @@ pub fn generate_catalog(
         return Vec::new();
     };
 
-    // Unlocked pool = entries whose tier the level's cap has reached. Sort by
-    // bundle_id so the eligible set is order-stable regardless of JSON/HashMap order
-    // (the seed drives the pick, not input ordering).
-    let mut unlocked: Vec<&PoolEntry> = building
-        .item_pool
-        .iter()
-        .filter(|e| e.tier <= params.tier_cap)
-        .collect();
+    // Prefer capture-measured exact pools for levels where we have them. Otherwise
+    // fall back to the authored broad tier pool.
+    let measured_pool = building
+        .level_pools
+        .get(&level.to_string())
+        .filter(|pool| !pool.is_empty());
+    let mut unlocked: Vec<&PoolEntry> = match measured_pool {
+        Some(pool) => pool.iter().collect(),
+        None => building
+            .item_pool
+            .iter()
+            .filter(|e| e.tier <= params.tier_cap)
+            .collect(),
+    };
     if unlocked.is_empty() {
         return Vec::new();
     }
@@ -284,8 +296,7 @@ mod tests {
 
     /// Load the committed `deploy/static/shop_stock.json` into the typed config.
     fn load_committed() -> ShopStockConfig {
-        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../deploy/static/shop_stock.json");
+        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static/shop_stock.json");
         let f = std::fs::File::open(&p).expect("shop_stock.json present");
         serde_json::from_reader(std::io::BufReader::new(f)).expect("shop_stock.json parses")
     }
@@ -393,7 +404,10 @@ mod tests {
             .filter(|e| e.tier >= 4)
             .map(|e| e.bundle_id)
             .collect();
-        assert!(!gated.is_empty(), "enchanter pool has gated tier>=4 bundles");
+        assert!(
+            !gated.is_empty(),
+            "enchanter pool has gated tier>=4 bundles"
+        );
         // ...and L1's tierCap is below that gate, so none can be rolled at L1.
         assert!(cap1 < 4, "enchanter L1 tierCap {cap1} < gate 4");
 
@@ -435,13 +449,242 @@ mod tests {
         // at least two must differ.
         let mut seen: Vec<Vec<Uuid>> = Vec::new();
         for w in 0..8 {
-            let mut ids: Vec<Uuid> =
-                generate_catalog(&cfg, &forge, 7, &shop, w).into_iter().map(|x| x.id).collect();
+            let mut ids: Vec<Uuid> = generate_catalog(&cfg, &forge, 7, &shop, w)
+                .into_iter()
+                .map(|x| x.id)
+                .collect();
             ids.sort();
             seen.push(ids);
         }
         let all_same = seen.iter().all(|s| *s == seen[0]);
-        assert!(!all_same, "stock should re-roll as the refresh window advances");
+        assert!(
+            !all_same,
+            "stock should re-roll as the refresh window advances"
+        );
+    }
+
+    #[derive(Clone, Copy)]
+    struct RetailMeasuredCell {
+        type_id: &'static str,
+        merchant: &'static str,
+        level: u64,
+        min_count: usize,
+        max_count: usize,
+    }
+
+    const RETAIL_MEASURED_CELLS: &[RetailMeasuredCell] = &[
+        // The snapshot has exact level-1 Blacksmith data. Enchanter/Alchemist
+        // did not have level-1 shop opens with a prior town snapshot, so their
+        // nearest low-level measured controls are Enchanter L2 and Alchemist L0.
+        RetailMeasuredCell {
+            type_id: FORGE,
+            merchant: "Blacksmith",
+            level: 1,
+            min_count: 5,
+            max_count: 5,
+        },
+        RetailMeasuredCell {
+            type_id: FORGE,
+            merchant: "Blacksmith",
+            level: 5,
+            min_count: 7,
+            max_count: 7,
+        },
+        RetailMeasuredCell {
+            type_id: FORGE,
+            merchant: "Blacksmith",
+            level: 9,
+            min_count: 11,
+            max_count: 11,
+        },
+        RetailMeasuredCell {
+            type_id: ENCHANTER,
+            merchant: "Enchanter",
+            level: 2,
+            min_count: 4,
+            max_count: 5,
+        },
+        RetailMeasuredCell {
+            type_id: ENCHANTER,
+            merchant: "Enchanter",
+            level: 5,
+            min_count: 5,
+            max_count: 5,
+        },
+        RetailMeasuredCell {
+            type_id: ENCHANTER,
+            merchant: "Enchanter",
+            level: 9,
+            min_count: 6,
+            max_count: 6,
+        },
+        RetailMeasuredCell {
+            type_id: ALCHEMIST,
+            merchant: "Alchemist",
+            level: 0,
+            min_count: 4,
+            max_count: 4,
+        },
+        RetailMeasuredCell {
+            type_id: ALCHEMIST,
+            merchant: "Alchemist",
+            level: 5,
+            min_count: 6,
+            max_count: 6,
+        },
+        RetailMeasuredCell {
+            type_id: ALCHEMIST,
+            merchant: "Alchemist",
+            level: 9,
+            min_count: 8,
+            max_count: 8,
+        },
+    ];
+
+    fn measured_pool<'a>(
+        cfg: &'a ShopStockConfig,
+        type_id: &Uuid,
+        level: u64,
+    ) -> &'a Vec<PoolEntry> {
+        cfg.generation
+            .get(type_id)
+            .and_then(|b| b.level_pools.get(&level.to_string()))
+            .unwrap_or_else(|| panic!("{type_id} level {level} has no measured levelPool"))
+    }
+
+    fn measured_band(pool: &[PoolEntry], bundle_id: Uuid) -> Option<(u64, u64)> {
+        pool.iter()
+            .find(|e| e.bundle_id == bundle_id)
+            .map(|e| (e.min_quantity, e.max_quantity))
+    }
+
+    fn assert_key_band(
+        cfg: &ShopStockConfig,
+        type_id: &str,
+        level: u64,
+        bundle_id: &str,
+        lo: u64,
+        hi: u64,
+    ) {
+        let type_id = ty(type_id);
+        let bundle_id = ty(bundle_id);
+        let pool = measured_pool(cfg, &type_id, level);
+        assert_eq!(
+            measured_band(pool, bundle_id),
+            Some((lo, hi)),
+            "{type_id} level {level} measured band for {bundle_id}"
+        );
+    }
+
+    fn assert_generated_stock_matches_measured_cells(cfg: &ShopStockConfig) {
+        let shop = ty("11111111-2222-3333-4444-555555555555");
+        for cell in RETAIL_MEASURED_CELLS {
+            let type_id = ty(cell.type_id);
+            let pool = measured_pool(cfg, &type_id, cell.level);
+            let allowed: std::collections::HashMap<Uuid, (u64, u64)> = pool
+                .iter()
+                .map(|e| (e.bundle_id, (e.min_quantity, e.max_quantity)))
+                .collect();
+            for window in 0..32 {
+                let out = generate_catalog(cfg, &type_id, cell.level, &shop, window);
+                assert!(
+                    (cell.min_count..=cell.max_count).contains(&out.len()),
+                    "{} L{} window {window} generated {} bundles, retail measured {}..{}",
+                    cell.merchant,
+                    cell.level,
+                    out.len(),
+                    cell.min_count,
+                    cell.max_count
+                );
+                for bundle in out {
+                    let (lo, hi) = allowed.get(&bundle.id).unwrap_or_else(|| {
+                        panic!(
+                            "{} L{} generated unmeasured bundle {}",
+                            cell.merchant, cell.level, bundle.id
+                        )
+                    });
+                    assert!(
+                        (*lo..=*hi).contains(&bundle.quantity),
+                        "{} L{} generated {} qty {}, retail band is {}..{}",
+                        cell.merchant,
+                        cell.level,
+                        bundle.id,
+                        bundle.quantity,
+                        lo,
+                        hi
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn measured_retail_stock_cells_drive_generated_catalogs() {
+        let cfg = load_committed();
+        assert_generated_stock_matches_measured_cells(&cfg);
+
+        // Tracker #277 controls: these are the retail bands that the old broad
+        // authored pool could not express because every entry was capped at 1..4.
+        assert_key_band(
+            &cfg,
+            ENCHANTER,
+            9,
+            "a52da45d-5a6b-439c-92a6-7bc04048058f", // Imp Stool
+            27,
+            33,
+        );
+        assert_key_band(
+            &cfg,
+            ENCHANTER,
+            9,
+            "76889fa6-4f69-4425-be4a-81ff991903aa", // Void Salts
+            18,
+            22,
+        );
+        assert_key_band(
+            &cfg,
+            ALCHEMIST,
+            9,
+            "3059daf9-5d16-445d-8024-405dd988c433", // Blue Dartwing
+            21,
+            26,
+        );
+        assert_key_band(
+            &cfg,
+            ALCHEMIST,
+            9,
+            "ec0c90cf-7af6-407a-889a-65c03bc317a1", // Potion of Intense Healing
+            2,
+            4,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "measured band")]
+    fn measured_retail_stock_negative_control_rejects_old_low_quantity_band() {
+        let mut cfg = load_committed();
+        let enchanter = ty(ENCHANTER);
+        let imp_stool = ty("a52da45d-5a6b-439c-92a6-7bc04048058f");
+        let pool = cfg
+            .generation
+            .get_mut(&enchanter)
+            .and_then(|b| b.level_pools.get_mut("9"))
+            .expect("enchanter L9 measured pool");
+        let entry = pool
+            .iter_mut()
+            .find(|e| e.bundle_id == imp_stool)
+            .expect("Imp Stool measured for L9 Enchanter");
+        entry.min_quantity = 1;
+        entry.max_quantity = 4;
+
+        assert_key_band(
+            &cfg,
+            ENCHANTER,
+            9,
+            "a52da45d-5a6b-439c-92a6-7bc04048058f",
+            27,
+            33,
+        );
     }
 
     #[test]
@@ -469,13 +712,18 @@ mod tests {
         let mut levels = HashMap::new();
         levels.insert(
             "1".to_string(),
-            LevelParams { max_items: 2, tier_cap: 1, refresh_seconds: 3600 },
+            LevelParams {
+                max_items: 2,
+                tier_cap: 1,
+                refresh_seconds: 3600,
+            },
         );
         let mut generation = HashMap::new();
         generation.insert(
             type_id,
             BuildingGeneration {
                 item_pool: pool,
+                level_pools: HashMap::new(),
                 levels,
                 merchant_gold: HashMap::new(),
             },
