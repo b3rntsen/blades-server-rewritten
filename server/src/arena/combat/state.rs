@@ -599,11 +599,8 @@ pub enum StatusEffectType {
     FrostResistance = 61,
     ShockResistance = 62,
     PoisonResistance = 63,
-    // The elemental WEAKNESS block. Wire-observed (58 op51 commands), but do NOT wire
-    // effects off these yet: they arrive in a 13-prop extended op51 shape where
-    // propId5 == propId8 and propId5 - propId12 == 96 in all 58 samples, so the
-    // captures cannot decide whether 100-103 is a second enum block or whether the
-    // extended shape moves the real type to propId 12. Both readings fit the data.
+    // The elemental WEAKNESS block. AlchemyInfo-driven weakness poisons use the
+    // extended op51 shape with propId5 == propId8 and their damage type in propId12.
     FireWeakness = 100,
     FrostWeakness = 101,
     ShockWeakness = 102,
@@ -1401,6 +1398,21 @@ pub struct ActiveEffect {
     pub is_transient_resist: bool,
 }
 
+/// Alchemy poison currently coating this fighter's weapon.
+///
+/// Retail applies these to the weapon first, then delivers the status to the opponent
+/// on later unblocked weapon hits. `charge_count` is the shipped
+/// `AlchemyInfo.ChargeCount`; `charges_remaining` is the server-side countdown.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ActiveAlchemyPoison {
+    pub effect: StatusEffectType,
+    pub damage_type: DamageType,
+    pub value: f32,
+    pub duration: f32,
+    pub charge_count: u8,
+    pub charges_remaining: u8,
+}
+
 /// A channelled (`_damagePerSecond`) spell still delivering ticks.
 ///
 /// Retail streams a channel as a run of `ReceiveDamage` frames carrying
@@ -1919,6 +1931,9 @@ pub struct Fighter {
     /// changes and already emits the stats update, so nothing new has to
     /// learn how to talk to the client.
     pub pending_restore: Option<PendingRestore>,
+    /// A weapon poison armed by a non-restoration alchemy consumable. Delivered on
+    /// later unblocked landed weapon hits; `None` when no poison is coated.
+    pub active_poison: Option<ActiveAlchemyPoison>,
     /// How long the CURRENT paralysis lasts (the casting rank's shipped `_duration`);
     /// read by `resolve::reconcile_paralysis`. [Phase 3.9]
     pub paralyze_secs: f32,
@@ -2230,6 +2245,7 @@ impl Fighter {
             continuous_carry: 0.0,
             equipped_consumable: None,
             pending_restore: None,
+            active_poison: None,
             paralyze_secs: paralyze_duration_secs(1),
             interrupt_pending: None,
             executions: Vec::new(),
@@ -4014,6 +4030,7 @@ impl MatchCombat {
             f.regen_carry_stamina = 0.0;
             f.regen_carry_magicka = 0.0;
             f.pending_restore = None;
+            f.active_poison = None;
             f.magicka_surge_until = None;
             f.magicka_surge_bonus = 0.0;
             f.no_magicka_regen_until = None;

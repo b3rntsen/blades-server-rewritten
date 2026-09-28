@@ -763,6 +763,7 @@ pub fn receive_damage(
 /// Poisoned(7) 47. Every other status is 255.
 /// [`docs/arena-status-resistance-spec.md` §5.3a]
 const STATUS_SOURCE_ELEMENTAL: u8 = 0;
+const STATUS_SOURCE_ALCHEMY: u8 = 1;
 const STATUS_SOURCE_NONE: u8 = 255;
 
 /// Is this one of the four elemental conditions retail marks with propId 7 == 0?
@@ -788,7 +789,7 @@ fn status_source_kind(status: StatusEffectType) -> u8 {
 /// (`docs/arena-status-resistance-spec.md` §5.3/§5.3a, 2 889 messages): `{0:Int actorObj ·
 /// 1:Byte 56 Avatar · 2:Byte 1 Authority · 3:Byte 51 · 4:Bool apply/remove · 5:Byte
 /// StatusEffectType · 6:Float duration · 7:Byte statusSourceKind}`, plus
-/// `8..12 AlchemyInfo` when propId 7 is 1 (not emitted here).
+/// `8..12 AlchemyInfo` when propId 7 is 1 (see `change_combat_status_effect_alchemy`).
 pub fn change_combat_status_effect(
     actor_net_object_id: i32,
     apply: bool,
@@ -804,6 +805,38 @@ pub fn change_combat_status_effect(
         .byte(5, status as u16 as u8)
         .float(6, duration)
         .byte(7, status_source_kind(status));
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
+/// Alchemy-flavoured op51 `ChangeCombatStatusEffect` (propId7 == 1).
+///
+/// Retail uses this extended layout for AlchemyInfo-driven consumables: propIds 8..12
+/// repeat the effect type and carry its magnitude, duration, charge count, and affected
+/// damage type. Removes still use the plain op51 shape; the extra block is the
+/// originating AlchemyInfo, not lifetime state.
+pub fn change_combat_status_effect_alchemy(
+    actor_net_object_id: i32,
+    apply: bool,
+    status: StatusEffectType,
+    duration: f32,
+    value: f32,
+    charge_count: u8,
+    affected_damage_type: DamageType,
+) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, actor_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GameMessageId::ChangeCombatStatusEffect as u8)
+        .bool(4, apply)
+        .byte(5, status as u16 as u8)
+        .float(6, duration)
+        .byte(7, STATUS_SOURCE_ALCHEMY)
+        .byte(8, status as u16 as u8)
+        .float(9, value)
+        .float(10, duration)
+        .int(11, charge_count as i32)
+        .byte(12, affected_damage_type as u8);
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
