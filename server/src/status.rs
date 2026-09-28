@@ -77,8 +77,8 @@ async fn healthz(state: web::Data<Arc<ServerGlobal>>) -> HttpResponse {
 
 /// Put the old process into deployment-drain mode. Token-gated because this makes
 /// matchmaking temporarily unavailable. The actor acknowledgement is essential: by
-/// the time this returns, every unresolved ticket has received `MatchmakingFailed`
-/// and the queue is empty; only `arenaActiveMatches` still needs to reach zero.
+/// the time this returns, the actor has stopped resolving queued tickets; only
+/// `arenaActiveMatches` still needs to reach zero.
 #[post("/healthz/arena-drain")]
 pub async fn arena_drain(
     req: HttpRequest,
@@ -104,9 +104,10 @@ pub async fn arena_drain(
     }
 
     match tokio::time::timeout(ARENA_DRAIN_ACK_TIMEOUT, ack_rx).await {
-        Ok(Ok(failed_tickets)) => Ok(HttpResponse::Ok().json(serde_json::json!({
+        Ok(Ok(held_tickets)) => Ok(HttpResponse::Ok().json(serde_json::json!({
             "ok": true,
-            "failedQueuedTickets": failed_tickets,
+            "failedQueuedTickets": 0,
+            "heldQueuedTickets": held_tickets,
             "activeMatches": state.arena.registry.active_count(),
         }))),
         _ => {
