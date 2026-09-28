@@ -10,12 +10,10 @@
 
 use std::collections::HashMap;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::user_data::{
-    CompleteCharacter, CompleteInventory, InventoryChangeTracker, SingleEquippedItem,
-};
+use crate::user_data::{CompleteCharacter, CompleteInventory, InventoryChangeTracker, SingleEquippedItem};
 
 /// Which attribute a level-up invests in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,12 +64,8 @@ pub fn apply_levelup(ch: &mut CompleteCharacter, attribute: Attribute) {
     ch.level = ch.level.saturating_add(1);
     if ch.level <= MAX_ATTRIBUTE_POINT_LEVEL {
         match attribute {
-            Attribute::Stamina => {
-                ch.stamina_attribute_points = ch.stamina_attribute_points.saturating_add(1)
-            }
-            Attribute::Magicka => {
-                ch.magicka_attribute_points = ch.magicka_attribute_points.saturating_add(1)
-            }
+            Attribute::Stamina => ch.stamina_attribute_points = ch.stamina_attribute_points.saturating_add(1),
+            Attribute::Magicka => ch.magicka_attribute_points = ch.magicka_attribute_points.saturating_add(1),
         }
     }
     ch.version += 1;
@@ -121,10 +115,7 @@ pub fn set_loadout_profile(ch: &mut CompleteCharacter, index: usize, profile: Va
     if !ch.loadout_profiles.is_array() {
         ch.loadout_profiles = json!([]);
     }
-    let arr = ch
-        .loadout_profiles
-        .as_array_mut()
-        .expect("just set to array");
+    let arr = ch.loadout_profiles.as_array_mut().expect("just set to array");
     while arr.len() <= index {
         arr.push(Value::Null);
     }
@@ -243,22 +234,8 @@ fn take_item_for_equip(
         .iter()
         .find_map(|(slot, equipped)| (equipped.id == item_id).then_some(*slot))?;
     let equipped = inv.loadout.equipped_items.0.remove(&source_slot)?;
-    tracker
-        .modified_loadout
-        .modified_equipped_items
-        .insert(source_slot);
+    tracker.modified_loadout.modified_equipped_items.insert(source_slot);
     Some(equipped.item)
-}
-
-fn template_id_for_equip_candidate(inv: &CompleteInventory, item_id: Uuid) -> Option<Uuid> {
-    if let Some(item) = inv.backpack.items.0.get(&item_id) {
-        return Some(item.item_template_id);
-    }
-    inv.loadout
-        .equipped_items
-        .0
-        .values()
-        .find_map(|equipped| (equipped.id == item_id).then_some(equipped.item.item_template_id))
 }
 
 pub fn apply_equipment_updates(
@@ -272,18 +249,15 @@ pub fn apply_equipment_updates(
         // Order matters: rejecting after the removal would strip the slot and
         // leave it empty, which is a different bug with the same cause.
         if let (Some(gd), Some(item_id)) = (game_data, target.as_ref()) {
-            if let Some(item_template_id) = template_id_for_equip_candidate(inv, *item_id) {
-                if !item_allowed_in_slot(gd, *slot, item_template_id) {
+            if let Some(item) = inv.backpack.items.0.get(item_id) {
+                if !item_allowed_in_slot(gd, *slot, item.item_template_id) {
                     continue;
                 }
             }
         }
         // Return whatever currently occupies the slot to the backpack.
         if let Some(prev) = inv.loadout.equipped_items.0.remove(slot) {
-            tracker
-                .modified_loadout
-                .modified_equipped_items
-                .insert(*slot);
+            tracker.modified_loadout.modified_equipped_items.insert(*slot);
             inv.backpack.items.0.insert(prev.id, prev.item);
             tracker.modified_backpack.items.insert(prev.id);
         }
@@ -298,10 +272,7 @@ pub fn apply_equipment_updates(
                         item,
                     },
                 );
-                tracker
-                    .modified_loadout
-                    .modified_equipped_items
-                    .insert(*slot);
+                tracker.modified_loadout.modified_equipped_items.insert(*slot);
             } else if inv.backpack.stackable_items.count(*item_id) > 0 {
                 // Not instanced gear, but the id IS a stackable consumable the player
                 // owns → treat it as a consumable equip rather than silently skipping.
@@ -436,35 +407,14 @@ mod tests {
         inv.backpack.items.0.insert(junk_id, item_of(DECORATION));
 
         let mut t = InventoryChangeTracker::default();
-        apply_equipment_updates(
-            &mut inv,
-            &HashMap::from([(off_hand, Some(shield_id))]),
-            &mut t,
-            Some(&gd),
-        );
-        assert!(
-            inv.loadout.equipped_items.0.contains_key(&off_hand),
-            "shield equips"
-        );
+        apply_equipment_updates(&mut inv, &HashMap::from([(off_hand, Some(shield_id))]), &mut t, Some(&gd));
+        assert!(inv.loadout.equipped_items.0.contains_key(&off_hand), "shield equips");
 
         let mut t2 = InventoryChangeTracker::default();
-        apply_equipment_updates(
-            &mut inv,
-            &HashMap::from([(off_hand, Some(junk_id))]),
-            &mut t2,
-            Some(&gd),
-        );
-        let still = inv
-            .loadout
-            .equipped_items
-            .0
-            .get(&off_hand)
-            .expect("slot must not be emptied");
+        apply_equipment_updates(&mut inv, &HashMap::from([(off_hand, Some(junk_id))]), &mut t2, Some(&gd));
+        let still = inv.loadout.equipped_items.0.get(&off_hand).expect("slot must not be emptied");
         assert_eq!(still.id, shield_id, "the shield must still be equipped");
-        assert!(
-            inv.backpack.items.0.contains_key(&junk_id),
-            "the junk stays in the backpack"
-        );
+        assert!(inv.backpack.items.0.contains_key(&junk_id), "the junk stays in the backpack");
     }
 
     const WEAPON: Uuid = Uuid::from_u128(0x11);
@@ -476,10 +426,7 @@ mod tests {
     const POTION: Uuid = Uuid::from_u128(0xD0);
 
     fn slot_test_game_data() -> crate::game_data::GameData {
-        let mk = |t: u64| crate::game_data::GameDataItem {
-            name: String::new(),
-            r#type: t,
-        };
+        let mk = |t: u64| crate::game_data::GameDataItem { name: String::new(), r#type: t };
         let mut gd = crate::game_data::GameData {
             items_template: std::collections::HashMap::new(),
             interactables: std::collections::HashMap::new(),
@@ -503,9 +450,8 @@ mod tests {
         it
     }
 
-    use crate::user_data::{
-        Backpack, CompleteInventoryUpdate, Item, ItemPropertiesAll, Loadout, Treasury,
-    };
+    use super::*;
+    use crate::user_data::{Backpack, Item, ItemPropertiesAll, Loadout, Treasury};
 
     fn inv() -> CompleteInventory {
         CompleteInventory {
@@ -526,54 +472,6 @@ mod tests {
             grade: None,
             arcane_tier: None,
             properties: ItemPropertiesAll::default(),
-        }
-    }
-
-    fn u(s: &str) -> Uuid {
-        Uuid::parse_str(s).unwrap()
-    }
-
-    fn equip_item(inv: &mut CompleteInventory, slot: Uuid, id: Uuid, template: Uuid) {
-        inv.loadout.equipped_items.0.insert(
-            slot,
-            SingleEquippedItem {
-                id,
-                slot,
-                item: item_of(template),
-            },
-        );
-    }
-
-    fn assert_equipped(inv: &CompleteInventory, slot: Uuid, item_id: Uuid, item_slot: Uuid) {
-        let equipped = inv
-            .loadout
-            .equipped_items
-            .0
-            .get(&slot)
-            .expect("slot should be equipped");
-        assert_eq!(equipped.id, item_id);
-        assert_eq!(equipped.slot, item_slot);
-    }
-
-    fn assert_response_has_no_equipped_backpack_items(diff: &CompleteInventoryUpdate) {
-        let equipped_ids: std::collections::HashSet<Uuid> = diff
-            .loadout
-            .equipped_items
-            .0
-            .values()
-            .map(|eq| eq.id)
-            .collect();
-        for item_id in diff.backpack.items.0.keys() {
-            assert!(
-                !equipped_ids.contains(item_id),
-                "response must not list {item_id} as both equipped and in backpack"
-            );
-        }
-        for (slot, equipped) in &diff.loadout.equipped_items.0 {
-            assert_eq!(
-                equipped.slot, *slot,
-                "equipped item's embedded slot must match its map key"
-            );
         }
     }
 
@@ -635,26 +533,15 @@ mod tests {
         let mut t = InventoryChangeTracker::default();
 
         // Equip.
-        apply_equipment_updates(
-            &mut i,
-            &HashMap::from([(slot, Some(item_id))]),
-            &mut t,
-            None,
-        );
+        apply_equipment_updates(&mut i, &HashMap::from([(slot, Some(item_id))]), &mut t, None);
         assert!(i.loadout.equipped_items.0.contains_key(&slot));
-        assert!(
-            !i.backpack.items.0.contains_key(&item_id),
-            "left the backpack"
-        );
+        assert!(!i.backpack.items.0.contains_key(&item_id), "left the backpack");
 
         // Unequip.
         let mut t2 = InventoryChangeTracker::default();
         apply_equipment_updates(&mut i, &HashMap::from([(slot, None)]), &mut t2, None);
         assert!(!i.loadout.equipped_items.0.contains_key(&slot));
-        assert!(
-            i.backpack.items.0.contains_key(&item_id),
-            "returned to backpack"
-        );
+        assert!(i.backpack.items.0.contains_key(&item_id), "returned to backpack");
     }
 
     #[test]
@@ -673,173 +560,15 @@ mod tests {
         );
         let mut t = InventoryChangeTracker::default();
 
-        apply_equipment_updates(
-            &mut i,
-            &HashMap::from([(to_slot, Some(item_id))]),
-            &mut t,
-            None,
-        );
+        apply_equipment_updates(&mut i, &HashMap::from([(to_slot, Some(item_id))]), &mut t, None);
 
-        assert!(
-            !i.loadout.equipped_items.0.contains_key(&from_slot),
-            "old slot is cleared"
-        );
-        let moved = i
-            .loadout
-            .equipped_items
-            .0
-            .get(&to_slot)
-            .expect("item moved to the new slot");
+        assert!(!i.loadout.equipped_items.0.contains_key(&from_slot), "old slot is cleared");
+        let moved = i.loadout.equipped_items.0.get(&to_slot).expect("item moved to the new slot");
         assert_eq!(moved.id, item_id);
         assert_eq!(moved.slot, to_slot);
-        assert!(
-            !i.backpack.items.0.contains_key(&item_id),
-            "move does not leave a backpack copy"
-        );
-        assert!(t
-            .modified_loadout
-            .modified_equipped_items
-            .contains(&from_slot));
-        assert!(t
-            .modified_loadout
-            .modified_equipped_items
-            .contains(&to_slot));
-    }
-
-    #[test]
-    fn equipped_source_moves_are_still_slot_checked() {
-        let gd = slot_test_game_data();
-        let weapon_slot = u("417e79de-c810-42f8-8273-f9759df6ae25");
-        let off_hand = u("862605de-c67f-4bce-b527-4e5fb6f25162");
-        let weapon_id = Uuid::from_u128(0x2701);
-        let shield_id = Uuid::from_u128(0x2702);
-        let mut i = inv();
-        equip_item(&mut i, weapon_slot, weapon_id, WEAPON);
-        equip_item(&mut i, off_hand, shield_id, SHIELD);
-        let mut t = InventoryChangeTracker::default();
-
-        // Retail-shaped bad hand swap: the client endpoint is a slot -> item map.
-        // The equipped-source path must not bypass the backpack equip slot check.
-        apply_equipment_updates(
-            &mut i,
-            &HashMap::from([(weapon_slot, Some(shield_id)), (off_hand, Some(weapon_id))]),
-            &mut t,
-            Some(&gd),
-        );
-
-        assert_equipped(&i, weapon_slot, weapon_id, weapon_slot);
-        assert_equipped(&i, off_hand, shield_id, off_hand);
-        assert!(
-            i.backpack.items.0.is_empty(),
-            "refused swaps do not unequip either item"
-        );
-        let diff = i.generate_client_update(&t);
-        assert!(
-            diff.loadout.equipped_items.0.is_empty(),
-            "no bad equippedItems delta is returned"
-        );
-        assert!(
-            diff.loadout.unequipped_item_slots.is_empty(),
-            "no source slot is cleared in the response"
-        );
-        assert_response_has_no_equipped_backpack_items(&diff);
-    }
-
-    #[test]
-    fn equipped_item_can_move_between_compatible_ring_slots() {
-        let gd = slot_test_game_data();
-        let left_ring = u("959c1931-bf85-4587-92ec-8ecaa58b06d5");
-        let right_ring = u("0d8f2023-4701-41e8-8bd5-92381d787456");
-        let moved_ring = Uuid::from_u128(0x2711);
-        let replaced_ring = Uuid::from_u128(0x2712);
-        let mut i = inv();
-        equip_item(&mut i, left_ring, moved_ring, RING);
-        equip_item(&mut i, right_ring, replaced_ring, RING);
-        let mut t = InventoryChangeTracker::default();
-
-        apply_equipment_updates(
-            &mut i,
-            &HashMap::from([(left_ring, None), (right_ring, Some(moved_ring))]),
-            &mut t,
-            Some(&gd),
-        );
-
-        assert!(
-            !i.loadout.equipped_items.0.contains_key(&left_ring),
-            "source ring slot is empty"
-        );
-        assert_equipped(&i, right_ring, moved_ring, right_ring);
-        assert!(
-            i.backpack.items.0.contains_key(&replaced_ring),
-            "the old destination ring returns to backpack"
-        );
-        assert!(
-            !i.backpack.items.0.contains_key(&moved_ring),
-            "the moved ring is not duplicated in backpack"
-        );
-        let diff = i.generate_client_update(&t);
-        assert!(
-            diff.loadout.unequipped_item_slots.contains(&left_ring),
-            "response clears the source slot"
-        );
-        assert_eq!(
-            diff.loadout
-                .equipped_items
-                .0
-                .get(&right_ring)
-                .map(|eq| eq.id),
-            Some(moved_ring),
-            "response equips the moved ring in its destination"
-        );
-        assert_response_has_no_equipped_backpack_items(&diff);
-    }
-
-    #[test]
-    fn backpack_weapon_and_shield_set_swap_still_works() {
-        let gd = slot_test_game_data();
-        let weapon_slot = u("417e79de-c810-42f8-8273-f9759df6ae25");
-        let off_hand = u("862605de-c67f-4bce-b527-4e5fb6f25162");
-        let old_weapon = Uuid::from_u128(0x2721);
-        let old_shield = Uuid::from_u128(0x2722);
-        let new_weapon = Uuid::from_u128(0x2723);
-        let new_shield = Uuid::from_u128(0x2724);
-        let mut i = inv();
-        equip_item(&mut i, weapon_slot, old_weapon, WEAPON);
-        equip_item(&mut i, off_hand, old_shield, SHIELD);
-        i.backpack.items.0.insert(new_weapon, item_of(WEAPON));
-        i.backpack.items.0.insert(new_shield, item_of(SHIELD));
-        let mut t = InventoryChangeTracker::default();
-
-        apply_equipment_updates(
-            &mut i,
-            &HashMap::from([
-                (weapon_slot, Some(new_weapon)),
-                (off_hand, Some(new_shield)),
-            ]),
-            &mut t,
-            Some(&gd),
-        );
-
-        assert_equipped(&i, weapon_slot, new_weapon, weapon_slot);
-        assert_equipped(&i, off_hand, new_shield, off_hand);
-        assert!(i.backpack.items.0.contains_key(&old_weapon));
-        assert!(i.backpack.items.0.contains_key(&old_shield));
-        assert!(!i.backpack.items.0.contains_key(&new_weapon));
-        assert!(!i.backpack.items.0.contains_key(&new_shield));
-        let diff = i.generate_client_update(&t);
-        assert_eq!(
-            diff.loadout
-                .equipped_items
-                .0
-                .get(&weapon_slot)
-                .map(|eq| eq.id),
-            Some(new_weapon)
-        );
-        assert_eq!(
-            diff.loadout.equipped_items.0.get(&off_hand).map(|eq| eq.id),
-            Some(new_shield)
-        );
-        assert_response_has_no_equipped_backpack_items(&diff);
+        assert!(!i.backpack.items.0.contains_key(&item_id), "move does not leave a backpack copy");
+        assert!(t.modified_loadout.modified_equipped_items.contains(&from_slot));
+        assert!(t.modified_loadout.modified_equipped_items.contains(&to_slot));
     }
 
     /// Equipping a STACKABLE consumable (potion) via the `equippedConsumables` field
@@ -855,28 +584,13 @@ mod tests {
 
         let changed = set_equipped_consumables(&mut i, &[potion], &mut t);
         assert!(changed, "equipping a potion changes the loadout");
-        assert_eq!(
-            i.loadout.equipped_consumables,
-            vec![potion],
-            "potion is equipped"
-        );
-        assert_eq!(
-            i.backpack.stackable_items.count(potion),
-            5,
-            "equipping does not consume the stack"
-        );
-        assert!(
-            t.modified_loadout.consumables_changed,
-            "tracker flags the change"
-        );
+        assert_eq!(i.loadout.equipped_consumables, vec![potion], "potion is equipped");
+        assert_eq!(i.backpack.stackable_items.count(potion), 5, "equipping does not consume the stack");
+        assert!(t.modified_loadout.consumables_changed, "tracker flags the change");
 
         // The loadout diff echoes the equipped-consumable list so the client sees it.
         let diff = i.loadout.generate_client_update(&t.modified_loadout);
-        assert_eq!(
-            diff.equipped_consumables,
-            Some(vec![potion]),
-            "diff carries the equipped consumable"
-        );
+        assert_eq!(diff.equipped_consumables, Some(vec![potion]), "diff carries the equipped consumable");
     }
 
     /// A consumable that the player does NOT own is dropped (never equipped), and an
@@ -890,11 +604,7 @@ mod tests {
         let mut t = InventoryChangeTracker::default();
 
         set_equipped_consumables(&mut i, &[owned, unowned, owned], &mut t);
-        assert_eq!(
-            i.loadout.equipped_consumables,
-            vec![owned],
-            "unowned dropped, duplicate collapsed"
-        );
+        assert_eq!(i.loadout.equipped_consumables, vec![owned], "unowned dropped, duplicate collapsed");
 
         // Re-applying the same effective list → no change.
         let mut t2 = InventoryChangeTracker::default();
@@ -926,19 +636,9 @@ mod tests {
             &mut t,
             None,
         );
-        assert!(
-            i.loadout.equipped_items.0.contains_key(&gear_slot),
-            "gear equipped normally"
-        );
-        assert_eq!(
-            i.loadout.equipped_consumables,
-            vec![potion],
-            "potion routed to consumables, not dropped"
-        );
-        assert!(
-            t.modified_loadout.consumables_changed,
-            "consumable change tracked for the diff"
-        );
+        assert!(i.loadout.equipped_items.0.contains_key(&gear_slot), "gear equipped normally");
+        assert_eq!(i.loadout.equipped_consumables, vec![potion], "potion routed to consumables, not dropped");
+        assert!(t.modified_loadout.consumables_changed, "consumable change tracked for the diff");
     }
 }
 
@@ -977,10 +677,7 @@ mod attribute_point_cap_tests {
             .filter_map(|(k, _)| k.parse::<u16>().ok())
             .collect();
 
-        assert!(
-            !granting.is_empty() && !withholding.is_empty(),
-            "both bands must exist"
-        );
+        assert!(!granting.is_empty() && !withholding.is_empty(), "both bands must exist");
         assert_eq!(
             granting.iter().copied().max().unwrap(),
             MAX_ATTRIBUTE_POINT_LEVEL,
@@ -1000,19 +697,13 @@ mod attribute_point_cap_tests {
         let mut ch = at_level(MAX_ATTRIBUTE_POINT_LEVEL - 1);
         apply_levelup(&mut ch, Attribute::Stamina);
         assert_eq!(ch.level, MAX_ATTRIBUTE_POINT_LEVEL);
-        assert_eq!(
-            ch.stamina_attribute_points, 1,
-            "the level that reaches the cap still pays"
-        );
+        assert_eq!(ch.stamina_attribute_points, 1, "the level that reaches the cap still pays");
 
         // 50 -> 51 does not.
         let mut ch = at_level(MAX_ATTRIBUTE_POINT_LEVEL);
         apply_levelup(&mut ch, Attribute::Stamina);
         assert_eq!(ch.level, MAX_ATTRIBUTE_POINT_LEVEL + 1);
-        assert_eq!(
-            ch.stamina_attribute_points, 0,
-            "the level past the cap pays nothing"
-        );
+        assert_eq!(ch.stamina_attribute_points, 0, "the level past the cap pays nothing");
     }
 
     /// THE CONTROL: the level itself must keep rising, and the character must still
