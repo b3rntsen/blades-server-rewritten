@@ -47,6 +47,10 @@ async fn load_owned(
         .await?
         .into_iter()
         .next()
+        .map(|mut entry| {
+            character_ops::normalize_loadout_profiles_for_retail(&mut entry.character.0);
+            entry
+        })
         .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))
 }
 
