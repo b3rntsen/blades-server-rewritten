@@ -172,7 +172,6 @@ struct BnetLoginRequest {
     #[serde(default)]
     login_token: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)]
     device_id: Option<String>,
     #[serde(default)]
     #[allow(dead_code)]
@@ -181,11 +180,17 @@ struct BnetLoginRequest {
 
 #[post("/blades.bgs.services/api/authentication/v1/public/auth/bnet/login")]
 async fn bnet_log_in(
+    req: HttpRequest,
     current_session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
     body: web::Json<BnetLoginRequest>,
 ) -> Result<web::Json<SessionResponse>, BladeApiError> {
     let body = body.into_inner();
+    let caller_device_id = caller_device_identity(&req, body.device_id.as_deref());
+    let caller_session = current_session
+        .get_session_or_error()
+        .ok()
+        .map(|s| (s.session_id, s.session.user_id));
     let mut conn = app_state.db_pool.get().await.unwrap();
 
     let (user_id, log_name) = if let (Some(username_raw), Some(password)) =
@@ -248,6 +253,20 @@ async fn bnet_log_in(
             .map_err(|_| BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 111))?
     };
 
+    if let (Some((_, source_user_id)), Some(device_id)) =
+        (caller_session, caller_device_id.as_deref())
+    {
+        if let Err(error) =
+            move_throwaway_device_claim(&mut conn, source_user_id, user.id, device_id).await
+        {
+            log::warn!(
+                "device claim move failed for {device_id} from {source_user_id} to {} after \
+                 account login: {error}",
+                user.id
+            );
+        }
+    }
+
     let session = Arc::new(Session::new(
         user.id,
         user.secret_id,
@@ -258,11 +277,9 @@ async fn bnet_log_in(
     // The caller's own session is the same device, not "another device": keep it
     // alive when it already belongs to this account, so a `/link/force` that
     // follows under it still authenticates (tracker #8).
-    let same_device = current_session
-        .get_session_or_error()
-        .ok()
-        .filter(|s| s.session.user_id == session.user_id)
-        .map(|s| s.session_id);
+    let same_device = caller_session
+        .filter(|(_, user_id)| *user_id == session.user_id)
+        .map(|(session_id, _)| session_id);
     crate::session::claim_account_for_this_device_keeping(
         &app_state.session_store,
         &app_state.db_pool,
@@ -322,6 +339,12 @@ struct BnetLinkRequest {
     #[serde(default)]
     #[allow(dead_code)]
     language: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    device_id: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    platform: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -449,6 +472,76 @@ const REMEMBER_DEVICE_SQL: &str = "UPDATE users AS u \
        AND NOT EXISTS (SELECT 1 FROM users AS o \
                        WHERE o.id <> $1 \
                          AND COALESCE(o.data->'gp_deviceids', '[]'::jsonb) ? $2)";
+
+/// Move exactly the caller's device binding off an abandoned account after a
+/// credential has proved which account the player actually owns.
+///
+/// The SQL is deliberately stricter than the existing forced-link device sweep:
+/// only the row for this request's device may move, and only when the current
+/// account has no arena credential and no captured/real character. This covers
+/// the shared server-made Adventurer accounts without stealing a device from an
+/// account that can still be logged into directly.
+const MOVE_THROWAWAY_DEVICE_CLAIM_SQL: &str = "WITH throwaway AS ( \
+         SELECT $1::uuid AS user_id \
+          WHERE $1 <> $2 \
+            AND NOT EXISTS (SELECT 1 FROM arena_credentials ac WHERE ac.user_id = $1) \
+            AND NOT EXISTS ( \
+                SELECT 1 FROM characters c \
+                 WHERE c.user_id = $1 \
+                   AND (c.source_alt_uuid IS NOT NULL \
+                        OR COALESCE(c.character->>'name', '') <> $4)) \
+     ) \
+     UPDATE device_bindings AS d \
+        SET user_id = $2, bound_at = now(), last_seen = now(), active_alt_uuid = NULL \
+       FROM throwaway \
+      WHERE d.user_id = throwaway.user_id \
+        AND d.device_id = $3 \
+      RETURNING d.device_id";
+
+fn request_source_wg_ip(req: &HttpRequest) -> Option<String> {
+    req.headers()
+        .get("x-newblades-device-ip")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+fn caller_device_identity(req: &HttpRequest, device_id: Option<&str>) -> Option<String> {
+    device_id
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| request_source_wg_ip(req))
+}
+
+#[derive(diesel::QueryableByName)]
+struct MovedDeviceClaim {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    device_id: String,
+}
+
+async fn move_throwaway_device_claim(
+    conn: &mut diesel_async::AsyncPgConnection,
+    source_user_id: Uuid,
+    target_user_id: Uuid,
+    device_id: &str,
+) -> Result<usize, diesel::result::Error> {
+    let moved: Vec<MovedDeviceClaim> = diesel::sql_query(MOVE_THROWAWAY_DEVICE_CLAIM_SQL)
+        .bind::<diesel::sql_types::Uuid, _>(source_user_id)
+        .bind::<diesel::sql_types::Uuid, _>(target_user_id)
+        .bind::<diesel::sql_types::Text, _>(device_id.to_string())
+        .bind::<diesel::sql_types::Text, _>(crate::character::STARTER_NAME)
+        .load(conn)
+        .await?;
+    for row in &moved {
+        log::info!(
+            "device claim moved: {} from {} to {} (reason: account login)",
+            row.device_id,
+            source_user_id,
+            target_user_id
+        );
+    }
+    Ok(moved.len())
+}
 
 async fn remember_device_on_account(
     conn: &mut diesel_async::AsyncPgConnection,
@@ -842,6 +935,7 @@ async fn apply_forced_link_changes(
 /// for every answer before #185.
 #[post("/blades.bgs.services/api/authentication/v1/public/auth/bnet/link/force")]
 async fn bnet_link_force(
+    req: HttpRequest,
     current_session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
     body: web::Json<BnetLinkRequest>,
@@ -851,6 +945,7 @@ async fn bnet_link_force(
     // authoritative source account whose installation is being linked.
     let source_user_id = current_session.get_session_or_error()?.session.user_id;
     let body = body.into_inner();
+    let caller_device_id = caller_device_identity(&req, body.device_id.as_deref());
     let (user_id, secret_id, session) =
         resolve_link(&app_state, &body.username, &body.password).await?;
 
@@ -859,6 +954,15 @@ async fn bnet_link_force(
 
     let (rebound, moved) = {
         let mut conn = app_state.db_pool.get().await.unwrap();
+        if let Some(device_id) = caller_device_id.as_deref()
+            && let Err(error) =
+                move_throwaway_device_claim(&mut conn, source_user_id, user_id, device_id).await
+        {
+            log::warn!(
+                "device claim move failed for {device_id} from {source_user_id} to {user_id} \
+                 after forced account link: {error}"
+            );
+        }
         apply_forced_link_changes(&mut conn, source_user_id, user_id, keep_played)
             .await
             .map_err(|error| {
@@ -922,12 +1026,7 @@ async fn anon_log_in(
     // Fix 1 / migration 2026-06-21-000000-0000_device_bindings_wg_ip. This
     // bridges the gap when a device was bound under its stable deviceId hash but
     // later connects with deviceId: null (e.g. after reinstalling the rigged APK).
-    let source_wg_ip: Option<String> = req
-        .headers()
-        .get("x-newblades-device-ip")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string());
+    let source_wg_ip: Option<String> = request_source_wg_ip(&req);
     let effective_device_id: Option<String> =
         info.0.device_id.clone().or_else(|| source_wg_ip.clone());
     // ONE line per anon login saying how (and whether) this client can be
@@ -1693,6 +1792,222 @@ mod link_tests {
             Some(&secret.to_string().to_uppercase()),
             secret
         ));
+    }
+}
+
+#[cfg(test)]
+mod device_identity_claim_tests {
+    use super::*;
+    use diesel_async::{AsyncConnection, AsyncPgConnection};
+
+    #[test]
+    fn claim_move_sql_is_limited_to_throwaway_accounts_and_the_caller_device() {
+        assert!(MOVE_THROWAWAY_DEVICE_CLAIM_SQL.contains("d.device_id = $3"));
+        assert!(MOVE_THROWAWAY_DEVICE_CLAIM_SQL.contains("d.user_id = throwaway.user_id"));
+        assert!(
+            MOVE_THROWAWAY_DEVICE_CLAIM_SQL.contains("NOT EXISTS (SELECT 1 FROM arena_credentials")
+        );
+        assert!(MOVE_THROWAWAY_DEVICE_CLAIM_SQL.contains("c.source_alt_uuid IS NOT NULL"));
+        assert!(MOVE_THROWAWAY_DEVICE_CLAIM_SQL.contains("COALESCE(c.character->>'name', '')"));
+        assert!(MOVE_THROWAWAY_DEVICE_CLAIM_SQL.contains("active_alt_uuid = NULL"));
+    }
+
+    #[test]
+    fn no_claim_move_is_attempted_without_a_completed_credential_flow() {
+        let src = include_str!("authentification.rs");
+        let login_start = src.find("async fn bnet_log_in").unwrap();
+        let link_start = src.find("async fn bnet_link(").unwrap();
+        let force_start = src.find("async fn bnet_link_force").unwrap();
+        let anon_start = src.find("async fn anon_log_in").unwrap();
+        let tests_start = src.find("\n#[cfg(test)]").unwrap();
+
+        let bnet_login = &src[login_start..link_start];
+        let bnet_link_preview = &src[link_start..force_start];
+        let bnet_force = &src[force_start..anon_start];
+        let anon_login = &src[anon_start..tests_start];
+
+        assert!(bnet_login.contains("move_throwaway_device_claim("));
+        assert!(bnet_force.contains("move_throwaway_device_claim("));
+        assert!(
+            !bnet_link_preview.contains("move_throwaway_device_claim("),
+            "the conflict preview must not move a device before /force completes"
+        );
+        assert!(
+            !anon_login.contains("move_throwaway_device_claim("),
+            "anonymous login has no verified credential and must not move claims"
+        );
+    }
+
+    async fn identity_tables() -> Option<AsyncPgConnection> {
+        let Some(url) = std::env::var("TEST_DATABASE_URL").ok() else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — device identity claim SQL not verified");
+            return None;
+        };
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction().await.unwrap();
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        diesel::sql_query(format!("CREATE SCHEMA {schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        diesel::sql_query(format!("SET LOCAL search_path TO {schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        for stmt in [
+            "CREATE TABLE users (id UUID PRIMARY KEY)",
+            "CREATE TABLE arena_credentials (
+                 username TEXT PRIMARY KEY,
+                 user_id UUID NOT NULL REFERENCES users(id),
+                 password_hash TEXT NOT NULL)",
+            "CREATE TABLE characters (
+                 id UUID PRIMARY KEY,
+                 user_id UUID NOT NULL REFERENCES users(id),
+                 character JSONB NOT NULL,
+                 source_alt_uuid UUID)",
+            "CREATE TABLE device_bindings (
+                 device_id TEXT PRIMARY KEY,
+                 user_id UUID REFERENCES users(id),
+                 platform TEXT,
+                 last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+                 bound_at TIMESTAMPTZ,
+                 source_wg_ip TEXT,
+                 active_alt_uuid UUID)",
+        ] {
+            diesel::sql_query(stmt).execute(&mut conn).await.unwrap();
+        }
+        Some(conn)
+    }
+
+    async fn add_user(conn: &mut AsyncPgConnection) -> Uuid {
+        let id = Uuid::new_v4();
+        diesel::sql_query("INSERT INTO users (id) VALUES ($1)")
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .execute(conn)
+            .await
+            .unwrap();
+        id
+    }
+
+    async fn owner_of(conn: &mut AsyncPgConnection, device: &str) -> Option<Uuid> {
+        #[derive(diesel::QueryableByName)]
+        struct Owner {
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+            user_id: Option<Uuid>,
+        }
+        diesel::sql_query("SELECT user_id FROM device_bindings WHERE device_id = $1")
+            .bind::<diesel::sql_types::Text, _>(device.to_string())
+            .get_result::<Owner>(conn)
+            .await
+            .optional()
+            .unwrap()
+            .and_then(|row| row.user_id)
+    }
+
+    #[tokio::test]
+    async fn account_login_moves_only_this_throwaway_device_claim() {
+        let Some(mut conn) = identity_tables().await else {
+            return;
+        };
+        let throwaway = add_user(&mut conn).await;
+        let real = add_user(&mut conn).await;
+        diesel::sql_query(
+            "INSERT INTO characters (id, user_id, character, source_alt_uuid)
+             VALUES ($1, $2, $3, NULL)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+        .bind::<diesel::sql_types::Uuid, _>(throwaway)
+        .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"name": "Adventurer", "level": 48}))
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        for device in ["phone-a", "phone-b"] {
+            diesel::sql_query("INSERT INTO device_bindings (device_id, user_id) VALUES ($1, $2)")
+                .bind::<diesel::sql_types::Text, _>(device.to_string())
+                .bind::<diesel::sql_types::Uuid, _>(throwaway)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            move_throwaway_device_claim(&mut conn, throwaway, real, "phone-a")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(owner_of(&mut conn, "phone-a").await, Some(real));
+        assert_eq!(
+            owner_of(&mut conn, "phone-b").await,
+            Some(throwaway),
+            "an unrelated device on the same throwaway account must not move"
+        );
+    }
+
+    #[tokio::test]
+    async fn account_with_credential_never_loses_its_binding() {
+        let Some(mut conn) = identity_tables().await else {
+            return;
+        };
+        let source = add_user(&mut conn).await;
+        let target = add_user(&mut conn).await;
+        diesel::sql_query(
+            "INSERT INTO arena_credentials (username, user_id, password_hash)
+             VALUES ('source', $1, 'hash')",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(source)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        diesel::sql_query("INSERT INTO device_bindings (device_id, user_id) VALUES ('phone', $1)")
+            .bind::<diesel::sql_types::Uuid, _>(source)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            move_throwaway_device_claim(&mut conn, source, target, "phone")
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(owner_of(&mut conn, "phone").await, Some(source));
+    }
+
+    #[tokio::test]
+    async fn captured_character_account_never_loses_its_binding() {
+        let Some(mut conn) = identity_tables().await else {
+            return;
+        };
+        let source = add_user(&mut conn).await;
+        let target = add_user(&mut conn).await;
+        let captured_alt = Uuid::new_v4();
+        diesel::sql_query(
+            "INSERT INTO characters (id, user_id, character, source_alt_uuid)
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+        .bind::<diesel::sql_types::Uuid, _>(source)
+        .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"name": "Adventurer", "level": 48}))
+        .bind::<diesel::sql_types::Uuid, _>(captured_alt)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        diesel::sql_query("INSERT INTO device_bindings (device_id, user_id) VALUES ('phone', $1)")
+            .bind::<diesel::sql_types::Uuid, _>(source)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            move_throwaway_device_claim(&mut conn, source, target, "phone")
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(owner_of(&mut conn, "phone").await, Some(source));
     }
 }
 
