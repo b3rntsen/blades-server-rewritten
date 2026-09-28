@@ -159,6 +159,21 @@ impl CharacterHolder for CharacterDbEntryServerState {
     }
 }
 
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = crate::schema::characters)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct CharacterDbEntryDailyReward {
+    pub user_id: Uuid,
+    pub character: JsonDbWrapper<CompleteCharacter>,
+    pub server_state: JsonDbWrapper<ServerState>,
+}
+
+impl CharacterHolder for CharacterDbEntryDailyReward {
+    fn get_user_id(&self) -> &Uuid {
+        &self.user_id
+    }
+}
+
 #[derive(Queryable, Selectable, AsChangeset)]
 #[diesel(table_name = crate::schema::characters)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
