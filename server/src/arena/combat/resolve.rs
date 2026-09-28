@@ -3945,6 +3945,14 @@ fn emit_damage_with_outcome(
         sr_m,
         sr_h,
     ));
+    if resolved.source.is_weapon_based() && !blocked && total > 0.0 {
+        out.extend(deliver_alchemy_poison(
+            combat,
+            attacker_slot,
+            target_slot,
+            now,
+        ));
+    }
 
     // Elemental conditioning + status land (after the hit resolved): record each
     // POST-NEGATION elemental component into the target's sliding window and check
@@ -5053,6 +5061,159 @@ fn apply_resist_elements(
         "combat: slot {caster_slot} RESIST ELEMENTS r{rank} applied (rating {resist_amount:.2}/elem, {resist_duration}s)"
     );
     out
+}
+
+fn alchemy_status(raw: u16) -> Option<super::state::StatusEffectType> {
+    use super::state::StatusEffectType;
+    Some(match raw {
+        60 => StatusEffectType::FireResistance,
+        61 => StatusEffectType::FrostResistance,
+        62 => StatusEffectType::ShockResistance,
+        63 => StatusEffectType::PoisonResistance,
+        100 => StatusEffectType::FireWeakness,
+        101 => StatusEffectType::FrostWeakness,
+        102 => StatusEffectType::ShockWeakness,
+        103 => StatusEffectType::PoisonWeakness,
+        120 => StatusEffectType::HealthRegenReduction,
+        121 => StatusEffectType::StaminaRegenReduction,
+        122 => StatusEffectType::MagickaRegenReduction,
+        _ => return None,
+    })
+}
+
+fn alchemy_status_damage_type(
+    status: super::state::StatusEffectType,
+) -> super::state::DamageType {
+    use super::state::{DamageType, StatusEffectType};
+    match status {
+        StatusEffectType::FireResistance | StatusEffectType::FireWeakness => DamageType::Fire,
+        StatusEffectType::FrostResistance | StatusEffectType::FrostWeakness => DamageType::Frost,
+        StatusEffectType::ShockResistance | StatusEffectType::ShockWeakness => DamageType::Shock,
+        StatusEffectType::PoisonResistance | StatusEffectType::PoisonWeakness => {
+            DamageType::Poison
+        }
+        _ => DamageType::None,
+    }
+}
+
+fn broadcast_alchemy_status_apply(
+    combat: &MatchCombat,
+    actor_slot: usize,
+    status: super::state::StatusEffectType,
+    duration: f32,
+    value: f32,
+    charge_count: u8,
+    damage_type: super::state::DamageType,
+) -> Vec<(usize, Vec<u8>)> {
+    let obj = combat.fighters[actor_slot].net_object_id;
+    let frame = messages::change_combat_status_effect_alchemy(
+        obj,
+        true,
+        status,
+        duration,
+        value,
+        charge_count,
+        damage_type,
+    );
+    (0..combat.fighters.len())
+        .map(|slot| (slot, frame.clone()))
+        .collect()
+}
+
+fn apply_alchemy_resistance(
+    combat: &mut MatchCombat,
+    slot: usize,
+    alchemy: &super::gamedata::AlchemyConsumable,
+    status: super::state::StatusEffectType,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    let damage_type = alchemy_status_damage_type(status);
+    if damage_type == super::state::DamageType::None {
+        return Vec::new();
+    }
+    let expires = now + Duration::from_secs_f32(alchemy.duration);
+    combat.fighters[slot]
+        .transient_resistances
+        .push((damage_type, alchemy.value, expires));
+    combat.fighters[slot].status_timers.push((status, expires));
+    info!(
+        "combat: slot {slot} consumed {} — alchemy resistance {:?} +{:.2} for {:.1}s",
+        alchemy.uuid, damage_type, alchemy.value, alchemy.duration
+    );
+    broadcast_alchemy_status_apply(
+        combat,
+        slot,
+        status,
+        alchemy.duration,
+        alchemy.value,
+        alchemy.charge_count,
+        damage_type,
+    )
+}
+
+fn arm_alchemy_poison(
+    combat: &mut MatchCombat,
+    slot: usize,
+    alchemy: &super::gamedata::AlchemyConsumable,
+    status: super::state::StatusEffectType,
+) {
+    let damage_type = alchemy_status_damage_type(status);
+    combat.fighters[slot].active_poison = Some(super::state::ActiveAlchemyPoison {
+        effect: status,
+        damage_type,
+        value: alchemy.value,
+        duration: alchemy.duration,
+        charge_count: alchemy.charge_count,
+        charges_remaining: alchemy.charge_count,
+    });
+    info!(
+        "combat: slot {slot} armed {} — alchemy poison {:?} {:.2} for {:.1}s ×{}",
+        alchemy.uuid, status, alchemy.value, alchemy.duration, alchemy.charge_count
+    );
+}
+
+fn deliver_alchemy_poison(
+    combat: &mut MatchCombat,
+    attacker_slot: usize,
+    target_slot: usize,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    let Some(mut poison) = combat.fighters[attacker_slot].active_poison else {
+        return Vec::new();
+    };
+    if poison.charges_remaining == 0 {
+        combat.fighters[attacker_slot].active_poison = None;
+        return Vec::new();
+    }
+
+    combat.fighters[target_slot]
+        .effects
+        .push(super::state::ActiveEffect {
+            effect: poison.effect,
+            damage_type: poison.damage_type,
+            value: poison.value,
+            per_tick_damage: 0.0,
+            expires_at: now + Duration::from_secs_f32(poison.duration),
+            last_tick: now,
+            is_transient_resist: false,
+        });
+    poison.charges_remaining = poison.charges_remaining.saturating_sub(1);
+    combat.fighters[attacker_slot].active_poison =
+        (poison.charges_remaining > 0).then_some(poison);
+    info!(
+        "combat: slot {attacker_slot} delivered alchemy poison {:?} to slot {target_slot} \
+         ({:.2} for {:.1}s, {} charge(s) left)",
+        poison.effect, poison.value, poison.duration, poison.charges_remaining
+    );
+    broadcast_alchemy_status_apply(
+        combat,
+        target_slot,
+        poison.effect,
+        poison.duration,
+        poison.value,
+        poison.charge_count,
+        poison.damage_type,
+    )
 }
 
 /// `winner` defeated its opponent (the killing blow just landed). Score the round
@@ -8788,11 +8949,9 @@ pub fn use_consumable(combat: &mut MatchCombat, slot: usize, _now: Instant) -> b
 /// (silently, no op64) when the fighter's `consumablesPerRound` budget is already
 /// spent, or when no op56 has named a consumable yet — the UUID is never fabricated.
 ///
-/// **Not wired here:** the potion's actual EFFECT. The shipped consumable items are
-/// not in `gamedata.rs` (none of the observed consumable UUIDs appear there), so
-/// there is no authoritative heal/restore magnitude to apply, and guessing one would
-/// desync the HUD from the real game's numbers. The charge accounting and the visual
-/// are faithful; the stat change is a documented gap.
+/// The effect is authoritative too: restoration potions come from
+/// `gamedata::RESTORATIONS`, while non-restoration AlchemyInfo consumables come from
+/// `gamedata::ALCHEMY_CONSUMABLES`.
 fn on_consume_consumable(
     combat: &mut MatchCombat,
     sender: usize,
@@ -8824,6 +8983,7 @@ fn on_consume_consumable(
     // every shipped tier is 2.5 s, and a 225-point heal arriving instantly is
     // a different thing to fight against than one arriving over two and a half
     // seconds. `apply_regen_tick` drains it.
+    let mut effect_frames = Vec::new();
     match super::gamedata::restoration(&uuid) {
         Some(r) => {
             let ticks = (r.duration / REGEN_TICK_INTERVAL.as_secs_f32()).max(1.0);
@@ -8839,10 +8999,22 @@ fn on_consume_consumable(
             );
         }
         None => {
-            // Every non-restoration consumable: resist potions and weakness
-            // poisons carry an AlchemyInfo instead, which is not modelled. The
-            // drink is still spent and still animates, as before.
-            info!("combat: slot {sender} consumed {uuid} (op63 → op64) — no restoration in data");
+            match super::gamedata::alchemy_consumable(&uuid)
+                .and_then(|a| alchemy_status(a.effect_type).map(|status| (a, status)))
+            {
+                Some((alchemy, status)) if alchemy.charge_count == 0 => {
+                    effect_frames =
+                        apply_alchemy_resistance(combat, sender, &alchemy, status, now);
+                }
+                Some((alchemy, status)) => {
+                    arm_alchemy_poison(combat, sender, &alchemy, status);
+                }
+                None => {
+                    info!(
+                        "combat: slot {sender} consumed {uuid} (op63 → op64) — no restoration or AlchemyInfo in data"
+                    );
+                }
+            }
         }
     }
 
@@ -8862,6 +9034,7 @@ fn on_consume_consumable(
             out.push((slot, f.clone()));
         }
     }
+    out.extend(effect_frames);
     out
 }
 
@@ -8887,7 +9060,83 @@ fn potion_vfx_for_stat(item_uuid: &str) -> Option<(&'static str, &'static str)> 
 
 #[cfg(test)]
 mod potion_tests {
+    use std::time::{Duration, Instant};
+
+    use super::super::damage::{DamageModel, RetailDamageModel};
     use super::super::gamedata;
+    use super::super::messages;
+    use super::super::state::{
+        ActiveSide, ActorStateType, DamageSource, DamageType, Fighter, MatchCombat,
+        StatusEffectType, WeaponProfile,
+    };
+    use super::super::tables::Weight;
+
+    const HEALTH_TIER9: &str = "61b31323-8ba2-49f2-befe-f43111c6e2c7";
+    const RESIST_FROST_TIER3: &str = "5d9aef62-a805-4362-a490-e1b98590bb13";
+    const AVERSION_FROST_TIER3: &str = "b7554ab7-99fa-4fb8-9131-e343450c6df2";
+    const RECOVERY_POISON_MAGICKA_TIER3: &str =
+        "51cd14b5-d44e-4183-bc8a-d0b975bc310d";
+
+    fn approx(a: f32, b: f32) {
+        assert!(
+            (a - b).abs() < 0.01,
+            "expected {a:.4} to be approximately {b:.4}"
+        );
+    }
+
+    fn set_weapon(f: &mut Fighter, ty: DamageType, base: f32) {
+        f.loadout.weapon = WeaponProfile {
+            primary_type: Some(ty),
+            base_by_type: vec![(ty, base)],
+            weight: Some(Weight::Light),
+        };
+        f.loadout.weapon_template = None;
+    }
+
+    fn attack_total(
+        combat: &MatchCombat,
+        attacker: usize,
+        target: usize,
+        ty: DamageType,
+        base: f32,
+        now: Instant,
+    ) -> f32 {
+        let mut loadout = combat.fighters[attacker].loadout.clone();
+        loadout.weapon = WeaponProfile {
+            primary_type: Some(ty),
+            base_by_type: vec![(ty, base)],
+            weight: Some(Weight::Light),
+        };
+        RetailDamageModel
+            .resolve_attack(
+                &loadout,
+                &combat.fighters[target],
+                DamageSource::Attack,
+                ActiveSide::Right,
+                1.0,
+                0,
+                now,
+            )
+            .total
+    }
+
+    fn land_weapon_hit(
+        combat: &mut MatchCombat,
+        attacker: usize,
+        target: usize,
+        now: Instant,
+    ) -> Vec<(usize, Vec<u8>)> {
+        let resolved = RetailDamageModel.resolve_attack(
+            &combat.fighters[attacker].loadout,
+            &combat.fighters[target],
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        super::emit_damage(combat, attacker, target, &resolved, now)
+    }
 
     /// Tracker #29: "potion had no effect". The engine spent the charge and
     /// played the animation and applied nothing, because no magnitude was known
@@ -8898,11 +9147,243 @@ mod potion_tests {
     #[test]
     fn the_reporters_potion_restores_its_shipped_amount() {
         // Items.Name.Potion.Restoration.Health.Tier9
-        let r = gamedata::restoration("61b31323-8ba2-49f2-befe-f43111c6e2c7")
-            .expect("the health potion must be in the table");
+        let r = gamedata::restoration(HEALTH_TIER9).expect("the health potion must be in the table");
         assert_eq!(r.affected_stat, 0, "health");
         assert_eq!(r.value, 225.0);
         assert_eq!(r.duration, 2.5);
+    }
+
+    #[test]
+    fn restoration_potions_still_use_the_restoration_path() {
+        let now = Instant::now();
+        let mut combat = super::tests::make_live_combat(now);
+        combat.fighters[0].equipped_consumable = Some(HEALTH_TIER9.to_string());
+
+        let out = super::on_consume_consumable(&mut combat, 0, now);
+
+        assert!(combat.fighters[0].pending_restore.is_some());
+        assert!(combat.fighters[0].transient_resistances.is_empty());
+        assert!(combat.fighters[0].active_poison.is_none());
+        assert!(
+            !out.iter()
+                .any(|(_, f)| messages::user_message_gmid(f) == Some(51)),
+            "restoration potions do not emit an alchemy status frame"
+        );
+    }
+
+    #[test]
+    fn frost_resist_potion_applies_flat_resistance_stacks_and_expires() {
+        let now = Instant::now();
+        let mut control = super::tests::make_live_combat(now);
+        let baseline = attack_total(&control, 1, 0, DamageType::Frost, 200.0, now);
+
+        let mut combat = super::tests::make_live_combat(now);
+        combat.fighters[0].equipped_consumable = Some(RESIST_FROST_TIER3.to_string());
+        let out = super::on_consume_consumable(&mut combat, 0, now);
+
+        assert!(combat.fighters[0].pending_restore.is_none());
+        approx(
+            combat.fighters[0].transient_resistance_against(DamageType::Frost, now),
+            80.169998,
+        );
+        let resisted = attack_total(&combat, 1, 0, DamageType::Frost, 200.0, now);
+        assert!(resisted < baseline);
+        approx(
+            attack_total(
+                &combat,
+                1,
+                0,
+                DamageType::Frost,
+                200.0,
+                now + Duration::from_secs(11),
+            ),
+            baseline,
+        );
+
+        let op51: Vec<_> = out
+            .iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(51))
+            .collect();
+        assert_eq!(op51.len(), 2, "one alchemy status apply per viewer");
+        let nd = arena_proto::parse_netdata(&op51[0].1[2..]);
+        assert_eq!(nd.int(5), Some(StatusEffectType::FrostResistance as i64));
+        assert_eq!(nd.int(7), Some(1), "AlchemyInfo source");
+        assert_eq!(nd.int(8), Some(StatusEffectType::FrostResistance as i64));
+        approx(super::netdata_f32(&nd, 9).expect("value"), 80.169998);
+        approx(super::netdata_f32(&nd, 10).expect("duration"), 10.0);
+        assert_eq!(nd.int(11), Some(0), "potion charge count");
+        assert_eq!(nd.int(12), Some(DamageType::Frost as i64));
+
+        let alchemy = gamedata::alchemy_consumable(RESIST_FROST_TIER3).unwrap();
+        let _ = super::apply_alchemy_resistance(
+            &mut control,
+            0,
+            &alchemy,
+            StatusEffectType::FrostResistance,
+            now,
+        );
+        let _ = super::apply_alchemy_resistance(
+            &mut control,
+            0,
+            &alchemy,
+            StatusEffectType::FrostResistance,
+            now + Duration::from_secs(1),
+        );
+        approx(
+            control.fighters[0].transient_resistance_against(
+                DamageType::Frost,
+                now + Duration::from_secs(2),
+            ),
+            160.339996,
+        );
+        approx(
+            control.fighters[0].transient_resistance_against(
+                DamageType::Frost,
+                now + Duration::from_millis(10_500),
+            ),
+            80.169998,
+        );
+    }
+
+    #[test]
+    fn aversion_poison_delivers_on_next_unblocked_weapon_hit_and_expires() {
+        let now = Instant::now();
+        let mut combat = super::tests::make_live_combat(now);
+        set_weapon(&mut combat.fighters[0], DamageType::Slashing, 40.0);
+        combat.fighters[0].equipped_consumable = Some(AVERSION_FROST_TIER3.to_string());
+        let before = attack_total(&combat, 0, 1, DamageType::Frost, 100.0, now);
+
+        let consume = super::on_consume_consumable(&mut combat, 0, now);
+        assert!(
+            !consume
+                .iter()
+                .any(|(_, f)| messages::user_message_gmid(f) == Some(51)),
+            "arming a poison does not apply a victim status immediately"
+        );
+        assert_eq!(
+            combat.fighters[0]
+                .active_poison
+                .expect("poison armed")
+                .charges_remaining,
+            3
+        );
+        assert_eq!(
+            combat.fighters[1].weakness_rating_against(DamageType::Frost, now),
+            0.0
+        );
+
+        let out = land_weapon_hit(&mut combat, 0, 1, now);
+        approx(
+            combat.fighters[1].weakness_rating_against(DamageType::Frost, now),
+            12.760000,
+        );
+        assert_eq!(
+            combat.fighters[0]
+                .active_poison
+                .expect("two charges left")
+                .charges_remaining,
+            2
+        );
+        let boosted = attack_total(&combat, 0, 1, DamageType::Frost, 100.0, now);
+        assert!(boosted > before);
+        assert_eq!(
+            combat.fighters[1].weakness_rating_against(
+                DamageType::Frost,
+                now + Duration::from_secs(11)
+            ),
+            0.0,
+            "frost weakness expires after its shipped duration"
+        );
+
+        let op51: Vec<_> = out
+            .iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(51))
+            .collect();
+        assert_eq!(op51.len(), 2, "weakness apply goes to both viewers");
+        let nd = arena_proto::parse_netdata(&op51[0].1[2..]);
+        assert_eq!(nd.int(5), Some(StatusEffectType::FrostWeakness as i64));
+        assert_eq!(nd.int(7), Some(1), "AlchemyInfo source");
+        assert_eq!(nd.int(11), Some(3), "authored charge count");
+        assert_eq!(nd.int(12), Some(DamageType::Frost as i64));
+    }
+
+    #[test]
+    fn blocked_hits_do_not_deliver_armed_poisons() {
+        let now = Instant::now();
+        let mut combat = super::tests::make_live_combat(now);
+        set_weapon(&mut combat.fighters[0], DamageType::Slashing, 40.0);
+        combat.fighters[0].equipped_consumable = Some(AVERSION_FROST_TIER3.to_string());
+        let _ = super::on_consume_consumable(&mut combat, 0, now);
+        combat.fighters[1].set_actor_state(ActorStateType::Blocking, now);
+        combat.fighters[1].blocking_side = ActiveSide::Middle;
+        combat.fighters[1].block_raised_at = Some(now);
+        combat.fighters[1].blocking_until = Some(now + Duration::from_secs(5));
+
+        let resolved = RetailDamageModel.resolve_attack(
+            &combat.fighters[0].loadout,
+            &combat.fighters[1],
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        assert!(resolved.blocked, "negative control must be an actual block");
+        let out = super::emit_damage(&mut combat, 0, 1, &resolved, now);
+
+        assert_eq!(
+            combat.fighters[1].weakness_rating_against(DamageType::Frost, now),
+            0.0
+        );
+        assert_eq!(
+            combat.fighters[0]
+                .active_poison
+                .expect("poison remains armed")
+                .charges_remaining,
+            3
+        );
+        assert!(
+            !out.iter()
+                .any(|(_, f)| messages::user_message_gmid(f) == Some(51)),
+            "blocked hit emits no alchemy status apply"
+        );
+    }
+
+    #[test]
+    fn regen_reduction_poison_delivers_and_reduces_the_target_regen_tick() {
+        let now = Instant::now();
+        let mut control = super::tests::make_live_combat(now);
+        control.fighters[1].max_magicka = 1_000;
+        control.fighters[1].magicka = 0;
+        control.fighters[1].regen_carry_magicka = 0.0;
+        control.last_regen_tick = now;
+        let _ = super::apply_regen_tick(&mut control, now + Duration::from_secs(1));
+        let normal_gain = control.fighters[1].magicka;
+
+        let mut combat = super::tests::make_live_combat(now);
+        set_weapon(&mut combat.fighters[0], DamageType::Slashing, 40.0);
+        combat.fighters[0].equipped_consumable =
+            Some(RECOVERY_POISON_MAGICKA_TIER3.to_string());
+        let _ = super::on_consume_consumable(&mut combat, 0, now);
+        let _ = land_weapon_hit(&mut combat, 0, 1, now);
+        approx(combat.fighters[1].regen_reduction(2, now), 10.800000);
+        combat.fighters[1].max_magicka = 1_000;
+        combat.fighters[1].magicka = 0;
+        combat.fighters[1].regen_carry_magicka = 0.0;
+        combat.last_regen_tick = now;
+        let _ = super::apply_regen_tick(&mut combat, now + Duration::from_secs(1));
+        let reduced_gain = combat.fighters[1].magicka;
+
+        assert!(reduced_gain < normal_gain);
+
+        combat.fighters[1].magicka = 0;
+        combat.fighters[1].regen_carry_magicka = 0.0;
+        combat.last_regen_tick = now + Duration::from_secs(11);
+        let _ = super::apply_regen_tick(&mut combat, now + Duration::from_secs(12));
+        assert_eq!(
+            combat.fighters[1].magicka, normal_gain,
+            "regen reduction expires after its shipped duration"
+        );
     }
 
     /// END TO END: drinking must actually PUT the frame on the wire.
