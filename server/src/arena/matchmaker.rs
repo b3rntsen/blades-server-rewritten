@@ -11,9 +11,10 @@
 //! points at our configured arena UDP endpoint. Real pairing + the live UDP
 //! match instance land in milestone (c)/(d).
 
+use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use actix_web::{
@@ -34,8 +35,7 @@ use uuid::Uuid;
 use crate::{
     BladeApiError, DbPool, ServerGlobal,
     arena::{
-        MatchmakingMessage,
-        arena_season,
+        MatchmakingMessage, arena_season,
         config::ArenaConfig,
         key_submit::{KeySubmitConfig, KeySubmitter},
         match_registry::MatchRegistry,
@@ -564,12 +564,9 @@ fn loadout_from_row(r: &CharacterDbEntryCharacterWalletInventory) -> crate::aren
     lo.next_treasury_chest_id = r.inventory.0.treasury.next_chest_id();
     lo.stackable_counts = r.inventory.0.backpack.stackable_items.counts().collect();
     lo.arena_chests_earned = r.server_state.0.arena_chests_earned;
-    lo.arena_last_elder_one_chest_at_secs =
-        r.server_state.0.arena_last_elder_one_chest_at_secs;
-    lo.arena_last_elder_two_chest_at_secs =
-        r.server_state.0.arena_last_elder_two_chest_at_secs;
-    lo.arena_last_legendary_chest_at_secs =
-        r.server_state.0.arena_last_legendary_chest_at_secs;
+    lo.arena_last_elder_one_chest_at_secs = r.server_state.0.arena_last_elder_one_chest_at_secs;
+    lo.arena_last_elder_two_chest_at_secs = r.server_state.0.arena_last_elder_two_chest_at_secs;
+    lo.arena_last_legendary_chest_at_secs = r.server_state.0.arena_last_legendary_chest_at_secs;
 
     // DIAGNOSTIC for "no ability buttons in a match", reported 2026-08-01 by two
     // players (Taheen, Swanne) while a third (Flappety) is unaffected.
@@ -1070,7 +1067,10 @@ fn price_bot_profile_for_match(
     let price = ranking::bot_pricing_trophies(config, own_trophies, mimic_matchmaking, gsid, 0);
     if let Some(obj) = v.as_object_mut() {
         obj.insert("pvpTrophies".into(), serde_json::Value::from(price));
-        obj.insert("matchmakingPvpTrophies".into(), serde_json::Value::from(price));
+        obj.insert(
+            "matchmakingPvpTrophies".into(),
+            serde_json::Value::from(price),
+        );
     }
     lo.profile_character_json = v.to_string();
 }
@@ -1242,7 +1242,12 @@ async fn pick_bot_loadout(
         &mut rows,
         human_char_uuid,
         ranking_config.bot.avoid_recent_opponents,
-        &recent_bot_opponents(&mut conn, human_char_uuid, ranking_config.bot.avoid_recent_opponents).await,
+        &recent_bot_opponents(
+            &mut conn,
+            human_char_uuid,
+            ranking_config.bot.avoid_recent_opponents,
+        )
+        .await,
     );
 
     let mut candidates: Vec<BotCandidate> = rows.iter().map(candidate_of_row).collect();
@@ -1272,7 +1277,12 @@ async fn pick_bot_loadout(
             &mut wide_rows,
             human_char_uuid,
             ranking_config.bot.avoid_recent_opponents,
-            &recent_bot_opponents(&mut conn, human_char_uuid, ranking_config.bot.avoid_recent_opponents).await,
+            &recent_bot_opponents(
+                &mut conn,
+                human_char_uuid,
+                ranking_config.bot.avoid_recent_opponents,
+            )
+            .await,
         );
         let wide_candidates: Vec<BotCandidate> = wide_rows.iter().map(candidate_of_row).collect();
         if let Some(d) = pick_bot_index(&wide_candidates, human_char_uuid, human, gsid)
@@ -1371,11 +1381,7 @@ fn roster_source(managed: bool, has_legacy_env: bool) -> BotRosterSource {
     }
 }
 
-fn should_widen(
-    source: BotRosterSource,
-    human: Option<Skill>,
-    draw: Option<BotDraw>,
-) -> bool {
+fn should_widen(source: BotRosterSource, human: Option<Skill>, draw: Option<BotDraw>) -> bool {
     // A manually managed roster is a consent boundary, not merely a curation
     // preference. Never draw an unchecked player's character to improve a match.
     if source != BotRosterSource::LegacyEnv || human.is_none() {
@@ -1641,7 +1647,10 @@ mod human_priority_tests {
         let mine = Uuid::new_v4();
         let rows = vec![character_row(mine, 300, 55)];
         let picked = pick_character(rows, Some(Uuid::new_v4())).expect("falls back");
-        assert_eq!(picked.id, mine, "an id this user does not own must not select it");
+        assert_eq!(
+            picked.id, mine,
+            "an id this user does not own must not select it"
+        );
     }
 
     /// No character named: deterministic, and the SAME ordering `load_skill` uses. These
@@ -2219,9 +2228,18 @@ mod bot_pick_tests {
         let mut lo = crate::arena::combat::loadout::starter();
         lo.profile_character_json =
             r#"{"name":"Blank","pvpTrophies":40,"matchmakingPvpTrophies":700}"#.to_string();
-        let human = Some(Skill { level: 86, trophies: 2500 });
+        let human = Some(Skill {
+            level: 86,
+            trophies: 2500,
+        });
 
-        price_bot_profile_for_match(&mut lo, &RankingConfig::default(), human, Some(120), Uuid::nil());
+        price_bot_profile_for_match(
+            &mut lo,
+            &RankingConfig::default(),
+            human,
+            Some(120),
+            Uuid::nil(),
+        );
 
         let v: serde_json::Value = serde_json::from_str(&lo.profile_character_json).unwrap();
         assert_eq!(v["pvpTrophies"], 120);
@@ -2249,14 +2267,32 @@ mod bot_pick_tests {
         let recent = Uuid::from_u128(1);
         let keep = Uuid::from_u128(2);
         let other = Uuid::from_u128(3);
-        let mut rows = vec![renderable_row(recent), renderable_row(keep), renderable_row(other)];
-        apply_recent_bot_avoidance(&mut rows, "00000000-0000-0000-0000-000000000000", 1, &[recent]);
+        let mut rows = vec![
+            renderable_row(recent),
+            renderable_row(keep),
+            renderable_row(other),
+        ];
+        apply_recent_bot_avoidance(
+            &mut rows,
+            "00000000-0000-0000-0000-000000000000",
+            1,
+            &[recent],
+        );
         let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
         assert_eq!(ids, vec![keep, other]);
 
         let mut tiny = vec![renderable_row(recent)];
-        apply_recent_bot_avoidance(&mut tiny, "00000000-0000-0000-0000-000000000000", 1, &[recent]);
-        assert_eq!(tiny.len(), 1, "a one-entry pool cannot avoid its only opponent");
+        apply_recent_bot_avoidance(
+            &mut tiny,
+            "00000000-0000-0000-0000-000000000000",
+            1,
+            &[recent],
+        );
+        assert_eq!(
+            tiny.len(),
+            1,
+            "a one-entry pool cannot avoid its only opponent"
+        );
     }
 
     /// `load_bot_loadout` has several return paths and could grow another. Marking
@@ -2315,7 +2351,12 @@ mod bot_pick_tests {
     /// A candidate at a known level / trophy count, RATED — its trophy count is
     /// measured, so both bracket axes apply.
     fn cand_at(uuid: &str, level: i32, trophies: i64) -> BotCandidate {
-        (uuid.to_string(), true, Some(Skill { level, trophies }), true)
+        (
+            uuid.to_string(),
+            true,
+            Some(Skill { level, trophies }),
+            true,
+        )
     }
 
     /// A candidate that has never fought: its 0 trophies mean "unrated", so only
@@ -2591,9 +2632,9 @@ mod bot_pick_tests {
         // One candidate per step, plus one outside every step.
         let cands = vec![
             cand_at("00000000-0000-0000-0000-00000000000f", 90, 2000), // outside all
-            cand_at("00000000-0000-0000-0000-000000000003", 68, 970), // step 2
-            cand_at("00000000-0000-0000-0000-000000000002", 59, 690), // step 1
-            cand_at("00000000-0000-0000-0000-000000000001", 53, 500), // step 0
+            cand_at("00000000-0000-0000-0000-000000000003", 68, 970),  // step 2
+            cand_at("00000000-0000-0000-0000-000000000002", 59, 690),  // step 1
+            cand_at("00000000-0000-0000-0000-000000000001", 53, 500),  // step 0
         ];
         // No step holds three, so the draw comes from the widest BRACKETED tier —
         // indices 1, 2 and 3 — and varies. Index 0 is outside every step and must
@@ -2867,7 +2908,6 @@ mod bot_pick_tests {
         }
     }
 
-
     // ── a bracket step must offer a choice (MIN_BOT_POOL) ────────────────────
 
     /// THE REPORTED BUG. The tightest step held exactly one character, so that
@@ -2879,7 +2919,10 @@ mod bot_pick_tests {
     #[test]
     fn a_step_holding_one_candidate_is_widened_rather_than_repeated() {
         let human = "aaaaaaaa-0000-0000-0000-000000000001";
-        let me = Some(Skill { level: 86, trophies: 883 });
+        let me = Some(Skill {
+            level: 86,
+            trophies: 883,
+        });
         // One character inside the tightest step, three more further out.
         let cands = vec![
             cand_at("cccccccc-0000-0000-0000-00000000000a", 86, 900), // step 0 alone
@@ -2910,7 +2953,10 @@ mod bot_pick_tests {
     #[test]
     fn the_tightest_step_that_offers_a_choice_is_the_one_taken() {
         let human = "aaaaaaaa-0000-0000-0000-000000000001";
-        let me = Some(Skill { level: 50, trophies: 500 });
+        let me = Some(Skill {
+            level: 50,
+            trophies: 500,
+        });
         let cands = vec![
             cand_at("cccccccc-0000-0000-0000-00000000000a", 50, 500),
             cand_at("cccccccc-0000-0000-0000-00000000000b", 52, 520),
@@ -2923,7 +2969,10 @@ mod bot_pick_tests {
             Some(BRACKET_STEPS[0]),
             "three candidates sit inside the tightest step, so it must not widen"
         );
-        assert_ne!(draw.index, 3, "the far candidate must not be reachable at step 0");
+        assert_ne!(
+            draw.index, 3,
+            "the far candidate must not be reachable at step 0"
+        );
     }
 
     /// THE CONTROL: this is a preference, not a gate. A roster too small to offer
@@ -2932,7 +2981,10 @@ mod bot_pick_tests {
     #[test]
     fn a_roster_smaller_than_the_minimum_still_yields_an_opponent() {
         let human = "aaaaaaaa-0000-0000-0000-000000000001";
-        let me = Some(Skill { level: 50, trophies: 500 });
+        let me = Some(Skill {
+            level: 50,
+            trophies: 500,
+        });
         let two = vec![
             cand_at("cccccccc-0000-0000-0000-00000000000a", 50, 500),
             cand_at("cccccccc-0000-0000-0000-00000000000b", 51, 510),
@@ -2952,7 +3004,10 @@ mod bot_pick_tests {
     #[test]
     fn a_thin_draw_still_reports_the_bracket_it_satisfied() {
         let human = "aaaaaaaa-0000-0000-0000-000000000001";
-        let me = Some(Skill { level: 50, trophies: 500 });
+        let me = Some(Skill {
+            level: 50,
+            trophies: 500,
+        });
         let two = vec![
             cand_at("cccccccc-0000-0000-0000-00000000000a", 50, 500),
             cand_at("cccccccc-0000-0000-0000-00000000000b", 51, 510),
@@ -2969,7 +3024,10 @@ mod bot_pick_tests {
     #[test]
     fn nobody_in_any_step_is_still_an_unbracketed_draw() {
         let human = "aaaaaaaa-0000-0000-0000-000000000001";
-        let me = Some(Skill { level: 5, trophies: 10 });
+        let me = Some(Skill {
+            level: 5,
+            trophies: 10,
+        });
         let far = vec![
             cand_at("cccccccc-0000-0000-0000-00000000000a", 90, 2000),
             cand_at("cccccccc-0000-0000-0000-00000000000b", 95, 2200),
@@ -2977,7 +3035,6 @@ mod bot_pick_tests {
         let draw = super::pick_bot_index(&far, human, me, Uuid::from_u128(3)).expect("a draw");
         assert_eq!(draw.step, None, "no step contained anyone");
     }
-
 
     // ── an unrated candidate is bracketed on level alone ─────────────────────
 
@@ -2993,7 +3050,10 @@ mod bot_pick_tests {
     #[test]
     fn a_strong_player_can_draw_unrated_opponents_at_their_own_level() {
         let human = "aaaaaaaa-0000-0000-0000-000000000001";
-        let flappety = Some(Skill { level: 86, trophies: 883 });
+        let flappety = Some(Skill {
+            level: 86,
+            trophies: 883,
+        });
         let never_played = vec![
             cand_unrated("cccccccc-0000-0000-0000-00000000000a", 89), // Scarlet
             cand_unrated("cccccccc-0000-0000-0000-00000000000b", 86), // Bagos
@@ -3029,7 +3089,10 @@ mod bot_pick_tests {
     #[test]
     fn being_unrated_does_not_excuse_a_level_mismatch() {
         let human = "aaaaaaaa-0000-0000-0000-000000000001";
-        let low = Some(Skill { level: 43, trophies: 49 });
+        let low = Some(Skill {
+            level: 43,
+            trophies: 49,
+        });
         let far = vec![
             cand_unrated("cccccccc-0000-0000-0000-00000000000a", 68),
             cand_unrated("cccccccc-0000-0000-0000-00000000000b", 89),
@@ -3057,7 +3120,10 @@ mod bot_pick_tests {
     #[test]
     fn a_measured_rating_still_gates_both_axes() {
         let human = "aaaaaaaa-0000-0000-0000-000000000001";
-        let strong = Some(Skill { level: 86, trophies: 883 });
+        let strong = Some(Skill {
+            level: 86,
+            trophies: 883,
+        });
         let measured_weak = vec![cand_at("cccccccc-0000-0000-0000-00000000000a", 86, 10)];
         assert_eq!(
             super::pick_bot_index(&measured_weak, human, strong, Uuid::from_u128(1))
@@ -3289,9 +3355,85 @@ pub struct ArenaGlobal {
     pub config: ArenaConfig,
     pub matchmaker_tx: UnboundedSender<MatchmakerCommand>,
     pub registry: Arc<MatchRegistry>,
+    pub active_tickets: Arc<ActiveTickets>,
     /// False only while the host deploy watcher is draining the old process. Checked
     /// before enqueue so no new ticket can slip in after the drain acknowledgement.
     pub accepting_matches: AtomicBool,
+}
+
+#[derive(Clone, Copy)]
+struct ActiveTicket {
+    ticket_id: Uuid,
+    game_session_id: Option<Uuid>,
+}
+
+#[derive(Default)]
+pub struct ActiveTickets {
+    by_user: Mutex<HashMap<Uuid, ActiveTicket>>,
+}
+
+impl ActiveTickets {
+    fn prune_locked(by_user: &mut HashMap<Uuid, ActiveTicket>, registry: &MatchRegistry) {
+        by_user.retain(|_, ticket| {
+            ticket
+                .game_session_id
+                .map(|gsid| registry.has_match(gsid))
+                .unwrap_or(true)
+        });
+    }
+
+    fn reserve_or_existing(
+        &self,
+        user_id: Uuid,
+        ticket_id: Uuid,
+        registry: &MatchRegistry,
+    ) -> Uuid {
+        let mut by_user = self.by_user.lock().unwrap();
+        Self::prune_locked(&mut by_user, registry);
+        match by_user.get(&user_id) {
+            Some(ticket) => ticket.ticket_id,
+            None => {
+                by_user.insert(
+                    user_id,
+                    ActiveTicket {
+                        ticket_id,
+                        game_session_id: None,
+                    },
+                );
+                ticket_id
+            }
+        }
+    }
+
+    fn mark_matched(&self, user_id: Uuid, ticket_id: Uuid, game_session_id: Uuid) {
+        let mut by_user = self.by_user.lock().unwrap();
+        if matches!(by_user.get(&user_id), Some(ticket) if ticket.ticket_id == ticket_id) {
+            by_user.insert(
+                user_id,
+                ActiveTicket {
+                    ticket_id,
+                    game_session_id: Some(game_session_id),
+                },
+            );
+        }
+    }
+
+    fn remove_queued(&self, user_id: Uuid, ticket_id: Uuid) {
+        let mut by_user = self.by_user.lock().unwrap();
+        if matches!(
+            by_user.get(&user_id),
+            Some(ticket) if ticket.ticket_id == ticket_id && ticket.game_session_id.is_none()
+        ) {
+            by_user.remove(&user_id);
+        }
+    }
+
+    fn remove(&self, user_id: Uuid, ticket_id: Uuid) {
+        let mut by_user = self.by_user.lock().unwrap();
+        if matches!(by_user.get(&user_id), Some(ticket) if ticket.ticket_id == ticket_id) {
+            by_user.remove(&user_id);
+        }
+    }
 }
 
 impl ArenaGlobal {
@@ -3306,8 +3448,10 @@ impl ArenaGlobal {
             MatchRegistry::new_with_submitter(config.max_concurrent_matches, key_submitter);
 
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
+        let active_tickets = Arc::new(ActiveTickets::default());
         let mm_cfg = config.clone();
         let mm_reg = registry.clone();
+        let mm_active_tickets = active_tickets.clone();
         actix_web::rt::spawn(async move {
             // A closed receiver makes every future `/matches/create` fail as
             // 503-4-2 while `/healthz` and the rest of HTTP keep returning 200.
@@ -3320,6 +3464,7 @@ impl ArenaGlobal {
                 rx,
                 mm_cfg,
                 mm_reg,
+                mm_active_tickets,
                 Some(db_pool),
             ))
             .catch_unwind()
@@ -3328,9 +3473,9 @@ impl ArenaGlobal {
                 Ok(()) => error!(
                     "matchmaker: actor exited while the arena process was still alive; terminating process for a clean restart"
                 ),
-                Err(_) => error!(
-                    "matchmaker: actor panicked; terminating process for a clean restart"
-                ),
+                Err(_) => {
+                    error!("matchmaker: actor panicked; terminating process for a clean restart")
+                }
             }
             // 70 = EX_SOFTWARE. `process::exit` is intentional here: this task is
             // the only owner of the receiver, so continuing can only serve permanent
@@ -3345,6 +3490,7 @@ impl ArenaGlobal {
             config,
             matchmaker_tx: tx,
             registry,
+            active_tickets,
             accepting_matches: AtomicBool::new(true),
         })
     }
@@ -3506,7 +3652,9 @@ fn fallback_deadline(
     let tier = tier_rank(live, recent, waiting_others);
     let floor = match prev {
         None => since + delay,
-        Some((current, previous_tier)) => next_floor(current, previous_tier, tier, since, delay, now),
+        Some((current, previous_tier)) => {
+            next_floor(current, previous_tier, tier, since, delay, now)
+        }
     };
 
     // Say WHY this deadline is what it is, but only when it moves. `fallback_tier`
@@ -3551,6 +3699,7 @@ async fn matchmaker_loop(
     mut rx: UnboundedReceiver<MatchmakerCommand>,
     config: ArenaConfig,
     registry: Arc<MatchRegistry>,
+    active_tickets: Arc<ActiveTickets>,
     db: Option<DbPool>,
 ) {
     info!(
@@ -3595,7 +3744,9 @@ async fn matchmaker_loop(
         let oldest = oldest_ticket.map(|(_, s)| *s);
         let oldest_user = oldest_ticket.map(|(t, _)| t.user_id);
         let oldest_tid = oldest_ticket.map(|(t, _)| t.ticket_id);
-        let next = if let Some(since) = oldest {
+        let next = if draining {
+            rx.recv().await
+        } else if let Some(since) = oldest {
             // HUMANS FIRST. While anyone else is in a live match they are, by
             // definition, about to be free — so hold the queue open long enough to
             // catch them, rather than handing this player a bot they did not ask for.
@@ -3666,8 +3817,10 @@ async fn matchmaker_loop(
                 }
                 waiting = live_tickets;
 
-                let shape: Vec<(Option<Skill>, Instant, Uuid)> =
-                    waiting.iter().map(|(t, s)| (t.skill, *s, t.user_id)).collect();
+                let shape: Vec<(Option<Skill>, Instant, Uuid)> = waiting
+                    .iter()
+                    .map(|(t, s)| (t.skill, *s, t.user_id))
+                    .collect();
                 if let Some(idx) =
                     last_call_partner(&shape, lone.skill, lone.user_id, Instant::now())
                 {
@@ -3679,7 +3832,23 @@ async fn matchmaker_loop(
                         partner.ticket_id,
                         partner_since.elapsed().as_secs_f32(),
                     );
-                    resolve(&registry, &config, &db, &[partner, lone], 0).await;
+                    let partner_user_id = partner.user_id;
+                    let partner_ticket_id = partner.ticket_id;
+                    let lone_user_id = lone.user_id;
+                    let lone_ticket_id = lone.ticket_id;
+                    if let Some(game_session_id) =
+                        resolve(&registry, &config, &db, &[partner, lone], 0).await
+                    {
+                        active_tickets.mark_matched(
+                            partner_user_id,
+                            partner_ticket_id,
+                            game_session_id,
+                        );
+                        active_tickets.mark_matched(lone_user_id, lone_ticket_id, game_session_id);
+                    } else {
+                        active_tickets.remove(partner_user_id, partner_ticket_id);
+                        active_tickets.remove(lone_user_id, lone_ticket_id);
+                    }
                     continue;
                 }
 
@@ -3689,7 +3858,13 @@ async fn matchmaker_loop(
                     waited.as_secs_f32(),
                     others_live,
                 );
-                resolve(&registry, &config, &db, &[lone], 1).await;
+                let lone_user_id = lone.user_id;
+                let lone_ticket_id = lone.ticket_id;
+                if let Some(game_session_id) = resolve(&registry, &config, &db, &[lone], 1).await {
+                    active_tickets.mark_matched(lone_user_id, lone_ticket_id, game_session_id);
+                } else {
+                    active_tickets.remove(lone_user_id, lone_ticket_id);
+                }
                 continue;
             }
             // Sleep to the deadline, but wake at least every FALLBACK_REEVALUATE so the
@@ -3710,17 +3885,11 @@ async fn matchmaker_loop(
 
         let req = match cmd {
             MatchmakerCommand::Enqueue(req) if draining => {
-                let _ = req
-                    .rms
-                    .send(MatchmakingMessage::Failed {
-                        ticket_id: req.ticket_id,
-                    })
-                    .await;
                 info!(
-                    "matchmaker: rejected ticket {} while deployment drain is active",
+                    "matchmaker: holding ticket {} while deployment drain is active",
                     req.ticket_id
                 );
-                continue;
+                req
             }
             MatchmakerCommand::Enqueue(req) => req,
             // Cancellation is routed through the actor so the ONLY owner of `waiting`
@@ -3732,6 +3901,7 @@ async fn matchmaker_loop(
                 let before = waiting.len();
                 waiting.retain(|(t, _)| !(t.ticket_id == ticket_id && t.user_id == user_id));
                 if waiting.len() < before {
+                    active_tickets.remove_queued(user_id, ticket_id);
                     info!(
                         "matchmaker: cancelled waiting ticket {ticket_id} (user {user_id}) — dequeued"
                     );
@@ -3745,17 +3915,8 @@ async fn matchmaker_loop(
             MatchmakerCommand::Drain { ack } => {
                 draining = true;
                 let count = waiting.len();
-                for (ticket, _) in waiting.drain(..) {
-                    let _ = ticket
-                        .rms
-                        .send(MatchmakingMessage::Failed {
-                            ticket_id: ticket.ticket_id,
-                        })
-                        .await;
-                }
-                floors.clear();
                 info!(
-                    "matchmaker: deployment drain acknowledged — failed {count} waiting ticket(s); no unresolved queue remains"
+                    "matchmaker: deployment drain acknowledged — holding {count} waiting ticket(s)"
                 );
                 let _ = ack.send(count);
                 continue;
@@ -3772,6 +3933,27 @@ async fn matchmaker_loop(
             "matchmaker: ticket {} (user {})",
             req.ticket_id, req.user_id
         );
+        let live_ticket_id =
+            active_tickets.reserve_or_existing(req.user_id, req.ticket_id, &registry);
+        if live_ticket_id != req.ticket_id {
+            info!(
+                "matchmaker: duplicate create for user {} — returning existing live ticket {} instead of allocating {}",
+                req.user_id, live_ticket_id, req.ticket_id
+            );
+            let _ = req
+                .rms
+                .send(MatchmakingMessage::Searching {
+                    ticket_id: live_ticket_id,
+                })
+                .await;
+            let _ = req
+                .rms
+                .send(MatchmakingMessage::PotentialMatch {
+                    ticket_id: live_ticket_id,
+                })
+                .await;
+            continue;
+        }
         arrivals.push((req.user_id, Instant::now()));
         record_match_queued(&db, req.ticket_id, req.user_id).await;
         // Push the captured 3-frame progression's first two frames now; the
@@ -3789,6 +3971,11 @@ async fn matchmaker_loop(
                 ticket_id: req.ticket_id,
             })
             .await;
+
+        if draining {
+            waiting.push((req, Instant::now()));
+            continue;
+        }
 
         // Drop any waiting ticket whose client has gone. Pairing against a stale
         // ticket mints a ghost match the opponent never connects to — the emu-vs-pixel
@@ -3849,7 +4036,19 @@ async fn matchmaker_loop(
                     if gap == i64::MAX { -1 } else { gap },
                     waited.as_secs_f32(),
                 );
-                resolve(&registry, &config, &db, &[first, req], 0).await
+                let first_user_id = first.user_id;
+                let first_ticket_id = first.ticket_id;
+                let req_user_id = req.user_id;
+                let req_ticket_id = req.ticket_id;
+                if let Some(game_session_id) =
+                    resolve(&registry, &config, &db, &[first, req], 0).await
+                {
+                    active_tickets.mark_matched(first_user_id, first_ticket_id, game_session_id);
+                    active_tickets.mark_matched(req_user_id, req_ticket_id, game_session_id);
+                } else {
+                    active_tickets.remove(first_user_id, first_ticket_id);
+                    active_tickets.remove(req_user_id, req_ticket_id);
+                }
             }
             None => {
                 if !waiting.is_empty() {
@@ -3875,7 +4074,7 @@ async fn resolve(
     db: &Option<DbPool>,
     tickets: &[TicketRequest],
     bots: usize,
-) {
+) -> Option<Uuid> {
     let game_session_id = Uuid::new_v4();
     let paired = tickets.len() >= 2;
     let ranking_config = match db {
@@ -4109,7 +4308,7 @@ async fn resolve(
                     })
                     .await;
             }
-            return;
+            return None;
         }
     }
 
@@ -4161,12 +4360,14 @@ async fn resolve(
                     })
                     .await;
             }
-            return;
+            return None;
         }
     }
 
-    let expected_udp_ips: Vec<Option<IpAddr>> =
-        tickets.iter().map(|ticket| ticket.expected_udp_ip).collect();
+    let expected_udp_ips: Vec<Option<IpAddr>> = tickets
+        .iter()
+        .map(|ticket| ticket.expected_udp_ip)
+        .collect();
     let h2h_pair_matches_today = if paired && bots == 0 && loadouts.len() >= 2 {
         pair_daily_h2h_count(db, &loadouts[0].character_uuid, &loadouts[1].character_uuid).await
     } else {
@@ -4189,7 +4390,7 @@ async fn resolve(
                 t.ticket_id
             );
         }
-        return;
+        return None;
     }
     info!(
         "matchmaker: resolved {} ({} player(s), gsid {game_session_id}) — clients dial {}:{}",
@@ -4223,6 +4424,7 @@ async fn resolve(
         // Record the resolution so the web /arena page can show "matched".
         record_match_resolved(db, t.ticket_id, game_session_id, paired).await;
     }
+    Some(game_session_id)
 }
 
 #[derive(Deserialize, Debug)]
@@ -4250,6 +4452,9 @@ struct MatchTicket {
     status: &'static str,
     port: u16,
 }
+
+const DRAIN_CREATE_WAIT: Duration = Duration::from_secs(5);
+const DRAIN_CREATE_POLL: Duration = Duration::from_millis(50);
 
 /// The queueing player's level and trophies, for the pairing bracket.
 ///
@@ -4327,15 +4532,17 @@ pub async fn create_match(
     body: web::Json<CreateMatchRequest>,
 ) -> Result<Json<CreateMatchResponse>, BladeApiError> {
     let session = session.get_session_or_error()?;
-    // A container replacement destroys the in-memory ENet sessions. During a
-    // deployment drain, fail a new queue attempt immediately instead of accepting a
-    // ticket that the old process will lose (or starting a match the deploy then
-    // freezes). The new process starts with `accepting_matches=true`.
+    // A deployment drain is often cancelled within a moment when the replacement
+    // process wins readiness. The client does not retry a 503 here, so wait briefly
+    // for the normal path to reopen instead of stranding it on the matchmaking screen.
     if !AtomicBool::load(&app_state.arena.accepting_matches, Ordering::Acquire) {
-        return Err(BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, 4, 3));
+        let deadline = tokio::time::Instant::now() + DRAIN_CREATE_WAIT;
+        while !AtomicBool::load(&app_state.arena.accepting_matches, Ordering::Acquire)
+            && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(DRAIN_CREATE_POLL).await;
+        }
     }
-    let ticket_id = Uuid::new_v4();
-
     // The RMS WebSocket must already be open — the client holds it from login. We
     // require it open at enqueue (so a client without a feed can't queue), but we hand
     // the matchmaker the `Arc<Session>` (not a cloned sender): the client reconnects
@@ -4353,6 +4560,22 @@ pub async fn create_match(
             session.session.user_id
         );
         return Err(BladeApiError::new(StatusCode::CONFLICT, 4, 1));
+    }
+
+    let new_ticket_id = Uuid::new_v4();
+    let ticket_id = app_state.arena.active_tickets.reserve_or_existing(
+        session.session.user_id,
+        new_ticket_id,
+        &app_state.arena.registry,
+    );
+    if ticket_id != new_ticket_id {
+        return Ok(Json(CreateMatchResponse {
+            r#match: MatchTicket {
+                ticket_id,
+                status: "QUEUED",
+                port: 0,
+            },
+        }));
     }
 
     // Read the player's strength once, here, so the matchmaker actor stays
@@ -4397,7 +4620,13 @@ pub async fn create_match(
             via_vpn,
             expected_udp_ip,
         }))
-        .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, 4, 2))?;
+        .map_err(|_| {
+            app_state
+                .arena
+                .active_tickets
+                .remove_queued(session.session.user_id, ticket_id);
+            BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, 4, 2)
+        })?;
 
     Ok(Json(CreateMatchResponse {
         r#match: MatchTicket {
@@ -4417,6 +4646,10 @@ pub async fn cancel_match(
     let session = session.get_session_or_error()?;
     let ticket_id = path.into_inner();
     info!("matchmaker: cancel ticket {ticket_id}");
+    app_state
+        .arena
+        .active_tickets
+        .remove_queued(session.session.user_id, ticket_id);
     // Route the cancel INTO the matchmaker actor so it actually DEQUEUES the ticket
     // from `waiting`. This was previously an acknowledged no-op, so a cancelled ticket
     // still zombie-resolved into a bot match on the solo-fallback timer (the client got
@@ -4565,7 +4798,13 @@ mod tests {
             recent_window_secs: 300,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
-        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+        tokio::spawn(matchmaker_loop(
+            rx,
+            config,
+            registry.clone(),
+            Arc::new(ActiveTickets::default()),
+            None,
+        ));
 
         let (rms_a, mut recv_a) = unbounded_channel();
         let (rms_b, mut recv_b) = unbounded_channel();
@@ -4649,7 +4888,13 @@ mod tests {
             recent_window_secs: 300,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
-        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+        tokio::spawn(matchmaker_loop(
+            rx,
+            config,
+            registry.clone(),
+            Arc::new(ActiveTickets::default()),
+            None,
+        ));
 
         let tid_a = Uuid::new_v4();
         let tid_b = Uuid::new_v4();
@@ -4746,7 +4991,13 @@ mod tests {
             recent_window_secs: 300,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
-        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+        tokio::spawn(matchmaker_loop(
+            rx,
+            config,
+            registry.clone(),
+            Arc::new(ActiveTickets::default()),
+            None,
+        ));
         let (rms, mut recv) = unbounded_channel();
         let ticket_id = Uuid::new_v4();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
@@ -4786,7 +5037,9 @@ mod tests {
         let harness = Uuid::new_v4();
         let someone = Uuid::new_v4();
         // Somebody else is exempt, and the roster is empty: neither shortens this wait.
-        assert!(!bot_fallback_fires_within(vec![harness], someone, Duration::from_millis(1500)).await);
+        assert!(
+            !bot_fallback_fires_within(vec![harness], someone, Duration::from_millis(1500)).await
+        );
         assert!(!bot_fallback_fires_within(Vec::new(), someone, Duration::from_millis(1500)).await);
     }
 
@@ -4813,7 +5066,13 @@ mod tests {
             recent_window_secs: 300,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
-        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+        tokio::spawn(matchmaker_loop(
+            rx,
+            config,
+            registry.clone(),
+            Arc::new(ActiveTickets::default()),
+            None,
+        ));
 
         // The client goes away immediately: drop the RMS receiver so is_closed() == true.
         let (rms_a, recv_a) = unbounded_channel();
@@ -4873,7 +5132,13 @@ mod tests {
             recent_window_secs: 300,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
-        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+        tokio::spawn(matchmaker_loop(
+            rx,
+            config,
+            registry.clone(),
+            Arc::new(ActiveTickets::default()),
+            None,
+        ));
 
         let (rms_a, mut recv_a) = unbounded_channel();
         let (rms_b, mut recv_b) = unbounded_channel();
@@ -4961,7 +5226,13 @@ mod tests {
             recent_window_secs: 300,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
-        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+        tokio::spawn(matchmaker_loop(
+            rx,
+            config,
+            registry.clone(),
+            Arc::new(ActiveTickets::default()),
+            None,
+        ));
 
         let (rms_a, _keep_a) = unbounded_channel();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
@@ -5037,7 +5308,13 @@ mod tests {
             recent_window_secs: 300,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
-        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+        tokio::spawn(matchmaker_loop(
+            rx,
+            config,
+            registry.clone(),
+            Arc::new(ActiveTickets::default()),
+            None,
+        ));
 
         let tid = Uuid::new_v4();
         let uid = Uuid::new_v4();
@@ -5078,11 +5355,65 @@ mod tests {
         }
     }
 
-    /// A deployment drain is acknowledged only after every unresolved ticket has
-    /// been failed and removed. This is the hand-off guarantee the image watcher
-    /// relies on before it waits for the active-match count to reach zero.
     #[tokio::test]
-    async fn deployment_drain_fails_and_clears_waiting_tickets_before_ack() {
+    async fn normal_create_still_queues_searching_then_potential() {
+        let registry = MatchRegistry::new(4);
+        let config = ArenaConfig {
+            public_advertise_host: None,
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 4,
+            max_queued_players: 64,
+            solo_fallback_secs: 600,
+            debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
+            busy_fallback_secs: 600,
+            recent_fallback_secs: 600,
+            recent_window_secs: 300,
+        };
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
+        tokio::spawn(matchmaker_loop(
+            rx,
+            config,
+            registry.clone(),
+            Arc::new(ActiveTickets::default()),
+            None,
+        ));
+
+        let ticket_id = Uuid::new_v4();
+        let (rms, mut recv) = unbounded_channel();
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
+            expected_udp_ip: None,
+            ticket_id,
+            user_id: Uuid::new_v4(),
+            character_id: None,
+            rms: RmsHandle::Direct(rms),
+            skill: None,
+        }))
+        .unwrap();
+
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), recv.recv()).await,
+            Ok(Some(MatchmakingMessage::Searching { ticket_id: id })) if id == ticket_id
+        ));
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), recv.recv()).await,
+            Ok(Some(MatchmakingMessage::PotentialMatch { ticket_id: id })) if id == ticket_id
+        ));
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_millis(200), recv.recv()).await,
+            Err(_)
+        ));
+        assert_eq!(registry.available_permits(), 4);
+    }
+
+    /// A deployment drain pauses ticket resolution, but it must not terminally fail
+    /// creates that race the drain. The client does not retry `matches/create` after
+    /// a 503/terminal failure, so the ticket has to remain live and resume normally.
+    #[tokio::test]
+    async fn deployment_drain_holds_create_until_resume() {
         let registry = MatchRegistry::new(4);
         let config = ArenaConfig {
             public_advertise_host: None,
@@ -5098,8 +5429,25 @@ mod tests {
             recent_fallback_secs: 30,
             recent_window_secs: 300,
         };
+        let active_tickets = Arc::new(ActiveTickets::default());
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
-        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+        tokio::spawn(matchmaker_loop(
+            rx,
+            config,
+            registry.clone(),
+            active_tickets,
+            None,
+        ));
+
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        tx.send(MatchmakerCommand::Drain { ack: ack_tx }).unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), ack_rx)
+                .await
+                .expect("drain acknowledgement timed out")
+                .expect("matchmaker dropped drain acknowledgement"),
+            0
+        );
 
         let ticket_id = Uuid::new_v4();
         let (rms, mut recv) = unbounded_channel();
@@ -5114,54 +5462,17 @@ mod tests {
         }))
         .unwrap();
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-        tx.send(MatchmakerCommand::Drain { ack: ack_tx }).unwrap();
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(1), ack_rx)
-                .await
-                .expect("drain acknowledgement timed out")
-                .expect("matchmaker dropped drain acknowledgement"),
-            1
-        );
-
-        let mut failed = false;
-        while let Ok(Some(msg)) = tokio::time::timeout(Duration::from_millis(50), recv.recv()).await
-        {
-            if matches!(
-                &msg,
-                MatchmakingMessage::Failed {
-                    ticket_id: failed_id
-                } if *failed_id == ticket_id
-            ) {
-                failed = true;
-            }
-            assert!(
-                !matches!(msg, MatchmakingMessage::Succeeded { .. }),
-                "a drained ticket must never receive Succeeded; got {msg:?}"
-            );
-        }
-        assert!(failed, "the drained ticket did not receive Failed");
-
-        // This enqueue models a handler that passed the HTTP admission check just
-        // before drain began but reached the actor just after its acknowledgement.
-        // The actor-level latch must reject it too, otherwise a zero-active deploy
-        // sample could still race a newly accepted ticket.
-        let late_ticket_id = Uuid::new_v4();
-        let (late_rms, mut late_recv) = unbounded_channel();
-        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
-            via_vpn: true,
-            expected_udp_ip: None,
-            ticket_id: late_ticket_id,
-            user_id: Uuid::new_v4(),
-            character_id: None,
-            rms: RmsHandle::Direct(late_rms),
-            skill: None,
-        }))
-        .unwrap();
         assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(1), late_recv.recv()).await,
-            Ok(Some(MatchmakingMessage::Failed { ticket_id })) if ticket_id == late_ticket_id
+            tokio::time::timeout(Duration::from_secs(1), recv.recv()).await,
+            Ok(Some(MatchmakingMessage::Searching { ticket_id: id })) if id == ticket_id
+        ));
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), recv.recv()).await,
+            Ok(Some(MatchmakingMessage::PotentialMatch { ticket_id: id })) if id == ticket_id
+        ));
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_millis(300), recv.recv()).await,
+            Err(_)
         ));
 
         let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
@@ -5172,11 +5483,158 @@ mod tests {
             .expect("resume acknowledgement timed out")
             .expect("matchmaker dropped resume acknowledgement");
 
-        tokio::time::sleep(Duration::from_millis(1100)).await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let mut failed_after_resume = false;
+        loop {
+            match tokio::time::timeout_at(deadline, recv.recv()).await {
+                Ok(Some(MatchmakingMessage::Failed { ticket_id: id })) if id == ticket_id => {
+                    failed_after_resume = true;
+                    break;
+                }
+                Ok(Some(msg)) => assert!(
+                    !matches!(msg, MatchmakingMessage::Succeeded { .. }),
+                    "no-DB test bot is unrenderable, so resume should fail visibly, not allocate"
+                ),
+                _ => break,
+            }
+        }
+        assert!(
+            failed_after_resume,
+            "the held ticket was not processed after resume"
+        );
         assert_eq!(
             registry.available_permits(),
             4,
-            "a drained ticket survived until its bot-fallback deadline"
+            "the rejected empty-bot fallback must not consume capacity"
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_create_for_same_user_reuses_the_live_ticket() {
+        let registry = MatchRegistry::new(4);
+        let config = ArenaConfig {
+            public_advertise_host: None,
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 4,
+            max_queued_players: 64,
+            solo_fallback_secs: 600,
+            debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
+            busy_fallback_secs: 600,
+            recent_fallback_secs: 600,
+            recent_window_secs: 300,
+        };
+        let active_tickets = Arc::new(ActiveTickets::default());
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
+        tokio::spawn(matchmaker_loop(
+            rx,
+            config,
+            registry.clone(),
+            active_tickets,
+            None,
+        ));
+
+        let user_id = Uuid::new_v4();
+        let first_ticket = Uuid::new_v4();
+        let duplicate_ticket = Uuid::new_v4();
+        let (rms_a, mut recv_a) = unbounded_channel();
+        let (rms_dup, mut recv_dup) = unbounded_channel();
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
+            expected_udp_ip: None,
+            ticket_id: first_ticket,
+            user_id,
+            character_id: None,
+            rms: RmsHandle::Direct(rms_a),
+            skill: None,
+        }))
+        .unwrap();
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: true,
+            expected_udp_ip: None,
+            ticket_id: duplicate_ticket,
+            user_id,
+            character_id: None,
+            rms: RmsHandle::Direct(rms_dup),
+            skill: None,
+        }))
+        .unwrap();
+
+        for recv in [&mut recv_a, &mut recv_dup] {
+            let mut seen = 0;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+            loop {
+                match tokio::time::timeout_at(deadline, recv.recv()).await {
+                    Ok(Some(MatchmakingMessage::Searching { ticket_id }))
+                    | Ok(Some(MatchmakingMessage::PotentialMatch { ticket_id })) => {
+                        assert_eq!(
+                            ticket_id, first_ticket,
+                            "duplicate create must be tied back to the first live ticket"
+                        );
+                        seen += 1;
+                    }
+                    Ok(Some(msg)) => panic!("duplicate create produced terminal frame: {msg:?}"),
+                    _ => break,
+                }
+            }
+            assert!(
+                seen >= 2,
+                "each caller should see the live ticket's queued progression"
+            );
+        }
+
+        tx.send(MatchmakerCommand::Cancel {
+            ticket_id: first_ticket,
+            user_id,
+        })
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert_eq!(
+            registry.available_permits(),
+            4,
+            "the duplicate ticket must not remain queued and allocate its own match"
+        );
+    }
+
+    #[test]
+    fn active_ticket_reservation_expires_after_the_match_is_gone() {
+        let registry = MatchRegistry::new(4);
+        let active = ActiveTickets::default();
+        let user_id = Uuid::new_v4();
+        let first_ticket = Uuid::new_v4();
+        let duplicate_ticket = Uuid::new_v4();
+        assert_eq!(
+            active.reserve_or_existing(user_id, first_ticket, &registry),
+            first_ticket
+        );
+        assert_eq!(
+            active.reserve_or_existing(user_id, duplicate_ticket, &registry),
+            first_ticket
+        );
+
+        let game_session_id = Uuid::new_v4();
+        assert!(registry.allocate_with_bots(
+            &["psess-active".to_string()],
+            vec![
+                crate::arena::combat::loadout::starter(),
+                crate::arena::combat::loadout::starter()
+            ],
+            game_session_id,
+            1,
+        ));
+        active.mark_matched(user_id, first_ticket, game_session_id);
+        assert_eq!(
+            active.reserve_or_existing(user_id, Uuid::new_v4(), &registry),
+            first_ticket
+        );
+
+        registry.sweep_expired(Instant::now() + Duration::from_secs(46));
+        let next_ticket = Uuid::new_v4();
+        assert_eq!(
+            active.reserve_or_existing(user_id, next_ticket, &registry),
+            next_ticket
         );
     }
 
@@ -5204,7 +5662,13 @@ mod tests {
             recent_window_secs: 300,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
-        tokio::spawn(matchmaker_loop(rx, config, registry.clone(), None));
+        tokio::spawn(matchmaker_loop(
+            rx,
+            config,
+            registry.clone(),
+            Arc::new(ActiveTickets::default()),
+            None,
+        ));
 
         let tid = Uuid::new_v4();
         let uid = Uuid::new_v4();
@@ -5315,11 +5779,13 @@ mod tests {
         let human = starter();
         let uuid = "1131a037-716c-49cc-b165-32d8ddc14f49";
 
-        assert!(check_bot_loadouts_renderable(
-            &[human.clone(), bot(uuid, r#"{"name":"Yaskrava (AI)"}"#)],
-            1,
-        )
-        .is_ok());
+        assert!(
+            check_bot_loadouts_renderable(
+                &[human.clone(), bot(uuid, r#"{"name":"Yaskrava (AI)"}"#)],
+                1,
+            )
+            .is_ok()
+        );
 
         let err = check_bot_loadouts_renderable(&[human.clone(), bot("", "{}")], 1)
             .expect_err("an empty bot UUID must be rejected");

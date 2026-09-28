@@ -1071,6 +1071,10 @@ impl MatchRegistry {
         self.matches.lock().unwrap().len()
     }
 
+    pub fn has_match(&self, game_session_id: Uuid) -> bool {
+        self.matches.lock().unwrap().contains_key(&game_session_id)
+    }
+
     /// An ENet peer disconnected. Like [`remove`](Self::remove), but first — if the
     /// peer left a LIVE match with an opponent still present — award that opponent the
     /// match by concession and return the immediate victory frames (already encrypted
