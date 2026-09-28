@@ -715,7 +715,8 @@ async fn start_craft(
                         );
                         let results =
                             grade_bare_jewelry_results(results, game_items, &mut rand::rng());
-                        (results, crafting_type_id, 0)
+                        let duration_ms = recipe_output_duration_ms(out, static_data);
+                        (results, crafting_type_id, duration_ms)
                     } else {
                     // Not a smith craftable, and not in the APK recipe table.
                     // REFUSE. There is no honest output for a recipe we never
@@ -1540,6 +1541,17 @@ fn grade_bare_jewelry_results<R: Rng + ?Sized>(
     results
 }
 
+fn recipe_output_duration_ms(
+    out: &blades_lib::features::recipe_outputs::RecipeOutput,
+    static_data: &blades_lib::static_data::StaticData,
+) -> i64 {
+    static_data
+        .smith_craftables
+        .resolve(&out.output_item_template_id)
+        .map(|craftable| craftable.duration_ms)
+        .unwrap_or(0)
+}
+
 /// Apply the requested `tempering_level` to every item in an `{"items":[...]}` results
 /// object. Stackable results are returned unchanged.
 fn apply_tempering_to_results(results: &Value, tempering_level: u64) -> Value {
@@ -2330,6 +2342,53 @@ mod tests {
         assert_eq!(reward.item.item_template_id, uuid(DRAGONSCALE_ARMOR));
         assert_eq!(reward.item.grade, None, "negative control: armor is not jewelry");
         assert!(reward.item.properties.grading.is_empty());
+    }
+
+    #[test]
+    fn apk_output_smith_recipe_uses_craftable_duration_when_known() {
+        use blades_lib::static_data::{SmithCraftable, SmithCraftables, StaticData};
+
+        let out = blades_lib::features::recipe_outputs::output_for(
+            &uuid(DRAGONSCALE_HELMET_RECIPE),
+        )
+        .expect("APK output recipe");
+        let duration_ms = 17_999_872;
+        let mut sd = StaticData::default();
+        sd.smith_craftables = SmithCraftables {
+            smithing_crafting_type_id: Some(uuid(SMITHING_CRAFTING_TYPE_ID)),
+            forge_building_type_id: None,
+            by_recipe: Default::default(),
+            by_template: {
+                let mut m = std::collections::HashMap::new();
+                m.insert(
+                    uuid(DRAGONSCALE_HELMET),
+                    SmithCraftable {
+                        item_template_id: uuid(DRAGONSCALE_HELMET),
+                        grade_index: 8,
+                        recipe_id: None,
+                        duration_ms,
+                        name: Some("Dragonscale Helmet".into()),
+                    },
+                );
+                m
+            },
+        };
+
+        assert_eq!(out.output_item_template_id, uuid(DRAGONSCALE_HELMET));
+        assert_eq!(recipe_output_duration_ms(out, &sd), duration_ms);
+    }
+
+    #[test]
+    fn apk_output_without_craftable_duration_stays_instant() {
+        let out = blades_lib::features::recipe_outputs::output_for(
+            &uuid(DRAGONSCALE_ARMOR_RECIPE),
+        )
+        .expect("APK output recipe");
+        assert_eq!(
+            recipe_output_duration_ms(out, &blades_lib::static_data::StaticData::default()),
+            0,
+            "negative control: do not invent durations absent from local data"
+        );
     }
 
     /// An unknown plain-craft recipe (e.g. an un-captured alchemy brew) must NOT get
