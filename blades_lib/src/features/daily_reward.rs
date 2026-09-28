@@ -34,7 +34,7 @@ pub const DAILY_PERIOD_SECS: i64 = 86_400;
 /// both five hours out.
 pub const DAILY_RESET_OFFSET_SECS: i64 = 5 * 3600;
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ChestDef {
     pub tier: u64,
@@ -43,7 +43,7 @@ pub struct ChestDef {
 
 /// A daily reward's payload: either stackables or a chest (matches the captured
 /// `dailyReward` object, which carries one or the other).
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DailyRewardPayload {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -52,12 +52,29 @@ pub struct DailyRewardPayload {
     pub chests: Vec<ChestDef>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DailyRewardLevelTier {
+    /// Inclusive lower bound for the character level this payload applies to.
+    pub min_level: u16,
+    pub daily_reward: DailyRewardPayload,
+}
+
 /// One entry of the daily-reward rotation (capture-derived).
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct DailyRewardDef {
     pub reward_uid: Uuid,
     pub daily_reward: DailyRewardPayload,
+    /// Optional per-character-level payloads. Retail kept the same weekday
+    /// `rewardUid` but varied the body by character level; absent keeps older
+    /// `daily_rewards.json` files working with their fixed payload.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub level_tiers: Vec<DailyRewardLevelTier>,
+    /// Chest daily rewards keep their tier but advertise/open at the character's
+    /// level. This avoids enumerating one chest tier per possible character level.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub chests_scale_with_character_level: bool,
     /// Which weekday this reward belongs to: 0 = Sunday … 6 = Saturday.
     ///
     /// Optional so an older `daily_rewards.json` still loads. Absent, the pool
@@ -65,6 +82,30 @@ pub struct DailyRewardDef {
     /// before and which lands the right rewards on the wrong days.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weekday: Option<u8>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+impl DailyRewardDef {
+    pub fn daily_reward_for_level(&self, character_level: u16) -> DailyRewardPayload {
+        let mut payload = self
+            .level_tiers
+            .iter()
+            .filter(|tier| tier.min_level <= character_level)
+            .max_by_key(|tier| tier.min_level)
+            .map(|tier| tier.daily_reward.clone())
+            .unwrap_or_else(|| self.daily_reward.clone());
+
+        if self.chests_scale_with_character_level {
+            for chest in &mut payload.chests {
+                chest.level = character_level as u64;
+            }
+        }
+
+        payload
+    }
 }
 
 /// Per-character daily-reward state (persisted in `server_state`).
@@ -130,6 +171,8 @@ mod tests {
                     stackable_items: HashMap::from([(Uuid::from_u128(10), 2)]),
                     chests: vec![],
                 },
+                level_tiers: vec![],
+                chests_scale_with_character_level: false,
                 weekday: None,
             },
             DailyRewardDef {
@@ -138,6 +181,8 @@ mod tests {
                     stackable_items: HashMap::default(),
                     chests: vec![ChestDef { tier: 3, level: 1 }],
                 },
+                level_tiers: vec![],
+                chests_scale_with_character_level: false,
                 weekday: None,
             },
         ]
@@ -149,6 +194,8 @@ mod tests {
             .map(|w| DailyRewardDef {
                 reward_uid: Uuid::from_u128(100 + w as u128),
                 daily_reward: DailyRewardPayload::default(),
+                level_tiers: vec![],
+                chests_scale_with_character_level: false,
                 weekday: Some(w),
             })
             .collect()
@@ -213,14 +260,21 @@ mod tests {
             })
             .collect();
         let unique: std::collections::HashSet<_> = seen.iter().collect();
-        assert_eq!(unique.len(), 7, "seven days, seven distinct rewards: {seen:?}");
+        assert_eq!(
+            unique.len(),
+            7,
+            "seven days, seven distinct rewards: {seen:?}"
+        );
     }
 
     /// A pool with a hole must still answer, or the client sits on a screen it
     /// cannot dismiss.
     #[test]
     fn a_missing_weekday_falls_back_rather_than_serving_nothing() {
-        let pool: Vec<_> = weekday_defs().into_iter().filter(|d| d.weekday != Some(2)).collect();
+        let pool: Vec<_> = weekday_defs()
+            .into_iter()
+            .filter(|d| d.weekday != Some(2))
+            .collect();
         assert!(reward_for_period(&pool, current_period(TUESDAY_NOON)).is_some());
     }
 
@@ -250,5 +304,109 @@ mod tests {
     #[test]
     fn empty_pool_has_no_reward() {
         assert!(reward_for_period(&[], 5).is_none());
+    }
+
+    fn static_defs() -> Vec<DailyRewardDef> {
+        serde_json::from_str(include_str!("../../../deploy/static/daily_rewards.json")).unwrap()
+    }
+
+    fn def(prefix: &str) -> DailyRewardDef {
+        static_defs()
+            .into_iter()
+            .find(|def| def.reward_uid.to_string().starts_with(prefix))
+            .unwrap_or_else(|| panic!("missing daily reward {prefix}"))
+    }
+
+    fn stack(payload: &DailyRewardPayload) -> (String, u64) {
+        let (item, qty) = payload
+            .stackable_items
+            .iter()
+            .next()
+            .expect("expected one stackable item");
+        (item.to_string(), *qty)
+    }
+
+    #[test]
+    fn level_scaled_static_payloads_match_retail_captures() {
+        let sunday_chest = def("2c4ba1ff");
+        for level in [1, 15, 86, 100] {
+            let payload = sunday_chest.daily_reward_for_level(level);
+            assert_eq!(
+                payload.chests,
+                vec![ChestDef {
+                    tier: 3,
+                    level: level as u64
+                }]
+            );
+        }
+
+        let monday_potions = def("d53c3748");
+        assert_eq!(
+            stack(&monday_potions.daily_reward_for_level(1)),
+            ("d5ccf370-0795-4554-9dab-68ccbb97473d".to_string(), 3),
+            "L1 captured Potion of Minor Healing x3",
+        );
+        assert_eq!(
+            stack(&monday_potions.daily_reward_for_level(15)),
+            ("819094ad-e749-4c02-9210-38c3bb1ec535".to_string(), 3),
+            "L15 captured Potion of Healing x3",
+        );
+        assert_eq!(
+            stack(&monday_potions.daily_reward_for_level(86)),
+            ("c2139cd9-1d9d-4d4e-80b2-133e07440158".to_string(), 1),
+            "L86 captured Potion of Ultimate Healing x1",
+        );
+        assert_eq!(
+            stack(&monday_potions.daily_reward_for_level(100)),
+            ("c2139cd9-1d9d-4d4e-80b2-133e07440158".to_string(), 1),
+            "L100 captured Potion of Ultimate Healing x1",
+        );
+
+        let tuesday_clay = def("9c66ba16");
+        assert_eq!(
+            stack(&tuesday_clay.daily_reward_for_level(1)),
+            ("42d91529-c88b-4c5b-815b-b55508b4e7ef".to_string(), 3)
+        );
+        assert_eq!(
+            stack(&tuesday_clay.daily_reward_for_level(15)),
+            ("42d91529-c88b-4c5b-815b-b55508b4e7ef".to_string(), 3)
+        );
+        assert_eq!(
+            stack(&tuesday_clay.daily_reward_for_level(86)),
+            ("42d91529-c88b-4c5b-815b-b55508b4e7ef".to_string(), 19)
+        );
+        assert_eq!(
+            stack(&tuesday_clay.daily_reward_for_level(100)),
+            ("42d91529-c88b-4c5b-815b-b55508b4e7ef".to_string(), 19)
+        );
+    }
+
+    #[test]
+    fn level_74_monday_is_ultimate_healing_not_the_legacy_fixed_healing() {
+        let monday_potions = def("d53c3748");
+        assert_eq!(
+            stack(&monday_potions.daily_reward_for_level(74)),
+            ("c2139cd9-1d9d-4d4e-80b2-133e07440158".to_string(), 1),
+        );
+        assert_ne!(
+            monday_potions.daily_reward,
+            monday_potions.daily_reward_for_level(74),
+            "negative control: reverting to the fixed static payload loses the L74 ultimate potion",
+        );
+    }
+
+    #[test]
+    fn older_fixed_payload_json_still_loads() {
+        let fixed: Vec<DailyRewardDef> = serde_json::from_value(serde_json::json!([{
+            "rewardUid": "00000000-0000-0000-0000-000000000001",
+            "dailyReward": {
+                "stackableItems": { "00000000-0000-0000-0000-000000000002": 2 }
+            }
+        }]))
+        .unwrap();
+        let def = &fixed[0];
+        assert!(def.level_tiers.is_empty());
+        assert!(!def.chests_scale_with_character_level);
+        assert_eq!(def.daily_reward_for_level(100), def.daily_reward);
     }
 }

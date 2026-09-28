@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use crate::{
     BladeApiError, ServerGlobal,
-    models::{CharacterDbEntryEconomy, CharacterDbEntryServerState},
+    models::{CharacterDbEntryDailyReward, CharacterDbEntryEconomy},
     session::SessionLookedUpMaybe,
     util::get_only_single_character_and_check_permission,
 };
@@ -60,6 +60,7 @@ struct StatusResponse {
 fn status_for(
     app_state: &ServerGlobal,
     period: i64,
+    character_level: u16,
     collected: bool,
 ) -> DailyRewardStatus {
     let until = daily_reward::until_ms(period);
@@ -67,7 +68,7 @@ fn status_for(
         Some(def) => DailyRewardStatus {
             reward_uid: def.reward_uid,
             until,
-            daily_reward: def.daily_reward.clone(),
+            daily_reward: def.daily_reward_for_level(character_level),
             collected,
         },
         // Empty pool: a placeholder with a future `until` so the client doesn't stall.
@@ -96,7 +97,7 @@ pub async fn get_daily_reward(
         use crate::schema::characters::dsl::*;
         characters
             .filter(id.eq(character_id))
-            .select(CharacterDbEntryServerState::as_select())
+            .select(CharacterDbEntryDailyReward::as_select())
             .load(&mut conn)
             .await
             .unwrap()
@@ -106,7 +107,7 @@ pub async fn get_daily_reward(
     let period = daily_reward::current_period(now_secs());
     let collected = entry.server_state.0.daily_reward.collected_period == Some(period);
     Ok(Json(StatusResponse {
-        daily_reward_status: status_for(&app_state, period, collected),
+        daily_reward_status: status_for(&app_state, period, entry.character.0.level, collected),
     }))
 }
 
@@ -240,8 +241,9 @@ pub async fn collect_daily_reward(
                 daily_reward::reward_for_period(&globals.static_data.daily_rewards, period)
             {
                 reward_uid = def.reward_uid;
+                let daily_reward = def.daily_reward_for_level(entry.character.0.level);
                 let collect_reward = collect_reward_for(
-                    &def.daily_reward,
+                    &daily_reward,
                     &globals.static_data.chest_loots,
                     def.reward_uid,
                 );
@@ -342,7 +344,10 @@ mod collect_response_tests {
         let reward = reward_for(&payload);
 
         assert!(!reward.is_empty(), "the reward must not be empty");
-        assert!(reward.chests.is_empty(), "collect opens the chest immediately");
+        assert!(
+            reward.chests.is_empty(),
+            "collect opens the chest immediately"
+        );
         assert_eq!(reward.currencies.get(&GOLD), Some(&2218));
         assert_eq!(reward.stackable_items.values().copied().sum::<u64>(), 7);
 
@@ -356,7 +361,10 @@ mod collect_response_tests {
             json.get("chests").is_none(),
             "daily collect should not hand over an unopened chest"
         );
-        assert!(json.get("currencies").is_some(), "opened loot reaches the wire");
+        assert!(
+            json.get("currencies").is_some(),
+            "opened loot reaches the wire"
+        );
     }
 
     /// The control: a stackables-only day must be unchanged. Opening chest rewards
@@ -377,6 +385,43 @@ mod collect_response_tests {
         assert!(
             json.get("chests").is_none(),
             "an empty chest list must stay off the wire, as every other reward does"
+        );
+    }
+
+    #[test]
+    fn scaled_status_payload_is_the_payload_collect_grants() {
+        let def: blades_lib::features::daily_reward::DailyRewardDef =
+            serde_json::from_value(serde_json::json!({
+                "rewardUid": "d53c3748-9d65-4a29-8cb0-385969c7b672",
+                "dailyReward": {
+                    "stackableItems": { "819094ad-e749-4c02-9210-38c3bb1ec535": 3 }
+                },
+                "levelTiers": [
+                    {
+                        "minLevel": 74,
+                        "dailyReward": {
+                            "stackableItems": {
+                                "c2139cd9-1d9d-4d4e-80b2-133e07440158": 1
+                            }
+                        }
+                    }
+                ]
+            }))
+            .expect("scaled daily reward def deserializes");
+
+        let status_payload = def.daily_reward_for_level(74);
+        let collect_reward = collect_reward_for(&status_payload, &loot_tables(), def.reward_uid);
+
+        assert_eq!(
+            collect_reward.stackable_items,
+            status_payload.stackable_items
+        );
+        assert_eq!(
+            collect_reward
+                .stackable_items
+                .get(&"c2139cd9-1d9d-4d4e-80b2-133e07440158".parse().unwrap()),
+            Some(&1),
+            "L74 must collect the Ultimate Healing Potion shown by status",
         );
     }
 

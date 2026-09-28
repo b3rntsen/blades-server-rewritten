@@ -1,5 +1,6 @@
 [
  {
+  "chestsScaleWithCharacterLevel": true,
   "dailyReward": {
    "chests": [
     {
@@ -14,26 +15,143 @@
  {
   "dailyReward": {
    "stackableItems": {
-    "819094ad-e749-4c02-9210-38c3bb1ec535": 3
+    "d5ccf370-0795-4554-9dab-68ccbb97473d": 3
    }
   },
+  "levelTiers": [
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "d5ccf370-0795-4554-9dab-68ccbb97473d": 3
+     }
+    },
+    "minLevel": 1
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "d5ccf370-0795-4554-9dab-68ccbb97473d": 2
+     }
+    },
+    "minLevel": 3
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "d5ccf370-0795-4554-9dab-68ccbb97473d": 3
+     }
+    },
+    "minLevel": 5
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "819094ad-e749-4c02-9210-38c3bb1ec535": 3
+     }
+    },
+    "minLevel": 15
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "aa52a6a4-6500-44b5-ad74-9eb1d58e38c7": 3
+     }
+    },
+    "minLevel": 19
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "f9d2869a-a517-4080-abac-be6af47e5556": 3
+     }
+    },
+    "minLevel": 24
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "21e6557f-17ca-4bd3-9379-00184efe0edc": 3
+     }
+    },
+    "minLevel": 28
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "c2139cd9-1d9d-4d4e-80b2-133e07440158": 1
+     }
+    },
+    "minLevel": 74
+   }
+  ],
   "rewardUid": "d53c3748-9d65-4a29-8cb0-385969c7b672",
   "weekday": 1
  },
  {
   "dailyReward": {
    "stackableItems": {
-    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 3
    }
   },
+  "levelTiers": [
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 3
+     }
+    },
+    "minLevel": 1
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 8
+     }
+    },
+    "minLevel": 20
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 10
+     }
+    },
+    "minLevel": 24
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 11
+     }
+    },
+    "minLevel": 29
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 16
+     }
+    },
+    "minLevel": 41
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 19
+     }
+    },
+    "minLevel": 86
+   }
+  ],
   "rewardUid": "9c66ba16-8a97-4052-8433-b1b21507830b",
   "weekday": 2
  },
  {
+  "chestsScaleWithCharacterLevel": true,
   "dailyReward": {
    "chests": [
     {
-     "level": 86,
+     "level": 1,
      "tier": 2
     }
    ]
@@ -44,9 +162,91 @@
  {
   "dailyReward": {
    "stackableItems": {
-    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 85
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 5
    }
   },
+  "levelTiers": [
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 5
+     }
+    },
+    "minLevel": 1
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 11
+     }
+    },
+    "minLevel": 5
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 21
+     }
+    },
+    "minLevel": 15
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 31
+     }
+    },
+    "minLevel": 21
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 41
+     }
+    },
+    "minLevel": 26
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
+     }
+    },
+    "minLevel": 30
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 85
+     }
+    },
+    "minLevel": 40
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 100
+     }
+    },
+    "minLevel": 79
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 102
+     }
+    },
+    "minLevel": 86
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "e7193116-d761-479b-8a20-5633737977f5": 92
+     }
+    },
+    "minLevel": 100
+   }
+  ],
   "rewardUid": "9d01f773-31dd-4fed-a692-0a7d28ec2fd9",
   "weekday": 4
  },
@@ -62,9 +262,91 @@
  {
   "dailyReward": {
    "stackableItems": {
-    "790a188b-3fa0-4f38-99d9-bc8d3675bc46": 2
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 2
    }
   },
+  "levelTiers": [
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "42d91529-c88b-4c5b-815b-b55508b4e7ef": 2
+     }
+    },
+    "minLevel": 1
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "89ece62c-9ff6-470a-a152-d45ef4e0c222": 1
+     }
+    },
+    "minLevel": 5
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "790a188b-3fa0-4f38-99d9-bc8d3675bc46": 2
+     }
+    },
+    "minLevel": 15
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "3ca59113-a093-4cc8-8389-0f578ad94851": 1
+     }
+    },
+    "minLevel": 17
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "790a188b-3fa0-4f38-99d9-bc8d3675bc46": 1
+     }
+    },
+    "minLevel": 22
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "9df9233f-e7b9-47e8-bc75-f37707917759": 1
+     }
+    },
+    "minLevel": 27
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029": 1
+     }
+    },
+    "minLevel": 31
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "a1d41da0-51e0-4a80-ba9a-b8e9046be27e": 1
+     }
+    },
+    "minLevel": 57
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "3932e499-441e-4c6d-b671-9a03131ebe6f": 2
+     }
+    },
+    "minLevel": 86
+   },
+   {
+    "dailyReward": {
+     "stackableItems": {
+      "3932e499-441e-4c6d-b671-9a03131ebe6f": 3
+     }
+    },
+    "minLevel": 100
+   }
+  ],
   "rewardUid": "eefb9db4-0632-49b9-ae35-1da398ca0003",
   "weekday": 6
  }
