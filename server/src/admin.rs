@@ -53,17 +53,17 @@ use uuid::Uuid;
 use crate::{
     BladeApiError, ServerGlobal,
     arena::arena_season::{self, SeasonConfig},
+    arena::matchmaker::{RecentTicketView, query_recent_matches},
     arena::{ranking, season_rewards, season_store},
     credentials,
-    arena::matchmaker::{RecentTicketView, query_recent_matches},
     json_db::JsonDbWrapper,
     models::{
         CharacterDbAlone, CharacterDbEntry, CharacterDbEntryCharacterAlone,
         CharacterDbEntryEconomy, QuestDbEntry, UserDBEntry,
     },
     schema::{
-        arena_ai_mimic_control, arena_ai_mimics, arena_ranking_config, arena_seasons, characters,
-        quests, users,
+        arena_ai_mimic_control, arena_ai_mimics, arena_ranking_config, arena_seasons,
+        character_versions, characters, quests, users,
     },
 };
 
@@ -187,6 +187,57 @@ fn align_import_with_active_season(
     active_season
         .map(|season| arena_season::roll_character_into(character, &season.config()).reset)
         .unwrap_or(false)
+}
+
+fn copy_current_season_progress(
+    character: &mut CompleteCharacter,
+    saved: &CompleteCharacter,
+    season: &SeasonConfig,
+) -> bool {
+    if saved.pvp_season_id != season.id {
+        return false;
+    }
+
+    character.pvp_season_id = season.id;
+    character.pvp_trophies = saved.pvp_trophies;
+    character.matchmaking_pvp_trophies = saved.matchmaking_pvp_trophies;
+    character.number_pvp_match_played = saved.number_pvp_match_played;
+    character.pvp_winning_streak = saved.pvp_winning_streak;
+    character.pvp_chest_meter = saved.pvp_chest_meter;
+    character.trophy_count_modifier = saved.trophy_count_modifier;
+    character.pvp_exception_easier_match_remaining = saved.pvp_exception_easier_match_remaining;
+    character.pvp_exception_harder_match_remaining = saved.pvp_exception_harder_match_remaining;
+    character.highest_arena_reached = saved.highest_arena_reached;
+    character.highest_level_arena_reached = saved.highest_level_arena_reached;
+    character.highest_level_arena_reached_time_secs = saved.highest_level_arena_reached_time_secs;
+    true
+}
+
+async fn latest_saved_current_season_character(
+    conn: &mut diesel_async::AsyncPgConnection,
+    user_id: Uuid,
+    alt_uuid: Uuid,
+    season: &SeasonConfig,
+) -> Result<Option<CompleteCharacter>, diesel::result::Error> {
+    let rows: Vec<Value> = character_versions::table
+        .filter(character_versions::user_id.eq(user_id))
+        .filter(character_versions::source_alt_uuid.eq(alt_uuid))
+        .select(character_versions::character)
+        .order(character_versions::saved_at.desc())
+        .limit(25)
+        .load(conn)
+        .await?;
+
+    for row in rows {
+        match serde_json::from_value::<CompleteCharacter>(row) {
+            Ok(saved) if saved.pvp_season_id == season.id => return Ok(Some(saved)),
+            Ok(_) => {}
+            Err(e) => {
+                warn!("[import] skipped unreadable saved alt while restoring season progress: {e}")
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Change one arena user's sole character's AI-mimic status.
@@ -363,6 +414,17 @@ pub async fn import_character(
                 let mut character = body.character;
                 let inherited_trophies = character.pvp_trophies;
                 let inherited_matches = character.number_pvp_match_played;
+                let incoming_alt = body.source_alt_uuid;
+                let saved_current_season = if let (Some(active_season), Some(alt_uuid)) =
+                    (active_season.as_ref(), incoming_alt)
+                {
+                    let cfg = active_season.config();
+                    latest_saved_current_season_character(&mut conn, user_id, alt_uuid, &cfg)
+                        .await?
+                        .map(|saved| (cfg, saved))
+                } else {
+                    None
+                };
                 if let Some(active_season) = active_season.as_ref() {
                     if align_import_with_active_season(&mut character, Some(active_season)) {
                         log::info!(
@@ -399,6 +461,16 @@ pub async fn import_character(
                         inherited_trophies,
                         inherited_matches,
                     );
+                }
+                if let Some((season, saved)) = saved_current_season.as_ref() {
+                    if copy_current_season_progress(&mut character, saved, season) {
+                        log::info!(
+                            "[import] restored user {user_id}'s current-season alt progress for season {} — cups {} and matches {}",
+                            season.id,
+                            character.pvp_trophies,
+                            character.number_pvp_match_played,
+                        );
+                    }
                 }
 
                 // 1. Ensure a backing `users` row exists (characters.user_id is a
@@ -477,8 +549,6 @@ pub async fn import_character(
                 // Stamp the row with the alt it now holds. Without this the next
                 // snapshot cannot label itself (see `snapshot_character`), and a
                 // switch cannot tell which alt it is leaving.
-                let incoming_alt = body.source_alt_uuid;
-
                 if created {
                     insert_into(characters::table)
                         .values(&entry)
@@ -4819,6 +4889,12 @@ mod tests {
 /// stamped with — and both had a hole that reached production.
 #[cfg(test)]
 mod seasons_are_what_the_database_says {
+    use super::{
+        CompleteCharacter, align_import_with_active_season, copy_current_season_progress,
+        season_store,
+    };
+    use uuid::Uuid;
+
     /// The rollover must resolve its season from `arena_seasons`, not from the
     /// build-time `arena_season::SEASONS`.
     ///
@@ -4935,6 +5011,93 @@ mod seasons_are_what_the_database_says {
                 "with no active season the import must still zero `{field}`"
             );
         }
+    }
+
+    fn test_season_row(id: Uuid) -> season_store::SeasonRow {
+        season_store::SeasonRow {
+            id,
+            number: 6,
+            name: "Test Season".into(),
+            starts_at: 1_788_220_800,
+            ends_at: 1_790_812_800,
+            status: "active".into(),
+            scoring: "shipped".into(),
+            reset_rule: "hard_reset".into(),
+            created_at: 1_788_220_000,
+            ended_at: None,
+        }
+    }
+
+    /// Control: a first-time import with only retail/foreign cups still enters
+    /// the local active season at zero.
+    #[test]
+    fn first_time_import_still_strips_retail_cups() {
+        let retail = Uuid::parse_str("7a3985ae-1111-4222-8333-444444444444").unwrap();
+        let active = Uuid::parse_str("6d26822b-1111-4222-8333-444444444444").unwrap();
+        let season = test_season_row(active);
+        let mut ch = CompleteCharacter {
+            pvp_season_id: retail,
+            pvp_trophies: 1222,
+            matchmaking_pvp_trophies: 1300,
+            number_pvp_match_played: 173,
+            pvp_winning_streak: 4,
+            ..CompleteCharacter::default()
+        };
+
+        assert!(align_import_with_active_season(&mut ch, Some(&season)));
+        assert_eq!(ch.pvp_season_id, active);
+        assert_eq!(ch.pvp_trophies, 0);
+        assert_eq!(ch.matchmaking_pvp_trophies, 0);
+        assert_eq!(ch.number_pvp_match_played, 0);
+        assert_eq!(ch.pvp_winning_streak, 0);
+    }
+
+    /// Negative control for the alt-switch bug: a web re-import may carry retail
+    /// counters, but if this alt has a saved current-season snapshot, those local
+    /// counters must be put back after the retail baseline is stripped.
+    #[test]
+    fn returning_alt_import_restores_saved_current_season_cups_after_roll_in() {
+        let retail = Uuid::parse_str("7a3985ae-1111-4222-8333-444444444444").unwrap();
+        let active = Uuid::parse_str("6d26822b-1111-4222-8333-444444444444").unwrap();
+        let season = test_season_row(active);
+        let cfg = season.config();
+
+        let mut imported = CompleteCharacter {
+            pvp_season_id: retail,
+            pvp_trophies: 1222,
+            matchmaking_pvp_trophies: 1300,
+            number_pvp_match_played: 173,
+            pvp_winning_streak: 3,
+            ..CompleteCharacter::default()
+        };
+        let saved = CompleteCharacter {
+            pvp_season_id: active,
+            pvp_trophies: 500,
+            matchmaking_pvp_trophies: 540,
+            number_pvp_match_played: 31,
+            pvp_winning_streak: -2,
+            pvp_chest_meter: 6,
+            highest_arena_reached: 2,
+            highest_level_arena_reached: 4,
+            highest_level_arena_reached_time_secs: 1_789_000_000,
+            ..CompleteCharacter::default()
+        };
+
+        assert!(align_import_with_active_season(
+            &mut imported,
+            Some(&season)
+        ));
+        assert_eq!(imported.pvp_trophies, 0, "retail cups are stripped first");
+        assert!(copy_current_season_progress(&mut imported, &saved, &cfg));
+
+        assert_eq!(imported.pvp_season_id, active);
+        assert_eq!(imported.pvp_trophies, 500);
+        assert_eq!(imported.matchmaking_pvp_trophies, 540);
+        assert_eq!(imported.number_pvp_match_played, 31);
+        assert_eq!(imported.pvp_winning_streak, -2);
+        assert_eq!(imported.pvp_chest_meter, 6);
+        assert_eq!(imported.highest_arena_reached, 2);
+        assert_eq!(imported.highest_level_arena_reached, 4);
     }
 }
 

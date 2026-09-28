@@ -2,7 +2,8 @@
 //!
 //! This used to be a stub that answered `{"totalEntries":0,"entries":[]}` to
 //! everyone, so the arena's Leaderboard tab was permanently empty. It now ranks
-//! real characters by their PvP trophy count.
+//! real characters by their PvP trophy count, including the newest saved snapshot
+//! for an alt that has been switched out of the live account slot.
 //!
 //! # Wire shape
 //!
@@ -30,11 +31,11 @@
 //!
 //! # Ranking source
 //!
-//! `score` is the player's own `character.pvpTrophies` — the same field the player
-//! screen and the social card serve, so the board cannot disagree with what a
-//! player sees. It is NOT reconstructed from `arena_match_results`; that
-//! reconstruction applied a retroactive zero-floor where the live counter clamps
-//! per match, and the two answers diverged for anyone who had ever bottomed out.
+//! `score` is the player's own `character.pvpTrophies` — from the live row for an
+//! active alt, or from the latest `character_versions` snapshot for a switched-out
+//! alt. It is NOT reconstructed from `arena_match_results`; that reconstruction
+//! applied a retroactive zero-floor where the live counter clamps per match, and
+//! the two answers diverged for anyone who had ever bottomed out.
 //!
 //! `wins` is a windowed count over the active season, as a LEFT join, so a
 //! character with trophies but no matches this season still appears at zero wins
@@ -163,35 +164,84 @@ const RANKED_CTE: &str = "
         GROUP BY r.character_id
     ),
     ranked AS (
-        SELECT c.id,
-               c.user_id,
-               COALESCE(c.character ->> 'name', '') AS name,
-               g.name AS guild_name,
-               COALESCE((c.character ->> 'pvpTrophies')::bigint, 0) AS score,
-               COALESCE((c.character ->> 'pvpWinningStreak')::bigint, 0) AS streak,
-               COALESCE(w.wins, 0) AS wins,
+        SELECT e.id,
+               e.user_id,
+               e.name,
+               e.guild_name,
+               e.score,
+               e.streak,
+               e.wins,
                ROW_NUMBER() OVER (
-                   ORDER BY COALESCE((c.character ->> 'pvpTrophies')::bigint, 0) DESC,
-                            COALESCE(w.wins, 0) DESC,
-                            c.id
+                   ORDER BY e.score DESC,
+                            e.wins DESC,
+                            e.id
                ) AS rank
-        FROM characters c
-        CROSS JOIN active_season s
-        LEFT JOIN season_wins w ON w.character_id = c.id
-        LEFT JOIN guild_members gm ON gm.character_id = c.id
-        LEFT JOIN guilds g ON g.id = gm.guild_id
-        WHERE COALESCE((c.character ->> 'pvpTrophies')::bigint, 0) > 0
-          -- Cups this character holds FOR THIS SEASON. `pvpTrophies` is a live
-          -- counter the season rollover zeroes; a character still stamped with
-          -- another season's id never had that rollover applied, so its balance
-          -- was earned somewhere else. Counting it here is what puts hundreds of
-          -- cups against zero wins. The nil stamp is admitted deliberately — see
-          -- `an_unstamped_character_is_not_treated_as_off_season`.
-          AND (
-                c.character ->> 'pvpSeasonId' IS NULL
-             OR c.character ->> 'pvpSeasonId' = '00000000-0000-0000-0000-000000000000'
-             OR c.character ->> 'pvpSeasonId' = s.id::text
-          )
+        FROM (
+            SELECT c.id,
+                   c.user_id,
+                   c.source_alt_uuid,
+                   COALESCE(c.character ->> 'name', '') AS name,
+                   g.name AS guild_name,
+                   COALESCE((c.character ->> 'pvpTrophies')::bigint, 0) AS score,
+                   COALESCE((c.character ->> 'pvpWinningStreak')::bigint, 0) AS streak,
+                   COALESCE(w.wins, 0) AS wins
+            FROM characters c
+            CROSS JOIN active_season s
+            LEFT JOIN season_wins w ON w.character_id = c.id
+            LEFT JOIN guild_members gm ON gm.character_id = c.id
+            LEFT JOIN guilds g ON g.id = gm.guild_id
+            WHERE COALESCE((c.character ->> 'pvpTrophies')::bigint, 0) > 0
+              -- Cups this character holds FOR THIS SEASON. `pvpTrophies` is a live
+              -- counter the season rollover zeroes; a character still stamped with
+              -- another season's id never had that rollover applied, so its balance
+              -- was earned somewhere else. Counting it here is what puts hundreds of
+              -- cups against zero wins. The nil stamp is admitted deliberately — see
+              -- `an_unstamped_character_is_not_treated_as_off_season`.
+              AND (
+                    c.character ->> 'pvpSeasonId' IS NULL
+                 OR c.character ->> 'pvpSeasonId' = '00000000-0000-0000-0000-000000000000'
+                 OR c.character ->> 'pvpSeasonId' = s.id::text
+              )
+            UNION ALL
+            SELECT saved.id,
+                   saved.user_id,
+                   saved.source_alt_uuid,
+                   saved.name,
+                   saved.guild_name,
+                   saved.score,
+                   saved.streak,
+                   saved.wins
+            FROM (
+                SELECT DISTINCT ON (v.user_id, v.source_alt_uuid)
+                       COALESCE(v.source_alt_uuid, v.character_id) AS id,
+                       v.user_id,
+                       v.source_alt_uuid,
+                       COALESCE(v.character ->> 'name', '') AS name,
+                       NULL::text AS guild_name,
+                       COALESCE((v.character ->> 'pvpTrophies')::bigint, 0) AS score,
+                       COALESCE((v.character ->> 'pvpWinningStreak')::bigint, 0) AS streak,
+                       0::bigint AS wins
+                FROM character_versions v
+                CROSS JOIN active_season s
+                WHERE v.source_alt_uuid IS NOT NULL
+                  AND NOT EXISTS (
+                        SELECT 1
+                        FROM characters live
+                        WHERE live.user_id = v.user_id
+                          AND live.source_alt_uuid = v.source_alt_uuid
+                  )
+                  AND COALESCE((v.character ->> 'pvpTrophies')::bigint, 0) > 0
+                  AND (
+                        v.character ->> 'pvpSeasonId' IS NULL
+                     OR v.character ->> 'pvpSeasonId' = '00000000-0000-0000-0000-000000000000'
+                     OR v.character ->> 'pvpSeasonId' = s.id::text
+                  )
+                ORDER BY v.user_id,
+                         v.source_alt_uuid,
+                         COALESCE((v.character ->> 'pvpTrophies')::bigint, 0) DESC,
+                         v.saved_at DESC
+            ) saved
+        ) e
     )
 ";
 
@@ -405,12 +455,35 @@ mod tests {
             "score must come from the character's live trophy count"
         );
         assert!(
+            RANKED_CTE.contains("v.character ->> 'pvpTrophies'"),
+            "switched-out alts must keep ranking from their saved trophy count"
+        );
+        assert!(
             !RANKED_CTE.contains("trophy_delta"),
             "the board must not reconstruct scores from match history: {RANKED_CTE}"
         );
         assert!(
             !RANKED_CTE.contains("raw_score"),
             "the retroactive zero-floor reconstruction must not come back"
+        );
+    }
+
+    /// Owner design: a player may compete on multiple alts in one season, so a
+    /// saved alt that is no longer the live row still belongs on the season board.
+    #[test]
+    fn saved_current_season_alts_stay_on_the_board() {
+        assert!(
+            RANKED_CTE.contains("FROM character_versions v"),
+            "the board must read saved switched-out alts"
+        );
+        assert!(
+            RANKED_CTE.contains("DISTINCT ON (v.user_id, v.source_alt_uuid)"),
+            "one switched-out alt should contribute its best saved season row"
+        );
+        assert!(
+            RANKED_CTE.contains("NOT EXISTS")
+                && RANKED_CTE.contains("live.source_alt_uuid = v.source_alt_uuid"),
+            "do not duplicate the alt currently occupying the live character row"
         );
     }
 
