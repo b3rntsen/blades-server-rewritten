@@ -135,10 +135,39 @@ pub fn set_loadout_profile(ch: &mut CompleteCharacter, index: usize, profile: Va
 /// never saw in retail. Drop only that non-retail profile member; leave null gaps,
 /// empty slots, unknown future fields, and every retail member untouched.
 pub fn normalize_loadout_profile(mut profile: Value) -> Value {
-    if let Some(obj) = profile.as_object_mut() {
-        obj.remove("equippedConsumables");
-    }
+    normalize_profile_object(&mut profile);
     profile
+}
+
+/// One saved profile, reshaped to what the retail server served back.
+///
+/// Besides dropping `equippedConsumables`, an EMPTY item slot loses its `itemId`
+/// key. The client saves an empty slot as `{"slot": …, "itemId": ""}` (252 of 594
+/// item entries in captured `POST …/loadouts/profiles/{n}` bodies), but retail never
+/// served that form back: across the capture snapshot's `GET /characters/{id}`
+/// responses, 4,617 empty slots are `{"slot": …}` with NO `itemId`, and zero carry
+/// `""` or `null`. We stored the client's `""` verbatim and served it; the Loadouts
+/// screen of a player whose build had four empty slots then shuddered and froze
+/// (tracker #274/#278). Filled slots and every other field are untouched.
+fn normalize_profile_object(profile: &mut Value) {
+    let Some(obj) = profile.as_object_mut() else {
+        return;
+    };
+    obj.remove("equippedConsumables");
+    if let Some(items) = obj.get_mut("equippedItems").and_then(Value::as_array_mut) {
+        for entry in items {
+            if let Some(e) = entry.as_object_mut() {
+                let empty = match e.get("itemId") {
+                    Some(Value::Null) => true,
+                    Some(Value::String(s)) => s.trim().is_empty(),
+                    _ => false,
+                };
+                if empty {
+                    e.remove("itemId");
+                }
+            }
+        }
+    }
 }
 
 /// Normalize every saved loadout profile on a character before serving or rewriting it.
@@ -147,9 +176,7 @@ pub fn normalize_loadout_profiles_for_retail(ch: &mut CompleteCharacter) {
         return;
     };
     for profile in profiles {
-        if let Some(obj) = profile.as_object_mut() {
-            obj.remove("equippedConsumables");
-        }
+        normalize_profile_object(profile);
     }
 }
 
@@ -333,6 +360,48 @@ pub fn set_equipped_consumables(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_empty_profile_slot_is_served_without_an_itemid_like_retail() {
+        let mut ch = CompleteCharacter::default();
+        set_loadout_profile(
+            &mut ch,
+            0,
+            json!({
+                "name": "Physical armour",
+                "iconIndex": 0,
+                "colorIndex": 0,
+                "keepShield": true,
+                "equippedItems": [
+                    {"slot": "897a600c-91d6-4449-af09-173da88a907e", "itemId": "6d8a9f14-7d79-4b5a-8a2a-7f59d2083836"},
+                    {"slot": "417e79de-c810-42f8-8273-f9759df6ae25", "itemId": ""},
+                    {"slot": "36d141e4-7783-466c-9565-6f90f09de428", "itemId": null}
+                ],
+                "equippedAbilities": [{"slot": "abilitySlot0", "itemId": "91078132-ef5c-492a-97f2-ac69be5140a8"}]
+            }),
+        );
+        let items = ch.loadout_profiles[0]["equippedItems"].as_array().unwrap().clone();
+        assert_eq!(items.len(), 3, "every slot entry stays, as retail served 9 of 9");
+        assert_eq!(items[0]["itemId"], "6d8a9f14-7d79-4b5a-8a2a-7f59d2083836", "a filled slot is untouched");
+        assert!(items[1].get("itemId").is_none(), "an empty \"\" slot is served with no itemId key");
+        assert!(items[2].get("itemId").is_none(), "a null slot is served with no itemId key");
+        assert_eq!(
+            ch.loadout_profiles[0]["equippedAbilities"][0]["itemId"],
+            "91078132-ef5c-492a-97f2-ac69be5140a8",
+            "abilities are not touched"
+        );
+    }
+
+    #[test]
+    fn stored_profiles_with_empty_slots_are_repaired_on_serve() {
+        let mut ch = CompleteCharacter::default();
+        ch.loadout_profiles = json!([{
+            "name": "old",
+            "equippedItems": [{"slot": "417e79de-c810-42f8-8273-f9759df6ae25", "itemId": ""}]
+        }]);
+        normalize_loadout_profiles_for_retail(&mut ch);
+        assert!(ch.loadout_profiles[0]["equippedItems"][0].get("itemId").is_none());
+    }
+
     use super::*;
 
     /// Report #164: the equip path put ANY item in ANY slot.
@@ -542,7 +611,7 @@ mod tests {
 
         let profile = &ch.loadout_profiles[0];
         assert!(profile.get("equippedConsumables").is_none());
-        assert_eq!(profile["equippedItems"][0]["itemId"], "");
+        assert!(profile["equippedItems"][0].get("itemId").is_none(), "an empty slot is served without itemId, as retail did");
         assert_eq!(profile["keepShield"], true);
     }
 
