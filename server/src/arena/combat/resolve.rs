@@ -896,6 +896,12 @@ pub fn on_c2s_input(
             if act.held {
                 // Guard UP. `set_actor_state` queues the transition; the drain turns it
                 // into the gmid 41 that raises the shield on BOTH screens.
+                //
+                // A guard is also an exit from the prior swing's Recovery. Drop that
+                // swing's scheduled FollowThrough/Recovery/Idle beats now; otherwise a
+                // stale Idle can overwrite `Blocking` on the next tick while the
+                // client is still holding the shield.
+                f.clear_scheduled_states();
                 f.set_actor_state(ActorStateType::Blocking, now);
                 f.blocking_side = ActiveSide::Middle; // retail: propId 9 == 1 in 578/578
                 f.blocking_until = Some(now + BLOCK_LEAK_GUARD);
@@ -2585,6 +2591,7 @@ fn begin_ability_guard(
 
     let until = now + Duration::from_secs_f32(window);
     let f = &mut combat.fighters[caster];
+    f.clear_scheduled_states();
     f.set_actor_state(ActorStateType::Blocking, now);
     f.blocking_side = ActiveSide::Middle;
     f.blocking_until = Some(until);
@@ -3897,7 +3904,7 @@ fn emit_damage_with_outcome(
     };
     let dealt = hp_before.saturating_sub(hp_after);
     info!(
-        "combat event: gsid={} attacker_slot={attacker_slot} attacker={} target_slot={target_slot} target={} source={:?} side={:?} components={components:?} total={total:.1} pct_max_hp={pct:.1} hp={hp_before}->{hp_after} dealt={dealt} drained_stam={drained_stam} drained_mag={drained_mag} ravaged_stam={rav_s} ravaged_mag={rav_m} ravaged_hp={rav_h} shield_ravaged=({sr_s},{sr_m},{sr_h}) max_stam_now={} max_mag_now={}",
+        "combat event: gsid={} attacker_slot={attacker_slot} attacker={} target_slot={target_slot} target={} source={:?} side={:?} components={components:?} total={total:.1} pct_max_hp={pct:.1} hp={hp_before}->{hp_after} dealt={dealt} drained_stam={drained_stam} drained_mag={drained_mag} ravaged_stam={rav_s} ravaged_mag={rav_m} ravaged_hp={rav_h} shield_ravaged=({sr_s},{sr_m},{sr_h}) max_stam_now={} max_mag_now={} blocked={} target_state={:?} target_block_phase={:?}",
         combat.game_session_id,
         combat.fighters[attacker_slot].loadout.display_name,
         combat.fighters[target_slot].loadout.display_name,
@@ -3905,6 +3912,12 @@ fn emit_damage_with_outcome(
         resolved.active_side,
         combat.fighters[target_slot].max_stamina,
         combat.fighters[target_slot].max_magicka,
+        // Whether the server saw the target guarding when this hit landed — the one
+        // fact a "it swung through my block" report needs, and info-level so a
+        // player-reported match can be settled from the journal alone.
+        resolved.blocked,
+        combat.fighters[target_slot].actor_state(),
+        combat.fighters[target_slot].block_phase(now),
     );
 
     let msg = {
@@ -6452,6 +6465,7 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
         if snapshot.state == BotObservedState::Charging {
             let f = &mut combat.fighters[bot];
             if f.actor_state() != ActorStateType::Blocking && f.block_phase(now).is_none() {
+                f.clear_scheduled_states();
                 f.set_actor_state(ActorStateType::Blocking, now);
                 f.blocking_side = ActiveSide::Middle;
                 f.blocking_until = Some(now + BLOCK_LEAK_GUARD);
@@ -9924,6 +9938,47 @@ mod phase4_tests {
                 .count(),
             2,
             "the held charge still commits"
+        );
+    }
+
+    #[test]
+    fn a_guard_raised_during_recovery_clears_the_previous_swing_idle() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+
+        on_c2s_input(&mut combat, 0, &make_pos_frame(0.8, 0.5, 0.0), now);
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, false), now);
+        let release = now + Duration::from_millis(250);
+        on_c2s_input(
+            &mut combat,
+            0,
+            &make_act_frame(false, 0.25, false),
+            release,
+        );
+        let _ = drain_state_changes(&mut combat, release);
+
+        let guard_at = release + Duration::from_millis(200);
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), guard_at);
+        assert_eq!(
+            combat.fighters[0].actor_state(),
+            ActorStateType::Blocking,
+            "precondition: the real op46 block-zone press raised the guard",
+        );
+
+        // The previous swing's scheduled Idle used to fire here and silently move the
+        // server off Blocking while the client still held guard.
+        let old_idle_due = release + Duration::from_millis(650);
+        combat.fighters[0].reconcile_scheduled_states(old_idle_due);
+        let stale = drain_state_changes(&mut combat, old_idle_due);
+        assert_eq!(
+            generic_state_count(&stale, ActorStateType::Idle),
+            0,
+            "the stale swing Idle must not lower a held guard",
+        );
+        assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
+        assert!(
+            combat.fighters[0].block_phase(old_idle_due).is_some(),
+            "damage::block_outcome can only block later hits if actor_state stayed Blocking",
         );
     }
 
@@ -15139,6 +15194,40 @@ mod report_31_high_block_stun {
             delayed.saturating_sub(control),
             Duration::from_millis(300),
             "bot maneuver impact timing is extended by the human RTT",
+        );
+    }
+
+    #[test]
+    fn bot_maneuver_op58_is_sent_before_the_rtt_delayed_impact() {
+        let now = Instant::now();
+        let mut c = combat(now, 1);
+        c.game_session_id = "maneuver-visibility".into();
+        c.set_slot_rtt(0, Duration::from_millis(300));
+        c.fighters[1].stamina = 100_000;
+        let uuid = uuid_of("RecoveryStrikes");
+        let frame = messages::request_execute_ability(c.fighters[1].net_object_id, uuid);
+        let ea = input::parse_execute_ability(&frame).expect("synthetic cast parses");
+
+        let out = super::resolve_ability_cast(&mut c, 1, 0, &frame, &ea, now);
+
+        assert!(
+            out.iter()
+                .any(|(_, f)| messages::user_message_gmid(f) == Some(58)),
+            "a bot weapon maneuver must send op58 immediately so the human sees the wind-up",
+        );
+        assert_eq!(
+            super::land_due_impacts(&mut c, now + Duration::from_millis(299))
+                .iter()
+                .filter(|(_, f)| messages::user_message_gmid(f) == Some(50))
+                .count(),
+            0,
+            "the RTT-compensated maneuver impact must not land before the warning window",
+        );
+        assert!(
+            super::land_due_impacts(&mut c, now + Duration::from_millis(1300))
+                .iter()
+                .any(|(_, f)| messages::user_message_gmid(f) == Some(50)),
+            "control: the queued Recovery Strikes impact still lands after its authored delay plus RTT",
         );
     }
 
