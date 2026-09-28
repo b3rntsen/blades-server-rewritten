@@ -421,6 +421,7 @@ async fn main() -> Result<()> {
             // Without it the victory card's gold / XP / trophies are wire-only and
             // vanish the moment the client re-syncs from REST.
             arena::arena_economy::install(db_pool.clone());
+            arena::ranking::spawn_h2h_reconcile_task(db_pool.clone());
 
             let arena_import_token = std::env::var("ARENA_IMPORT_TOKEN").ok();
             // DEBUG: dedicated token for the arena packet-injection routes;

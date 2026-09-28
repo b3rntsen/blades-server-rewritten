@@ -12,3 +12,6 @@ build-app/*.apk
 
 # arena deploy secrets (docker-compose.arena.yml --env-file)
 deploy/arena.env
+
+# Agent scratch space (prompts, PR bodies) — never commit
+.cre/
