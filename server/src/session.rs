@@ -374,11 +374,21 @@ impl SessionStore {
     /// sessions for one account are what let a player queue against themselves.
     ///
     /// Returns how many were evicted, for the log.
+    #[cfg(test)]
+    pub fn contains(&self, id: Uuid) -> bool {
+        self.map.lock().unwrap().contains_key(&id)
+    }
+
     pub fn evict_other_sessions_for_user(&self, user_id: Uuid, keep: Uuid) -> Vec<Uuid> {
+        self.evict_other_sessions_for_user_keeping(user_id, &[keep])
+    }
+
+    /// Like [`Self::evict_other_sessions_for_user`], but spares every session in `keep`.
+    pub fn evict_other_sessions_for_user_keeping(&self, user_id: Uuid, keep: &[Uuid]) -> Vec<Uuid> {
         let mut locked = self.map.lock().unwrap();
         let doomed: Vec<Uuid> = locked
             .iter()
-            .filter(|(id, s)| **id != keep && s.user_id == user_id)
+            .filter(|(id, s)| !keep.contains(id) && s.user_id == user_id)
             .map(|(id, _)| *id)
             .collect();
         for id in &doomed {
@@ -517,7 +527,25 @@ pub async fn claim_account_for_this_device(
     user_id: Uuid,
     session_id: Uuid,
 ) {
-    let evicted = store.evict_other_sessions_for_user(user_id, session_id);
+    claim_account_for_this_device_keeping(store, db, user_id, session_id, None).await
+}
+
+/// [`claim_account_for_this_device`] that also spares `same_device`: a session the
+/// SAME device already holds for this account (the caller's own Authorization
+/// session). Tracker #8: in-game Settings → link runs `/link` (conflict), then
+/// `/auth/bnet/login`, then `/link/force` — all under the device's original
+/// session. When that session already belonged to the account being logged into,
+/// the login used to evict it as "another device", so `/link/force` presented a
+/// dead session and 401'd before any credential was checked.
+pub async fn claim_account_for_this_device_keeping(
+    store: &SessionStore,
+    db: &DbPool,
+    user_id: Uuid,
+    session_id: Uuid,
+    same_device: Option<Uuid>,
+) {
+    let keep: Vec<Uuid> = std::iter::once(session_id).chain(same_device).collect();
+    let evicted = store.evict_other_sessions_for_user_keeping(user_id, &keep);
     if evicted.is_empty() {
         return;
     }
@@ -535,9 +563,12 @@ pub async fn claim_account_for_this_device(
             return;
         }
     };
-    if let Err(e) = diesel::sql_query("DELETE FROM sessions WHERE user_id = $1 AND session_id <> $2")
+    if let Err(e) = diesel::sql_query(
+        "DELETE FROM sessions WHERE user_id = $1 AND session_id <> $2 AND session_id <> $3",
+    )
         .bind::<diesel::sql_types::Uuid, _>(user_id)
         .bind::<diesel::sql_types::Uuid, _>(session_id)
+        .bind::<diesel::sql_types::Uuid, _>(same_device.unwrap_or(session_id))
         .execute(&mut conn)
         .await
     {
@@ -581,6 +612,39 @@ mod one_device_owns_the_account {
             Arc::new(Session::new(user, Uuid::new_v4(), Duration::from_secs(3600))),
         );
         id
+    }
+
+    /// Tracker #8: `/auth/bnet/login` from a device that already holds a session for
+    /// the same account must not evict that session — the in-game link flow sends
+    /// `/link/force` under it right afterwards. Another device is still displaced.
+    #[test]
+    fn a_login_keeps_the_same_devices_session_but_still_evicts_other_devices() {
+        let s = store();
+        let user = Uuid::new_v4();
+        let callers_own = add(&s, Uuid::new_v4(), user);
+        let other_device = add(&s, Uuid::new_v4(), user);
+        let fresh = add(&s, Uuid::new_v4(), user);
+
+        let evicted = s.evict_other_sessions_for_user_keeping(user, &[fresh, callers_own]);
+
+        assert_eq!(evicted, vec![other_device], "only the other device is displaced");
+        assert!(s.contains(callers_own), "the caller's own session survives the login");
+        assert!(s.contains(fresh));
+        assert!(!s.contains(other_device));
+    }
+
+    /// Control: the single-id form still leaves exactly one live session.
+    #[test]
+    fn the_single_keep_form_still_evicts_everything_else() {
+        let s = store();
+        let user = Uuid::new_v4();
+        let old = add(&s, Uuid::new_v4(), user);
+        let fresh = add(&s, Uuid::new_v4(), user);
+
+        let evicted = s.evict_other_sessions_for_user(user, fresh);
+
+        assert_eq!(evicted, vec![old]);
+        assert!(s.contains(fresh) && !s.contains(old));
     }
 
     /// The scenario, end to end: device 1, then device 2, then device 1 again.
@@ -660,7 +724,8 @@ mod one_device_owns_the_account {
     fn every_login_path_claims_the_account() {
         let src = include_str!("authentification.rs");
         let mints = src.matches("store_new_session(").count();
-        let claims = src.matches("claim_account_for_this_device(").count();
+        let claims = src.matches("claim_account_for_this_device(").count()
+            + src.matches("claim_account_for_this_device_keeping(").count();
         assert!(mints > 0, "there is at least one login path");
         assert!(
             claims >= mints,

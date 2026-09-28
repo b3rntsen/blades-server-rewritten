@@ -181,6 +181,7 @@ struct BnetLoginRequest {
 
 #[post("/blades.bgs.services/api/authentication/v1/public/auth/bnet/login")]
 async fn bnet_log_in(
+    current_session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
     body: web::Json<BnetLoginRequest>,
 ) -> Result<web::Json<SessionResponse>, BladeApiError> {
@@ -254,11 +255,20 @@ async fn bnet_log_in(
     ));
     let session_id = app_state.session_store.store_new_session(session.clone());
     crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
-    crate::session::claim_account_for_this_device(
+    // The caller's own session is the same device, not "another device": keep it
+    // alive when it already belongs to this account, so a `/link/force` that
+    // follows under it still authenticates (tracker #8).
+    let same_device = current_session
+        .get_session_or_error()
+        .ok()
+        .filter(|s| s.session.user_id == session.user_id)
+        .map(|s| s.session_id);
+    crate::session::claim_account_for_this_device_keeping(
         &app_state.session_store,
         &app_state.db_pool,
         session.user_id,
         session_id,
+        same_device,
     )
     .await;
     match log_name {
