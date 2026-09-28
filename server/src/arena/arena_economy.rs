@@ -154,6 +154,18 @@ fn add_promotion_stackables(
     promo.stackable_items.iter().map(|(_, n)| n).sum()
 }
 
+fn add_promotion_currencies(
+    reward: &mut RewardGrant,
+    promo: &arena_ladder::PromotionRewards,
+) -> u64 {
+    for (currency, quantity) in &promo.currencies {
+        let currency = Uuid::parse_str(currency)
+            .expect("generated arena-promotion currency id is a valid UUID");
+        *reward.currencies.entry(currency).or_insert(0) += quantity;
+    }
+    promo.currencies.iter().map(|(_, n)| n).sum()
+}
+
 /// Apply one match outcome durably: PvP counters + wallet + XP + any promotion
 /// chests and fixed stackables. One transaction, row-locked, so two matches ending
 /// at the same instant for the same character cannot interleave.
@@ -255,6 +267,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                 }
                 reward.character_xp = o.character_xp.max(0) as u64;
                 let promotion_stackables = add_promotion_stackables(&mut reward, &promo);
+                let promotion_currencies = add_promotion_currencies(&mut reward, &promo);
 
                 // Arena Giveaway. Retail's banner promised Gems for turning up inside
                 // a two-hour Saturday window — "Join them during that time and earn
@@ -400,6 +413,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                     meter,
                     granted,
                     promotion_stackables,
+                    promotion_currencies,
                 }))
             }
             .scope_boxed()
@@ -411,7 +425,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
 
     info!(
         "arena economy: persisted {} for L{} character {} — gold {:+}, xp {:+}, \
-         trophies {} -> {} ({:+}), high-water {}, arena {}/{}, meter {}{}{}",
+         trophies {} -> {} ({:+}), high-water {}, arena {}/{}, meter {}{}{}{}",
         if outcome.win { "WIN" } else { "LOSS" },
         outcome.level,
         a.character_id,
@@ -431,6 +445,11 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
         },
         if a.promotion_stackables > 0 {
             format!(", {} promotion stackable(s)", a.promotion_stackables)
+        } else {
+            String::new()
+        },
+        if a.promotion_currencies > 0 {
+            format!(", {} promotion currency", a.promotion_currencies)
         } else {
             String::new()
         },
@@ -811,6 +830,7 @@ struct AppliedOutcome {
     meter: i64,
     granted: usize,
     promotion_stackables: u64,
+    promotion_currencies: u64,
     /// Gems paid by an open Arena Giveaway window, 0 when none was running.
     giveaway_gems: i64,
 }
@@ -867,6 +887,20 @@ mod tests {
                 .get(&Uuid::parse_str("d94bab85-53d5-4c9c-a637-acd94fc66c98").unwrap()),
             Some(&3)
         );
+    }
+
+    #[test]
+    fn crossing_500_stages_premium_gems_for_durable_application() {
+        let promo = arena_ladder::promotion_rewards(499, 500, 86);
+        let mut reward = RewardGrant::default();
+        assert_eq!(add_promotion_currencies(&mut reward, &promo), 50);
+        assert_eq!(reward.currencies.get(&blades_lib::economy::GEMS), Some(&50));
+
+        // Negative control: a disabled Gem row in loot.json does not become a grant.
+        let disabled = arena_ladder::promotion_rewards(549, 550, 86);
+        let mut reward = RewardGrant::default();
+        assert_eq!(add_promotion_currencies(&mut reward, &disabled), 0);
+        assert!(!reward.currencies.contains_key(&blades_lib::economy::GEMS));
     }
 
     async fn h2h_fixture() -> Option<AsyncPgConnection> {
@@ -931,6 +965,7 @@ mod tests {
             meter: 2,
             granted: 0,
             promotion_stackables: 0,
+            promotion_currencies: 0,
             giveaway_gems: 0,
         }
     }

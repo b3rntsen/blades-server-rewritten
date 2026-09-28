@@ -320,8 +320,11 @@ pub struct PromotionRewards {
     /// Fixed, guaranteed stackables from each crossed rung's shipped loot table,
     /// aggregated by item template UUID.
     pub stackable_items: Vec<(&'static str, u64)>,
-    /// Trophy thresholds with fixed loot in `stackable_items`, retained for the
-    /// server-only idempotency ledger.
+    /// Fixed, guaranteed currencies from each crossed rung's shipped loot table,
+    /// aggregated by currency UUID.
+    pub currencies: Vec<(&'static str, u64)>,
+    /// Trophy thresholds with fixed loot in `stackable_items`/`currencies`,
+    /// retained for the server-only idempotency ledger.
     pub loot_thresholds: Vec<i64>,
     /// The tier the player ends up on, if it changed.
     pub new_tier: Option<ArenaTier>,
@@ -329,7 +332,7 @@ pub struct PromotionRewards {
 
 impl PromotionRewards {
     pub fn is_empty(&self) -> bool {
-        self.chests.is_empty() && self.stackable_items.is_empty()
+        self.chests.is_empty() && self.stackable_items.is_empty() && self.currencies.is_empty()
     }
 }
 
@@ -368,19 +371,25 @@ pub fn promotion_rewards(old_high_water: i64, new_high_water: i64, character_lev
         .flat_map(|t| t.chests_once_reached.iter().map(move |&r| (r, character_level)))
         .collect::<Vec<_>>();
     let mut stackable_items = BTreeMap::new();
+    let mut currencies = BTreeMap::new();
     let mut loot_thresholds = Vec::new();
     for tier in &crossed {
         let fixed = super::arena_promotion_loot::stackables_for(tier.loot_table, character_level);
-        if !fixed.is_empty() {
+        let fixed_currencies = super::arena_promotion_loot::currencies_for(tier.loot_table, character_level);
+        if !fixed.is_empty() || !fixed_currencies.is_empty() {
             loot_thresholds.push(tier.required_trophies);
         }
         for item in fixed {
             *stackable_items.entry(item.template_uuid).or_insert(0) += item.quantity;
         }
+        for item in fixed_currencies {
+            *currencies.entry(item.currency_uuid).or_insert(0) += item.quantity;
+        }
     }
     PromotionRewards {
         chests,
         stackable_items: stackable_items.into_iter().collect(),
+        currencies: currencies.into_iter().collect(),
         loot_thresholds,
         new_tier: crossed.last().copied().copied(),
     }
@@ -623,6 +632,7 @@ mod tests {
         let p = promotion_rewards(0, 51, 5);
         assert_eq!(p.chests, vec![(3, 5)]);
         assert!(p.stackable_items.is_empty());
+        assert!(p.currencies.is_empty());
         assert!(p.loot_thresholds.is_empty());
         assert_eq!(p.new_tier.map(|t| (t.arena, t.level)), Some((1, 2)));
 
@@ -637,12 +647,14 @@ mod tests {
                 ("d826ea12-e583-47c1-a50f-4de608281735", 3),
             ]
         );
+        assert!(p.currencies.is_empty());
         assert_eq!(p.loot_thresholds, vec![100]);
         assert_eq!(p.new_tier.map(|t| (t.arena, t.level)), Some((1, 4)));
 
         // s607: simi L56 crossed 250 -> arena 1 level 6, chest_rarity 3.
         let p = promotion_rewards(200, 256, 56);
         assert_eq!(p.chests, vec![(3, 56)]);
+        assert!(p.currencies.is_empty());
 
         // No crossing -> empty (the card ships `rewardNewLevelArena: {}`).
         assert!(promotion_rewards(817, 847, 86).is_empty());
@@ -657,6 +669,7 @@ mod tests {
             p.stackable_items,
             vec![("d94bab85-53d5-4c9c-a637-acd94fc66c98", 3)]
         );
+        assert!(p.currencies.is_empty());
         assert_eq!(p.loot_thresholds, vec![200]);
         assert_eq!(p.new_tier.map(|t| (t.arena, t.level)), Some((1, 5)));
     }
@@ -793,7 +806,10 @@ mod tests {
         assert_eq!((tier_for_trophies(499).arena, tier_for_trophies(499).level), (1, 9));
         let promoted = tier_for_trophies(500);
         assert_eq!((promoted.arena, promoted.level), (2, 1));
-        assert_eq!(promotion_rewards(499, 500, 86).chests, vec![(4, 86)]);
+        let promo = promotion_rewards(499, 500, 86);
+        assert_eq!(promo.chests, vec![(4, 86)]);
+        assert_eq!(promo.currencies, vec![("470c8f58-a8dd-4c07-8c92-843b785e1139", 50)]);
+        assert_eq!(promo.loot_thresholds, vec![500]);
 
         // The engine/persistence store max(live trophies, old high-water). A later
         // loss can lower the visible cups but must keep the player's own backdrop.
@@ -801,6 +817,15 @@ mod tests {
         let high_water_after_loss = 500.max(live_after_loss);
         let still_promoted = tier_for_trophies(high_water_after_loss);
         assert_eq!((still_promoted.arena, still_promoted.level), (2, 1));
+    }
+
+    #[test]
+    fn disabled_gem_rows_do_not_pay_on_ordinary_rungs() {
+        let arena_one_disabled = promotion_rewards(299, 300, 86);
+        assert!(arena_one_disabled.currencies.is_empty());
+
+        let arena_two_disabled = promotion_rewards(549, 550, 86);
+        assert!(arena_two_disabled.currencies.is_empty());
     }
 
     #[test]

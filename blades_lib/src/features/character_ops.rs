@@ -217,6 +217,27 @@ pub fn item_allowed_in_slot(
     }
 }
 
+fn take_item_for_equip(
+    inv: &mut CompleteInventory,
+    item_id: Uuid,
+    tracker: &mut InventoryChangeTracker,
+) -> Option<crate::user_data::Item> {
+    if let Some(item) = inv.backpack.items.0.remove(&item_id) {
+        tracker.modified_backpack.items.insert(item_id);
+        return Some(item);
+    }
+
+    let source_slot = inv
+        .loadout
+        .equipped_items
+        .0
+        .iter()
+        .find_map(|(slot, equipped)| (equipped.id == item_id).then_some(*slot))?;
+    let equipped = inv.loadout.equipped_items.0.remove(&source_slot)?;
+    tracker.modified_loadout.modified_equipped_items.insert(source_slot);
+    Some(equipped.item)
+}
+
 pub fn apply_equipment_updates(
     inv: &mut CompleteInventory,
     updates: &HashMap<Uuid, Option<Uuid>>,
@@ -242,8 +263,7 @@ pub fn apply_equipment_updates(
         }
         if let Some(item_id) = target {
             // Equip an instanced gear item from the backpack.
-            if let Some(item) = inv.backpack.items.0.remove(item_id) {
-                tracker.modified_backpack.items.insert(*item_id);
+            if let Some(item) = take_item_for_equip(inv, *item_id, tracker) {
                 inv.loadout.equipped_items.0.insert(
                     *slot,
                     SingleEquippedItem {
@@ -522,6 +542,33 @@ mod tests {
         apply_equipment_updates(&mut i, &HashMap::from([(slot, None)]), &mut t2, None);
         assert!(!i.loadout.equipped_items.0.contains_key(&slot));
         assert!(i.backpack.items.0.contains_key(&item_id), "returned to backpack");
+    }
+
+    #[test]
+    fn equip_can_move_an_already_equipped_item_between_slots() {
+        let mut i = inv();
+        let item_id = Uuid::from_u128(7);
+        let from_slot = Uuid::from_u128(100);
+        let to_slot = Uuid::from_u128(101);
+        i.loadout.equipped_items.0.insert(
+            from_slot,
+            SingleEquippedItem {
+                id: item_id,
+                slot: from_slot,
+                item: item(),
+            },
+        );
+        let mut t = InventoryChangeTracker::default();
+
+        apply_equipment_updates(&mut i, &HashMap::from([(to_slot, Some(item_id))]), &mut t, None);
+
+        assert!(!i.loadout.equipped_items.0.contains_key(&from_slot), "old slot is cleared");
+        let moved = i.loadout.equipped_items.0.get(&to_slot).expect("item moved to the new slot");
+        assert_eq!(moved.id, item_id);
+        assert_eq!(moved.slot, to_slot);
+        assert!(!i.backpack.items.0.contains_key(&item_id), "move does not leave a backpack copy");
+        assert!(t.modified_loadout.modified_equipped_items.contains(&from_slot));
+        assert!(t.modified_loadout.modified_equipped_items.contains(&to_slot));
     }
 
     /// Equipping a STACKABLE consumable (potion) via the `equippedConsumables` field
