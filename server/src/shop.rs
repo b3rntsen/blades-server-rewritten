@@ -34,7 +34,7 @@
 //! Unchanged in shape, two tiers best-first:
 //! 1. **Authored per-level generation** ([`crate::shop_gen`]) — the `shop_id` is the
 //!    character's building INSTANCE id, so we resolve its `typeId` + town-building
-//!    level from the stored town and use that level for both stock and merchant gold.
+//!    level from the stored town, but pick the stock band from the character level.
 //! 2. **Capture-derived template** fallback — if the shop isn't one of the 4
 //!    crafting vendors, or the town/level can't be resolved, or the config lacks
 //!    that building/level, we serve a captured template. A vendor is thus NEVER
@@ -187,7 +187,7 @@ fn window_to_wire(shop_id: Uuid, window: &MerchantWindow) -> OpenShopResponse {
 ///
 /// `building` = the resolved `(typeId, building_level, stock_level)` when `shop_id`
 /// is one of the character's crafting-vendor buildings; `None` when it couldn't be
-/// resolved. Tier 1 rolls generated stock and merchant gold from the town
+/// resolved. Tier 1 rolls generated, player-level-appropriate stock plus the town
 /// building level's measured gold band. Tier 2 falls back to the capture-derived
 /// template so a vendor is never empty — including its captured `wallet`, which is
 /// real retail merchant gold.
@@ -284,14 +284,23 @@ fn window_for(
     window
 }
 
-fn stock_building_for(entry: &CharacterDbEntryShop, shop_id: Uuid) -> Option<(Uuid, u64, u64)> {
-    stock_building_from_town(entry.town.as_ref().map(|t| &t.0), shop_id)
+fn stock_level_for_player_level(player_level: u16) -> u64 {
+    if player_level == 0 {
+        return 0;
+    }
+    (((u64::from(player_level) - 1) / 10) + 1).min(9)
 }
 
-fn stock_building_from_town(town: Option<&Value>, shop_id: Uuid) -> Option<(Uuid, u64, u64)> {
-    let (type_id, building_level) =
-        town.and_then(|town| find_building_type_level(town, shop_id))?;
-    Some((type_id, building_level, building_level))
+fn stock_building_for(entry: &CharacterDbEntryShop, shop_id: Uuid) -> Option<(Uuid, u64, u64)> {
+    let (type_id, building_level) = entry
+        .town
+        .as_ref()
+        .and_then(|t| find_building_type_level(&t.0, shop_id))?;
+    Some((
+        type_id,
+        building_level,
+        stock_level_for_player_level(entry.character.0.level),
+    ))
 }
 
 /// Walk `town.districts[].segments{}.buildings{}` for the building whose `id` equals
@@ -1097,7 +1106,6 @@ async fn write_back(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::JsonDbWrapper;
     use serde_json::json;
 
     const FORGE: &str = "26fdb92f-a4df-4928-a97b-dee8699af605";
@@ -1123,31 +1131,6 @@ mod tests {
                 }
             }]
         })
-    }
-
-    fn empty_inventory() -> blades_lib::user_data::CompleteInventory {
-        blades_lib::user_data::CompleteInventory {
-            backpack: Default::default(),
-            loadout: Default::default(),
-            treasury: Default::default(),
-            overflow_treasury: Default::default(),
-            backpack_version: 0,
-            treasury_version: 0,
-        }
-    }
-
-    fn shop_entry(building_id: Uuid, player_level: u16) -> CharacterDbEntryShop {
-        let mut character = blades_lib::user_data::CompleteCharacter::default();
-        character.level = player_level;
-        CharacterDbEntryShop {
-            id: Uuid::new_v4(),
-            user_id: Uuid::new_v4(),
-            character: JsonDbWrapper(character),
-            wallet: JsonDbWrapper(CompleteWallet::default()),
-            inventory: JsonDbWrapper(empty_inventory()),
-            town: Some(JsonDbWrapper(town_fixture(building_id))),
-            server_state: JsonDbWrapper(blades_lib::server_state::ServerState::default()),
-        }
     }
 
     #[test]
@@ -1180,26 +1163,26 @@ mod tests {
     }
 
     #[test]
-    fn building_level_selects_the_stock_band() {
-        let bid = Uuid::new_v4();
-        let entry = shop_entry(bid, 86);
-        let got = stock_building_for(&entry, bid).expect("building resolved");
-        assert_eq!(got.0, Uuid::parse_str(FORGE).unwrap());
-        assert_eq!(got.1, 4, "control: merchant gold still uses building level");
+    fn player_level_selects_the_stock_band() {
+        assert_eq!(stock_level_for_player_level(1), 1, "control: level 1 uses stock band 1");
+        assert_eq!(stock_level_for_player_level(9), 1);
+        assert_eq!(stock_level_for_player_level(10), 1);
+        assert_eq!(stock_level_for_player_level(11), 2);
         assert_eq!(
-            got.2, 4,
-            "stock band comes from the town building level, not the level-86 character"
+            stock_level_for_player_level(74),
+            8,
+            "a level-74 character must not be limited by a low-level town building"
         );
+        assert_eq!(stock_level_for_player_level(86), 9);
+        assert_eq!(stock_level_for_player_level(100), 9);
     }
 
     #[test]
-    fn unknown_shop_id_has_no_authored_stock_band() {
-        let bid = Uuid::new_v4();
-        let town = town_fixture(bid);
+    fn zero_player_level_has_no_authored_stock_band() {
         assert_eq!(
-            stock_building_from_town(Some(&town), Uuid::new_v4()),
-            None,
-            "negative control: unresolved vendors fall back to captured stock"
+            stock_level_for_player_level(0),
+            0,
+            "negative control: level 0 stays on the special captured/seeded band"
         );
     }
 
