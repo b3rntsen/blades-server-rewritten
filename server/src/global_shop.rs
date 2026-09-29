@@ -480,7 +480,7 @@ struct GlobalShopForCharacterResponse {
     global_shop: GlobalShopState,
 }
 
-fn current_window_purchase_tracking_ids(
+fn current_purchase_tracking_ids(
     static_data: &blades_lib::static_data::StaticData,
     now: i64,
 ) -> HashSet<String> {
@@ -498,31 +498,75 @@ fn current_window_purchase_tracking_ids(
         })
         .filter_map(|limit| {
             let tid = limit.get("purchaseTrackingId")?.as_str()?;
-            let capped = limit.get("limit").and_then(Value::as_u64).unwrap_or(0) > 0;
-            let windowed = tid
-                .rsplit("::")
-                .next()
-                .is_some_and(|tail| !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()));
-            (capped && windowed).then(|| tid.to_string())
+            Uuid::parse_str(tid).is_err().then(|| tid.to_string())
         })
         .collect()
 }
 
-fn purchases_list_with_window_counts(
+fn current_lifetime_purchase_tracking_ids(
+    static_data: &blades_lib::static_data::StaticData,
+    now: i64,
+) -> HashMap<String, Uuid> {
+    current_catalog(static_data, now)
+        .get("globalShopOverrides")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(product, entry)| {
+            let product_id = Uuid::parse_str(product).ok()?;
+            let lifetime_cap = entry
+                .get("maxPurchases")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            (lifetime_cap > 0).then_some((product, product_id, entry))
+        })
+        .flat_map(|(product, product_id, entry)| {
+            entry
+                .get("maxPurchaseLimits")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(move |limit| {
+                    let tid = limit.get("purchaseTrackingId")?.as_str()?;
+                    let capped = limit.get("limit").and_then(Value::as_u64).unwrap_or(0) > 0;
+                    let non_product = tid != product;
+                    let non_windowed = tid.rsplit("::").next().is_none_or(|tail| {
+                        tail.is_empty() || !tail.chars().all(|c| c.is_ascii_digit())
+                    });
+                    (capped && non_product && non_windowed).then(|| (tid.to_string(), product_id))
+                })
+        })
+        .collect()
+}
+
+fn purchases_list_with_tracking_counts(
     product_counts: &HashMap<Uuid, u64>,
-    window_counts: &HashMap<String, u64>,
-    visible_window_ids: &HashSet<String>,
+    tracking_counts: &HashMap<String, u64>,
+    visible_tracking_ids: &HashSet<String>,
+    lifetime_tracking_ids: &HashMap<String, Uuid>,
 ) -> Vec<PurchaseEntry> {
     let mut list = global_shop::purchases_list(product_counts);
     list.extend(
-        window_counts
+        tracking_counts
             .iter()
-            .filter(|(id, quantity)| **quantity > 0 && visible_window_ids.contains(*id))
+            .filter(|(id, quantity)| **quantity > 0 && visible_tracking_ids.contains(*id))
             .map(|(id, quantity)| PurchaseEntry {
                 id: id.clone(),
                 quantity: *quantity,
             }),
     );
+    for (id, product_id) in lifetime_tracking_ids {
+        if list.iter().any(|entry| entry.id == *id) {
+            continue;
+        }
+        let Some(quantity) = product_counts.get(product_id).copied().filter(|q| *q > 0) else {
+            continue;
+        };
+        list.push(PurchaseEntry {
+            id: id.clone(),
+            quantity,
+        });
+    }
     list.sort_by(|a, b| a.id.cmp(&b.id));
     list
 }
@@ -540,7 +584,8 @@ pub async fn get_global_shop_for_character(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    let visible_window_ids = current_window_purchase_tracking_ids(&app_state.static_data, now);
+    let visible_tracking_ids = current_purchase_tracking_ids(&app_state.static_data, now);
+    let lifetime_tracking_ids = current_lifetime_purchase_tracking_ids(&app_state.static_data, now);
     let mut conn = app_state.db_pool.get().await.unwrap();
 
     let rows = {
@@ -555,10 +600,11 @@ pub async fn get_global_shop_for_character(
     let entry = get_only_single_character_and_check_permission(rows, &session.session)?;
     Ok(Json(GlobalShopForCharacterResponse {
         global_shop: GlobalShopState {
-            global_shop_purchases: purchases_list_with_window_counts(
+            global_shop_purchases: purchases_list_with_tracking_counts(
                 &entry.server_state.0.global_shop_purchases,
                 &entry.server_state.0.global_shop_window_purchases,
-                &visible_window_ids,
+                &visible_tracking_ids,
+                &lifetime_tracking_ids,
             ),
         },
     }))
@@ -915,6 +961,35 @@ fn window_purchase_cap(
     None
 }
 
+fn current_product_purchase_tracking_ids(
+    static_data: &blades_lib::static_data::StaticData,
+    product_id: Uuid,
+    now: i64,
+) -> Vec<String> {
+    let product = product_id.to_string();
+    let current = current_catalog(static_data, now);
+    let Some(limits) = current
+        .get("globalShopOverrides")
+        .and_then(Value::as_object)
+        .and_then(|m| m.get(&product))
+        .and_then(|e| e.get("maxPurchaseLimits"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for lim in limits {
+        let Some(tid) = lim.get("purchaseTrackingId").and_then(Value::as_str) else {
+            continue;
+        };
+        if tid != product && !out.iter().any(|seen| seen == tid) {
+            out.push(tid.to_string());
+        }
+    }
+    out
+}
+
 /// `POST /…/globalshops/current/purchase` — buy a global-shop product: validate the
 /// client price, debit it, grant the product, bump the purchase count.
 #[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/globalshops/current/purchase")]
@@ -1018,7 +1093,10 @@ pub async fn purchase_global_shop(
     // Resolved here, not inside the transaction: the closure takes `app_state`.
     let lifetime_cap = lifetime_purchase_cap(&app_state.static_data, product_id, now);
     let window_cap = window_purchase_cap(&app_state.static_data, product_id, now);
-    let visible_window_ids = current_window_purchase_tracking_ids(&app_state.static_data, now);
+    let product_tracking_ids =
+        current_product_purchase_tracking_ids(&app_state.static_data, product_id, now);
+    let visible_tracking_ids = current_purchase_tracking_ids(&app_state.static_data, now);
+    let lifetime_tracking_ids = current_lifetime_purchase_tracking_ids(&app_state.static_data, now);
     let mut conn = app_state.db_pool.get().await.unwrap();
 
     conn.transaction(move |mut conn| {
@@ -1168,7 +1246,7 @@ pub async fn purchase_global_shop(
                 .global_shop_purchases
                 .entry(product_id)
                 .or_insert(0) += 1;
-            if let Some((key, _)) = window_cap {
+            for key in product_tracking_ids {
                 *entry
                     .server_state
                     .0
@@ -1179,10 +1257,11 @@ pub async fn purchase_global_shop(
 
             let inventory = entry.inventory.0.generate_client_update(&tracker);
             let wallet = entry.wallet.0.clone();
-            let global_shop_purchases = purchases_list_with_window_counts(
+            let global_shop_purchases = purchases_list_with_tracking_counts(
                 &entry.server_state.0.global_shop_purchases,
                 &entry.server_state.0.global_shop_window_purchases,
-                &visible_window_ids,
+                &visible_tracking_ids,
+                &lifetime_tracking_ids,
             );
 
             {
@@ -1866,11 +1945,11 @@ mod replay_tests {
 
     /// The client decides that a limited-time offer is sold out by comparing the
     /// offer's `maxPurchaseLimits[].purchaseTrackingId` with the character's
-    /// `globalShop.globalShopPurchases`. We enforced the per-window cap but only
-    /// returned the lifetime product id here, so the offer stayed buyable-looking
-    /// until the doomed purchase 400'd and the client reloaded.
+    /// `globalShop.globalShopPurchases`. Retail returned product, bare override
+    /// and windowed tracking ids after a purchase; returning only the product id
+    /// leaves some capped offers looking buyable until the doomed purchase 400s.
     #[test]
-    fn character_purchase_state_includes_the_current_window_tracking_id() {
+    fn character_purchase_state_includes_the_current_tracking_ids() {
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
         let sd = crate::static_loader::load(&dir);
         let now = 1_783_000_000 + 400 * 86_400;
@@ -1879,24 +1958,88 @@ mod replay_tests {
         let (window_key, cap) =
             window_purchase_cap(&sd, product, now).expect("incident product still has a cap");
         assert_eq!(cap, 3);
+        let tracking_ids = current_product_purchase_tracking_ids(&sd, product, now);
+        let bare_key = tracking_ids
+            .iter()
+            .find(|id| {
+                !id.rsplit("::")
+                    .next()
+                    .is_some_and(|tail| tail.chars().all(|c| c.is_ascii_digit()))
+            })
+            .expect("retail product has a bare override tracking id")
+            .clone();
 
-        let visible = current_window_purchase_tracking_ids(&sd, now);
+        let visible = current_purchase_tracking_ids(&sd, now);
+        let lifetime_tracking = current_lifetime_purchase_tracking_ids(&sd, now);
         assert!(
             visible.contains(&window_key),
             "the key the purchase handler enforces must be visible to the client"
         );
+        assert!(
+            visible.contains(&bare_key),
+            "the bare override tracking id must be visible to the client"
+        );
 
         let product_counts = HashMap::from([(product, 2)]);
-        let window_counts = HashMap::from([(window_key.clone(), 3)]);
-        let list = purchases_list_with_window_counts(&product_counts, &window_counts, &visible);
+        let tracking_counts = HashMap::from([(bare_key.clone(), 2), (window_key.clone(), 3)]);
+        let list = purchases_list_with_tracking_counts(
+            &product_counts,
+            &tracking_counts,
+            &visible,
+            &lifetime_tracking,
+        );
 
         assert!(
             list.iter().any(|e| e.id == product.to_string() && e.quantity == 2),
             "control: ordinary lifetime product counts still go out"
         );
         assert!(
+            list.iter().any(|e| e.id == bare_key && e.quantity == 2),
+            "the current bare override count must go out like retail"
+        );
+        assert!(
             list.iter().any(|e| e.id == window_key && e.quantity == 3),
             "the current window count must go out so the capped offer reads sold out"
+        );
+    }
+
+    /// Tracker #8: Mikhail's shield has `maxPurchases: 1`, but the client-side
+    /// sold-out check also sees the bare override entry in `maxPurchaseLimits`.
+    /// Retail returned that bare tracking id at quantity 1 after the first buy.
+    #[test]
+    fn character_purchase_state_includes_the_capped_shield_override_tracking_id() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let sd = crate::static_loader::load(&dir);
+        let product = Uuid::parse_str("bcc83fac-5a47-4ba9-8627-3b10d4eece9c").unwrap();
+        let now = 1_783_000_000 + 400 * 86_400;
+
+        assert_eq!(lifetime_purchase_cap(&sd, product, now), Some(1));
+        let tracking_ids = current_product_purchase_tracking_ids(&sd, product, now);
+        let bare_key =
+            "bcc83fac-5a47-4ba9-8627-3b10d4eece9c::override::834a1e14-10f4-4f0e-a9ec-719c4f479905";
+        assert!(
+            tracking_ids.iter().any(|id| id == bare_key),
+            "the shield's capped override tracking id must be counted"
+        );
+
+        let visible = current_purchase_tracking_ids(&sd, now);
+        let lifetime_tracking = current_lifetime_purchase_tracking_ids(&sd, now);
+        let product_counts = HashMap::from([(product, 1)]);
+        let tracking_counts = HashMap::new();
+        let list = purchases_list_with_tracking_counts(
+            &product_counts,
+            &tracking_counts,
+            &visible,
+            &lifetime_tracking,
+        );
+
+        assert!(
+            list.iter().any(|e| e.id == product.to_string() && e.quantity == 1),
+            "the lifetime product count still goes out"
+        );
+        assert!(
+            list.iter().any(|e| e.id == bare_key && e.quantity == 1),
+            "the client needs this override count to gray out the shield"
         );
     }
 
@@ -1918,10 +2061,16 @@ mod replay_tests {
             .expect("window key has a timestamp");
         assert_ne!(stale_key, window_key);
 
-        let visible = current_window_purchase_tracking_ids(&sd, now);
+        let visible = current_purchase_tracking_ids(&sd, now);
+        let lifetime_tracking = current_lifetime_purchase_tracking_ids(&sd, now);
         let product_counts = HashMap::new();
-        let window_counts = HashMap::from([(stale_key.clone(), 99)]);
-        let list = purchases_list_with_window_counts(&product_counts, &window_counts, &visible);
+        let tracking_counts = HashMap::from([(stale_key.clone(), 99)]);
+        let list = purchases_list_with_tracking_counts(
+            &product_counts,
+            &tracking_counts,
+            &visible,
+            &lifetime_tracking,
+        );
 
         assert!(
             !list.iter().any(|e| e.id == stale_key),

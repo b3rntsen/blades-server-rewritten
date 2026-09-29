@@ -87,9 +87,9 @@ pub struct PurchaseEntry {
     pub quantity: u64,
 }
 
-/// Build the `globalShopPurchases` list from per-product counts (base `productId`
-/// entries; the retail server also emits `::override::…` tracking variants for
-/// limited-time caps, which we omit).
+/// Build the base `globalShopPurchases` list from per-product counts. The server
+/// route appends active `::override::…` tracking variants from its string-keyed
+/// offer counter map.
 pub fn purchases_list(counts: &HashMap<Uuid, u64>) -> Vec<PurchaseEntry> {
     let mut list: Vec<PurchaseEntry> = counts
         .iter()
