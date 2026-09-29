@@ -2200,6 +2200,8 @@ mod event_run_lifecycle_db {
         let r = crate::quest::complete_quest_in_tx(
             conn,
             &world().sd,
+            &world().gd,
+            &serde_json::json!({}),
             p.user,
             p.character,
             p.instance,
