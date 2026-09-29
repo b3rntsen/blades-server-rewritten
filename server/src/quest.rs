@@ -893,13 +893,29 @@ pub async fn get_quests(
             let reset_boundary = jobs_gen::current_reset_boundary(&job_pools_def, now);
             let needs_regen = character.character.0.last_jobs_reset_time < reset_boundary;
 
-            let (jobs, job_pools) = jobs_gen::generate(
+            let completed_job_ids = if needs_regen {
+                std::collections::HashSet::new()
+            } else {
+                use crate::schema::quests;
+                quests::table
+                    .filter(quests::character_id.eq(character_id_var))
+                    .select(QuestDbEntry::as_select())
+                    .load(&mut conn)
+                    .await?
+                    .into_iter()
+                    .filter(|q| jobs_gen::is_job_row(&q.info.0) && q.info.0.completed)
+                    .map(|q| q.id)
+                    .collect()
+            };
+
+            let (jobs, job_pools) = jobs_gen::generate_replenished(
                 &job_pools_def,
                 character_id_var,
                 character.character.0.level,
                 character.character.0.job_difficulty_cycle_index,
                 reset_boundary,
                 now,
+                &completed_job_ids,
             );
 
             if needs_regen {
@@ -1781,6 +1797,16 @@ pub(crate) struct CompleteQuestResponse {
     inventory: CompleteInventoryUpdate,
     wallet: CompleteWallet,
     character: CompleteCharacterWithIdWithoutData,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    quests: Vec<QuestWithId>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    jobs: Vec<Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    dungeon_generated_data_list: Vec<DungeonGeneratedDataWithId>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    deleted_quest_ids: Vec<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    job_pools: Option<Value>,
 }
 
 /// Mark one stored quest completion exactly once.
@@ -1847,6 +1873,8 @@ pub async fn complete_quest(
             complete_quest_in_tx(
                 conn,
                 &globals.static_data,
+                &globals.game_data,
+                &globals.job_pools,
                 user_id,
                 character_id,
                 quest_id,
@@ -1871,6 +1899,8 @@ pub async fn complete_quest(
 pub(crate) async fn complete_quest_in_tx(
     conn: &mut diesel_async::AsyncPgConnection,
     static_data: &blades_lib::static_data::StaticData,
+    game_data: &blades_lib::game_data::GameData,
+    job_pools_def: &Value,
     user_id: Uuid,
     character_id: Uuid,
     quest_id: Uuid,
@@ -1918,6 +1948,11 @@ pub(crate) async fn complete_quest_in_tx(
                 id: character_id,
                 character: entry.character.0.clone(),
             },
+            quests: Vec::new(),
+            jobs: Vec::new(),
+            dungeon_generated_data_list: Vec::new(),
+            deleted_quest_ids: Vec::new(),
+            job_pools: None,
         });
     }
 
@@ -2030,6 +2065,108 @@ pub(crate) async fn complete_quest_in_tx(
     let inventory = entry.inventory.0.generate_client_update(&tracker);
     let wallet = entry.wallet.0.clone();
     let character = entry.character.0.clone();
+    let is_job = jobs_gen::is_job_row(&quest_entry.info.0);
+    let mut response_quests = Vec::new();
+    let mut response_jobs = Vec::new();
+    let mut response_generated_data = Vec::new();
+    let mut response_deleted_quest_ids = Vec::new();
+    let mut response_job_pools = None;
+
+    if is_job {
+        let reset_boundary = jobs_gen::current_reset_boundary(job_pools_def, now.max(0) as u64);
+        let mut completed_job_ids = {
+            use crate::schema::quests;
+            quests::table
+                .filter(quests::character_id.eq(character_id))
+                .select(QuestDbEntry::as_select())
+                .load(conn)
+                .await?
+                .into_iter()
+                .filter(|q| jobs_gen::is_job_row(&q.info.0) && q.info.0.completed)
+                .map(|q| q.id)
+                .collect::<std::collections::HashSet<_>>()
+        };
+        completed_job_ids.insert(quest_id);
+
+        let existing_live_job_ids = {
+            use crate::schema::quests;
+            quests::table
+                .filter(quests::character_id.eq(character_id))
+                .select(QuestDbEntry::as_select())
+                .load(conn)
+                .await?
+                .into_iter()
+                .filter(|q| {
+                    q.id != quest_id
+                        && jobs_gen::is_job_row(&q.info.0)
+                        && !q.info.0.completed
+                })
+                .map(|q| q.id)
+                .collect::<std::collections::HashSet<_>>()
+        };
+
+        let (jobs, pools) = jobs_gen::generate_replenished(
+            job_pools_def,
+            character_id,
+            character.level,
+            character.job_difficulty_cycle_index,
+            reset_boundary,
+            now.max(0) as u64,
+            &completed_job_ids,
+        );
+        for job in &jobs {
+            let Some(row) = jobs_gen::job_quest_db_entry(
+                job,
+                character_id,
+                game_data,
+                &static_data.quests_daily.level_scaling,
+            ) else {
+                continue;
+            };
+            let is_new = !existing_live_job_ids.contains(&row.id);
+            {
+                use crate::schema::quests;
+                insert_into(quests::table)
+                    .values(&row)
+                    .on_conflict((quests::id, quests::character_id))
+                    .do_nothing()
+                    .execute(conn)
+                    .await?;
+            }
+            if is_new {
+                if let Some(inner) = row.generated_data.0 {
+                    response_generated_data.push(DungeonGeneratedDataWithId {
+                        quest_id: row.id,
+                        inner,
+                    });
+                }
+            }
+        }
+
+        response_quests = {
+            use crate::schema::quests;
+            quests::table
+                .filter(quests::character_id.eq(character_id))
+                .select(QuestDbEntry::as_select())
+                .load(conn)
+                .await?
+                .into_iter()
+                .filter(|q| {
+                    !jobs_gen::is_job_row(&q.info.0)
+                        && !q.info.0.completed
+                        && !matches!(q.info.0.r#type, blades_lib::user_data::QuestType::GameEvent)
+                        && q.generated_data.0.is_some()
+                })
+                .map(|q| QuestWithId {
+                    quest_id: q.id,
+                    quest: q.info.0,
+                })
+                .collect()
+        };
+        response_deleted_quest_ids.push(quest_id);
+        response_jobs = jobs;
+        response_job_pools = Some(pools);
+    }
 
     // Write the completed quest flag back.
     {
@@ -2062,6 +2199,11 @@ pub(crate) async fn complete_quest_in_tx(
             id: character_id,
             character,
         },
+        quests: response_quests,
+        jobs: response_jobs,
+        dungeon_generated_data_list: response_generated_data,
+        deleted_quest_ids: response_deleted_quest_ids,
+        job_pools: response_job_pools,
     })
 }
 
@@ -3521,6 +3663,77 @@ pub(crate) mod jobs_gen {
             for slot in 0..count {
                 jobs.push(roll_job(pools_def, pool, character_id, level, reset_boundary, slot));
             }
+            let (end_time, next_start) = pool_timers(pool, now, count);
+            timers.push(json!({ "id": pool_id, "endTime": end_time, "nextStartTime": next_start }));
+        }
+        (jobs, Value::Array(timers))
+    }
+
+    /// Generate the current board while replacing jobs already completed in this
+    /// reset window.
+    ///
+    /// Retail replenishes a town job immediately on `/complete`: the response names
+    /// the finished quest in `deletedQuestIds`, returns a full `jobs[]` board of the
+    /// same size, and includes generated data only for the new replacement. The
+    /// completed row we keep in `quests` is the window-local memory that keeps the
+    /// replacement stable until the next reset prunes old job rows.
+    pub fn generate_replenished(
+        pools_def: &Value,
+        character_id: Uuid,
+        level: u16,
+        cycle_index: i64,
+        reset_boundary: u64,
+        now: u64,
+        completed_job_ids: &std::collections::HashSet<Uuid>,
+    ) -> (Vec<Value>, Value) {
+        if completed_job_ids.is_empty() {
+            return generate(
+                pools_def,
+                character_id,
+                level,
+                cycle_index,
+                reset_boundary,
+                now,
+            );
+        }
+
+        let pools = match pools_def.get("jobPools").and_then(|p| p.as_array()) {
+            Some(p) => p,
+            None => return (Vec::new(), json!([])),
+        };
+        let max_active_global = pools_def
+            .get("globals")
+            .and_then(|g| g.get("maxActiveJobs"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(4);
+
+        let mut jobs = Vec::new();
+        let mut timers = Vec::new();
+        for pool in pools {
+            let pool_id = match get_str(pool, "jobPoolId") {
+                Some(id) => id,
+                None => continue,
+            };
+            let mut count = pool_active_count(pool, reset_boundary);
+            if get_i64(pool, "presentation", 0) == 0 {
+                count = count.min(max_active_global);
+            }
+
+            let mut kept = 0;
+            let mut slot = 0;
+            while kept < count {
+                let job = roll_job(pools_def, pool, character_id, level, reset_boundary, slot);
+                slot += 1;
+                let Some(id) = get_str(&job, "questId").and_then(|s| Uuid::parse_str(s).ok()) else {
+                    continue;
+                };
+                if completed_job_ids.contains(&id) {
+                    continue;
+                }
+                jobs.push(job);
+                kept += 1;
+            }
+
             let (end_time, next_start) = pool_timers(pool, now, count);
             timers.push(json!({ "id": pool_id, "endTime": end_time, "nextStartTime": next_start }));
         }
@@ -4986,7 +5199,7 @@ mod event_quest_tests {
 #[cfg(test)]
 mod report92_job_completion_reward_tests {
     use super::*;
-    use blades_lib::static_data::{QuestLevelScaling, StaticData};
+    use blades_lib::static_data::StaticData;
     use blades_lib::user_data::Quest;
 
     const GOLD: &str = "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2";
@@ -5020,6 +5233,15 @@ mod report92_job_completion_reward_tests {
         let (jobs, _t) = jobs_gen::generate(&pools, CHAR, 48, 0, boundary, NOW_WED);
         assert!(!jobs.is_empty(), "the committed pools must roll a board at all");
         jobs
+    }
+
+    fn job_ids(jobs: &[Value]) -> std::collections::HashSet<Uuid> {
+        jobs.iter()
+            .map(|j| {
+                Uuid::parse_str(j["questId"].as_str().expect("job has questId"))
+                    .expect("questId is a uuid")
+            })
+            .collect()
     }
 
     /// One retail job, reduced to the three `jobSetup` fields the reward is built
@@ -5121,6 +5343,76 @@ mod report92_job_completion_reward_tests {
         story.job_reward = None;
         let reward = resolve_completion_reward(&sd, Uuid::from_u128(0xF00D), &story);
         assert!(!reward.is_empty(), "the story-quest control must still pay");
+    }
+
+    /// Report #279: HauDrauf completed one job (`21c4b74d...`) and then had five
+    /// live job rows left in storage, but retail replaces the completed job inside
+    /// the same reset window. The board must therefore keep those five exact rows,
+    /// drop the completed one, and add one deterministic replacement.
+    #[test]
+    fn completed_jobs_are_replenished_for_the_rest_of_the_window() {
+        let pools = job_pools();
+        let character = Uuid::parse_str("489620db-7f90-4a03-bb7c-f7e92a9c73cb").unwrap();
+        let now = 1_790_661_960; // 2026-09-29 06:06 UTC
+        let boundary = jobs_gen::current_reset_boundary(&pools, now);
+        assert_eq!(boundary, 1_790_658_000, "the report's 05:00 UTC reset");
+
+        let (base, _) = jobs_gen::generate(&pools, character, 100, 44, boundary, now);
+        let base_ids = job_ids(&base);
+        let completed = Uuid::parse_str("21c4b74d-56f2-4053-b16d-61c350f66bfd").unwrap();
+        assert!(
+            base_ids.contains(&completed),
+            "control: the exact job HauDrauf finished must be on the original board"
+        );
+
+        let completed_ids = std::collections::HashSet::from([completed]);
+        let (replenished, _) =
+            jobs_gen::generate_replenished(&pools, character, 100, 44, boundary, now, &completed_ids);
+        let replenished_ids = job_ids(&replenished);
+
+        assert_eq!(replenished.len(), base.len(), "retail keeps the board full");
+        assert!(
+            !replenished_ids.contains(&completed),
+            "the completed job must be deleted from the client board"
+        );
+        for open in [
+            "1b3fe471-d9ca-481e-b2cd-1a69d681b971",
+            "41d2b7ae-bdbf-4d54-9eb9-eb1e9b21a1bb",
+            "c53d368d-7f5e-4254-8853-4f9dd70fd2ff",
+            "c81e5650-ee21-421d-8509-cc22202354b8",
+            "eb437dde-2ac3-4adc-bb6d-d18c1d8bd113",
+        ] {
+            let id = Uuid::parse_str(open).unwrap();
+            assert!(
+                replenished_ids.contains(&id),
+                "open job {id} from HauDrauf's rows should stay on the board"
+            );
+        }
+        let replacements: Vec<_> = replenished_ids.difference(&base_ids).collect();
+        assert_eq!(replacements.len(), 1, "exactly one new job replaces the one deleted");
+    }
+
+    /// Negative control for the report #279 fix: an untouched board takes the old
+    /// generator path and does not reshuffle ids.
+    #[test]
+    fn replenishment_without_completed_jobs_is_the_original_board() {
+        let pools = job_pools();
+        let boundary = jobs_gen::current_reset_boundary(&pools, NOW_WED);
+        let (base, _) = jobs_gen::generate(&pools, CHAR, 48, 0, boundary, NOW_WED);
+        let (same, _) = jobs_gen::generate_replenished(
+            &pools,
+            CHAR,
+            48,
+            0,
+            boundary,
+            NOW_WED,
+            &std::collections::HashSet::new(),
+        );
+        assert_eq!(
+            serde_json::to_value(&same).unwrap(),
+            serde_json::to_value(&base).unwrap(),
+            "empty exclusions must not move the board"
+        );
     }
 
     /// Rows stored before `job_reward` existed carry `None`. They must still pay
