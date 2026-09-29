@@ -527,6 +527,16 @@ pub fn on_c2s_input(
         }
         return Vec::new();
     }
+    if !matches!(combat.phase, FlowState::StateTimeout)
+        && input::is_request_consume_consumable(user_data)
+    {
+        info!(
+            "combat: slot {sender} op63 ignored — round is not live yet \
+             (gsid={} phase={:?})",
+            combat.game_session_id, combat.phase,
+        );
+        return Vec::new();
+    }
     // Combat resolves ONLY in the live round (StateTimeout). During Connecting /
     // Spawning / BackendMatchCreated the inbound op54s are round-start handshake
     // traffic (the client's PlayerLoadoutReady upload, op55, op58) — resolving them as
@@ -8938,14 +8948,23 @@ pub fn use_consumable(combat: &mut MatchCombat, slot: usize, _now: Instant) -> b
         Some(f) => {
             let ok = f.try_use_consumable();
             if !ok {
-                debug!(
-                    "combat: slot {slot} consumable REJECTED — consumablesPerRound ({}) already spent",
+                info!(
+                    "combat: slot {slot} consumable REJECTED — consumablesPerRound ({}) already spent \
+                     (gsid={})",
                     super::state::CONSUMABLES_PER_ROUND,
+                    combat.game_session_id,
                 );
             }
             ok
         }
-        None => false,
+        None => {
+            info!(
+                "combat: slot {slot} consumable REJECTED — fighter slot is out of range \
+                 (gsid={})",
+                combat.game_session_id,
+            );
+            false
+        }
     }
 }
 
@@ -8977,9 +8996,10 @@ fn on_consume_consumable(
     // Resolve the item id BEFORE spending the charge, so a request we cannot answer
     // does not silently burn the round's only consumable.
     let Some(uuid) = combat.fighters[sender].equipped_consumable.clone() else {
-        debug!(
+        info!(
             "combat: slot {sender} op63 ignored — no consumable declared yet \
-             (no EquipAbilitiesAndConsumables seen)"
+             (no EquipAbilitiesAndConsumables seen; gsid={})",
+            combat.game_session_id,
         );
         return Vec::new();
     };
@@ -9599,6 +9619,7 @@ mod phase4_tests {
         out
     }
     use super::*;
+    use super::super::gamedata;
     use crate::arena::combat::state::Fighter;
 
     // ---------------------------------------------------------------------
@@ -10550,6 +10571,78 @@ mod phase4_tests {
             .filter(|(_, f)| messages::user_message_gmid(f) == Some(64))
             .count();
         assert_eq!(op64_again, 2, "the budget resets between rounds");
+    }
+
+    /// Report #280: the highest stamina tier must travel through the retail wire path
+    /// and reach the HUD bar. Retail c2s op56 is `{obj, Avatar, Autonomous, 56,
+    /// consumableUuid, charges}` and op63 is the bare `{obj, Avatar, Autonomous, 63}`;
+    /// the successful server answer is op64, and the actual bar movement is the later
+    /// op65 `PlayerStatsUpdate` emitted by the regen/restoration tick.
+    #[test]
+    fn top_stamina_potion_retail_op56_op63_emits_op64_and_raises_stamina() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        let obj = combat.fighters[0].net_object_id;
+        const ULTIMATE_STAMINA: &str = "8da5101c-2e7c-446b-b3bd-d1b9aa5c44f6";
+
+        let r = gamedata::restoration(ULTIMATE_STAMINA).expect("tier 10 stamina exists");
+        assert_eq!(r.affected_stat, 1, "Items.Name.Potion.Restoration.Stamina.Tier10");
+        assert_eq!(r.value, 775.0);
+        assert_eq!(r.duration, 2.5);
+
+        combat.fighters[0].max_stamina = 1_000;
+        combat.fighters[0].stamina = 100;
+        combat.fighters[0].regen_carry_stamina = 0.0;
+        combat.last_regen_tick = now;
+
+        // Negative control: op63 alone is refused, emits no op64, and does not spend
+        // the round's one consumable budget.
+        assert!(on_c2s_input(&mut combat, 0, &make_request_consume_frame(obj), now).is_empty());
+        assert_eq!(combat.fighters[0].consumables_used, 0);
+        assert_eq!(combat.fighters[0].stamina, 100);
+
+        assert!(
+            on_c2s_input(
+                &mut combat,
+                0,
+                &make_equip_consumable_frame(obj, ULTIMATE_STAMINA, 63),
+                now
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            combat.fighters[0].equipped_consumable.as_deref(),
+            Some(ULTIMATE_STAMINA)
+        );
+
+        let consume = on_c2s_input(&mut combat, 0, &make_request_consume_frame(obj), now);
+        let op64: Vec<_> = consume
+            .iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(64))
+            .collect();
+        assert_eq!(op64.len(), 2, "op64 goes to both players");
+        assert_eq!(
+            op64[0].1,
+            messages::perform_consume_consumable(obj, ULTIMATE_STAMINA),
+            "op64 carries the latched top-tier stamina UUID"
+        );
+        assert!(combat.fighters[0].pending_restore.is_some());
+        assert_eq!(
+            combat.fighters[0].stamina, 100,
+            "restoration is spread over ticks, not applied inside op63 handling"
+        );
+
+        let tick = apply_regen_tick(&mut combat, now + Duration::from_secs(1));
+        assert!(
+            combat.fighters[0].stamina > 400,
+            "tier 10 stamina restore plus normal regen must raise the bar: {}",
+            combat.fighters[0].stamina
+        );
+        let op65 = tick
+            .iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(65))
+            .count();
+        assert_eq!(op65, 2, "the stamina bar update is PlayerStatsUpdate to both players");
     }
 
     /// op56 is a loadout declaration, so it must latch even OUTSIDE the live round —
