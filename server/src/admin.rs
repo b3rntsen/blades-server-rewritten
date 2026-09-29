@@ -1151,6 +1151,9 @@ pub struct CurrentCharacterSummary {
     name: String,
     level: u16,
     pvp_trophies: i64,
+    /// The captured character this live row was imported from (`characters.source_alt_uuid`),
+    /// so the web can keep that archived alt's name in step with a rename.
+    source_alt_uuid: Option<Uuid>,
 }
 
 #[derive(Serialize)]
@@ -1180,6 +1183,7 @@ const AI_NAME_SUFFIX: &str = "(AI)";
 
 fn current_character_summary(
     row: CharacterDbEntryCharacterAlone,
+    source_alt_uuid: Option<Uuid>,
 ) -> CurrentCharacterSummary {
     CurrentCharacterSummary {
         user_id: row.user_id,
@@ -1187,6 +1191,7 @@ fn current_character_summary(
         name: row.character.0.name,
         level: row.character.0.level,
         pvp_trophies: row.character.0.pvp_trophies,
+        source_alt_uuid,
     }
 }
 
@@ -1211,9 +1216,20 @@ pub async fn get_current_character(
         .await
         .optional()?;
 
-    Ok(Json(CurrentCharacterResponse {
-        character: row.map(current_character_summary),
-    }))
+    let character = match row {
+        Some(row) => {
+            let source_alt_uuid: Option<Uuid> = characters::table
+                .filter(characters::id.eq(row.id))
+                .select(characters::source_alt_uuid)
+                .first::<Option<Uuid>>(&mut conn)
+                .await
+                .optional()?
+                .flatten();
+            Some(current_character_summary(row, source_alt_uuid))
+        }
+        None => None,
+    };
+    Ok(Json(CurrentCharacterResponse { character }))
 }
 
 /// `POST /…/api/dev/v1/characters/{character_id}/name` — rename the current live
@@ -3291,7 +3307,7 @@ mod tests {
                     global_shop_offers: serde_json::json!([{"private": "not projected"}]),
                     ..CompleteCharacter::default()
                 }),
-            });
+            }, Some(Uuid::from_u128(3)));
             let value = serde_json::to_value(summary).unwrap();
             let mut keys: Vec<&str> = value
                 .as_object()
@@ -3302,8 +3318,9 @@ mod tests {
             keys.sort_unstable();
             assert_eq!(
                 keys,
-                ["characterId", "level", "name", "pvpTrophies", "userId"]
+                ["characterId", "level", "name", "pvpTrophies", "sourceAltUuid", "userId"]
             );
+            assert_eq!(value["sourceAltUuid"], Uuid::from_u128(3).to_string());
             assert_eq!(value["name"], "Current Hero");
             assert_eq!(value["level"], 42);
             assert_eq!(value["pvpTrophies"], 733);
