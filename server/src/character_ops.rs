@@ -13,21 +13,23 @@ use actix_web::{
     post,
     web::{self, Json},
 };
+use blades_lib::economy::GEMS;
 use blades_lib::features::character_ops::{self, Attribute};
 use blades_lib::features::level_up;
 use blades_lib::user_data::{
-    CompleteCharacter, CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate,
-    CompleteWallet, InventoryChangeTracker,
+    CompleteCharacter, CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
+    InventoryChangeTracker, WalletEntry,
 };
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
+use diesel_async::{
+    AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    BladeApiError, ServerGlobal, models::CharacterDbEntryEconomy,
-    session::SessionLookedUpMaybe,
+    BladeApiError, ServerGlobal, models::CharacterDbEntryEconomy, session::SessionLookedUpMaybe,
 };
 
 const CHAR_OPS_SERVICE_ID: u64 = 9006;
@@ -90,6 +92,13 @@ struct CharacterOnly {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct RespecResponse {
+    character: CompleteCharacterWithIdWithoutData,
+    wallet: CompleteWallet,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct InventoryOnly {
     inventory: CompleteInventoryUpdate,
 }
@@ -106,16 +115,14 @@ fn requested_levelup_attribute(req: &LevelupRequest, current_level: u16) -> Opti
         // Retail stops granting attribute points after level 50. At that point the
         // client may send `null` or omit the field entirely; accept a harmless
         // placeholder rather than refusing a level whose attribute choice is ignored.
-        None if current_level >= character_ops::MAX_ATTRIBUTE_POINT_LEVEL => Some(Attribute::Stamina),
+        None if current_level >= character_ops::MAX_ATTRIBUTE_POINT_LEVEL => {
+            Some(Attribute::Stamina)
+        }
         None => None,
     }
 }
 
-fn set_level_up_offer(
-    character: &mut CompleteCharacter,
-    offers: &HashMap<u16, Uuid>,
-    now: u64,
-) {
+fn set_level_up_offer(character: &mut CompleteCharacter, offers: &HashMap<u16, Uuid>, now: u64) {
     character.global_shop_offers = match offers.get(&character.level) {
         Some(product_id) => serde_json::json!([{
             "globalShopProductId": product_id,
@@ -156,7 +163,9 @@ pub async fn levelup(
         async move {
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
             let attribute = requested_levelup_attribute(&body, entry.character.0.level)
-                .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, CHAR_OPS_SERVICE_ID, 1))?;
+                .ok_or_else(|| {
+                    BladeApiError::new(StatusCode::BAD_REQUEST, CHAR_OPS_SERVICE_ID, 1)
+                })?;
 
             // Refuse before anything is written: an unearned level must leave the
             // character exactly as it was, not half-applied.
@@ -274,7 +283,7 @@ pub async fn learn_abilities(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
-            character_ops::merge_abilities(&mut entry.character.0, &updates);
+            character_ops::replace_abilities(&mut entry.character.0, &updates);
             let character = CompleteCharacterWithIdWithoutData {
                 id: character_id,
                 character: entry.character.0.clone(),
@@ -305,23 +314,31 @@ pub async fn respec(
     app_state: web::Data<Arc<ServerGlobal>>,
     path: web::Path<Uuid>,
     body: Json<RespecRequest>,
-) -> Result<Json<CharacterWallet>, BladeApiError> {
+) -> Result<Json<RespecResponse>, BladeApiError> {
     let session = session.get_session_or_error()?;
     let user_id = session.session.user_id;
     let character_id = path.into_inner();
     let body = body.into_inner();
-    let mut conn = app_state.db_pool.get().await.unwrap();
+    let app_state_clone = app_state.into_inner().clone();
+    let db_pool = app_state_clone.db_pool.clone();
+    let mut conn = db_pool.get().await.unwrap();
 
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
-            character_ops::apply_respec(&mut entry.character.0, body.stamina, body.magicka);
-            let resp = CharacterWallet {
+            apply_respec_transaction(
+                &mut entry.character.0,
+                &mut entry.wallet.0,
+                &app_state_clone.level_up_data,
+                body.stamina,
+                body.magicka,
+            )?;
+            let resp = RespecResponse {
                 character: CompleteCharacterWithIdWithoutData {
                     id: character_id,
                     character: entry.character.0.clone(),
                 },
-                wallet: entry.wallet.0.clone(),
+                wallet: wallet_one_currency(&entry.wallet.0, GEMS),
             };
             write_back(&mut conn, entry).await?;
             Ok::<_, BladeApiError>(Json(resp))
@@ -329,6 +346,42 @@ pub async fn respec(
         .scope_boxed()
     })
     .await
+}
+
+fn respec_cost_for_level(data: &level_up::LevelUpData, level: u16) -> u64 {
+    data.get_reward(u32::from(level))
+        .map(|r| u64::from(r.reset_cost))
+        .unwrap_or(0)
+}
+
+fn apply_respec_transaction(
+    character: &mut CompleteCharacter,
+    wallet: &mut CompleteWallet,
+    data: &level_up::LevelUpData,
+    stamina: u32,
+    magicka: u32,
+) -> Result<u64, BladeApiError> {
+    let cost = respec_cost_for_level(data, character.level);
+    if cost > 0 {
+        wallet
+            .debit(GEMS, cost)
+            .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, CHAR_OPS_SERVICE_ID, 5))?;
+    }
+    character_ops::apply_respec(character, stamina, magicka);
+    Ok(cost)
+}
+
+fn wallet_one_currency(wallet: &CompleteWallet, currency: Uuid) -> CompleteWallet {
+    let mut out = HashMap::new();
+    out.insert(
+        currency,
+        wallet
+            .0
+            .get(&currency)
+            .cloned()
+            .unwrap_or(WalletEntry { balance: 0 }),
+    );
+    CompleteWallet(out)
 }
 
 #[derive(Deserialize)]
@@ -339,7 +392,9 @@ struct UpgradeRequest {
 }
 
 /// `POST /inventories/current/upgrade` — raise backpack capacity tier.
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/inventories/current/upgrade")]
+#[post(
+    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/inventories/current/upgrade"
+)]
 pub async fn upgrade_inventory(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -377,7 +432,9 @@ struct DestroyRequest {
 }
 
 /// `POST /inventories/current/destroy` — destroy instanced backpack items.
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/inventories/current/destroy")]
+#[post(
+    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/inventories/current/destroy"
+)]
 pub async fn destroy_items(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -406,7 +463,9 @@ pub async fn destroy_items(
 }
 
 /// `POST /loadouts/profiles/{n}` — save a named loadout profile (returns `null`).
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/loadouts/profiles/{index}")]
+#[post(
+    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/loadouts/profiles/{index}"
+)]
 pub async fn save_loadout_profile(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -572,54 +631,60 @@ pub async fn update_loadout(
     let globals = app_state.get_ref().clone();
     let mut conn = app_state.db_pool.get().await.unwrap();
 
-    let result = conn.transaction(move |mut conn| {
-        async move {
-            let mut entry = load_owned(&mut conn, character_id, user_id).await?;
-            let mut tracker = InventoryChangeTracker::default();
-            let mut inventory_changed = false;
-            if !body.equipment_updates.is_empty() {
-                let updates =
-                    without_armour_in_the_wrong_slot(&body.equipment_updates, &entry.inventory.0);
-                character_ops::apply_equipment_updates(
-                    &mut entry.inventory.0,
-                    &updates,
-                    &mut tracker,
-                    Some(&globals.game_data),
-                );
-                inventory_changed = true;
+    let result = conn
+        .transaction(move |mut conn| {
+            async move {
+                let mut entry = load_owned(&mut conn, character_id, user_id).await?;
+                let mut tracker = InventoryChangeTracker::default();
+                let mut inventory_changed = false;
+                if !body.equipment_updates.is_empty() {
+                    let updates = without_armour_in_the_wrong_slot(
+                        &body.equipment_updates,
+                        &entry.inventory.0,
+                    );
+                    character_ops::apply_equipment_updates(
+                        &mut entry.inventory.0,
+                        &updates,
+                        &mut tracker,
+                        Some(&globals.game_data),
+                    );
+                    inventory_changed = true;
+                }
+                // A potion equip arrives as the separate `equippedConsumables` list (a full
+                // replacement). Apply it faithfully so the equipped consumable lands + is
+                // echoed in the loadout diff — the old handler ignored this, so the equip
+                // never took and the client showed "Unable to connect".
+                if let Some(consumables) = &body.equipped_consumables {
+                    let changed = character_ops::set_equipped_consumables(
+                        &mut entry.inventory.0,
+                        consumables,
+                        &mut tracker,
+                    );
+                    inventory_changed |= changed;
+                }
+                if inventory_changed {
+                    entry.inventory.0.backpack_version += 1;
+                }
+                if body.ability_updates.is_object() {
+                    character_ops::set_equipped_abilities(
+                        &mut entry.character.0,
+                        &body.ability_updates,
+                    );
+                }
+                let resp = CharacterWalletInventory {
+                    character: CompleteCharacterWithIdWithoutData {
+                        id: character_id,
+                        character: entry.character.0.clone(),
+                    },
+                    wallet: entry.wallet.0.clone(),
+                    inventory: entry.inventory.0.generate_client_update(&tracker),
+                };
+                write_back(&mut conn, entry).await?;
+                Ok::<_, BladeApiError>(Json(resp))
             }
-            // A potion equip arrives as the separate `equippedConsumables` list (a full
-            // replacement). Apply it faithfully so the equipped consumable lands + is
-            // echoed in the loadout diff — the old handler ignored this, so the equip
-            // never took and the client showed "Unable to connect".
-            if let Some(consumables) = &body.equipped_consumables {
-                let changed = character_ops::set_equipped_consumables(
-                    &mut entry.inventory.0,
-                    consumables,
-                    &mut tracker,
-                );
-                inventory_changed |= changed;
-            }
-            if inventory_changed {
-                entry.inventory.0.backpack_version += 1;
-            }
-            if body.ability_updates.is_object() {
-                character_ops::set_equipped_abilities(&mut entry.character.0, &body.ability_updates);
-            }
-            let resp = CharacterWalletInventory {
-                character: CompleteCharacterWithIdWithoutData {
-                    id: character_id,
-                    character: entry.character.0.clone(),
-                },
-                wallet: entry.wallet.0.clone(),
-                inventory: entry.inventory.0.generate_client_update(&tracker),
-            };
-            write_back(&mut conn, entry).await?;
-            Ok::<_, BladeApiError>(Json(resp))
-        }
-        .scope_boxed()
-    })
-    .await;
+            .scope_boxed()
+        })
+        .await;
     // Report #232: this is also how the between-rounds ChooseLoadout screen saves a
     // loadout switch. After the commit, hand the rebuilt loadout to a live match.
     // A pure potion swap is not a combat loadout/profile change: retail declares the
@@ -642,8 +707,8 @@ pub async fn update_loadout(
 
 #[cfg(test)]
 mod tests {
-    use blades_lib::economy::{GEMS, GOLD};
     use super::*;
+    use blades_lib::economy::{GEMS, GOLD};
 
     #[test]
     fn a_consumable_only_loadout_save_does_not_stage_arena_gear() {
@@ -671,7 +736,10 @@ mod tests {
             ability_updates: Value::Null,
             equipped_consumables: None,
         };
-        assert!(should_stage_live_match_loadout(&gear), "gear changes rebuild the combat loadout");
+        assert!(
+            should_stage_live_match_loadout(&gear),
+            "gear changes rebuild the combat loadout"
+        );
 
         let abilities = LoadoutCurrentRequest {
             equipment_updates: HashMap::new(),
@@ -689,7 +757,9 @@ mod tests {
     /// helmet slot (type 3); the template's own equipmentSlot refuses it.
     #[test]
     fn a_cuirass_is_refused_in_the_helmet_slot_and_a_helmet_is_not() {
-        use blades_lib::user_data::{Backpack, CompleteInventory, Item, ItemPropertiesAll, Loadout, Treasury};
+        use blades_lib::user_data::{
+            Backpack, CompleteInventory, Item, ItemPropertiesAll, Loadout, Treasury,
+        };
         let u = |s: &str| Uuid::parse_str(s).unwrap();
         let (helmet_slot, body_slot, weapon_slot) = (
             u("48021ab1-a1a6-487b-80a4-ca472a4d0c77"),
@@ -713,20 +783,36 @@ mod tests {
             backpack_version: 1,
             treasury_version: 0,
         };
-        inv.backpack.items.0.insert(helmet, piece("d00c04af-562d-48d8-b38d-10621e55dadd")); // Dragonscale Helmet
-        inv.backpack.items.0.insert(cuirass, piece("659dd496-f71e-4cf8-aaee-8f0c4723410e")); // Dragonscale Armor
+        inv.backpack
+            .items
+            .0
+            .insert(helmet, piece("d00c04af-562d-48d8-b38d-10621e55dadd")); // Dragonscale Helmet
+        inv.backpack
+            .items
+            .0
+            .insert(cuirass, piece("659dd496-f71e-4cf8-aaee-8f0c4723410e")); // Dragonscale Armor
 
         let keep = |slot: Uuid, item: Option<Uuid>| {
-            without_armour_in_the_wrong_slot(&HashMap::from([(slot, item)]), &inv).contains_key(&slot)
+            without_armour_in_the_wrong_slot(&HashMap::from([(slot, item)]), &inv)
+                .contains_key(&slot)
         };
-        assert!(!keep(helmet_slot, Some(cuirass)), "the cuirass is refused in the helmet slot");
-        assert!(!keep(body_slot, Some(helmet)), "and the helmet in the body slot");
+        assert!(
+            !keep(helmet_slot, Some(cuirass)),
+            "the cuirass is refused in the helmet slot"
+        );
+        assert!(
+            !keep(body_slot, Some(helmet)),
+            "and the helmet in the body slot"
+        );
         // CONTROLS: the right piece in the right slot, an unequip, a slot that is not an
         // armour slot, and an id the backpack does not hold all pass through untouched.
         assert!(keep(helmet_slot, Some(helmet)));
         assert!(keep(body_slot, Some(cuirass)));
         assert!(keep(helmet_slot, None));
-        assert!(keep(weapon_slot, Some(cuirass)), "the type check owns non-armour slots");
+        assert!(
+            keep(weapon_slot, Some(cuirass)),
+            "the type check owns non-armour slots"
+        );
         assert!(keep(helmet_slot, Some(Uuid::new_v4())));
     }
 
@@ -780,10 +866,17 @@ mod tests {
         let req: LoadoutCurrentRequest = serde_json::from_str(SWANNE_VS_WARRIOR)
             .expect("the real request body must deserialize");
         assert_eq!(req.equipment_updates.len(), 9, "all nine slots survive");
-        let filled = req.equipment_updates.values().filter(|v| v.is_some()).count();
+        let filled = req
+            .equipment_updates
+            .values()
+            .filter(|v| v.is_some())
+            .count();
         assert_eq!(filled, 3, "exactly the three equipped items are Some");
         assert_eq!(
-            req.equipment_updates.values().filter(|v| v.is_none()).count(),
+            req.equipment_updates
+                .values()
+                .filter(|v| v.is_none())
+                .count(),
             6,
             "the six empty slots are None, however they were spelled"
         );
@@ -791,11 +884,21 @@ mod tests {
 
     #[test]
     fn empty_string_and_null_mean_the_same_thing() {
-        let slot_a = "58b6d121-2e23-4fa4-b892-c92ae2e2c4c5".parse::<Uuid>().unwrap();
-        let slot_b = "417e79de-c810-42f8-8273-f9759df6ae25".parse::<Uuid>().unwrap();
+        let slot_a = "58b6d121-2e23-4fa4-b892-c92ae2e2c4c5"
+            .parse::<Uuid>()
+            .unwrap();
+        let slot_b = "417e79de-c810-42f8-8273-f9759df6ae25"
+            .parse::<Uuid>()
+            .unwrap();
         let req: LoadoutCurrentRequest = serde_json::from_str(SWANNE_VS_WARRIOR).unwrap();
-        assert_eq!(req.equipment_updates[&slot_a], None, "\"\" is an empty slot");
-        assert_eq!(req.equipment_updates[&slot_b], None, "null is an empty slot");
+        assert_eq!(
+            req.equipment_updates[&slot_a], None,
+            "\"\" is an empty slot"
+        );
+        assert_eq!(
+            req.equipment_updates[&slot_b], None,
+            "null is an empty slot"
+        );
     }
 
     #[test]
@@ -830,7 +933,10 @@ mod tests {
     #[test]
     fn levelup_still_honors_an_explicit_attribute_before_the_cap() {
         let req = levelup_req(r#"{"attribute":"MAGICKA"}"#);
-        assert_eq!(requested_levelup_attribute(&req, 49), Some(Attribute::Magicka));
+        assert_eq!(
+            requested_levelup_attribute(&req, 49),
+            Some(Attribute::Magicka)
+        );
     }
 
     #[test]
@@ -913,9 +1019,148 @@ mod tests {
         let purse = wallet_of(&[(GOLD, 900), (GEMS, 12)]);
         let json = body(credited_wallet(&purse, &[GEMS]));
         let entries = json["wallet"].as_array().expect("wallet array");
-        assert_eq!(entries.len(), 1, "one currency, not the whole purse: {json}");
+        assert_eq!(
+            entries.len(),
+            1,
+            "one currency, not the whole purse: {json}"
+        );
         assert_eq!(entries[0]["currencyId"], GEMS.to_string());
         assert_eq!(entries[0]["balance"], 12);
+    }
+
+    fn level_table() -> level_up::LevelUpData {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/level_rewards.json");
+        let raw = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
+        let json: serde_json::Value = serde_json::from_str(&raw).expect("valid level rewards");
+        level_up::LevelUpData::from_json(&json)
+    }
+
+    fn skill_points_through(data: &level_up::LevelUpData, level: u16) -> u32 {
+        (1..=u32::from(level))
+            .filter_map(|l| data.get_reward(l).map(|r| r.skill_points))
+            .sum()
+    }
+
+    #[test]
+    fn retail_respec_table_explains_lagorping_and_the_captured_price() {
+        let data = level_table();
+        assert_eq!(
+            skill_points_through(&data, 68),
+            179,
+            "tracker #281: LagorPing L68 has 179 refundable skill points"
+        );
+        assert_eq!(
+            respec_cost_for_level(&data, 86),
+            456,
+            "captures 23184->23192 and 31880->31891 each dropped gems by 456"
+        );
+    }
+
+    #[test]
+    fn respec_then_abilities_replays_retails_full_map_sequence() {
+        let data = level_table();
+        let stale = Uuid::from_u128(1).to_string();
+        let kept = Uuid::from_u128(2).to_string();
+        let upgraded = Uuid::from_u128(3).to_string();
+        let learned_after_reset = serde_json::json!({
+            &kept: 1,
+            &upgraded: 5,
+        });
+        let mut character = CompleteCharacter {
+            level: 86,
+            stamina_attribute_points: 49,
+            magicka_attribute_points: 0,
+            abilities: serde_json::json!({ &stale: 6, &kept: 1 }),
+            equipped_abilities: serde_json::json!({ "0": &stale }),
+            version: 500590,
+            ..CompleteCharacter::default()
+        };
+        let mut wallet = wallet_of(&[(GEMS, 59_028), (GOLD, 900)]);
+
+        apply_respec_transaction(&mut character, &mut wallet, &data, 25, 24)
+            .expect("captured respec is affordable");
+
+        assert_eq!(
+            (
+                character.stamina_attribute_points,
+                character.magicka_attribute_points
+            ),
+            (25, 24)
+        );
+        assert!(
+            character.abilities.is_null(),
+            "retail /respec omits the learned map"
+        );
+        assert!(
+            character.equipped_abilities.is_null(),
+            "retail /respec omits equipped ability slots"
+        );
+        assert_eq!(
+            wallet.balance(GEMS),
+            58_572,
+            "post-respec gem balance from capture 23192"
+        );
+
+        let response = serde_json::to_value(RespecResponse {
+            character: CompleteCharacterWithIdWithoutData {
+                id: Uuid::nil(),
+                character: character.clone(),
+            },
+            wallet: wallet_one_currency(&wallet, GEMS),
+        })
+        .unwrap();
+        assert!(
+            response["character"].get("abilities").is_none(),
+            "{response}"
+        );
+        assert!(
+            response["character"].get("equippedAbilities").is_none(),
+            "{response}"
+        );
+        assert_eq!(response["wallet"].as_array().unwrap().len(), 1);
+        assert_eq!(response["wallet"][0]["currencyId"], GEMS.to_string());
+        assert_eq!(response["wallet"][0]["balance"], 58_572);
+
+        character_ops::replace_abilities(&mut character, &learned_after_reset);
+        assert_eq!(
+            character.abilities, learned_after_reset,
+            "retail /abilities echoes exactly the full client map after reset"
+        );
+        assert!(
+            character.abilities.get(&stale).is_none(),
+            "a full-map save must not re-merge a pre-reset stale ability"
+        );
+    }
+
+    #[test]
+    fn unaffordable_respec_leaves_character_and_wallet_untouched() {
+        let data = level_table();
+        let learned = Uuid::from_u128(7).to_string();
+        let mut character = CompleteCharacter {
+            level: 86,
+            stamina_attribute_points: 49,
+            magicka_attribute_points: 0,
+            abilities: serde_json::json!({ &learned: 4 }),
+            version: 99,
+            ..CompleteCharacter::default()
+        };
+        let mut wallet = wallet_of(&[(GEMS, 455)]);
+        let before_character = character.clone();
+        let before_wallet = wallet.clone();
+
+        let err = apply_respec_transaction(&mut character, &mut wallet, &data, 25, 24)
+            .expect_err("one gem short must be refused");
+
+        assert_eq!(
+            actix_web::ResponseError::status_code(&err),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            serde_json::to_value(&character).unwrap(),
+            serde_json::to_value(&before_character).unwrap()
+        );
+        assert_eq!(wallet.balance(GEMS), before_wallet.balance(GEMS));
     }
 
     /// Every refusal is a 400 — the client asked for a level it cannot have, which
