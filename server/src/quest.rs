@@ -200,7 +200,10 @@ fn split_quest_rows(
         let Some(inner) = generated_data else {
             continue;
         };
-        let with_id = QuestWithId { quest_id, quest: info };
+        let with_id = QuestWithId {
+            quest_id,
+            quest: info,
+        };
         if is_event {
             event_quests.push(with_id);
         } else {
@@ -239,10 +242,7 @@ fn assemble_generated_data_list(
 /// Do not replace the whole generated-data object: an entered quest may already carry
 /// enemy/chest state authored by retail or imported with the character. The fresh item
 /// map is safe because its rolls are deterministic for the dungeon + spawn ids.
-fn refresh_empty_item_loot(
-    stored: &mut DungeonGeneratedData,
-    fresh: DungeonGeneratedData,
-) -> bool {
+fn refresh_empty_item_loot(stored: &mut DungeonGeneratedData, fresh: DungeonGeneratedData) -> bool {
     let has_item_loot = |data: &DungeonGeneratedData| {
         data.item_generated_data.values().flatten().any(|item| {
             item.loot_table_loot.values().any(|loot| {
@@ -266,7 +266,6 @@ fn refresh_empty_item_loot(
     stored.item_generated_data = fresh.item_generated_data;
     true
 }
-
 
 /// Add loot tables a stored row predates (#192).
 ///
@@ -388,9 +387,12 @@ fn add_missing_enemy_key_loot(
         let Some(stored_spawners) = stored.enemy_generated_data.get_mut(group) else {
             continue;
         };
-        for (fresh_enemies, stored_enemies) in fresh_spawners.iter().zip(stored_spawners.iter_mut()) {
+        for (fresh_enemies, stored_enemies) in fresh_spawners.iter().zip(stored_spawners.iter_mut())
+        {
             for (fresh_enemy, stored_enemy) in fresh_enemies.iter().zip(stored_enemies.iter_mut()) {
-                if stored_enemy.spawn_group_loot.is_empty() && !fresh_enemy.spawn_group_loot.is_empty() {
+                if stored_enemy.spawn_group_loot.is_empty()
+                    && !fresh_enemy.spawn_group_loot.is_empty()
+                {
                     stored_enemy.spawn_group_loot = fresh_enemy.spawn_group_loot.clone();
                     changed = true;
                 }
@@ -420,8 +422,8 @@ fn add_missing_enemy_key_loot(
 /// fallback.
 #[cfg(test)]
 pub(crate) fn shipped_scaling() -> blades_lib::static_data::QuestLevelScaling {
-    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../deploy/static/quests_daily.json");
+    let p =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static/quests_daily.json");
     let raw = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
     let json: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
     let scaling: blades_lib::static_data::QuestLevelScaling =
@@ -480,7 +482,12 @@ mod report236_key_holder_repair_tests {
         data.enemy_generated_data[&uuid(group)]
             .iter()
             .flatten()
-            .filter_map(|e| e.merged_loot_table().stackable_items.get(&uuid(DOOR_KEY)).copied())
+            .filter_map(|e| {
+                e.merged_loot_table()
+                    .stackable_items
+                    .get(&uuid(DOOR_KEY))
+                    .copied()
+            })
             .sum()
     }
 
@@ -492,7 +499,10 @@ mod report236_key_holder_repair_tests {
             // Stored at one level, refreshed at another: the player levelled.
             let mut stored = as_stored_before_the_fix(&fresh(quest, 73));
             assert_eq!(keys(&stored, holder), 0, "{quest}: the precondition");
-            assert!(add_missing_enemy_key_loot(&mut stored, &fresh(quest, 89)), "{quest}");
+            assert!(
+                add_missing_enemy_key_loot(&mut stored, &fresh(quest, 89)),
+                "{quest}"
+            );
             assert_eq!(keys(&stored, holder), 1, "{quest}: still no key");
         }
     }
@@ -515,7 +525,10 @@ mod report236_key_holder_repair_tests {
         *some_enemy = Default::default();
         let before = serde_json::to_value(&stored).unwrap();
 
-        assert!(add_missing_enemy_key_loot(&mut stored, &fresh(EQ15_QUEST, 73)));
+        assert!(add_missing_enemy_key_loot(
+            &mut stored,
+            &fresh(EQ15_QUEST, 73)
+        ));
 
         let mut after = serde_json::to_value(&stored).unwrap();
         // Take the one intended change back out; everything else must be equal.
@@ -529,7 +542,10 @@ mod report236_key_holder_repair_tests {
         let mut stored = as_stored_before_the_fix(&fresh(EQ15_QUEST, 30));
         stored.version = 1;
         let before = serde_json::to_value(&stored).unwrap();
-        assert!(!add_missing_enemy_key_loot(&mut stored, &fresh(EQ15_QUEST, 30)));
+        assert!(!add_missing_enemy_key_loot(
+            &mut stored,
+            &fresh(EQ15_QUEST, 30)
+        ));
         assert_eq!(serde_json::to_value(&stored).unwrap(), before);
     }
 
@@ -543,7 +559,10 @@ mod report236_key_holder_repair_tests {
             enemy.spawn_group_loot = Default::default();
             enemy.loot_table_loot.clear();
         }
-        assert!(!add_missing_enemy_key_loot(&mut stored, &fresh(EQ15_QUEST, 30)));
+        assert!(!add_missing_enemy_key_loot(
+            &mut stored,
+            &fresh(EQ15_QUEST, 30)
+        ));
         assert_eq!(keys(&stored, MERCENARY), 0);
     }
 
@@ -552,7 +571,10 @@ mod report236_key_holder_repair_tests {
     #[test]
     fn an_up_to_date_row_is_not_rewritten() {
         let mut stored = fresh(EQ15_QUEST, 30);
-        assert!(!add_missing_enemy_key_loot(&mut stored, &fresh(EQ15_QUEST, 30)));
+        assert!(!add_missing_enemy_key_loot(
+            &mut stored,
+            &fresh(EQ15_QUEST, 30)
+        ));
     }
 }
 
@@ -604,9 +626,11 @@ mod report192_missing_table_tests {
             !refresh_empty_item_loot(&mut stored, fresh.clone()),
             "the old repair must refuse this row — that is why this one exists"
         );
-        assert!(!stored.item_generated_data[&pot][0]
-            .loot_table_loot
-            .contains_key(&key_table));
+        assert!(
+            !stored.item_generated_data[&pot][0]
+                .loot_table_loot
+                .contains_key(&key_table)
+        );
 
         assert!(add_missing_item_tables(&mut stored, &fresh));
         assert_eq!(
@@ -628,10 +652,7 @@ mod report192_missing_table_tests {
             .next()
             .expect("the pot already rolls something");
         // Something only the stored row has: a value the fresh roll disagrees with.
-        stored
-            .item_generated_data
-            .get_mut(&pot)
-            .unwrap()[0]
+        stored.item_generated_data.get_mut(&pot).unwrap()[0]
             .loot_table_loot
             .get_mut(&lumber)
             .unwrap()
@@ -725,7 +746,12 @@ mod report260_variant_family_repair_tests {
             .into_iter()
             .flatten()
             .flatten()
-            .filter_map(|e| e.merged_loot_table().stackable_items.get(&uuid(DOOR_KEY)).copied())
+            .filter_map(|e| {
+                e.merged_loot_table()
+                    .stackable_items
+                    .get(&uuid(DOOR_KEY))
+                    .copied()
+            })
             .sum()
     }
 
@@ -739,13 +765,24 @@ mod report260_variant_family_repair_tests {
 
         assert!(add_missing_dungeon_sections(&mut stored, &fresh));
 
-        assert_eq!(keys(&stored), 1, "the SQ201 stage-2 key-holder was not restored");
+        assert_eq!(
+            keys(&stored),
+            1,
+            "the SQ201 stage-2 key-holder was not restored"
+        );
         let mut after = serde_json::to_value(&stored).unwrap();
-        for section in ["enemyGeneratedData", "itemGeneratedData", "chestGeneratedData"] {
+        for section in [
+            "enemyGeneratedData",
+            "itemGeneratedData",
+            "chestGeneratedData",
+        ] {
             let Some(obj) = after[section].as_object_mut() else {
                 continue;
             };
-            let Some(fresh_obj) = serde_json::to_value(&fresh).unwrap()[section].as_object().cloned() else {
+            let Some(fresh_obj) = serde_json::to_value(&fresh).unwrap()[section]
+                .as_object()
+                .cloned()
+            else {
                 continue;
             };
             obj.retain(|id, _| !fresh_obj.contains_key(id) || before[section].get(id).is_some());
@@ -775,13 +812,9 @@ mod report152_stale_story_loot_tests {
     fn haunted_forest_refreshes_old_empty_item_rolls_without_replacing_enemy_data() {
         let game_data = super::report85_job_generated_data_tests::game_data();
         let quest_id = Uuid::parse_str("378307c6-0a23-41f8-b721-5282fa0a8a2b").unwrap();
-        let (_, fresh) = generate_quest_data(
-            &game_data,
-            quest_id,
-            48,
-            &QuestLevelScaling::default(),
-        )
-        .expect("Haunted Forest exists");
+        let (_, fresh) =
+            generate_quest_data(&game_data, quest_id, 48, &QuestLevelScaling::default())
+                .expect("Haunted Forest exists");
         let fresh = fresh.expect("Haunted Forest has a dungeon");
 
         assert_eq!(
@@ -833,13 +866,9 @@ mod report152_stale_story_loot_tests {
     fn a_row_that_already_has_loot_is_not_rewritten() {
         let game_data = super::report85_job_generated_data_tests::game_data();
         let quest_id = Uuid::parse_str("378307c6-0a23-41f8-b721-5282fa0a8a2b").unwrap();
-        let (_, fresh) = generate_quest_data(
-            &game_data,
-            quest_id,
-            48,
-            &QuestLevelScaling::default(),
-        )
-        .expect("Haunted Forest exists");
+        let (_, fresh) =
+            generate_quest_data(&game_data, quest_id, 48, &QuestLevelScaling::default())
+                .expect("Haunted Forest exists");
         let fresh = fresh.expect("Haunted Forest has a dungeon");
         let mut stored = fresh.clone();
 
@@ -1326,8 +1355,7 @@ struct AcceptQuestResponse {
 /// quest holder, so entries belong here only when a tester supplies an exact retail
 /// observation. The insert result in [`accept_quest`] makes the grant idempotent.
 fn acceptance_reward(quest_id: Uuid) -> RewardGrant {
-    const MQ04_REBUILD_TOWN_HALL: Uuid =
-        Uuid::from_u128(0x3b478dfa_73bb_42df_a420_05cf83d015bc);
+    const MQ04_REBUILD_TOWN_HALL: Uuid = Uuid::from_u128(0x3b478dfa_73bb_42df_a420_05cf83d015bc);
     const LUMBER: Uuid = Uuid::from_u128(0xe7193116_d761_479b_8a20_5633737977f5);
     const COPPER: Uuid = Uuid::from_u128(0x42d91529_c88b_4c5b_815b_b55508b4e7ef);
     const LIMESTONE: Uuid = Uuid::from_u128(0xfd67bbc6_20f4_44a3_9614_28265ebb8c67);
@@ -1398,17 +1426,16 @@ async fn accept_quest(
             reset_boundary,
             now,
         );
-        if let Some(job) = jobs.iter().find(|j| {
-            j.get("questId").and_then(|v| v.as_str()) == Some(&quest_id.to_string())
-        }) {
-            if let Some(entry) =
-                jobs_gen::job_quest_db_entry(
-                    job,
-                    character_id,
-                    &app_state.game_data,
-                    &app_state.static_data.quests_daily.level_scaling,
-                )
-            {
+        if let Some(job) = jobs
+            .iter()
+            .find(|j| j.get("questId").and_then(|v| v.as_str()) == Some(&quest_id.to_string()))
+        {
+            if let Some(entry) = jobs_gen::job_quest_db_entry(
+                job,
+                character_id,
+                &app_state.game_data,
+                &app_state.static_data.quests_daily.level_scaling,
+            ) {
                 use crate::schema::quests;
                 insert_into(quests::table)
                     .values(&entry)
@@ -1427,9 +1454,10 @@ async fn accept_quest(
                     },
                     // Was hard-coded `None`: accepting a job handed the client a quest
                     // with no dungeon data, the accept-path half of report #85.
-                    dungeon_generated_data: entry.generated_data.0.map(|inner| {
-                        DungeonGeneratedDataWithId { quest_id, inner }
-                    }),
+                    dungeon_generated_data: entry
+                        .generated_data
+                        .0
+                        .map(|inner| DungeonGeneratedDataWithId { quest_id, inner }),
                 }));
             }
         }
@@ -1597,9 +1625,7 @@ mod accept_error_mapping_tests {
 
     #[test]
     fn an_unknown_quest_is_a_404_not_a_generic_500() {
-        let err = map_quest_generation_error(GenerateQuestDataError::QuestNotFound(
-            Uuid::nil(),
-        ));
+        let err = map_quest_generation_error(GenerateQuestDataError::QuestNotFound(Uuid::nil()));
         assert_eq!(err.status_code(), StatusCode::NOT_FOUND);
         assert_eq!(err.error_code(), 1);
     }
@@ -1617,17 +1643,17 @@ mod report99_quest_reward_tests {
 
     fn repair_data() -> RepairData {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
-        let durability: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("item_durability.json")).unwrap())
-                .unwrap();
+        let durability: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("item_durability.json")).unwrap(),
+        )
+        .unwrap();
         RepairData::from_json(&durability, &json!({}))
     }
 
     #[test]
     fn mq04_acceptance_grants_the_observed_resources() {
-        let reward = acceptance_reward(
-            Uuid::parse_str("3b478dfa-73bb-42df-a420-05cf83d015bc").unwrap(),
-        );
+        let reward =
+            acceptance_reward(Uuid::parse_str("3b478dfa-73bb-42df-a420-05cf83d015bc").unwrap());
         let lumber = Uuid::parse_str("e7193116-d761-479b-8a20-5633737977f5").unwrap();
         let copper = Uuid::parse_str("42d91529-c88b-4c5b-815b-b55508b4e7ef").unwrap();
         let limestone = Uuid::parse_str("fd67bbc6-20f4-44a3-9614-28265ebb8c67").unwrap();
@@ -1730,7 +1756,6 @@ fn resolve_completion_reward(
     quest_id: Uuid,
     quest: &blades_lib::user_data::Quest,
 ) -> RewardGrant {
-
     // A town job pays what its own jobSetup declared. Its sentinel gldQuestId is in
     // neither reward table, so before this branch existed every job completion fell
     // through to "paying nothing" below — a full retail reward silently dropped on
@@ -1845,7 +1870,10 @@ mod stale_completed_event_row {
         // Retail's only `completed: true` event entries are at their last tier.
         assert!(!event_row_is_stale_completed(5, 5));
         assert!(!event_row_is_stale_completed(6, 5));
-        assert!(!event_row_is_stale_completed(0, 0), "unknown template: leave it");
+        assert!(
+            !event_row_is_stale_completed(0, 0),
+            "unknown template: leave it"
+        );
     }
 }
 
@@ -2101,9 +2129,7 @@ pub(crate) async fn complete_quest_in_tx(
                 .await?
                 .into_iter()
                 .filter(|q| {
-                    q.id != quest_id
-                        && jobs_gen::is_job_row(&q.info.0)
-                        && !q.info.0.completed
+                    q.id != quest_id && jobs_gen::is_job_row(&q.info.0) && !q.info.0.completed
                 })
                 .map(|q| q.id)
                 .collect::<std::collections::HashSet<_>>()
@@ -2323,9 +2349,7 @@ fn objective_reward(
                 }
                 if is_currency(item.template_uuid) {
                     *out.currencies.entry(item.template_uuid).or_insert(0) += item.count;
-                } else if let Some(durability) =
-                    repair_data.max_durability(item.template_uuid, 0)
-                {
+                } else if let Some(durability) = repair_data.max_durability(item.template_uuid, 0) {
                     for _ in 0..item.count {
                         out.items.push(RewardItem {
                             id: Uuid::new_v4(),
@@ -2668,8 +2692,7 @@ pub(crate) mod jobs_gen {
     /// /quests handler can (a) keep them out of the `quests[]` array and (b)
     /// recognise a prior-window job row when pruning. It is a fixed, otherwise
     /// unused UUID — no real quest carries it.
-    pub const JOB_SENTINEL_GLD: Uuid =
-        Uuid::from_u128(0x30B10B5F_0000_4A0B_8000_000000000B0B_u128);
+    pub const JOB_SENTINEL_GLD: Uuid = Uuid::from_u128(0x30B10B5F_0000_4A0B_8000_000000000B0B_u128);
 
     /// Default daily reset hour (UTC) when the pool defs don't specify one.
     const DEFAULT_RESET_HOUR: u64 = 5;
@@ -2708,7 +2731,11 @@ pub(crate) mod jobs_gen {
             }
         }
         fn range_incl(&mut self, lo: i64, hi: i64) -> i64 {
-            if hi <= lo { lo } else { lo + self.below((hi - lo + 1) as u64) as i64 }
+            if hi <= lo {
+                lo
+            } else {
+                lo + self.below((hi - lo + 1) as u64) as i64
+            }
         }
     }
 
@@ -2744,14 +2771,22 @@ pub(crate) mod jobs_gen {
     // The APK dungeon bundles (not job_pools.json) hold these; the captured set
     // is representative and keeps generated jobs acceptable/displayable.
     const DUNGEON_TEMPLATES: &[&str] = &[
-        "18e81559-3561-47ef-b73e-9f3bc34ba0b8", "19a3b1b0-c18b-4f2f-b73f-780f3759fe48",
-        "3bcfeff9-5b22-4f7c-b1b8-ef4b277f7bc2", "4d3153a0-cfc5-405c-b065-92547ee9fbbc",
-        "57d639c2-ec4c-4e6b-9995-ff6a7ef3e712", "5af68bb1-e478-4a2d-916c-651b8d793749",
-        "62598ab9-82ac-4321-8534-a048edd26ccb", "6c9fe3b7-2557-408a-b52a-1842680fed3f",
-        "79757d9d-8a26-4a19-bd2e-49ba8577a007", "86e6a720-caa4-4b13-b8b8-73f3dcf049a2",
-        "a9386df1-5b26-462b-9c56-de9cb371c790", "b13c209c-3f41-48ac-998c-e15482e3a1a0",
-        "c232c91f-37cb-4254-b8be-31f9c9d5dc54", "c45ba434-a2a7-4fff-99e2-8aa703f13893",
-        "c5da36d7-5e28-454c-b1f5-ba57c2f5c0c4", "dbfd45fe-8c8c-4c8d-83c6-9b4566afc788",
+        "18e81559-3561-47ef-b73e-9f3bc34ba0b8",
+        "19a3b1b0-c18b-4f2f-b73f-780f3759fe48",
+        "3bcfeff9-5b22-4f7c-b1b8-ef4b277f7bc2",
+        "4d3153a0-cfc5-405c-b065-92547ee9fbbc",
+        "57d639c2-ec4c-4e6b-9995-ff6a7ef3e712",
+        "5af68bb1-e478-4a2d-916c-651b8d793749",
+        "62598ab9-82ac-4321-8534-a048edd26ccb",
+        "6c9fe3b7-2557-408a-b52a-1842680fed3f",
+        "79757d9d-8a26-4a19-bd2e-49ba8577a007",
+        "86e6a720-caa4-4b13-b8b8-73f3dcf049a2",
+        "a9386df1-5b26-462b-9c56-de9cb371c790",
+        "b13c209c-3f41-48ac-998c-e15482e3a1a0",
+        "c232c91f-37cb-4254-b8be-31f9c9d5dc54",
+        "c45ba434-a2a7-4fff-99e2-8aa703f13893",
+        "c5da36d7-5e28-454c-b1f5-ba57c2f5c0c4",
+        "dbfd45fe-8c8c-4c8d-83c6-9b4566afc788",
         "e7418cc7-01de-4c84-ba00-e221f8783d51",
     ];
     /// The dungeon templates a Duel (the one-on-one "Champion" job) is fought in:
@@ -2778,38 +2813,65 @@ pub(crate) mod jobs_gen {
     /// Where a job of this type may be rolled. Only a Duel is narrowed; every other
     /// type keeps drawing from the full pool exactly as before.
     pub(super) fn dungeon_pool(job_type: i64) -> &'static [&'static str] {
-        if job_type == 5 { DUEL_DUNGEON_TEMPLATES } else { DUNGEON_TEMPLATES }
+        if job_type == 5 {
+            DUEL_DUNGEON_TEMPLATES
+        } else {
+            DUNGEON_TEMPLATES
+        }
     }
     const ENEMY_FAMILIES: &[&str] = &[
-        "008cf5b0-2590-433b-832e-f2e6f0e0226f", "06591d48-8c3a-4f81-a2c6-dba2e7163788",
-        "1696d9c0-900f-4829-ae3f-f0441d92a37c", "1b2a30db-2871-43a2-bca0-eaa4bd804698",
-        "20e856fc-9465-4ffe-8d0a-6118c2eed219", "225d747b-9d24-4ffc-9ece-541728b4aef0",
-        "31be99a6-8557-4e9b-81e6-5503f900b7d2", "33de9f64-8eb6-41d2-b62d-8b7fb3632729",
-        "340cd608-31ec-447f-9f72-2162639bff3c", "3d932102-3b5c-42ba-b96a-35405752c5a3",
-        "3fa0aa97-7a45-4c96-8b62-53e08691f746", "4c60bb97-3918-485a-822e-1017d2401dd2",
-        "50994925-f050-48b2-8cab-259b0f1a3531", "521bb612-587d-4a90-adee-904a48d89c33",
-        "6ee657a9-5cc3-45b7-ad14-db8828f7ae2c", "7f9c2b46-e6b8-4a65-9caa-f2b952623c23",
-        "878febe5-106b-4b48-972a-7debd771a079", "8c75bd1f-95a3-47d4-a28c-fdb1fc0de228",
-        "90a62106-6294-4456-8206-cf6817995bf8", "9137d218-6f05-4e8f-a5e5-1c63c61c95ca",
-        "be99402d-c518-4e81-be00-9e2e20e690b0", "d14a0ec0-39a5-417f-a21c-8c4840d60a56",
-        "de4686d9-f748-40f7-a8d3-7baadb46a695", "de8e06be-5403-4fc1-b912-1a5cd9d608a6",
+        "008cf5b0-2590-433b-832e-f2e6f0e0226f",
+        "06591d48-8c3a-4f81-a2c6-dba2e7163788",
+        "1696d9c0-900f-4829-ae3f-f0441d92a37c",
+        "1b2a30db-2871-43a2-bca0-eaa4bd804698",
+        "20e856fc-9465-4ffe-8d0a-6118c2eed219",
+        "225d747b-9d24-4ffc-9ece-541728b4aef0",
+        "31be99a6-8557-4e9b-81e6-5503f900b7d2",
+        "33de9f64-8eb6-41d2-b62d-8b7fb3632729",
+        "340cd608-31ec-447f-9f72-2162639bff3c",
+        "3d932102-3b5c-42ba-b96a-35405752c5a3",
+        "3fa0aa97-7a45-4c96-8b62-53e08691f746",
+        "4c60bb97-3918-485a-822e-1017d2401dd2",
+        "50994925-f050-48b2-8cab-259b0f1a3531",
+        "521bb612-587d-4a90-adee-904a48d89c33",
+        "6ee657a9-5cc3-45b7-ad14-db8828f7ae2c",
+        "7f9c2b46-e6b8-4a65-9caa-f2b952623c23",
+        "878febe5-106b-4b48-972a-7debd771a079",
+        "8c75bd1f-95a3-47d4-a28c-fdb1fc0de228",
+        "90a62106-6294-4456-8206-cf6817995bf8",
+        "9137d218-6f05-4e8f-a5e5-1c63c61c95ca",
+        "be99402d-c518-4e81-be00-9e2e20e690b0",
+        "d14a0ec0-39a5-417f-a21c-8c4840d60a56",
+        "de4686d9-f748-40f7-a8d3-7baadb46a695",
+        "de8e06be-5403-4fc1-b912-1a5cd9d608a6",
         "ea8096f9-6c1b-4b42-af71-9ceabd7de33d",
     ];
     const DUEL_BOSSES: &[&str] = &[
-        "01d82726-527f-4601-929c-182acd3fa9b7", "024b4f81-c7ef-4322-a547-ee863b4c02ad",
-        "282b51da-b334-4cab-90fd-ba7fbdea00f1", "2f85c042-ab17-47f2-a4b2-385f8626034c",
-        "33bbefc6-abb3-48e1-a233-96002d9ca98c", "68a30f8a-dd30-4a41-a014-200f16a8ff89",
-        "ad5bf23a-2899-40e1-b77b-dd0cb3555176", "dadd4e4e-7544-4680-9a73-84208c8ab7a2",
+        "01d82726-527f-4601-929c-182acd3fa9b7",
+        "024b4f81-c7ef-4322-a547-ee863b4c02ad",
+        "282b51da-b334-4cab-90fd-ba7fbdea00f1",
+        "2f85c042-ab17-47f2-a4b2-385f8626034c",
+        "33bbefc6-abb3-48e1-a233-96002d9ca98c",
+        "68a30f8a-dd30-4a41-a014-200f16a8ff89",
+        "ad5bf23a-2899-40e1-b77b-dd0cb3555176",
+        "dadd4e4e-7544-4680-9a73-84208c8ab7a2",
         "ea48eb54-672c-4b28-9c92-60463314ee0d",
     ];
     const GATHER_ITEMS: &[&str] = &[
-        "0fab3016-8306-48ee-8268-d3f7bea7d9d2", "144a3de0-bc3b-45b4-858e-0c7864ffce52",
-        "49a5aed9-3fc2-423a-875c-1e4f3c10f4d8", "5fd5015c-43f9-4e25-90cb-e960753842a9",
-        "7ea91e7d-3c00-47d8-bf31-6da3aaa008ee", "8e7d18af-a9bd-4a3f-964e-ab9f301cdc35",
-        "9972b682-4c8d-43ba-90f1-b22f5800b0e9", "a885cc70-b2b3-4a28-9e19-2d946e2255e3",
-        "b010281a-df63-436c-9396-41eba43665df", "d145895e-e222-4cb0-be8a-e297b628173c",
-        "d7b5faad-fffe-4717-a75d-bb80ba61b6f5", "da767378-8c00-43c1-a5eb-705d7d2f7306",
-        "e2a06efd-e77e-4f7b-9138-7dcc64844b62", "fa22d326-f218-4c4b-8524-e9481e6066d6",
+        "0fab3016-8306-48ee-8268-d3f7bea7d9d2",
+        "144a3de0-bc3b-45b4-858e-0c7864ffce52",
+        "49a5aed9-3fc2-423a-875c-1e4f3c10f4d8",
+        "5fd5015c-43f9-4e25-90cb-e960753842a9",
+        "7ea91e7d-3c00-47d8-bf31-6da3aaa008ee",
+        "8e7d18af-a9bd-4a3f-964e-ab9f301cdc35",
+        "9972b682-4c8d-43ba-90f1-b22f5800b0e9",
+        "a885cc70-b2b3-4a28-9e19-2d946e2255e3",
+        "b010281a-df63-436c-9396-41eba43665df",
+        "d145895e-e222-4cb0-be8a-e297b628173c",
+        "d7b5faad-fffe-4717-a75d-bb80ba61b6f5",
+        "da767378-8c00-43c1-a5eb-705d7d2f7306",
+        "e2a06efd-e77e-4f7b-9138-7dcc64844b62",
+        "fa22d326-f218-4c4b-8524-e9481e6066d6",
     ];
     /// The soft-currency reward item ("gold") used by every captured job.
     const REWARD_ITEM_GOLD: &str = "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2";
@@ -2842,13 +2904,28 @@ pub(crate) mod jobs_gen {
     /// Objective template IDs are fixed per job type in the captures.
     fn objective_ids(job_type: i64) -> &'static [&'static str] {
         match job_type {
-            0 => &["fe67a8c1-b107-44de-8e6a-c76e259fd42d", "8b425eba-67ff-4d38-ba3b-ffa2e8493954"],
-            1 => &["33af0174-0c6e-4907-a4c6-77fa9caff640", "919c2ad0-0b07-4fd2-a690-8d36be2e311b"],
-            3 => &["c1ac35b0-4bda-4741-8115-0d3345d63ce6", "51cdee5a-82d9-46bd-9655-64ae0294c310"],
-            4 => &["0e54c204-300d-40c1-b9e1-674380dfa330", "bdb8cc31-d9e1-409c-9a57-0014af59d430"],
+            0 => &[
+                "fe67a8c1-b107-44de-8e6a-c76e259fd42d",
+                "8b425eba-67ff-4d38-ba3b-ffa2e8493954",
+            ],
+            1 => &[
+                "33af0174-0c6e-4907-a4c6-77fa9caff640",
+                "919c2ad0-0b07-4fd2-a690-8d36be2e311b",
+            ],
+            3 => &[
+                "c1ac35b0-4bda-4741-8115-0d3345d63ce6",
+                "51cdee5a-82d9-46bd-9655-64ae0294c310",
+            ],
+            4 => &[
+                "0e54c204-300d-40c1-b9e1-674380dfa330",
+                "bdb8cc31-d9e1-409c-9a57-0014af59d430",
+            ],
             5 => &["091311ed-5e00-40d7-8720-8428407291e0"],
             // type 2 (Clear) wasn't captured; reuse the Defeat objective pair.
-            _ => &["fe67a8c1-b107-44de-8e6a-c76e259fd42d", "8b425eba-67ff-4d38-ba3b-ffa2e8493954"],
+            _ => &[
+                "fe67a8c1-b107-44de-8e6a-c76e259fd42d",
+                "8b425eba-67ff-4d38-ba3b-ffa2e8493954",
+            ],
         }
     }
 
@@ -2971,18 +3048,19 @@ pub(crate) mod jobs_gen {
     ///
     /// The replacement is keyed on the job's own seed, so it is deterministic and
     /// consumes no rng draw: every other value on the board stays what it was.
-    fn nameable<'a>(job_type: i64, dungeon: &'a str, prim_fam: &'a str, base_seed: u64)
-        -> (&'a str, &'a str)
-    {
+    fn nameable<'a>(
+        job_type: i64,
+        dungeon: &'a str,
+        prim_fam: &'a str,
+        base_seed: u64,
+    ) -> (&'a str, &'a str) {
         let has_kit = |d: &str| {
             let has_location = job_localization()["dungeons"][d]["locations"]
                 .as_array()
                 .is_some_and(|l| !l.is_empty());
             kit_name(d).is_some() && has_location
         };
-        let has_name = |f: &str| {
-            enemy_str(f, "name").is_some() && enemy_str(f, "plural").is_some()
-        };
+        let has_name = |f: &str| enemy_str(f, "name").is_some() && enemy_str(f, "plural").is_some();
         let swap = |pool: &'a [&'a str], ok: &dyn Fn(&str) -> bool| -> Option<&'a str> {
             let usable: Vec<&'a str> = pool.iter().copied().filter(|x| ok(x)).collect();
             if usable.is_empty() {
@@ -2995,9 +3073,10 @@ pub(crate) mod jobs_gen {
             0 if !has_name(prim_fam) => {
                 (dungeon, swap(ENEMY_FAMILIES, &has_name).unwrap_or(prim_fam))
             }
-            1 if !has_kit(dungeon) => {
-                (swap(DUNGEON_TEMPLATES, &has_kit).unwrap_or(dungeon), prim_fam)
-            }
+            1 if !has_kit(dungeon) => (
+                swap(DUNGEON_TEMPLATES, &has_kit).unwrap_or(dungeon),
+                prim_fam,
+            ),
             _ => (dungeon, prim_fam),
         }
     }
@@ -3008,10 +3087,18 @@ pub(crate) mod jobs_gen {
     /// half-filled list. But an empty NAME list is fatal to the quest map (see
     /// [`nameable`]), so `roll_job` only reaches the empty arm through a table
     /// that has lost its entries, and it logs when it does.
-    fn dynamic_elements(rng: &mut Rng, job_type: i64, setup: &serde_json::Map<String, Value>)
-        -> (Vec<Value>, Vec<Value>)
-    {
-        let s = |k: &str| setup.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    fn dynamic_elements(
+        rng: &mut Rng,
+        job_type: i64,
+        setup: &serde_json::Map<String, Value>,
+    ) -> (Vec<Value>, Vec<Value>) {
+        let s = |k: &str| {
+            setup
+                .get(k)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
         let n = |k: &str| setup.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
         let dungeon = s("dungeonTemplateId");
         let empty = (Vec::new(), Vec::new());
@@ -3042,7 +3129,9 @@ pub(crate) mod jobs_gen {
                 (vec![loc_elem(&loc)], vec![loc_elem(&kit)])
             }
             3 => {
-                let Some(loc) = pick_location(rng, &dungeon) else { return empty };
+                let Some(loc) = pick_location(rng, &dungeon) else {
+                    return empty;
+                };
                 (vec![loc_elem(&loc)], vec![int_elem(n("rescueNpcCount"))])
             }
             4 => {
@@ -3056,8 +3145,7 @@ pub(crate) mod jobs_gen {
                 (els.clone(), els)
             }
             5 => {
-                let (Some(npc), Some(loc)) = (pick_npc(rng), pick_location(rng, &dungeon))
-                else {
+                let (Some(npc), Some(loc)) = (pick_npc(rng), pick_location(rng, &dungeon)) else {
                     return empty;
                 };
                 (vec![loc_elem(&npc), loc_elem(&loc)], vec![loc_elem(&npc)])
@@ -3108,7 +3196,10 @@ pub(crate) mod jobs_gen {
             for p in pools {
                 if let Some(rec) = p.get("recurrence") {
                     if let Some(h) = rec.get("resetHour").and_then(|x| x.as_u64()) {
-                        return (h, rec.get("resetMinute").and_then(|x| x.as_u64()).unwrap_or(0));
+                        return (
+                            h,
+                            rec.get("resetMinute").and_then(|x| x.as_u64()).unwrap_or(0),
+                        );
                     }
                 }
             }
@@ -3214,8 +3305,12 @@ pub(crate) mod jobs_gen {
             // constants above for the three measured rules and their sample counts.
 
             // 1. The secret-room boss only exists when the job has one.
-            if setup.get("secretBossEnemyFamilyId").is_none_or(Value::is_null) {
-                data.enemy_generated_data.remove(&JOB_SECRET_BOSS_SPAWN_GROUP);
+            if setup
+                .get("secretBossEnemyFamilyId")
+                .is_none_or(Value::is_null)
+            {
+                data.enemy_generated_data
+                    .remove(&JOB_SECRET_BOSS_SPAWN_GROUP);
             }
 
             // 2. The packs carry the job's OWN declared counts, not the reference
@@ -3235,7 +3330,8 @@ pub(crate) mod jobs_gen {
 
             // 3. The Gather pickup only exists on a Gather job.
             if setup.get("gatherItemId").is_none_or(Value::is_null) {
-                data.item_generated_data.remove(&JOB_GATHER_ITEM_SPAWN_GROUP);
+                data.item_generated_data
+                    .remove(&JOB_GATHER_ITEM_SPAWN_GROUP);
             }
 
             // 4. The floor-item groups are a RARITY PICK, not the whole list. See
@@ -3364,7 +3460,11 @@ pub(crate) mod jobs_gen {
                 if let Ok(oid) = Uuid::parse_str(k) {
                     objective_statuses.insert(
                         oid,
-                        ObjectiveStatus { status: QuestStatus::Active, progress: 0.0, completed: false },
+                        ObjectiveStatus {
+                            status: QuestStatus::Active,
+                            progress: 0.0,
+                            completed: false,
+                        },
                     );
                 }
             }
@@ -3413,7 +3513,11 @@ pub(crate) mod jobs_gen {
                 } else {
                     let target_dow = get_i64(&rec, "dayOfWeek", 0).rem_euclid(7) as u64;
                     let cur_dow = weekday_sun0(reset_boundary);
-                    if cur_dow == (target_dow + 1) % 7 { 1 } else { 0 }
+                    if cur_dow == (target_dow + 1) % 7 {
+                        1
+                    } else {
+                        0
+                    }
                 }
             }
         }
@@ -3460,16 +3564,41 @@ pub(crate) mod jobs_gen {
     }
     const SECS_PER_WEEK: u64 = 604_800;
 
-    /// Difficulty-level roll for a job: character level offset by the per-type,
-    /// per-level difficulty range from `perTypeDifficulty` (clamped to a floor of 1).
-    fn roll_difficulty(pools_def: &Value, job_type: i64, level: u16, rng: &mut Rng) -> i64 {
+    /// Retail's job generator does not roll from the raw character level at high
+    /// levels. It first derives an effective player level (`jobSetup.initialEPL`),
+    /// then applies the per-type difficulty offsets to that baseline.
+    fn job_initial_epl(pools_def: &Value, level: u16) -> i64 {
         let level = level.max(1) as i64;
+        let Some(obj) = pools_def
+            .get("globals")
+            .and_then(|g| g.get("initialEplByPlayerLevel"))
+            .and_then(Value::as_object)
+        else {
+            return level;
+        };
+
+        obj.iter()
+            .filter_map(|(k, v)| Some((k.parse::<i64>().ok()?, v.as_i64()?)))
+            .filter(|(k, _)| *k <= level)
+            .max_by_key(|(k, _)| *k)
+            .map(|(_, epl)| epl.max(1))
+            .unwrap_or(level)
+    }
+
+    /// Difficulty-level roll for a job: effective player level offset by the
+    /// per-type, per-level difficulty range from `perTypeDifficulty` (clamped to a
+    /// floor of 1).
+    fn roll_difficulty(pools_def: &Value, job_type: i64, base_level: i64, rng: &mut Rng) -> i64 {
+        let level = base_level.max(1);
         let (mut lo, mut hi) = pools_def
             .get("globals")
             .and_then(|g| g.get("baseJobDifficultyRange"))
             .map(|r| (get_i64(r, "min", -2), get_i64(r, "max", 9)))
             .unwrap_or((-2, 9));
-        if let Some(arr) = pools_def.get("perTypeDifficulty").and_then(|a| a.as_array()) {
+        if let Some(arr) = pools_def
+            .get("perTypeDifficulty")
+            .and_then(|a| a.as_array())
+        {
             if let Some(entry) = arr.iter().find(|e| get_i64(e, "jobType", -1) == job_type) {
                 if let Some(by_level) = entry.get("difficultyByLevel").and_then(|a| a.as_array()) {
                     let mut best: Option<&Value> = None;
@@ -3513,7 +3642,8 @@ pub(crate) mod jobs_gen {
 
         let quest_id = uuid_from_seed(base_seed.wrapping_add(0xA11CE));
         let seed_field: i64 = rng.next_u64() as i64; // signed, matches captured range
-        let difficulty = roll_difficulty(pools_def, job_type, level, &mut rng);
+        let initial_epl = job_initial_epl(pools_def, level);
+        let difficulty = roll_difficulty(pools_def, job_type, initial_epl, &mut rng);
 
         let mut objectives = serde_json::Map::new();
         for oid in objective_ids(job_type) {
@@ -3534,8 +3664,16 @@ pub(crate) mod jobs_gen {
         // on the board moves.
         let (dungeon, prim_fam) = nameable(job_type, dungeon, prim_fam, base_seed);
 
-        let primary_count = if job_type == 5 { 0 } else { rng.range_incl(3, 6) };
-        let secondary_count = if job_type == 5 { 0 } else { rng.range_incl(2, 4) };
+        let primary_count = if job_type == 5 {
+            0
+        } else {
+            rng.range_incl(3, 6)
+        };
+        let secondary_count = if job_type == 5 {
+            0
+        } else {
+            rng.range_incl(2, 4)
+        };
         let boss_level_delta = rng.range_incl(4, 8);
         let secret_room = job_type != 5 && rng.below(2) == 1;
         // Reward curve, fitted to 802 distinct retail jobs mined out of 200
@@ -3550,8 +3688,12 @@ pub(crate) mod jobs_gen {
         } else {
             (d * GOLD_PER_DIFFICULTY + GOLD_BASE + rng.below(GOLD_JITTER)) / 10 * 10
         };
-        let reward_gem = if secret_room && rng.below(3) == 0 { rng.range_incl(6, 15) as u64 } else { 0 };
-        let initial_epl = difficulty.max(1) as u64;
+        let reward_gem = if secret_room && rng.below(3) == 0 {
+            rng.range_incl(6, 15) as u64
+        } else {
+            0
+        };
+        let initial_epl = initial_epl.max(1) as u64;
 
         let name_idx = rng.below(name_variant_count(job_type)) + 1;
         let name_key = format!("UI.Jobs.Names.{}.{:03}", name_prefix(job_type), name_idx);
@@ -3665,7 +3807,14 @@ pub(crate) mod jobs_gen {
                 count = count.min(max_active_global);
             }
             for slot in 0..count {
-                jobs.push(roll_job(pools_def, pool, character_id, level, reset_boundary, slot));
+                jobs.push(roll_job(
+                    pools_def,
+                    pool,
+                    character_id,
+                    level,
+                    reset_boundary,
+                    slot,
+                ));
             }
             let (end_time, next_start) = pool_timers(pool, now, count);
             timers.push(json!({ "id": pool_id, "endTime": end_time, "nextStartTime": next_start }));
@@ -3728,7 +3877,8 @@ pub(crate) mod jobs_gen {
             while kept < count {
                 let job = roll_job(pools_def, pool, character_id, level, reset_boundary, slot);
                 slot += 1;
-                let Some(id) = get_str(&job, "questId").and_then(|s| Uuid::parse_str(s).ok()) else {
+                let Some(id) = get_str(&job, "questId").and_then(|s| Uuid::parse_str(s).ok())
+                else {
                     continue;
                 };
                 if completed_job_ids.contains(&id) {
@@ -3886,7 +4036,14 @@ pub(crate) mod event_quests {
         game_events::open_instances_themed(&static_data.game_events, theme, now)
             .into_iter()
             .filter_map(|(start, def)| {
-                build(def, start, static_data, game_data, character_id, player_level)
+                build(
+                    def,
+                    start,
+                    static_data,
+                    game_data,
+                    character_id,
+                    player_level,
+                )
             })
             .collect()
     }
@@ -3978,7 +4135,12 @@ mod jobs_tests {
         let (jobs, _timers) = jobs_gen::generate(&pools, CHAR, 30, 0, boundary, NOW_WED);
         // 4 standard daily + 1 weekly boss (Wed is not the featured pool's day).
         assert!(!jobs.is_empty(), "board must not be empty");
-        assert_eq!(jobs.len(), 5, "4 daily + 1 boss expected, got {}", jobs.len());
+        assert_eq!(
+            jobs.len(),
+            5,
+            "4 daily + 1 boss expected, got {}",
+            jobs.len()
+        );
     }
 
     #[test]
@@ -3989,21 +4151,45 @@ mod jobs_tests {
         for j in &jobs {
             assert_eq!(j["type"], "JOB");
             assert!(j["questId"].as_str().is_some(), "questId present");
-            assert!(Uuid::parse_str(j["questId"].as_str().unwrap()).is_ok(), "questId is a UUID");
+            assert!(
+                Uuid::parse_str(j["questId"].as_str().unwrap()).is_ok(),
+                "questId is a UUID"
+            );
             let js = &j["jobSetup"];
             assert!(js.is_object(), "jobSetup present");
             // Required jobSetup fields are populated (non-null).
             for key in [
-                "jobType", "jobCreatorVersion", "algorithmVersion", "dungeonTemplateId",
-                "bossEnemyFamilyId", "primaryEnemyCount", "secondaryEnemyCount",
-                "enemyBaseLevelOffset", "bossLevelDelta", "secretRoom", "rewardGemCount",
-                "rewardItemId", "rewardItemCount", "rewardXp", "initialEPL", "questName",
+                "jobType",
+                "jobCreatorVersion",
+                "algorithmVersion",
+                "dungeonTemplateId",
+                "bossEnemyFamilyId",
+                "primaryEnemyCount",
+                "secondaryEnemyCount",
+                "enemyBaseLevelOffset",
+                "bossLevelDelta",
+                "secretRoom",
+                "rewardGemCount",
+                "rewardItemId",
+                "rewardItemCount",
+                "rewardXp",
+                "initialEPL",
+                "questName",
             ] {
                 assert!(!js[key].is_null(), "jobSetup.{key} populated");
             }
-            assert!(js["dungeonTemplateId"].as_str().unwrap().len() == 36, "real dungeon id");
-            assert!(j["difficultyLevel"].as_i64().unwrap() >= 1, "difficulty >= 1");
-            assert!(j["objectiveStatuses"].as_object().unwrap().len() >= 1, "has objectives");
+            assert!(
+                js["dungeonTemplateId"].as_str().unwrap().len() == 36,
+                "real dungeon id"
+            );
+            assert!(
+                j["difficultyLevel"].as_i64().unwrap() >= 1,
+                "difficulty >= 1"
+            );
+            assert!(
+                j["objectiveStatuses"].as_object().unwrap().len() >= 1,
+                "has objectives"
+            );
         }
     }
 
@@ -4017,7 +4203,10 @@ mod jobs_tests {
             .find(|j| j["jobPoolId"] == "361da91e-6860-4c31-a447-4010cbaad1dd")
             .expect("boss pool produced a job");
         assert_eq!(boss["jobSetup"]["jobType"], 5, "boss pool -> Duel");
-        assert!(boss["jobSetup"]["duelBossId"].as_str().is_some(), "duelBossId present");
+        assert!(
+            boss["jobSetup"]["duelBossId"].as_str().is_some(),
+            "duelBossId present"
+        );
     }
 
     #[test]
@@ -4039,7 +4228,13 @@ mod jobs_tests {
         for p in arr {
             for k in ["endTime", "nextStartTime"] {
                 let t = p[k].as_u64().unwrap();
-                assert!(t == 0 || t > NOW_WED, "{} {} must be 0 or > now (got {})", p["id"], k, t);
+                assert!(
+                    t == 0 || t > NOW_WED,
+                    "{} {} must be 0 or > now (got {})",
+                    p["id"],
+                    k,
+                    t
+                );
             }
         }
     }
@@ -4122,8 +4317,7 @@ mod jobs_tests {
 
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../deploy/static/job_pools.json");
-        let raw = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         let pools: Value = serde_json::from_str(&raw).expect("valid job_pools.json");
 
         let mut seen: std::collections::BTreeMap<usize, usize> = Default::default();
@@ -4156,18 +4350,28 @@ mod jobs_tests {
     fn real_job_pools_file_generates_prod_shaped_board() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../deploy/static/job_pools.json");
-        let raw = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         let pools: Value = serde_json::from_str(&raw).expect("valid job_pools.json");
 
         let boundary = jobs_gen::current_reset_boundary(&pools, NOW_WED);
         let (jobs, timers) = jobs_gen::generate(&pools, CHAR, 30, 0, boundary, NOW_WED);
 
-        assert_eq!(timers.as_array().unwrap().len(), 10, "10 pools -> 10 timers");
-        assert_eq!(jobs.len(), 6, "Wed board = 4 daily + 1 boss + 1 featured, got {}", jobs.len());
+        assert_eq!(
+            timers.as_array().unwrap().len(),
+            10,
+            "10 pools -> 10 timers"
+        );
+        assert_eq!(
+            jobs.len(),
+            6,
+            "Wed board = 4 daily + 1 boss + 1 featured, got {}",
+            jobs.len()
+        );
         // The featured pool active on this weekday produced exactly one job.
         assert_eq!(
-            jobs.iter().filter(|j| j["jobPoolId"] == "9fcbb01c-13bf-4cd9-916f-25d5faf5314e").count(),
+            jobs.iter()
+                .filter(|j| j["jobPoolId"] == "9fcbb01c-13bf-4cd9-916f-25d5faf5314e")
+                .count(),
             1,
             "Tue-featured pool active during the Wed game-day"
         );
@@ -4176,7 +4380,13 @@ mod jobs_tests {
         for p in timers.as_array().unwrap() {
             for k in ["endTime", "nextStartTime"] {
                 let t = p[k].as_u64().unwrap();
-                assert!(t == 0 || t > NOW_WED, "timer {} {} stale: {}", p["id"], k, t);
+                assert!(
+                    t == 0 || t > NOW_WED,
+                    "timer {} {} stale: {}",
+                    p["id"],
+                    k,
+                    t
+                );
             }
         }
         // The daily standard pool produced exactly maxActiveJobs (4) entries.
@@ -4197,7 +4407,8 @@ mod jobs_tests {
         let gd = super::report85_job_generated_data_tests::game_data();
         for j in &jobs {
             assert!(
-                jobs_gen::job_quest_db_entry(j, CHAR, &gd, &crate::quest::shipped_scaling()).is_some(),
+                jobs_gen::job_quest_db_entry(j, CHAR, &gd, &crate::quest::shipped_scaling())
+                    .is_some(),
                 "job must build a persistable quest row"
             );
         }
@@ -4263,7 +4474,10 @@ mod report92_reward_curve {
                 }
             }
         }
-        assert!(out.len() > 500, "the committed pools must roll a real sample");
+        assert!(
+            out.len() > 500,
+            "the committed pools must roll a real sample"
+        );
         out
     }
 
@@ -4272,9 +4486,12 @@ mod report92_reward_curve {
     #[test]
     fn xp_per_difficulty_matches_the_retail_fit() {
         let s = sample();
-        let ratio: f64 = s.iter().filter(|(d, ..)| *d > 0)
+        let ratio: f64 = s
+            .iter()
+            .filter(|(d, ..)| *d > 0)
             .map(|(d, xp, _)| *xp as f64 / *d as f64)
-            .sum::<f64>() / s.iter().filter(|(d, ..)| *d > 0).count() as f64;
+            .sum::<f64>()
+            / s.iter().filter(|(d, ..)| *d > 0).count() as f64;
         assert!(
             (17.0..=26.0).contains(&ratio),
             "xp/difficulty {ratio:.2} is outside the retail band (fit 18.92);              the old constant gave about 15"
@@ -4286,7 +4503,10 @@ mod report92_reward_curve {
     fn gold_per_difficulty_matches_the_retail_fit() {
         let s = sample();
         let paying: Vec<_> = s.iter().filter(|(d, _, g)| *d > 0 && *g > 0).collect();
-        let ratio: f64 = paying.iter().map(|(d, _, g)| *g as f64 / *d as f64).sum::<f64>()
+        let ratio: f64 = paying
+            .iter()
+            .map(|(d, _, g)| *g as f64 / *d as f64)
+            .sum::<f64>()
             / paying.len() as f64;
         assert!(
             (15.0..=28.0).contains(&ratio),
@@ -4311,7 +4531,11 @@ mod report92_reward_curve {
     #[test]
     fn gold_is_always_a_multiple_of_ten() {
         for (_, _, g) in sample() {
-            assert_eq!(g % 10, 0, "captured rewardItemCount is always a round ten, got {g}");
+            assert_eq!(
+                g % 10,
+                0,
+                "captured rewardItemCount is always a round ten, got {g}"
+            );
         }
     }
 }
@@ -4339,8 +4563,8 @@ mod report85_job_generated_data_tests {
     use std::collections::HashSet;
 
     pub fn game_data() -> GameData {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../deploy/static/parsed.json");
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static/parsed.json");
         let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         serde_json::from_str(&raw).expect("valid parsed.json")
     }
@@ -4361,7 +4585,10 @@ mod report85_job_generated_data_tests {
         let pools = job_pools();
         let boundary = jobs_gen::current_reset_boundary(&pools, NOW_WED);
         let (jobs, _t) = jobs_gen::generate(&pools, CHAR, 48, 0, boundary, NOW_WED);
-        assert!(!jobs.is_empty(), "the committed pools must roll a board at all");
+        assert!(
+            !jobs.is_empty(),
+            "the committed pools must roll a board at all"
+        );
         jobs
     }
 
@@ -4373,21 +4600,28 @@ mod report85_job_generated_data_tests {
             .quests
             .iter()
             .filter(|(_, q)| {
-                q.dungeon_info
-                    .as_ref()
-                    .is_some_and(|d| !d.dungeon_uuid.is_nil() && gd.dungeons.contains_key(&d.dungeon_uuid))
+                q.dungeon_info.as_ref().is_some_and(|d| {
+                    !d.dungeon_uuid.is_nil() && gd.dungeons.contains_key(&d.dungeon_uuid)
+                })
             })
             .map(|(id, _)| *id)
             .collect();
         ids.sort();
-        assert!(!ids.is_empty(), "parsed.json has at least one dungeon-backed quest");
+        assert!(
+            !ids.is_empty(),
+            "parsed.json has at least one dungeon-backed quest"
+        );
         ids[0]
     }
 
     fn story_generated(gd: &GameData) -> blades_lib::user_data::DungeonGeneratedData {
-        let (_q, data) =
-            generate_quest_data(gd, story_quest_with_dungeon(gd), 48, &QuestLevelScaling::default())
-                .expect("a dungeon-backed quest generates");
+        let (_q, data) = generate_quest_data(
+            gd,
+            story_quest_with_dungeon(gd),
+            48,
+            &QuestLevelScaling::default(),
+        )
+        .expect("a dungeon-backed quest generates");
         data.expect("…with dungeon data")
     }
 
@@ -4401,7 +4635,8 @@ mod report85_job_generated_data_tests {
     fn every_job_on_the_board_has_generated_data() {
         let gd = game_data();
         let jobs = board();
-        let list = assemble_generated_data_list(Vec::new(), &gd, &jobs, &crate::quest::shipped_scaling());
+        let list =
+            assemble_generated_data_list(Vec::new(), &gd, &jobs, &crate::quest::shipped_scaling());
 
         let job_ids: Vec<Uuid> = jobs
             .iter()
@@ -4409,7 +4644,11 @@ mod report85_job_generated_data_tests {
             .collect();
         let with_data: HashSet<Uuid> = list.iter().map(|g| g.quest_id).collect();
 
-        let missing: Vec<Uuid> = job_ids.iter().copied().filter(|id| !with_data.contains(id)).collect();
+        let missing: Vec<Uuid> = job_ids
+            .iter()
+            .copied()
+            .filter(|id| !with_data.contains(id))
+            .collect();
         assert!(
             missing.is_empty(),
             "{} of {} jobs have no generatedData entry — the quest map waits forever for \
@@ -4417,7 +4656,11 @@ mod report85_job_generated_data_tests {
             missing.len(),
             job_ids.len(),
         );
-        assert_eq!(list.len(), job_ids.len(), "exactly one entry per job, no extras");
+        assert_eq!(
+            list.len(),
+            job_ids.len(),
+            "exactly one entry per job, no extras"
+        );
     }
 
     /// The control for the test above. If `parsed.json` failed to load, or
@@ -4441,8 +4684,9 @@ mod report85_job_generated_data_tests {
     fn a_jobs_generated_data_is_not_empty() {
         let gd = game_data();
         for job in board() {
-            let data = jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling())
-                .expect("the reference dungeon resolves");
+            let data =
+                jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling())
+                    .expect("the reference dungeon resolves");
             assert!(
                 !data.enemy_generated_data.is_empty(),
                 "job {} generated no enemies — nothing to kill, nothing to complete",
@@ -4453,11 +4697,14 @@ mod report85_job_generated_data_tests {
         // The control that makes the above discriminating: generating from the
         // dungeonTemplateId instead — the plausible wrong answer — really is empty.
         let template: Uuid = Uuid::parse_str(
-            board()[0]["jobSetup"]["dungeonTemplateId"].as_str().expect("template id"),
+            board()[0]["jobSetup"]["dungeonTemplateId"]
+                .as_str()
+                .expect("template id"),
         )
         .expect("uuid");
-        let from_template = blades_lib::util::dungeon::generate_for_dungeon(&gd, &template, 40, 4000)
-            .expect("the template dungeon exists in parsed.json");
+        let from_template =
+            blades_lib::util::dungeon::generate_for_dungeon(&gd, &template, 40, 4000)
+                .expect("the template dungeon exists in parsed.json");
         assert!(
             from_template.enemy_generated_data.is_empty(),
             "if the template id ever gains spawn info, revisit JOB_SPAWN_GROUPS_REFERENCE"
@@ -4477,7 +4724,8 @@ mod report85_job_generated_data_tests {
             .iter()
             .find(|j| j["jobSetup"]["jobType"] == 5)
             .expect("the weekly boss pool must produce a Duel");
-        let data = jobs_gen::generated_data_for_job(&gd, duel, &crate::quest::shipped_scaling()).expect("Duel generates");
+        let data = jobs_gen::generated_data_for_job(&gd, duel, &crate::quest::shipped_scaling())
+            .expect("Duel generates");
 
         let actual: HashSet<Uuid> = data.enemy_generated_data.keys().copied().collect();
         let expected: HashSet<Uuid> = jobs_gen::DUEL_ENEMY_SPAWN_GROUPS.into_iter().collect();
@@ -4491,8 +4739,15 @@ mod report85_job_generated_data_tests {
             3,
             "retail generated exactly three Duel enemies"
         );
-        assert!(data.item_generated_data.is_empty(), "retail Duel has no floor-item data");
-        assert_eq!(data.chest_generated_data.len(), 2, "retail Duel keeps both chest groups");
+        assert!(
+            data.item_generated_data.is_empty(),
+            "retail Duel has no floor-item data"
+        );
+        assert_eq!(
+            data.chest_generated_data.len(),
+            2,
+            "retail Duel keeps both chest groups"
+        );
 
         let difficulty = duel["difficultyLevel"].as_i64().unwrap();
         let boss_delta = duel["jobSetup"]["bossLevelDelta"].as_i64().unwrap();
@@ -4518,7 +4773,8 @@ mod report85_job_generated_data_tests {
             .find(|j| j["jobSetup"]["jobType"] != 5)
             .expect("the daily pool must produce ordinary jobs");
         let ordinary_data =
-            jobs_gen::generated_data_for_job(&gd, ordinary, &crate::quest::shipped_scaling()).expect("ordinary job generates");
+            jobs_gen::generated_data_for_job(&gd, ordinary, &crate::quest::shipped_scaling())
+                .expect("ordinary job generates");
         assert!(ordinary_data.enemy_generated_data.len() > 3);
         assert!(!ordinary_data.item_generated_data.is_empty());
     }
@@ -4552,9 +4808,18 @@ mod report85_job_generated_data_tests {
                 .unwrap_or_else(|| panic!("{key} rarity {rarity} missing"))
         };
 
-        assert_eq!(jobs_gen::JOB_ITEM_R1, by_rarity("interactableItemSpawnGroups", 1));
-        assert_eq!(jobs_gen::JOB_ITEM_R2, by_rarity("interactableItemSpawnGroups", 2));
-        assert_eq!(jobs_gen::JOB_ITEM_R3, by_rarity("interactableItemSpawnGroups", 3));
+        assert_eq!(
+            jobs_gen::JOB_ITEM_R1,
+            by_rarity("interactableItemSpawnGroups", 1)
+        );
+        assert_eq!(
+            jobs_gen::JOB_ITEM_R2,
+            by_rarity("interactableItemSpawnGroups", 2)
+        );
+        assert_eq!(
+            jobs_gen::JOB_ITEM_R3,
+            by_rarity("interactableItemSpawnGroups", 3)
+        );
         assert_eq!(
             jobs_gen::JOB_SECRET_ITEM_R1,
             by_rarity("interactableItemSpawnGroupsInSecrets", 1)
@@ -4599,18 +4864,32 @@ mod report85_job_generated_data_tests {
         let mut checked = 0usize;
 
         for job in jobs.iter().filter(|j| j["jobSetup"]["jobType"] != 5) {
-            let data = jobs_gen::generated_data_for_job(&gd, job, &crate::quest::shipped_scaling()).expect("job generates");
+            let data = jobs_gen::generated_data_for_job(&gd, job, &crate::quest::shipped_scaling())
+                .expect("job generates");
             let has = |u: Uuid| data.item_generated_data.contains_key(&u);
 
-            assert!(has(jobs_gen::JOB_ITEM_R1), "the main rarity-1 group is always present");
-            assert!(has(jobs_gen::JOB_SECRET_ITEM_R1), "the secret rarity-1 group is always present");
+            assert!(
+                has(jobs_gen::JOB_ITEM_R1),
+                "the main rarity-1 group is always present"
+            );
+            assert!(
+                has(jobs_gen::JOB_SECRET_ITEM_R1),
+                "the secret rarity-1 group is always present"
+            );
 
             let secrets = [jobs_gen::JOB_SECRET_ITEM_R2, jobs_gen::JOB_SECRET_ITEM_R3]
-                .into_iter().filter(|u| has(*u)).count();
-            assert_eq!(secrets, 1, "exactly one secret-room rarity group, never both or neither");
+                .into_iter()
+                .filter(|u| has(*u))
+                .count();
+            assert_eq!(
+                secrets, 1,
+                "exactly one secret-room rarity group, never both or neither"
+            );
 
             let main = [jobs_gen::JOB_ITEM_R2, jobs_gen::JOB_ITEM_R3]
-                .into_iter().filter(|u| has(*u)).count();
+                .into_iter()
+                .filter(|u| has(*u))
+                .count();
             assert!(main <= 1, "at most one main rarity group, never both");
 
             seen_sizes.insert(data.item_generated_data.len());
@@ -4620,7 +4899,10 @@ mod report85_job_generated_data_tests {
         assert!(checked > 0, "the fixture board must contain ordinary jobs");
         // Retail ships 3-5 (3 when a Gather group is absent, up to 5 with it).
         for n in &seen_sizes {
-            assert!((3..=5).contains(n), "an ordinary job shipped {n} item groups, retail ships 3-5");
+            assert!(
+                (3..=5).contains(n),
+                "an ordinary job shipped {n} item groups, retail ships 3-5"
+            );
         }
     }
 
@@ -4636,12 +4918,18 @@ mod report85_job_generated_data_tests {
             .find(|j| j["jobSetup"]["jobType"] != 5)
             .expect("an ordinary job");
 
-        let first = jobs_gen::generated_data_for_job(&gd, job, &crate::quest::shipped_scaling()).expect("generates");
+        let first = jobs_gen::generated_data_for_job(&gd, job, &crate::quest::shipped_scaling())
+            .expect("generates");
         for _ in 0..5 {
-            let again = jobs_gen::generated_data_for_job(&gd, job, &crate::quest::shipped_scaling()).expect("generates");
+            let again =
+                jobs_gen::generated_data_for_job(&gd, job, &crate::quest::shipped_scaling())
+                    .expect("generates");
             let a: std::collections::BTreeSet<_> = first.item_generated_data.keys().collect();
             let b: std::collections::BTreeSet<_> = again.item_generated_data.keys().collect();
-            assert_eq!(a, b, "the same job must always generate the same item groups");
+            assert_eq!(
+                a, b,
+                "the same job must always generate the same item groups"
+            );
         }
     }
 
@@ -4666,7 +4954,8 @@ mod report85_job_generated_data_tests {
 
         for job in jobs.iter().filter(|j| j["jobSetup"]["jobType"] != 5) {
             let setup = &job["jobSetup"];
-            let data = jobs_gen::generated_data_for_job(&gd, job, &crate::quest::shipped_scaling()).expect("job generates");
+            let data = jobs_gen::generated_data_for_job(&gd, job, &crate::quest::shipped_scaling())
+                .expect("job generates");
             let has_secret_boss = !setup["secretBossEnemyFamilyId"].is_null();
             let carries = data
                 .enemy_generated_data
@@ -4750,13 +5039,26 @@ mod report85_job_generated_data_tests {
             .dungeons
             .get(&jobs_gen::JOB_SPAWN_GROUPS_REFERENCE)
             .expect("JobSpawnGroupsReference is in parsed.json");
-        assert_eq!(reference.handle, "JobSpawnGroupsReference", "the id still names it");
-        let enemies: HashSet<Uuid> = reference.spawn_info.enemy_spawn_groups.keys().copied().collect();
+        assert_eq!(
+            reference.handle, "JobSpawnGroupsReference",
+            "the id still names it"
+        );
+        let enemies: HashSet<Uuid> = reference
+            .spawn_info
+            .enemy_spawn_groups
+            .keys()
+            .copied()
+            .collect();
 
         for job in board() {
-            let data = jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling()).expect("generated");
+            let data =
+                jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling())
+                    .expect("generated");
             for id in data.enemy_generated_data.keys() {
-                assert!(enemies.contains(id), "job spawn id {id} is not in the reference dungeon");
+                assert!(
+                    enemies.contains(id),
+                    "job spawn id {id} is not in the reference dungeon"
+                );
             }
         }
 
@@ -4764,7 +5066,10 @@ mod report85_job_generated_data_tests {
         // reference containing *every* spawn id in the game would pass the loop above.
         let story = story_generated(&gd);
         assert!(
-            story.enemy_generated_data.keys().all(|id| !enemies.contains(id)),
+            story
+                .enemy_generated_data
+                .keys()
+                .all(|id| !enemies.contains(id)),
             "the control quest must draw from its OWN dungeon, not the job reference"
         );
     }
@@ -4775,7 +5080,9 @@ mod report85_job_generated_data_tests {
     fn a_stored_job_row_carries_its_generated_data() {
         let gd = game_data();
         for job in board() {
-            let entry = jobs_gen::job_quest_db_entry(&job, CHAR, &gd, &crate::quest::shipped_scaling()).expect("row builds");
+            let entry =
+                jobs_gen::job_quest_db_entry(&job, CHAR, &gd, &crate::quest::shipped_scaling())
+                    .expect("row builds");
             let data = entry
                 .generated_data
                 .0
@@ -4791,11 +5098,17 @@ mod report85_job_generated_data_tests {
     fn job_entries_carry_the_captured_version_and_story_quests_are_unchanged() {
         let gd = game_data();
         for job in board() {
-            let data = jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling()).expect("generated");
+            let data =
+                jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling())
+                    .expect("generated");
             assert_eq!(data.version, 1, "retail sends version 1 on job entries");
             assert_eq!(data.algorithm_version, 1);
         }
-        assert_eq!(story_generated(&gd).version, 0, "the story-quest path must not shift");
+        assert_eq!(
+            story_generated(&gd).version,
+            0,
+            "the story-quest path must not shift"
+        );
     }
 
     /// The key set retail puts on a job's generated-data entry, pinned.
@@ -4810,7 +5123,8 @@ mod report85_job_generated_data_tests {
     fn a_job_entry_serializes_to_retails_key_set() {
         let gd = game_data();
         let jobs = board();
-        let list = assemble_generated_data_list(Vec::new(), &gd, &jobs, &crate::quest::shipped_scaling());
+        let list =
+            assemble_generated_data_list(Vec::new(), &gd, &jobs, &crate::quest::shipped_scaling());
         let entry = serde_json::to_value(&list[0]).expect("entry serializes");
         let mut keys: Vec<&str> = entry
             .as_object()
@@ -4843,9 +5157,13 @@ mod report85_job_generated_data_tests {
 
         // A story quest advertised alongside the jobs, exactly as a real board is.
         let story_id = Uuid::from_u128(0x570F);
-        let (story_quest, story_data) =
-            generate_quest_data(&gd, story_quest_with_dungeon(&gd), 48, &QuestLevelScaling::default())
-                .expect("control quest generates");
+        let (story_quest, story_data) = generate_quest_data(
+            &gd,
+            story_quest_with_dungeon(&gd),
+            48,
+            &QuestLevelScaling::default(),
+        )
+        .expect("control quest generates");
         // Assembled exactly the way the handler assembles it: the story quest arrives via
         // `split_quest_rows` (stored row), the jobs are added by the same call the route
         // makes. Going through `assemble_generated_data_list` rather than reaching past it
@@ -4855,7 +5173,8 @@ mod report85_job_generated_data_tests {
             vec![(story_id, story_quest.clone(), story_data.clone())].into_iter(),
             &Default::default(),
         );
-        let generated = assemble_generated_data_list(from_rows, &gd, &jobs, &crate::quest::shipped_scaling());
+        let generated =
+            assemble_generated_data_list(from_rows, &gd, &jobs, &crate::quest::shipped_scaling());
 
         assert_eq!(quests_out.len(), 1, "the control quest is advertised");
 
@@ -4884,14 +5203,20 @@ mod report85_job_generated_data_tests {
 
         for job in body["jobs"].as_array().expect("jobs") {
             let id = job["questId"].as_str().unwrap();
-            assert!(resolvable.contains(id), "job {id} is on the board but unresolvable");
+            assert!(
+                resolvable.contains(id),
+                "job {id} is on the board but unresolvable"
+            );
         }
         // The control, in the same assertion style: quests must resolve too. A change
         // that emptied the whole list would pass the loop above only if `jobs` were also
         // empty, and this catches the case where it is not.
         for quest in body["quests"].as_array().expect("quests") {
             let id = quest["questId"].as_str().unwrap();
-            assert!(resolvable.contains(id), "quest {id} is advertised but unresolvable");
+            assert!(
+                resolvable.contains(id),
+                "quest {id} is advertised but unresolvable"
+            );
         }
         assert_eq!(
             body["jobs"].as_array().unwrap().len() + body["quests"].as_array().unwrap().len(),
@@ -4913,8 +5238,8 @@ mod event_quest_tests {
     }
 
     fn game_data() -> blades_lib::game_data::GameData {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../deploy/static/parsed.json");
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static/parsed.json");
         let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         serde_json::from_str(&raw).expect("valid parsed.json")
     }
@@ -4954,7 +5279,10 @@ mod event_quest_tests {
         let sd = static_data();
         let gd = game_data();
         let minted = event_quests::mint(&sd, &gd, CHAR, 40, NOW);
-        assert!(!minted.is_empty(), "the committed calendar opens events at NOW");
+        assert!(
+            !minted.is_empty(),
+            "the committed calendar opens events at NOW"
+        );
         for m in &minted {
             assert_ne!(
                 m.quest_id, m.quest.gld_quest_id,
@@ -4968,8 +5296,15 @@ mod event_quest_tests {
                 !gd.quests.contains_key(&m.quest_id),
                 "the INSTANCE must not — that is the whole point of the two ids"
             );
-            assert!(matches!(m.quest.r#type, blades_lib::user_data::QuestType::GameEvent));
-            let data = m.quest.game_event_quest_data.as_ref().expect("carries its instance");
+            assert!(matches!(
+                m.quest.r#type,
+                blades_lib::user_data::QuestType::GameEvent
+            ));
+            let data = m
+                .quest
+                .game_event_quest_data
+                .as_ref()
+                .expect("carries its instance");
             assert!(data.game_event_instance_id.contains("::"));
         }
     }
@@ -5013,9 +5348,14 @@ mod event_quest_tests {
             let got: Vec<String> = minted.iter().map(|m| instance(&m.quest)).collect();
             assert_eq!(got, feed, "t={now}: quest rows and feed disagree");
             for m in &minted {
-                assert!(!m.quest.objective_statuses.is_empty(), "t={now}: no objectives");
+                assert!(
+                    !m.quest.objective_statuses.is_empty(),
+                    "t={now}: no objectives"
+                );
                 assert!(m.dungeon.is_some(), "t={now}: no dungeon");
-                rows.entry(m.quest.gld_quest_id).or_default().insert(instance(&m.quest));
+                rows.entry(m.quest.gld_quest_id)
+                    .or_default()
+                    .insert(instance(&m.quest));
             }
 
             let soon: Vec<String> =
@@ -5055,8 +5395,15 @@ mod event_quest_tests {
                 "event quest {} has no dungeon data — the client would wait forever",
                 m.quest_id
             );
-            assert!(m.quest.rewards.is_some(), "milestones must reach the client");
-            assert_eq!(m.quest.rewards.as_ref().unwrap().len(), 5, "five milestones");
+            assert!(
+                m.quest.rewards.is_some(),
+                "milestones must reach the client"
+            );
+            assert_eq!(
+                m.quest.rewards.as_ref().unwrap().len(),
+                5,
+                "five milestones"
+            );
             assert!(m.quest.final_reward.is_some());
         }
     }
@@ -5067,10 +5414,22 @@ mod event_quest_tests {
     #[test]
     fn instance_ids_are_stable_per_character_and_window() {
         let a = event_quests::instance_quest_id(CHAR, "e1::1000");
-        assert_eq!(a, event_quests::instance_quest_id(CHAR, "e1::1000"), "stable");
-        assert_ne!(a, event_quests::instance_quest_id(CHAR, "e1::2000"), "next window differs");
+        assert_eq!(
+            a,
+            event_quests::instance_quest_id(CHAR, "e1::1000"),
+            "stable"
+        );
+        assert_ne!(
+            a,
+            event_quests::instance_quest_id(CHAR, "e1::2000"),
+            "next window differs"
+        );
         let other = Uuid::from_u128(0xdead_beef);
-        assert_ne!(a, event_quests::instance_quest_id(other, "e1::1000"), "per character");
+        assert_ne!(
+            a,
+            event_quests::instance_quest_id(other, "e1::1000"),
+            "per character"
+        );
     }
 
     /// A GAME_EVENT row goes to `gameEventQuests[]`, never `quests[]` — and only
@@ -5132,7 +5491,10 @@ mod event_quest_tests {
             paid.push(event_milestone_reward(&sd, m.quest_id, &m.quest, n).unwrap_or_default());
         }
         for tier in 0..5 {
-            assert!(!paid[tier].is_empty(), "milestone {tier} must pay something");
+            assert!(
+                !paid[tier].is_empty(),
+                "milestone {tier} must pay something"
+            );
         }
         assert!(
             paid[5].is_empty(),
@@ -5174,7 +5536,10 @@ mod event_quest_tests {
             // the row id instead of gldQuestId finds nothing and pays zero.
             let row_id = Uuid::from_u128(0xF00D);
             let reward = resolve_completion_reward(&sd, row_id, &q);
-            assert!(!reward.is_empty(), "quest {gld} is covered but paid nothing");
+            assert!(
+                !reward.is_empty(),
+                "quest {gld} is covered but paid nothing"
+            );
             paid += 1;
         }
         assert!(
@@ -5183,7 +5548,6 @@ mod event_quest_tests {
         );
     }
 }
-
 
 /// Report #92/#98: a completed town job paid nothing.
 ///
@@ -5217,8 +5581,8 @@ mod report92_job_completion_reward_tests {
     }
 
     fn game_data() -> blades_lib::game_data::GameData {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../deploy/static/parsed.json");
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static/parsed.json");
         let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         serde_json::from_str(&raw).expect("valid parsed.json")
     }
@@ -5235,7 +5599,10 @@ mod report92_job_completion_reward_tests {
         let pools = job_pools();
         let boundary = jobs_gen::current_reset_boundary(&pools, NOW_WED);
         let (jobs, _t) = jobs_gen::generate(&pools, CHAR, 48, 0, boundary, NOW_WED);
-        assert!(!jobs.is_empty(), "the committed pools must roll a board at all");
+        assert!(
+            !jobs.is_empty(),
+            "the committed pools must roll a board at all"
+        );
         jobs
     }
 
@@ -5270,8 +5637,11 @@ mod report92_job_completion_reward_tests {
     #[test]
     fn a_job_pays_exactly_what_its_jobsetup_declared() {
         // capture 242402 (board) -> capture 242652 (/complete)
-        let reward =
-            jobs_gen::job_completion_reward(&retail_job("1385706b-d464-4e30-838b-55558644e8ba", 1526, 1000));
+        let reward = jobs_gen::job_completion_reward(&retail_job(
+            "1385706b-d464-4e30-838b-55558644e8ba",
+            1526,
+            1000,
+        ));
         assert_eq!(
             serde_json::to_value(&reward).unwrap(),
             json!({ "currencies": { GOLD: 1000 }, "characterXp": 1526 }),
@@ -5279,8 +5649,11 @@ mod report92_job_completion_reward_tests {
         );
 
         // capture 242402 (board) -> capture 243017 (/complete)
-        let reward =
-            jobs_gen::job_completion_reward(&retail_job("9ba20667-fd89-4bda-a8f3-708013b70710", 1586, 1000));
+        let reward = jobs_gen::job_completion_reward(&retail_job(
+            "9ba20667-fd89-4bda-a8f3-708013b70710",
+            1586,
+            1000,
+        ));
         assert_eq!(
             serde_json::to_value(&reward).unwrap(),
             json!({ "currencies": { GOLD: 1000 }, "characterXp": 1586 }),
@@ -5314,7 +5687,9 @@ mod report92_job_completion_reward_tests {
         let gd = game_data();
         let jobs = board();
         for job in &jobs {
-            let row = jobs_gen::job_quest_db_entry(job, CHAR, &gd, &crate::quest::shipped_scaling()).expect("job row");
+            let row =
+                jobs_gen::job_quest_db_entry(job, CHAR, &gd, &crate::quest::shipped_scaling())
+                    .expect("job row");
             let paid = resolve_completion_reward(&sd, row.id, &row.info.0);
             let declared = jobs_gen::job_completion_reward(job);
             assert!(
@@ -5370,8 +5745,15 @@ mod report92_job_completion_reward_tests {
         );
 
         let completed_ids = std::collections::HashSet::from([completed]);
-        let (replenished, _) =
-            jobs_gen::generate_replenished(&pools, character, 100, 44, boundary, now, &completed_ids);
+        let (replenished, _) = jobs_gen::generate_replenished(
+            &pools,
+            character,
+            100,
+            44,
+            boundary,
+            now,
+            &completed_ids,
+        );
         let replenished_ids = job_ids(&replenished);
 
         assert_eq!(replenished.len(), base.len(), "retail keeps the board full");
@@ -5393,7 +5775,11 @@ mod report92_job_completion_reward_tests {
             );
         }
         let replacements: Vec<_> = replenished_ids.difference(&base_ids).collect();
-        assert_eq!(replacements.len(), 1, "exactly one new job replaces the one deleted");
+        assert_eq!(
+            replacements.len(),
+            1,
+            "exactly one new job replaces the one deleted"
+        );
     }
 
     /// Negative control for the report #279 fix: an untouched board takes the old
@@ -5432,7 +5818,10 @@ mod report92_job_completion_reward_tests {
             "gldQuestId": jobs_gen::JOB_SENTINEL_GLD, "completed": false,
         }))
         .expect("a pre-field row must still deserialize");
-        assert!(legacy.job_reward.is_none(), "the fixture is the legacy shape");
+        assert!(
+            legacy.job_reward.is_none(),
+            "the fixture is the legacy shape"
+        );
 
         let reward = resolve_completion_reward(&sd, Uuid::from_u128(1), &legacy);
         // From the SHIPPED table, not `QuestLevelScaling::default()`. The default is
@@ -5449,7 +5838,10 @@ mod report92_job_completion_reward_tests {
             100 * 75,
             "and the real table is not the old formula, or this proves nothing"
         );
-        assert!(reward.currencies.is_empty(), "and no gold, which is unrecoverable");
+        assert!(
+            reward.currencies.is_empty(),
+            "and no gold, which is unrecoverable"
+        );
     }
 
     /// `job_reward` is ours, not retail's: no captured quest carries the key, and
@@ -5553,7 +5945,10 @@ mod finished_quest_tests {
     #[test]
     fn jobs_and_events_are_left_to_their_own_prunes() {
         let job = quest(jobs_gen::JOB_SENTINEL_GLD, "NORMAL", true);
-        assert!(jobs_gen::is_job_row(&job), "fixture must actually be a job row");
+        assert!(
+            jobs_gen::is_job_row(&job),
+            "fixture must actually be a job row"
+        );
         assert!(!is_finished_ordinary_quest(&job));
 
         let event = quest(MQ03, "GAME_EVENT", true);
@@ -5571,7 +5966,11 @@ mod finished_quest_tests {
                 .expect("minimal generated data must deserialize");
         let rows = vec![
             (MQ03, quest(MQ03, "NORMAL", true), Some(generated.clone())),
-            (Uuid::from_u128(7), quest(Uuid::from_u128(7), "NORMAL", false), Some(generated)),
+            (
+                Uuid::from_u128(7),
+                quest(Uuid::from_u128(7), "NORMAL", false),
+                Some(generated),
+            ),
         ];
         let live: Vec<_> = rows
             .into_iter()
@@ -5741,10 +6140,18 @@ mod report62_quest_map_tests {
     fn the_production_shape_resolves_to_a_consistent_pair_of_arrays() {
         let mut rows = Vec::new();
         for i in 0..3u128 {
-            rows.push((Uuid::from_u128(100 + i), quest(Uuid::from_u128(0xC0 + i)), Some(generated())));
+            rows.push((
+                Uuid::from_u128(100 + i),
+                quest(Uuid::from_u128(0xC0 + i)),
+                Some(generated()),
+            ));
         }
         for i in 0..6u128 {
-            rows.push((Uuid::from_u128(200 + i), quest(jobs_gen::JOB_SENTINEL_GLD), None));
+            rows.push((
+                Uuid::from_u128(200 + i),
+                quest(jobs_gen::JOB_SENTINEL_GLD),
+                None,
+            ));
         }
         // "The Message"
         rows.push((Uuid::from_u128(300), quest(Uuid::from_u128(0xCCA4)), None));
@@ -5776,7 +6183,10 @@ mod objectives_wire_tests {
         let parsed: ObjectivesRequest = serde_json::from_str(body)
             .expect("the client's own completion report must deserialize");
         let id = Uuid::parse_str("76b97069-67e9-4202-aa93-8bc1dc7fbc65").unwrap();
-        let update = parsed.objective_updates.get(&id).expect("the objective is there");
+        let update = parsed
+            .objective_updates
+            .get(&id)
+            .expect("the objective is there");
         assert!(
             matches!(update.status, blades_lib::user_data::QuestStatus::Completed),
             "a completion report must arrive as Completed"
@@ -5822,9 +6232,15 @@ mod objectives_wire_tests {
             game_event_quest,
         })
         .unwrap();
-        assert!(wire.get("quest").is_none(), "an event quest is not under `quest`");
+        assert!(
+            wire.get("quest").is_none(),
+            "an event quest is not under `quest`"
+        );
         assert_eq!(wire["gameEventQuest"]["type"], "GAME_EVENT");
-        assert!(wire.get("reward").is_none(), "no reward on an event objective");
+        assert!(
+            wire.get("reward").is_none(),
+            "no reward on an event objective"
+        );
         assert_eq!(
             wire.as_object().unwrap().len(),
             1,
@@ -5961,7 +6377,12 @@ mod playability_sweep {
         }
 
         assert_eq!(total, 185, "the shipped quest corpus is 185 quests");
-        assert!(errored.is_empty(), "{} quest(s) failed to generate:\n{}", errored.len(), errored.join("\n"));
+        assert!(
+            errored.is_empty(),
+            "{} quest(s) failed to generate:\n{}",
+            errored.len(),
+            errored.join("\n")
+        );
         assert_eq!(
             no_dungeon.len(),
             19,
@@ -5973,7 +6394,10 @@ mod playability_sweep {
         // so the two never drift apart.
         let declared = sd.quests_daily.non_dungeon_ids();
         for id in &no_dungeon {
-            assert!(declared.contains(id), "{id} has no dungeon but is not in nonDungeonQuests");
+            assert!(
+                declared.contains(id),
+                "{id} has no dungeon but is not in nonDungeonQuests"
+            );
         }
 
         // Report #117: the extractor used to read only DungeonQuestHolder assets,
@@ -6001,12 +6425,15 @@ mod playability_sweep {
         }
 
         // MQ04 is the reporter's direct reproduction and must retain both objectives.
-        let rebuild_town_hall =
-            Uuid::parse_str("3b478dfa-73bb-42df-a420-05cf83d015bc").unwrap();
+        let rebuild_town_hall = Uuid::parse_str("3b478dfa-73bb-42df-a420-05cf83d015bc").unwrap();
         let (quest, dungeon) = generate_quest_data(&gd, rebuild_town_hall, 1, scaling)
             .expect("MQ04 Rebuilding the Town Hall must resolve");
         assert!(dungeon.is_none(), "MQ04 is a town objective, not a dungeon");
-        assert_eq!(quest.objective_statuses.len(), 2, "both retail objectives are present");
+        assert_eq!(
+            quest.objective_statuses.len(),
+            2,
+            "both retail objectives are present"
+        );
         // One known exception, and it is not a real quest: `MultiKitTest`
         // (category "test", `version: 0`) is a developer fixture the client ships. It
         // has a dungeon and zero objectives, so nothing can complete it — but nothing
@@ -6053,7 +6480,11 @@ mod playability_sweep {
     fn reward_coverage_is_what_the_captures_support() {
         let sd = static_data();
         let gd = game_data();
-        let flat = gd.quests.keys().filter(|q| sd.quest_rewards.contains_key(q)).count();
+        let flat = gd
+            .quests
+            .keys()
+            .filter(|q| sd.quest_rewards.contains_key(q))
+            .count();
         let evented = gd
             .quests
             .keys()
@@ -6094,11 +6525,17 @@ mod playability_sweep {
         assert_eq!(sd.event_quests.templates.len(), 46);
         for (gld, tmpl) in &sd.event_quests.templates {
             assert_eq!(tmpl.rewards.len(), 5, "{gld}: five wire milestones");
-            assert_eq!(tmpl.payable_rewards.len(), 5, "{gld}: five granting milestones");
+            assert_eq!(
+                tmpl.payable_rewards.len(),
+                5,
+                "{gld}: five granting milestones"
+            );
             assert!(tmpl.final_reward.is_some(), "{gld}: a final reward");
             assert!(!tmpl.objective_ids.is_empty(), "{gld}: objective ids");
             for step in 0..5 {
-                let payout = tmpl.payout(step).unwrap_or_else(|| panic!("{gld}: no tier {step}"));
+                let payout = tmpl
+                    .payout(step)
+                    .unwrap_or_else(|| panic!("{gld}: no tier {step}"));
                 assert!(!payout.is_empty(), "{gld}: tier {step} pays nothing");
             }
             assert!(tmpl.payout(5).is_none(), "{gld}: exhausted after five");
@@ -6193,7 +6630,6 @@ mod assert_reachability {
     }
 }
 
-
 /// The dynamicElements retail put on job names and descriptions.
 ///
 /// Mined from 2,149 distinct job entries in 1,725 captured `/quests` responses;
@@ -6215,16 +6651,17 @@ mod job_dynamic_elements {
         // one character happened to roll.
         let mut all = Vec::new();
         for seed in 1..=24u128 {
-            let (jobs, _) = jobs_gen::generate(
-                &pools, uuid::Uuid::from_u128(seed), 50, 0, boundary, now,
-            );
+            let (jobs, _) =
+                jobs_gen::generate(&pools, uuid::Uuid::from_u128(seed), 50, 0, boundary, now);
             all.extend(jobs);
         }
         all
     }
 
     fn elems<'a>(job: &'a Value, field: &str) -> &'a Vec<Value> {
-        job["jobSetup"][field]["dynamicElements"].as_array().unwrap()
+        job["jobSetup"][field]["dynamicElements"]
+            .as_array()
+            .unwrap()
     }
     fn types(job: &Value, field: &str) -> Vec<String> {
         elems(job, field)
@@ -6241,14 +6678,20 @@ mod job_dynamic_elements {
     #[test]
     fn element_shapes_match_retail_per_job_type() {
         let jobs = board();
-        assert!(!jobs.is_empty(), "no jobs generated — the test would prove nothing");
+        assert!(
+            !jobs.is_empty(),
+            "no jobs generated — the test would prove nothing"
+        );
         let mut seen: std::collections::BTreeSet<i64> = Default::default();
         let mut populated = 0usize;
 
         for j in &jobs {
             let jt = j["jobSetup"]["jobType"].as_i64().unwrap();
             let (want_name, want_desc): (Vec<&str>, Vec<&str>) = match jt {
-                0 => (vec!["LOCALIZATION_ID"; 3], vec!["INTEGER", "LOCALIZATION_ID"]),
+                0 => (
+                    vec!["LOCALIZATION_ID"; 3],
+                    vec!["INTEGER", "LOCALIZATION_ID"],
+                ),
                 1 => (vec!["LOCALIZATION_ID"], vec!["LOCALIZATION_ID"]),
                 3 => (vec!["LOCALIZATION_ID"], vec!["INTEGER"]),
                 4 => (
@@ -6302,12 +6745,16 @@ mod job_dynamic_elements {
             }
             match jt {
                 0 => assert_eq!(
-                    elems(&j, "questDescription")[0]["intValue"].as_i64().unwrap(),
+                    elems(&j, "questDescription")[0]["intValue"]
+                        .as_i64()
+                        .unwrap(),
                     from("primaryEnemyCount"),
                     "Defeat description counts primaryEnemyCount"
                 ),
                 3 => assert_eq!(
-                    elems(&j, "questDescription")[0]["intValue"].as_i64().unwrap(),
+                    elems(&j, "questDescription")[0]["intValue"]
+                        .as_i64()
+                        .unwrap(),
                     from("rescueNpcCount"),
                     "Rescue description counts rescueNpcCount"
                 ),
@@ -6329,14 +6776,18 @@ mod job_dynamic_elements {
             serde_json::from_str(include_str!("job_localization.json")).expect("table parses");
         let mut known: std::collections::HashSet<String> = Default::default();
         for (_, d) in raw["dungeons"].as_object().unwrap() {
-            if let Some(k) = d["kitName"].as_str() { known.insert(k.into()); }
+            if let Some(k) = d["kitName"].as_str() {
+                known.insert(k.into());
+            }
             for l in d["locations"].as_array().unwrap() {
                 known.insert(l.as_str().unwrap().into());
             }
         }
         for (_, f) in raw["enemyFamilies"].as_object().unwrap() {
             for k in ["name", "plural", "group"] {
-                if let Some(v) = f[k].as_str() { known.insert(v.into()); }
+                if let Some(v) = f[k].as_str() {
+                    known.insert(v.into());
+                }
             }
         }
         for (_, v) in raw["items"].as_object().unwrap() {
@@ -6357,7 +6808,10 @@ mod job_dynamic_elements {
                 }
             }
         }
-        assert!(checked > 0, "no localization values emitted — the test proved nothing");
+        assert!(
+            checked > 0,
+            "no localization values emitted — the test proved nothing"
+        );
     }
 }
 
@@ -6378,8 +6832,15 @@ mod jobs_wire_diff {
     /// Keys on a JOB entry, from the committed board (all 6 jobs carry exactly
     /// these 9).
     const RETAIL_JOB_KEYS: &[&str] = &[
-        "completed", "difficultyLevel", "jobPoolId", "jobSetup", "objectiveStatuses",
-        "questId", "seed", "type", "version",
+        "completed",
+        "difficultyLevel",
+        "jobPoolId",
+        "jobSetup",
+        "objectiveStatuses",
+        "questId",
+        "seed",
+        "type",
+        "version",
     ];
 
     /// `jobSetup` keys present on ALL SIX retail jobs — the universal set.
@@ -6390,11 +6851,24 @@ mod jobs_wire_diff {
     /// has 20 keys, no primary/secondary enemy family, and a `duelBossId` instead
     /// — which is exactly what we emit. The test was wrong, not the generator.
     const RETAIL_UNIVERSAL_JOBSETUP_KEYS: &[&str] = &[
-        "algorithmVersion", "bossEnemyFamilyId", "bossLevelDelta", "dungeonTemplateId",
-        "enemyBaseLevelOffset", "initialEPL", "jobCreatorVersion", "jobType",
-        "primaryEnemyCount", "questDescription", "questName", "rewardGemCount",
-        "rewardItemCount", "rewardItemId", "rewardXp", "secondaryEnemyCount",
-        "secondaryEnemyCountPerSpawnerMax", "secondaryEnemyCountPerSpawnerMin",
+        "algorithmVersion",
+        "bossEnemyFamilyId",
+        "bossLevelDelta",
+        "dungeonTemplateId",
+        "enemyBaseLevelOffset",
+        "initialEPL",
+        "jobCreatorVersion",
+        "jobType",
+        "primaryEnemyCount",
+        "questDescription",
+        "questName",
+        "rewardGemCount",
+        "rewardItemCount",
+        "rewardItemId",
+        "rewardXp",
+        "secondaryEnemyCount",
+        "secondaryEnemyCountPerSpawnerMax",
+        "secondaryEnemyCountPerSpawnerMin",
         "secretRoom",
     ];
 
@@ -6402,8 +6876,13 @@ mod jobs_wire_diff {
     /// set. Union across the six jobs; the two sets together are every key retail
     /// is known to send, so anything outside them is a key we invented.
     const RETAIL_OPTIONAL_JOBSETUP_KEYS: &[&str] = &[
-        "duelBossId", "gatherItemCount", "gatherItemId", "primaryEnemyFamilyId",
-        "rescueNpcCount", "secondaryEnemyFamilyId", "secretBossEnemyFamilyId",
+        "duelBossId",
+        "gatherItemCount",
+        "gatherItemId",
+        "primaryEnemyFamilyId",
+        "rescueNpcCount",
+        "secondaryEnemyFamilyId",
+        "secretBossEnemyFamilyId",
         "secretBossLevelDelta",
     ];
 
@@ -6467,7 +6946,6 @@ mod jobs_wire_diff {
             );
         }
     }
-
 }
 
 #[cfg(test)]
@@ -6551,7 +7029,11 @@ mod story_quest_difficulty_repair {
         let mut objective_statuses = HashMap::new();
         objective_statuses.insert(
             Uuid::from_u128(1),
-            ObjectiveStatus { status: QuestStatus::Active, progress: 0.0, completed: false },
+            ObjectiveStatus {
+                status: QuestStatus::Active,
+                progress: 0.0,
+                completed: false,
+            },
         );
         Quest {
             version: 2,
@@ -6573,7 +7055,10 @@ mod story_quest_difficulty_repair {
         // Flappety's row, from prod: the same quest another 19 characters hold
         // with -1. The only field that differed was this one.
         let mut q = row(QuestType::Normal, STORY, 3);
-        assert!(repair_story_quest_difficulty(&mut q), "should report a change");
+        assert!(
+            repair_story_quest_difficulty(&mut q),
+            "should report a change"
+        );
         assert_eq!(q.difficulty_level, -1);
     }
 
@@ -6610,7 +7095,6 @@ mod story_quest_difficulty_repair {
     }
 }
 
-
 /// 2026-09-25: tapping QUESTS spun forever for every character tested.
 ///
 /// The 05:00 UTC reset rolled boards whose Explore drew an Arena template (no kit
@@ -6634,14 +7118,21 @@ mod quest_map_wedge_2026_09_25 {
 
     fn pools() -> Value {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
-        serde_json::from_str(&std::fs::read_to_string(dir.join("job_pools.json")).unwrap())
-            .unwrap()
+        serde_json::from_str(&std::fs::read_to_string(dir.join("job_pools.json")).unwrap()).unwrap()
     }
 
     fn board(character: &str, now: u64) -> Vec<Value> {
         let pools = pools();
         let boundary = jobs_gen::current_reset_boundary(&pools, now);
-        jobs_gen::generate(&pools, Uuid::parse_str(character).unwrap(), 86, 0, boundary, now).0
+        jobs_gen::generate(
+            &pools,
+            Uuid::parse_str(character).unwrap(),
+            86,
+            0,
+            boundary,
+            now,
+        )
+        .0
     }
 
     fn job<'a>(jobs: &'a [Value], quest_id: &str) -> &'a Value {
@@ -6651,7 +7142,10 @@ mod quest_map_wedge_2026_09_25 {
     }
 
     fn name_elements(j: &Value) -> usize {
-        j["jobSetup"]["questName"]["dynamicElements"].as_array().unwrap().len()
+        j["jobSetup"]["questName"]["dynamicElements"]
+            .as_array()
+            .unwrap()
+            .len()
     }
 
     /// The exact jobs production served with an empty name, now named.
@@ -6660,15 +7154,34 @@ mod quest_map_wedge_2026_09_25 {
         let ht = board(HALLOWEEN_TEST, NOW);
         let fl = board(FLAPPETY, NOW);
         for (jobs, id, key, want) in [
-            (&ht, "e51dda6b-b7e6-49a0-a3bf-c64347e9f917", "UI.Jobs.Names.Explore.005", 1),
-            (&ht, "f7a75fca-402b-4d90-81f6-030f92903363", "UI.Jobs.Names.Defeat.005", 3),
-            (&fl, "060a79b5-c3e2-49f7-b56e-52c769a1f39e", "UI.Jobs.Names.Defeat.011", 3),
+            (
+                &ht,
+                "e51dda6b-b7e6-49a0-a3bf-c64347e9f917",
+                "UI.Jobs.Names.Explore.005",
+                1,
+            ),
+            (
+                &ht,
+                "f7a75fca-402b-4d90-81f6-030f92903363",
+                "UI.Jobs.Names.Defeat.005",
+                3,
+            ),
+            (
+                &fl,
+                "060a79b5-c3e2-49f7-b56e-52c769a1f39e",
+                "UI.Jobs.Names.Defeat.011",
+                3,
+            ),
         ] {
             let j = job(jobs, id);
             // Control: the same questId AND name key means we are regenerating
             // prod's board, where this job went out with `dynamicElements: []`.
             assert_eq!(j["jobSetup"]["questName"]["key"], key, "{id}");
-            assert_eq!(name_elements(j), want, "{id} {key} must fill its placeholders");
+            assert_eq!(
+                name_elements(j),
+                want,
+                "{id} {key} must fill its placeholders"
+            );
         }
     }
 
@@ -6678,15 +7191,27 @@ mod quest_map_wedge_2026_09_25 {
     fn jobs_that_were_already_named_do_not_move() {
         let ht = board(HALLOWEEN_TEST, NOW);
         let goblins = &job(&ht, "c916c4f0-0323-45ac-ada5-c3b01bf74d7e")["jobSetup"];
-        assert_eq!(goblins["primaryEnemyFamilyId"], "9137d218-6f05-4e8f-a5e5-1c63c61c95ca");
-        assert_eq!(goblins["dungeonTemplateId"], "dbfd45fe-8c8c-4c8d-83c6-9b4566afc788");
+        assert_eq!(
+            goblins["primaryEnemyFamilyId"],
+            "9137d218-6f05-4e8f-a5e5-1c63c61c95ca"
+        );
+        assert_eq!(
+            goblins["dungeonTemplateId"],
+            "dbfd45fe-8c8c-4c8d-83c6-9b4566afc788"
+        );
         assert_eq!(
             goblins["questName"]["dynamicElements"][0]["localizationValue"],
             "Enemy.Name.Goblin.Wizard"
         );
         let lumber = &job(&ht, "87e29b6b-e4c7-4caa-afe2-60b24e9ea4aa")["jobSetup"];
-        assert_eq!(lumber["dungeonTemplateId"], "57d639c2-ec4c-4e6b-9995-ff6a7ef3e712");
-        assert_eq!(lumber["primaryEnemyFamilyId"], "3d932102-3b5c-42ba-b96a-35405752c5a3");
+        assert_eq!(
+            lumber["dungeonTemplateId"],
+            "57d639c2-ec4c-4e6b-9995-ff6a7ef3e712"
+        );
+        assert_eq!(
+            lumber["primaryEnemyFamilyId"],
+            "3d932102-3b5c-42ba-b96a-35405752c5a3"
+        );
         assert_eq!(lumber["questName"]["key"], "UI.Jobs.Names.Gather.008");
     }
 
@@ -6718,7 +7243,10 @@ mod quest_map_wedge_2026_09_25 {
             }
         }
         assert!(checked > 50_000, "only {checked} jobs checked");
-        assert!(defeat_or_explore > checked / 4, "the sweep barely exercised Defeat/Explore");
+        assert!(
+            defeat_or_explore > checked / 4,
+            "the sweep barely exercised Defeat/Explore"
+        );
     }
 }
 
@@ -6738,8 +7266,7 @@ mod report_237_duel_arena {
 
     fn pools() -> Value {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
-        serde_json::from_str(&std::fs::read_to_string(dir.join("job_pools.json")).unwrap())
-            .unwrap()
+        serde_json::from_str(&std::fs::read_to_string(dir.join("job_pools.json")).unwrap()).unwrap()
     }
 
     fn duels(pools: &Value, character: Uuid, level: u16, now: u64) -> Vec<Value> {
@@ -6780,13 +7307,19 @@ mod report_237_duel_arena {
         }
         assert!(checked >= 6_000, "only {checked} Duels checked");
         // All five arenas are in play, as they were in retail (8-11 of 46 each).
-        assert_eq!(seen.len(), jobs_gen::DUEL_DUNGEON_TEMPLATES.len(), "{seen:?}");
+        assert_eq!(
+            seen.len(),
+            jobs_gen::DUEL_DUNGEON_TEMPLATES.len(),
+            "{seen:?}"
+        );
     }
 
     /// The Duel production is serving HalloweenTest this week was rolled into
     /// `JobStoneVariant_03`. It moves into an arena, and nothing else about it moves:
-    /// the dungeon pick is still one draw, so the champion, level, rewards and name
-    /// stay what the player was already shown.
+    /// the dungeon pick is still one draw, so the champion and name stay what the
+    /// player was already shown. The level/reward assertions below reflect the
+    /// later report #279 difficulty correction: L86 jobs roll from retail's
+    /// effective job baseline, not raw character level.
     #[test]
     fn a_duel_prod_served_in_a_stone_dungeon_moves_to_an_arena_and_nothing_else_moves() {
         let pools = pools();
@@ -6797,16 +7330,22 @@ mod report_237_duel_arena {
             .expect("this is not prod's board");
         let js = &duel["jobSetup"];
         let t = js["dungeonTemplateId"].as_str().unwrap();
-        assert_ne!(t, "4d3153a0-cfc5-405c-b065-92547ee9fbbc", "still in JobStoneVariant_03");
+        assert_ne!(
+            t, "4d3153a0-cfc5-405c-b065-92547ee9fbbc",
+            "still in JobStoneVariant_03"
+        );
         assert!(jobs_gen::DUEL_DUNGEON_TEMPLATES.contains(&t), "{t}");
 
         // Control: every value prod served before the fix is unchanged.
-        assert_eq!(duel["difficultyLevel"], 82);
+        assert_eq!(duel["difficultyLevel"], 76);
         assert_eq!(duel["seed"], -2_524_332_663_550_136_772_i64);
         assert_eq!(js["duelBossId"], "024b4f81-c7ef-4322-a547-ee863b4c02ad");
-        assert_eq!(js["bossEnemyFamilyId"], "31be99a6-8557-4e9b-81e6-5503f900b7d2");
+        assert_eq!(
+            js["bossEnemyFamilyId"],
+            "31be99a6-8557-4e9b-81e6-5503f900b7d2"
+        );
         assert_eq!(js["bossLevelDelta"], 7);
-        assert_eq!(js["rewardXp"], 1657);
+        assert_eq!(js["rewardXp"], 1543);
         assert_eq!(js["rewardItemCount"], 0);
         assert_eq!(js["questName"]["key"], "UI.Jobs.Names.Duel.002");
         assert_eq!(
@@ -6820,8 +7359,134 @@ mod report_237_duel_arena {
     #[test]
     fn other_job_types_keep_their_pool() {
         for t in [0, 1, 2, 3, 4] {
-            assert_eq!(jobs_gen::dungeon_pool(t), jobs_gen::dungeon_pool(-1), "jobType {t}");
+            assert_eq!(
+                jobs_gen::dungeon_pool(t),
+                jobs_gen::dungeon_pool(-1),
+                "jobType {t}"
+            );
             assert!(jobs_gen::dungeon_pool(t).len() > jobs_gen::DUEL_DUNGEON_TEMPLATES.len());
         }
+    }
+}
+
+/// Report #279 follow-up: L100 town jobs were lethal because we rolled job
+/// difficulty from raw character level. Retail L100 boards in the 2026-06-07
+/// snapshot carry `jobSetup.initialEPL` 83-84 and `difficultyLevel` 74-84; our
+/// L100 rows carried 87-97 and generated enemies at those same levels.
+#[cfg(test)]
+mod report_279_job_difficulty {
+    use super::*;
+    use serde_json::Value;
+    use uuid::Uuid;
+
+    const NOW: u64 = 1_790_618_400;
+
+    fn pools() -> Value {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        serde_json::from_str(&std::fs::read_to_string(dir.join("job_pools.json")).unwrap()).unwrap()
+    }
+
+    fn l100_board(character: Uuid) -> Vec<Value> {
+        let pools = pools();
+        let boundary = jobs_gen::current_reset_boundary(&pools, NOW);
+        jobs_gen::generate(&pools, character, 100, 0, boundary, NOW).0
+    }
+
+    #[test]
+    fn level_100_jobs_roll_from_retail_effective_level_not_raw_player_level() {
+        let mut checked = 0;
+        let mut saw_top_retail_level = false;
+        for c in 1..=200u128 {
+            for job in l100_board(Uuid::from_u128(c * 0x9E37_79B9_7F4A_7C15)) {
+                let setup = &job["jobSetup"];
+                assert_eq!(
+                    setup["initialEPL"], 84,
+                    "retail L100 jobs use an 83-84 effective baseline, not raw level 100"
+                );
+                let difficulty = job["difficultyLevel"].as_i64().unwrap();
+                assert!(
+                    (73..=84).contains(&difficulty),
+                    "L100 job {} rolled difficulty {difficulty}; retail sample is 74-84",
+                    job["questId"]
+                );
+                saw_top_retail_level |= difficulty == 84;
+                checked += 1;
+            }
+        }
+        assert!(checked > 1_000, "only {checked} jobs checked");
+        assert!(
+            saw_top_retail_level,
+            "the sweep never exercised the top retail level"
+        );
+    }
+
+    #[test]
+    fn generated_enemies_follow_the_softened_job_difficulty() {
+        let gd = super::report85_job_generated_data_tests::game_data();
+        for job in l100_board(Uuid::from_u128(0x279)) {
+            let difficulty = job["difficultyLevel"].as_i64().unwrap();
+            let boss_delta = job["jobSetup"]["bossLevelDelta"].as_i64().unwrap_or(0);
+            let data =
+                jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling())
+                    .expect("job generates");
+            let mut levels = Vec::new();
+            for enemy in data.enemy_generated_data.values().flatten().flatten() {
+                levels.push(enemy.enemy_level);
+            }
+            assert!(!levels.is_empty(), "job has generated enemies");
+            assert_eq!(levels.iter().copied().min(), Some(difficulty));
+            assert!(
+                levels.iter().copied().max().unwrap() <= difficulty + boss_delta + 2,
+                "generated levels {levels:?} escaped the job's own softened difficulty"
+            );
+            assert!(
+                levels.iter().all(|level| *level <= 92),
+                "raw-L100 scaling leaked back into generated data: {levels:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn control_an_explicit_job_row_keeps_its_declared_difficulty() {
+        let gd = super::report85_job_generated_data_tests::game_data();
+        let job = json!({
+            "questId": "00000000-0000-4000-8000-000000000279",
+            "version": 0,
+            "type": "JOB",
+            "objectiveStatuses": {},
+            "difficultyLevel": 97,
+            "seed": 0,
+            "jobSetup": {
+                "jobType": 0,
+                "bossLevelDelta": 5,
+                "rewardXp": 0,
+                "rewardItemCount": 0
+            },
+            "completed": false
+        });
+        let entry = jobs_gen::job_quest_db_entry(
+            &job,
+            Uuid::from_u128(0x279),
+            &gd,
+            &crate::quest::shipped_scaling(),
+        )
+        .expect("row builds");
+        assert_eq!(entry.info.0.difficulty_level, 97);
+        let generated = entry
+            .generated_data
+            .0
+            .expect("job rows carry generated data");
+        let min_level = generated
+            .enemy_generated_data
+            .values()
+            .flatten()
+            .flatten()
+            .map(|enemy| enemy.enemy_level)
+            .min();
+        assert_eq!(
+            min_level,
+            Some(97),
+            "stored job rows preserve the declared level"
+        );
     }
 }
