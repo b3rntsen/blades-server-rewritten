@@ -413,19 +413,18 @@ async fn resolve_link(
 /// Is the account the client is already signed in as the same one the
 /// credential names?
 ///
-/// The comparison is against the SECRET id, not the row id. The secret id is
-/// the only user id the client is ever told (`SessionResponseInner` reports
-/// `secret_user_id`), so comparing `selectedUserId` against the row id would
-/// report a conflict every single time — including when the player is already
-/// signed in as exactly the account they are linking.
+/// The comparison is primarily against the PUBLIC id, because that is what
+/// `SessionResponseInner.userId` now publishes. The SECRET id is still accepted
+/// for older clients/installations and for historical conflict payloads that
+/// used the login-token namespace.
 ///
 /// Anything unparseable, or absent, counts as "not the same". That direction is
 /// deliberate: it makes the client ASK which account to keep instead of
 /// silently switching the player to another one.
-fn is_same_account(selected: Option<&str>, secret_id: Uuid) -> bool {
+fn is_same_account(selected: Option<&str>, public_id: Uuid, secret_id: Uuid) -> bool {
     selected
         .and_then(|s| Uuid::parse_str(s).ok())
-        .is_some_and(|s| s == secret_id)
+        .is_some_and(|s| s == public_id || s == secret_id)
 }
 
 /// Move this installation's anonymous-login identity to the account the
@@ -580,11 +579,10 @@ async fn bnet_link(
     let (user_id, secret_id, session) =
         resolve_link(&app_state, &body.username, &body.password).await?;
 
-    // The client names the account it is currently signed in as by its SECRET
-    // id — that is the only user id it is ever told (see `SessionResponseInner`,
-    // which reports `secret_user_id`). Comparing it against the row id would
-    // report a conflict every single time.
-    let same_account = is_same_account(body.selected_user_id.as_deref(), secret_id);
+    // The client names the account it is currently signed in as by its public
+    // session `userId` on current builds. Older payloads may still carry the
+    // stable secret/login-token id, so accept both.
+    let same_account = is_same_account(body.selected_user_id.as_deref(), user_id, secret_id);
 
     if !same_account {
         // BOTH profiles, not just the one being linked to. This is the picker's
@@ -598,8 +596,9 @@ async fn bnet_link(
         // other profile's characters successfully — it simply had no second
         // entry to render against.
         //
-        // Secret ids, in the same currency as `selectedUserId`; the row id is
-        // never something the client has seen.
+        // Public ids, in the same currency as current `selectedUserId`. The
+        // linked account's secret remains available as `loginToken`, not as a
+        // profile id.
         let mut ids = Vec::new();
         if let Some(sel) = body
             .selected_user_id
@@ -608,7 +607,7 @@ async fn bnet_link(
         {
             ids.push(sel.to_string());
         }
-        ids.push(secret_id.to_string());
+        ids.push(user_id.to_string());
 
         // The client exposes this field as `NewBnetToken` and persists it before
         // continuing through the conflict picker. It therefore has to be the
@@ -660,19 +659,23 @@ async fn bnet_link(
 /// Did the player choose to keep the character they were PLAYING, rather than
 /// the one already on the account they are linking to?
 ///
-/// `selectedUserId` is a SECRET id — the only kind of user id the client is ever
-/// told (see `SessionResponseInner`). The conflict picker offers two of them: the
-/// account the client is signed in as, and the credential's. So "not the
-/// credential's" means "the one I am playing", and an absent or unparseable
+/// `selectedUserId` is the public session id on current builds, though old
+/// payloads may still carry a secret/login-token id. The conflict picker offers
+/// the account the client is signed in as and the credential's account. So "not
+/// the credential's" means "the one I am playing", and an absent or unparseable
 /// value means we cannot tell and must not move anything.
 ///
 /// #185: this answer used to be computed and thrown away. Both branches of the
 /// picker kept the credential's character, so a player with a fresh level 48
 /// "Adventurer" on the linked account could never get their real character onto
 /// it, whichever option they tapped.
-fn keeps_the_played_character(selected: Option<&str>, credential_secret: Uuid) -> bool {
+fn keeps_the_played_character(
+    selected: Option<&str>,
+    credential_public: Uuid,
+    credential_secret: Uuid,
+) -> bool {
     match selected.and_then(|s| Uuid::parse_str(s).ok()) {
-        Some(chosen) => chosen != credential_secret,
+        Some(chosen) => chosen != credential_public && chosen != credential_secret,
         None => false,
     }
 }
@@ -950,7 +953,8 @@ async fn bnet_link_force(
         resolve_link(&app_state, &body.username, &body.password).await?;
 
     // The player's answer, which this endpoint used to discard (#185).
-    let keep_played = keeps_the_played_character(body.selected_user_id.as_deref(), secret_id);
+    let keep_played =
+        keeps_the_played_character(body.selected_user_id.as_deref(), user_id, secret_id);
 
     let (rebound, moved) = {
         let mut conn = app_state.db_pool.get().await.unwrap();
@@ -1597,22 +1601,23 @@ mod link_tests {
     }
 
     #[test]
-    fn compares_against_the_secret_id_the_client_was_given() {
+    fn compares_against_the_public_id_the_client_was_given() {
+        let public = Uuid::from_u128(0xBBBB);
         let secret = Uuid::from_u128(0xAAAA);
-        let row_id = Uuid::from_u128(0xBBBB);
-        assert!(is_same_account(Some(&secret.to_string()), secret));
+        assert!(is_same_account(Some(&public.to_string()), public, secret));
         assert!(
-            !is_same_account(Some(&row_id.to_string()), secret),
-            "the row id is never what the client holds"
+            is_same_account(Some(&secret.to_string()), public, secret),
+            "old secret-id payloads must still be accepted"
         );
     }
 
     #[test]
     fn anything_unknown_reports_a_conflict_rather_than_assuming() {
+        let public = Uuid::from_u128(0xBBBB);
         let secret = Uuid::from_u128(0xAAAA);
         for selected in [None, Some(""), Some("not-a-uuid"), Some("0")] {
             assert!(
-                !is_same_account(selected, secret),
+                !is_same_account(selected, public, secret),
                 "{selected:?} must not be treated as a match"
             );
         }
@@ -1623,8 +1628,25 @@ mod link_tests {
         // The normal case for us: signed in anonymously, linking to the account
         // that actually holds their character.
         let anon = Uuid::from_u128(1);
-        let real = Uuid::from_u128(2);
-        assert!(!is_same_account(Some(&anon.to_string()), real));
+        let real_public = Uuid::from_u128(2);
+        let real_secret = Uuid::from_u128(3);
+        assert!(!is_same_account(
+            Some(&anon.to_string()),
+            real_public,
+            real_secret
+        ));
+    }
+
+    #[test]
+    fn report_8_same_account_public_selected_user_id_is_not_a_conflict() {
+        let public = Uuid::parse_str("ca9ac649-1583-5990-8b41-6b44381dc1d9").unwrap();
+        let secret = Uuid::parse_str("530e7cb0-c189-4a51-9bf7-75a580241d72").unwrap();
+
+        assert!(
+            is_same_account(Some(&public.to_string()), public, secret),
+            "Mikhail's link selected the public session user id for the same account; \
+             comparing only with the secret id forced a false conflict"
+        );
     }
 
     /// Backstop for local runs without Postgres: the production statement must
@@ -1787,9 +1809,16 @@ mod link_tests {
     /// its own id must not be told it is a different account.
     #[test]
     fn case_does_not_change_the_answer() {
+        let public = Uuid::from_u128(0x123456);
         let secret = Uuid::from_u128(0xABCDEF);
         assert!(is_same_account(
             Some(&secret.to_string().to_uppercase()),
+            public,
+            secret
+        ));
+        assert!(is_same_account(
+            Some(&public.to_string().to_uppercase()),
+            public,
             secret
         ));
     }
@@ -2125,8 +2154,11 @@ mod session_identity {
 mod report185_link_choice_tests {
     use super::*;
 
-    /// The credential's secret id — one of the two the picker offers.
-    const CREDENTIAL: Uuid = Uuid::from_u128(0x11111111_2222_4333_8444_555555555555);
+    /// The credential account's public id — one of the two the picker offers.
+    const CREDENTIAL_PUBLIC: Uuid = Uuid::from_u128(0x11111111_2222_4333_8444_555555555555);
+    /// The credential account's secret/login-token id. Older conflict payloads
+    /// used this namespace, so the answer parser still accepts it.
+    const CREDENTIAL_SECRET: Uuid = Uuid::from_u128(0xaaaaaaaa_bbbb_4ccc_8ddd_eeeeeeeeeeee);
     /// The account the client is signed in as — the other one.
     const PLAYED: Uuid = Uuid::from_u128(0x99999999_8888_4777_8666_555555555555);
 
@@ -2137,7 +2169,8 @@ mod report185_link_choice_tests {
     fn choosing_the_played_character_is_recognised() {
         assert!(keeps_the_played_character(
             Some(&PLAYED.to_string()),
-            CREDENTIAL
+            CREDENTIAL_PUBLIC,
+            CREDENTIAL_SECRET,
         ));
     }
 
@@ -2148,8 +2181,14 @@ mod report185_link_choice_tests {
     #[test]
     fn choosing_the_linked_account_moves_nothing() {
         assert!(!keeps_the_played_character(
-            Some(&CREDENTIAL.to_string()),
-            CREDENTIAL
+            Some(&CREDENTIAL_PUBLIC.to_string()),
+            CREDENTIAL_PUBLIC,
+            CREDENTIAL_SECRET,
+        ));
+        assert!(!keeps_the_played_character(
+            Some(&CREDENTIAL_SECRET.to_string()),
+            CREDENTIAL_PUBLIC,
+            CREDENTIAL_SECRET,
         ));
     }
 
@@ -2159,27 +2198,37 @@ mod report185_link_choice_tests {
     /// conflict rather than assuming.
     #[test]
     fn an_unknown_answer_moves_nothing() {
-        assert!(!keeps_the_played_character(None, CREDENTIAL));
-        assert!(!keeps_the_played_character(Some("not-a-uuid"), CREDENTIAL));
-        assert!(!keeps_the_played_character(Some(""), CREDENTIAL));
+        assert!(!keeps_the_played_character(
+            None,
+            CREDENTIAL_PUBLIC,
+            CREDENTIAL_SECRET
+        ));
+        assert!(!keeps_the_played_character(
+            Some("not-a-uuid"),
+            CREDENTIAL_PUBLIC,
+            CREDENTIAL_SECRET
+        ));
+        assert!(!keeps_the_played_character(
+            Some(""),
+            CREDENTIAL_PUBLIC,
+            CREDENTIAL_SECRET
+        ));
     }
 
-    /// The id in the answer is a SECRET id, never a row id — it is the only kind
-    /// the client is ever told. Comparing against the row id would read every
-    /// answer as "keep the played character" and move a character on every link.
+    /// The id in the answer is the public id now, but old secret-id answers still
+    /// mean "keep the linked account". Comparing against only one namespace
+    /// would read a valid linked-account choice as "keep the played character".
     #[test]
-    fn the_answer_is_compared_against_the_secret_id() {
-        let row_id = Uuid::from_u128(0xdeadbeef_0000_4000_8000_000000000001);
-        assert_ne!(row_id, CREDENTIAL);
-        // The same string that means "keep the linked account" against the
-        // secret id would mean the opposite against the row id.
+    fn the_answer_is_compared_against_both_credential_ids() {
         assert!(!keeps_the_played_character(
-            Some(&CREDENTIAL.to_string()),
-            CREDENTIAL
+            Some(&CREDENTIAL_PUBLIC.to_string()),
+            CREDENTIAL_PUBLIC,
+            CREDENTIAL_SECRET
         ));
-        assert!(keeps_the_played_character(
-            Some(&CREDENTIAL.to_string()),
-            row_id
+        assert!(!keeps_the_played_character(
+            Some(&CREDENTIAL_SECRET.to_string()),
+            CREDENTIAL_PUBLIC,
+            CREDENTIAL_SECRET
         ));
     }
 
