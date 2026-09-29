@@ -77,6 +77,15 @@ pub struct CraftJob {
     pub results: Value,
 }
 
+/// Reversible audit trail for support-initiated current-character renames.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterRenameAuditEntry {
+    pub previous_name: String,
+    pub new_name: String,
+    pub renamed_at_secs: i64,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ServerState {
@@ -166,6 +175,9 @@ pub struct ServerState {
     pub arena_last_elder_two_chest_at_secs: i64,
     #[serde(default)]
     pub arena_last_legendary_chest_at_secs: i64,
+    /// Previous names for support-driven live-character renames.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub current_character_renames: Vec<CharacterRenameAuditEntry>,
 }
 
 #[cfg(test)]
@@ -229,5 +241,26 @@ mod tests {
             value["arenaLastElderOneChestAtSecs"],
             serde_json::json!(1_725_000_000i64)
         );
+    }
+
+    #[test]
+    fn current_character_rename_audit_round_trips() {
+        let mut state = ServerState::default();
+        state.current_character_renames.push(CharacterRenameAuditEntry {
+            previous_name: "Old Hero".into(),
+            new_name: "New Hero".into(),
+            renamed_at_secs: 1_789_999_999,
+        });
+        let value = serde_json::to_value(&state).unwrap();
+        assert_eq!(
+            value["currentCharacterRenames"][0],
+            serde_json::json!({
+                "previousName": "Old Hero",
+                "newName": "New Hero",
+                "renamedAtSecs": 1_789_999_999i64
+            })
+        );
+        let back: ServerState = serde_json::from_value(value).unwrap();
+        assert_eq!(back.current_character_renames, state.current_character_renames);
     }
 }

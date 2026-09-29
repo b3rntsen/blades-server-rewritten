@@ -1998,6 +1998,7 @@ dependencies = [
  "subtle",
  "tokio",
  "tokio-stream",
+ "unicode-normalization",
  "uuid",
 ]
 
