@@ -13,16 +13,17 @@ use blades_lib::economy::{Price, RewardGrant};
 use blades_lib::features::challenges::ChallengeTemplate;
 use blades_lib::features::chests::ChestLootTables;
 use blades_lib::features::daily_reward::DailyRewardDef;
-use blades_lib::features::game_events::{EventDef, EventTheme, HALLOWEEN_THEME_QUESTS, MAX_THEME_DAYS};
+use blades_lib::features::game_events::{
+    EventDef, EventTheme, HALLOWEEN_THEME_QUESTS, MAX_THEME_DAYS,
+};
 use blades_lib::static_data::{
-    Announcement, AbyssStaticData, EnchantingData, EventQuestsData, FreeProductIds, GiftDef,
-    ItemModRecipe,
-    QuestsDailyData, Recipe, RecipeCraftingTypes, ShopBundle, ShopData, SmithCraftables,
-    SmithCraftablesFile, StaticData,
+    AbyssStaticData, Announcement, EnchantingData, EventQuestsData, FreeProductIds, GiftDef,
+    ItemModRecipe, QuestsDailyData, Recipe, RecipeCraftingTypes, ShopBundle, ShopData,
+    SmithCraftables, SmithCraftablesFile, StaticData,
 };
 use log::warn;
 use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 /// Read a JSON file into a UUID-keyed map, skipping the `_meta` provenance block
@@ -236,6 +237,8 @@ pub fn load(dir: &Path) -> StaticData {
         read_json(&dir.join("item_mod_recipes.json"));
     // A missing file leaves enchanting on the captured-outcome fallback in craft.rs.
     let enchanting: EnchantingData = read_json(&dir.join("enchanting.json"));
+    let jewelry_roll_ranges: blades_lib::static_data::JewelryRollRanges =
+        read_json(&dir.join("jewelry_roll_ranges.json"));
     // The APK-extracted recipe -> CraftingType table. A missing file degrades to an
     // empty map and the craft path keeps its captured-recipe / smith / alchemy fallback
     // chain — the same behaviour as before the table existed.
@@ -246,20 +249,21 @@ pub fn load(dir: &Path) -> StaticData {
     // Through `read_json` a single non-UUID key fails the WHOLE map and every quest
     // silently pays nothing — the exact silent-emptying failure `read_uuid_map`
     // exists to prevent.
-    let quest_rewards: HashMap<Uuid, RewardGrant> =
-        read_uuid_map(&dir.join("quest_rewards.json"));
+    let quest_rewards: HashMap<Uuid, RewardGrant> = read_uuid_map(&dir.join("quest_rewards.json"));
     let abyss: AbyssStaticData = read_json(&dir.join("abyss.json"));
     // The forge craftables file has a rich schema; deserialize the raw shape and resolve
     // it into by-recipe / by-template lookups (a missing file → empty lookups, and the
     // smith craft keeps its lenient placeholder path rather than failing).
-    let smith_craftables_raw: SmithCraftablesFile =
-        read_json(&dir.join("smith_craftables.json"));
+    let smith_craftables_raw: SmithCraftablesFile = read_json(&dir.join("smith_craftables.json"));
     let smith_craftables = SmithCraftables::from_raw(smith_craftables_raw);
     let quests_daily: QuestsDailyData = read_json(&dir.join("quests_daily.json"));
     let event_quests: EventQuestsData = read_json(&dir.join("event_quests.json"));
 
     StaticData {
-        gifts: gifts.into_iter().map(|g| (g.global_gift_id, g)).collect::<HashMap<_, _>>(),
+        gifts: gifts
+            .into_iter()
+            .map(|g| (g.global_gift_id, g))
+            .collect::<HashMap<_, _>>(),
         announcements,
         global_shop_overrides,
         global_shop_authored,
@@ -279,6 +283,7 @@ pub fn load(dir: &Path) -> StaticData {
         recipes,
         item_mod_recipes,
         enchanting,
+        jewelry_roll_ranges,
         recipe_crafting_types,
         quest_rewards,
         abyss,
@@ -362,7 +367,9 @@ fn event_theme_from_value(raw: &Value, library: &[EventDef]) -> Option<EventThem
         return None;
     }
     let Some(plan) = theme.plan(library) else {
-        warn!("[static] event_theme.json: none of its events is in game_events.json; no themed window");
+        warn!(
+            "[static] event_theme.json: none of its events is in game_events.json; no themed window"
+        );
         return None;
     };
     log::info!(
@@ -405,7 +412,9 @@ mod event_theme_file {
     /// Changing the file must be a deliberate edit to this test too.
     #[test]
     fn the_committed_window_is_halloween_2026() {
-        let t = load(&dir()).game_event_theme.expect("event_theme.json is committed");
+        let t = load(&dir())
+            .game_event_theme
+            .expect("event_theme.json is committed");
         assert_eq!(t.start_secs, 1_791_158_400, "2026-10-05 00:00 UTC");
         assert_eq!(t.end_secs, 1_793_577_600, "2026-11-02 00:00 UTC");
         assert_eq!(t.quest_ids, HALLOWEEN_THEME_QUESTS.to_vec());
@@ -419,7 +428,10 @@ mod event_theme_file {
         assert_eq!(t.end_secs, 1_793_404_800, "2026-10-31 00:00 UTC");
         assert_eq!(t.quest_ids, HALLOWEEN_THEME_QUESTS.to_vec());
         // Unix seconds, as a number or a string, mean the same instants.
-        assert_eq!(theme(json!({ "start": 1_791_590_400, "end": "1793404800" })), Some(t));
+        assert_eq!(
+            theme(json!({ "start": 1_791_590_400, "end": "1793404800" })),
+            Some(t)
+        );
     }
 
     /// Read from disk end to end, the way the server starts: a copy of the
@@ -452,14 +464,23 @@ mod event_theme_file {
 
         // Half a window, backwards, unparseable, or naming nothing we have.
         assert_eq!(theme(json!({ "start": "2026-10-24" })), None);
-        assert_eq!(theme(json!({ "start": "2026-11-01", "end": "2026-10-24" })), None);
-        assert_eq!(theme(json!({ "start": "Halloween", "end": "2026-11-01" })), None);
+        assert_eq!(
+            theme(json!({ "start": "2026-11-01", "end": "2026-10-24" })),
+            None
+        );
+        assert_eq!(
+            theme(json!({ "start": "Halloween", "end": "2026-11-01" })),
+            None
+        );
         // No UTC midnight inside it, or milliseconds typed for seconds.
         assert_eq!(
             theme(json!({ "start": "2026-10-24T05:00:00Z", "end": "2026-10-24T19:00:00Z" })),
             None
         );
-        assert_eq!(theme(json!({ "start": 1_791_590_400_000i64, "end": 1_793_404_800_000i64 })), None);
+        assert_eq!(
+            theme(json!({ "start": 1_791_590_400_000i64, "end": 1_793_404_800_000i64 })),
+            None
+        );
         assert_eq!(
             theme(json!({
                 "start": "2026-10-24", "end": "2026-11-01",
@@ -469,7 +490,6 @@ mod event_theme_file {
         );
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -514,15 +534,30 @@ mod tests {
         };
 
         // 2026: 31 Oct is day 303, 25 Dec is day 358, 15 Jun is day 165.
-        assert!(open_on(303, WITCH), "Season of the Witch must run at Halloween");
-        assert!(open_on(358, LONG_NIGHT), "The Long Night must run at midwinter");
+        assert!(
+            open_on(303, WITCH),
+            "Season of the Witch must run at Halloween"
+        );
+        assert!(
+            open_on(358, LONG_NIGHT),
+            "The Long Night must run at midwinter"
+        );
 
         // …and nowhere else. Midsummer is the control: if these were simply always
         // open, every assertion above would still pass.
-        assert!(!open_on(165, WITCH), "Season of the Witch must not run in June");
-        assert!(!open_on(165, LONG_NIGHT), "The Long Night must not run in June");
+        assert!(
+            !open_on(165, WITCH),
+            "Season of the Witch must not run in June"
+        );
+        assert!(
+            !open_on(165, LONG_NIGHT),
+            "The Long Night must not run in June"
+        );
         assert!(!open_on(358, WITCH), "Halloween event open at Christmas");
-        assert!(!open_on(303, LONG_NIGHT), "midwinter event open at Halloween");
+        assert!(
+            !open_on(303, LONG_NIGHT),
+            "midwinter event open at Halloween"
+        );
 
         // Four years on, after a leap day has shifted the 365-day series a day
         // earlier, both must still cover their holiday.
@@ -628,8 +663,15 @@ mod tests {
         // the wrong day — which is what it did before the weekday field existed.
         let mut days: Vec<u8> = sd.daily_rewards.iter().filter_map(|d| d.weekday).collect();
         days.sort_unstable();
-        assert_eq!(days, (0u8..7).collect::<Vec<_>>(), "daily_rewards.json weekdays");
-        assert!(!sd.chest_loots.is_empty(), "chest_loots.json (Item.properties default)");
+        assert_eq!(
+            days,
+            (0u8..7).collect::<Vec<_>>(),
+            "daily_rewards.json weekdays"
+        );
+        assert!(
+            !sd.chest_loots.is_empty(),
+            "chest_loots.json (Item.properties default)"
+        );
 
         // Tiers 1-3 are the ones retail capture covers well enough to publish; a
         // silently tier-less file is exactly the regression that made every chest
@@ -652,15 +694,29 @@ mod tests {
         }
         assert!(!sd.game_events.is_empty(), "game_events.json");
         assert!(!sd.salvage_recipes.is_empty(), "salvage_recipes.json");
-        assert!(!sd.shop_data.by_template.is_empty(), "shops.json byTemplate");
+        assert!(
+            !sd.shop_data.by_template.is_empty(),
+            "shops.json byTemplate"
+        );
         assert!(sd.shop_data.default.is_some(), "shops.json default");
         assert!(!sd.shop_bundles.is_empty(), "shop_bundles.json");
         assert!(!sd.recipes.is_empty(), "recipes.json");
         assert!(!sd.item_mod_recipes.is_empty(), "item_mod_recipes.json");
         assert_eq!(sd.enchanting.recipes.len(), 202, "enchanting.json recipes");
-        assert_eq!(sd.enchanting.secondary_tables.len(), 16, "enchanting.json tables");
-        assert_eq!(sd.enchanting.arcane_tier_count_odds.len(), 2, "enchanting.json arcane tiers");
-        assert!(!sd.enchanting.templates.is_empty(), "enchanting.json templates");
+        assert_eq!(
+            sd.enchanting.secondary_tables.len(),
+            16,
+            "enchanting.json tables"
+        );
+        assert_eq!(
+            sd.enchanting.arcane_tier_count_odds.len(),
+            2,
+            "enchanting.json arcane tiers"
+        );
+        assert!(
+            !sd.enchanting.templates.is_empty(),
+            "enchanting.json templates"
+        );
         // The APK-extracted recipe -> CraftingType table. Every recipe the client ships
         // is in here, so a craft job can always name a real bench instead of guessing.
         assert!(
@@ -683,7 +739,10 @@ mod tests {
                 );
             }
         }
-        assert!(sd.global_shop_overrides.get("globalShopOverrides").is_some());
+        assert!(sd
+            .global_shop_overrides
+            .get("globalShopOverrides")
+            .is_some());
         assert!(
             sd.global_shop_windows["globalShopWindows"]
                 .as_object()
@@ -695,22 +754,44 @@ mod tests {
         assert!(!sd.abyss.fixed_slices.is_empty(), "abyss.json fixedSlices");
         assert!(!sd.abyss.random_pool.is_empty(), "abyss.json randomPool");
         // New abyss keys wire in.
-        assert!(!sd.abyss.difficulty_curve.is_empty(), "abyss.json difficultyCurve");
-        assert!(!sd.abyss.monster_tiers.is_empty(), "abyss.json monsterTiers");
+        assert!(
+            !sd.abyss.difficulty_curve.is_empty(),
+            "abyss.json difficultyCurve"
+        );
+        assert!(
+            !sd.abyss.monster_tiers.is_empty(),
+            "abyss.json monsterTiers"
+        );
         assert!(!sd.abyss.depth_bands.is_empty(), "abyss.json depthBands");
         assert!(!sd.abyss.dungeon_pool.is_empty(), "abyss.json dungeonPool");
         // Smith craftables resolve into both lookups + carry the smithing type id.
-        assert!(!sd.smith_craftables.by_template.is_empty(), "smith_craftables.json byTemplate");
-        assert!(!sd.smith_craftables.by_recipe.is_empty(), "smith_craftables.json byRecipe (captured)");
+        assert!(
+            !sd.smith_craftables.by_template.is_empty(),
+            "smith_craftables.json byTemplate"
+        );
+        assert!(
+            !sd.smith_craftables.by_recipe.is_empty(),
+            "smith_craftables.json byRecipe (captured)"
+        );
         assert!(
             sd.smith_craftables.smithing_crafting_type_id.is_some(),
             "smith_craftables.json smithingCraftingTypeId"
         );
         // Daily quests: pool + non-dungeon exclusion list + a scaling table.
-        assert!(!sd.quests_daily.daily_quest_pool.is_empty(), "quests_daily.json dailyQuestPool");
-        assert!(!sd.quests_daily.non_dungeon_quests.is_empty(), "quests_daily.json nonDungeonQuests");
         assert!(
-            !sd.quests_daily.level_scaling.enemy_level_from_player_level.offset_by_skull.is_empty(),
+            !sd.quests_daily.daily_quest_pool.is_empty(),
+            "quests_daily.json dailyQuestPool"
+        );
+        assert!(
+            !sd.quests_daily.non_dungeon_quests.is_empty(),
+            "quests_daily.json nonDungeonQuests"
+        );
+        assert!(
+            !sd.quests_daily
+                .level_scaling
+                .enemy_level_from_player_level
+                .offset_by_skull
+                .is_empty(),
             "quests_daily.json levelScaling"
         );
         // The event calendar and its milestone tables must both survive the load, and
@@ -790,22 +871,38 @@ mod tests {
             .count();
         // Counts as committed at the time of writing. They are lower bounds: a
         // re-extraction may add more, but going DOWN means the plumbing broke.
-        assert!(graded >= 8, "global_shop_grants.json lost item grades (found {graded})");
-        assert!(arcane >= 19, "global_shop_grants.json lost item arcaneTiers (found {arcane})");
+        assert!(
+            graded >= 8,
+            "global_shop_grants.json lost item grades (found {graded})"
+        );
+        assert!(
+            arcane >= 19,
+            "global_shop_grants.json lost item arcaneTiers (found {arcane})"
+        );
 
         // The one grant that carries BOTH, pinned by id so the values are checked and not
         // just counted.
         let id: Uuid = "79995d29-eac2-49a3-bfec-ce9e547b98de".parse().unwrap();
-        let grant = sd.global_shop_grants.get(&id).expect("grant 79995d29 present");
+        let grant = sd
+            .global_shop_grants
+            .get(&id)
+            .expect("grant 79995d29 present");
         let item = grant
             .items
             .iter()
             .find(|i| i.item.grade.is_some())
             .expect("grant 79995d29 has a graded item");
         assert_eq!(item.item.grade, Some(4), "grant 79995d29 item grade");
-        assert_eq!(item.item.arcane_tier, Some(2), "grant 79995d29 item arcaneTier");
+        assert_eq!(
+            item.item.arcane_tier,
+            Some(2),
+            "grant 79995d29 item arcaneTier"
+        );
         // Retail's graded items carry GRADING affixes and no tempering/durability.
-        assert!(!item.item.properties.grading.is_empty(), "graded item keeps its GRADING affixes");
+        assert!(
+            !item.item.properties.grading.is_empty(),
+            "graded item keeps its GRADING affixes"
+        );
     }
 
     /// A CORRUPT OR MISSING `chest_loots.json` MUST NOT EMPTY EVERY CHEST.
@@ -837,7 +934,10 @@ mod tests {
         // …and so must an absent one.
         std::fs::remove_file(&path).unwrap();
         let from_missing: ChestLootTables = read_json_or_builtin(&path, CHEST_LOOTS_BUILTIN);
-        assert!(!from_missing.is_empty(), "a missing file must fall back too");
+        assert!(
+            !from_missing.is_empty(),
+            "a missing file must fall back too"
+        );
 
         // THE CONTROL: the fallback is not masking a broken built-in. The corpus
         // compiled in must carry the same per-tier depth the on-disk assertions

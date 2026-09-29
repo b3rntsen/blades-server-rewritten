@@ -53,9 +53,7 @@ use actix_web::{
     web::{self, Json},
 };
 use blades_lib::economy::{GOLD, apply_reward};
-use blades_lib::features::merchant::{
-    self, Buyback, MerchantWindow, SellPrices,
-};
+use blades_lib::features::merchant::{self, Buyback, MerchantWindow, SellPrices};
 use blades_lib::static_data::{ShopBundleRef, ShopWalletEntry};
 use blades_lib::user_data::{
     CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
@@ -257,6 +255,7 @@ fn window_for(
                      the vendor will pay 0 for the player's items"
                 );
             }
+            roll_generated_jewelry_for_window(app_state, shop_id, &mut window);
             return window;
         }
     }
@@ -273,7 +272,11 @@ fn window_for(
         .catalog_for(&shop_id)
         .cloned()
         .unwrap_or_default();
-    window.bundles = cat.bundles.into_iter().map(|b| (b.id, b.quantity)).collect();
+    window.bundles = cat
+        .bundles
+        .into_iter()
+        .map(|b| (b.id, b.quantity))
+        .collect();
     // The captured templates carry a real retail merchant wallet (30 templates,
     // 545..35,885 gold) — use it rather than leaving the vendor penniless.
     window.wallet_gold = cat
@@ -282,7 +285,47 @@ fn window_for(
         .find(|w| w.currency_id == GOLD)
         .map(|w| w.balance.max(0) as u64)
         .unwrap_or(0);
+    roll_generated_jewelry_for_window(app_state, shop_id, &mut window);
     window
+}
+
+fn roll_generated_jewelry_for_window(
+    app_state: &ServerGlobal,
+    shop_id: Uuid,
+    window: &mut MerchantWindow,
+) {
+    window.generated_grants.clear();
+    for (idx, (bundle_id, _)) in window.bundles.iter().enumerate() {
+        let Some(def) = app_state.static_data.shop_bundles.get(bundle_id) else {
+            continue;
+        };
+        if !def.grant.items.iter().any(|i| {
+            crate::jewelry_roll::is_jewelry_template(
+                i.item.item_template_id,
+                &app_state.game_data.items_template,
+            )
+        }) {
+            continue;
+        }
+        let mut grant = def.grant.clone();
+        let mut changed = false;
+        let mut rng = crate::jewelry_roll::seeded(
+            &[shop_id.as_bytes(), bundle_id.as_bytes()],
+            window.start_ms as u64 ^ idx as u64,
+        );
+        for item in &mut grant.items {
+            changed |= crate::jewelry_roll::roll_generated_jewelry(
+                &mut item.item,
+                &app_state.game_data.items_template,
+                &app_state.static_data.enchanting,
+                &app_state.static_data.jewelry_roll_ranges,
+                &mut rng,
+            );
+        }
+        if changed {
+            window.generated_grants.insert(*bundle_id, grant);
+        }
+    }
 }
 
 fn stock_building_for(entry: &CharacterDbEntryShop, shop_id: Uuid) -> Option<(Uuid, u64)> {
@@ -463,10 +506,9 @@ struct BuyResponse {
 /// What `qty` units of a merchant bundle put in the buyer's backpack.
 ///
 /// Stackables multiply. Instanced gear gets a fresh instance id per unit (the
-/// static definition carries a placeholder — same as chests.rs), and a ring or
-/// necklace gets its grade rolled per unit (#240): the APK authors no
-/// enhancement for any merchant jewellery bundle, and retail rolled one at
-/// purchase — see [`crate::jewelry_grade`].
+/// static definition carries a placeholder — same as chests.rs). Generated
+/// jewelry rolls are already stored on the merchant window; legacy/fallback bare
+/// jewelry still gets the old grade-only roll here.
 fn mint_bundle<R: rand::Rng + ?Sized>(
     grant: &blades_lib::economy::RewardGrant,
     qty: u64,
@@ -523,7 +565,9 @@ fn txn_state(shop_id: Uuid, window: &MerchantWindow) -> ShopTxnState {
 /// Stock is finite: a request for more than remains is clamped, and buying draws
 /// down `remaining_stock` while pushing `revenue` positive — which is what lets the
 /// merchant afford to buy from the player again.
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/shops/{shop_id}/purchase")]
+#[post(
+    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/shops/{shop_id}/purchase"
+)]
 pub async fn buy_from_shop(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -576,8 +620,9 @@ pub async fn buy_from_shop(
                     .debit(currency, cost)
                     .map_err(BladeApiError::from_economy)?;
 
+                let grant = window.generated_grants.get(&b.id).unwrap_or(&def.grant);
                 let reward = mint_bundle(
-                    &def.grant,
+                    grant,
                     qty,
                     &globals.game_data.items_template,
                     &mut rand::rng(),
@@ -809,8 +854,9 @@ pub async fn buy_from_social_shop(
                     .debit(currency, cost)
                     .map_err(BladeApiError::from_economy)?;
 
+                let grant = window.generated_grants.get(&b.id).unwrap_or(&def.grant);
                 let reward = mint_bundle(
-                    &def.grant,
+                    grant,
                     qty,
                     &globals.game_data.items_template,
                     &mut rand::rng(),
@@ -1261,8 +1307,20 @@ mod tests {
         let live = Uuid::from_u128(1);
         let stale = Uuid::from_u128(2);
         let stale_with_buyback = Uuid::from_u128(3);
-        shops.insert(live, MerchantWindow { expiration_ms: now + 1000, ..Default::default() });
-        shops.insert(stale, MerchantWindow { expiration_ms: now - merchant::BUYBACK_MS - 1, ..Default::default() });
+        shops.insert(
+            live,
+            MerchantWindow {
+                expiration_ms: now + 1000,
+                ..Default::default()
+            },
+        );
+        shops.insert(
+            stale,
+            MerchantWindow {
+                expiration_ms: now - merchant::BUYBACK_MS - 1,
+                ..Default::default()
+            },
+        );
         shops.insert(
             stale_with_buyback,
             MerchantWindow {
@@ -1301,7 +1359,10 @@ mod tests {
         prune_stale_shops(&mut shops, now);
         assert!(shops.contains_key(&live));
         assert!(shops.contains_key(&stale_with_buyback));
-        assert!(!shops.contains_key(&stale), "expired, buyback-free windows are dropped");
+        assert!(
+            !shops.contains_key(&stale),
+            "expired, buyback-free windows are dropped"
+        );
         assert!(
             !shops.contains_key(&stale_with_dead_buyback),
             "an expired buyback must not keep a dead window alive"
@@ -1337,7 +1398,15 @@ mod tests {
         assert!(body["social"]["shop"].is_object(), "{body}");
         assert!(body["social"]["catalog"].is_object(), "{body}");
         // The keys the captured catalog carried, so a rename is caught here.
-        for key in ["id", "templateId", "bundles", "wallet", "start", "expiration", "expired"] {
+        for key in [
+            "id",
+            "templateId",
+            "bundles",
+            "wallet",
+            "start",
+            "expiration",
+            "expired",
+        ] {
             assert!(
                 body["social"]["catalog"].get(key).is_some(),
                 "catalog is missing `{key}`: {body}"
@@ -1384,7 +1453,7 @@ mod tests {
         );
     }
 
-    // ── #240: merchant jewellery is graded at purchase ────────────────────────
+    // ── #240/#jewelry: merchant jewellery rolls ───────────────────────────────
 
     fn deploy_items() -> &'static HashMap<Uuid, blades_lib::game_data::GameDataItem> {
         static T: std::sync::OnceLock<HashMap<Uuid, blades_lib::game_data::GameDataItem>> =
@@ -1399,11 +1468,32 @@ mod tests {
     }
 
     fn deploy_bundle(id: &str) -> blades_lib::static_data::ShopBundle {
-        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/shop_bundles.json");
+        let p = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static/shop_bundles.json"
+        );
         let all: serde_json::Map<String, Value> =
             serde_json::from_str(&std::fs::read_to_string(p).expect("shop_bundles.json"))
                 .expect("parses");
         serde_json::from_value(all[id].clone()).expect("bundle parses")
+    }
+
+    fn deploy_enchanting() -> blades_lib::static_data::EnchantingData {
+        let p = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static/enchanting.json"
+        );
+        serde_json::from_str(&std::fs::read_to_string(p).expect("enchanting.json"))
+            .expect("enchanting parses")
+    }
+
+    fn deploy_jewelry_ranges() -> blades_lib::static_data::JewelryRollRanges {
+        let p = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static/jewelry_roll_ranges.json"
+        );
+        serde_json::from_str(&std::fs::read_to_string(p).expect("jewelry_roll_ranges.json"))
+            .expect("jewelry ranges parse")
     }
 
     /// The two bundles the reporter bought, which retail sold graded.
@@ -1423,26 +1513,44 @@ mod tests {
     fn merchant_jewellery_is_minted_graded() {
         use rand::SeedableRng;
         let mut rng = rand::rngs::StdRng::seed_from_u64(240);
-        for (bundle, slot) in [(GOLD_EMERALD_RING, "Ring"), (GOLD_EMERALD_NECKLACE, "Necklace")] {
+        for (bundle, slot) in [
+            (GOLD_EMERALD_RING, "Ring"),
+            (GOLD_EMERALD_NECKLACE, "Necklace"),
+        ] {
             let def = deploy_bundle(bundle);
             let own = slot_pool(slot);
             // CONTROL: the static definition really is bare, so a graded result
-            // can only have come from the purchase path.
-            assert!(def.grant.items[0].item.grade.is_none(), "{bundle}: fixture must be bare");
+            // can only have come from the minting path.
+            assert!(
+                def.grant.items[0].item.grade.is_none(),
+                "{bundle}: fixture must be bare"
+            );
             let reward = mint_bundle(&def.grant, 3, deploy_items(), &mut rng);
             assert_eq!(reward.items.len(), 3, "one instance per unit");
             for ri in &reward.items {
                 let it = &ri.item;
                 let grade = it.grade.expect("merchant jewellery must carry a grade");
                 assert!(!it.properties.grading.is_empty(), "{bundle}: no GRADING");
-                assert_eq!(grade, it.properties.grading.iter().map(|p| p.tier).sum::<u64>());
-                assert!(it.properties.grading.iter().all(|p| own.contains(&p.id)), "{bundle}: wrong slot");
-                assert!(it.properties.enchanting.is_empty(), "retail merchant jewellery had no ENCHANTING");
+                assert_eq!(
+                    grade,
+                    it.properties.grading.iter().map(|p| p.tier).sum::<u64>()
+                );
+                assert!(
+                    it.properties.grading.iter().all(|p| own.contains(&p.id)),
+                    "{bundle}: wrong slot"
+                );
+                assert!(
+                    it.properties.enchanting.is_empty(),
+                    "retail merchant jewellery had no ENCHANTING"
+                );
                 assert_eq!(it.arcane_tier, None);
                 // The wire shape retail sent: grade, never temperingLevel/durability.
                 let wire = serde_json::to_value(ri).unwrap();
                 assert!(wire.get("grade").is_some(), "{wire}");
-                assert!(wire.get("durability").is_none() && wire.get("temperingLevel").is_none(), "{wire}");
+                assert!(
+                    wire.get("durability").is_none() && wire.get("temperingLevel").is_none(),
+                    "{wire}"
+                );
             }
             let ids: std::collections::HashSet<_> = reward.items.iter().map(|i| i.id).collect();
             assert_eq!(ids.len(), 3, "fresh instance ids");
@@ -1456,9 +1564,48 @@ mod tests {
         let def = deploy_bundle(GOLD_EMERALD_RING);
         let mut rng = rand::rngs::StdRng::seed_from_u64(9);
         let grades: std::collections::HashSet<u64> = (0..200)
-            .map(|_| mint_bundle(&def.grant, 1, deploy_items(), &mut rng).items[0].item.grade.unwrap())
+            .map(|_| {
+                mint_bundle(&def.grant, 1, deploy_items(), &mut rng).items[0]
+                    .item
+                    .grade
+                    .unwrap()
+            })
             .collect();
         assert_eq!(grades, (1..=6).collect(), "every grade must be reachable");
+    }
+
+    /// Generated Enchanter jewelry is rolled at catalog/window creation. Buying it
+    /// must mint exactly that stored item, not roll a different one at purchase.
+    #[test]
+    fn generated_jewelry_purchase_keeps_the_window_roll() {
+        let def = deploy_bundle(GOLD_EMERALD_RING);
+        let mut generated = def.grant.clone();
+        let mut roll_rng = crate::jewelry_roll::seeded(
+            &[
+                Uuid::from_u128(0x5150).as_bytes(),
+                Uuid::parse_str(GOLD_EMERALD_RING).unwrap().as_bytes(),
+            ],
+            7,
+        );
+        crate::jewelry_roll::roll_generated_jewelry(
+            &mut generated.items[0].item,
+            deploy_items(),
+            &deploy_enchanting(),
+            &deploy_jewelry_ranges(),
+            &mut roll_rng,
+        );
+        let shown = generated.items[0].item.clone();
+        assert!(
+            !shown.properties.enchanting.is_empty(),
+            "generated stock must show rolled enchants"
+        );
+
+        let mut purchase_rng = crate::jewelry_roll::seeded(&[b"purchase"], 99);
+        let bought = mint_bundle(&generated, 1, deploy_items(), &mut purchase_rng);
+        let item = &bought.items[0].item;
+        assert_eq!(item.grade, shown.grade);
+        assert_eq!(item.properties, shown.properties);
+        assert_eq!(item.item_template_id, shown.item_template_id);
     }
 
     /// NEGATIVE CONTROL: gear that wears is never graded, and keeps its durability.
@@ -1467,18 +1614,30 @@ mod tests {
         use rand::SeedableRng;
         let mut rng = rand::rngs::StdRng::seed_from_u64(1);
         let items = deploy_items();
-        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/shop_bundles.json");
+        let p = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static/shop_bundles.json"
+        );
         let all: serde_json::Map<String, Value> =
             serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
         let (mut gear, mut stacks) = (0, 0);
         for (id, raw) in &all {
-            let Ok(def) = serde_json::from_value::<blades_lib::static_data::ShopBundle>(raw.clone()) else {
+            let Ok(def) =
+                serde_json::from_value::<blades_lib::static_data::ShopBundle>(raw.clone())
+            else {
                 continue;
             };
             let reward = mint_bundle(&def.grant, 2, items, &mut rng);
-            assert_eq!(reward.stackable_items.len(), def.grant.stackable_items.len());
+            assert_eq!(
+                reward.stackable_items.len(),
+                def.grant.stackable_items.len()
+            );
             for (t, n) in &def.grant.stackable_items {
-                assert_eq!(reward.stackable_items[t], n * 2, "{id}: stackables multiply");
+                assert_eq!(
+                    reward.stackable_items[t],
+                    n * 2,
+                    "{id}: stackables multiply"
+                );
                 stacks += 1;
             }
             for (ri, src) in reward.items.iter().zip(def.grant.items.iter().cycle()) {
@@ -1488,11 +1647,20 @@ mod tests {
                 }
                 gear += 1;
                 assert_eq!(ri.item.grade, None, "{id}: non-jewellery graded");
-                assert!(ri.item.properties.grading.is_empty(), "{id}: GRADING on gear");
-                assert_eq!(ri.item.durability, src.item.durability, "{id}: durability changed");
+                assert!(
+                    ri.item.properties.grading.is_empty(),
+                    "{id}: GRADING on gear"
+                );
+                assert_eq!(
+                    ri.item.durability, src.item.durability,
+                    "{id}: durability changed"
+                );
             }
         }
-        assert!(gear > 100 && stacks > 100, "the sweep must cover real data: {gear} gear, {stacks} stacks");
+        assert!(
+            gear > 100 && stacks > 100,
+            "the sweep must cover real data: {gear} gear, {stacks} stacks"
+        );
     }
 
     /// NEGATIVE CONTROL: an item that already carries a grade (authored or

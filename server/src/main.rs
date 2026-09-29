@@ -1,7 +1,7 @@
 use std::{
+    collections::{BTreeSet, HashMap},
     fs::File,
     path::PathBuf,
-    collections::{BTreeSet, HashMap},
     sync::{Arc, atomic::Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -16,9 +16,9 @@ use actix_web::{
 };
 use anyhow::{Context, Result};
 use bb8::Pool;
+use blades_lib::features::level_up::LevelUpData;
 use blades_lib::game_data::GameData;
 use blades_lib::static_data::StaticData;
-use blades_lib::features::level_up::LevelUpData;
 use clap::{Parser, Subcommand};
 use diesel_async::{AsyncPgConnection, pooled_connection::AsyncDieselConnectionManager};
 use log::debug;
@@ -28,7 +28,6 @@ use log::debug;
 /// under it.
 const DB_POOL_MAX: u32 = 10;
 
-mod credentials;
 mod abyss;
 mod admin;
 mod analytics;
@@ -42,6 +41,7 @@ mod character_data;
 mod character_ops;
 mod chests;
 mod craft;
+mod credentials;
 mod daily_reward;
 mod dungeon;
 mod dungeon_update;
@@ -55,18 +55,19 @@ mod guild;
 mod guild_admin;
 mod guild_policy;
 mod inventory;
-mod json_db;
 mod jewelry_grade;
+mod jewelry_roll;
+mod json_db;
 pub mod models;
 mod quest;
 mod repair;
+mod route_registration;
 mod salvage;
 pub mod schema;
-mod shop;
-mod social;
-mod route_registration;
-mod shop_gen;
 mod session;
+mod shop;
+mod shop_gen;
+mod social;
 mod static_loader;
 mod status;
 mod town;
@@ -76,8 +77,8 @@ mod wallet;
 pub use error::BladeApiError;
 use uuid::Uuid;
 
-use crate::session::{SessionLookedUpMaybe, SessionStore};
 use crate::event_quests::EventQuestData;
+use crate::session::{SessionLookedUpMaybe, SessionStore};
 
 #[derive(Parser)]
 #[command(name = "blade")]
@@ -327,11 +328,12 @@ async fn main() -> Result<()> {
             let load_static_json = |name: &str| -> serde_json::Value {
                 let p = static_data.join(name);
                 match File::open(&p) {
-                    Ok(f) => serde_json::from_reader(std::io::BufReader::new(f))
-                        .unwrap_or_else(|e| {
+                    Ok(f) => {
+                        serde_json::from_reader(std::io::BufReader::new(f)).unwrap_or_else(|e| {
                             log::warn!("[static] invalid {p:?}: {e}; feature degraded to Null");
                             serde_json::Value::Null
-                        }),
+                        })
+                    }
                     Err(_) => {
                         log::warn!("[static] no {p:?}; feature degraded to Null");
                         serde_json::Value::Null
@@ -366,13 +368,14 @@ async fn main() -> Result<()> {
             let shop_stock: shop_gen::ShopStockConfig = {
                 let p = static_data.join("shop_stock.json");
                 match File::open(&p) {
-                    Ok(f) => serde_json::from_reader(std::io::BufReader::new(f))
-                        .unwrap_or_else(|e| {
+                    Ok(f) => {
+                        serde_json::from_reader(std::io::BufReader::new(f)).unwrap_or_else(|e| {
                             log::warn!(
                                 "[shop] invalid {p:?}: {e}; shop stock falls back to templates"
                             );
                             Default::default()
-                        }),
+                        })
+                    }
                     Err(_) => {
                         log::warn!("[shop] no {p:?}; shop stock falls back to templates");
                         Default::default()
@@ -474,17 +477,17 @@ async fn main() -> Result<()> {
             {
                 let pool = server_global.db_pool.clone();
                 actix_web::rt::spawn(async move {
-                    use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper};
-                    use diesel_async::RunQueryDsl;
                     use crate::schema::arena_seasons;
+                    use diesel::{
+                        ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper,
+                    };
+                    use diesel_async::RunQueryDsl;
                     match pool.get().await {
                         Ok(mut c) => {
                             let active: Option<crate::arena::season_store::SeasonRow> =
                                 arena_seasons::table
                                     .filter(arena_seasons::status.eq("active"))
-                                    .select(
-                                        crate::arena::season_store::SeasonRow::as_select(),
-                                    )
+                                    .select(crate::arena::season_store::SeasonRow::as_select())
                                     .order(arena_seasons::starts_at.desc())
                                     .first(&mut c)
                                     .await
@@ -508,9 +511,9 @@ async fn main() -> Result<()> {
                                 // No active season means no season trophies to total.
                                 // Leaving the column alone is right: it already reads 0
                                 // after the previous season's reset.
-                                None => log::info!(
-                                    "guild trophy recompute skipped: no active season"
-                                ),
+                                None => {
+                                    log::info!("guild trophy recompute skipped: no active season")
+                                }
                             }
                         }
                         Err(e) => log::warn!("guild trophy recompute: no db connection: {e}"),
@@ -859,8 +862,14 @@ mod cli_tests {
 
         unsafe { std::env::set_var("ARENA_DATABASE_URL", "postgres://u:p@h:5432/db") };
         let parsed = Cli::try_parse_from([
-            "server", "run", "--host", "0.0.0.0", "--port", "8080",
-            "--static-data", "/data/static",
+            "server",
+            "run",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8080",
+            "--static-data",
+            "/data/static",
         ]);
         match prev {
             Some(v) => unsafe { std::env::set_var("ARENA_DATABASE_URL", v) },
@@ -869,7 +878,9 @@ mod cli_tests {
 
         let cli = parsed.expect("the env var must satisfy --connection-string");
         match cli.command {
-            Commands::Run { connection_string, .. } => {
+            Commands::Run {
+                connection_string, ..
+            } => {
                 assert_eq!(connection_string, "postgres://u:p@h:5432/db");
             }
             Commands::BackfillArenaPromotionGems { .. } => {
@@ -888,13 +899,22 @@ mod cli_tests {
         unsafe { std::env::remove_var("ARENA_DATABASE_URL") };
 
         let parsed = Cli::try_parse_from([
-            "server", "run", "--host", "0.0.0.0", "--port", "8080",
-            "--static-data", "/data/static",
+            "server",
+            "run",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8080",
+            "--static-data",
+            "/data/static",
         ]);
         if let Some(v) = prev {
             unsafe { std::env::set_var("ARENA_DATABASE_URL", v) };
         }
-        assert!(parsed.is_err(), "must not start without a connection string");
+        assert!(
+            parsed.is_err(),
+            "must not start without a connection string"
+        );
     }
 }
 

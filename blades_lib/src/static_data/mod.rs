@@ -12,8 +12,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::economy::RewardGrant;
-use crate::features::chests::ChestLootTables;
 use crate::features::challenges::ChallengeTemplate;
+use crate::features::chests::ChestLootTables;
 use crate::features::daily_reward::DailyRewardDef;
 use crate::features::game_events::{EventDef, EventTheme};
 use crate::user_data::ItemSingleProperty;
@@ -274,6 +274,39 @@ pub struct SecondaryEnchantTable {
 pub struct WeightedProperty {
     pub id: Uuid,
     pub weight: f64,
+}
+
+/// Measured jewelry roll ranges from retail purchase responses. The property pools
+/// still come from APK data; this table constrains count/tier choices to observed
+/// jewelry outcomes and carries the provenance in `jewelry_roll_ranges.json`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JewelryRollRanges {
+    #[serde(default)]
+    pub by_item_tier: HashMap<String, JewelryTierRollRange>,
+    #[serde(default)]
+    pub template_tiers: HashMap<Uuid, u64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JewelryTierRollRange {
+    #[serde(default)]
+    pub observations: u64,
+    #[serde(default)]
+    pub enchanting_count: HashMap<String, u64>,
+    #[serde(default)]
+    pub grade: HashMap<String, u64>,
+}
+
+impl JewelryRollRanges {
+    pub fn template_tier(&self, template: &Uuid) -> Option<u64> {
+        self.template_tiers.get(template).copied()
+    }
+
+    pub fn tier_range(&self, item_tier: u64) -> Option<&JewelryTierRollRange> {
+        self.by_item_tier.get(&item_tier.to_string())
+    }
 }
 
 /// One fixed floor entry for the abyss (floors 1–24, captured from prod).
@@ -1324,6 +1357,9 @@ pub struct StaticData {
     pub item_mod_recipes: HashMap<Uuid, ItemModRecipe>,
     /// APK-extracted enchant recipes and secondary-enchantment odds (`enchanting.json`).
     pub enchanting: EnchantingData,
+    /// Measured jewelry roll ranges (`jewelry_roll_ranges.json`) used when a shop
+    /// or Sigil offer mints a fresh generated ring/necklace instance.
+    pub jewelry_roll_ranges: JewelryRollRanges,
     /// APK-extracted `recipeId -> CraftingType` (`recipe_crafting_types.json`). The
     /// authoritative answer to "which bench does this recipe belong to", covering every
     /// recipe the client ships — not just the captured ones.

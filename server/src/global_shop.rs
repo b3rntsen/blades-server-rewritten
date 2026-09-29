@@ -185,7 +185,11 @@ fn shift_to_now(overrides: &Value, now: i64) -> Value {
             .get("activeEndDate")
             .and_then(|d| d.as_i64())
             .is_some_and(|end| end < lead_in_ends);
-        let shift = if in_lead_in { shift + REPLAY_PERIOD } else { shift };
+        let shift = if in_lead_in {
+            shift + REPLAY_PERIOD
+        } else {
+            shift
+        };
         shift_entry_in_place(&mut e, shift);
         out.insert(id.clone(), e);
     }
@@ -206,7 +210,10 @@ fn shift_entry_in_place(e: &mut Value, shift: i64) {
             e[field] = Value::from(t + shift);
         }
     }
-    if let Some(limits) = e.get_mut("maxPurchaseLimits").and_then(|l| l.as_array_mut()) {
+    if let Some(limits) = e
+        .get_mut("maxPurchaseLimits")
+        .and_then(|l| l.as_array_mut())
+    {
         for lim in limits.iter_mut() {
             let Some(tid) = lim.get("purchaseTrackingId").and_then(|t| t.as_str()) else {
                 continue;
@@ -320,7 +327,9 @@ fn replay_calendar(windows: &Value, now: i64) -> Option<Value> {
         }
         for &(e, s, en) in &dated {
             if !is_dated(s, en) {
-                let periods = (now - en + REPLAY_PERIOD - 1).div_euclid(REPLAY_PERIOD).max(0);
+                let periods = (now - en + REPLAY_PERIOD - 1)
+                    .div_euclid(REPLAY_PERIOD)
+                    .max(0);
                 let shift = periods * REPLAY_PERIOD;
                 candidates.push((s + shift, en + shift, e, shift));
             }
@@ -665,6 +674,22 @@ fn grant_from_offer_contents(
     // nothing described in advance to stay consistent with.
     roll_nonce: u64,
 ) -> Option<RewardGrant> {
+    grant_from_offer_contents_with_enchanting(
+        contents,
+        repair_data,
+        items,
+        &blades_lib::static_data::EnchantingData::default(),
+        roll_nonce,
+    )
+}
+
+fn grant_from_offer_contents_with_enchanting(
+    contents: Option<&OfferContents>,
+    repair_data: &blades_lib::features::repair::RepairData,
+    items: &std::collections::HashMap<uuid::Uuid, blades_lib::game_data::GameDataItem>,
+    enchanting: &blades_lib::static_data::EnchantingData,
+    roll_nonce: u64,
+) -> Option<RewardGrant> {
     let c = contents?;
     // `NeedsRoll` is now grantable — that is the whole of this change: its gear is
     // no longer "needs a roll", because the APK authors the enhancement and the
@@ -676,9 +701,7 @@ fn grant_from_offer_contents(
     // player. `Unclassified`/`Unknown` carry a bucket this build cannot place.
     if !matches!(
         c.kind,
-        OfferContentsKind::Literal
-            | OfferContentsKind::NeedsRoll
-            | OfferContentsKind::Unclassified
+        OfferContentsKind::Literal | OfferContentsKind::NeedsRoll | OfferContentsKind::Unclassified
     ) {
         return None;
     }
@@ -728,10 +751,8 @@ fn grant_from_offer_contents(
             // so the client read the brand-new axe as broken, and a repair could
             // not fix it because the restored durability was dropped again on
             // the way out.
-            let wears = !blades_lib::economy::template_skips_durability(
-                entry.item_template_id,
-                items,
-            );
+            let wears =
+                !blades_lib::economy::template_skips_durability(entry.item_template_id, items);
             let rolled_grading = if !wears && entry.grading.is_empty() && entry.arcane_tier > 0 {
                 Some(blades_lib::features::sigil_grades::roll_grading(
                     entry.arcane_tier,
@@ -755,7 +776,10 @@ fn grant_from_offer_contents(
                 enchanting: entry
                     .enchanting
                     .iter()
-                    .map(|p| blades_lib::user_data::ItemSingleProperty { id: p.id, tier: p.tier })
+                    .map(|p| blades_lib::user_data::ItemSingleProperty {
+                        id: p.id,
+                        tier: p.tier,
+                    })
                     .collect(),
                 // The rolled grade when this offer leaves it to a roll, the
                 // authored one otherwise.
@@ -776,20 +800,43 @@ fn grant_from_offer_contents(
                 Some(rolled) => rolled.iter().map(|p| p.tier).sum(),
                 None => entry.grading.iter().map(|p| p.tier).sum(),
             };
-            for _ in 0..entry.quantity.max(1) {
+            for quantity_idx in 0..entry.quantity.max(1) {
+                let mut item = blades_lib::user_data::Item {
+                    item_template_id: entry.item_template_id,
+                    tempering_level: entry.tempering_level,
+                    durability,
+                    // Never on gear that wears — see `wears` above.
+                    grade: (!wears && grade > 0).then_some(grade),
+                    arcane_tier: (entry.arcane_tier > 0).then_some(entry.arcane_tier),
+                    properties: properties.clone(),
+                };
+                if !enchanting.secondary_tables.is_empty() {
+                    let tier = entry
+                        .enchanting
+                        .iter()
+                        .map(|p| p.tier)
+                        .max()
+                        .unwrap_or(entry.arcane_tier)
+                        .max(1);
+                    let mut rng = crate::jewelry_roll::seeded(
+                        &[entry.item_template_id.as_bytes(), b"sigil"],
+                        roll_nonce ^ quantity_idx,
+                    );
+                    crate::jewelry_roll::reroll_sigil_jewelry(
+                        &mut item,
+                        entry.enchanting.len(),
+                        tier,
+                        rolled_grading.is_none(),
+                        items,
+                        enchanting,
+                        &mut rng,
+                    );
+                }
                 reward.items.push(blades_lib::economy::RewardItem {
                     // A fresh instance per purchase; the frozen ids in the
                     // capture-derived grants are what made buying twice overwrite.
                     id: uuid::Uuid::new_v4(),
-                    item: blades_lib::user_data::Item {
-                        item_template_id: entry.item_template_id,
-                        tempering_level: entry.tempering_level,
-                        durability,
-                        // Never on gear that wears — see `wears` above.
-                        grade: (!wears && grade > 0).then_some(grade),
-                        arcane_tier: (entry.arcane_tier > 0).then_some(entry.arcane_tier),
-                        properties: properties.clone(),
-                    },
+                    item,
                 });
             }
             continue;
@@ -832,7 +879,10 @@ fn captured_grant_for_product(
     // This is not a second way to reinterpret normal APK-authored products.
     // Their bundle contents remain the fallback below; only a product absent
     // from the APK can borrow its captured replacement-window sibling.
-    if static_data.global_shop_offer_contents.contains_key(&product_id) {
+    if static_data
+        .global_shop_offer_contents
+        .contains_key(&product_id)
+    {
         return None;
     }
 
@@ -992,7 +1042,9 @@ fn current_product_purchase_tracking_ids(
 
 /// `POST /…/globalshops/current/purchase` — buy a global-shop product: validate the
 /// client price, debit it, grant the product, bump the purchase count.
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/globalshops/current/purchase")]
+#[post(
+    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/globalshops/current/purchase"
+)]
 pub async fn purchase_global_shop(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -1020,53 +1072,6 @@ pub async fn purchase_global_shop(
     // fixed tier-5 bundle (#215/#216) — or none at all, which refused the sale.
     let randomised =
         blades_lib::features::store_bundles::is_randomised_bundle(&body.global_shop_product_id);
-    let reward = match captured_grant_for_product(
-        &app_state.static_data,
-        body.global_shop_product_id,
-    ) {
-        _ if randomised => RewardGrant::default(),
-        Some(r) => r.clone(),
-        None => grant_from_offer_contents(
-            app_state
-                .static_data
-                .global_shop_offer_contents
-                .get(&body.global_shop_product_id),
-            &app_state.repair_data,
-            &app_state.game_data.items_template,
-            // Fresh per purchase. Retail rolled the arcane grade every time, and
-            // the purchase response is the grant, so there is nothing described
-            // in advance that this has to stay consistent with.
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos() as u64 ^ d.as_secs())
-                .unwrap_or(0),
-        )
-        .ok_or_else(|| {
-            // NOT a 404. This comment's own neighbour records why: a 404 here makes
-            // the client prompt the player to reconnect to Bethesda, and a player
-            // who touched one of these lost the game entirely — "ever since I tried
-            // to buy something in the shop, Blades won't start anymore" (#170),
-            // matching the single purchase 404 in that day's log.
-            //
-            // Every valid product in the current captured catalogue has a reward;
-            // this remains as the safe failure for a newer or malformed product.
-            // Hiding unknowns was measured and is worse: it can collapse the shop
-            // back to the near-empty state from #141. So the offer stays visible
-            // and the refusal remains survivable.
-            //
-            // The shape is the one the client already receives in ordinary play for
-            // a price mismatch — 400 on this service — so it is a path known to be
-            // handled rather than a code invented here. The real reason is logged
-            // server-side; the client is simply told no.
-            log::warn!(
-                "[shop] character {character_id} tried to buy product {} which has no \
-                 deliverable reward (#167); refusing with the price-mismatch shape \
-                 rather than a 404, which would brick the client",
-                body.global_shop_product_id,
-            );
-            map_purchase_err(PurchaseError::InvalidPrice)
-        })?,
-    };
     // The store has free offers — retail's daily giveaway — and the client sends
     // `quantity: 0` for them. `sanitize_prices` rejects a zero quantity, so every
     // attempt to claim one 400'd (report #58's reporter hit it; the corpus shows
@@ -1091,6 +1096,7 @@ pub async fn purchase_global_shop(
     let product_id = body.global_shop_product_id;
     let prices = body.expected_prices;
     // Resolved here, not inside the transaction: the closure takes `app_state`.
+    let globals = app_state.get_ref().clone();
     let lifetime_cap = lifetime_purchase_cap(&app_state.static_data, product_id, now);
     let window_cap = window_purchase_cap(&app_state.static_data, product_id, now);
     let product_tracking_ids =
@@ -1157,7 +1163,35 @@ pub async fn purchase_global_shop(
                 }
             }
 
-            // Charge the (validated) price; fail on insufficient funds.
+            let bought_before = entry
+                .server_state
+                .0
+                .global_shop_purchases
+                .get(&product_id)
+                .copied()
+                .unwrap_or(0);
+
+            let reward = match captured_grant_for_product(&globals.static_data, product_id) {
+                _ if randomised => RewardGrant::default(),
+                Some(r) => r.clone(),
+                None => grant_from_offer_contents_with_enchanting(
+                    globals.static_data.global_shop_offer_contents.get(&product_id),
+                    &globals.repair_data,
+                    &globals.game_data.items_template,
+                    &globals.static_data.enchanting,
+                    bought_before,
+                )
+                .ok_or_else(|| {
+                    log::warn!(
+                        "[shop] character {character_id} tried to buy product {product_id} which has no \
+                         deliverable reward (#167); refusing with the price-mismatch shape \
+                         rather than a 404, which would brick the client",
+                    );
+                    map_purchase_err(PurchaseError::InvalidPrice)
+                })?,
+            };
+
+            // Charge the (validated) price after proving the reward is deliverable.
             entry
                 .wallet
                 .0
@@ -1198,13 +1232,6 @@ pub async fn purchase_global_shop(
             // bought before. The purchase count is the nonce, so buying the same
             // bundle twice in a row cannot return the same thing.
             let reward = {
-                let bought_before = entry
-                    .server_state
-                    .0
-                    .global_shop_purchases
-                    .get(&product_id)
-                    .copied()
-                    .unwrap_or(0);
                 blades_lib::features::store_bundles::roll_bundle(
                     &product_id,
                     u64::from(entry.character.0.level),
@@ -1287,12 +1314,12 @@ pub async fn purchase_global_shop(
     .await
 }
 
-
 /// The shipped template table, for the entries whose bucket the extractor left
 /// `unknown`. Read from the same file the server loads. File-scope so every test
 /// module in this file can reach it.
 #[cfg(test)]
-fn item_table() -> &'static std::collections::HashMap<uuid::Uuid, blades_lib::game_data::GameDataItem> {
+fn item_table()
+-> &'static std::collections::HashMap<uuid::Uuid, blades_lib::game_data::GameDataItem> {
     static T: std::sync::OnceLock<
         std::collections::HashMap<uuid::Uuid, blades_lib::game_data::GameDataItem>,
     > = std::sync::OnceLock::new();
@@ -1433,7 +1460,11 @@ mod replay_tests {
             .keys()
             .filter(|id| Uuid::parse_str(id).is_ok())
             .count();
-        assert_eq!(raw_map.len(), before + 1, "one malformed retail id is omitted");
+        assert_eq!(
+            raw_map.len(),
+            before + 1,
+            "one malformed retail id is omitted"
+        );
         let after = shift_to_now(&raw, now)["globalShopOverrides"]
             .as_object()
             .unwrap()
@@ -1515,10 +1546,15 @@ mod replay_tests {
                 continue;
             }
             let after = &b[id];
-            offsets.insert(after["activeStartDate"].as_i64().unwrap() - before["activeStartDate"].as_i64().unwrap());
+            offsets.insert(
+                after["activeStartDate"].as_i64().unwrap()
+                    - before["activeStartDate"].as_i64().unwrap(),
+            );
             assert_eq!(
-                after["activeEndDate"].as_i64().unwrap() - before["activeEndDate"].as_i64().unwrap(),
-                after["activeStartDate"].as_i64().unwrap() - before["activeStartDate"].as_i64().unwrap(),
+                after["activeEndDate"].as_i64().unwrap()
+                    - before["activeEndDate"].as_i64().unwrap(),
+                after["activeStartDate"].as_i64().unwrap()
+                    - before["activeStartDate"].as_i64().unwrap(),
                 "an offer's duration must not change",
             );
         }
@@ -1560,8 +1596,14 @@ mod replay_tests {
                 continue;
             }
             let s0 = before["activeStartDate"].as_i64().unwrap();
-            let s1 = shifted["globalShopOverrides"][id]["activeStartDate"].as_i64().unwrap();
-            assert_eq!(s0 % 86_400, s1 % 86_400, "offer {id} changed its time of day");
+            let s1 = shifted["globalShopOverrides"][id]["activeStartDate"]
+                .as_i64()
+                .unwrap();
+            assert_eq!(
+                s0 % 86_400,
+                s1 % 86_400,
+                "offer {id} changed its time of day"
+            );
         }
     }
 
@@ -1577,12 +1619,19 @@ mod replay_tests {
         for (id, before) in raw["globalShopOverrides"].as_object().unwrap() {
             let (Some(bl), Some(al)) = (
                 before.get("maxPurchaseLimits").and_then(|l| l.as_array()),
-                shifted["globalShopOverrides"][id].get("maxPurchaseLimits").and_then(|l| l.as_array()),
-            ) else { continue };
+                shifted["globalShopOverrides"][id]
+                    .get("maxPurchaseLimits")
+                    .and_then(|l| l.as_array()),
+            ) else {
+                continue;
+            };
             for (b, a) in bl.iter().zip(al.iter()) {
                 let bt = b["purchaseTrackingId"].as_str().unwrap();
                 let at = a["purchaseTrackingId"].as_str().unwrap();
-                match bt.rsplit_once("::").and_then(|(_, t)| t.parse::<i64>().ok()) {
+                match bt
+                    .rsplit_once("::")
+                    .and_then(|(_, t)| t.parse::<i64>().ok())
+                {
                     // The per-occurrence form: its timestamp must have moved.
                     Some(ts) => {
                         let new_ts: i64 = at.rsplit_once("::").unwrap().1.parse().unwrap();
@@ -1595,7 +1644,10 @@ mod replay_tests {
                 }
             }
         }
-        assert!(checked > 100, "expected many per-occurrence ids, saw {checked}");
+        assert!(
+            checked > 100,
+            "expected many per-occurrence ids, saw {checked}"
+        );
     }
 
     /// Inside the original window the catalogue is served untouched, so refreshing
@@ -1618,10 +1670,15 @@ mod replay_tests {
     fn a_malformed_product_id_is_never_served() {
         const BAD: &str = "53c6f124-3603-4100-ba9a-e2fe23969f7p";
         let raw = catalog();
-        assert!(raw["globalShopOverrides"].get(BAD).is_some(), "fixture keeps the retail typo");
+        assert!(
+            raw["globalShopOverrides"].get(BAD).is_some(),
+            "fixture keeps the retail typo"
+        );
         for now in [1_780_000_000, 1_783_000_000 + 400 * 86_400] {
             assert!(
-                shift_to_now(&raw, now)["globalShopOverrides"].get(BAD).is_none(),
+                shift_to_now(&raw, now)["globalShopOverrides"]
+                    .get(BAD)
+                    .is_none(),
                 "the invalid id was served at {now}"
             );
         }
@@ -1670,7 +1727,11 @@ mod replay_tests {
         // Applied after the shift, the rotation is untouched.
         let served = apply_authored(
             shift_to_now(&raw, now),
-            &authored("11111111-1111-4111-8111-111111111111", now + 30 * 86_400, now + 37 * 86_400),
+            &authored(
+                "11111111-1111-4111-8111-111111111111",
+                now + 30 * 86_400,
+                now + 37 * 86_400,
+            ),
         );
         assert!(
             live_count(&served, now) > 1,
@@ -1713,7 +1774,10 @@ mod replay_tests {
             before["globalShopOverrides"].as_object().unwrap().len(),
             "no duplicate entry",
         );
-        assert_eq!(served["globalShopOverrides"][&id]["activeEndDate"].as_i64(), Some(9));
+        assert_eq!(
+            served["globalShopOverrides"][&id]["activeEndDate"].as_i64(),
+            Some(9)
+        );
     }
 
     /// The normal case — an empty authored file must change nothing at all.
@@ -1778,7 +1842,10 @@ mod replay_tests {
         .map(|raw| raw.parse().unwrap())
         .collect();
         expected.sort_unstable();
-        assert_eq!(aliases, expected, "only the three replacement windows alias a grant");
+        assert_eq!(
+            aliases, expected,
+            "only the three replacement windows alias a grant"
+        );
     }
 
     /// THE CAPS IN THE CATALOGUE WERE DECORATIVE.
@@ -1810,7 +1877,10 @@ mod replay_tests {
                 None => uncapped += 1,
             }
         }
-        assert!(capped > 0, "no capped product found — the enforcement is inert");
+        assert!(
+            capped > 0,
+            "no capped product found — the enforcement is inert"
+        );
         assert!(
             uncapped > capped,
             "most products are uncapped; if that flipped, the reading of maxPurchases is wrong"
@@ -1838,7 +1908,10 @@ mod replay_tests {
         // The product from the incident: windowed limit 3, maxPurchases 0.
         let id = Uuid::parse_str("6ec8f67f-2cef-41aa-a7fc-f46237ae809c").unwrap();
         let entry = &sd.global_shop_overrides["globalShopOverrides"][id.to_string()];
-        assert!(!entry.is_null(), "the incident product must still be in the catalogue");
+        assert!(
+            !entry.is_null(),
+            "the incident product must still be in the catalogue"
+        );
 
         let windowed: Vec<i64> = entry["maxPurchaseLimits"]
             .as_array()
@@ -1847,7 +1920,11 @@ mod replay_tests {
             .filter(|l| {
                 l["purchaseTrackingId"]
                     .as_str()
-                    .and_then(|t| t.rsplit("::").next().map(|s| s.chars().all(|c| c.is_ascii_digit())))
+                    .and_then(|t| {
+                        t.rsplit("::")
+                            .next()
+                            .map(|s| s.chars().all(|c| c.is_ascii_digit()))
+                    })
                     .unwrap_or(false)
             })
             .filter_map(|l| l["limit"].as_i64())
@@ -1879,7 +1956,9 @@ mod replay_tests {
             .expect("the product bought 109 times must expose its windowed cap");
         assert_eq!(cap, 3, "the catalogue declares 3 per window");
         assert!(
-            key.rsplit("::").next().is_some_and(|t| t.chars().all(|c| c.is_ascii_digit())),
+            key.rsplit("::")
+                .next()
+                .is_some_and(|t| t.chars().all(|c| c.is_ascii_digit())),
             "the counter key must be the WINDOWED tracking id, or it cannot reset"
         );
     }
@@ -1898,7 +1977,10 @@ mod replay_tests {
         // A full replay period later the rotation has moved on.
         let later = window_purchase_cap(&sd, id, base + REPLAY_PERIOD).map(|(k, _)| k);
 
-        assert!(first.is_some(), "precondition: the offer has a windowed cap now");
+        assert!(
+            first.is_some(),
+            "precondition: the offer has a windowed cap now"
+        );
         assert_ne!(
             first, later,
             "a later window must produce a different counter key, or the cap never resets"
@@ -1925,13 +2007,14 @@ mod replay_tests {
                     .flatten()
                     .any(|l| {
                         let t = l["purchaseTrackingId"].as_str().unwrap_or("");
-                        let windowed = t
-                            .rsplit("::")
-                            .next()
-                            .is_some_and(|x| !x.is_empty() && x.chars().all(|c| c.is_ascii_digit()));
+                        let windowed = t.rsplit("::").next().is_some_and(|x| {
+                            !x.is_empty() && x.chars().all(|c| c.is_ascii_digit())
+                        });
                         windowed && l["limit"].as_u64().unwrap_or(0) > 0
                     });
-                (!any_windowed_nonzero).then(|| Uuid::parse_str(k).ok()).flatten()
+                (!any_windowed_nonzero)
+                    .then(|| Uuid::parse_str(k).ok())
+                    .flatten()
             })
             .next()
             .expect("some offer has no windowed cap");
@@ -1990,7 +2073,8 @@ mod replay_tests {
         );
 
         assert!(
-            list.iter().any(|e| e.id == product.to_string() && e.quantity == 2),
+            list.iter()
+                .any(|e| e.id == product.to_string() && e.quantity == 2),
             "control: ordinary lifetime product counts still go out"
         );
         assert!(
@@ -2034,7 +2118,8 @@ mod replay_tests {
         );
 
         assert!(
-            list.iter().any(|e| e.id == product.to_string() && e.quantity == 1),
+            list.iter()
+                .any(|e| e.id == product.to_string() && e.quantity == 1),
             "the lifetime product count still goes out"
         );
         assert!(
@@ -2087,7 +2172,10 @@ mod replay_tests {
 
         let mut sigil = 0usize;
         let mut ok = 0usize;
-        for (id, e) in sd.global_shop_overrides["globalShopOverrides"].as_object().unwrap() {
+        for (id, e) in sd.global_shop_overrides["globalShopOverrides"]
+            .as_object()
+            .unwrap()
+        {
             let is_sigil = e["prices"]
                 .as_array()
                 .into_iter()
@@ -2136,7 +2224,9 @@ mod replay_tests {
             .flatten()
             .map(|(k, _)| k)
         {
-            let uuid: Uuid = id.parse().unwrap_or_else(|e| panic!("authored id {id}: {e}"));
+            let uuid: Uuid = id
+                .parse()
+                .unwrap_or_else(|e| panic!("authored id {id}: {e}"));
             assert!(
                 grants.contains_key(&uuid),
                 "authored offer {id} has no global_shop_grants entry — buying it would 404",
@@ -2359,7 +2449,11 @@ mod offer_contents_fallback {
     }
 
     fn offer(kind: OfferContentsKind, contents: Vec<OfferContentEntry>) -> OfferContents {
-        OfferContents { kind, contents, town_xp: 0 }
+        OfferContents {
+            kind,
+            contents,
+            town_xp: 0,
+        }
     }
 
     /// The case this exists for: currencies and stackables, granted verbatim.
@@ -2368,9 +2462,13 @@ mod offer_contents_fallback {
     fn a_literal_offer_becomes_a_grantable_reward() {
         let o = offer(
             OfferContentsKind::Literal,
-            vec![entry(GOLD, 10_000, "currencies"), entry(CLAY, 85, "stackableItems")],
+            vec![
+                entry(GOLD, 10_000, "currencies"),
+                entry(CLAY, 85, "stackableItems"),
+            ],
         );
-        let r = grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1).expect("literal must be grantable");
+        let r = grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1)
+            .expect("literal must be grantable");
         assert_eq!(r.currencies.get(&GOLD), Some(&10_000));
         assert_eq!(r.stackable_items.get(&CLAY), Some(&85));
         assert!(r.items.is_empty(), "nothing may be invented into `items`");
@@ -2398,8 +2496,12 @@ mod offer_contents_fallback {
             if recorded.items.len() != 1 {
                 continue;
             }
-            let Some(built) = grant_from_offer_contents(sd.global_shop_offer_contents.get(id), &rd, item_table(), 1)
-            else {
+            let Some(built) = grant_from_offer_contents(
+                sd.global_shop_offer_contents.get(id),
+                &rd,
+                item_table(),
+                1,
+            ) else {
                 continue;
             };
             if built.items.len() != 1 {
@@ -2415,12 +2517,95 @@ mod offer_contents_fallback {
                 matched += 1;
             }
         }
-        assert!(compared > 0, "nothing to compare — the corpus or the contents file is wrong");
+        assert!(
+            compared > 0,
+            "nothing to compare — the corpus or the contents file is wrong"
+        );
         eprintln!("instance identity: {matched}/{compared}");
         assert!(
             matched * 100 >= compared * 90,
             "only {matched}/{compared} reconstructions match the recorded retail instance"
         );
+    }
+
+    /// Sigil-store jewelry with authored fixed enchantments must roll a fresh set
+    /// per purchase. The template/offer stay fixed; ENCHANTING/GRADING do not.
+    #[test]
+    fn sigil_jewelry_rolls_per_purchase_inside_the_measured_count_range() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let sd = crate::static_loader::load(&dir);
+        let rd = repair_data();
+        let offer_id = Uuid::parse_str("579141c5-4960-4280-9b29-98b8a88f9dfe").unwrap();
+        let contents = sd
+            .global_shop_offer_contents
+            .get(&offer_id)
+            .expect("Ebony Faerite Ring offer present");
+        let authored = &contents.contents[0];
+        assert_eq!(authored.item_template_id, EBONY_FAERITE_RING);
+        assert_eq!(
+            authored.enchanting.len(),
+            3,
+            "fixture must be the fixed-secondary offer"
+        );
+
+        let mut seen = std::collections::HashSet::new();
+        for nonce in 0..40 {
+            let reward = grant_from_offer_contents_with_enchanting(
+                Some(contents),
+                &rd,
+                item_table(),
+                &sd.enchanting,
+                nonce,
+            )
+            .expect("Sigil jewelry offer grantable");
+            let item = &reward.items[0].item;
+            assert_eq!(item.item_template_id, EBONY_FAERITE_RING);
+            assert_eq!(
+                item.properties.enchanting.len(),
+                authored.enchanting.len(),
+                "roll must stay inside the offer's measured/authored count"
+            );
+            assert!((1..=6).contains(&item.grade.unwrap()), "grade range");
+            seen.insert(format!(
+                "{:?}|{:?}",
+                item.properties.enchanting, item.properties.grading
+            ));
+        }
+        assert!(
+            seen.len() > 1,
+            "same offer returned one frozen jewelry roll"
+        );
+    }
+
+    /// Negative control: the jewelry roll path must not touch non-jewelry Sigil gear.
+    #[test]
+    fn sigil_non_jewelry_keeps_its_authored_properties() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let sd = crate::static_loader::load(&dir);
+        let rd = repair_data();
+        let contents = sd
+            .global_shop_offer_contents
+            .get(&ARCANE_HAND_AXE_OFFER)
+            .expect("hand axe offer present");
+        let a = grant_from_offer_contents_with_enchanting(
+            Some(contents),
+            &rd,
+            item_table(),
+            &sd.enchanting,
+            0,
+        )
+        .expect("grantable");
+        let b = grant_from_offer_contents_with_enchanting(
+            Some(contents),
+            &rd,
+            item_table(),
+            &sd.enchanting,
+            37,
+        )
+        .expect("grantable");
+        assert_eq!(a.items[0].item.properties, b.items[0].item.properties);
+        assert_eq!(a.items[0].item.grade, None);
+        assert!(a.items[0].item.durability > 0.0);
     }
 
     /// THE CONTROL that matters: an arcane item whose grading retail ROLLED must
@@ -2457,8 +2642,13 @@ mod offer_contents_fallback {
         // two purchases can come out differently.
         let mut outcomes = std::collections::HashSet::new();
         for nonce in 0..80u64 {
-            let r = grant_from_offer_contents(Some(&arcane_no_grading), &repair_data(), item_table(), nonce)
-                .expect("an arcane offer must now be grantable");
+            let r = grant_from_offer_contents(
+                Some(&arcane_no_grading),
+                &repair_data(),
+                item_table(),
+                nonce,
+            )
+            .expect("an arcane offer must now be grantable");
             // indexed, not `.first()`: diesel's prelude brings its own `first`
             // into scope here and it shadows the slice method.
             assert_eq!(r.items.len(), 1, "one item");
@@ -2480,17 +2670,16 @@ mod offer_contents_fallback {
         let mut unknown_tier = arcane_no_grading.clone();
         unknown_tier.contents[0].arcane_tier = 9;
         assert!(
-            grant_from_offer_contents(Some(&unknown_tier), &repair_data(), item_table(), 1).is_none(),
+            grant_from_offer_contents(Some(&unknown_tier), &repair_data(), item_table(), 1)
+                .is_none(),
             "a grade must not be invented for a tier retail never showed"
         );
 
         // …and the same entry WITH authored grading is grantable, so the refusal is
         // about the missing roll and not about arcane items in general.
         let mut graded = arcane_no_grading.clone();
-        graded.contents[0].grading = vec![blades_lib::static_data::PropertyRef {
-            id: CLAY,
-            tier: 3,
-        }];
+        graded.contents[0].grading =
+            vec![blades_lib::static_data::PropertyRef { id: CLAY, tier: 3 }];
         // (Only reaches the durability lookup; a template with no durability row is
         // still refused, which is asserted separately.)
         let _ = grant_from_offer_contents(Some(&graded), &repair_data(), item_table(), 1);
@@ -2515,8 +2704,13 @@ mod offer_contents_fallback {
             .get(&ARCANE_HAND_AXE_OFFER)
             .expect("the arcane hand axe offer is in the static data");
         let rd = repair_data();
-        let full = rd.max_durability(DRAGONBONE_HAND_AXE, 0).expect("axe durability row");
-        assert_eq!(full, 162.5, "the APK's temper-0 max for the Dragonbone Hand Axe");
+        let full = rd
+            .max_durability(DRAGONBONE_HAND_AXE, 0)
+            .expect("axe durability row");
+        assert_eq!(
+            full, 162.5,
+            "the APK's temper-0 max for the Dragonbone Hand Axe"
+        );
 
         for nonce in 0..200u64 {
             let r = grant_from_offer_contents(Some(offer), &rd, item_table(), nonce)
@@ -2526,14 +2720,20 @@ mod offer_contents_fallback {
             assert_eq!(item.item_template_id, DRAGONBONE_HAND_AXE);
             assert_eq!(item.arcane_tier, Some(2));
             assert_eq!(item.grade, None, "nonce {nonce}: an arcane axe was graded");
-            assert!(item.properties.grading.is_empty(), "nonce {nonce}: GRADING on an axe");
+            assert!(
+                item.properties.grading.is_empty(),
+                "nonce {nonce}: GRADING on an axe"
+            );
             assert_eq!(item.durability, full, "a new axe must be at full condition");
 
             let wire = serde_json::to_value(item).unwrap();
             assert_eq!(wire.get("durability").and_then(|v| v.as_f64()), Some(full));
             assert_eq!(wire.get("temperingLevel").and_then(|v| v.as_u64()), Some(0));
             assert!(wire.get("grade").is_none());
-            assert!(!rd.needs_repair(item), "a brand-new axe must not need repair");
+            assert!(
+                !rd.needs_repair(item),
+                "a brand-new axe must not need repair"
+            );
         }
 
         // The same holds for arcane ARMOUR (the gauntlets the grade-roll test used
@@ -2553,7 +2753,10 @@ mod offer_contents_fallback {
         };
         for nonce in 0..200u64 {
             let r = grant_from_offer_contents(Some(&gauntlets), &rd, item_table(), nonce).unwrap();
-            assert_eq!(r.items[0].item.grade, None, "nonce {nonce}: arcane gauntlets were graded");
+            assert_eq!(
+                r.items[0].item.grade, None,
+                "nonce {nonce}: arcane gauntlets were graded"
+            );
         }
     }
 
@@ -2608,12 +2811,18 @@ mod offer_contents_fallback {
         }
         // control: the identical contents under `Literal` ARE grantable, so the
         // refusals above are about the kind and not about the contents.
-        let o = offer(OfferContentsKind::Literal, vec![entry(GOLD, 1, "currencies")]);
+        let o = offer(
+            OfferContentsKind::Literal,
+            vec![entry(GOLD, 1, "currencies")],
+        );
         assert!(grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1).is_some());
         // …and `Unclassified` left this list (#184). The extractor could not place
         // its entries in a bucket; the template's own type can, and 51 offers whose
         // contents are all real item templates were being refused for a label.
-        let o = offer(OfferContentsKind::Unclassified, vec![entry(GOLD, 1, "currencies")]);
+        let o = offer(
+            OfferContentsKind::Unclassified,
+            vec![entry(GOLD, 1, "currencies")],
+        );
         assert!(
             grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1).is_some(),
             "an unclassified offer whose entries resolve must be grantable"
@@ -2638,18 +2847,28 @@ mod offer_contents_fallback {
     /// the price is charged before the reward is applied.
     #[test]
     fn an_empty_or_absent_offer_is_not_a_purchase() {
-        assert!(grant_from_offer_contents(None, &repair_data(), item_table(), 1).is_none(), "unknown product");
+        assert!(
+            grant_from_offer_contents(None, &repair_data(), item_table(), 1).is_none(),
+            "unknown product"
+        );
         let o = offer(OfferContentsKind::Literal, vec![]);
-        assert!(grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1).is_none(), "empty reward");
+        assert!(
+            grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1).is_none(),
+            "empty reward"
+        );
     }
 
     /// townXp rides through, and on its own is enough to be a real reward —
     /// 16 of the captured grants carry a non-zero one.
     #[test]
     fn town_xp_rides_through() {
-        let mut o = offer(OfferContentsKind::Literal, vec![entry(GOLD, 5, "currencies")]);
+        let mut o = offer(
+            OfferContentsKind::Literal,
+            vec![entry(GOLD, 5, "currencies")],
+        );
         o.town_xp = 40;
-        let r = grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1).expect("grantable");
+        let r = grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1)
+            .expect("grantable");
         assert_eq!(r.town_xp, 40);
     }
 
@@ -2658,9 +2877,13 @@ mod offer_contents_fallback {
     fn a_repeated_template_sums() {
         let o = offer(
             OfferContentsKind::Literal,
-            vec![entry(GOLD, 100, "currencies"), entry(GOLD, 25, "currencies")],
+            vec![
+                entry(GOLD, 100, "currencies"),
+                entry(GOLD, 25, "currencies"),
+            ],
         );
-        let r = grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1).expect("grantable");
+        let r = grant_from_offer_contents(Some(&o), &repair_data(), item_table(), 1)
+            .expect("grantable");
         assert_eq!(r.currencies.get(&GOLD), Some(&125));
     }
 }
@@ -2698,7 +2921,10 @@ mod purchase_item_id_tests {
                 ids.insert(id.to_string());
             }
         }
-        assert!(with_items > 0, "no grant awards an item — the premise is gone");
+        assert!(
+            with_items > 0,
+            "no grant awards an item — the premise is gone"
+        );
         assert!(
             ids.len() > 1,
             "the ids must be real frozen uuids, not one repeated placeholder"
@@ -2734,7 +2960,10 @@ mod purchase_item_id_tests {
         let a = mint(grant);
         let b = mint(grant);
 
-        assert_ne!(a.items[0].id, b.items[0].id, "each purchase needs its own instance id");
+        assert_ne!(
+            a.items[0].id, b.items[0].id,
+            "each purchase needs its own instance id"
+        );
         assert_ne!(a.items[0].id, frozen, "the frozen id must not survive");
         assert_eq!(
             a.items[0].item.item_template_id, template,
@@ -2757,7 +2986,8 @@ mod report184_unclassified_tests {
 
     /// The same two helpers the fallback tests use, which are private to that
     /// module; duplicated rather than made public so the surface stays closed.
-    fn item_table() -> &'static std::collections::HashMap<uuid::Uuid, blades_lib::game_data::GameDataItem> {
+    fn item_table()
+    -> &'static std::collections::HashMap<uuid::Uuid, blades_lib::game_data::GameDataItem> {
         static T: std::sync::OnceLock<
             std::collections::HashMap<uuid::Uuid, blades_lib::game_data::GameDataItem>,
         > = std::sync::OnceLock::new();
@@ -2772,9 +3002,10 @@ mod report184_unclassified_tests {
 
     fn repair_data() -> blades_lib::features::repair::RepairData {
         let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static"));
-        let durability: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("item_durability.json")).unwrap())
-                .unwrap();
+        let durability: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("item_durability.json")).unwrap(),
+        )
+        .unwrap();
         let costs: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("repair_costs.json")).unwrap())
                 .unwrap();
@@ -2837,8 +3068,7 @@ mod report184_unclassified_tests {
     fn a_ring_grants_without_a_durability_entry() {
         let sd = shipped();
         let rd = repair_data();
-        let uuid =
-            uuid::Uuid::parse_str("a66c27d2-6fc1-47f9-9c9c-419d1fa98855").unwrap();
+        let uuid = uuid::Uuid::parse_str("a66c27d2-6fc1-47f9-9c9c-419d1fa98855").unwrap();
         let reward = grant_from_offer_contents(
             Some(sd.global_shop_offer_contents.get(&uuid).unwrap()),
             &rd,
@@ -2875,8 +3105,7 @@ mod report184_unclassified_tests {
             }],
         };
         assert!(
-            grant_from_offer_contents(Some(&contents), &repair_data(), item_table(), 1)
-                .is_none(),
+            grant_from_offer_contents(Some(&contents), &repair_data(), item_table(), 1).is_none(),
             "an id nothing can classify must refuse, not guess a bucket"
         );
     }
@@ -2968,13 +3197,29 @@ mod report238_calendar_tests {
     #[test]
     fn the_reported_moment_has_a_full_daily_block() {
         let (all, daily) = live_sigil(&shipped(), REPORTED);
-        assert!(all.len() >= 45, "only {} live Sigil offers at the report", all.len());
-        assert!(daily.len() >= 25, "only {} daily Sigil offers at the report", daily.len());
+        assert!(
+            all.len() >= 45,
+            "only {} live Sigil offers at the report",
+            all.len()
+        );
+        assert!(
+            daily.len() >= 25,
+            "only {} daily Sigil offers at the report",
+            daily.len()
+        );
 
         // CONTROL: the collapsed replay reproduces what the player saw.
         let (all0, daily0) = live_sigil(&collapsed(), REPORTED);
-        assert_eq!(daily0.len(), 2, "precondition: the old replay showed two daily items");
-        assert!(all0.len() < 30, "precondition: the old replay was thin ({})", all0.len());
+        assert_eq!(
+            daily0.len(),
+            2,
+            "precondition: the old replay showed two daily items"
+        );
+        assert!(
+            all0.len() < 30,
+            "precondition: the old replay was thin ({})",
+            all0.len()
+        );
     }
 
     /// NO DAY OF TWO FULL CYCLES MAY LACK THE DAILY BLOCK. Retail, measured from
@@ -2987,13 +3232,21 @@ mod report238_calendar_tests {
             .map(|t| (live_sigil(&shipped(), t).1.len(), t))
             .min()
             .unwrap();
-        assert!(worst.0 >= 25, "only {} daily Sigil offers at {}", worst.0, worst.1);
+        assert!(
+            worst.0 >= 25,
+            "only {} daily Sigil offers at {}",
+            worst.0,
+            worst.1
+        );
 
         // CONTROL: the collapsed replay is missing the block on most days.
         let thin = evenings(days)
             .filter(|&t| live_sigil(&collapsed(), t).1.len() < 10)
             .count();
-        assert!(thin as i64 > days / 2, "precondition: old replay thin on {thin}/{days} days");
+        assert!(
+            thin as i64 > days / 2,
+            "precondition: old replay thin on {thin}/{days} days"
+        );
     }
 
     /// "Not refreshing daily": consecutive days' daily blocks must be different
@@ -3001,7 +3254,9 @@ mod report238_calendar_tests {
     #[test]
     fn the_daily_block_turns_over_completely() {
         let sd = shipped();
-        let days: Vec<_> = evenings(REPLAY_PERIOD_DAYS + 1).map(|t| live_sigil(&sd, t).1).collect();
+        let days: Vec<_> = evenings(REPLAY_PERIOD_DAYS + 1)
+            .map(|t| live_sigil(&sd, t).1)
+            .collect();
         for (i, pair) in days.windows(2).enumerate() {
             let same = pair[0].intersection(&pair[1]).count();
             assert_eq!(same, 0, "day {i}: {same} daily offers did not rotate");
@@ -3013,20 +3268,29 @@ mod report238_calendar_tests {
     #[test]
     fn soul_gems_and_salts_come_back_every_few_days() {
         let per_day = |sd: &StaticData| -> Vec<HashSet<String>> {
-            evenings(REPLAY_PERIOD_DAYS).map(|t| live_sigil(sd, t).0).collect()
+            evenings(REPLAY_PERIOD_DAYS)
+                .map(|t| live_sigil(sd, t).0)
+                .collect()
         };
         let (fixed, old) = (per_day(&shipped()), per_day(&collapsed()));
-        let days_on_sale = |days: &[HashSet<String>], id: &str| days.iter().filter(|d| d.contains(id)).count();
+        let days_on_sale =
+            |days: &[HashSet<String>], id: &str| days.iter().filter(|d| d.contains(id)).count();
         for (id, name, floor) in [
             (TRANSCENDENT, "Transcendent soul gem", 4),
             (FROST_SALTS, "Frost Salts", 8),
             (FIRE_SALTS, "Fire Salts", 8),
         ] {
             let n = days_on_sale(&fixed, id);
-            assert!(n >= floor, "{name} on sale on only {n} of {REPLAY_PERIOD_DAYS} days");
+            assert!(
+                n >= floor,
+                "{name} on sale on only {n} of {REPLAY_PERIOD_DAYS} days"
+            );
             // CONTROL
             let n0 = days_on_sale(&old, id);
-            assert!(n0 <= 1, "precondition: the old replay sold {name} on {n0} days");
+            assert!(
+                n0 <= 1,
+                "precondition: the old replay sold {name} on {n0} days"
+            );
         }
     }
 
@@ -3047,17 +3311,34 @@ mod report238_calendar_tests {
             .as_object()
             .unwrap()
             .values()
-            .filter(|ws| ws.as_array().unwrap().iter().any(|w| w["isActive"].as_bool() == Some(true)))
+            .filter(|ws| {
+                ws.as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|w| w["isActive"].as_bool() == Some(true))
+            })
             .count();
-        assert_eq!(valid - ever_active, 3, "precondition: three never-active retail offers");
+        assert_eq!(
+            valid - ever_active,
+            3,
+            "precondition: three never-active retail offers"
+        );
         let mut reached = HashSet::new();
         for t in (REPORTED..REPORTED + REPLAY_PERIOD).step_by(6 * 3_600) {
             let cat = current_catalog(&sd, t);
             let map = cat["globalShopOverrides"].as_object().unwrap();
             assert_eq!(map.len(), valid, "the catalogue lost offers at {t}");
-            reached.extend(map.iter().filter(|(_, e)| is_live(e, t)).map(|(id, _)| id.clone()));
+            reached.extend(
+                map.iter()
+                    .filter(|(_, e)| is_live(e, t))
+                    .map(|(id, _)| id.clone()),
+            );
         }
-        assert_eq!(reached.len(), ever_active, "offers never on sale in a whole cycle");
+        assert_eq!(
+            reached.len(),
+            ever_active,
+            "offers never on sale in a whole cycle"
+        );
     }
 
     /// Replaying moves windows, never reshapes them: every served window is a
@@ -3066,7 +3347,9 @@ mod report238_calendar_tests {
     #[test]
     fn served_windows_are_retail_windows_moved_by_whole_periods() {
         let sd = shipped();
-        let calendar = sd.global_shop_windows["globalShopWindows"].as_object().unwrap();
+        let calendar = sd.global_shop_windows["globalShopWindows"]
+            .as_object()
+            .unwrap();
         for t in [REPORTED, REPORTED + 17 * DAY, REPORTED + 900 * DAY] {
             let cat = current_catalog(&sd, t);
             for (id, e) in cat["globalShopOverrides"].as_object().unwrap() {
@@ -3086,7 +3369,10 @@ mod report238_calendar_tests {
                         .collect()
                 };
                 for (a, b) in tids(w).iter().zip(tids(e).iter()) {
-                    match a.rsplit_once("::").and_then(|(h, ts)| Some((h, ts.parse::<i64>().ok()?))) {
+                    match a
+                        .rsplit_once("::")
+                        .and_then(|(h, ts)| Some((h, ts.parse::<i64>().ok()?)))
+                    {
                         Some((h, ts)) => assert_eq!(b, &format!("{h}::{}", ts + moved)),
                         None => assert_eq!(a, b),
                     }
@@ -3106,10 +3392,18 @@ mod report238_calendar_tests {
             .as_object()
             .unwrap()
             .iter()
-            .filter(|(_, ws)| ws.as_array().unwrap().iter().any(|w| is_sigil(w) && is_live(w, now)))
+            .filter(|(_, ws)| {
+                ws.as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|w| is_sigil(w) && is_live(w, now))
+            })
             .map(|(id, _)| id.clone())
             .collect();
-        assert!(retail.len() >= 45, "precondition: retail had a full shop that day");
+        assert!(
+            retail.len() >= 45,
+            "precondition: retail had a full shop that day"
+        );
         assert_eq!(served, retail);
     }
 
@@ -3124,12 +3418,19 @@ mod report238_calendar_tests {
             "9e4dc391-422e-4b25-ba90-faab39e0769f",
         ] {
             assert!(
-                sd.global_shop_windows["globalShopWindows"].get(id).is_some(),
+                sd.global_shop_windows["globalShopWindows"]
+                    .get(id)
+                    .is_some(),
                 "precondition: {id} is in the calendar"
             );
-            for t in (REPORTED..REPORTED + 5 * 365 * DAY).step_by((5 * DAY + 7 * 3_600 + 13) as usize) {
+            for t in
+                (REPORTED..REPORTED + 5 * 365 * DAY).step_by((5 * DAY + 7 * 3_600 + 13) as usize)
+            {
                 let cat = current_catalog(&sd, t);
-                assert!(is_live(&cat["globalShopOverrides"][id], t), "{id} lapsed at {t}");
+                assert!(
+                    is_live(&cat["globalShopOverrides"][id], t),
+                    "{id} lapsed at {t}"
+                );
             }
         }
     }
@@ -3160,6 +3461,9 @@ mod report238_calendar_tests {
             }}
         });
         let cat = current_catalog(&sd, REPORTED);
-        assert_eq!(window_of(&cat["globalShopOverrides"][TRANSCENDENT]), Some((start, end)));
+        assert_eq!(
+            window_of(&cat["globalShopOverrides"][TRANSCENDENT]),
+            Some((start, end))
+        );
     }
 }
