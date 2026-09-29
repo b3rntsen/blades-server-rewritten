@@ -13,7 +13,9 @@ use std::collections::HashMap;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::user_data::{CompleteCharacter, CompleteInventory, InventoryChangeTracker, SingleEquippedItem};
+use crate::user_data::{
+    CompleteCharacter, CompleteInventory, InventoryChangeTracker, SingleEquippedItem,
+};
 
 /// Which attribute a level-up invests in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,17 +66,24 @@ pub fn apply_levelup(ch: &mut CompleteCharacter, attribute: Attribute) {
     ch.level = ch.level.saturating_add(1);
     if ch.level <= MAX_ATTRIBUTE_POINT_LEVEL {
         match attribute {
-            Attribute::Stamina => ch.stamina_attribute_points = ch.stamina_attribute_points.saturating_add(1),
-            Attribute::Magicka => ch.magicka_attribute_points = ch.magicka_attribute_points.saturating_add(1),
+            Attribute::Stamina => {
+                ch.stamina_attribute_points = ch.stamina_attribute_points.saturating_add(1)
+            }
+            Attribute::Magicka => {
+                ch.magicka_attribute_points = ch.magicka_attribute_points.saturating_add(1)
+            }
         }
     }
     ch.version += 1;
 }
 
-/// Reallocate attribute points (respec): set the totals as requested.
+/// Reallocate attribute points (respec): set the totals as requested and clear
+/// learned/equipped abilities so the client recomputes all skill points as free.
 pub fn apply_respec(ch: &mut CompleteCharacter, stamina: u32, magicka: u32) {
     ch.stamina_attribute_points = stamina;
     ch.magicka_attribute_points = magicka;
+    ch.abilities = Value::Null;
+    ch.equipped_abilities = Value::Null;
     ch.version += 1;
 }
 
@@ -84,16 +93,13 @@ pub fn upgrade_inventory(ch: &mut CompleteCharacter) {
     ch.version += 1;
 }
 
-/// Merge learned/upgraded abilities (`{abilityId: level}`) into `character.abilities`.
-pub fn merge_abilities(ch: &mut CompleteCharacter, updates: &Value) {
-    if !ch.abilities.is_object() {
-        ch.abilities = json!({});
-    }
-    if let (Some(dst), Some(src)) = (ch.abilities.as_object_mut(), updates.as_object()) {
-        for (k, v) in src {
-            dst.insert(k.clone(), v.clone());
-        }
-    }
+/// Store the full learned/upgraded ability map (`{abilityId: level}`).
+pub fn replace_abilities(ch: &mut CompleteCharacter, updates: &Value) {
+    ch.abilities = if updates.is_object() {
+        updates.clone()
+    } else {
+        json!({})
+    };
     ch.version += 1;
 }
 
@@ -116,7 +122,10 @@ pub fn set_loadout_profile(ch: &mut CompleteCharacter, index: usize, profile: Va
     if !ch.loadout_profiles.is_array() {
         ch.loadout_profiles = json!([]);
     }
-    let arr = ch.loadout_profiles.as_array_mut().expect("just set to array");
+    let arr = ch
+        .loadout_profiles
+        .as_array_mut()
+        .expect("just set to array");
     while arr.len() <= index {
         arr.push(Value::Null);
     }
@@ -293,7 +302,10 @@ pub fn apply_equipment_updates(
         }
         // Return whatever currently occupies the slot to the backpack.
         if let Some(prev) = inv.loadout.equipped_items.0.remove(slot) {
-            tracker.modified_loadout.modified_equipped_items.insert(*slot);
+            tracker
+                .modified_loadout
+                .modified_equipped_items
+                .insert(*slot);
             inv.backpack.items.0.insert(prev.id, prev.item);
             tracker.modified_backpack.items.insert(prev.id);
         }
@@ -309,7 +321,10 @@ pub fn apply_equipment_updates(
                         item,
                     },
                 );
-                tracker.modified_loadout.modified_equipped_items.insert(*slot);
+                tracker
+                    .modified_loadout
+                    .modified_equipped_items
+                    .insert(*slot);
             } else if inv.backpack.stackable_items.count(*item_id) > 0 {
                 // Not instanced gear, but the id IS a stackable consumable the player
                 // owns → treat it as a consumable equip rather than silently skipping.
@@ -379,11 +394,27 @@ mod tests {
                 "equippedAbilities": [{"slot": "abilitySlot0", "itemId": "91078132-ef5c-492a-97f2-ac69be5140a8"}]
             }),
         );
-        let items = ch.loadout_profiles[0]["equippedItems"].as_array().unwrap().clone();
-        assert_eq!(items.len(), 3, "every slot entry stays, as retail served 9 of 9");
-        assert_eq!(items[0]["itemId"], "6d8a9f14-7d79-4b5a-8a2a-7f59d2083836", "a filled slot is untouched");
-        assert!(items[1].get("itemId").is_none(), "an empty \"\" slot is served with no itemId key");
-        assert!(items[2].get("itemId").is_none(), "a null slot is served with no itemId key");
+        let items = ch.loadout_profiles[0]["equippedItems"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            items.len(),
+            3,
+            "every slot entry stays, as retail served 9 of 9"
+        );
+        assert_eq!(
+            items[0]["itemId"], "6d8a9f14-7d79-4b5a-8a2a-7f59d2083836",
+            "a filled slot is untouched"
+        );
+        assert!(
+            items[1].get("itemId").is_none(),
+            "an empty \"\" slot is served with no itemId key"
+        );
+        assert!(
+            items[2].get("itemId").is_none(),
+            "a null slot is served with no itemId key"
+        );
         assert_eq!(
             ch.loadout_profiles[0]["equippedAbilities"][0]["itemId"],
             "91078132-ef5c-492a-97f2-ac69be5140a8",
@@ -399,7 +430,11 @@ mod tests {
             "equippedItems": [{"slot": "417e79de-c810-42f8-8273-f9759df6ae25", "itemId": ""}]
         }]);
         normalize_loadout_profiles_for_retail(&mut ch);
-        assert!(ch.loadout_profiles[0]["equippedItems"][0].get("itemId").is_none());
+        assert!(
+            ch.loadout_profiles[0]["equippedItems"][0]
+                .get("itemId")
+                .is_none()
+        );
     }
 
     use super::*;
@@ -486,14 +521,35 @@ mod tests {
         inv.backpack.items.0.insert(junk_id, item_of(DECORATION));
 
         let mut t = InventoryChangeTracker::default();
-        apply_equipment_updates(&mut inv, &HashMap::from([(off_hand, Some(shield_id))]), &mut t, Some(&gd));
-        assert!(inv.loadout.equipped_items.0.contains_key(&off_hand), "shield equips");
+        apply_equipment_updates(
+            &mut inv,
+            &HashMap::from([(off_hand, Some(shield_id))]),
+            &mut t,
+            Some(&gd),
+        );
+        assert!(
+            inv.loadout.equipped_items.0.contains_key(&off_hand),
+            "shield equips"
+        );
 
         let mut t2 = InventoryChangeTracker::default();
-        apply_equipment_updates(&mut inv, &HashMap::from([(off_hand, Some(junk_id))]), &mut t2, Some(&gd));
-        let still = inv.loadout.equipped_items.0.get(&off_hand).expect("slot must not be emptied");
+        apply_equipment_updates(
+            &mut inv,
+            &HashMap::from([(off_hand, Some(junk_id))]),
+            &mut t2,
+            Some(&gd),
+        );
+        let still = inv
+            .loadout
+            .equipped_items
+            .0
+            .get(&off_hand)
+            .expect("slot must not be emptied");
         assert_eq!(still.id, shield_id, "the shield must still be equipped");
-        assert!(inv.backpack.items.0.contains_key(&junk_id), "the junk stays in the backpack");
+        assert!(
+            inv.backpack.items.0.contains_key(&junk_id),
+            "the junk stays in the backpack"
+        );
     }
 
     const WEAPON: Uuid = Uuid::from_u128(0x11);
@@ -505,7 +561,10 @@ mod tests {
     const POTION: Uuid = Uuid::from_u128(0xD0);
 
     fn slot_test_game_data() -> crate::game_data::GameData {
-        let mk = |t: u64| crate::game_data::GameDataItem { name: String::new(), r#type: t };
+        let mk = |t: u64| crate::game_data::GameDataItem {
+            name: String::new(),
+            r#type: t,
+        };
         let mut gd = crate::game_data::GameData {
             items_template: std::collections::HashMap::new(),
             interactables: std::collections::HashMap::new(),
@@ -574,13 +633,45 @@ mod tests {
     }
 
     #[test]
-    fn abilities_merge_into_opaque_value() {
+    fn abilities_save_replaces_the_full_opaque_value() {
         let mut ch = CompleteCharacter::default();
         let a = Uuid::from_u128(1).to_string();
-        merge_abilities(&mut ch, &json!({ &a: 3 }));
+        let stale = Uuid::from_u128(2).to_string();
+        ch.abilities = json!({ &stale: 4 });
+
+        replace_abilities(&mut ch, &json!({ &a: 3 }));
         assert_eq!(ch.abilities[&a], 3);
-        merge_abilities(&mut ch, &json!({ &a: 5 }));
-        assert_eq!(ch.abilities[&a], 5, "later upgrade overwrites");
+        assert!(
+            ch.abilities.get(&stale).is_none(),
+            "retail sends the full post-reset map; omitted stale abilities must be removed"
+        );
+    }
+
+    #[test]
+    fn respec_clears_learned_and_equipped_abilities() {
+        let ability = Uuid::from_u128(1).to_string();
+        let mut ch = CompleteCharacter {
+            stamina_attribute_points: 8,
+            magicka_attribute_points: 4,
+            abilities: json!({ &ability: 3 }),
+            equipped_abilities: json!({ "0": &ability }),
+            ..CompleteCharacter::default()
+        };
+        let version = ch.version;
+
+        apply_respec(&mut ch, 12, 0);
+
+        assert_eq!(ch.stamina_attribute_points, 12);
+        assert_eq!(ch.magicka_attribute_points, 0);
+        assert!(
+            ch.abilities.is_null(),
+            "respec response must omit abilities"
+        );
+        assert!(
+            ch.equipped_abilities.is_null(),
+            "resetting learned abilities also clears invalid equipped slots"
+        );
+        assert_eq!(ch.version, version + 1);
     }
 
     #[test]
@@ -611,7 +702,10 @@ mod tests {
 
         let profile = &ch.loadout_profiles[0];
         assert!(profile.get("equippedConsumables").is_none());
-        assert!(profile["equippedItems"][0].get("itemId").is_none(), "an empty slot is served without itemId, as retail did");
+        assert!(
+            profile["equippedItems"][0].get("itemId").is_none(),
+            "an empty slot is served without itemId, as retail did"
+        );
         assert_eq!(profile["keepShield"], true);
     }
 
@@ -643,10 +737,22 @@ mod tests {
 
         normalize_loadout_profiles_for_retail(&mut ch);
 
-        assert!(ch.loadout_profiles[0].is_null(), "null profile gaps are retail");
-        assert_eq!(ch.loadout_profiles[1]["equippedItems"][0]["slot"], "862605de-c67f-4bce-b527-4e5fb6f25162");
-        assert_eq!(ch.loadout_profiles[1]["equippedAbilities"][0]["slot"], "abilitySlot0");
-        assert_eq!(ch.loadout_profiles[1]["note"], "leave unknown profile fields alone");
+        assert!(
+            ch.loadout_profiles[0].is_null(),
+            "null profile gaps are retail"
+        );
+        assert_eq!(
+            ch.loadout_profiles[1]["equippedItems"][0]["slot"],
+            "862605de-c67f-4bce-b527-4e5fb6f25162"
+        );
+        assert_eq!(
+            ch.loadout_profiles[1]["equippedAbilities"][0]["slot"],
+            "abilitySlot0"
+        );
+        assert_eq!(
+            ch.loadout_profiles[1]["note"],
+            "leave unknown profile fields alone"
+        );
         assert!(ch.loadout_profiles[2].get("equippedConsumables").is_none());
     }
 
@@ -670,15 +776,26 @@ mod tests {
         let mut t = InventoryChangeTracker::default();
 
         // Equip.
-        apply_equipment_updates(&mut i, &HashMap::from([(slot, Some(item_id))]), &mut t, None);
+        apply_equipment_updates(
+            &mut i,
+            &HashMap::from([(slot, Some(item_id))]),
+            &mut t,
+            None,
+        );
         assert!(i.loadout.equipped_items.0.contains_key(&slot));
-        assert!(!i.backpack.items.0.contains_key(&item_id), "left the backpack");
+        assert!(
+            !i.backpack.items.0.contains_key(&item_id),
+            "left the backpack"
+        );
 
         // Unequip.
         let mut t2 = InventoryChangeTracker::default();
         apply_equipment_updates(&mut i, &HashMap::from([(slot, None)]), &mut t2, None);
         assert!(!i.loadout.equipped_items.0.contains_key(&slot));
-        assert!(i.backpack.items.0.contains_key(&item_id), "returned to backpack");
+        assert!(
+            i.backpack.items.0.contains_key(&item_id),
+            "returned to backpack"
+        );
     }
 
     /// Equipping a STACKABLE consumable (potion) via the `equippedConsumables` field
@@ -694,13 +811,28 @@ mod tests {
 
         let changed = set_equipped_consumables(&mut i, &[potion], &mut t);
         assert!(changed, "equipping a potion changes the loadout");
-        assert_eq!(i.loadout.equipped_consumables, vec![potion], "potion is equipped");
-        assert_eq!(i.backpack.stackable_items.count(potion), 5, "equipping does not consume the stack");
-        assert!(t.modified_loadout.consumables_changed, "tracker flags the change");
+        assert_eq!(
+            i.loadout.equipped_consumables,
+            vec![potion],
+            "potion is equipped"
+        );
+        assert_eq!(
+            i.backpack.stackable_items.count(potion),
+            5,
+            "equipping does not consume the stack"
+        );
+        assert!(
+            t.modified_loadout.consumables_changed,
+            "tracker flags the change"
+        );
 
         // The loadout diff echoes the equipped-consumable list so the client sees it.
         let diff = i.loadout.generate_client_update(&t.modified_loadout);
-        assert_eq!(diff.equipped_consumables, Some(vec![potion]), "diff carries the equipped consumable");
+        assert_eq!(
+            diff.equipped_consumables,
+            Some(vec![potion]),
+            "diff carries the equipped consumable"
+        );
     }
 
     /// A consumable that the player does NOT own is dropped (never equipped), and an
@@ -714,7 +846,11 @@ mod tests {
         let mut t = InventoryChangeTracker::default();
 
         set_equipped_consumables(&mut i, &[owned, unowned, owned], &mut t);
-        assert_eq!(i.loadout.equipped_consumables, vec![owned], "unowned dropped, duplicate collapsed");
+        assert_eq!(
+            i.loadout.equipped_consumables,
+            vec![owned],
+            "unowned dropped, duplicate collapsed"
+        );
 
         // Re-applying the same effective list → no change.
         let mut t2 = InventoryChangeTracker::default();
@@ -746,9 +882,19 @@ mod tests {
             &mut t,
             None,
         );
-        assert!(i.loadout.equipped_items.0.contains_key(&gear_slot), "gear equipped normally");
-        assert_eq!(i.loadout.equipped_consumables, vec![potion], "potion routed to consumables, not dropped");
-        assert!(t.modified_loadout.consumables_changed, "consumable change tracked for the diff");
+        assert!(
+            i.loadout.equipped_items.0.contains_key(&gear_slot),
+            "gear equipped normally"
+        );
+        assert_eq!(
+            i.loadout.equipped_consumables,
+            vec![potion],
+            "potion routed to consumables, not dropped"
+        );
+        assert!(
+            t.modified_loadout.consumables_changed,
+            "consumable change tracked for the diff"
+        );
     }
 }
 
@@ -787,7 +933,10 @@ mod attribute_point_cap_tests {
             .filter_map(|(k, _)| k.parse::<u16>().ok())
             .collect();
 
-        assert!(!granting.is_empty() && !withholding.is_empty(), "both bands must exist");
+        assert!(
+            !granting.is_empty() && !withholding.is_empty(),
+            "both bands must exist"
+        );
         assert_eq!(
             granting.iter().copied().max().unwrap(),
             MAX_ATTRIBUTE_POINT_LEVEL,
@@ -807,13 +956,19 @@ mod attribute_point_cap_tests {
         let mut ch = at_level(MAX_ATTRIBUTE_POINT_LEVEL - 1);
         apply_levelup(&mut ch, Attribute::Stamina);
         assert_eq!(ch.level, MAX_ATTRIBUTE_POINT_LEVEL);
-        assert_eq!(ch.stamina_attribute_points, 1, "the level that reaches the cap still pays");
+        assert_eq!(
+            ch.stamina_attribute_points, 1,
+            "the level that reaches the cap still pays"
+        );
 
         // 50 -> 51 does not.
         let mut ch = at_level(MAX_ATTRIBUTE_POINT_LEVEL);
         apply_levelup(&mut ch, Attribute::Stamina);
         assert_eq!(ch.level, MAX_ATTRIBUTE_POINT_LEVEL + 1);
-        assert_eq!(ch.stamina_attribute_points, 0, "the level past the cap pays nothing");
+        assert_eq!(
+            ch.stamina_attribute_points, 0,
+            "the level past the cap pays nothing"
+        );
     }
 
     /// THE CONTROL: the level itself must keep rising, and the character must still
