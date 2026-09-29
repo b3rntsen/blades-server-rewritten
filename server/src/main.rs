@@ -762,6 +762,7 @@ async fn main() -> Result<()> {
                     .service(admin::list_arena_h2h_seasons)
                     .service(admin::rebuild_arena_h2h_ratings)
                     .service(admin::get_current_character)
+                    .service(admin::set_current_character_name)
                     .service(admin::recent_matches)
                     .service(admin::bind_device)
                     .service(admin::reassign_device)

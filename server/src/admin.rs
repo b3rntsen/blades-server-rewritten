@@ -37,6 +37,7 @@ use actix_web::{
 };
 use blades_lib::{
     economy::{RewardGrant, apply_reward, grant_chest},
+    server_state::{CharacterRenameAuditEntry, ServerState},
     user_data::{
         CompleteCharacter, CompleteCharacterData, CompleteInventory, CompleteWallet,
         DungeonGeneratedData, DungeonGeneratedDataWithId, InventoryChangeTracker, QuestWithId,
@@ -48,6 +49,7 @@ use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt
 use log::warn;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
 use crate::{
@@ -1149,6 +1151,9 @@ pub struct CurrentCharacterSummary {
     name: String,
     level: u16,
     pvp_trophies: i64,
+    /// The captured character this live row was imported from (`characters.source_alt_uuid`),
+    /// so the web can keep that archived alt's name in step with a rename.
+    source_alt_uuid: Option<Uuid>,
 }
 
 #[derive(Serialize)]
@@ -1157,8 +1162,28 @@ pub struct CurrentCharacterResponse {
     character: Option<CurrentCharacterSummary>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCurrentCharacterNameRequest {
+    pub user_id: Uuid,
+    pub name: String,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCurrentCharacterNameResponse {
+    pub ok: bool,
+    pub character_id: Uuid,
+    pub name: String,
+    pub previous_name: String,
+}
+
+const CURRENT_CHARACTER_NAME_MAX_LEN: usize = 24;
+const AI_NAME_SUFFIX: &str = "(AI)";
+
 fn current_character_summary(
     row: CharacterDbEntryCharacterAlone,
+    source_alt_uuid: Option<Uuid>,
 ) -> CurrentCharacterSummary {
     CurrentCharacterSummary {
         user_id: row.user_id,
@@ -1166,6 +1191,7 @@ fn current_character_summary(
         name: row.character.0.name,
         level: row.character.0.level,
         pvp_trophies: row.character.0.pvp_trophies,
+        source_alt_uuid,
     }
 }
 
@@ -1190,9 +1216,200 @@ pub async fn get_current_character(
         .await
         .optional()?;
 
-    Ok(Json(CurrentCharacterResponse {
-        character: row.map(current_character_summary),
-    }))
+    let character = match row {
+        Some(row) => {
+            let source_alt_uuid: Option<Uuid> = characters::table
+                .filter(characters::id.eq(row.id))
+                .select(characters::source_alt_uuid)
+                .first::<Option<Uuid>>(&mut conn)
+                .await
+                .optional()?
+                .flatten();
+            Some(current_character_summary(row, source_alt_uuid))
+        }
+        None => None,
+    };
+    Ok(Json(CurrentCharacterResponse { character }))
+}
+
+/// `POST /…/api/dev/v1/characters/{character_id}/name` — rename the current live
+/// arena character for a user from the web support/account surface.
+#[post("/blades.bgs.services/api/dev/v1/characters/{character_id}/name")]
+pub async fn set_current_character_name(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<Uuid>,
+    body: web::Json<SetCurrentCharacterNameRequest>,
+) -> Result<Json<SetCurrentCharacterNameResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let character_id = path.into_inner();
+    let body = body.into_inner();
+    let name = normalise_current_character_name(&body.name)
+        .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 26))?;
+
+    let mut conn = app_state
+        .db_pool
+        .get()
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5))?;
+
+    conn.transaction(move |mut conn| {
+        async move { rename_current_character(&mut conn, character_id, body.user_id, name).await }
+            .scope_boxed()
+    })
+    .await
+    .map(Json)
+}
+
+fn normalise_current_character_name(raw: &str) -> Result<String, ()> {
+    let name = raw.nfc().collect::<String>().trim().to_string();
+    if name.is_empty()
+        || name.chars().count() > CURRENT_CHARACTER_NAME_MAX_LEN
+        || has_undisplayable_name_char(&name)
+        || is_reserved_ai_name(&name)
+    {
+        return Err(());
+    }
+    Ok(name)
+}
+
+fn has_undisplayable_name_char(name: &str) -> bool {
+    name.chars().any(|ch| {
+        let cp = ch as u32;
+        matches!(
+            cp,
+            0x00..=0x1f
+                | 0x7f..=0x9f
+                | 0x200b..=0x200f
+                | 0x2028..=0x202e
+                | 0x2060..=0x2064
+                | 0x2066..=0x206f
+        )
+    })
+}
+
+fn is_reserved_ai_name(name: &str) -> bool {
+    name.trim().ends_with(AI_NAME_SUFFIX)
+}
+
+async fn rename_current_character(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    user_id: Uuid,
+    name: String,
+) -> Result<SetCurrentCharacterNameResponse, BladeApiError> {
+    let (mut character, mut server_state): (Value, Value) = characters::table
+        .filter(characters::id.eq(character_id))
+        .filter(characters::user_id.eq(user_id))
+        .select((characters::character, characters::server_state))
+        .for_update()
+        .first(conn)
+        .await
+        .optional()
+        .map_err(|e| {
+            warn!("current-character rename: read failed for {character_id}: {e}");
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 27)
+        })?
+        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 28))?;
+
+    // NOT refused on `arena_ai_mimics`: that table also lists a player's own REAL
+    // character they opted in as an AI ("mimic as AI"), and renaming it is theirs to
+    // do. The server-made AI copies always carry the "(AI)" name, refused below.
+
+    let previous_name = character
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if is_reserved_ai_name(&previous_name) {
+        return Err(BladeApiError::new(
+            StatusCode::CONFLICT,
+            IMPORT_SERVICE_ID,
+            30,
+        ));
+    }
+
+    let Some(character_obj) = character.as_object_mut() else {
+        warn!("current-character rename: character {character_id} JSON is not an object");
+        return Err(BladeApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            IMPORT_SERVICE_ID,
+            31,
+        ));
+    };
+    character_obj.insert("name".into(), Value::String(name.clone()));
+    append_current_character_rename_audit(
+        &mut server_state,
+        CharacterRenameAuditEntry {
+            previous_name: previous_name.clone(),
+            new_name: name.clone(),
+            renamed_at_secs: arena_season::now_unix(),
+        },
+    )?;
+
+    diesel::update(
+        characters::table
+            .filter(characters::id.eq(character_id))
+            .filter(characters::user_id.eq(user_id)),
+    )
+        .set((
+            characters::character.eq(character),
+            characters::server_state.eq(server_state),
+        ))
+        .execute(conn)
+        .await
+        .map_err(|e| {
+            warn!("current-character rename: write failed for {character_id}: {e}");
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 32)
+        })?;
+
+    log::info!("current-character rename: {character_id} {:?} -> {:?}", previous_name, name);
+    Ok(SetCurrentCharacterNameResponse {
+        ok: true,
+        character_id,
+        name,
+        previous_name,
+    })
+}
+
+fn append_current_character_rename_audit(
+    server_state: &mut Value,
+    entry: CharacterRenameAuditEntry,
+) -> Result<(), BladeApiError> {
+    let Some(obj) = server_state.as_object_mut() else {
+        warn!("current-character rename: server_state JSON is not an object");
+        return Err(BladeApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            IMPORT_SERVICE_ID,
+            31,
+        ));
+    };
+    let entry = serde_json::to_value(entry)
+        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 31))?;
+    match obj.get_mut("currentCharacterRenames") {
+        Some(Value::Array(entries)) => entries.push(entry),
+        Some(_) => {
+            warn!("current-character rename: currentCharacterRenames is not an array");
+            return Err(BladeApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                IMPORT_SERVICE_ID,
+                31,
+            ));
+        }
+        None => {
+            obj.insert("currentCharacterRenames".into(), Value::Array(vec![entry]));
+        }
+    }
+
+    // Pin this key to the typed server-state model. If that model ever stops
+    // accepting the ledger, a rename should fail here rather than writing audit
+    // data a later server-state save would silently discard.
+    serde_json::from_value::<ServerState>(server_state.clone())
+        .map(|_| ())
+        .map_err(|e| {
+            warn!("current-character rename: server_state no longer accepts audit: {e}");
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 31)
+        })
 }
 
 #[derive(Deserialize)]
@@ -3090,7 +3307,7 @@ mod tests {
                     global_shop_offers: serde_json::json!([{"private": "not projected"}]),
                     ..CompleteCharacter::default()
                 }),
-            });
+            }, Some(Uuid::from_u128(3)));
             let value = serde_json::to_value(summary).unwrap();
             let mut keys: Vec<&str> = value
                 .as_object()
@@ -3101,11 +3318,210 @@ mod tests {
             keys.sort_unstable();
             assert_eq!(
                 keys,
-                ["characterId", "level", "name", "pvpTrophies", "userId"]
+                ["characterId", "level", "name", "pvpTrophies", "sourceAltUuid", "userId"]
             );
+            assert_eq!(value["sourceAltUuid"], Uuid::from_u128(3).to_string());
             assert_eq!(value["name"], "Current Hero");
             assert_eq!(value["level"], 42);
             assert_eq!(value["pvpTrophies"], 733);
+        }
+    }
+
+    mod current_character_rename {
+        use super::super::*;
+        use actix_web::ResponseError;
+        use diesel::sql_types::{Jsonb, Uuid as SqlUuid};
+        use diesel::{QueryableByName, sql_query};
+        use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+
+        #[derive(QueryableByName)]
+        struct StoredCharacter {
+            #[diesel(sql_type = Jsonb)]
+            character: Value,
+            #[diesel(sql_type = Jsonb)]
+            server_state: Value,
+        }
+
+        const SCHEMA: [&str; 2] = [
+            "CREATE TABLE characters ( \
+                 id UUID PRIMARY KEY, \
+                 user_id UUID NOT NULL, \
+                 character JSONB NOT NULL, \
+                 server_state JSONB NOT NULL)",
+            "CREATE TABLE arena_ai_mimics ( \
+                 character_id UUID PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE)",
+        ];
+
+        async fn fixture() -> Option<AsyncPgConnection> {
+            let url = std::env::var("TEST_DATABASE_URL").ok()?;
+            let mut conn = AsyncPgConnection::establish(&url)
+                .await
+                .expect("TEST_DATABASE_URL is set but unreachable");
+            conn.begin_test_transaction()
+                .await
+                .expect("could not open a test transaction");
+            let schema = format!("t{}", Uuid::new_v4().simple());
+            sql_query(format!("CREATE SCHEMA {schema}"))
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            sql_query(format!("SET LOCAL search_path TO {schema}"))
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            for stmt in SCHEMA {
+                sql_query(stmt).execute(&mut conn).await.unwrap();
+            }
+            Some(conn)
+        }
+
+        macro_rules! db {
+            () => {
+                match fixture().await {
+                    Some(c) => c,
+                    None => {
+                        eprintln!(
+                            "SKIP: TEST_DATABASE_URL unset — current-character rename DB tests NOT verified"
+                        );
+                        return;
+                    }
+                }
+            };
+        }
+
+        async fn seed_character(
+            conn: &mut AsyncPgConnection,
+            character: Value,
+        ) -> (Uuid, Uuid) {
+            let id = Uuid::new_v4();
+            let user_id = Uuid::new_v4();
+            sql_query(
+                "INSERT INTO characters (id, user_id, character, server_state) \
+                 VALUES ($1, $2, $3, '{}'::jsonb)",
+            )
+            .bind::<SqlUuid, _>(id)
+            .bind::<SqlUuid, _>(user_id)
+            .bind::<Jsonb, _>(character)
+            .execute(conn)
+            .await
+            .unwrap();
+            (id, user_id)
+        }
+
+        async fn stored(conn: &mut AsyncPgConnection, id: Uuid) -> StoredCharacter {
+            sql_query("SELECT character, server_state FROM characters WHERE id = $1")
+                .bind::<SqlUuid, _>(id)
+                .get_result(conn)
+                .await
+                .unwrap()
+        }
+
+        #[test]
+        fn validation_matches_the_web_alt_name_limits_plus_ai_reservation() {
+            assert_eq!(
+                normalise_current_character_name("  So\u{308}vnga\u{30a}rd  ").unwrap(),
+                "Sövngård"
+            );
+            assert!(normalise_current_character_name("   ").is_err());
+            assert!(normalise_current_character_name(&"a".repeat(25)).is_err());
+            assert!(normalise_current_character_name("Hero\nName").is_err());
+            assert!(normalise_current_character_name("Hero\u{200b}Name").is_err());
+            assert!(normalise_current_character_name("Fighter (AI)").is_err());
+            assert!(normalise_current_character_name("(AI)").is_err());
+        }
+
+        #[actix_web::test]
+        async fn a_character_owned_by_someone_else_is_404() {
+            let mut conn = db!();
+            let (character_id, _owner) =
+                seed_character(&mut conn, serde_json::json!({"name":"Hidden"})).await;
+            let err = rename_current_character(
+                &mut conn,
+                character_id,
+                Uuid::new_v4(),
+                "Visible".into(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.status_code(), StatusCode::NOT_FOUND);
+        }
+
+        #[actix_web::test]
+        async fn a_real_character_opted_in_as_ai_can_still_be_renamed() {
+            // arena_ai_mimics also lists a player's OWN character they ticked
+            // "mimic as AI" for; the rename is theirs. Only "(AI)" copies are refused.
+            let mut conn = db!();
+            let (character_id, user_id) =
+                seed_character(&mut conn, serde_json::json!({"name":"Borrowed"})).await;
+            sql_query("INSERT INTO arena_ai_mimics (character_id) VALUES ($1)")
+                .bind::<SqlUuid, _>(character_id)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+
+            rename_current_character(&mut conn, character_id, user_id, "Mine".into())
+                .await
+                .expect("an opted-in real character renames");
+        }
+
+        #[actix_web::test]
+        async fn an_existing_ai_suffixed_name_is_refused() {
+            let mut conn = db!();
+            let (character_id, user_id) =
+                seed_character(&mut conn, serde_json::json!({"name":"Borrowed (AI)"})).await;
+            let err = rename_current_character(&mut conn, character_id, user_id, "Mine".into())
+                .await
+                .unwrap_err();
+            assert_eq!(err.status_code(), StatusCode::CONFLICT);
+        }
+
+        #[actix_web::test]
+        async fn success_updates_only_name_and_appends_reversible_audit() {
+            let mut conn = db!();
+            let (character_id, user_id) = seed_character(
+                &mut conn,
+                serde_json::json!({
+                    "name": "Old Hero",
+                    "level": 42,
+                    "pvpTrophies": 700,
+                    "futureField": {"kept": true}
+                }),
+            )
+            .await;
+
+            let response =
+                rename_current_character(&mut conn, character_id, user_id, "New Hero".into())
+                    .await
+                    .unwrap();
+            assert_eq!(
+                response,
+                SetCurrentCharacterNameResponse {
+                    ok: true,
+                    character_id,
+                    name: "New Hero".into(),
+                    previous_name: "Old Hero".into(),
+                }
+            );
+
+            let row = stored(&mut conn, character_id).await;
+            assert_eq!(row.character["name"], "New Hero");
+            assert_eq!(row.character["level"], 42);
+            assert_eq!(row.character["pvpTrophies"], 700);
+            assert_eq!(row.character["futureField"], serde_json::json!({"kept": true}));
+            assert_eq!(
+                row.server_state["currentCharacterRenames"][0]["previousName"],
+                "Old Hero"
+            );
+            assert_eq!(
+                row.server_state["currentCharacterRenames"][0]["newName"],
+                "New Hero"
+            );
+            assert!(
+                row.server_state["currentCharacterRenames"][0]["renamedAtSecs"]
+                    .as_i64()
+                    .unwrap()
+                    > 0
+            );
         }
     }
 
