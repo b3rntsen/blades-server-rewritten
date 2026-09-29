@@ -103,7 +103,7 @@ impl Price {
 /// A chest included directly in a reward (tier + level; the server assigns a new id
 /// when granting it into the treasury). Matches the `"chests":[{id,tier,level}]`
 /// captured inside quest/dungeon completion rewards.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RewardChest {
     /// The chest id stored in the capture (ignored when granting — the treasury
@@ -175,7 +175,7 @@ fn is_zero(v: &u64) -> bool {
 /// An instanced (non-stackable) item granted by a reward — `{id, itemTemplateId,
 /// temperingLevel, durability, properties}`. The `id` is the new item instance id;
 /// the rest flattens [`Item`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RewardItem {
     pub id: Uuid,
@@ -255,7 +255,7 @@ pub fn template_skips_durability(
 /// The uniform `reward` block returned by quest/event/challenge completion, chest
 /// collection, shop/global-shop purchase, gift claim, salvage, etc. Empty
 /// collections and zero XP are omitted so each endpoint's wire matches its captures.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RewardGrant {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

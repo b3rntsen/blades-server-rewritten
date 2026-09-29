@@ -27,7 +27,9 @@ use std::{
 };
 
 use actix_web::{
-    get, http::StatusCode, post,
+    get,
+    http::StatusCode,
+    post,
     web::{self, Json},
 };
 use blades_lib::economy::{RewardGrant, RewardItem, apply_reward, remove_backpack_item};
@@ -40,16 +42,16 @@ use blades_lib::user_data::{
     CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
     InventoryChangeTracker, Item, ItemPropertiesAll, ItemSingleProperty,
 };
-use rand::{Rng, RngExt};
 use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
+use rand::{Rng, RngExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    BladeApiError, ServerGlobal, json_db::JsonDbWrapper,
-    models::CharacterDbEntryEconomy, session::SessionLookedUpMaybe,
+    BladeApiError, ServerGlobal, json_db::JsonDbWrapper, models::CharacterDbEntryEconomy,
+    session::SessionLookedUpMaybe,
 };
 use blades_lib::game_data::GameDataItem;
 
@@ -178,7 +180,10 @@ fn craft_wires<'a>(
         // (buildingId, emitted craftingTypeId) -> indices, in a stable order.
         let mut groups: std::collections::BTreeMap<(Uuid, Uuid), Vec<usize>> = Default::default();
         for (i, w) in wires.iter().enumerate() {
-            groups.entry((w.building_id, w.crafting_type_id)).or_default().push(i);
+            groups
+                .entry((w.building_id, w.crafting_type_id))
+                .or_default()
+                .push(i);
         }
 
         let mut demote: Vec<usize> = Vec::new();
@@ -279,7 +284,9 @@ fn is_stuck_finished(
     owned_buildings: &std::collections::HashSet<Uuid>,
     now_ms: i64,
 ) -> bool {
-    !is_enchant_job(job) && owned_buildings.contains(&job.building_id) && job.completed_at_ms <= now_ms
+    !is_enchant_job(job)
+        && owned_buildings.contains(&job.building_id)
+        && job.completed_at_ms <= now_ms
 }
 
 fn is_enchant_job(job: &CraftJob) -> bool {
@@ -582,9 +589,8 @@ async fn start_craft(
 
     let (results, crafting_type_id, duration_ms) = if let Some(item_id) = item_id {
         // ── temper / enchant: modify an existing backpack item ──
-        let existing =
-            remove_backpack_item(&mut entry.inventory.0, item_id, &mut tracker)
-                .map_err(BladeApiError::from_economy)?;
+        let existing = remove_backpack_item(&mut entry.inventory.0, item_id, &mut tracker)
+            .map_err(BladeApiError::from_economy)?;
         // An enchant is PAID here, before the roll: an unaffordable one is refused
         // with nothing rolled, stored or debited. A temper charges nothing (as before).
         charge_enchant_inputs(
@@ -609,7 +615,10 @@ async fn start_craft(
             &mut rand::rng(),
         );
         entry.inventory.0.backpack_version += 1;
-        let reward_item = RewardItem { id: item_id, item: mutated };
+        let reward_item = RewardItem {
+            id: item_id,
+            item: mutated,
+        };
         let results = serde_json::json!({ "items": [reward_item] });
         // crafting_type_id MUST be the universal temper/enchant CraftingType, never the
         // recipe id. item_mod_recipes.json is a tiny subset of the real recipes
@@ -651,8 +660,7 @@ async fn start_craft(
                     )),
                     batch_size,
                 );
-                let results =
-                    grade_bare_jewelry_results(results, game_items, &mut rand::rng());
+                let results = grade_bare_jewelry_results(results, game_items, &mut rand::rng());
                 (results, recipe.crafting_type_id, recipe.duration_ms)
             }
             None => {
@@ -663,21 +671,17 @@ async fn start_craft(
                 // proper instanced backpack item, like a known recipe) and ALWAYS
                 // report the Smithing craftingTypeId — never the recipe id (echoing
                 // recipe_id hangs the client, fix e5659c9).
-                if let Some(craftable) =
-                    static_data.smith_craftables.resolve(&recipe_id)
-                {
+                if let Some(craftable) = static_data.smith_craftables.resolve(&recipe_id) {
                     // Prefer the APK's per-recipe answer; the Smithing constant
                     // stays as the fallback for a craftable resolved by template
                     // id (which is not a recipe id and so is not in the table).
-                    let crafting_type_id =
-                        apk_crafting_type(&recipe_id, static_data)
-                            .unwrap_or_else(|| smithing_crafting_type(static_data));
+                    let crafting_type_id = apk_crafting_type(&recipe_id, static_data)
+                        .unwrap_or_else(|| smithing_crafting_type(static_data));
                     let results = apply_batch_size_to_results(
                         mint_smith_craftable(craftable, tempering_level),
                         batch_size,
                     );
-                    let results =
-                        grade_bare_jewelry_results(results, game_items, &mut rand::rng());
+                    let results = grade_bare_jewelry_results(results, game_items, &mut rand::rng());
                     (results, crafting_type_id, craftable.duration_ms)
                 } else {
                     // The APK says what this recipe makes. 898 recipes
@@ -687,15 +691,12 @@ async fn start_craft(
                     // crafts that were falling through to the refusal
                     // below, including the Steel Longsword and the
                     // decoration that broke two players' saves.
-                    if let Some(out) =
-                        blades_lib::features::recipe_outputs::output_for(&recipe_id)
+                    if let Some(out) = blades_lib::features::recipe_outputs::output_for(&recipe_id)
                     {
                         let crafting_type_id = out
                             .crafting_type_id
                             .or_else(|| apk_crafting_type(&recipe_id, static_data))
-                            .unwrap_or_else(|| {
-                                derive_plain_craft_type(building_id, static_data)
-                            });
+                            .unwrap_or_else(|| derive_plain_craft_type(building_id, static_data));
                         let results = apply_batch_size_to_results(
                             mint_recipe_output(
                                 &CraftJob {
@@ -718,42 +719,38 @@ async fn start_craft(
                         let duration_ms = recipe_output_duration_ms(out, static_data);
                         (results, crafting_type_id, duration_ms)
                     } else {
-                    // Not a smith craftable, and not in the APK recipe table.
-                    // REFUSE. There is no honest output for a recipe we never
-                    // captured, and every alternative has now been tried:
-                    //
-                    //   * the recipe id as a stackable -- what this used to do.
-                    //     A recipe id is not an item template; five characters
-                    //     on production were carrying one and two could not
-                    //     load the game at all (#176, #179, #180).
-                    //   * nothing (`{}`) -- breaks the codebase's own invariant
-                    //     that a completed craft yields a real grant, asserted
-                    //     by three separate tests, and `{}` is exactly the shape
-                    //     the repair path treats as broken.
-                    //   * the name-seed mapped to a real template -- only 239 of
-                    //     2,590 `Items.Name.*` seeds resolve to exactly one item,
-                    //     and three of the four ids seen on production resolve to
-                    //     none. It would guess wrong more often than right.
-                    //
-                    // So the craft does not start. 400 with the price-mismatch
-                    // shape is a path the client is known to handle -- it is what
-                    // an undeliverable shop product returns, shipped for #170 and
-                    // live since, replacing a 404 that bricked the client.
-                    //
-                    // The player loses nothing: materials are not charged here
-                    // (see the TODO at the top of this module), and a craft that
-                    // never starts is recoverable in a way an unloadable save is
-                    // not.
-                    log::warn!(
-                        "[craft] refusing recipe {recipe_id}: not in recipes.json, \
+                        // Not a smith craftable, and not in the APK recipe table.
+                        // REFUSE. There is no honest output for a recipe we never
+                        // captured, and every alternative has now been tried:
+                        //
+                        //   * the recipe id as a stackable -- what this used to do.
+                        //     A recipe id is not an item template; five characters
+                        //     on production were carrying one and two could not
+                        //     load the game at all (#176, #179, #180).
+                        //   * nothing (`{}`) -- breaks the codebase's own invariant
+                        //     that a completed craft yields a real grant, asserted
+                        //     by three separate tests, and `{}` is exactly the shape
+                        //     the repair path treats as broken.
+                        //   * the name-seed mapped to a real template -- only 239 of
+                        //     2,590 `Items.Name.*` seeds resolve to exactly one item,
+                        //     and three of the four ids seen on production resolve to
+                        //     none. It would guess wrong more often than right.
+                        //
+                        // So the craft does not start. 400 with the price-mismatch
+                        // shape is a path the client is known to handle -- it is what
+                        // an undeliverable shop product returns, shipped for #170 and
+                        // live since, replacing a 404 that bricked the client.
+                        //
+                        // The player loses nothing: materials are not charged here
+                        // (see the TODO at the top of this module), and a craft that
+                        // never starts is recoverable in a way an unloadable save is
+                        // not.
+                        log::warn!(
+                            "[craft] refusing recipe {recipe_id}: not in recipes.json, \
                          smith_craftables or the APK table, and there is no honest \
                          output for it. Capture the recipe to enable it."
-                    );
-                    return Err(BladeApiError::new(
-                        StatusCode::BAD_REQUEST,
-                        20001,
-                        3,
-                    ));
+                        );
+                        return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 3));
                     }
                 }
             }
@@ -822,7 +819,9 @@ struct FinishCraftResponse {
 /// [`blades_lib::economy::skip_time`] curve town construction uses. A player who
 /// cannot afford it gets an error and keeps the job; the alternative (collect early
 /// for free) is what this endpoint used to do.
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/crafts/{craft_id}/finish")]
+#[post(
+    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/crafts/{craft_id}/finish"
+)]
 pub async fn finish_craft(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -912,7 +911,10 @@ async fn collect_craft(
     write_back(conn, entry).await?;
 
     Ok(FinishCraftResponse {
-        character: CompleteCharacterWithIdWithoutData { id: character_id, character },
+        character: CompleteCharacterWithIdWithoutData {
+            id: character_id,
+            character,
+        },
         reward,
         wallet,
         inventory,
@@ -939,7 +941,12 @@ fn remint_colliding_reward_ids(
 ) {
     for ri in &mut reward.items {
         let held = inventory.backpack.items.0.contains_key(&ri.id)
-            || inventory.loadout.equipped_items.0.values().any(|e| e.id == ri.id);
+            || inventory
+                .loadout
+                .equipped_items
+                .0
+                .values()
+                .any(|e| e.id == ri.id);
         if held {
             let fresh = Uuid::new_v4();
             log::warn!(
@@ -1034,11 +1041,16 @@ fn charge_enchant_inputs(
              starting it WITHOUT charging (re-run script/extract_enchanting_data.py)"
         );
     }
-    let inputs: Vec<(Uuid, u64)> =
-        recipe.inputs.iter().map(|i| (i.template_id, i.quantity)).collect();
+    let inputs: Vec<(Uuid, u64)> = recipe
+        .inputs
+        .iter()
+        .map(|i| (i.template_id, i.quantity))
+        .collect();
     if gems_payment {
-        blades_lib::economy::missing_resources::pay_inputs_with_gems(&inputs, wallet, inventory, tracker)
-            .map_err(BladeApiError::from_economy)?;
+        blades_lib::economy::missing_resources::pay_inputs_with_gems(
+            &inputs, wallet, inventory, tracker,
+        )
+        .map_err(BladeApiError::from_economy)?;
     } else {
         blades_lib::economy::pay_inputs(&inputs, wallet, inventory, tracker)
             .map_err(BladeApiError::from_economy)?;
@@ -1213,9 +1225,7 @@ fn results_are_our_own_approximation(job: &CraftJob) -> bool {
     job.results
         .get("stackableItems")
         .and_then(Value::as_object)
-        .is_some_and(|m| {
-            m.len() == 1 && m.contains_key(&job.recipe_id.to_string())
-        })
+        .is_some_and(|m| m.len() == 1 && m.contains_key(&job.recipe_id.to_string()))
 }
 
 /// Mint a recipe's REAL output into the `results` shape its bench restores.
@@ -1276,7 +1286,11 @@ fn mint_recipe_output(
 /// empty / neither shape (the caller then has nothing to check against).
 fn observed_result_shape(results: &Value) -> Option<CraftResultShape> {
     let obj = results.as_object()?;
-    if obj.get("items").and_then(Value::as_array).map_or(false, |a| !a.is_empty()) {
+    if obj
+        .get("items")
+        .and_then(Value::as_array)
+        .map_or(false, |a| !a.is_empty())
+    {
         return Some(CraftResultShape::Instanced);
     }
     if obj
@@ -1340,7 +1354,9 @@ fn reconcile_type_with_results<'a>(
     stored_type_is_unmappable: bool,
 ) -> (Uuid, Cow<'a, Value>) {
     let (Some(wanted), Some(have)) = (
-        static_data.recipe_crafting_types.result_shape_of_type(&candidate),
+        static_data
+            .recipe_crafting_types
+            .result_shape_of_type(&candidate),
         observed_result_shape(&results),
     ) else {
         return (candidate, results);
@@ -1382,7 +1398,9 @@ fn apk_crafting_type(
     recipe_id: &Uuid,
     static_data: &blades_lib::static_data::StaticData,
 ) -> Option<Uuid> {
-    static_data.recipe_crafting_types.crafting_type_of(recipe_id)
+    static_data
+        .recipe_crafting_types
+        .crafting_type_of(recipe_id)
 }
 
 /// The universal ALCHEMY crafting type id (capture-confirmed: the craftingTypeId shared
@@ -1410,7 +1428,11 @@ fn derive_plain_craft_type(
     // future data set that renames it still yields a client-mappable type); else fall
     // back to ANY known recipe's craftingTypeId (still a real CraftingStation), and only
     // as a last resort the hardcoded alchemy id.
-    if static_data.recipes.values().any(|r| r.crafting_type_id == alchemy) {
+    if static_data
+        .recipes
+        .values()
+        .any(|r| r.crafting_type_id == alchemy)
+    {
         return alchemy;
     }
     static_data
@@ -1458,7 +1480,10 @@ const SMITH_MINT_DURABILITY: f64 = 150.0;
 /// scales and equating them would stamp values retail never emitted onto forge output —
 /// worse than omitting the key, which at least matches the pre-existing shape. Resolving
 /// this needs either a captured forge result carrying both, or the client's grade table.
-fn mint_smith_craftable(craftable: &blades_lib::static_data::SmithCraftable, tempering_level: u64) -> Value {
+fn mint_smith_craftable(
+    craftable: &blades_lib::static_data::SmithCraftable,
+    tempering_level: u64,
+) -> Value {
     serde_json::json!({
         "items": [{
             "id": Uuid::new_v4().to_string(),
@@ -1649,7 +1674,10 @@ fn roll_enchant<R: Rng + ?Sized>(
     arcane_tier: Option<u64>,
     enchanting: &EnchantingData,
 ) -> Vec<ItemSingleProperty> {
-    let mut out = vec![ItemSingleProperty { id: recipe.property, tier: recipe.tier }];
+    let mut out = vec![ItemSingleProperty {
+        id: recipe.property,
+        tier: recipe.tier,
+    }];
     let Some(table) = table else { return out };
     let count_odds = arcane_tier
         .and_then(|t| enchanting.arcane_tier_count_odds.get(&t))
@@ -1663,9 +1691,14 @@ fn roll_enchant<R: Rng + ?Sized>(
         .collect();
     for _ in 0..count {
         let weights: Vec<f64> = pool.iter().map(|p| p.1).collect();
-        let Some(i) = weighted_index(rng, &weights) else { break };
+        let Some(i) = weighted_index(rng, &weights) else {
+            break;
+        };
         let (id, _) = pool.remove(i);
-        out.push(ItemSingleProperty { id, tier: recipe.tier });
+        out.push(ItemSingleProperty {
+            id,
+            tier: recipe.tier,
+        });
     }
     out
 }
@@ -1802,7 +1835,10 @@ mod tests {
     use blades_lib::user_data::{ItemPropertiesAll, ItemSingleProperty};
 
     fn prop(n: u128) -> ItemSingleProperty {
-        ItemSingleProperty { id: Uuid::from_u128(n), tier: 10 }
+        ItemSingleProperty {
+            id: Uuid::from_u128(n),
+            tier: 10,
+        }
     }
 
     fn item_with(tempering: u64, enchants: Vec<ItemSingleProperty>) -> Item {
@@ -1812,7 +1848,10 @@ mod tests {
             durability: 300.0,
             grade: None,
             arcane_tier: None,
-            properties: ItemPropertiesAll { enchanting: enchants, grading: vec![] },
+            properties: ItemPropertiesAll {
+                enchanting: enchants,
+                grading: vec![],
+            },
         }
     }
 
@@ -1888,9 +1927,21 @@ mod tests {
     #[test]
     fn temper_sets_level_and_keeps_enchants() {
         let existing = item_with(0, vec![prop(1), prop(2)]);
-        let out = apply_item_mod(&existing, 10, ANY_RECIPE, None, deploy_enchanting(), no_game_items(), &mut seeded(1));
+        let out = apply_item_mod(
+            &existing,
+            10,
+            ANY_RECIPE,
+            None,
+            deploy_enchanting(),
+            no_game_items(),
+            &mut seeded(1),
+        );
         assert_eq!(out.tempering_level, 10);
-        assert_eq!(out.properties.enchanting.len(), 2, "existing enchants preserved");
+        assert_eq!(
+            out.properties.enchanting.len(),
+            2,
+            "existing enchants preserved"
+        );
         assert_eq!(out.durability, 300.0);
         assert_eq!(out.item_template_id, existing.item_template_id);
     }
@@ -1906,15 +1957,41 @@ mod tests {
         }]);
         let none = EnchantingData::default();
         let plain = item_with(5, vec![]);
-        let out = apply_item_mod(&plain, 0, ANY_RECIPE, Some(&recipe), &none, no_game_items(), &mut seeded(1));
-        assert_eq!(out.properties.enchanting.len(), 3, "enchants applied from outcome");
+        let out = apply_item_mod(
+            &plain,
+            0,
+            ANY_RECIPE,
+            Some(&recipe),
+            &none,
+            no_game_items(),
+            &mut seeded(1),
+        );
+        assert_eq!(
+            out.properties.enchanting.len(),
+            3,
+            "enchants applied from outcome"
+        );
         assert_eq!(out.tempering_level, 5, "tempering preserved on enchant");
         assert_eq!(out.arcane_tier, None, "a plain item must not turn arcane");
         let j = serde_json::to_string(&out).unwrap();
-        assert!(!j.contains("arcaneTier"), "absent arcane tier must be omitted: {j}");
+        assert!(
+            !j.contains("arcaneTier"),
+            "absent arcane tier must be omitted: {j}"
+        );
 
-        let arcane = Item { arcane_tier: Some(1), ..item_with(5, vec![]) };
-        let out = apply_item_mod(&arcane, 0, ANY_RECIPE, Some(&recipe), &none, no_game_items(), &mut seeded(1));
+        let arcane = Item {
+            arcane_tier: Some(1),
+            ..item_with(5, vec![])
+        };
+        let out = apply_item_mod(
+            &arcane,
+            0,
+            ANY_RECIPE,
+            Some(&recipe),
+            &none,
+            no_game_items(),
+            &mut seeded(1),
+        );
         assert_eq!(out.arcane_tier, Some(1), "the item's own tier survives");
     }
 
@@ -1937,11 +2014,23 @@ mod tests {
             &mut seeded(264),
         );
 
-        assert!(!out.properties.enchanting.is_empty(), "the enchant itself is present");
+        assert!(
+            !out.properties.enchanting.is_empty(),
+            "the enchant itself is present"
+        );
         let grade = out.grade.expect("enchanted ring must carry a grade");
-        assert!(!out.properties.grading.is_empty(), "enchanted ring must carry ability GRADING");
-        assert_eq!(grade, out.properties.grading.iter().map(|p| p.tier).sum::<u64>());
-        assert_eq!(out.tempering_level, 0, "graded jewelry has no wear fields on the wire");
+        assert!(
+            !out.properties.grading.is_empty(),
+            "enchanted ring must carry ability GRADING"
+        );
+        assert_eq!(
+            grade,
+            out.properties.grading.iter().map(|p| p.tier).sum::<u64>()
+        );
+        assert_eq!(
+            out.tempering_level, 0,
+            "graded jewelry has no wear fields on the wire"
+        );
         assert_eq!(out.durability, 0.0, "graded jewelry has no durability");
     }
 
@@ -1958,7 +2047,10 @@ mod tests {
             deploy_items(),
             &mut seeded(264),
         );
-        assert!(!out.properties.enchanting.is_empty(), "control enchant should still apply");
+        assert!(
+            !out.properties.enchanting.is_empty(),
+            "control enchant should still apply"
+        );
         assert_eq!(out.grade, None);
         assert!(out.properties.grading.is_empty());
         assert!(out.durability > 0.0, "gear keeps durability");
@@ -1980,8 +2072,16 @@ mod tests {
         });
         let reward = reward_from_results(&results);
         assert_eq!(reward.items.len(), 1);
-        assert_eq!(reward.items[0].item.grade, Some(4), "grade lost in reward_from_results");
-        assert_eq!(reward.items[0].item.arcane_tier, Some(2), "arcaneTier lost in reward_from_results");
+        assert_eq!(
+            reward.items[0].item.grade,
+            Some(4),
+            "grade lost in reward_from_results"
+        );
+        assert_eq!(
+            reward.items[0].item.arcane_tier,
+            Some(2),
+            "arcaneTier lost in reward_from_results"
+        );
 
         // A gear result with neither key stays bare (no invented zeros).
         let plain = serde_json::json!({
@@ -2002,45 +2102,99 @@ mod tests {
     #[test]
     fn enchant_fallback_pick_is_random_not_a_function_of_the_item() {
         let recipe = enchant_recipe(vec![
-            EnchantOutcome { enchanting: vec![prop(1)], arcane_tier: None },
-            EnchantOutcome { enchanting: vec![prop(2), prop(3)], arcane_tier: None },
+            EnchantOutcome {
+                enchanting: vec![prop(1)],
+                arcane_tier: None,
+            },
+            EnchantOutcome {
+                enchanting: vec![prop(2), prop(3)],
+                arcane_tier: None,
+            },
         ]);
         let none = EnchantingData::default();
         let existing = item_with(0, vec![]);
         let mut rng = seeded(7);
         let lens: std::collections::HashSet<usize> = (0..64)
             .map(|_| {
-                apply_item_mod(&existing, 0, ANY_RECIPE, Some(&recipe), &none, no_game_items(), &mut rng)
-                    .properties
-                    .enchanting
-                    .len()
+                apply_item_mod(
+                    &existing,
+                    0,
+                    ANY_RECIPE,
+                    Some(&recipe),
+                    &none,
+                    no_game_items(),
+                    &mut rng,
+                )
+                .properties
+                .enchanting
+                .len()
             })
             .collect();
         assert_eq!(lens.len(), 2, "one item must reach both outcomes: {lens:?}");
         // Control: the same seed reproduces the same roll.
-        let a = apply_item_mod(&existing, 0, ANY_RECIPE, Some(&recipe), &none, no_game_items(), &mut seeded(3));
-        let b = apply_item_mod(&existing, 0, ANY_RECIPE, Some(&recipe), &none, no_game_items(), &mut seeded(3));
+        let a = apply_item_mod(
+            &existing,
+            0,
+            ANY_RECIPE,
+            Some(&recipe),
+            &none,
+            no_game_items(),
+            &mut seeded(3),
+        );
+        let b = apply_item_mod(
+            &existing,
+            0,
+            ANY_RECIPE,
+            Some(&recipe),
+            &none,
+            no_game_items(),
+            &mut seeded(3),
+        );
         assert_eq!(a.properties.enchanting, b.properties.enchanting);
     }
 
     #[test]
     fn enchant_without_recipe_is_lenient_noop() {
         let existing = item_with(3, vec![prop(1)]);
-        let out = apply_item_mod(&existing, 0, ANY_RECIPE, None, deploy_enchanting(), no_game_items(), &mut seeded(1));
+        let out = apply_item_mod(
+            &existing,
+            0,
+            ANY_RECIPE,
+            None,
+            deploy_enchanting(),
+            no_game_items(),
+            &mut seeded(1),
+        );
         assert_eq!(out.tempering_level, 3);
-        assert_eq!(out.properties.enchanting.len(), 1, "unchanged when no recipe");
+        assert_eq!(
+            out.properties.enchanting.len(),
+            1,
+            "unchanged when no recipe"
+        );
     }
 
     /// Roll `n` enchants of a Madness Battleaxe with the Magicka Damage T10 recipe.
-    fn roll_battleaxe(n: usize, arcane_tier: Option<u64>, seed: u64) -> Vec<Vec<ItemSingleProperty>> {
+    fn roll_battleaxe(
+        n: usize,
+        arcane_tier: Option<u64>,
+        seed: u64,
+    ) -> Vec<Vec<ItemSingleProperty>> {
         let e = deploy_enchanting();
         let item = madness_battleaxe(arcane_tier);
         let mut rng = seeded(seed);
         (0..n)
             .map(|_| {
-                apply_item_mod(&item, 0, uuid(MAGICKA_DAMAGE_T10), None, e, no_game_items(), &mut rng)
-                    .properties
-                    .enchanting
+                apply_item_mod(
+                    &item,
+                    0,
+                    uuid(MAGICKA_DAMAGE_T10),
+                    None,
+                    e,
+                    no_game_items(),
+                    &mut rng,
+                )
+                .properties
+                .enchanting
             })
             .collect()
     }
@@ -2077,18 +2231,34 @@ mod tests {
     fn madness_battleaxe_secondaries_are_weighted_distinct_and_at_the_primary_tier() {
         let e = deploy_enchanting();
         let recipe = &e.recipes[&uuid(MAGICKA_DAMAGE_T10)];
-        let table = e.table_for(&uuid(MADNESS_BATTLEAXE)).expect("battleaxe table");
-        let weight: HashMap<Uuid, f64> =
-            table.properties.iter().filter(|p| p.weight > 0.0).map(|p| (p.id, p.weight)).collect();
+        let table = e
+            .table_for(&uuid(MADNESS_BATTLEAXE))
+            .expect("battleaxe table");
+        let weight: HashMap<Uuid, f64> = table
+            .properties
+            .iter()
+            .filter(|p| p.weight > 0.0)
+            .map(|p| (p.id, p.weight))
+            .collect();
         let rolls = roll_battleaxe(20_000, Some(2), 9);
         let mut hits: HashMap<Uuid, usize> = HashMap::new();
         for r in &rolls {
-            assert_eq!(r[0], ItemSingleProperty { id: recipe.property, tier: 10 });
+            assert_eq!(
+                r[0],
+                ItemSingleProperty {
+                    id: recipe.property,
+                    tier: 10
+                }
+            );
             assert_eq!(r.len(), 3, "arcane tier 2 guarantees two secondaries");
             let secs: std::collections::HashSet<Uuid> = r[1..].iter().map(|p| p.id).collect();
             assert_eq!(secs.len(), 2, "secondaries never repeat: {r:?}");
             for p in &r[1..] {
-                assert!(weight.contains_key(&p.id), "{} is not in the battleaxe pool", p.id);
+                assert!(
+                    weight.contains_key(&p.id),
+                    "{} is not in the battleaxe pool",
+                    p.id
+                );
                 assert_eq!(p.tier, recipe.tier, "a secondary takes the primary's tier");
                 *hits.entry(p.id).or_default() += 1;
             }
@@ -2096,7 +2266,10 @@ mod tests {
         for (id, w) in &weight {
             let want = if *w > 0.1 { 0.353 } else { 0.147 };
             let got = hits.get(id).copied().unwrap_or(0) as f64 / rolls.len() as f64;
-            assert!((got - want).abs() < 0.02, "{id}: in {got:.3} of 2-draws, want {want}");
+            assert!(
+                (got - want).abs() < 0.02,
+                "{id}: in {got:.3} of 2-draws, want {want}"
+            );
         }
     }
 
@@ -2108,9 +2281,15 @@ mod tests {
             }
         }
         // An arcane tier the catalog does not know falls back to the item's table.
-        let lens: std::collections::HashSet<usize> =
-            roll_battleaxe(500, Some(7), 5).iter().map(|r| r.len()).collect();
-        assert_eq!(lens.len(), 3, "unknown arcane tier uses the table odds: {lens:?}");
+        let lens: std::collections::HashSet<usize> = roll_battleaxe(500, Some(7), 5)
+            .iter()
+            .map(|r| r.len())
+            .collect();
+        assert_eq!(
+            lens.len(),
+            3,
+            "unknown arcane tier uses the table odds: {lens:?}"
+        );
     }
 
     /// Identity check against every captured retail enchant in `item_mod_recipes.json`
@@ -2120,7 +2299,8 @@ mod tests {
         let e = deploy_enchanting();
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
         let captured: HashMap<Uuid, ItemModRecipe> =
-            serde_json::from_slice(&std::fs::read(dir.join("item_mod_recipes.json")).unwrap()).unwrap();
+            serde_json::from_slice(&std::fs::read(dir.join("item_mod_recipes.json")).unwrap())
+                .unwrap();
         let any_pool: std::collections::HashSet<Uuid> = e
             .secondary_tables
             .iter()
@@ -2128,7 +2308,10 @@ mod tests {
             .collect();
         let mut checked = 0;
         for (id, rec) in captured.iter().filter(|(_, r)| r.kind == "enchant") {
-            let apk = e.recipes.get(id).unwrap_or_else(|| panic!("captured recipe {id} not in the APK"));
+            let apk = e
+                .recipes
+                .get(id)
+                .unwrap_or_else(|| panic!("captured recipe {id} not in the APK"));
             for o in &rec.outcomes {
                 let (primary, secs) = o.enchanting.split_first().expect("non-empty");
                 assert_eq!((primary.id, primary.tier), (apk.property, apk.tier), "{id}");
@@ -2136,11 +2319,18 @@ mod tests {
                 let distinct: std::collections::HashSet<Uuid> = secs.iter().map(|p| p.id).collect();
                 assert_eq!(distinct.len(), secs.len(), "{id}: repeated secondary");
                 for s in secs {
-                    assert!(any_pool.contains(&s.id), "{id}: secondary {} in no pool", s.id);
+                    assert!(
+                        any_pool.contains(&s.id),
+                        "{id}: secondary {} in no pool",
+                        s.id
+                    );
                     assert_eq!(s.tier, apk.tier, "{id}: secondary tier");
                 }
                 if let Some(t) = o.arcane_tier {
-                    assert!(e.arcane_tier_count_odds[&t][secs.len()] > 0.0, "{id}: arcane {t}");
+                    assert!(
+                        e.arcane_tier_count_odds[&t][secs.len()] > 0.0,
+                        "{id}: arcane {t}"
+                    );
                 }
                 checked += 1;
             }
@@ -2165,7 +2355,8 @@ mod tests {
             no_game_items(),
             &mut seeded(11),
         );
-        let results = serde_json::json!({ "items": [RewardItem { id: item_id, item: rolled.clone() }] });
+        let results =
+            serde_json::json!({ "items": [RewardItem { id: item_id, item: rolled.clone() }] });
         let job = CraftJob {
             id: Uuid::new_v4(),
             recipe_id: uuid(MAGICKA_DAMAGE_T10),
@@ -2176,17 +2367,29 @@ mod tests {
         };
         let sd = static_data_from_deploy();
         let (_, repaired) = repaired_craft_fields(&job, &sd, repair_data_from_deploy());
-        assert_eq!(*repaired, job.results, "GET /crafts must not touch a stored enchant");
+        assert_eq!(
+            *repaired, job.results,
+            "GET /crafts must not touch a stored enchant"
+        );
 
         let mut jobs = vec![job.clone()];
         let taken = take_craft_job(&mut jobs, job.id).expect("first finish");
         let reward = reward_from_results(&taken.results);
         assert_eq!(reward.items.len(), 1);
-        assert_eq!(reward.items[0].id, item_id, "the original item id comes back");
-        assert_eq!(reward.items[0].item.properties.enchanting, rolled.properties.enchanting);
+        assert_eq!(
+            reward.items[0].id, item_id,
+            "the original item id comes back"
+        );
+        assert_eq!(
+            reward.items[0].item.properties.enchanting,
+            rolled.properties.enchanting
+        );
         assert_eq!(reward.items[0].item.arcane_tier, Some(2));
         let again = take_craft_job(&mut jobs, job.id);
-        assert!(again.is_err(), "a second finish must 404, not re-grant or re-roll");
+        assert!(
+            again.is_err(),
+            "a second finish must 404, not re-grant or re-roll"
+        );
     }
 
     #[test]
@@ -2200,7 +2403,11 @@ mod tests {
         }]});
         let r = reward_from_results(&results);
         assert_eq!(r.items.len(), 1);
-        assert_eq!(r.items[0].id.to_string(), item_id, "finish must preserve the item id");
+        assert_eq!(
+            r.items[0].id.to_string(),
+            item_id,
+            "finish must preserve the item id"
+        );
         assert_eq!(r.items[0].item.tempering_level, 10);
     }
 
@@ -2208,7 +2415,9 @@ mod tests {
     /// player already holds used to REPLACE the held item (the backpack is keyed by id).
     #[test]
     fn a_collected_item_never_takes_an_id_that_is_already_held() {
-        use blades_lib::user_data::{Backpack, CompleteInventory, Loadout, SingleEquippedItem, Treasury};
+        use blades_lib::user_data::{
+            Backpack, CompleteInventory, Loadout, SingleEquippedItem, Treasury,
+        };
         let held_in_backpack = Uuid::new_v4();
         let held_equipped = Uuid::new_v4();
         let free = Uuid::new_v4();
@@ -2220,15 +2429,25 @@ mod tests {
             backpack_version: 1,
             treasury_version: 0,
         };
-        inv.backpack.items.0.insert(held_in_backpack, item_with(0, vec![]));
+        inv.backpack
+            .items
+            .0
+            .insert(held_in_backpack, item_with(0, vec![]));
         let slot = uuid("48021ab1-a1a6-487b-80a4-ca472a4d0c77");
         inv.loadout.equipped_items.0.insert(
             slot,
-            SingleEquippedItem { id: held_equipped, slot, item: item_with(0, vec![]) },
+            SingleEquippedItem {
+                id: held_equipped,
+                slot,
+                item: item_with(0, vec![]),
+            },
         );
         let mut reward = RewardGrant::default();
         for id in [held_in_backpack, held_equipped, free] {
-            reward.items.push(RewardItem { id, item: item_with(0, vec![]) });
+            reward.items.push(RewardItem {
+                id,
+                item: item_with(0, vec![]),
+            });
         }
 
         remint_colliding_reward_ids(&mut reward, &inv);
@@ -2252,7 +2471,10 @@ mod tests {
         let ida = a["items"][0]["id"].as_str().unwrap();
         let idb = b["items"][0]["id"].as_str().unwrap();
         assert_ne!(ida, idb, "each craft gets a unique id");
-        assert_ne!(ida, "00000000-0000-0000-0000-000000000001", "placeholder replaced");
+        assert_ne!(
+            ida, "00000000-0000-0000-0000-000000000001",
+            "placeholder replaced"
+        );
     }
 
     #[test]
@@ -2279,7 +2501,10 @@ mod tests {
             &blades_lib::static_data::StaticData::default(),
             repair_data_from_deploy(),
         );
-        assert_eq!(wire.batch_size, 5, "wire reflects the stored multi-craft batch");
+        assert_eq!(
+            wire.batch_size, 5,
+            "wire reflects the stored multi-craft batch"
+        );
     }
 
     #[test]
@@ -2308,8 +2533,7 @@ mod tests {
             "temperingLevel": 0,
             "durability": 150.0
         }]});
-        let graded =
-            grade_bare_jewelry_results(results, deploy_items(), &mut seeded(391));
+        let graded = grade_bare_jewelry_results(results, deploy_items(), &mut seeded(391));
         let reward: RewardItem =
             serde_json::from_value(graded["items"][0].clone()).expect("reward item");
 
@@ -2322,7 +2546,13 @@ mod tests {
         );
         assert_eq!(
             grade,
-            reward.item.properties.grading.iter().map(|p| p.tier).sum::<u64>()
+            reward
+                .item
+                .properties
+                .grading
+                .iter()
+                .map(|p| p.tier)
+                .sum::<u64>()
         );
     }
 
@@ -2334,13 +2564,15 @@ mod tests {
             "temperingLevel": 0,
             "durability": 150.0
         }]});
-        let graded =
-            grade_bare_jewelry_results(results, deploy_items(), &mut seeded(391));
+        let graded = grade_bare_jewelry_results(results, deploy_items(), &mut seeded(391));
         let reward: RewardItem =
             serde_json::from_value(graded["items"][0].clone()).expect("reward item");
 
         assert_eq!(reward.item.item_template_id, uuid(DRAGONSCALE_ARMOR));
-        assert_eq!(reward.item.grade, None, "negative control: armor is not jewelry");
+        assert_eq!(
+            reward.item.grade, None,
+            "negative control: armor is not jewelry"
+        );
         assert!(reward.item.properties.grading.is_empty());
     }
 
@@ -2348,10 +2580,9 @@ mod tests {
     fn apk_output_smith_recipe_uses_craftable_duration_when_known() {
         use blades_lib::static_data::{SmithCraftable, SmithCraftables, StaticData};
 
-        let out = blades_lib::features::recipe_outputs::output_for(
-            &uuid(DRAGONSCALE_HELMET_RECIPE),
-        )
-        .expect("APK output recipe");
+        let out =
+            blades_lib::features::recipe_outputs::output_for(&uuid(DRAGONSCALE_HELMET_RECIPE))
+                .expect("APK output recipe");
         let duration_ms = 17_999_872;
         let mut sd = StaticData::default();
         sd.smith_craftables = SmithCraftables {
@@ -2380,10 +2611,8 @@ mod tests {
 
     #[test]
     fn apk_output_without_craftable_duration_stays_instant() {
-        let out = blades_lib::features::recipe_outputs::output_for(
-            &uuid(DRAGONSCALE_ARMOR_RECIPE),
-        )
-        .expect("APK output recipe");
+        let out = blades_lib::features::recipe_outputs::output_for(&uuid(DRAGONSCALE_ARMOR_RECIPE))
+            .expect("APK output recipe");
         assert_eq!(
             recipe_output_duration_ms(out, &blades_lib::static_data::StaticData::default()),
             0,
@@ -2437,12 +2666,20 @@ mod tests {
         let mut sd = StaticData::default();
         sd.recipes.insert(
             Uuid::from_u128(1),
-            Recipe { crafting_type_id: alchemy, results: serde_json::json!({}), duration_ms: 0 },
+            Recipe {
+                crafting_type_id: alchemy,
+                results: serde_json::json!({}),
+                duration_ms: 0,
+            },
         );
         // A different (forge) recipe also present — alchemy must still win.
         sd.recipes.insert(
             Uuid::from_u128(2),
-            Recipe { crafting_type_id: Uuid::from_u128(0xF0), results: serde_json::json!({}), duration_ms: 0 },
+            Recipe {
+                crafting_type_id: Uuid::from_u128(0xF0),
+                results: serde_json::json!({}),
+                duration_ms: 0,
+            },
         );
         assert_eq!(derive_plain_craft_type(Uuid::from_u128(9), &sd), alchemy);
     }
@@ -2477,7 +2714,10 @@ mod tests {
         };
 
         // The unknown-recipe smith path resolves + mints.
-        let resolved = sd.smith_craftables.resolve(&request_recipe_id).expect("resolves by template");
+        let resolved = sd
+            .smith_craftables
+            .resolve(&request_recipe_id)
+            .expect("resolves by template");
         let results = mint_smith_craftable(resolved, 10);
         let ctid = smithing_crafting_type(&sd);
 
@@ -2488,9 +2728,18 @@ mod tests {
         // The minted item is the real template, is finish-able, and carries the tempering.
         let reward = reward_from_results(&results);
         assert_eq!(reward.items.len(), 1, "one instanced item minted");
-        assert_eq!(reward.items[0].item.item_template_id, template, "real itemTemplateId");
-        assert_eq!(reward.items[0].item.tempering_level, 10, "requested tempering applied");
-        assert!(reward.items[0].item.durability > 0.0, "minted with durability");
+        assert_eq!(
+            reward.items[0].item.item_template_id, template,
+            "real itemTemplateId"
+        );
+        assert_eq!(
+            reward.items[0].item.tempering_level, 10,
+            "requested tempering applied"
+        );
+        assert!(
+            reward.items[0].item.durability > 0.0,
+            "minted with durability"
+        );
     }
 
     /// Resolution prefers the captured recipe id over the template id, and the two smith
@@ -2511,12 +2760,26 @@ mod tests {
         sd.smith_craftables = SmithCraftables {
             smithing_crafting_type_id: None, // force fallback
             forge_building_type_id: None,
-            by_recipe: { let mut m = std::collections::HashMap::new(); m.insert(recipe, craftable.clone()); m },
-            by_template: { let mut m = std::collections::HashMap::new(); m.insert(template, craftable.clone()); m },
+            by_recipe: {
+                let mut m = std::collections::HashMap::new();
+                m.insert(recipe, craftable.clone());
+                m
+            },
+            by_template: {
+                let mut m = std::collections::HashMap::new();
+                m.insert(template, craftable.clone());
+                m
+            },
         };
-        assert!(sd.smith_craftables.resolve(&recipe).is_some(), "resolves by captured recipe id");
+        assert!(
+            sd.smith_craftables.resolve(&recipe).is_some(),
+            "resolves by captured recipe id"
+        );
         // No loaded type → the known Smithing station UUID fallback (a real CraftingStation).
-        assert_eq!(smithing_crafting_type(&sd).to_string(), SMITHING_CRAFTING_TYPE_ID);
+        assert_eq!(
+            smithing_crafting_type(&sd).to_string(),
+            SMITHING_CRAFTING_TYPE_ID
+        );
     }
 
     /// An unknown recipe grants NOTHING, and that is deliberate.
@@ -2693,7 +2956,10 @@ mod tests {
         ("Iron Dagger", "a57591a0-9354-411b-862a-5449dfbd335b"),
         ("Iron Greatsword", "5fe0e868-957e-47c2-a094-9c1daad097d5"),
         ("Iron Warhammer", "7ad4e3a0-49b0-4c2f-9a94-6158acbb51d9"),
-        ("Dragonbone Longsword", "668a077b-2a2e-477b-894d-cb0878fa7dd3"),
+        (
+            "Dragonbone Longsword",
+            "668a077b-2a2e-477b-894d-cb0878fa7dd3",
+        ),
     ];
 
     /// The owner's forge row, verbatim: Alchemy in the `craftingTypeId` slot, the
@@ -2786,7 +3052,9 @@ mod tests {
         let wanted = sd
             .recipe_crafting_types
             .result_shape_of_type(&ctid)
-            .unwrap_or_else(|| panic!("{label}: emitted craftingTypeId {ctid} is not a CraftingType"));
+            .unwrap_or_else(|| {
+                panic!("{label}: emitted craftingTypeId {ctid} is not a CraftingType")
+            });
         let have = observed_result_shape(&wire["results"])
             .unwrap_or_else(|| panic!("{label}: emitted results have no recognisable shape"));
         assert_eq!(
@@ -2833,7 +3101,10 @@ mod tests {
             },
         );
         let wire = wire_of(&poisoned_smith_job(), &sd);
-        assert_ne!(wire["craftingTypeId"], wire["recipeId"], "must never echo the recipe id");
+        assert_ne!(
+            wire["craftingTypeId"], wire["recipeId"],
+            "must never echo the recipe id"
+        );
         assert_eq!(
             wire["craftingTypeId"].as_str().unwrap(),
             SMITHING_CRAFTING_TYPE_ID,
@@ -2905,7 +3176,10 @@ mod tests {
                 job.crafting_type_id.to_string(),
                 "healthy craftingTypeId must be preserved"
             );
-            assert_eq!(wire["results"], job.results, "healthy results must be preserved");
+            assert_eq!(
+                wire["results"], job.results,
+                "healthy results must be preserved"
+            );
         }
     }
 
@@ -2949,20 +3223,29 @@ mod tests {
 
         // The premise still holds: neither table that mints a REAL item knows this
         // recipe. The repair no longer depends on them.
-        assert!(sd.recipes.get(&job.recipe_id).is_none(), "not a captured recipe");
+        assert!(
+            sd.recipes.get(&job.recipe_id).is_none(),
+            "not a captured recipe"
+        );
         assert!(
             sd.smith_craftables.resolve(&job.recipe_id).is_none(),
             "not a resolvable smith craftable"
         );
         assert_eq!(
-            apk_crafting_type(&job.recipe_id, &sd).map(|u| u.to_string()).as_deref(),
+            apk_crafting_type(&job.recipe_id, &sd)
+                .map(|u| u.to_string())
+                .as_deref(),
             Some(SMITHING_CRAFTING_TYPE_ID),
             "the APK table says Smithing"
         );
 
         let wire = wire_of(&job, &sd);
         let ctid = wire["craftingTypeId"].as_str().unwrap();
-        assert_ne!(ctid, wire["recipeId"].as_str().unwrap(), "must never echo the recipe id");
+        assert_ne!(
+            ctid,
+            wire["recipeId"].as_str().unwrap(),
+            "must never echo the recipe id"
+        );
         assert_eq!(
             ctid, SMITHING_CRAFTING_TYPE_ID,
             "the Dragonbone War Axe is forged at the Smithy and its results can now be \
@@ -2985,12 +3268,16 @@ mod tests {
         let alchemy_recipe = Uuid::parse_str("b5a2dbe9-d115-4bf2-99d9-558be1de3ef7").unwrap();
         let forge_recipe = Uuid::parse_str("fd13cfa0-0148-41c0-be70-b3d08852f673").unwrap();
         assert_eq!(
-            apk_crafting_type(&alchemy_recipe, &sd).map(|u| u.to_string()).as_deref(),
+            apk_crafting_type(&alchemy_recipe, &sd)
+                .map(|u| u.to_string())
+                .as_deref(),
             Some(ALCHEMY_CRAFTING_TYPE_ID),
             "Deadly Aversion to Frost is brewed at the Alchemist"
         );
         assert_eq!(
-            apk_crafting_type(&forge_recipe, &sd).map(|u| u.to_string()).as_deref(),
+            apk_crafting_type(&forge_recipe, &sd)
+                .map(|u| u.to_string())
+                .as_deref(),
             Some(SMITHING_CRAFTING_TYPE_ID),
             "Dragonbone War Axe is forged at the Smithy"
         );
@@ -3034,10 +3321,16 @@ mod tests {
                 .filter(|(_, r)| r.crafting_type_id == type_id)
                 .map(|(id, _)| id)
                 .collect();
-            assert!(!of_type.is_empty(), "{name}: no recipes — is the table loaded?");
+            assert!(
+                !of_type.is_empty(),
+                "{name}: no recipes — is the table loaded?"
+            );
 
-            let unresolvable: Vec<&Uuid> =
-                of_type.iter().copied().filter(|id| !resolvable(id)).collect();
+            let unresolvable: Vec<&Uuid> = of_type
+                .iter()
+                .copied()
+                .filter(|id| !resolvable(id))
+                .collect();
             assert!(
                 unresolvable.is_empty(),
                 "{name}: {} of {} recipes would be REFUSED, e.g. {:?}",
@@ -3079,7 +3372,10 @@ mod tests {
                 .filter(|(_, r)| r.crafting_type_id == type_id)
                 .map(|(id, _)| id)
                 .collect();
-            assert!(!of_type.is_empty(), "{name}: no recipes — is the table loaded?");
+            assert!(
+                !of_type.is_empty(),
+                "{name}: no recipes — is the table loaded?"
+            );
             let covered = of_type.iter().filter(|id| resolvable(id)).count();
             assert!(
                 covered * 4 < of_type.len(),
@@ -3153,7 +3449,11 @@ mod tests {
         };
         let wire = wire_of(&job, &sd);
         let ctid = wire["craftingTypeId"].as_str().unwrap();
-        assert_ne!(ctid, wire["recipeId"].as_str().unwrap(), "must never echo the recipe id");
+        assert_ne!(
+            ctid,
+            wire["recipeId"].as_str().unwrap(),
+            "must never echo the recipe id"
+        );
         assert_ne!(
             ctid,
             enchanting.to_string(),
@@ -3180,7 +3480,10 @@ mod tests {
             );
         }
         for id in sd.item_mod_recipes.keys() {
-            assert!(apk_crafting_type(id, &sd).is_some(), "mod recipe {id} missing from the table");
+            assert!(
+                apk_crafting_type(id, &sd).is_some(),
+                "mod recipe {id} missing from the table"
+            );
         }
         for id in sd.salvage_recipes.keys() {
             assert!(
@@ -3254,9 +3557,12 @@ mod tests {
                 smithing.to_string(),
                 "{name}: the bench is finally named honestly"
             );
-            let items = wire["results"]["items"]
-                .as_array()
-                .unwrap_or_else(|| panic!("{name}: results must carry `items`, got {}", wire["results"]));
+            let items = wire["results"]["items"].as_array().unwrap_or_else(|| {
+                panic!(
+                    "{name}: results must carry `items`, got {}",
+                    wire["results"]
+                )
+            });
             assert_eq!(items.len(), 1, "{name}: a Recipe has exactly one output");
             assert_eq!(
                 items[0]["itemTemplateId"].as_str(),
@@ -3283,7 +3589,11 @@ mod tests {
                 Some(want_durability),
                 "{name}: durability must be this template's own level-0 maximum"
             );
-            assert_eq!(items[0]["temperingLevel"].as_u64(), Some(0), "{name}: base level");
+            assert_eq!(
+                items[0]["temperingLevel"].as_u64(),
+                Some(0),
+                "{name}: base level"
+            );
             assert_shape_consistent(name, &wire, &sd);
         }
     }
@@ -3303,9 +3613,15 @@ mod tests {
         let first = wire_of(&job, &sd)["results"]["items"][0]["id"].clone();
         let second = wire_of(&job, &sd)["results"]["items"][0]["id"].clone();
         assert!(first.is_string(), "an instanced result carries an id");
-        assert_eq!(first, second, "the same job must render the same item id every read");
+        assert_eq!(
+            first, second,
+            "the same job must render the same item id every read"
+        );
 
-        let other = CraftJob { id: Uuid::from_u128(0xF1), ..live_forge_row(recipe_id, id) };
+        let other = CraftJob {
+            id: Uuid::from_u128(0xF1),
+            ..live_forge_row(recipe_id, id)
+        };
         assert_ne!(
             wire_of(&other, &sd)["results"]["items"][0]["id"],
             first,
@@ -3334,7 +3650,10 @@ mod tests {
             "a template-keyed stackable is not our approximation"
         );
         let wire = wire_of(&job, &sd);
-        assert_eq!(wire["results"], job.results, "retail data must be passed through untouched");
+        assert_eq!(
+            wire["results"], job.results,
+            "retail data must be passed through untouched"
+        );
         assert_shape_consistent("real stackable", &wire, &sd);
     }
 
@@ -3347,7 +3666,9 @@ mod tests {
         let sd = static_data_from_deploy();
         let unknown = Uuid::from_u128(0xDEADBEEF);
         assert!(
-            sd.recipe_crafting_types.output_template_of(&unknown).is_none(),
+            sd.recipe_crafting_types
+                .output_template_of(&unknown)
+                .is_none(),
             "premise: the table cannot mint this recipe"
         );
         let job = live_forge_row(unknown, &unknown.to_string());
@@ -3398,13 +3719,18 @@ mod tests {
         let sd = static_data_from_deploy();
         let jobs = live_forge_pile();
         let wires = wires_of(&jobs, &sd);
-        assert_eq!(wires.len(), jobs.len(), "no job may be dropped from the list");
+        assert_eq!(
+            wires.len(),
+            jobs.len(),
+            "no job may be dropped from the list"
+        );
 
         // The guarantee: a job we corrected is ALONE on the station we moved it to. The
         // rows we left alone stay as production serves them today (nominally on an
         // Alchemy station the Forge does not have, which is why they are inert) — thinning
         // that pile further would mean dropping the player's crafts.
-        let mut per_station: std::collections::HashMap<(String, String), usize> = Default::default();
+        let mut per_station: std::collections::HashMap<(String, String), usize> =
+            Default::default();
         for w in &wires {
             *per_station
                 .entry((
@@ -3420,7 +3746,8 @@ mod tests {
             }
             let building = w["buildingId"].as_str().unwrap().to_string();
             assert_eq!(
-                per_station[&(building.clone(), ctid.to_string())], 1,
+                per_station[&(building.clone(), ctid.to_string())],
+                1,
                 "corrected job {} shares station {ctid} at building {building} with another; \
                  retail showed 238/238 singletons",
                 w["id"]
@@ -3429,10 +3756,15 @@ mod tests {
         // And no group may be bigger than it was before the repair ran.
         let mut before: std::collections::HashMap<(Uuid, Uuid), usize> = Default::default();
         for job in &jobs {
-            *before.entry((job.building_id, job.crafting_type_id)).or_default() += 1;
+            *before
+                .entry((job.building_id, job.crafting_type_id))
+                .or_default() += 1;
         }
         for ((building, ctid), n) in &per_station {
-            let key = (Uuid::parse_str(building).unwrap(), Uuid::parse_str(ctid).unwrap());
+            let key = (
+                Uuid::parse_str(building).unwrap(),
+                Uuid::parse_str(ctid).unwrap(),
+            );
             assert!(
                 *n <= before.get(&key).copied().unwrap_or(0).max(1),
                 "station {ctid} at building {building} went from {:?} to {n} jobs",
@@ -3461,7 +3793,10 @@ mod tests {
                 ALCHEMY_CRAFTING_TYPE_ID,
                 "a demoted row keeps the bench that leaves it inert"
             );
-            assert_eq!(w["results"], job.results, "and its stored results, untouched");
+            assert_eq!(
+                w["results"], job.results,
+                "and its stored results, untouched"
+            );
         }
 
         // The invariant that this whole change is downstream of, over the full list.
@@ -3487,7 +3822,11 @@ mod tests {
         let forward = winner(&jobs);
         let mut reversed = jobs.clone();
         reversed.reverse();
-        assert_eq!(forward, winner(&reversed), "the same job must win either way");
+        assert_eq!(
+            forward,
+            winner(&reversed),
+            "the same job must win either way"
+        );
     }
 
     /// A job already sitting on that station — one whose type we did not touch — outranks
@@ -3539,7 +3878,10 @@ mod tests {
             .into_iter()
             .enumerate()
             // live_craft_rows reuses fixture ids; a real list has distinct ones.
-            .map(|(n, (_, job))| CraftJob { id: Uuid::from_u128(0xA000 + n as u128), ..job })
+            .map(|(n, (_, job))| CraftJob {
+                id: Uuid::from_u128(0xA000 + n as u128),
+                ..job
+            })
             .collect();
         let wires = wires_of(&jobs, &sd);
 
@@ -3588,17 +3930,50 @@ mod tests {
     /// reproduces. Three rows share `b949b05f` at one building, so a winner has to be
     /// picked among identical recipes as well as among different ones.
     const OWNER_FORGE_ROWS_2026_08_20: [(&str, &str); 11] = [
-        ("0e73f481-9efa-4dc8-a66b-46da95ff76ee", "5fe0e868-957e-47c2-a094-9c1daad097d5"),
-        ("0e73f481-9efa-4dc8-a66b-46da95ff76ee", "7ad4e3a0-49b0-4c2f-9a94-6158acbb51d9"),
-        ("0e73f481-9efa-4dc8-a66b-46da95ff76ee", "a57591a0-9354-411b-862a-5449dfbd335b"),
-        ("0e73f481-9efa-4dc8-a66b-46da95ff76ee", "b949b05f-2e46-4a0c-80e4-171c4aecb9e5"),
-        ("105c24bf-9e16-4cbb-bddd-514ad0b23e0e", "38671302-f4f1-4357-aef9-5f57972c423d"),
-        ("105c24bf-9e16-4cbb-bddd-514ad0b23e0e", "38671302-f4f1-4357-aef9-5f57972c423d"),
-        ("105c24bf-9e16-4cbb-bddd-514ad0b23e0e", "38671302-f4f1-4357-aef9-5f57972c423d"),
-        ("105c24bf-9e16-4cbb-bddd-514ad0b23e0e", "5fe0e868-957e-47c2-a094-9c1daad097d5"),
-        ("105c24bf-9e16-4cbb-bddd-514ad0b23e0e", "a57591a0-9354-411b-862a-5449dfbd335b"),
-        ("105c24bf-9e16-4cbb-bddd-514ad0b23e0e", "b949b05f-2e46-4a0c-80e4-171c4aecb9e5"),
-        ("105c24bf-9e16-4cbb-bddd-514ad0b23e0e", "b949b05f-2e46-4a0c-80e4-171c4aecb9e5"),
+        (
+            "0e73f481-9efa-4dc8-a66b-46da95ff76ee",
+            "5fe0e868-957e-47c2-a094-9c1daad097d5",
+        ),
+        (
+            "0e73f481-9efa-4dc8-a66b-46da95ff76ee",
+            "7ad4e3a0-49b0-4c2f-9a94-6158acbb51d9",
+        ),
+        (
+            "0e73f481-9efa-4dc8-a66b-46da95ff76ee",
+            "a57591a0-9354-411b-862a-5449dfbd335b",
+        ),
+        (
+            "0e73f481-9efa-4dc8-a66b-46da95ff76ee",
+            "b949b05f-2e46-4a0c-80e4-171c4aecb9e5",
+        ),
+        (
+            "105c24bf-9e16-4cbb-bddd-514ad0b23e0e",
+            "38671302-f4f1-4357-aef9-5f57972c423d",
+        ),
+        (
+            "105c24bf-9e16-4cbb-bddd-514ad0b23e0e",
+            "38671302-f4f1-4357-aef9-5f57972c423d",
+        ),
+        (
+            "105c24bf-9e16-4cbb-bddd-514ad0b23e0e",
+            "38671302-f4f1-4357-aef9-5f57972c423d",
+        ),
+        (
+            "105c24bf-9e16-4cbb-bddd-514ad0b23e0e",
+            "5fe0e868-957e-47c2-a094-9c1daad097d5",
+        ),
+        (
+            "105c24bf-9e16-4cbb-bddd-514ad0b23e0e",
+            "a57591a0-9354-411b-862a-5449dfbd335b",
+        ),
+        (
+            "105c24bf-9e16-4cbb-bddd-514ad0b23e0e",
+            "b949b05f-2e46-4a0c-80e4-171c4aecb9e5",
+        ),
+        (
+            "105c24bf-9e16-4cbb-bddd-514ad0b23e0e",
+            "b949b05f-2e46-4a0c-80e4-171c4aecb9e5",
+        ),
     ];
 
     /// The owner's real forge pile, on the real two buildings, must come out with one
@@ -3652,13 +4027,19 @@ mod tests {
         );
         for b in &smith_buildings {
             assert_eq!(
-                occupancy[&(b.clone(), SMITHING_CRAFTING_TYPE_ID.to_string())], 1,
+                occupancy[&(b.clone(), SMITHING_CRAFTING_TYPE_ID.to_string())],
+                1,
                 "the Smithing station at {b} must hold one job, not a crowd"
             );
         }
         // Each promoted row carries a real instanced item the durability ladder knows.
-        for w in wires.iter().filter(|w| w["craftingTypeId"] == SMITHING_CRAFTING_TYPE_ID) {
-            let tpl = w["results"]["items"][0]["itemTemplateId"].as_str().expect("an item");
+        for w in wires
+            .iter()
+            .filter(|w| w["craftingTypeId"] == SMITHING_CRAFTING_TYPE_ID)
+        {
+            let tpl = w["results"]["items"][0]["itemTemplateId"]
+                .as_str()
+                .expect("an item");
             assert_ne!(tpl, w["recipeId"].as_str().unwrap(), "not the recipe id");
             assert!(
                 repair_data_from_deploy()
@@ -3673,7 +4054,10 @@ mod tests {
             if w["craftingTypeId"] == SMITHING_CRAFTING_TYPE_ID {
                 continue;
             }
-            assert_eq!(w["craftingTypeId"].as_str().unwrap(), ALCHEMY_CRAFTING_TYPE_ID);
+            assert_eq!(
+                w["craftingTypeId"].as_str().unwrap(),
+                ALCHEMY_CRAFTING_TYPE_ID
+            );
             assert_eq!(w["results"], job.results);
         }
     }
@@ -3707,7 +4091,10 @@ mod tests {
             "items": [{ "id": Uuid::from_u128(7).to_string(), "itemTemplateId": id }]
         }));
         let (ctid, _) = reconcile_type_with_results(&job, alchemy, instanced, &sd, true);
-        assert_ne!(ctid, alchemy, "Alchemy + items is equally absent from retail");
+        assert_ne!(
+            ctid, alchemy,
+            "Alchemy + items is equally absent from retail"
+        );
     }
 
     /// The relabel is not abandoned — it is conditioned. The same six recipes, stored
@@ -3737,7 +4124,10 @@ mod tests {
                 SMITHING_CRAFTING_TYPE_ID,
                 "{name}: a forge craft that CAN be shaped like one names the Smithy"
             );
-            assert_eq!(wire["results"], job.results, "a safe relabel still leaves results alone");
+            assert_eq!(
+                wire["results"], job.results,
+                "a safe relabel still leaves results alone"
+            );
             assert_shape_consistent(name, &wire, &sd);
         }
     }
@@ -3864,7 +4254,10 @@ mod tests {
     fn a_recipe_absent_from_the_table_still_falls_back() {
         let sd = static_data_from_deploy();
         let unknown = Uuid::from_u128(0xDEAD_BEEF_DEAD_BEEF);
-        assert!(apk_crafting_type(&unknown, &sd).is_none(), "not in the shipped data");
+        assert!(
+            apk_crafting_type(&unknown, &sd).is_none(),
+            "not in the shipped data"
+        );
         let job = CraftJob {
             id: Uuid::from_u128(0xF1),
             recipe_id: unknown,
@@ -3876,7 +4269,10 @@ mod tests {
         let wire = wire_of(&job, &sd);
         let ctid = wire["craftingTypeId"].as_str().unwrap();
         assert_ne!(ctid, unknown.to_string(), "must never echo the recipe id");
-        assert_eq!(ctid, ALCHEMY_CRAFTING_TYPE_ID, "falls back exactly as before");
+        assert_eq!(
+            ctid, ALCHEMY_CRAFTING_TYPE_ID,
+            "falls back exactly as before"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -3943,8 +4339,9 @@ mod tests {
         use actix_web::ResponseError;
         let now = 1_800_000_000_000i64;
         let mut w = wallet_with(151);
-        let err = charge_craft_speed_up(true, Some(&shipped_table()), now + 47_994_000, now, &mut w)
-            .expect_err("151 gems cannot buy a 152-gem skip");
+        let err =
+            charge_craft_speed_up(true, Some(&shipped_table()), now + 47_994_000, now, &mut w)
+                .expect_err("151 gems cannot buy a 152-gem skip");
         assert_eq!(err.status_code(), StatusCode::BAD_REQUEST);
         assert_eq!(w.balance(GEMS), 151);
     }
@@ -3991,7 +4388,11 @@ mod tests {
 
     /// Enough of every Magicka T10 input, with `MAT_1` and `MAT_4` at exactly what the
     /// recipe needs so the charge drains them (retail then lists them as removed).
-    fn enchanter_inventory(item_id: Uuid, item: Item, short_by_one: Option<&str>) -> CompleteInventory {
+    fn enchanter_inventory(
+        item_id: Uuid,
+        item: Item,
+        short_by_one: Option<&str>,
+    ) -> CompleteInventory {
         let mut inv = CompleteInventory {
             backpack: Backpack::default(),
             loadout: Loadout::default(),
@@ -4000,7 +4401,13 @@ mod tests {
             backpack_version: 1,
             treasury_version: 0,
         };
-        for (t, n) in [(MAT_99, 150), (MAT_1, 1), (MAT_2, 10), (MAT_4, 4), (BYSTANDER, 7)] {
+        for (t, n) in [
+            (MAT_99, 150),
+            (MAT_1, 1),
+            (MAT_2, 10),
+            (MAT_4, 4),
+            (BYSTANDER, 7),
+        ] {
             let n = if short_by_one == Some(t) { n - 1 } else { n };
             inv.backpack.stackable_items.add(uuid(t), n);
         }
@@ -4050,7 +4457,10 @@ mod tests {
         );
         assert_eq!(wallet.balance(GOLD), 50_000 - RETAIL_MAGICKA_T10_GOLD);
         assert_eq!(wallet.balance(GEMS), 500, "gems are not an input");
-        assert_eq!(counts(&inv), stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)]));
+        assert_eq!(
+            counts(&inv),
+            stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)])
+        );
 
         // The client diff has retail's shape: a partly-used stack at its new count, a
         // drained one under `removedStackableItems` (capture 41606 drained 68d7941e the
@@ -4061,12 +4471,24 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .map(|s| (s["itemTemplateId"].as_str().unwrap().to_string(), s["count"].as_u64().unwrap()))
+            .map(|s| {
+                (
+                    s["itemTemplateId"].as_str().unwrap().to_string(),
+                    s["count"].as_u64().unwrap(),
+                )
+            })
             .collect();
         listed.sort();
-        assert_eq!(listed, vec![(MAT_99.to_string(), 51), (MAT_2.to_string(), 8)]);
-        let mut removed: Vec<&str> =
-            bp["removedStackableItems"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(
+            listed,
+            vec![(MAT_99.to_string(), 51), (MAT_2.to_string(), 8)]
+        );
+        let mut removed: Vec<&str> = bp["removedStackableItems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
         removed.sort();
         assert_eq!(removed, vec![MAT_4, MAT_1]);
     }
@@ -4079,10 +4501,24 @@ mod tests {
         let mut inv = enchanter_inventory(item_id, madness_battleaxe(None), None);
         let before = (serde_json::to_value(&wallet).unwrap(), counts(&inv));
         let mut tracker = InventoryChangeTracker::default();
-        let err = charge_enchant_inputs(0, uuid(MAGICKA_DAMAGE_T10), deploy_enchanting(), &mut wallet, &mut inv, &mut tracker, false)
-            .expect_err("one gold short");
-        assert_eq!(err.to_string(), "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 1 }");
-        assert_eq!((serde_json::to_value(&wallet).unwrap(), counts(&inv)), before);
+        let err = charge_enchant_inputs(
+            0,
+            uuid(MAGICKA_DAMAGE_T10),
+            deploy_enchanting(),
+            &mut wallet,
+            &mut inv,
+            &mut tracker,
+            false,
+        )
+        .expect_err("one gold short");
+        assert_eq!(
+            err.to_string(),
+            "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 1 }"
+        );
+        assert_eq!(
+            (serde_json::to_value(&wallet).unwrap(), counts(&inv)),
+            before
+        );
         assert!(tracker.modified_backpack.stackable_items.is_empty());
 
         // One of a material short, gold plentiful → the economy 400 for a material,
@@ -4091,17 +4527,39 @@ mod tests {
         let mut inv = enchanter_inventory(item_id, madness_battleaxe(None), Some(MAT_4));
         let before = (serde_json::to_value(&wallet).unwrap(), counts(&inv));
         let mut tracker = InventoryChangeTracker::default();
-        let err = charge_enchant_inputs(0, uuid(MAGICKA_DAMAGE_T10), deploy_enchanting(), &mut wallet, &mut inv, &mut tracker, false)
-            .expect_err("one material short");
-        assert_eq!(err.to_string(), "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 4 }");
-        assert_eq!((serde_json::to_value(&wallet).unwrap(), counts(&inv)), before);
+        let err = charge_enchant_inputs(
+            0,
+            uuid(MAGICKA_DAMAGE_T10),
+            deploy_enchanting(),
+            &mut wallet,
+            &mut inv,
+            &mut tracker,
+            false,
+        )
+        .expect_err("one material short");
+        assert_eq!(
+            err.to_string(),
+            "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 4 }"
+        );
+        assert_eq!(
+            (serde_json::to_value(&wallet).unwrap(), counts(&inv)),
+            before
+        );
         assert!(tracker.modified_backpack.stackable_items.is_empty());
 
         // Control: exactly the price is enough — the refusal above is the price.
         let mut wallet = purse(RETAIL_MAGICKA_T10_GOLD);
         let mut inv = enchanter_inventory(item_id, madness_battleaxe(None), None);
-        charge_enchant_inputs(0, uuid(MAGICKA_DAMAGE_T10), deploy_enchanting(), &mut wallet, &mut inv, &mut InventoryChangeTracker::default(), false)
-            .expect("exactly affordable");
+        charge_enchant_inputs(
+            0,
+            uuid(MAGICKA_DAMAGE_T10),
+            deploy_enchanting(),
+            &mut wallet,
+            &mut inv,
+            &mut InventoryChangeTracker::default(),
+            false,
+        )
+        .expect("exactly affordable");
         assert_eq!(wallet.balance(GOLD), 0);
     }
 
@@ -4121,7 +4579,11 @@ mod tests {
     const FROST_DAMAGE_T10: &str = "441ac895-b30f-46c0-9346-bd77bd267f6d";
     const FROST_SALTS: &str = "05b4dd6b-796f-4088-a772-0e33ea3db976";
 
-    fn yaskrava(gold: u64, gems: u64, stacks: &[(&str, u64)]) -> (CompleteWallet, CompleteInventory) {
+    fn yaskrava(
+        gold: u64,
+        gems: u64,
+        stacks: &[(&str, u64)],
+    ) -> (CompleteWallet, CompleteInventory) {
         let mut w = CompleteWallet::default();
         w.credit(GOLD, gold);
         w.credit(GEMS, gems);
@@ -4134,12 +4596,24 @@ mod tests {
     }
 
     /// The `inventory` + `wallet` a start answers with, as retail would list them.
-    fn diff_of(inv: &CompleteInventory, tracker: &InventoryChangeTracker) -> (Vec<(String, u64)>, Vec<String>) {
+    fn diff_of(
+        inv: &CompleteInventory,
+        tracker: &InventoryChangeTracker,
+    ) -> (Vec<(String, u64)>, Vec<String>) {
         let diff = serde_json::to_value(inv.generate_client_update(tracker)).unwrap();
         let bp = &diff["backpack"];
         let mut listed: Vec<(String, u64)> = bp["stackableItems"]
             .as_array()
-            .map(|a| a.iter().map(|s| (s["itemTemplateId"].as_str().unwrap().to_string(), s["count"].as_u64().unwrap())).collect())
+            .map(|a| {
+                a.iter()
+                    .map(|s| {
+                        (
+                            s["itemTemplateId"].as_str().unwrap().to_string(),
+                            s["count"].as_u64().unwrap(),
+                        )
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
         listed.sort();
         let mut removed: Vec<String> = bp["removedStackableItems"]
@@ -4159,33 +4633,86 @@ mod tests {
     #[test]
     fn a_gem_paid_enchant_replays_retail_capture_59598() {
         // Before: gold 26 533 (8 467 short), gems 14 897 (the 59596 finish).
-        let (mut w, mut inv) =
-            yaskrava(26_533, 14_897, &[(MAT_4, 8), (MAT_2, 5_013), (MAT_1, 1_297), (HONEYCOMB, 7_111)]);
+        let (mut w, mut inv) = yaskrava(
+            26_533,
+            14_897,
+            &[
+                (MAT_4, 8),
+                (MAT_2, 5_013),
+                (MAT_1, 1_297),
+                (HONEYCOMB, 7_111),
+            ],
+        );
         let mut tracker = InventoryChangeTracker::default();
-        charge_enchant_inputs(0, uuid(SHIELD_STAMINA_T10), deploy_enchanting(), &mut w, &mut inv, &mut tracker, true)
-            .expect("retail answered 200");
+        charge_enchant_inputs(
+            0,
+            uuid(SHIELD_STAMINA_T10),
+            deploy_enchanting(),
+            &mut w,
+            &mut inv,
+            &mut tracker,
+            true,
+        )
+        .expect("retail answered 200");
         // Retail's response: gold 0, gems 14 769, and these four stacks.
         assert_eq!((w.balance(GOLD), w.balance(GEMS)), (0, 14_769));
         let (listed, removed) = diff_of(&inv, &tracker);
-        assert_eq!(listed, sorted(&[(MAT_4, 4), (MAT_2, 5_011), (MAT_1, 1_296), (HONEYCOMB, 7_029)]));
+        assert_eq!(
+            listed,
+            sorted(&[
+                (MAT_4, 4),
+                (MAT_2, 5_011),
+                (MAT_1, 1_296),
+                (HONEYCOMB, 7_029)
+            ])
+        );
         assert!(removed.is_empty());
         // Retail listed gold at 0 rather than dropping it; so does our wallet.
         let wire = serde_json::to_value(&w).unwrap();
-        assert!(wire.as_array().unwrap().iter().any(|e| e["currencyId"] == GOLD.to_string() && e["balance"] == 0), "{wire}");
+        assert!(
+            wire.as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["currencyId"] == GOLD.to_string() && e["balance"] == 0),
+            "{wire}"
+        );
     }
 
     #[test]
     fn a_gem_paid_enchant_replays_retail_capture_59601() {
         // Before: gold 0 (35 000 short), gems 14 739 (the 59600 finish), 4 Grand soul gems.
-        let (mut w, mut inv) =
-            yaskrava(0, 14_739, &[(MAT_4, 4), (MAT_2, 5_011), (MAT_1, 1_296), (HONEYCOMB, 7_029)]);
+        let (mut w, mut inv) = yaskrava(
+            0,
+            14_739,
+            &[
+                (MAT_4, 4),
+                (MAT_2, 5_011),
+                (MAT_1, 1_296),
+                (HONEYCOMB, 7_029),
+            ],
+        );
         let mut tracker = InventoryChangeTracker::default();
-        charge_enchant_inputs(0, uuid(SHIELD_STAMINA_T10), deploy_enchanting(), &mut w, &mut inv, &mut tracker, true)
-            .expect("retail answered 200");
+        charge_enchant_inputs(
+            0,
+            uuid(SHIELD_STAMINA_T10),
+            deploy_enchanting(),
+            &mut w,
+            &mut inv,
+            &mut tracker,
+            true,
+        )
+        .expect("retail answered 200");
         assert_eq!((w.balance(GOLD), w.balance(GEMS)), (0, 14_214));
         let (listed, removed) = diff_of(&inv, &tracker);
-        assert_eq!(listed, sorted(&[(MAT_2, 5_009), (MAT_1, 1_295), (HONEYCOMB, 6_947)]));
-        assert_eq!(removed, vec![MAT_4.to_string()], "retail: removedStackableItems [68d7941e]");
+        assert_eq!(
+            listed,
+            sorted(&[(MAT_2, 5_009), (MAT_1, 1_295), (HONEYCOMB, 6_947)])
+        );
+        assert_eq!(
+            removed,
+            vec![MAT_4.to_string()],
+            "retail: removedStackableItems [68d7941e]"
+        );
     }
 
     /// The reporter's case: plenty of gold, SHORT of Frost Salts, `gemsPayment: true`.
@@ -4195,21 +4722,44 @@ mod tests {
         let held = [(FROST_SALTS, 40), (MAT_1, 3), (MAT_2, 9), (MAT_4, 10)];
         let (mut w, mut inv) = yaskrava(15_503_434, 61_303, &held);
         let mut tracker = InventoryChangeTracker::default();
-        charge_enchant_inputs(0, uuid(FROST_DAMAGE_T10), deploy_enchanting(), &mut w, &mut inv, &mut tracker, true)
-            .expect("gems buy the 59 missing Frost Salts");
+        charge_enchant_inputs(
+            0,
+            uuid(FROST_DAMAGE_T10),
+            deploy_enchanting(),
+            &mut w,
+            &mut inv,
+            &mut tracker,
+            true,
+        )
+        .expect("gems buy the 59 missing Frost Salts");
         // 59 salts × 5 gems (IngredientValueTable), everything else from stock.
         assert_eq!(w.balance(GEMS), 61_303 - 59 * 5);
         assert_eq!(w.balance(GOLD), 15_503_434 - 42_000);
         let (listed, removed) = diff_of(&inv, &tracker);
         assert_eq!(listed, sorted(&[(MAT_1, 2), (MAT_2, 7), (MAT_4, 6)]));
-        assert_eq!(removed, vec![FROST_SALTS.to_string()], "the held salts are all used");
+        assert_eq!(
+            removed,
+            vec![FROST_SALTS.to_string()],
+            "the held salts are all used"
+        );
 
         // Control: the same player WITHOUT gemsPayment is still refused, and it is
         // the material refusal — so the case above is the shortfall path.
         let (mut w, mut inv) = yaskrava(15_503_434, 61_303, &held);
-        let err = charge_enchant_inputs(0, uuid(FROST_DAMAGE_T10), deploy_enchanting(), &mut w, &mut inv, &mut InventoryChangeTracker::default(), false)
-            .expect_err("short of salts, no gems offered");
-        assert_eq!(err.to_string(), "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 4 }");
+        let err = charge_enchant_inputs(
+            0,
+            uuid(FROST_DAMAGE_T10),
+            deploy_enchanting(),
+            &mut w,
+            &mut inv,
+            &mut InventoryChangeTracker::default(),
+            false,
+        )
+        .expect_err("short of salts, no gems offered");
+        assert_eq!(
+            err.to_string(),
+            "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 4 }"
+        );
         assert_eq!(w.balance(GEMS), 61_303);
     }
 
@@ -4219,9 +4769,20 @@ mod tests {
         let (mut w, mut inv) = yaskrava(100_000, 59 * 5 - 1, &held);
         let before = (serde_json::to_value(&w).unwrap(), counts(&inv));
         let mut tracker = InventoryChangeTracker::default();
-        let err = charge_enchant_inputs(0, uuid(FROST_DAMAGE_T10), deploy_enchanting(), &mut w, &mut inv, &mut tracker, true)
-            .expect_err("one gem short");
-        assert_eq!(err.to_string(), "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 1 }");
+        let err = charge_enchant_inputs(
+            0,
+            uuid(FROST_DAMAGE_T10),
+            deploy_enchanting(),
+            &mut w,
+            &mut inv,
+            &mut tracker,
+            true,
+        )
+        .expect_err("one gem short");
+        assert_eq!(
+            err.to_string(),
+            "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 1 }"
+        );
         assert_eq!((serde_json::to_value(&w).unwrap(), counts(&inv)), before);
         assert!(tracker.modified_backpack.stackable_items.is_empty());
     }
@@ -4234,11 +4795,22 @@ mod tests {
         for gems_payment in [false, true] {
             let mut wallet = purse(50_000);
             let mut inv = enchanter_inventory(Uuid::new_v4(), madness_battleaxe(None), None);
-            charge_enchant_inputs(0, uuid(MAGICKA_DAMAGE_T10), deploy_enchanting(), &mut wallet, &mut inv, &mut InventoryChangeTracker::default(), gems_payment)
-                .expect("affordable");
+            charge_enchant_inputs(
+                0,
+                uuid(MAGICKA_DAMAGE_T10),
+                deploy_enchanting(),
+                &mut wallet,
+                &mut inv,
+                &mut InventoryChangeTracker::default(),
+                gems_payment,
+            )
+            .expect("affordable");
             assert_eq!(wallet.balance(GEMS), 500, "gemsPayment={gems_payment}");
             assert_eq!(wallet.balance(GOLD), 50_000 - RETAIL_MAGICKA_T10_GOLD);
-            assert_eq!(counts(&inv), stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)]));
+            assert_eq!(
+                counts(&inv),
+                stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)])
+            );
         }
     }
 
@@ -4250,15 +4822,30 @@ mod tests {
             let mut inv = enchanter_inventory(item_id, madness_battleaxe(None), None);
             let before = (serde_json::to_value(&wallet).unwrap(), counts(&inv));
             let mut tracker = InventoryChangeTracker::default();
-            let charged = charge_enchant_inputs(tempering_level, recipe, deploy_enchanting(), &mut wallet, &mut inv, &mut tracker, false)
-                .expect("never refused");
+            let charged = charge_enchant_inputs(
+                tempering_level,
+                recipe,
+                deploy_enchanting(),
+                &mut wallet,
+                &mut inv,
+                &mut tracker,
+                false,
+            )
+            .expect("never refused");
             assert!(charged.is_empty(), "temper {tempering_level} / {recipe}");
-            assert_eq!((serde_json::to_value(&wallet).unwrap(), counts(&inv)), before);
+            assert_eq!(
+                (serde_json::to_value(&wallet).unwrap(), counts(&inv)),
+                before
+            );
         }
         // Control: the fallback case really is absent from the table, and the charged
         // case really is present — otherwise the loop above proves nothing.
         assert!(!deploy_enchanting().recipes.contains_key(&ANY_RECIPE));
-        assert!(!deploy_enchanting().recipes[&uuid(MAGICKA_DAMAGE_T10)].inputs.is_empty());
+        assert!(
+            !deploy_enchanting().recipes[&uuid(MAGICKA_DAMAGE_T10)]
+                .inputs
+                .is_empty()
+        );
     }
 
     /// Every one of the 202 recipes has a gold input and at least one material, so no
@@ -4269,7 +4856,11 @@ mod tests {
         assert_eq!(e.recipes.len(), 202);
         for (id, r) in &e.recipes {
             let gold = r.inputs.iter().filter(|i| i.template_id == GOLD).count();
-            let mats = r.inputs.iter().filter(|i| !blades_lib::economy::is_currency(i.template_id)).count();
+            let mats = r
+                .inputs
+                .iter()
+                .filter(|i| !blades_lib::economy::is_currency(i.template_id))
+                .count();
             assert_eq!(gold, 1, "{id}: exactly one gold line");
             assert!(mats >= 2, "{id}: soul gem + at least one material");
             assert!(r.inputs.iter().all(|i| i.quantity > 0), "{id}");
@@ -4298,10 +4889,18 @@ mod tests {
             let mut conn = AsyncPgConnection::establish(&url)
                 .await
                 .expect("TEST_DATABASE_URL is set but unreachable");
-            conn.begin_test_transaction().await.expect("test transaction");
+            conn.begin_test_transaction()
+                .await
+                .expect("test transaction");
             let schema = format!("t{}", Uuid::new_v4().simple());
-            diesel::sql_query(format!("CREATE SCHEMA {schema}")).execute(&mut conn).await.unwrap();
-            diesel::sql_query(format!("SET LOCAL search_path TO {schema}")).execute(&mut conn).await.unwrap();
+            diesel::sql_query(format!("CREATE SCHEMA {schema}"))
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            diesel::sql_query(format!("SET LOCAL search_path TO {schema}"))
+                .execute(&mut conn)
+                .await
+                .unwrap();
             diesel::sql_query(SCHEMA).execute(&mut conn).await.unwrap();
             Some(conn)
         }
@@ -4328,7 +4927,11 @@ mod tests {
             seed_short(conn, gold, None).await
         }
 
-        async fn seed_short(conn: &mut AsyncPgConnection, gold: u64, short_by_one: Option<&str>) -> Seeded {
+        async fn seed_short(
+            conn: &mut AsyncPgConnection,
+            gold: u64,
+            short_by_one: Option<&str>,
+        ) -> Seeded {
             let (character_id, user_id, item_id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
             let inv = enchanter_inventory(item_id, madness_battleaxe(Some(2)), short_by_one);
             diesel::sql_query(
@@ -4345,7 +4948,11 @@ mod tests {
             .execute(conn)
             .await
             .unwrap();
-            Seeded { character_id, user_id, item_id }
+            Seeded {
+                character_id,
+                user_id,
+                item_id,
+            }
         }
 
         fn request(item_id: Uuid, tempering_level: u64) -> CreateCraftRequest {
@@ -4353,7 +4960,11 @@ mod tests {
         }
 
         /// The body the client sends — retail's exact key set (captures 59598/59601).
-        fn request_paying(item_id: Uuid, tempering_level: u64, gems_payment: bool) -> CreateCraftRequest {
+        fn request_paying(
+            item_id: Uuid,
+            tempering_level: u64,
+            gems_payment: bool,
+        ) -> CreateCraftRequest {
             serde_json::from_value(serde_json::json!({
                 "recipeId": MAGICKA_DAMAGE_T10,
                 "itemId": item_id,
@@ -4366,7 +4977,9 @@ mod tests {
         }
 
         async fn stored(conn: &mut AsyncPgConnection, s: &Seeded) -> CharacterDbEntryEconomy {
-            load_owned(conn, s.character_id, s.user_id).await.expect("row")
+            load_owned(conn, s.character_id, s.user_id)
+                .await
+                .expect("row")
         }
 
         fn gold_of(e: &CharacterDbEntryEconomy) -> u64 {
@@ -4380,42 +4993,98 @@ mod tests {
             let rd = repair_data_from_deploy();
             let s = seed(&mut conn, 100_000).await;
 
-            let resp = start_craft(&mut conn, &sd, rd, deploy_items(), s.user_id, s.character_id, request(s.item_id, 0))
-                .await
-                .expect("affordable enchant starts");
+            let resp = start_craft(
+                &mut conn,
+                &sd,
+                rd,
+                deploy_items(),
+                s.user_id,
+                s.character_id,
+                request(s.item_id, 0),
+            )
+            .await
+            .expect("affordable enchant starts");
             // The response carries the charged wallet and the material diff.
             assert_eq!(resp.wallet.balance(GOLD), 100_000 - RETAIL_MAGICKA_T10_GOLD);
             let inv = serde_json::to_value(&resp.inventory).unwrap();
-            let removed = inv["backpack"]["removedStackableItems"].as_array().unwrap().len();
+            let removed = inv["backpack"]["removedStackableItems"]
+                .as_array()
+                .unwrap()
+                .len();
             let listed = inv["backpack"]["stackableItems"].as_array().unwrap().len();
             assert_eq!((listed, removed), (2, 2), "{inv}");
-            assert!(inv["backpack"]["removedItems"].as_array().unwrap().contains(&serde_json::json!(s.item_id)));
+            assert!(
+                inv["backpack"]["removedItems"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&serde_json::json!(s.item_id))
+            );
 
             let row = stored(&mut conn, &s).await;
             assert_eq!(gold_of(&row), 100_000 - RETAIL_MAGICKA_T10_GOLD);
-            assert_eq!(counts(&row.inventory.0), stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)]));
+            assert_eq!(
+                counts(&row.inventory.0),
+                stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)])
+            );
             assert_eq!(row.server_state.0.craft_jobs.len(), 1);
             let craft_id = row.server_state.0.craft_jobs[0].id;
 
-            let fin = collect_craft(&mut conn, &sd, rd, None, s.user_id, s.character_id, craft_id, false)
-                .await
-                .expect("first finish");
+            let fin = collect_craft(
+                &mut conn,
+                &sd,
+                rd,
+                None,
+                s.user_id,
+                s.character_id,
+                craft_id,
+                false,
+            )
+            .await
+            .expect("first finish");
             assert_eq!(fin.reward.items.len(), 1);
             assert_eq!(fin.reward.items[0].id, s.item_id);
             let row = stored(&mut conn, &s).await;
-            assert_eq!(gold_of(&row), 100_000 - RETAIL_MAGICKA_T10_GOLD, "finish charges nothing");
-            assert_eq!(counts(&row.inventory.0), stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)]));
+            assert_eq!(
+                gold_of(&row),
+                100_000 - RETAIL_MAGICKA_T10_GOLD,
+                "finish charges nothing"
+            );
+            assert_eq!(
+                counts(&row.inventory.0),
+                stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)])
+            );
             let enchanted = &row.inventory.0.backpack.items.0[&s.item_id];
-            assert_eq!(enchanted.properties.enchanting.len(), 3, "arcane 2 = primary + 2");
+            assert_eq!(
+                enchanted.properties.enchanting.len(),
+                3,
+                "arcane 2 = primary + 2"
+            );
 
-            let again = collect_craft(&mut conn, &sd, rd, None, s.user_id, s.character_id, craft_id, false).await;
+            let again = collect_craft(
+                &mut conn,
+                &sd,
+                rd,
+                None,
+                s.user_id,
+                s.character_id,
+                craft_id,
+                false,
+            )
+            .await;
             assert_eq!(
                 again.err().map(|e| e.to_string()).as_deref(),
                 Some("BladeApiError { http_status_code: 404, service_id: 20000, error_code: 5 }")
             );
             let row = stored(&mut conn, &s).await;
-            assert_eq!(gold_of(&row), 100_000 - RETAIL_MAGICKA_T10_GOLD, "a second finish charges nothing");
-            assert_eq!(counts(&row.inventory.0), stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)]));
+            assert_eq!(
+                gold_of(&row),
+                100_000 - RETAIL_MAGICKA_T10_GOLD,
+                "a second finish charges nothing"
+            );
+            assert_eq!(
+                counts(&row.inventory.0),
+                stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)])
+            );
         }
 
         /// A plain craft body for an APK-output recipe (no itemId).
@@ -4453,8 +5122,14 @@ mod tests {
             // recipe, not a smith craftable) — otherwise this proves nothing.
             for r in [DRAGONSCALE_HELMET_RECIPE, DRAGONSCALE_ARMOR_RECIPE] {
                 let id = uuid(r);
-                assert!(!sd.recipes.contains_key(&id) && sd.smith_craftables.resolve(&id).is_none(), "{r}");
-                assert!(blades_lib::features::recipe_outputs::output_for(&id).is_some(), "{r}");
+                assert!(
+                    !sd.recipes.contains_key(&id) && sd.smith_craftables.resolve(&id).is_none(),
+                    "{r}"
+                );
+                assert!(
+                    blades_lib::features::recipe_outputs::output_for(&id).is_some(),
+                    "{r}"
+                );
             }
 
             let mut crafted = Vec::new();
@@ -4462,17 +5137,40 @@ mod tests {
                 (DRAGONSCALE_HELMET_RECIPE, DRAGONSCALE_HELMET),
                 (DRAGONSCALE_ARMOR_RECIPE, DRAGONSCALE_ARMOR),
             ] {
-                let started = start_craft(&mut conn, &sd, rd, deploy_items(), s.user_id, s.character_id, plain_request(recipe))
-                    .await
-                    .expect("APK-output craft starts");
+                let started = start_craft(
+                    &mut conn,
+                    &sd,
+                    rd,
+                    deploy_items(),
+                    s.user_id,
+                    s.character_id,
+                    plain_request(recipe),
+                )
+                .await
+                .expect("APK-output craft starts");
                 let minted = result_item_id(&started.craft);
-                assert_eq!(started.craft["results"]["items"][0]["itemTemplateId"], template);
+                assert_eq!(
+                    started.craft["results"]["items"][0]["itemTemplateId"],
+                    template
+                );
                 let craft_id: Uuid = started.craft["id"].as_str().unwrap().parse().unwrap();
-                let fin = collect_craft(&mut conn, &sd, rd, None, s.user_id, s.character_id, craft_id, false)
-                    .await
-                    .expect("finish");
+                let fin = collect_craft(
+                    &mut conn,
+                    &sd,
+                    rd,
+                    None,
+                    s.user_id,
+                    s.character_id,
+                    craft_id,
+                    false,
+                )
+                .await
+                .expect("finish");
                 assert_eq!(fin.reward.items.len(), 1);
-                assert_eq!(fin.reward.items[0].id, minted, "nothing was held at that id: kept as minted");
+                assert_eq!(
+                    fin.reward.items[0].id, minted,
+                    "nothing was held at that id: kept as minted"
+                );
                 crafted.push((minted, template));
             }
 
@@ -4480,9 +5178,17 @@ mod tests {
             assert_ne!(helmet_id, armor_id, "each craft mints its own item id");
             let row = stored(&mut conn, &s).await;
             let items = &row.inventory.0.backpack.items.0;
-            assert_eq!(items[&helmet_id].item_template_id, uuid(DRAGONSCALE_HELMET), "the helmet is still a helmet");
+            assert_eq!(
+                items[&helmet_id].item_template_id,
+                uuid(DRAGONSCALE_HELMET),
+                "the helmet is still a helmet"
+            );
             assert_eq!(items[&armor_id].item_template_id, uuid(DRAGONSCALE_ARMOR));
-            assert_eq!(items.len(), 3, "the seeded battleaxe + both crafts: {items:?}");
+            assert_eq!(
+                items.len(),
+                3,
+                "the seeded battleaxe + both crafts: {items:?}"
+            );
         }
 
         /// CONTROL for the collision guard: a temper takes its item out of the backpack
@@ -4494,16 +5200,36 @@ mod tests {
             let sd = static_data_from_deploy();
             let rd = repair_data_from_deploy();
             let s = seed(&mut conn, 0).await;
-            start_craft(&mut conn, &sd, rd, deploy_items(), s.user_id, s.character_id, request(s.item_id, 10))
-                .await
-                .expect("temper starts");
+            start_craft(
+                &mut conn,
+                &sd,
+                rd,
+                deploy_items(),
+                s.user_id,
+                s.character_id,
+                request(s.item_id, 10),
+            )
+            .await
+            .expect("temper starts");
             let craft_id = stored(&mut conn, &s).await.server_state.0.craft_jobs[0].id;
-            let fin = collect_craft(&mut conn, &sd, rd, None, s.user_id, s.character_id, craft_id, false)
-                .await
-                .expect("finish");
+            let fin = collect_craft(
+                &mut conn,
+                &sd,
+                rd,
+                None,
+                s.user_id,
+                s.character_id,
+                craft_id,
+                false,
+            )
+            .await
+            .expect("finish");
             assert_eq!(fin.reward.items[0].id, s.item_id);
             let row = stored(&mut conn, &s).await;
-            assert_eq!(row.inventory.0.backpack.items.0[&s.item_id].tempering_level, 10);
+            assert_eq!(
+                row.inventory.0.backpack.items.0[&s.item_id].tempering_level,
+                10
+            );
             assert_eq!(row.inventory.0.backpack.items.0.len(), 1);
         }
 
@@ -4515,25 +5241,50 @@ mod tests {
             let s = seed(&mut conn, RETAIL_MAGICKA_T10_GOLD - 1).await;
             let before = stored(&mut conn, &s).await;
 
-            let err = start_craft(&mut conn, &sd, rd, deploy_items(), s.user_id, s.character_id, request(s.item_id, 0))
-                .await
-                .err()
-                .expect("one gold short is refused");
-            assert_eq!(err.to_string(), "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 1 }");
+            let err = start_craft(
+                &mut conn,
+                &sd,
+                rd,
+                deploy_items(),
+                s.user_id,
+                s.character_id,
+                request(s.item_id, 0),
+            )
+            .await
+            .err()
+            .expect("one gold short is refused");
+            assert_eq!(
+                err.to_string(),
+                "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 1 }"
+            );
 
             let after = stored(&mut conn, &s).await;
             assert_eq!(gold_of(&after), RETAIL_MAGICKA_T10_GOLD - 1);
             assert_eq!(counts(&after.inventory.0), counts(&before.inventory.0));
             assert!(after.server_state.0.craft_jobs.is_empty(), "no job");
             let item = &after.inventory.0.backpack.items.0[&s.item_id];
-            assert!(item.properties.enchanting.is_empty(), "no roll: the item is still in the backpack, unenchanted");
-            assert_eq!(after.inventory.0.backpack_version, before.inventory.0.backpack_version);
+            assert!(
+                item.properties.enchanting.is_empty(),
+                "no roll: the item is still in the backpack, unenchanted"
+            );
+            assert_eq!(
+                after.inventory.0.backpack_version,
+                before.inventory.0.backpack_version
+            );
 
             // Control: the same character with one more gold starts fine.
             let s2 = seed(&mut conn, RETAIL_MAGICKA_T10_GOLD).await;
-            start_craft(&mut conn, &sd, rd, deploy_items(), s2.user_id, s2.character_id, request(s2.item_id, 0))
-                .await
-                .expect("exactly affordable");
+            start_craft(
+                &mut conn,
+                &sd,
+                rd,
+                deploy_items(),
+                s2.user_id,
+                s2.character_id,
+                request(s2.item_id, 0),
+            )
+            .await
+            .expect("exactly affordable");
             assert_eq!(gold_of(&stored(&mut conn, &s2).await), 0);
         }
 
@@ -4547,16 +5298,35 @@ mod tests {
             let rd = repair_data_from_deploy();
 
             let refused = seed_short(&mut conn, 100_000, Some(MAT_4)).await;
-            let err = start_craft(&mut conn, &sd, rd, deploy_items(), refused.user_id, refused.character_id, request(refused.item_id, 0))
-                .await
-                .err()
-                .expect("short, no gems offered");
-            assert_eq!(err.to_string(), "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 4 }");
+            let err = start_craft(
+                &mut conn,
+                &sd,
+                rd,
+                deploy_items(),
+                refused.user_id,
+                refused.character_id,
+                request(refused.item_id, 0),
+            )
+            .await
+            .err()
+            .expect("short, no gems offered");
+            assert_eq!(
+                err.to_string(),
+                "BladeApiError { http_status_code: 400, service_id: 9001, error_code: 4 }"
+            );
 
             let s = seed_short(&mut conn, 100_000, Some(MAT_4)).await;
-            let resp = start_craft(&mut conn, &sd, rd, deploy_items(), s.user_id, s.character_id, request_paying(s.item_id, 0, true))
-                .await
-                .expect("gems buy the missing soul gem");
+            let resp = start_craft(
+                &mut conn,
+                &sd,
+                rd,
+                deploy_items(),
+                s.user_id,
+                s.character_id,
+                request_paying(s.item_id, 0, true),
+            )
+            .await
+            .expect("gems buy the missing soul gem");
             assert_eq!(resp.wallet.balance(GEMS), 500 - 16);
             assert_eq!(resp.wallet.balance(GOLD), 100_000 - RETAIL_MAGICKA_T10_GOLD);
             let inv = serde_json::to_value(&resp.inventory).unwrap();
@@ -4567,17 +5337,38 @@ mod tests {
                 .map(|v| v.as_str().unwrap())
                 .collect();
             removed.sort();
-            assert_eq!(removed, vec![MAT_4, MAT_1], "the 3 held Grand soul gems are used: {inv}");
-            assert_eq!(resp.craft["craftingTypeId"], "aaef180b-8ee7-474a-a7eb-0156aa5529ba", "{}", resp.craft);
+            assert_eq!(
+                removed,
+                vec![MAT_4, MAT_1],
+                "the 3 held Grand soul gems are used: {inv}"
+            );
+            assert_eq!(
+                resp.craft["craftingTypeId"], "aaef180b-8ee7-474a-a7eb-0156aa5529ba",
+                "{}",
+                resp.craft
+            );
 
             let row = stored(&mut conn, &s).await;
             assert_eq!(row.wallet.0.balance(GEMS), 500 - 16);
             assert_eq!(row.server_state.0.craft_jobs.len(), 1);
             let craft_id = row.server_state.0.craft_jobs[0].id;
-            collect_craft(&mut conn, &sd, rd, None, s.user_id, s.character_id, craft_id, false)
-                .await
-                .expect("the gem-paid job is collectable");
-            assert_eq!(stored(&mut conn, &s).await.wallet.0.balance(GEMS), 500 - 16, "finish bills nothing more");
+            collect_craft(
+                &mut conn,
+                &sd,
+                rd,
+                None,
+                s.user_id,
+                s.character_id,
+                craft_id,
+                false,
+            )
+            .await
+            .expect("the gem-paid job is collectable");
+            assert_eq!(
+                stored(&mut conn, &s).await.wallet.0.balance(GEMS),
+                500 - 16,
+                "finish bills nothing more"
+            );
         }
 
         #[tokio::test]
@@ -4588,9 +5379,17 @@ mod tests {
             let s = seed(&mut conn, 100_000).await;
             let before = stored(&mut conn, &s).await;
 
-            start_craft(&mut conn, &sd, rd, deploy_items(), s.user_id, s.character_id, request(s.item_id, 10))
-                .await
-                .expect("temper starts");
+            start_craft(
+                &mut conn,
+                &sd,
+                rd,
+                deploy_items(),
+                s.user_id,
+                s.character_id,
+                request(s.item_id, 10),
+            )
+            .await
+            .expect("temper starts");
             let after = stored(&mut conn, &s).await;
             assert_eq!(gold_of(&after), 100_000);
             assert_eq!(counts(&after.inventory.0), counts(&before.inventory.0));
@@ -4600,9 +5399,7 @@ mod tests {
             assert_eq!(job.results["items"][0]["temperingLevel"], 10);
         }
     }
-
 }
-
 
 #[cfg(test)]
 mod town_hang_containment_tests {
@@ -4620,7 +5417,10 @@ mod town_hang_containment_tests {
         let b1 = Uuid::new_v4();
         let t = town_with(&b1.to_string());
         let ids = town_building_ids(&t);
-        assert!(ids.contains(&b1), "must find a building the client will find");
+        assert!(
+            ids.contains(&b1),
+            "must find a building the client will find"
+        );
         assert_eq!(ids.len(), 1);
     }
 
@@ -4703,7 +5503,10 @@ mod stuck_craft_tests {
         let b = Uuid::from_u128(0xB1);
         let owned = std::collections::HashSet::from([b]);
         assert!(is_stuck_finished(&job(b, NOW - 1), &owned, NOW));
-        assert!(is_stuck_finished(&job(b, NOW), &owned, NOW), "exactly due counts as finished");
+        assert!(
+            is_stuck_finished(&job(b, NOW), &owned, NOW),
+            "exactly due counts as finished"
+        );
     }
 
     /// Retail restart recovery for enchants: `POST /crafts` removes the input item, and
@@ -4750,10 +5553,18 @@ mod stuck_craft_tests {
     #[test]
     fn a_finished_job_on_an_unowned_building_is_untouched() {
         let owned = std::collections::HashSet::from([Uuid::from_u128(0xB1)]);
-        assert!(!is_stuck_finished(&job(Uuid::from_u128(0xB2), NOW - 1), &owned, NOW));
+        assert!(!is_stuck_finished(
+            &job(Uuid::from_u128(0xB2), NOW - 1),
+            &owned,
+            NOW
+        ));
         // …and with no town at all, nothing is ever collected.
         let empty = std::collections::HashSet::new();
-        assert!(!is_stuck_finished(&job(Uuid::from_u128(0xB1), NOW - 1), &empty, NOW));
+        assert!(!is_stuck_finished(
+            &job(Uuid::from_u128(0xB1), NOW - 1),
+            &empty,
+            NOW
+        ));
     }
 }
 

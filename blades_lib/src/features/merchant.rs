@@ -63,7 +63,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::economy::GOLD;
+use crate::economy::{RewardGrant, GOLD};
 use crate::user_data::{CompleteInventory, InventoryChangeTracker, Item};
 
 /// Catalog refresh window. **MEASURED**: `expiration − start` was 36,000,000 ms
@@ -132,7 +132,9 @@ impl SellPrices {
                 let Ok(property) = Uuid::parse_str(key) else {
                     continue;
                 };
-                let Some(tiers) = row.as_object() else { continue };
+                let Some(tiers) = row.as_object() else {
+                    continue;
+                };
                 let mut parsed = HashMap::new();
                 for (tier, v) in tiers {
                     if let (Ok(t), Some(gold)) = (tier.parse::<u64>(), v.as_u64()) {
@@ -175,7 +177,11 @@ impl SellPrices {
             Some(ladder) if !ladder.is_empty() => {
                 let idx = ((level - 1) as usize).min(ladder.len() - 1);
                 let m = ladder[idx];
-                if m > 0.0 { m } else { 1.0 }
+                if m > 0.0 {
+                    m
+                } else {
+                    1.0
+                }
             }
             // Untemperable, or a template with no ladder: temper cannot raise the
             // price, so pay the base value.
@@ -190,16 +196,21 @@ impl SellPrices {
             // row means the same thing.
             return 0;
         };
-        let scaled =
-            (*base as f64 * self.temper_multiplier(item.item_template_id, item.tempering_level))
-                .round() as u64;
+        let scaled = (*base as f64
+            * self.temper_multiplier(item.item_template_id, item.tempering_level))
+        .round() as u64;
         // GRADING contributes nothing (measured: residual 0 over 188 graded
         // records); only ENCHANTING adds, and at face value.
         let enchant: u64 = item
             .properties
             .enchanting
             .iter()
-            .filter_map(|p| self.enchant.get(&p.id).and_then(|t| t.get(&p.tier)).copied())
+            .filter_map(|p| {
+                self.enchant
+                    .get(&p.id)
+                    .and_then(|t| t.get(&p.tier))
+                    .copied()
+            })
             .sum();
         scaled.saturating_add(enchant)
     }
@@ -266,6 +277,11 @@ pub struct MerchantWindow {
     pub expiration_ms: i64,
     /// The rolled sale stock for this window: bundle id -> quantity stocked.
     pub bundles: Vec<(Uuid, u64)>,
+    /// Generated item grants for bundles whose static definition is only a bare
+    /// template. Used for Enchanter jewelry: roll once when the catalog is
+    /// generated, then grant exactly that item when bought.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub generated_grants: HashMap<Uuid, RewardGrant>,
     /// The merchant's STATIC gold budget for this window.
     pub wallet_gold: u64,
     /// Net cashflow this window: negative when the merchant bought from the
@@ -285,6 +301,7 @@ impl Default for MerchantWindow {
             start_ms: 0,
             expiration_ms: 0,
             bundles: Vec::new(),
+            generated_grants: HashMap::new(),
             wallet_gold: 0,
             revenue_gold: 0,
             sales: HashMap::new(),
@@ -432,8 +449,15 @@ impl SplitMix64 {
 /// One line of a sell: what left the player's inventory and what they were paid.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SoldLine {
-    Item { id: Uuid, paid: u64 },
-    Stackable { template: Uuid, count: u64, paid: u64 },
+    Item {
+        id: Uuid,
+        paid: u64,
+    },
+    Stackable {
+        template: Uuid,
+        count: u64,
+        paid: u64,
+    },
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -516,7 +540,10 @@ pub fn apply_buyback(
         // `try_pay` is the same debit the shop's own purchase path uses, so an
         // overdraft is impossible even if the balance check above ever drifts.
         wallet
-            .try_pay(&[crate::economy::Price { currency_id: GOLD, quantity: price }])
+            .try_pay(&[crate::economy::Price {
+                currency_id: GOLD,
+                quantity: price,
+            }])
             .map_err(|_| BuybackError::InsufficientGold)?;
     }
     // The merchant gets its money back, mirroring the `-= paid` in `apply_sell`.
@@ -537,7 +564,10 @@ pub fn apply_buyback(
             .insert(bs.item_template_id);
     }
 
-    Ok(BuybackOutcome { slot, gold_spent: price })
+    Ok(BuybackOutcome {
+        slot,
+        gold_spent: price,
+    })
 }
 
 pub fn apply_sell(
@@ -566,18 +596,12 @@ pub fn apply_sell(
         window.revenue_gold -= paid as i64;
         wallet.credit(GOLD, paid);
         tracker.modified_backpack.items.insert(*item_id);
-        outcome.sold.push(SoldLine::Item {
-            id: *item_id,
-            paid,
-        });
+        outcome.sold.push(SoldLine::Item { id: *item_id, paid });
         outcome.gold_paid = outcome.gold_paid.saturating_add(paid);
         outcome.buybacks.push(Buyback {
             id: buyback_id(&shop_id, item_id, now_ms, nth),
             shop_id,
-            item: Some(BuybackItem {
-                id: *item_id,
-                item,
-            }),
+            item: Some(BuybackItem { id: *item_id, item }),
             stackable_item: None,
             expiration: now_ms + BUYBACK_MS,
             price: paid,
@@ -672,7 +696,10 @@ mod tests {
             properties: ItemPropertiesAll {
                 enchanting: enchants
                     .iter()
-                    .map(|(id, tier)| ItemSingleProperty { id: *id, tier: *tier })
+                    .map(|(id, tier)| ItemSingleProperty {
+                        id: *id,
+                        tier: *tier,
+                    })
                     .collect(),
                 grading: vec![ItemSingleProperty {
                     id: Uuid::from_u128(0x99),
@@ -700,6 +727,7 @@ mod tests {
             start_ms: 1_000_000,
             expiration_ms: expiration_for(1_000_000),
             bundles: vec![(Uuid::from_u128(0xb1), 5)],
+            generated_grants: HashMap::new(),
             wallet_gold: gold,
             revenue_gold: 0,
             sales: HashMap::new(),
@@ -768,7 +796,11 @@ mod tests {
         let a = band.roll(&SHOP, 42_000);
         let b = band.roll(&SHOP, 42_000);
         assert_eq!(a, b);
-        assert_ne!(a, band.roll(&SHOP, 42_000 + REFRESH_MS), "next window rerolls");
+        assert_ne!(
+            a,
+            band.roll(&SHOP, 42_000 + REFRESH_MS),
+            "next window rerolls"
+        );
     }
 
     #[test]
@@ -786,7 +818,10 @@ mod tests {
     #[test]
     fn revenue_is_omitted_from_the_wire_until_something_moves() {
         let mut w = window(1000);
-        assert!(w.revenue_wire().is_empty(), "fresh catalog reports revenue: []");
+        assert!(
+            w.revenue_wire().is_empty(),
+            "fresh catalog reports revenue: []"
+        );
         w.revenue_gold = -35;
         assert_eq!(w.revenue_wire(), vec![(GOLD, -35)]);
     }
@@ -851,7 +886,11 @@ mod tests {
         let p = prices();
         let mut it = item(99, &[]);
         it.properties.enchanting.clear();
-        assert_eq!(p.item_price(&it), 7639, "clamps to the temper-10 multiplier");
+        assert_eq!(
+            p.item_price(&it),
+            7639,
+            "clamps to the temper-10 multiplier"
+        );
     }
 
     #[test]
@@ -889,16 +928,30 @@ mod tests {
         let mut stacks = HashMap::new();
         stacks.insert(TPL_STACK, 4);
         let out = apply_sell(
-            &p, &mut w, SHOP, &[id], &stacks, &mut inv, &mut wallet, &mut tracker, 2_000_000,
+            &p,
+            &mut w,
+            SHOP,
+            &[id],
+            &stacks,
+            &mut inv,
+            &mut wallet,
+            &mut tracker,
+            2_000_000,
         );
 
         // 635 for the item + 4 * 190 for the stack.
         assert_eq!(out.gold_paid, 635 + 760);
         assert_eq!(wallet.balance(GOLD), 1395);
-        assert_eq!(w.revenue_gold, -1395, "revenue goes negative, wallet does not move");
+        assert_eq!(
+            w.revenue_gold, -1395,
+            "revenue goes negative, wallet does not move"
+        );
         assert_eq!(w.wallet_gold, 10_000, "the wallet is a static budget");
         assert_eq!(w.remaining_budget(), 8_605);
-        assert!(!inv.backpack.items.0.contains_key(&id), "item left the backpack");
+        assert!(
+            !inv.backpack.items.0.contains_key(&id),
+            "item left the backpack"
+        );
         assert_eq!(inv.backpack.stackable_items.count(TPL_STACK), 0);
         assert_eq!(out.buybacks.len(), 2);
         assert!(out.unknown.is_empty());
@@ -924,7 +977,14 @@ mod tests {
         }
 
         let out = apply_sell(
-            &p, &mut w, SHOP, &[a, b], &HashMap::new(), &mut inv, &mut wallet, &mut tracker,
+            &p,
+            &mut w,
+            SHOP,
+            &[a, b],
+            &HashMap::new(),
+            &mut inv,
+            &mut wallet,
+            &mut tracker,
             2_000_000,
         );
 
@@ -945,7 +1005,10 @@ mod tests {
             })
             .collect();
         assert_eq!(paid, vec![400, 0]);
-        assert_eq!(out.buybacks[1].price, 0, "a zero-price buyback slot still exists");
+        assert_eq!(
+            out.buybacks[1].price, 0,
+            "a zero-price buyback slot still exists"
+        );
     }
 
     #[test]
@@ -984,7 +1047,15 @@ mod tests {
         stacks.insert(TPL_STACK, 1);
         let now = 2_000_000;
         apply_sell(
-            &p, &mut w, SHOP, &[], &stacks, &mut inv, &mut wallet, &mut tracker, now,
+            &p,
+            &mut w,
+            SHOP,
+            &[],
+            &stacks,
+            &mut inv,
+            &mut wallet,
+            &mut tracker,
+            now,
         );
         assert_eq!(w.buybacks.len(), 1);
         assert_eq!(w.buybacks[0].expiration, now + 300_000);
@@ -1005,7 +1076,15 @@ mod tests {
         let mut stacks = HashMap::new();
         stacks.insert(TPL_STACK, 3); // none held
         let out = apply_sell(
-            &p, &mut w, SHOP, &[ghost], &stacks, &mut inv, &mut wallet, &mut tracker, 2_000_000,
+            &p,
+            &mut w,
+            SHOP,
+            &[ghost],
+            &stacks,
+            &mut inv,
+            &mut wallet,
+            &mut tracker,
+            2_000_000,
         );
         assert_eq!(out.unknown.len(), 2);
         assert!(out.sold.is_empty());
@@ -1029,7 +1108,10 @@ mod tests {
         let j = serde_json::to_value(&b).unwrap();
         let obj = j.as_object().unwrap();
         assert!(obj.contains_key("stackableItem"), "camelCase stackableItem");
-        assert!(!obj.contains_key("item"), "instanced item omitted when absent");
+        assert!(
+            !obj.contains_key("item"),
+            "instanced item omitted when absent"
+        );
         assert!(obj.contains_key("shopId") && obj.contains_key("expiration"));
         assert_eq!(obj["price"], 35);
         let back: Buyback = serde_json::from_value(j).unwrap();
@@ -1067,7 +1149,10 @@ mod tests {
             distinct.len()
         );
         let max = p.sell_value.values().copied().max().unwrap_or(0);
-        assert!(max > 50_000, "top sell value is only {max}; expected retail scale");
+        assert!(
+            max > 50_000,
+            "top sell value is only {max}; expected retail scale"
+        );
         // Every temper ladder must be usable: 10 entries, all positive.
         for (tpl, ladder) in p.temper_mult.iter() {
             assert_eq!(ladder.len(), 10, "template {tpl} has a short temper ladder");
@@ -1077,7 +1162,6 @@ mod tests {
             );
         }
     }
-
 
     /// SELLING MUST BE REVERSIBLE. The whole of report #163.
     ///
@@ -1099,17 +1183,39 @@ mod tests {
         inv.backpack.items.0.insert(id, item(3, &[]));
 
         let gold_before = wallet.balance(GOLD);
-        let out = apply_sell(&prices(), &mut w, SHOP, &[id], &Default::default(),
-                             &mut inv, &mut wallet, &mut tracker, now);
+        let out = apply_sell(
+            &prices(),
+            &mut w,
+            SHOP,
+            &[id],
+            &Default::default(),
+            &mut inv,
+            &mut wallet,
+            &mut tracker,
+            now,
+        );
         assert_eq!(out.buybacks.len(), 1, "selling opens a buyback slot");
-        assert!(!inv.backpack.items.0.contains_key(&id), "the item left the pack");
+        assert!(
+            !inv.backpack.items.0.contains_key(&id),
+            "the item left the pack"
+        );
         let paid = out.buybacks[0].price;
         let slot_id = out.buybacks[0].id;
 
-        let back = apply_buyback(&mut w, slot_id, &mut inv, &mut wallet, &mut tracker, now + 1)
-            .expect("the slot must be claimable");
+        let back = apply_buyback(
+            &mut w,
+            slot_id,
+            &mut inv,
+            &mut wallet,
+            &mut tracker,
+            now + 1,
+        )
+        .expect("the slot must be claimable");
 
-        assert_eq!(back.gold_spent, paid, "you pay back exactly what you were paid");
+        assert_eq!(
+            back.gold_spent, paid,
+            "you pay back exactly what you were paid"
+        );
         assert!(inv.backpack.items.0.contains_key(&id), "the item came back");
         assert_eq!(wallet.balance(GOLD), gold_before, "and the gold nets out");
         assert!(w.buybacks.is_empty(), "the slot is consumed");
@@ -1127,10 +1233,26 @@ mod tests {
         let original = item(7, &[(ENCH, 9)]);
         inv.backpack.items.0.insert(id, original.clone());
 
-        let out = apply_sell(&prices(), &mut w, SHOP, &[id], &Default::default(),
-                             &mut inv, &mut wallet, &mut tr, now);
-        apply_buyback(&mut w, out.buybacks[0].id, &mut inv, &mut wallet, &mut tr, now + 1)
-            .expect("claimable");
+        let out = apply_sell(
+            &prices(),
+            &mut w,
+            SHOP,
+            &[id],
+            &Default::default(),
+            &mut inv,
+            &mut wallet,
+            &mut tr,
+            now,
+        );
+        apply_buyback(
+            &mut w,
+            out.buybacks[0].id,
+            &mut inv,
+            &mut wallet,
+            &mut tr,
+            now + 1,
+        )
+        .expect("claimable");
 
         assert_eq!(
             inv.backpack.items.0.get(&id),
@@ -1151,13 +1273,33 @@ mod tests {
 
         let mut want = std::collections::HashMap::new();
         want.insert(TPL_STACK, 10u64);
-        let out = apply_sell(&prices(), &mut w, SHOP, &[], &want,
-                             &mut inv, &mut wallet, &mut tr, now);
+        let out = apply_sell(
+            &prices(),
+            &mut w,
+            SHOP,
+            &[],
+            &want,
+            &mut inv,
+            &mut wallet,
+            &mut tr,
+            now,
+        );
         assert_eq!(inv.backpack.stackable_items.count(TPL_STACK), 15);
 
-        apply_buyback(&mut w, out.buybacks[0].id, &mut inv, &mut wallet, &mut tr, now + 1)
-            .expect("claimable");
-        assert_eq!(inv.backpack.stackable_items.count(TPL_STACK), 25, "the stack is whole again");
+        apply_buyback(
+            &mut w,
+            out.buybacks[0].id,
+            &mut inv,
+            &mut wallet,
+            &mut tr,
+            now + 1,
+        )
+        .expect("claimable");
+        assert_eq!(
+            inv.backpack.stackable_items.count(TPL_STACK),
+            25,
+            "the stack is whole again"
+        );
     }
 
     /// THE CONTROL: the five-minute window is still enforced, and an expired slot
@@ -1173,14 +1315,32 @@ mod tests {
         let mut tr = InventoryChangeTracker::default();
         let id = Uuid::from_u128(0xFEED);
         inv.backpack.items.0.insert(id, item(1, &[]));
-        let out = apply_sell(&prices(), &mut w, SHOP, &[id], &Default::default(),
-                             &mut inv, &mut wallet, &mut tr, now);
+        let out = apply_sell(
+            &prices(),
+            &mut w,
+            SHOP,
+            &[id],
+            &Default::default(),
+            &mut inv,
+            &mut wallet,
+            &mut tr,
+            now,
+        );
 
-        let err = apply_buyback(&mut w, out.buybacks[0].id, &mut inv, &mut wallet, &mut tr,
-                                now + BUYBACK_MS + 1)
-            .expect_err("an expired slot must be refused");
+        let err = apply_buyback(
+            &mut w,
+            out.buybacks[0].id,
+            &mut inv,
+            &mut wallet,
+            &mut tr,
+            now + BUYBACK_MS + 1,
+        )
+        .expect_err("an expired slot must be refused");
         assert_eq!(err, BuybackError::Expired);
-        assert!(!inv.backpack.items.0.contains_key(&id), "and the item stays sold");
+        assert!(
+            !inv.backpack.items.0.contains_key(&id),
+            "and the item stays sold"
+        );
     }
 
     /// An unknown slot id is `NoSuchSlot`, distinct from `Expired` — the two are
@@ -1191,9 +1351,15 @@ mod tests {
         let mut inv = inventory();
         let mut wallet = CompleteWallet::default();
         let mut tr = InventoryChangeTracker::default();
-        let err = apply_buyback(&mut w, Uuid::from_u128(0x1234), &mut inv, &mut wallet, &mut tr, 1)
-            .expect_err("no such slot");
+        let err = apply_buyback(
+            &mut w,
+            Uuid::from_u128(0x1234),
+            &mut inv,
+            &mut wallet,
+            &mut tr,
+            1,
+        )
+        .expect_err("no such slot");
         assert_eq!(err, BuybackError::NoSuchSlot);
     }
-
 }

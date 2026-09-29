@@ -6,7 +6,7 @@
 //! ring or necklace from a merchant — the four retail merchant purchases of
 //! jewellery we hold are all graded, and the SAME bundle (Gold Emerald Ring,
 //! `01ada486`) came out at grade 1 once and grade 3 another time, so the grade
-//! was rolled at purchase, not authored per offer. The APK agrees: every one of
+//! was generated rather than authored per bundle. The APK agrees: every one of
 //! the 16 jewellery bundles a merchant can stock has no `_itemEnhancementPointer`
 //! at all, while `LootEnhancementData._alwaysGradedItemTypes` is `[10, 11]` —
 //! rings and necklaces are ALWAYS graded.
@@ -142,7 +142,7 @@ pub fn grade_if_bare<R: Rng + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{SeedableRng, rngs::StdRng};
+    use rand::{rngs::StdRng, SeedableRng};
 
     fn provided_bonuses(grade: u64) -> &'static [u64] {
         JEWELRY_GRADES.iter().find(|g| g.0 == grade).unwrap().2

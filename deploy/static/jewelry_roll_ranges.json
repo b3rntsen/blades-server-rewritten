@@ -1,0 +1,102 @@
+{
+  "_meta": {
+    "description": "Measured jewelry roll ranges used for generated Sigil and Enchanter jewelry.",
+    "source": "Read-only retail snapshot /Users/berntsen/blades-prod-backups/20260607-112415/blades-snapshot-20260607-112415.db, api_captures, decoded response_body JSON; item type/template labels from /Users/berntsen/Projects/blades-capture/reference/game-defs/items.json and uuid_labels.json.",
+    "measurementDate": "2026-09-29",
+    "globalShopJewelryPurchases": "251 jewelry grants found in 1102 successful POST .../globalshops/current/purchase rows. The only global-shop jewelry purchases in this snapshot were the three randomized jewelry bundle products 11102495-fde7-4e77-b6c4-d13b9303f1f5, 11b322d2-1b5e-4e90-bb41-a8d90ca9548b, and 9e4dc391-422e-4b25-ba90-faab39e0769f; every sampled purchase had a distinct full roll.",
+    "namedSigilJewelryPurchases": "0 exact named Sigil ring/necklace purchase responses were present in this snapshot; named offers are granted from global_shop_offer_contents.json, with ENCHANTING/GRADING rolled from the APK property pools and constrained by the count/tier ranges measured here.",
+    "enchanterJewelryPurchases": "0 jewelry purchases found in 8 successful POST .../shops/{id}/purchase rows. Retail shop opens expose bundle ids/quantities only; per-window generated grants are server state in this implementation so the purchase keeps the generated item.",
+    "generator": "script/mine_jewelry_rolls.js"
+  },
+  "globalShop": {
+    "observations": 251,
+    "products": {
+      "11102495-fde7-4e77-b6c4-d13b9303f1f5": {
+        "observations": 77,
+        "distinctRolls": 77
+      },
+      "11b322d2-1b5e-4e90-bb41-a8d90ca9548b": {
+        "observations": 69,
+        "distinctRolls": 69
+      },
+      "9e4dc391-422e-4b25-ba90-faab39e0769f": {
+        "observations": 105,
+        "distinctRolls": 105
+      }
+    }
+  },
+  "byItemTier": {
+    "1": {
+      "observations": 21,
+      "enchantingCount": { "0": 3, "1": 2, "2": 3, "3": 13 },
+      "grade": { "2": 1, "3": 8, "4": 4, "5": 5, "6": 3 }
+    },
+    "2": {
+      "observations": 79,
+      "enchantingCount": { "0": 7, "1": 12, "2": 13, "3": 47 },
+      "grade": { "1": 2, "2": 3, "3": 27, "4": 12, "5": 21, "6": 14 }
+    },
+    "3": {
+      "observations": 46,
+      "enchantingCount": { "0": 5, "1": 9, "2": 6, "3": 26 },
+      "grade": { "1": 1, "2": 2, "3": 10, "4": 17, "5": 9, "6": 6 }
+    },
+    "4": {
+      "observations": 30,
+      "enchantingCount": { "0": 2, "1": 6, "2": 8, "3": 14 },
+      "grade": { "2": 2, "3": 14, "4": 6, "5": 5, "6": 3 }
+    },
+    "5": {
+      "observations": 36,
+      "enchantingCount": { "0": 6, "1": 4, "2": 8, "3": 18 },
+      "grade": { "1": 6, "2": 4, "3": 13, "4": 3, "5": 6, "6": 4 }
+    },
+    "6": {
+      "observations": 31,
+      "enchantingCount": { "0": 6, "1": 6, "2": 2, "3": 17 },
+      "grade": { "1": 3, "2": 4, "3": 13, "4": 5, "5": 1, "6": 5 }
+    },
+    "7": {
+      "observations": 8,
+      "enchantingCount": { "2": 1, "3": 7 },
+      "grade": { "1": 1, "2": 1, "3": 1, "4": 2, "5": 2, "6": 1 }
+    }
+  },
+  "templateTiers": {
+    "8b0e69bc-f25a-46d9-9bc2-60becb25cb2e": 1,
+    "869bf6f4-f7fb-43cf-b264-02b84f9a5425": 1,
+    "43ec840f-f24f-4e84-8201-6c70885c14f6": 2,
+    "ef55a000-ff34-41b0-a12a-b439c2d47b06": 2,
+    "db210664-0021-4bac-a5ac-86310ed6fd29": 2,
+    "f5a6289a-ecdf-4d8d-9f17-eb695231bdf1": 2,
+    "32b64e57-98c4-4b28-a654-9b7539da490a": 2,
+    "05862206-b6db-4cd4-9f7a-ed2e03fc90af": 3,
+    "73a2e3d8-a64e-42ab-b0d7-f6680b40a635": 3,
+    "726d5855-c0ad-429f-9317-c2d561b2b761": 3,
+    "bcaf39a9-d543-41a8-bd2a-f996d1da2941": 4,
+    "f32e5b28-afa4-41a5-a40d-1a3d430d08d2": 4,
+    "27ee19f6-0b60-4059-9c89-99d72429d29c": 5,
+    "1b1d7a8e-a37b-4baf-9339-f6832cba81e6": 5,
+    "36c43eae-867b-44e6-a45e-5065c4f86002": 6,
+    "aa34efff-d04f-464e-9a75-1267d4c98eae": 6,
+    "52739560-b5f0-4a33-82ef-907ee227ba73": 6,
+    "9e0714d7-2a10-406d-a3eb-9b8ca95e14ad": 7,
+    "d408a912-3a4f-4b2a-bf4d-a55b78910f08": 7,
+    "40e8b7f7-17fd-49bf-8305-d0c27a758b2e": 8,
+    "9c2cfaa9-0f28-4ac2-8d10-b9b6cf2b6270": 8,
+    "591fad86-0cef-4e8e-aed1-990f8eaa8571": 8,
+    "1ca7737c-1eef-462a-b85d-922dfb5eb5b6": 9,
+    "6fa7a0a0-e5fe-4cfb-9387-2f566949762f": 9,
+    "bad8c999-7ec2-4e12-b64a-ca232b88e7f3": 9,
+    "a948c18d-9895-44fe-afd7-0dcb8789d41e": 9,
+    "3833ad47-86c6-427a-b30e-8d3e1f27b1d7": 9,
+    "23607f09-a103-4ed3-a0de-33e0498f8018": 9,
+    "5a67da20-ddaa-4468-9b93-a4e60320f95c": 10,
+    "54a7fc91-93e7-4908-a29a-0667d0b07179": 10,
+    "240eb001-fe3e-4899-b0cc-dd87cb8a72b6": 10,
+    "01f4a08e-ffd7-45eb-8a65-0a4ca6d0b7fd": 10,
+    "85c44edf-2fc6-4b4d-b8a9-3340f127f9f0": 10,
+    "81d242e6-de85-4960-9ce9-8bfa75b85730": 10,
+    "4add8afb-bfb4-4022-8681-c226ec05c0de": 10
+  }
+}
