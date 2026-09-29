@@ -94,20 +94,22 @@ pub struct ServerState {
     /// How many times each global-shop product has been bought
     /// (`globalShopProductId` -> count), surfaced by `GET /globalshops/current`.
     pub global_shop_purchases: HashMap<Uuid, u64>,
-    /// How many times each global-shop offer has been bought **in its current
-    /// window**, keyed by the offer's full `purchaseTrackingId`.
+    /// How many times each global-shop offer tracking id has been bought, keyed by
+    /// the offer's full `purchaseTrackingId`.
     ///
     /// Separate from [`Self::global_shop_purchases`] because the two count
     /// different things and cannot share a key. That one is a LIFETIME total per
     /// product and backs `maxPurchases`; this one backs the `maxPurchaseLimits`
-    /// entries whose tracking id ends in a window start
-    /// (`<product>::override::<override>::<startTimeSecs>`).
+    /// entries the client checks for sold-out display. Retail returned both the
+    /// bare override tracking id and the timestamped window tracking id when an
+    /// offer had both.
     ///
-    /// Keying by the whole tracking id is what makes the reset free: the rotation
-    /// shifts that embedded timestamp, so a new window is a new key and the count
-    /// starts at zero without any expiry logic. Enforcing a per-window cap against
-    /// the lifetime counter instead would bar the offer for ever after its first
-    /// window — the bug that locked a player out of an event permanently.
+    /// For timestamped keys, keying by the whole tracking id is what makes the
+    /// reset free: the rotation shifts that embedded timestamp, so a new window is
+    /// a new key and the count starts at zero without any expiry logic. Enforcing
+    /// a per-window cap against the lifetime counter instead would bar the offer
+    /// for ever after its first window — the bug that locked a player out of an
+    /// event permanently.
     #[serde(default)]
     pub global_shop_window_purchases: HashMap<String, u64>,
     /// Active challenge set + rotation cursor + season points.
