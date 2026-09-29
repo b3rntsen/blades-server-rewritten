@@ -956,25 +956,6 @@ pub async fn get_quests(
                         deleted_quest_ids.extend(stale.iter().copied());
                     }
                 }
-                // Upsert the current window's job rows (idempotent within the window).
-                for job in &jobs {
-                    if let Some(entry) =
-                        jobs_gen::job_quest_db_entry(
-                            job,
-                            character_id_var,
-                            &globals.game_data,
-                            &globals.static_data.quests_daily.level_scaling,
-                        )
-                    {
-                        use crate::schema::quests;
-                        insert_into(quests::table)
-                            .values(&entry)
-                            .on_conflict((quests::id, quests::character_id))
-                            .do_nothing()
-                            .execute(&mut conn)
-                            .await?;
-                    }
-                }
                 // Persist the rotation scalars on the character.
                 character.character.0.last_jobs_reset_time = reset_boundary;
                 character.character.0.job_difficulty_cycle_index =
@@ -984,6 +965,29 @@ pub async fn get_quests(
                     diesel::update(characters::table)
                         .filter(characters::id.eq(character_id_var))
                         .set(&character)
+                        .execute(&mut conn)
+                        .await?;
+                }
+            }
+
+            // Upsert EVERY job the board is about to show — not only on a window reset.
+            // A replacement job minted by `generate_replenished` between resets (after a
+            // job was completed) is on the board too, and the client enters it by id:
+            // with no row behind it, `…/dungeons/current/enter` 404'd and the quest never
+            // started (tracker #279, 2026-09-29 12:57). Idempotent: `do_nothing` on an
+            // existing row, so an entered job's dungeon_state is never touched.
+            for job in &jobs {
+                if let Some(entry) = jobs_gen::job_quest_db_entry(
+                    job,
+                    character_id_var,
+                    &globals.game_data,
+                    &globals.static_data.quests_daily.level_scaling,
+                ) {
+                    use crate::schema::quests;
+                    insert_into(quests::table)
+                        .values(&entry)
+                        .on_conflict((quests::id, quests::character_id))
+                        .do_nothing()
                         .execute(&mut conn)
                         .await?;
                 }
