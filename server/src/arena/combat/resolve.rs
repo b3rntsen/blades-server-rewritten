@@ -1365,7 +1365,7 @@ fn stun_the_blocked_attacker(
     blocker_slot: usize,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
-    use super::state::{BASE_STAGGER_DURATION_SECS, StatusEffectType};
+    use super::state::{StatusEffectType, BASE_STAGGER_DURATION_SECS};
     let mut out = Vec::new();
     let viewers = combat.fighters.len();
     if attacker_slot >= viewers || combat.fighters[attacker_slot].is_dead() {
@@ -1955,8 +1955,7 @@ pub(super) fn resolve_ability_cast(
             let authored = maneuver_timing
                 .and_then(|t| t.impacts.get(idx).copied())
                 .unwrap_or_else(|| if idx == 0 { 0.0 } else { delay.as_secs_f32() });
-            let due =
-                now + Duration::from_secs_f32(authored.max(0.0)) + bot_maneuver_latency_comp;
+            let due = now + Duration::from_secs_f32(authored.max(0.0)) + bot_maneuver_latency_comp;
             debug!(
                 "combat: slot {sender} maneuver {} impact {}/{} in {:?}",
                 ea.ability_uuid,
@@ -4346,7 +4345,7 @@ fn apply_status_conditioning(
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
     use super::damage::is_elemental;
-    use super::state::{DamageType, condition_for_element};
+    use super::state::{condition_for_element, DamageType};
 
     let mut out = Vec::new();
     let target_obj = combat.fighters[target_slot].net_object_id;
@@ -4415,12 +4414,8 @@ fn apply_status_conditioning(
                 0
             };
             combat.fighters[target_slot].clear_element_damage(*ty);
-            let frame = messages::change_combat_status_effect(
-                target_obj,
-                true,
-                condition,
-                duration_secs,
-            );
+            let frame =
+                messages::change_combat_status_effect(target_obj, true, condition, duration_secs);
             info!(
                 "combat status: gsid={} target_slot={target_slot} target={} status={condition:?} source_element={ty:?} recent_damage={recent:.1} threshold={threshold:.1} duration={duration_secs} dot_per_tick={per_tick:.2} poisoned_ravage_hp={poisoned_ravage}",
                 combat.game_session_id, combat.fighters[target_slot].loadout.display_name,
@@ -4472,7 +4467,10 @@ fn apply_status_conditioning(
     out
 }
 
-fn condition_duration_secs(attacker: &super::state::Fighter, victim: &super::state::Fighter) -> f32 {
+fn condition_duration_secs(
+    attacker: &super::state::Fighter,
+    victim: &super::state::Fighter,
+) -> f32 {
     CONDITION_DURATION_SECS
         * (1.0 + attacker.loadout.status_extend.max(0.0))
         * (1.0 - victim.loadout.status_shorten.max(0.0)).max(0.0)
@@ -5104,17 +5102,13 @@ fn alchemy_status(raw: u16) -> Option<super::state::StatusEffectType> {
     })
 }
 
-fn alchemy_status_damage_type(
-    status: super::state::StatusEffectType,
-) -> super::state::DamageType {
+fn alchemy_status_damage_type(status: super::state::StatusEffectType) -> super::state::DamageType {
     use super::state::{DamageType, StatusEffectType};
     match status {
         StatusEffectType::FireResistance | StatusEffectType::FireWeakness => DamageType::Fire,
         StatusEffectType::FrostResistance | StatusEffectType::FrostWeakness => DamageType::Frost,
         StatusEffectType::ShockResistance | StatusEffectType::ShockWeakness => DamageType::Shock,
-        StatusEffectType::PoisonResistance | StatusEffectType::PoisonWeakness => {
-            DamageType::Poison
-        }
+        StatusEffectType::PoisonResistance | StatusEffectType::PoisonWeakness => DamageType::Poison,
         _ => DamageType::None,
     }
 }
@@ -5221,8 +5215,7 @@ fn deliver_alchemy_poison(
             is_transient_resist: false,
         });
     poison.charges_remaining = poison.charges_remaining.saturating_sub(1);
-    combat.fighters[attacker_slot].active_poison =
-        (poison.charges_remaining > 0).then_some(poison);
+    combat.fighters[attacker_slot].active_poison = (poison.charges_remaining > 0).then_some(poison);
     info!(
         "combat: slot {attacker_slot} delivered alchemy poison {:?} to slot {target_slot} \
          ({:.2} for {:.1}s, {} charge(s) left)",
@@ -5714,7 +5707,8 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
         // blocked pool skips the whole `rate x max + Σ additive` term in retail
         // (`Actor.UpdateStatsRegeneration@0x1C52764`, tracker #231).
         let gear_blocks_mag = f.loadout.blocks_magicka_regen;
-        if !block_mag && !gear_blocks_mag && !surge_blackout && f.magicka < f.damaged_max_magicka() {
+        if !block_mag && !gear_blocks_mag && !surge_blackout && f.magicka < f.damaged_max_magicka()
+        {
             let mut base =
                 MAGICKA_REGEN_RATE_PER_S * f.max_magicka as f32 + f.loadout.magicka_regen;
             if surge_live {
@@ -5730,9 +5724,22 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
 
         let changed = f.stamina != before_s || f.magicka != before_m || f.health != before_h;
         if changed {
-            f.stats_seq = f.stats_seq.wrapping_add(1);
-            let packed = f.packed_stats();
-            let obj_id = f.net_object_id;
+            // Retail stat-carrying frames stamp both actors' packed words with one
+            // fresh sequence. If propId 4 and propId 5 drift independently, the
+            // client can reject a later potion correction as stale after seeing the
+            // other actor's newer combat frame.
+            let next_stats_seq = combat
+                .fighters
+                .iter()
+                .map(|fighter| fighter.stats_seq)
+                .max()
+                .unwrap_or(0)
+                .wrapping_add(1);
+            for fighter in &mut combat.fighters {
+                fighter.stats_seq = next_stats_seq;
+            }
+            let packed = combat.fighters[slot].packed_stats();
+            let obj_id = combat.fighters[slot].net_object_id;
             // propId 5 is `_pvpOtherActorStats` — the OPPONENT of the avatar at
             // propId 0. It used to be a hardcoded `1`, which decodes to
             // all-pools-zero, and this tick fires ~1/s per fighter for the whole
@@ -7256,9 +7263,9 @@ mod tests {
         // _isWithinBlockZone byte + structural separator
         frame.push(0x00); // blockZone (not decoded, any value)
         frame.push(0xcc); // separator
-        // _clientChargeTime f32 LE packed with _held in bit0 of MSB (byte [11]).
-        // Use a representative chargeTime of 52.22s (s293 swing1 chargeTime, both directions).
-        // DOWN: raw bytes e1 e2 50 43; UP: e1 e2 50 42 (bit0 of MSB flipped).
+                          // _clientChargeTime f32 LE packed with _held in bit0 of MSB (byte [11]).
+                          // Use a representative chargeTime of 52.22s (s293 swing1 chargeTime, both directions).
+                          // DOWN: raw bytes e1 e2 50 43; UP: e1 e2 50 42 (bit0 of MSB flipped).
         let (b8, b9, b10, b11): (u8, u8, u8, u8) = if held {
             (0xe1, 0xe2, 0x50, 0x43) // DOWN: bit0 of MSB = 1
         } else {
@@ -7342,7 +7349,7 @@ mod tests {
                 weight: Some(weight),
             };
             f.loadout.weapon_template = None; // synthetic profile → fallback cadence
-            // No enchants → pure physical, ratio of crit:uncharged == swing_factor exactly.
+                                              // No enchants → pure physical, ratio of crit:uncharged == swing_factor exactly.
             f.loadout.enchants = vec![];
             combat.fighters.push(f);
         }
@@ -8919,8 +8926,8 @@ mod cooldown_data_tests {
         assert!((ms("d07a8d30-9a1c-49b0-866d-97a8aa1534cf", 1) - 3.54).abs() < 1e-3); // Fireball
         assert!((ms("ce6b63e9-9f18-49c4-aee0-51f7985f9892", 1) - 8.09).abs() < 1e-2); // Power Attack
         assert!((ms("65ede044-d68a-4b2b-8f0c-02075ad133cc", 1) - 7.5).abs() < 1e-3); // Ward
-        // The old table had Thunderstorm under a fabricated uuid, so it silently fell
-        // back to 3 s; the real id now resolves.
+                                                                                     // The old table had Thunderstorm under a fabricated uuid, so it silently fell
+                                                                                     // back to 3 s; the real id now resolves.
         assert_ne!(
             ability_cooldown("2ab06506-2114-4738-bd87-f6f402d3ce2e", 1),
             ABILITY_COOLDOWN
@@ -9037,8 +9044,7 @@ fn on_consume_consumable(
                 .and_then(|a| alchemy_status(a.effect_type).map(|status| (a, status)))
             {
                 Some((alchemy, status)) if alchemy.charge_count == 0 => {
-                    effect_frames =
-                        apply_alchemy_resistance(combat, sender, &alchemy, status, now);
+                    effect_frames = apply_alchemy_resistance(combat, sender, &alchemy, status, now);
                 }
                 Some((alchemy, status)) => {
                     arm_alchemy_poison(combat, sender, &alchemy, status);
@@ -9108,8 +9114,7 @@ mod potion_tests {
     const HEALTH_TIER9: &str = "61b31323-8ba2-49f2-befe-f43111c6e2c7";
     const RESIST_FROST_TIER3: &str = "5d9aef62-a805-4362-a490-e1b98590bb13";
     const AVERSION_FROST_TIER3: &str = "b7554ab7-99fa-4fb8-9131-e343450c6df2";
-    const RECOVERY_POISON_MAGICKA_TIER3: &str =
-        "51cd14b5-d44e-4183-bc8a-d0b975bc310d";
+    const RECOVERY_POISON_MAGICKA_TIER3: &str = "51cd14b5-d44e-4183-bc8a-d0b975bc310d";
 
     fn approx(a: f32, b: f32) {
         assert!(
@@ -9181,7 +9186,8 @@ mod potion_tests {
     #[test]
     fn the_reporters_potion_restores_its_shipped_amount() {
         // Items.Name.Potion.Restoration.Health.Tier9
-        let r = gamedata::restoration(HEALTH_TIER9).expect("the health potion must be in the table");
+        let r =
+            gamedata::restoration(HEALTH_TIER9).expect("the health potion must be in the table");
         assert_eq!(r.affected_stat, 0, "health");
         assert_eq!(r.value, 225.0);
         assert_eq!(r.duration, 2.5);
@@ -9264,10 +9270,8 @@ mod potion_tests {
             now + Duration::from_secs(1),
         );
         approx(
-            control.fighters[0].transient_resistance_against(
-                DamageType::Frost,
-                now + Duration::from_secs(2),
-            ),
+            control.fighters[0]
+                .transient_resistance_against(DamageType::Frost, now + Duration::from_secs(2)),
             160.339996,
         );
         approx(
@@ -9321,10 +9325,8 @@ mod potion_tests {
         let boosted = attack_total(&combat, 0, 1, DamageType::Frost, 100.0, now);
         assert!(boosted > before);
         assert_eq!(
-            combat.fighters[1].weakness_rating_against(
-                DamageType::Frost,
-                now + Duration::from_secs(11)
-            ),
+            combat.fighters[1]
+                .weakness_rating_against(DamageType::Frost, now + Duration::from_secs(11)),
             0.0,
             "frost weakness expires after its shipped duration"
         );
@@ -9396,8 +9398,7 @@ mod potion_tests {
 
         let mut combat = super::tests::make_live_combat(now);
         set_weapon(&mut combat.fighters[0], DamageType::Slashing, 40.0);
-        combat.fighters[0].equipped_consumable =
-            Some(RECOVERY_POISON_MAGICKA_TIER3.to_string());
+        combat.fighters[0].equipped_consumable = Some(RECOVERY_POISON_MAGICKA_TIER3.to_string());
         let _ = super::on_consume_consumable(&mut combat, 0, now);
         let _ = land_weapon_hit(&mut combat, 0, 1, now);
         approx(combat.fighters[1].regen_reduction(2, now), 10.800000);
@@ -9618,9 +9619,9 @@ mod phase4_tests {
         out.extend(land(combat, now));
         out
     }
-    use super::*;
     use super::super::gamedata;
-    use crate::arena::combat::state::Fighter;
+    use super::*;
+    use crate::arena::combat::state::{Fighter, NetObjectType, NetRole};
 
     // ---------------------------------------------------------------------
     // Phase 4.1 — swing-side classification from real client input geometry
@@ -9970,12 +9971,7 @@ mod phase4_tests {
         on_c2s_input(&mut combat, 0, &make_pos_frame(0.8, 0.5, 0.0), now);
         on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, false), now);
         let release = now + Duration::from_millis(250);
-        on_c2s_input(
-            &mut combat,
-            0,
-            &make_act_frame(false, 0.25, false),
-            release,
-        );
+        on_c2s_input(&mut combat, 0, &make_act_frame(false, 0.25, false), release);
         let _ = drain_state_changes(&mut combat, release);
 
         let guard_at = release + Duration::from_millis(200);
@@ -10200,11 +10196,9 @@ mod phase4_tests {
                 .count(),
             2,
         );
-        assert!(
-            swing
-                .iter()
-                .all(|(_, frame)| messages::user_message_gmid(frame) != Some(40)),
-        );
+        assert!(swing
+            .iter()
+            .all(|(_, frame)| messages::user_message_gmid(frame) != Some(40)),);
     }
 
     /// The X midpoint splits Left from Right; garbage coordinates classify to nothing
@@ -10520,15 +10514,13 @@ mod phase4_tests {
         assert_eq!(combat.fighters[0].consumables_used, 0);
 
         // op56 latches the equipped item.
-        assert!(
-            on_c2s_input(
-                &mut combat,
-                0,
-                &make_equip_consumable_frame(obj, POTION, 6),
-                now
-            )
-            .is_empty()
-        );
+        assert!(on_c2s_input(
+            &mut combat,
+            0,
+            &make_equip_consumable_frame(obj, POTION, 6),
+            now
+        )
+        .is_empty());
         assert_eq!(
             combat.fighters[0].equipped_consumable.as_deref(),
             Some(POTION)
@@ -10580,13 +10572,18 @@ mod phase4_tests {
     /// op65 `PlayerStatsUpdate` emitted by the regen/restoration tick.
     #[test]
     fn top_stamina_potion_retail_op56_op63_emits_op64_and_raises_stamina() {
+        use super::super::state::PackedStats;
+
         let now = Instant::now();
         let mut combat = live_combat(now);
         let obj = combat.fighters[0].net_object_id;
         const ULTIMATE_STAMINA: &str = "8da5101c-2e7c-446b-b3bd-d1b9aa5c44f6";
 
         let r = gamedata::restoration(ULTIMATE_STAMINA).expect("tier 10 stamina exists");
-        assert_eq!(r.affected_stat, 1, "Items.Name.Potion.Restoration.Stamina.Tier10");
+        assert_eq!(
+            r.affected_stat, 1,
+            "Items.Name.Potion.Restoration.Stamina.Tier10"
+        );
         assert_eq!(r.value, 775.0);
         assert_eq!(r.duration, 2.5);
 
@@ -10601,15 +10598,13 @@ mod phase4_tests {
         assert_eq!(combat.fighters[0].consumables_used, 0);
         assert_eq!(combat.fighters[0].stamina, 100);
 
-        assert!(
-            on_c2s_input(
-                &mut combat,
-                0,
-                &make_equip_consumable_frame(obj, ULTIMATE_STAMINA, 63),
-                now
-            )
-            .is_empty()
-        );
+        assert!(on_c2s_input(
+            &mut combat,
+            0,
+            &make_equip_consumable_frame(obj, ULTIMATE_STAMINA, 63),
+            now
+        )
+        .is_empty());
         assert_eq!(
             combat.fighters[0].equipped_consumable.as_deref(),
             Some(ULTIMATE_STAMINA)
@@ -10638,11 +10633,130 @@ mod phase4_tests {
             "tier 10 stamina restore plus normal regen must raise the bar: {}",
             combat.fighters[0].stamina
         );
-        let op65 = tick
+        let op65: Vec<_> = tick
             .iter()
             .filter(|(_, f)| messages::user_message_gmid(f) == Some(65))
-            .count();
-        assert_eq!(op65, 2, "the stamina bar update is PlayerStatsUpdate to both players");
+            .collect();
+        assert_eq!(
+            op65.len(),
+            2,
+            "the stamina bar update is PlayerStatsUpdate to both players"
+        );
+        assert_eq!(op65[0].0, 0, "drinker receives the correction");
+        assert_eq!(op65[1].0, 1, "opponent receives the same correction");
+        assert_eq!(
+            messages::retail_channel(&op65[0].1),
+            1,
+            "retail sends op65 on ENet channel 1"
+        );
+        let nd = arena_proto::parse_netdata(&op65[0].1[2..]);
+        assert_eq!(nd.int(0), Some(i64::from(obj)));
+        assert_eq!(nd.int(1), Some(NetObjectType::Avatar as i64));
+        assert_eq!(nd.int(2), Some(NetRole::Authority as i64));
+        assert_eq!(nd.int(3), Some(65));
+        let own = match nd.props.get(&4) {
+            Some(arena_proto::NetDataValue::ULong(v)) => *v,
+            other => panic!("op65 propId 4 must be _pvpThisActorStats ULong, got {other:?}"),
+        };
+        let other = match nd.props.get(&5) {
+            Some(arena_proto::NetDataValue::ULong(v)) => *v,
+            other => panic!("op65 propId 5 must be _pvpOtherActorStats ULong, got {other:?}"),
+        };
+        let (_, wire_stamina, _, own_seq) = PackedStats::unpack(own);
+        let (_, _, _, other_seq) = PackedStats::unpack(other);
+        assert!(
+            wire_stamina > 400,
+            "propId 4 carries the restored stamina fraction, got {wire_stamina}"
+        );
+        assert_eq!(
+            own_seq, other_seq,
+            "retail stat frames stamp propId 4 and propId 5 with one shared sequence"
+        );
+    }
+
+    /// Ivan's report: the Extreme Magicka potion was accepted server-side but the
+    /// client bar stayed down. Retail s414 shows the op64 for
+    /// `5bcb4692-3c94-4732-9a27-63868a25ba5f` followed by packed stat frames whose
+    /// magicka bits rise and whose propId 4/5 sequence words match.
+    #[test]
+    fn extreme_magicka_potion_op65_uses_retail_shared_stats_sequence() {
+        use super::super::state::PackedStats;
+
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        let obj = combat.fighters[0].net_object_id;
+        const EXTREME_MAGICKA: &str = "5bcb4692-3c94-4732-9a27-63868a25ba5f";
+
+        let r = gamedata::restoration(EXTREME_MAGICKA).expect("extreme magicka exists");
+        assert_eq!(r.affected_stat, 2);
+        assert_eq!(r.value, 775.0);
+        assert_eq!(r.duration, 2.5);
+
+        combat.fighters[0].max_magicka = 1_000;
+        combat.fighters[0].magicka = 100;
+        combat.fighters[0].regen_carry_magicka = 0.0;
+        combat.last_regen_tick = now;
+
+        assert!(on_c2s_input(
+            &mut combat,
+            0,
+            &make_equip_consumable_frame(obj, EXTREME_MAGICKA, 100),
+            now
+        )
+        .is_empty());
+
+        let consume = on_c2s_input(&mut combat, 0, &make_request_consume_frame(obj), now);
+        let op64: Vec<_> = consume
+            .iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(64))
+            .collect();
+        assert_eq!(op64.len(), 2, "op64 goes to both players");
+        assert_eq!(
+            op64[0].1,
+            messages::perform_consume_consumable(obj, EXTREME_MAGICKA),
+            "op64 carries the retail magicka potion UUID"
+        );
+
+        let tick = apply_regen_tick(&mut combat, now + Duration::from_secs(1));
+        assert!(
+            combat.fighters[0].magicka > 400,
+            "extreme magicka restore plus normal regen must raise the bar: {}",
+            combat.fighters[0].magicka
+        );
+        let op65: Vec<_> = tick
+            .iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(65))
+            .collect();
+        assert_eq!(op65.len(), 2, "magicka correction goes to both players");
+        assert_eq!(messages::retail_channel(&op65[0].1), 1);
+        let nd = arena_proto::parse_netdata(&op65[0].1[2..]);
+        assert_eq!(nd.int(0), Some(i64::from(obj)));
+        assert_eq!(nd.int(1), Some(NetObjectType::Avatar as i64));
+        assert_eq!(nd.int(2), Some(NetRole::Authority as i64));
+        assert_eq!(nd.int(3), Some(65));
+        let own = match nd.props.get(&4) {
+            Some(arena_proto::NetDataValue::ULong(v)) => *v,
+            other => panic!("op65 propId 4 must be _pvpThisActorStats ULong, got {other:?}"),
+        };
+        let other = match nd.props.get(&5) {
+            Some(arena_proto::NetDataValue::ULong(v)) => *v,
+            other => panic!("op65 propId 5 must be _pvpOtherActorStats ULong, got {other:?}"),
+        };
+        let (_, _, wire_magicka, own_seq) = PackedStats::unpack(own);
+        let (_, _, _, other_seq) = PackedStats::unpack(other);
+        assert!(
+            wire_magicka > 400,
+            "propId 4 carries the restored magicka fraction, got {wire_magicka}"
+        );
+        assert_eq!(
+            own_seq, other_seq,
+            "retail stat frames stamp propId 4 and propId 5 with one shared sequence"
+        );
+
+        assert!(
+            on_c2s_input(&mut combat, 0, &make_request_consume_frame(obj), now).is_empty(),
+            "negative control: the same round cannot consume a second potion"
+        );
     }
 
     /// op56 is a loadout declaration, so it must latch even OUTSIDE the live round —
@@ -10654,15 +10768,13 @@ mod phase4_tests {
         combat.phase = FlowState::BackendMatchCreated;
         let obj = combat.fighters[0].net_object_id;
         const POTION: &str = "819094ad-e749-4c02-9210-38c3bb1ec535";
-        assert!(
-            on_c2s_input(
-                &mut combat,
-                0,
-                &make_equip_consumable_frame(obj, POTION, 3),
-                now
-            )
-            .is_empty()
-        );
+        assert!(on_c2s_input(
+            &mut combat,
+            0,
+            &make_equip_consumable_frame(obj, POTION, 3),
+            now
+        )
+        .is_empty());
         assert_eq!(
             combat.fighters[0].equipped_consumable.as_deref(),
             Some(POTION)
@@ -10808,8 +10920,7 @@ mod shipped_effects_tests {
     use super::super::loadout;
     use super::super::state::{
         AbilityTag, ActiveEffect, DamageNegationSource, DamageType, EquippedAbility, Fighter,
-        NegationPool,
-        StatusEffectType, WeaponProfile,
+        NegationPool, StatusEffectType, WeaponProfile,
     };
     use super::super::tables::Weight;
     use super::*;
@@ -12430,12 +12541,10 @@ mod shipped_effects_tests {
             2,
             "one Blind removal per viewer",
         );
-        assert!(
-            !c.fighters[1]
-                .effects
-                .iter()
-                .any(|e| e.effect == StatusEffectType::Blind),
-        );
+        assert!(!c.fighters[1]
+            .effects
+            .iter()
+            .any(|e| e.effect == StatusEffectType::Blind),);
         assert!(
             emit_status_removals(&mut c, now + Duration::from_millis(1)).is_empty(),
             "the cure was already acknowledged on the wire",
@@ -12609,10 +12718,9 @@ mod shipped_effects_tests {
         let now = Instant::now();
         let mut c = combat2(now);
         c.fighters[0].effects.push(burning_effect(now, 50.0, 10));
-        c.fighters[0].status_timers.push((
-            StatusEffectType::Frozen,
-            now + Duration::from_secs(5),
-        ));
+        c.fighters[0]
+            .status_timers
+            .push((StatusEffectType::Frozen, now + Duration::from_secs(5)));
         c.fighters[0].transient_resistances.push((
             DamageType::Fire,
             10.0,
@@ -12629,7 +12737,10 @@ mod shipped_effects_tests {
         );
         assert!(c.fighters.iter().all(|f| f.effects.is_empty()));
         assert!(c.fighters.iter().all(|f| f.status_timers.is_empty()));
-        assert!(c.fighters.iter().all(|f| f.transient_resistances.is_empty()));
+        assert!(c
+            .fighters
+            .iter()
+            .all(|f| f.transient_resistances.is_empty()));
         assert!(c.fighters.iter().all(|f| f.health_damage_carry == 0.0));
 
         let out = apply_dot_ticks(&mut c, now + DOT_TICK_INTERVAL * 2);
@@ -12704,7 +12815,11 @@ mod shipped_effects_tests {
 
         let just_short =
             apply_status_conditioning(&mut c, 1, &[(DamageType::Poison, threshold - 10.0)], now);
-        assert_eq!(just_short.len(), 2, "attacker Fortify Poisoned pushes it over");
+        assert_eq!(
+            just_short.len(),
+            2,
+            "attacker Fortify Poisoned pushes it over"
+        );
 
         let mut control = combat2(now);
         control.fighters[1].loadout.status_fortify = vec![(StatusEffectType::Poisoned, 16.8)];
@@ -12819,8 +12934,7 @@ mod shipped_effects_tests {
 
         let mut control = combat2(now);
         control.fighters[0].loadout.cooldown_penalty_secs = 1.0;
-        control
-            .fighters[1]
+        control.fighters[1]
             .cooldowns
             .insert(spell.clone(), now + Duration::from_secs(5));
         let mut spell_hit = hit.clone();
@@ -12861,7 +12975,10 @@ mod shipped_effects_tests {
         let hp_before = c.fighters[0].health;
         let _ = emit_damage(&mut c, 0, 1, &hit, now);
         assert_eq!(c.fighters[0].ravaged_stamina, 0, "low block control");
-        assert_eq!(c.fighters[0].health, hp_before, "low block has no shield damage");
+        assert_eq!(
+            c.fighters[0].health, hp_before,
+            "low block has no shield damage"
+        );
 
         let mut opt = combat2(now);
         opt.fighters[1].loadout.shield_ravage = vec![(DamageType::Stamina, 42.0)];
@@ -13062,7 +13179,7 @@ mod shipped_effects_tests {
     /// living in the `Paralyze | Damage | Generic` arm was unreachable for them.
     #[test]
     fn the_stagger_field_is_carried_mostly_by_maneuvers() {
-        use super::super::gamedata::{ABILITIES, AbilityKind, ability_rank_clamped};
+        use super::super::gamedata::{ability_rank_clamped, AbilityKind, ABILITIES};
         let carriers: Vec<(&str, AbilityKind)> = ABILITIES
             .iter()
             .filter(|a| {
@@ -13730,9 +13847,9 @@ mod report_31_high_block_stun {
     use super::super::damage::flags;
     use super::super::loadout::starter;
     use super::super::state::{
-        AbilityTag, ActorStateType, BASE_STAGGER_DURATION_SECS, BLOCK_OPTIMAL_TIME_SECS,
-        BlockPhase, BotObservedState, BotOpponentSnapshot, EquippedAbility, Fighter, FlowState,
-        MatchCombat, StatusEffectType, WeaponProfile,
+        AbilityTag, ActorStateType, BlockPhase, BotObservedState, BotOpponentSnapshot,
+        EquippedAbility, Fighter, FlowState, MatchCombat, StatusEffectType, WeaponProfile,
+        BASE_STAGGER_DURATION_SECS, BLOCK_OPTIMAL_TIME_SECS,
     };
     use super::*;
 
@@ -14268,9 +14385,18 @@ mod report_31_high_block_stun {
         // A zero-damage frost channel tick (Blizzard Armor), a Frostbite tick and an
         // Ice Spike: none of them is a weapon hit.
         for (source, components) in [
-            (DamageSource::ContinuousSpell, vec![(DamageType::Frost, 0.0), (DamageType::Stamina, 0.0)]),
-            (DamageSource::ContinuousSpell, vec![(DamageType::Frost, 7.9), (DamageType::Stamina, 7.9)]),
-            (DamageSource::Spell, vec![(DamageType::Frost, 120.0), (DamageType::Stamina, 120.0)]),
+            (
+                DamageSource::ContinuousSpell,
+                vec![(DamageType::Frost, 0.0), (DamageType::Stamina, 0.0)],
+            ),
+            (
+                DamageSource::ContinuousSpell,
+                vec![(DamageType::Frost, 7.9), (DamageType::Stamina, 7.9)],
+            ),
+            (
+                DamageSource::Spell,
+                vec![(DamageType::Frost, 120.0), (DamageType::Stamina, 120.0)],
+            ),
         ] {
             let mut c = combat(now, 2);
             c.fighters[0].loadout.ravage = vec![(DamageType::Stamina, 32.0)];
@@ -14279,7 +14405,8 @@ mod report_31_high_block_stun {
                 super::emit_damage(&mut c, 0, 1, &hit(source, components.clone()), now);
             }
             assert_eq!(
-                c.fighters[1].damaged_max_stamina(), ceiling,
+                c.fighters[1].damaged_max_stamina(),
+                ceiling,
                 "{source:?} must not carry the attacker's WEAPON ravage",
             );
             assert_eq!(c.fighters[1].ravaged_stamina, 0);
@@ -14289,9 +14416,18 @@ mod report_31_high_block_stun {
             let mut c = combat(now, 2);
             c.fighters[0].loadout.ravage = vec![(DamageType::Stamina, 32.0)];
             let ceiling = c.fighters[1].max_stamina;
-            super::emit_damage(&mut c, 0, 1, &hit(source, vec![(DamageType::Slashing, 50.0)]), now);
+            super::emit_damage(
+                &mut c,
+                0,
+                1,
+                &hit(source, vec![(DamageType::Slashing, 50.0)]),
+                now,
+            );
             // Ravage is a DESTROYED portion (`ravaged_stamina`) under the full maximum.
-            assert_eq!(c.fighters[1].ravaged_stamina, 32, "{source:?} is weapon-based");
+            assert_eq!(
+                c.fighters[1].ravaged_stamina, 32,
+                "{source:?} is weapon-based"
+            );
             assert_eq!(c.fighters[1].damaged_max_stamina(), ceiling - 32);
         }
     }
@@ -14396,9 +14532,7 @@ mod report_31_high_block_stun {
 
         assert!(
             out.iter().any(|(_s, b)| {
-                b.len() > 2
-                    && b[1] == 0x36
-                    && arena_proto::parse_netdata(&b[2..]).int(6) == Some(6)
+                b.len() > 2 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(6) == Some(6)
             }),
             "the capped hit still emits as Revenge"
         );
@@ -14815,16 +14949,14 @@ mod report_31_high_block_stun {
         let now = Instant::now();
         let mut c = combat(now, 1);
         let gsid = c.game_session_id.clone();
-        assert!(
-            super::bot_next_ready_ability(
-                &mut c.fighters[1],
-                &gsid,
-                1,
-                snapshot(BotObservedState::Idle),
-                now,
-            )
-            .is_none()
-        );
+        assert!(super::bot_next_ready_ability(
+            &mut c.fighters[1],
+            &gsid,
+            1,
+            snapshot(BotObservedState::Idle),
+            now,
+        )
+        .is_none());
 
         let at = bot_decision_due(&mut c, 1, now);
         super::on_tick(&mut c, at, false);
@@ -15147,10 +15279,20 @@ mod report_31_high_block_stun {
                 tag: AbilityTag::Ward,
             },
         ];
-        assert!(super::super::gamedata::ability(uuid_of("TempestArmor")).unwrap().enemy_only);
-        assert!(super::super::gamedata::ability(uuid_of("FirestormArmor")).unwrap().enemy_only);
         assert!(
-            !super::super::gamedata::ability(uuid_of("Ward")).unwrap().enemy_only,
+            super::super::gamedata::ability(uuid_of("TempestArmor"))
+                .unwrap()
+                .enemy_only
+        );
+        assert!(
+            super::super::gamedata::ability(uuid_of("FirestormArmor"))
+                .unwrap()
+                .enemy_only
+        );
+        assert!(
+            !super::super::gamedata::ability(uuid_of("Ward"))
+                .unwrap()
+                .enemy_only,
             "control: a player ability in the same loadout remains selectable",
         );
         let gsid = c.game_session_id.clone();
@@ -15207,8 +15349,7 @@ mod report_31_high_block_stun {
         super::on_tick(&mut zero, due, false);
 
         assert_eq!(
-            zero.fighters[1].bot_swing_at,
-            control.fighters[1].bot_swing_at,
+            zero.fighters[1].bot_swing_at, control.fighters[1].bot_swing_at,
             "an explicit 0 ms RTT is bit-for-bit today's bot timing",
         );
     }
@@ -15243,7 +15384,9 @@ mod report_31_high_block_stun {
             c.set_slot_rtt(0, rtt);
             let gsid = c.game_session_id.clone();
             let t = super::bot_reaction_time(&mut c.fighters[1], &gsid, 1);
-            let decision = now + t + rtt.min(super::super::state::BOT_LATENCY_COMPENSATION_CAP)
+            let decision = now
+                + t
+                + rtt.min(super::super::state::BOT_LATENCY_COMPENSATION_CAP)
                 + Duration::from_millis(1);
             super::on_tick(&mut c, decision, false);
             c.fighters[1]
@@ -18106,8 +18249,7 @@ mod double_ko_cap_tests {
         let mut c = live(now);
         c.fighters[0].loadout.level = 50;
         c.fighters[1].loadout.level = 10;
-        c.fighters[1].loadout.revenge =
-            vec![(super::super::state::DamageType::Fire, 10_000.0)];
+        c.fighters[1].loadout.revenge = vec![(super::super::state::DamageType::Fire, 10_000.0)];
 
         let hit = ResolvedDamage {
             source: super::super::state::DamageSource::Attack,
@@ -18127,8 +18269,14 @@ mod double_ko_cap_tests {
         };
         let out = emit_damage(&mut c, 0, 1, &hit, now);
 
-        assert!(c.fighters[0].is_dead(), "Revenge killed the primary attacker");
-        assert!(c.fighters[1].is_dead(), "the primary hit killed the defender");
+        assert!(
+            c.fighters[0].is_dead(),
+            "Revenge killed the primary attacker"
+        );
+        assert!(
+            c.fighters[1].is_dead(),
+            "the primary hit killed the defender"
+        );
         assert_eq!(
             c.round_winners,
             vec![Some(1)],
@@ -18219,7 +18367,11 @@ mod report_231_artifact_regen_tick_tests {
 
         c.fighters[0].health = max / 2;
         apply_regen_tick(&mut c, now + REGEN_TICK_INTERVAL);
-        assert_eq!(c.fighters[0].health, max / 2 + base, "not critical: base only");
+        assert_eq!(
+            c.fighters[0].health,
+            max / 2 + base,
+            "not critical: base only"
+        );
 
         c.fighters[0].health = 10;
         c.fighters[1].health = 10;
@@ -18227,7 +18379,11 @@ mod report_231_artifact_regen_tick_tests {
         c.fighters[1].regen_carry_health = 0.0;
         apply_regen_tick(&mut c, now + REGEN_TICK_INTERVAL * 2);
         let control_gain = c.fighters[1].health - 10;
-        assert_eq!(c.fighters[0].health - 10, control_gain + 5, "critical: +5 over the control");
+        assert_eq!(
+            c.fighters[0].health - 10,
+            control_gain + 5,
+            "critical: +5 over the control"
+        );
     }
 
     /// Fork of Horripilation: no magicka regen at all — base and gear alike — while
@@ -18243,6 +18399,9 @@ mod report_231_artifact_regen_tick_tests {
         apply_regen_tick(&mut c, now + REGEN_TICK_INTERVAL);
         assert_eq!(c.fighters[0].magicka, 10, "magicka blocked");
         assert!(c.fighters[0].stamina > 0, "stamina is not affected");
-        assert!(c.fighters[1].magicka > 10, "control: unblocked magicka regenerates");
+        assert!(
+            c.fighters[1].magicka > 10,
+            "control: unblocked magicka regenerates"
+        );
     }
 }
