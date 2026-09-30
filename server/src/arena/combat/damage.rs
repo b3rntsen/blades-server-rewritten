@@ -2205,6 +2205,64 @@ mod tests {
         assert!((comp(&rd3, DamageType::Poison) - 2.8625).abs() < 0.5);
     }
 
+    #[test]
+    fn report284_each_defensive_elemental_resistance_source_reaches_formula() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let attacker = Loadout::default();
+        let fire = |target: &Fighter| {
+            let hit = m.resolve_flat(
+                &attacker,
+                target,
+                DamageSource::Attack,
+                ActiveSide::Right,
+                DamageType::Fire,
+                111.125,
+                now,
+            );
+            comp(&hit, DamageType::Fire)
+        };
+
+        let control = target();
+        assert!((fire(&control) - 111.125).abs() < 0.001);
+
+        let mut dunmer = target();
+        dunmer
+            .loadout
+            .innate_base_resistances
+            .push(super::super::state::InnateBaseResistance {
+                damage_types: vec![DamageType::Fire],
+                damage_sources: Vec::new(),
+                factor: 0.15,
+            });
+        assert!((fire(&dunmer) - 94.45625).abs() < 0.001);
+
+        let mut armor_enchant = target();
+        armor_enchant.loadout.resistances = vec![(DamageType::Fire, 20.0)];
+        assert!((fire(&armor_enchant) - 91.125).abs() < 0.001);
+
+        let mut potion = target();
+        potion
+            .transient_resistances
+            .push((DamageType::Fire, 30.0, now + std::time::Duration::from_secs(10)));
+        assert!((fire(&potion) - 81.125).abs() < 0.001);
+
+        let mut resist_elements = target();
+        resist_elements
+            .transient_resistances
+            .push((DamageType::Fire, 48.54, now + std::time::Duration::from_secs(10)));
+        assert!((fire(&resist_elements) - 62.585).abs() < 0.001);
+
+        let mut stacked_transients = target();
+        stacked_transients
+            .transient_resistances
+            .push((DamageType::Fire, 30.0, now + std::time::Duration::from_secs(10)));
+        stacked_transients
+            .transient_resistances
+            .push((DamageType::Fire, 48.54, now + std::time::Duration::from_secs(10)));
+        assert!((fire(&stacked_transients) - 32.585).abs() < 0.001);
+    }
+
     /// THE FORTIFY BUG — EDIR's twin, on the same frost build.
     ///
     /// `Fortify <Element> Damage` was read in exactly ONE place: inside
