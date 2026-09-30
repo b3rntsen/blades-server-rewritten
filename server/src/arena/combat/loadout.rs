@@ -248,7 +248,9 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         if let Some(w) = gamedata::weapon(&template) {
             // Prefer the highest-damage resolvable weapon if several are equipped
             // (the client only ever equips one, but be deterministic).
-            let better = weapon.map(|(p, _)| w.base_damage > p.base_damage).unwrap_or(true);
+            let better = weapon
+                .map(|(p, _)| w.base_damage > p.base_damage)
+                .unwrap_or(true);
             if better {
                 weapon = Some((w, eq.item.tempering_level));
             }
@@ -257,7 +259,11 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
             item_rating_for_material = Some(a.armor_rating);
         } else if let Some(s) = gamedata::shield(&template) {
             install_shield(&mut lo, s, eq.item.tempering_level);
-            item_rating_for_material = Some(blocking_item_rating(&template, s.block_base, eq.item.tempering_level));
+            item_rating_for_material = Some(blocking_item_rating(
+                &template,
+                s.block_base,
+                eq.item.tempering_level,
+            ));
         }
 
         // --- the TEMPLATE's mandatory properties -------------------------------
@@ -282,17 +288,22 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         );
 
         // --- enchantments, dispatched on the family's LOGIC CLASS (Phase 3.6/3.7) ---
-        let primary_mult = 1.0 + eq
-            .item
-            .properties
-            .enchanting
-            .iter()
-            .filter_map(|prop| {
-                let family = gamedata::enchant_family(&prop.id.as_hyphenated().to_string())?;
-                (family.logic == "FortifyPrimaryEnchantPropertyLogic")
-                    .then(|| gamedata::enchant_magnitude(&family.uuid, prop.tier.min(u8::MAX as u64) as u8).unwrap_or(0.15))
-            })
-            .sum::<f32>();
+        let primary_mult = 1.0
+            + eq.item
+                .properties
+                .enchanting
+                .iter()
+                .filter_map(|prop| {
+                    let family = gamedata::enchant_family(&prop.id.as_hyphenated().to_string())?;
+                    (family.logic == "FortifyPrimaryEnchantPropertyLogic").then(|| {
+                        gamedata::enchant_magnitude(
+                            &family.uuid,
+                            prop.tier.min(u8::MAX as u64) as u8,
+                        )
+                        .unwrap_or(0.15)
+                    })
+                })
+                .sum::<f32>();
         for prop in &eq.item.properties.enchanting {
             let tier = prop.tier.min(u8::MAX as u64) as u8;
             // Record the property id for EVERY equipped item before dispatching.
@@ -304,12 +315,14 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
             let before = lo.enchants.len();
             let family = gamedata::enchant_family(&prop.id.as_hyphenated().to_string());
             let xvalue_multiplier = family
-                .map(|f| item_property_xvalue_multiplier(
-                    f.logic,
-                    primary_mult,
-                    lo.perks.enchantment_synergy,
-                    property_counts.get(&prop.id).copied().unwrap_or(0),
-                ))
+                .map(|f| {
+                    item_property_xvalue_multiplier(
+                        f.logic,
+                        primary_mult,
+                        lo.perks.enchantment_synergy,
+                        property_counts.get(&prop.id).copied().unwrap_or(0),
+                    )
+                })
                 .unwrap_or(1.0);
             apply_enchant_with_rating_and_multiplier(
                 &mut lo,
@@ -355,7 +368,9 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
                 .iter()
                 .map(|a| format!(
                     "{}@{}",
-                    gamedata::ability(&a.instance_uuid).map(|x| x.editor_name).unwrap_or("?"),
+                    gamedata::ability(&a.instance_uuid)
+                        .map(|x| x.editor_name)
+                        .unwrap_or("?"),
                     a.level
                 ))
                 .collect::<Vec<_>>()
@@ -385,45 +400,71 @@ pub fn apply_racial_innates_from_customization(lo: &mut Loadout, customization: 
     let Some(uid) = customization_character_uid(customization) else {
         return;
     };
-    match uid {
-        "342a912a-ab40-4acc-8a48-c5a10476bac0" => {
-            push_base_resist(lo, &[], &[DamageSource::Spell, DamageSource::ContinuousSpell, DamageSource::AreaEffect, DamageSource::EchoWeapon], 0.10);
+    match racial_innate_category_for_character_uid(uid) {
+        Some(BRETON_RACE_CATEGORY) => {
+            push_base_resist(
+                lo,
+                &[],
+                &[
+                    DamageSource::Spell,
+                    DamageSource::ContinuousSpell,
+                    DamageSource::AreaEffect,
+                    DamageSource::EchoWeapon,
+                ],
+                0.10,
+            );
             push_weapon_factor(lo, tables::Weight::Versatile, 0.05);
         }
-        "e1bb7fe2-4d60-4b7f-bd4d-a55da2edf922" => {
+        Some(ORC_RACE_CATEGORY) => {
             lo.innate_armor_multiplier += 0.05;
-            push_source_factor(lo, &[DamageSource::WeaponManeuver, DamageSource::ShieldManeuver], 0.05);
+            push_source_factor(
+                lo,
+                &[DamageSource::WeaponManeuver, DamageSource::ShieldManeuver],
+                0.05,
+            );
         }
-        "ff21fc3d-6afa-4c18-9844-05daaa60fb19" => {
+        Some(IMPERIAL_RACE_CATEGORY) => {
             lo.innate_healing_multiplier += 0.05;
             push_weapon_factor(lo, tables::Weight::Versatile, 0.05);
         }
-        "a183c3ad-dc3d-42fd-9566-8727f9543304" => {
+        Some(REDGUARD_RACE_CATEGORY) => {
             push_base_resist(lo, &[DamageType::Poison], &[], 0.15);
             lo.innate_regen_multipliers[1] += 0.05;
         }
-        "6a386cd0-36c2-463a-b6a4-418b0bbeb159" => {
+        Some(NORD_RACE_CATEGORY) => {
             push_base_resist(lo, &[DamageType::Frost], &[], 0.15);
             push_weapon_factor(lo, tables::Weight::Heavy, 0.05);
         }
-        "8905a147-84f6-4730-ae2f-cf6f69559d3f" => {
+        Some(WOOD_ELF_RACE_CATEGORY) => {
             push_base_resist(lo, &[DamageType::Poison], &[], 0.15);
-            push_source_factor(lo, &[DamageSource::WeaponManeuver, DamageSource::ShieldManeuver], 0.05);
+            push_source_factor(
+                lo,
+                &[DamageSource::WeaponManeuver, DamageSource::ShieldManeuver],
+                0.05,
+            );
         }
-        "84cb19ea-f66f-4451-8f66-018338d070b4" => {
+        Some(DARK_ELF_RACE_CATEGORY) => {
             push_base_resist(lo, &[DamageType::Fire], &[], 0.15);
-            push_source_factor(lo, &[DamageSource::Spell, DamageSource::ContinuousSpell, DamageSource::AreaEffect, DamageSource::EchoWeapon], 0.05);
+            push_source_factor(
+                lo,
+                &[
+                    DamageSource::Spell,
+                    DamageSource::ContinuousSpell,
+                    DamageSource::AreaEffect,
+                    DamageSource::EchoWeapon,
+                ],
+                0.05,
+            );
         }
-        "8d9c8503-d992-45f2-910e-befd2201d3a1"
-        | "468f591f-5f01-4b41-9d98-cda62918f83b" => {
+        Some(HIGH_ELF_RACE_CATEGORY) | Some(HIGH_ELF_VARIANT_RACE_CATEGORY) => {
             push_base_resist(lo, &[DamageType::Shock], &[], 0.15);
             lo.innate_regen_multipliers[2] += 0.05;
         }
-        "127a8438-5903-4f91-9587-a4142ed12866" => {
+        Some(KHAJIIT_RACE_CATEGORY) => {
             lo.innate_armor_multiplier += 0.05;
             push_type_factor(lo, &[DamageType::Poison], 0.10);
         }
-        "8accc37f-1a14-453a-b30a-7d4163de2a11" => {
+        Some(ARGONIAN_RACE_CATEGORY) => {
             lo.innate_regen_multipliers[0] += 0.05;
             push_weapon_factor(lo, tables::Weight::Light, 0.05);
         }
@@ -431,10 +472,93 @@ pub fn apply_racial_innates_from_customization(lo: &mut Loadout, customization: 
     }
 }
 
+const BRETON_RACE_CATEGORY: &str = "342a912a-ab40-4acc-8a48-c5a10476bac0";
+const ORC_RACE_CATEGORY: &str = "e1bb7fe2-4d60-4b7f-bd4d-a55da2edf922";
+const IMPERIAL_RACE_CATEGORY: &str = "ff21fc3d-6afa-4c18-9844-05daaa60fb19";
+const REDGUARD_RACE_CATEGORY: &str = "a183c3ad-dc3d-42fd-9566-8727f9543304";
+const NORD_RACE_CATEGORY: &str = "6a386cd0-36c2-463a-b6a4-418b0bbeb159";
+const DREMORA_RACE_CATEGORY: &str = "5961c0ba-0193-45f9-a45d-42c1cb70a9e0";
+const WOOD_ELF_RACE_CATEGORY: &str = "8905a147-84f6-4730-ae2f-cf6f69559d3f";
+const DARK_ELF_RACE_CATEGORY: &str = "84cb19ea-f66f-4451-8f66-018338d070b4";
+const HIGH_ELF_RACE_CATEGORY: &str = "8d9c8503-d992-45f2-910e-befd2201d3a1";
+const HIGH_ELF_VARIANT_RACE_CATEGORY: &str = "468f591f-5f01-4b41-9d98-cda62918f83b";
+const KHAJIIT_RACE_CATEGORY: &str = "127a8438-5903-4f91-9587-a4142ed12866";
+const ARGONIAN_RACE_CATEGORY: &str = "8accc37f-1a14-453a-b30a-7d4163de2a11";
+
+/// Resolve the live profile `CharacterUID` (a CharacterVisual/player-preset id)
+/// to the `CharacterVisualCategory` id whose `_innateBonuses` retail applies.
+///
+/// Provenance:
+/// * race category ids and bonuses: `reference/game-defs/races.json`, generated
+///   from the APK `CharacterVisualCategoryList` ScriptableObject by
+///   `reference/game-defs/extract/x_races.py`;
+/// * live visual ids: `~/Projects/blades-capture/web/lib/arena-appearance.ts`
+///   `PLAYER_VISUALS`, cross-checked against
+///   `scripts/profile_parser.py::derive_race`. Male Nord is the recovered
+///   `WIRE_VISUALS_NOT_IN_CAPTURES` entry there.
+///
+/// Direct category ids are accepted too, so tests and any already-normalized
+/// callers keep behaving.
+fn racial_innate_category_for_character_uid(uid: &str) -> Option<&str> {
+    match uid {
+        BRETON_RACE_CATEGORY
+        | ORC_RACE_CATEGORY
+        | IMPERIAL_RACE_CATEGORY
+        | REDGUARD_RACE_CATEGORY
+        | NORD_RACE_CATEGORY
+        | DREMORA_RACE_CATEGORY
+        | WOOD_ELF_RACE_CATEGORY
+        | DARK_ELF_RACE_CATEGORY
+        | HIGH_ELF_RACE_CATEGORY
+        | HIGH_ELF_VARIANT_RACE_CATEGORY
+        | KHAJIIT_RACE_CATEGORY
+        | ARGONIAN_RACE_CATEGORY => Some(uid),
+
+        "a84028f9-aa59-4a02-995d-e6125b0efd27" | "9c2cc2b3-804c-4e97-8ad5-56371690bdf5" => {
+            Some(ARGONIAN_RACE_CATEGORY)
+        }
+        "6e8d9d40-6d1b-4167-a223-f9a3c5c0936b" | "46b0d965-00be-478d-914a-996ff8f3e5a0" => {
+            Some(BRETON_RACE_CATEGORY)
+        }
+        "142ed7a5-efdd-40b7-8a69-78f802404ecb" | "95d7a396-de4b-4803-ac37-6c068946d52c" => {
+            Some(DARK_ELF_RACE_CATEGORY)
+        }
+        "a3e00d58-d589-4b37-aa9c-01a4ecf1e1dc" | "ab8fa65a-84db-4698-8788-a77f557286cc" => {
+            Some(DREMORA_RACE_CATEGORY)
+        }
+        "370c058c-140d-4840-90ae-eac4efc11726" | "18db9526-81b9-4df3-8355-454bfabe5ba3" => {
+            Some(HIGH_ELF_RACE_CATEGORY)
+        }
+        "ccce1d22-f862-4b83-9636-6c5dfb53f528" | "d6eac1b4-2f2d-46c1-b039-8ee73d844e5d" => {
+            Some(IMPERIAL_RACE_CATEGORY)
+        }
+        "81c01573-8c66-48d2-856a-25459fbb97b8" | "33e66455-3bc5-4fe9-89de-607ba3e975cc" => {
+            Some(KHAJIIT_RACE_CATEGORY)
+        }
+        "2a36970f-ab56-4ae6-966f-d826f30a4e36" | "79c1d00e-a0ac-495a-910c-23d3040c1193" => {
+            Some(NORD_RACE_CATEGORY)
+        }
+        "9fe5a7ee-8126-46e7-9f89-362fb455cf49" | "5b5f2f42-fc18-4173-82fa-1108b947264f" => {
+            Some(ORC_RACE_CATEGORY)
+        }
+        "40c381f6-4004-4580-908e-22b1c130174f" | "7fc6073c-93ca-43c2-9235-0dc72ad108e7" => {
+            Some(REDGUARD_RACE_CATEGORY)
+        }
+        "e48c092b-8ddf-492d-85b8-ad71207be644" | "c65c7a08-ed74-4f55-be60-52822b04cbd0" => {
+            Some(WOOD_ELF_RACE_CATEGORY)
+        }
+        _ => None,
+    }
+}
+
 fn customization_character_uid(customization: &Value) -> Option<&str> {
     let uid = customization.get("CharacterUID")?;
     uid.as_str()
-        .or_else(|| uid.get("id").and_then(|id| id.get("_v")).and_then(Value::as_str))
+        .or_else(|| {
+            uid.get("id")
+                .and_then(|id| id.get("_v"))
+                .and_then(Value::as_str)
+        })
         .or_else(|| uid.get("_v").and_then(Value::as_str))
 }
 
@@ -465,7 +589,12 @@ fn push_weapon_factor(lo: &mut Loadout, weapon_class: tables::Weight, factor: f3
     });
 }
 
-fn push_base_resist(lo: &mut Loadout, damage_types: &[DamageType], damage_sources: &[DamageSource], factor: f32) {
+fn push_base_resist(
+    lo: &mut Loadout,
+    damage_types: &[DamageType],
+    damage_sources: &[DamageSource],
+    factor: f32,
+) {
     lo.innate_base_resistances.push(InnateBaseResistance {
         damage_types: damage_types.to_vec(),
         damage_sources: damage_sources.to_vec(),
@@ -595,15 +724,25 @@ fn apply_enchant_with_rating_and_multiplier(
         "ShieldRavageMagickaPropertyLogic" => {
             push_shield_ravage(lo, DamageType::Magicka, magnitude)
         }
-        "ShieldRavageHealthPropertyLogic" => {
-            push_shield_ravage(lo, DamageType::Health, magnitude)
+        "ShieldRavageHealthPropertyLogic" => push_shield_ravage(lo, DamageType::Health, magnitude),
+        "ShieldFireDamagePropertyLogic" => {
+            lo.shield_enchant_damage.push((DamageType::Fire, magnitude))
         }
-        "ShieldFireDamagePropertyLogic" => lo.shield_enchant_damage.push((DamageType::Fire, magnitude)),
-        "ShieldFrostDamagePropertyLogic" => lo.shield_enchant_damage.push((DamageType::Frost, magnitude)),
-        "ShieldShockDamagePropertyLogic" => lo.shield_enchant_damage.push((DamageType::Shock, magnitude)),
-        "ShieldPoisonDamagePropertyLogic" => lo.shield_enchant_damage.push((DamageType::Poison, magnitude)),
-        "ShieldStaminaDamagePropertyLogic" => lo.shield_enchant_damage.push((DamageType::Stamina, magnitude)),
-        "ShieldMagickaDamagePropertyLogic" => lo.shield_enchant_damage.push((DamageType::Magicka, magnitude)),
+        "ShieldFrostDamagePropertyLogic" => lo
+            .shield_enchant_damage
+            .push((DamageType::Frost, magnitude)),
+        "ShieldShockDamagePropertyLogic" => lo
+            .shield_enchant_damage
+            .push((DamageType::Shock, magnitude)),
+        "ShieldPoisonDamagePropertyLogic" => lo
+            .shield_enchant_damage
+            .push((DamageType::Poison, magnitude)),
+        "ShieldStaminaDamagePropertyLogic" => lo
+            .shield_enchant_damage
+            .push((DamageType::Stamina, magnitude)),
+        "ShieldMagickaDamagePropertyLogic" => lo
+            .shield_enchant_damage
+            .push((DamageType::Magicka, magnitude)),
 
         // ---- elemental retaliation (Revenge) -------------------------------
         // These families cap at the post-mitigation same-element damage suffered
@@ -618,32 +757,62 @@ fn apply_enchant_with_rating_and_multiplier(
         "SpellRevengeFrostPropertyLogic" => lo.spell_revenge.push((DamageType::Frost, magnitude)),
         "SpellRevengeShockPropertyLogic" => lo.spell_revenge.push((DamageType::Shock, magnitude)),
         "SpellRevengePoisonPropertyLogic" => lo.spell_revenge.push((DamageType::Poison, magnitude)),
-        "BlockSpellRevengeFirePropertyLogic" => lo.block_spell_revenge.push((DamageType::Fire, magnitude)),
-        "BlockSpellRevengeFrostPropertyLogic" => lo.block_spell_revenge.push((DamageType::Frost, magnitude)),
-        "BlockSpellRevengeShockPropertyLogic" => lo.block_spell_revenge.push((DamageType::Shock, magnitude)),
-        "BlockSpellRevengePoisonPropertyLogic" => lo.block_spell_revenge.push((DamageType::Poison, magnitude)),
+        "BlockSpellRevengeFirePropertyLogic" => {
+            lo.block_spell_revenge.push((DamageType::Fire, magnitude))
+        }
+        "BlockSpellRevengeFrostPropertyLogic" => {
+            lo.block_spell_revenge.push((DamageType::Frost, magnitude))
+        }
+        "BlockSpellRevengeShockPropertyLogic" => {
+            lo.block_spell_revenge.push((DamageType::Shock, magnitude))
+        }
+        "BlockSpellRevengePoisonPropertyLogic" => {
+            lo.block_spell_revenge.push((DamageType::Poison, magnitude))
+        }
 
         // ---- resistance ratings (Phase 3.4) --------------------------------
         "ResistFirePropertyLogic" => push_resist(lo, DamageType::Fire, magnitude),
-        "ResistFireMaterialPropertyLogic" => push_resist(lo, DamageType::Fire, material_magnitude(magnitude, item_rating)),
+        "ResistFireMaterialPropertyLogic" => push_resist(
+            lo,
+            DamageType::Fire,
+            material_magnitude(magnitude, item_rating),
+        ),
         "ResistFrostPropertyLogic" => push_resist(lo, DamageType::Frost, magnitude),
-        "ResistFrostMaterialPropertyLogic" => push_resist(lo, DamageType::Frost, material_magnitude(magnitude, item_rating)),
+        "ResistFrostMaterialPropertyLogic" => push_resist(
+            lo,
+            DamageType::Frost,
+            material_magnitude(magnitude, item_rating),
+        ),
         "ResistShockPropertyLogic" => push_resist(lo, DamageType::Shock, magnitude),
-        "ResistShockMaterialPropertyLogic" => push_resist(lo, DamageType::Shock, material_magnitude(magnitude, item_rating)),
+        "ResistShockMaterialPropertyLogic" => push_resist(
+            lo,
+            DamageType::Shock,
+            material_magnitude(magnitude, item_rating),
+        ),
         "ResistPoisonPropertyLogic" => push_resist(lo, DamageType::Poison, magnitude),
-        "ResistPoisonMaterialPropertyLogic" => push_resist(lo, DamageType::Poison, material_magnitude(magnitude, item_rating)),
+        "ResistPoisonMaterialPropertyLogic" => push_resist(
+            lo,
+            DamageType::Poison,
+            material_magnitude(magnitude, item_rating),
+        ),
         "ResistSlashingPropertyLogic" => push_resist(lo, DamageType::Slashing, magnitude),
-        "ResistSlashingMaterialPropertyLogic" => {
-            push_resist(lo, DamageType::Slashing, material_magnitude(magnitude, item_rating))
-        }
+        "ResistSlashingMaterialPropertyLogic" => push_resist(
+            lo,
+            DamageType::Slashing,
+            material_magnitude(magnitude, item_rating),
+        ),
         "ResistCleavingPropertyLogic" => push_resist(lo, DamageType::Cleaving, magnitude),
-        "ResistCleavingMaterialPropertyLogic" => {
-            push_resist(lo, DamageType::Cleaving, material_magnitude(magnitude, item_rating))
-        }
+        "ResistCleavingMaterialPropertyLogic" => push_resist(
+            lo,
+            DamageType::Cleaving,
+            material_magnitude(magnitude, item_rating),
+        ),
         "ResistBashingPropertyLogic" => push_resist(lo, DamageType::Bashing, magnitude),
-        "ResistBashingMaterialPropertyLogic" => {
-            push_resist(lo, DamageType::Bashing, material_magnitude(magnitude, item_rating))
-        }
+        "ResistBashingMaterialPropertyLogic" => push_resist(
+            lo,
+            DamageType::Bashing,
+            material_magnitude(magnitude, item_rating),
+        ),
 
         // ---- block rating -------------------------------------------------
         // `magnitude`, not the raw `value`: the shared `_value` curve runs
@@ -654,13 +823,27 @@ fn apply_enchant_with_rating_and_multiplier(
         // (`block_rating_bonus`), not part of the blocking item's own rating. The
         // client adds it only for the enchant's own damage types; that split is
         // 03-D11 and not modelled yet, so it still applies to every type.
-        "BlockReductionFirePropertyLogic" => lo.block_rating_bonuses.push((DamageType::Fire, magnitude)),
-        "BlockReductionFrostPropertyLogic" => lo.block_rating_bonuses.push((DamageType::Frost, magnitude)),
-        "BlockReductionShockPropertyLogic" => lo.block_rating_bonuses.push((DamageType::Shock, magnitude)),
-        "BlockReductionPoisonPropertyLogic" => lo.block_rating_bonuses.push((DamageType::Poison, magnitude)),
-        "BlockReductionSlashingPropertyLogic" => lo.block_rating_bonuses.push((DamageType::Slashing, magnitude)),
-        "BlockReductionCleavingPropertyLogic" => lo.block_rating_bonuses.push((DamageType::Cleaving, magnitude)),
-        "BlockReductionBashingPropertyLogic" => lo.block_rating_bonuses.push((DamageType::Bashing, magnitude)),
+        "BlockReductionFirePropertyLogic" => {
+            lo.block_rating_bonuses.push((DamageType::Fire, magnitude))
+        }
+        "BlockReductionFrostPropertyLogic" => {
+            lo.block_rating_bonuses.push((DamageType::Frost, magnitude))
+        }
+        "BlockReductionShockPropertyLogic" => {
+            lo.block_rating_bonuses.push((DamageType::Shock, magnitude))
+        }
+        "BlockReductionPoisonPropertyLogic" => lo
+            .block_rating_bonuses
+            .push((DamageType::Poison, magnitude)),
+        "BlockReductionSlashingPropertyLogic" => lo
+            .block_rating_bonuses
+            .push((DamageType::Slashing, magnitude)),
+        "BlockReductionCleavingPropertyLogic" => lo
+            .block_rating_bonuses
+            .push((DamageType::Cleaving, magnitude)),
+        "BlockReductionBashingPropertyLogic" => lo
+            .block_rating_bonuses
+            .push((DamageType::Bashing, magnitude)),
         "BlockReductionTemplarPropertyLogic" => lo.block_rating_bonus += magnitude,
 
         // Powerful Block is NOT block rating. Its shipped tooltip is "Target stunned
@@ -675,7 +858,9 @@ fn apply_enchant_with_rating_and_multiplier(
         "ConvertDamageFirePropertyLogic" => lo.convert_damage.push((DamageType::Fire, magnitude)),
         "ConvertDamageFrostPropertyLogic" => lo.convert_damage.push((DamageType::Frost, magnitude)),
         "ConvertDamageShockPropertyLogic" => lo.convert_damage.push((DamageType::Shock, magnitude)),
-        "ConvertDamagePoisonPropertyLogic" => lo.convert_damage.push((DamageType::Poison, magnitude)),
+        "ConvertDamagePoisonPropertyLogic" => {
+            lo.convert_damage.push((DamageType::Poison, magnitude))
+        }
         "HastePropertyLogic" => lo.haste += (1.0 - magnitude).max(0.0),
         "CoolDownPenaltyPropertyLogic" => lo.cooldown_penalty_secs += magnitude,
         "ShortenStaggerPropertyLogic" => lo.shorten_stagger += magnitude,
@@ -689,10 +874,18 @@ fn apply_enchant_with_rating_and_multiplier(
         "ArmorPiercingPhysicalPropertyLogic" => lo.armor_piercing_rating += magnitude,
 
         // ---- status-threshold fortifies (Phase 3.8) ------------------------
-        "FortifyPoisonedPropertyLogic" => push_status_fortify(lo, StatusEffectType::Poisoned, magnitude),
-        "FortifyBurningPropertyLogic" => push_status_fortify(lo, StatusEffectType::Burning, magnitude),
-        "FortifyFrozenPropertyLogic" => push_status_fortify(lo, StatusEffectType::Frozen, magnitude),
-        "FortifyEnervatedPropertyLogic" => push_status_fortify(lo, StatusEffectType::Enervated, magnitude),
+        "FortifyPoisonedPropertyLogic" => {
+            push_status_fortify(lo, StatusEffectType::Poisoned, magnitude)
+        }
+        "FortifyBurningPropertyLogic" => {
+            push_status_fortify(lo, StatusEffectType::Burning, magnitude)
+        }
+        "FortifyFrozenPropertyLogic" => {
+            push_status_fortify(lo, StatusEffectType::Frozen, magnitude)
+        }
+        "FortifyEnervatedPropertyLogic" => {
+            push_status_fortify(lo, StatusEffectType::Enervated, magnitude)
+        }
 
         // ---- status duration ------------------------------------------------
         // The shared curve is a magnitude, not a percentage; express it as a
@@ -846,12 +1039,14 @@ fn apply_template_properties_with_context(
             lo.property_ids.push(id);
             let family = gamedata::enchant_family(property_uuid);
             let xvalue_multiplier = family
-                .map(|f| item_property_xvalue_multiplier(
-                    f.logic,
-                    1.0,
-                    lo.perks.enchantment_synergy,
-                    property_counts.get(&id).copied().unwrap_or(0),
-                ))
+                .map(|f| {
+                    item_property_xvalue_multiplier(
+                        f.logic,
+                        1.0,
+                        lo.perks.enchantment_synergy,
+                        property_counts.get(&id).copied().unwrap_or(0),
+                    )
+                })
                 .unwrap_or(1.0);
             apply_enchant_with_rating_and_multiplier(
                 lo,
@@ -1121,8 +1316,7 @@ fn collect_grade_bonus(
             continue;
         };
         let tier = prop.tier.min(u8::MAX as u64) as u8;
-        *out.entry(g.ability_uuid.to_string()).or_insert(0) +=
-            u16::from(grade_bonus_ranks(tier));
+        *out.entry(g.ability_uuid.to_string()).or_insert(0) += u16::from(grade_bonus_ranks(tier));
     }
 }
 
@@ -1167,7 +1361,6 @@ fn push_status_fortify(lo: &mut Loadout, cond: StatusEffectType, magnitude: f32)
 fn push_fortify(lo: &mut Loadout, ty: DamageType, frac: f32) {
     lo.element_fortify.push((ty, frac));
 }
-
 
 // ---------------------------------------------------------------------------
 // Abilities (Phase 3.11)
@@ -1389,7 +1582,11 @@ mod tests {
             tag: AbilityTag::Damage,
         }];
         super::apply_grade_bonuses(&mut abilities, &bonus);
-        assert_eq!(u16::from(abilities[0].level), cap, "must clamp at maximum_level");
+        assert_eq!(
+            u16::from(abilities[0].level),
+            cap,
+            "must clamp at maximum_level"
+        );
     }
 
     /// An ability with no jewellery bonus is left exactly as it was.
@@ -1440,7 +1637,10 @@ mod tests {
     /// would simply never grant its bonus, with nothing to notice.
     #[test]
     fn every_grade_property_points_at_a_known_ability() {
-        assert!(!gamedata::GRADE_PROPERTIES.is_empty(), "the table must not be empty");
+        assert!(
+            !gamedata::GRADE_PROPERTIES.is_empty(),
+            "the table must not be empty"
+        );
         for g in gamedata::GRADE_PROPERTIES.iter() {
             assert!(
                 gamedata::ability(g.ability_uuid).is_some(),
@@ -1528,7 +1728,10 @@ mod tests {
         }
         // And the rest are gear-only: -1 for both level and cost, never one of
         // the two, which would mean the sentinel had drifted.
-        for p in gamedata::PERK_RANKS.iter().filter(|p| p.required_hero_level < 0) {
+        for p in gamedata::PERK_RANKS
+            .iter()
+            .filter(|p| p.required_hero_level < 0)
+        {
             assert_eq!(
                 p.ability_point_cost, -1,
                 "{} rank {} is unbuyable but still has a point cost",
@@ -1564,7 +1767,11 @@ mod tests {
         let id = Uuid::parse_str("17718cb7-fb8a-4fbc-adeb-c4cdbc37faf4").unwrap();
         super::apply_enchant(&mut lo, &id, 10);
 
-        assert_eq!(lo.revenge.len(), 1, "the enchantment must register exactly once");
+        assert_eq!(
+            lo.revenge.len(),
+            1,
+            "the enchantment must register exactly once"
+        );
         let (ty, mag) = lo.revenge[0];
         assert_eq!(ty, DamageType::Frost);
         // 36.86 is the SHIPPED `RevengeFrostPropertyLogic._xValueByTier[10]`.
@@ -1593,8 +1800,14 @@ mod tests {
 
         super::apply_template_properties(&mut lo, "23607f09-a103-4ed3-a0de-33e0498f8018");
 
-        assert!(lo.revenge.is_empty(), "Warlock's Ring carries SpellRevenge, not ordinary Revenge");
-        assert!(lo.block_spell_revenge.is_empty(), "no Warlock block-only SpellRevenge");
+        assert!(
+            lo.revenge.is_empty(),
+            "Warlock's Ring carries SpellRevenge, not ordinary Revenge"
+        );
+        assert!(
+            lo.block_spell_revenge.is_empty(),
+            "no Warlock block-only SpellRevenge"
+        );
         assert_eq!(lo.spell_revenge.len(), 4);
         let has = |ty: DamageType, want: f32| {
             lo.spell_revenge
@@ -1622,7 +1835,19 @@ mod tests {
     const POWERFUL_BLOCK: &str = "f8e9dec5-c6e7-4976-b24b-2155f1921692";
 
     fn lo() -> Loadout {
-        Loadout { status_dur_mult: 1.0, shield_optimal_block_boost: 1.0, ..Default::default() }
+        Loadout {
+            status_dur_mult: 1.0,
+            shield_optimal_block_boost: 1.0,
+            ..Default::default()
+        }
+    }
+
+    fn has_any_racial_innates(lo: &Loadout) -> bool {
+        !lo.innate_base_resistances.is_empty()
+            || !lo.innate_damage_factors.is_empty()
+            || lo.innate_armor_multiplier != 0.0
+            || lo.innate_healing_multiplier != 0.0
+            || lo.innate_regen_multipliers.iter().any(|v| *v != 0.0)
     }
 
     /// Enchants are routed by the family's LOGIC CLASS, and the magnitude comes
@@ -1641,9 +1866,14 @@ mod tests {
         let fire_family = gamedata::enchant_family(RESIST_FIRE).unwrap();
         let a_real_tier = fire_family.tiers().last().unwrap().tier;
         apply_enchant(&mut r, &Uuid::parse_str(RESIST_FIRE).unwrap(), a_real_tier);
-        assert!(r.enchants.is_empty(), "a resist enchant is not a damage track");
         assert!(
-            r.resistances.iter().any(|(t, v)| *t == DamageType::Fire && *v > 0.0),
+            r.enchants.is_empty(),
+            "a resist enchant is not a damage track"
+        );
+        assert!(
+            r.resistances
+                .iter()
+                .any(|(t, v)| *t == DamageType::Fire && *v > 0.0),
             "Resist Fire becomes a Fire Resistance RATING, got {:?}",
             r.resistances
         );
@@ -1652,7 +1882,10 @@ mod tests {
         let mut p = lo();
         apply_enchant(&mut p, &Uuid::parse_str(ELEM_PIERCE).unwrap(), 10);
         assert!(p.elem_resist_piercing_rating > 0.0);
-        assert_eq!(p.elem_resist_piercing, 0.0, "the fractional field is ability-side only");
+        assert_eq!(
+            p.elem_resist_piercing, 0.0,
+            "the fractional field is ability-side only"
+        );
     }
 
     /// Thunderfell is the reported weapon: a Shock Mace carrying BOTH ravage
@@ -1666,7 +1899,10 @@ mod tests {
         ] {
             let m = gamedata::enchant_magnitude_for_weight(uuid, 10, tables::Weight::Versatile)
                 .expect("Thunderfell's suffix ships a versatile curve");
-            assert!((m - 42.0).abs() < 1e-3, "{ty:?} ravage t10 versatile = 42.0, got {m}");
+            assert!(
+                (m - 42.0).abs() < 1e-3,
+                "{ty:?} ravage t10 versatile = 42.0, got {m}"
+            );
         }
     }
 
@@ -1676,11 +1912,21 @@ mod tests {
     fn ravage_scales_with_weapon_weight() {
         let u = "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07";
         let light = gamedata::enchant_magnitude_for_weight(u, 10, tables::Weight::Light).unwrap();
-        let vers = gamedata::enchant_magnitude_for_weight(u, 10, tables::Weight::Versatile).unwrap();
+        let vers =
+            gamedata::enchant_magnitude_for_weight(u, 10, tables::Weight::Versatile).unwrap();
         let heavy = gamedata::enchant_magnitude_for_weight(u, 10, tables::Weight::Heavy).unwrap();
-        assert!((light - 31.66).abs() < 1e-2, "light t10 = 31.66, got {light}");
-        assert!((vers - 42.0).abs() < 1e-2, "versatile t10 = 42.0, got {vers}");
-        assert!((heavy - 52.66).abs() < 1e-2, "heavy t10 = 52.66, got {heavy}");
+        assert!(
+            (light - 31.66).abs() < 1e-2,
+            "light t10 = 31.66, got {light}"
+        );
+        assert!(
+            (vers - 42.0).abs() < 1e-2,
+            "versatile t10 = 42.0, got {vers}"
+        );
+        assert!(
+            (heavy - 52.66).abs() < 1e-2,
+            "heavy t10 = 52.66, got {heavy}"
+        );
         assert!(light < vers && vers < heavy, "light < versatile < heavy");
     }
 
@@ -1690,7 +1936,10 @@ mod tests {
         let mut l = lo();
         l.weapon.weight = None;
         apply_enchant_with_rating(&mut l, &id, 10, None);
-        assert!(l.ravage.is_empty(), "class-None weapon enchants have no authored track");
+        assert!(
+            l.ravage.is_empty(),
+            "class-None weapon enchants have no authored track"
+        );
     }
 
     #[test]
@@ -1705,7 +1954,10 @@ mod tests {
             .filter(|(ty, _)| *ty == DamageType::Fire)
             .map(|(_, v)| *v)
             .sum();
-        assert!((got - magnitude * 230.4).abs() < 0.01, "material resist is xValue x AR");
+        assert!(
+            (got - magnitude * 230.4).abs() < 0.01,
+            "material resist is xValue x AR"
+        );
 
         let mut control = lo();
         apply_enchant(&mut control, &id, 10);
@@ -1715,7 +1967,10 @@ mod tests {
             .filter(|(ty, _)| *ty == DamageType::Fire)
             .map(|(_, v)| *v)
             .sum();
-        assert!((unscaled - magnitude).abs() < 0.001, "direct calls keep the raw xValue fallback");
+        assert!(
+            (unscaled - magnitude).abs() < 0.001,
+            "direct calls keep the raw xValue fallback"
+        );
     }
 
     #[test]
@@ -1727,15 +1982,216 @@ mod tests {
         );
         argonian.weapon.weight = Some(tables::Weight::Light);
         assert!((argonian.regen_multiplier(0) - 1.05).abs() < 1e-6);
-        assert!((argonian.innate_damage_multiplier(DamageType::Slashing, DamageSource::Attack) - 1.05).abs() < 1e-6);
+        assert!(
+            (argonian.innate_damage_multiplier(DamageType::Slashing, DamageSource::Attack) - 1.05)
+                .abs()
+                < 1e-6
+        );
 
         let mut nord = lo();
         apply_racial_innates_from_customization(
             &mut nord,
             &json!({ "CharacterUID": "6a386cd0-36c2-463a-b6a4-418b0bbeb159" }),
         );
-        assert!((nord.innate_base_resistance_multiplier(DamageType::Frost, DamageSource::Attack) - 0.85).abs() < 1e-6);
-        assert!((nord.innate_base_resistance_multiplier(DamageType::Fire, DamageSource::Attack) - 1.0).abs() < 1e-6);
+        assert!(
+            (nord.innate_base_resistance_multiplier(DamageType::Frost, DamageSource::Attack)
+                - 0.85)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (nord.innate_base_resistance_multiplier(DamageType::Fire, DamageSource::Attack) - 1.0)
+                .abs()
+                < 1e-6
+        );
+    }
+
+    #[test]
+    fn huge_goobers_wire_visual_resolves_to_nord_innates() {
+        let mut goober = lo();
+        apply_racial_innates_from_customization(
+            &mut goober,
+            &json!({ "CharacterUID": "79c1d00e-a0ac-495a-910c-23d3040c1193" }),
+        );
+        assert_eq!(
+            racial_innate_category_for_character_uid("79c1d00e-a0ac-495a-910c-23d3040c1193"),
+            Some(NORD_RACE_CATEGORY),
+            "Huge Goober's recovered male-Nord visual must map to Nord"
+        );
+        assert!(
+            (goober.innate_base_resistance_multiplier(DamageType::Frost, DamageSource::Attack)
+                - 0.85)
+                .abs()
+                < 1e-6
+        );
+        goober.weapon.weight = Some(tables::Weight::Heavy);
+        assert!(
+            (goober.innate_damage_multiplier(DamageType::Cleaving, DamageSource::Attack) - 1.05)
+                .abs()
+                < 1e-6
+        );
+    }
+
+    #[test]
+    fn prod_wire_visuals_resolve_to_race_categories() {
+        let cases = [
+            (
+                "9c2cc2b3-804c-4e97-8ad5-56371690bdf5",
+                ARGONIAN_RACE_CATEGORY,
+            ),
+            ("46b0d965-00be-478d-914a-996ff8f3e5a0", BRETON_RACE_CATEGORY),
+            ("79c1d00e-a0ac-495a-910c-23d3040c1193", NORD_RACE_CATEGORY),
+            (
+                "142ed7a5-efdd-40b7-8a69-78f802404ecb",
+                DARK_ELF_RACE_CATEGORY,
+            ),
+            ("6e8d9d40-6d1b-4167-a223-f9a3c5c0936b", BRETON_RACE_CATEGORY),
+            (
+                "d6eac1b4-2f2d-46c1-b039-8ee73d844e5d",
+                IMPERIAL_RACE_CATEGORY,
+            ),
+            (
+                "33e66455-3bc5-4fe9-89de-607ba3e975cc",
+                KHAJIIT_RACE_CATEGORY,
+            ),
+            (
+                "95d7a396-de4b-4803-ac37-6c068946d52c",
+                DARK_ELF_RACE_CATEGORY,
+            ),
+            (
+                "81c01573-8c66-48d2-856a-25459fbb97b8",
+                KHAJIIT_RACE_CATEGORY,
+            ),
+            ("2a36970f-ab56-4ae6-966f-d826f30a4e36", NORD_RACE_CATEGORY),
+            (
+                "c65c7a08-ed74-4f55-be60-52822b04cbd0",
+                WOOD_ELF_RACE_CATEGORY,
+            ),
+            ("5b5f2f42-fc18-4173-82fa-1108b947264f", ORC_RACE_CATEGORY),
+            (
+                "e48c092b-8ddf-492d-85b8-ad71207be644",
+                WOOD_ELF_RACE_CATEGORY,
+            ),
+            (
+                "ccce1d22-f862-4b83-9636-6c5dfb53f528",
+                IMPERIAL_RACE_CATEGORY,
+            ),
+            (
+                "18db9526-81b9-4df3-8355-454bfabe5ba3",
+                HIGH_ELF_RACE_CATEGORY,
+            ),
+            ("9fe5a7ee-8126-46e7-9f89-362fb455cf49", ORC_RACE_CATEGORY),
+            (
+                "a84028f9-aa59-4a02-995d-e6125b0efd27",
+                ARGONIAN_RACE_CATEGORY,
+            ),
+        ];
+        for (visual, category) in cases {
+            assert_eq!(
+                racial_innate_category_for_character_uid(visual),
+                Some(category),
+                "{visual} resolves to its race category"
+            );
+        }
+    }
+
+    #[test]
+    fn complete_player_visual_table_resolves() {
+        let cases = [
+            (
+                "a84028f9-aa59-4a02-995d-e6125b0efd27",
+                ARGONIAN_RACE_CATEGORY,
+            ),
+            (
+                "9c2cc2b3-804c-4e97-8ad5-56371690bdf5",
+                ARGONIAN_RACE_CATEGORY,
+            ),
+            ("6e8d9d40-6d1b-4167-a223-f9a3c5c0936b", BRETON_RACE_CATEGORY),
+            ("46b0d965-00be-478d-914a-996ff8f3e5a0", BRETON_RACE_CATEGORY),
+            (
+                "142ed7a5-efdd-40b7-8a69-78f802404ecb",
+                DARK_ELF_RACE_CATEGORY,
+            ),
+            (
+                "95d7a396-de4b-4803-ac37-6c068946d52c",
+                DARK_ELF_RACE_CATEGORY,
+            ),
+            (
+                "a3e00d58-d589-4b37-aa9c-01a4ecf1e1dc",
+                DREMORA_RACE_CATEGORY,
+            ),
+            (
+                "ab8fa65a-84db-4698-8788-a77f557286cc",
+                DREMORA_RACE_CATEGORY,
+            ),
+            (
+                "370c058c-140d-4840-90ae-eac4efc11726",
+                HIGH_ELF_RACE_CATEGORY,
+            ),
+            (
+                "18db9526-81b9-4df3-8355-454bfabe5ba3",
+                HIGH_ELF_RACE_CATEGORY,
+            ),
+            (
+                "ccce1d22-f862-4b83-9636-6c5dfb53f528",
+                IMPERIAL_RACE_CATEGORY,
+            ),
+            (
+                "d6eac1b4-2f2d-46c1-b039-8ee73d844e5d",
+                IMPERIAL_RACE_CATEGORY,
+            ),
+            (
+                "81c01573-8c66-48d2-856a-25459fbb97b8",
+                KHAJIIT_RACE_CATEGORY,
+            ),
+            (
+                "33e66455-3bc5-4fe9-89de-607ba3e975cc",
+                KHAJIIT_RACE_CATEGORY,
+            ),
+            ("2a36970f-ab56-4ae6-966f-d826f30a4e36", NORD_RACE_CATEGORY),
+            ("79c1d00e-a0ac-495a-910c-23d3040c1193", NORD_RACE_CATEGORY),
+            ("9fe5a7ee-8126-46e7-9f89-362fb455cf49", ORC_RACE_CATEGORY),
+            ("5b5f2f42-fc18-4173-82fa-1108b947264f", ORC_RACE_CATEGORY),
+            (
+                "40c381f6-4004-4580-908e-22b1c130174f",
+                REDGUARD_RACE_CATEGORY,
+            ),
+            (
+                "7fc6073c-93ca-43c2-9235-0dc72ad108e7",
+                REDGUARD_RACE_CATEGORY,
+            ),
+            (
+                "e48c092b-8ddf-492d-85b8-ad71207be644",
+                WOOD_ELF_RACE_CATEGORY,
+            ),
+            (
+                "c65c7a08-ed74-4f55-be60-52822b04cbd0",
+                WOOD_ELF_RACE_CATEGORY,
+            ),
+        ];
+        for (visual, category) in cases {
+            assert_eq!(
+                racial_innate_category_for_character_uid(visual),
+                Some(category)
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_empty_and_no_bonus_visuals_apply_no_innates() {
+        for customization in [
+            json!({ "CharacterUID": "00000000-0000-0000-0000-000000000000" }),
+            json!({ "CharacterUID": "" }),
+            json!({}),
+            json!({ "CharacterUID": "a3e00d58-d589-4b37-aa9c-01a4ecf1e1dc" }),
+        ] {
+            let mut l = lo();
+            apply_racial_innates_from_customization(&mut l, &customization);
+            assert!(
+                !has_any_racial_innates(&l),
+                "unknown, empty, missing, and Dremora visuals carry no arena innates"
+            );
+        }
     }
 
     #[test]
@@ -1809,7 +2265,10 @@ mod tests {
         assert_eq!(family.logic, "PowerfulBlockPropertyLogic");
         let top = family.tiers().last().unwrap().tier;
         let raw = family.value(top).unwrap();
-        assert!(raw > 7000.0, "Powerful Block t{top} ships the 7591 curve top, got {raw}");
+        assert!(
+            raw > 7000.0,
+            "Powerful Block t{top} ships the 7591 curve top, got {raw}"
+        );
 
         let mut l = lo();
         apply_enchant(&mut l, &Uuid::parse_str(POWERFUL_BLOCK).unwrap(), top);
@@ -1820,7 +2279,10 @@ mod tests {
         // answer moved, from a borrowed constant to the client's own table.
         let want = gamedata::enchant_magnitude(POWERFUL_BLOCK, top)
             .expect("Powerful Block ships a magnitude table");
-        assert!(want < raw / 10.0, "the shipped magnitude is nothing like the raw curve");
+        assert!(
+            want < raw / 10.0,
+            "the shipped magnitude is nothing like the raw curve"
+        );
         // Powerful Block lands on `powerful_block`, NOT `block_rating`. Its shipped
         // tooltip is "Target stunned by a blocked attack takes {0} extra damage while
         // stunned", and in the client the only thing constructing a
@@ -1861,8 +2323,7 @@ mod tests {
         let zeroed: Vec<&str> = gamedata::ENCHANT_FAMILIES
             .iter()
             .filter(|f| {
-                f.logic.starts_with("BlockReduction")
-                    && f.tiers().iter().all(|t| t.value == 0.0)
+                f.logic.starts_with("BlockReduction") && f.tiers().iter().all(|t| t.value == 0.0)
             })
             .map(|f| f.logic)
             .collect();
@@ -1885,13 +2346,22 @@ mod tests {
     /// The full ability table drives routing — not one hardcoded prefix.
     #[test]
     fn ability_routing_covers_the_shipped_table() {
-        assert_eq!(ability_tag_for_template(gamedata::ids::WARD), AbilityTag::Ward);
-        assert_eq!(ability_tag_for_template(gamedata::ids::PARALYZE), AbilityTag::Paralyze);
+        assert_eq!(
+            ability_tag_for_template(gamedata::ids::WARD),
+            AbilityTag::Ward
+        );
+        assert_eq!(
+            ability_tag_for_template(gamedata::ids::PARALYZE),
+            AbilityTag::Paralyze
+        );
         assert_eq!(
             ability_tag_for_template(gamedata::ids::RESIST_ELEMENTS),
             AbilityTag::ResistElements
         );
-        assert_eq!(ability_tag_for_template(gamedata::ids::FIREBALL), AbilityTag::Damage);
+        assert_eq!(
+            ability_tag_for_template(gamedata::ids::FIREBALL),
+            AbilityTag::Damage
+        );
         // Absorb (a spell with no damage_type) is its own negation class.
         assert_eq!(
             ability_tag_for_template("4e760726-b012-4b25-bc92-0cd6312d6601"),
@@ -1915,7 +2385,10 @@ mod tests {
             .iter()
             .find(|a| a.editor_name == "TempestArmor")
             .expect("TempestArmor");
-        assert!(tempest.enemy_only, "precondition: Tempest Armor is enemy-only");
+        assert!(
+            tempest.enemy_only,
+            "precondition: Tempest Armor is enemy-only"
+        );
         let equipped = serde_json::json!({
             "0": tempest.uuid,
             "1": gamedata::ids::WARD,
@@ -1927,7 +2400,11 @@ mod tests {
 
         let got = super::parse_equipped_abilities(&equipped, &levels);
 
-        assert_eq!(got.len(), 1, "only the player-legal control ability imports");
+        assert_eq!(
+            got.len(),
+            1,
+            "only the player-legal control ability imports"
+        );
         assert_eq!(got[0].instance_uuid, gamedata::ids::WARD);
         assert_eq!(got[0].tag, AbilityTag::Ward);
     }
@@ -1940,7 +2417,10 @@ mod tests {
         let p = weapon_profile(w, 10);
         assert_eq!(p.weight, Some(tables::Weight::Light));
         assert_eq!(p.primary_type, Some(DamageType::Slashing));
-        assert!((profile_base(&p) - 144.0).abs() < 1e-3, "99 + 45 tempering = 144");
+        assert!(
+            (profile_base(&p) - 144.0).abs() < 1e-3,
+            "99 + 45 tempering = 144"
+        );
         assert!((w.block_base - 49.5).abs() < 1e-3);
         let mut lo = Loadout::default();
         install_weapon(&mut lo, w, 10);
@@ -1992,9 +2472,18 @@ mod tests {
         assert_eq!(two.block_rating, 116.0);
 
         // The T1 fixture items (blades-capture capture-tests.md §1).
-        assert_eq!(blocking_item_rating("905ee635-200e-445a-89de-db5ecbb17989", 148.5, 10), 216.0);
-        assert_eq!(blocking_item_rating("aa4ffedf-ad74-4aa1-bd82-18a041100f79", 247.5, 10), 360.0);
-        assert_eq!(blocking_item_rating("28000fc8-4208-4036-90d4-5e698b680d96", 147.0, 0), 147.0);
+        assert_eq!(
+            blocking_item_rating("905ee635-200e-445a-89de-db5ecbb17989", 148.5, 10),
+            216.0
+        );
+        assert_eq!(
+            blocking_item_rating("aa4ffedf-ad74-4aa1-bd82-18a041100f79", 247.5, 10),
+            360.0
+        );
+        assert_eq!(
+            blocking_item_rating("28000fc8-4208-4036-90d4-5e698b680d96", 147.0, 0),
+            147.0
+        );
     }
 
     /// The generated temper table covers the weapon and shield templates, and never
@@ -2002,37 +2491,69 @@ mod tests {
     #[test]
     fn the_temper_table_is_consistent_with_the_templates() {
         use super::super::block_temper::{tempered_block_value, BLOCK_TEMPER};
-        assert!(BLOCK_TEMPER.windows(2).all(|w| w[0].0 < w[1].0), "sorted for binary search");
+        assert!(
+            BLOCK_TEMPER.windows(2).all(|w| w[0].0 < w[1].0),
+            "sorted for binary search"
+        );
         let mut covered = 0;
         for w in gamedata::WEAPONS.iter() {
             if let Some(v1) = tempered_block_value(w.uuid, 1) {
                 covered += 1;
-                assert!(v1 >= w.block_base, "{}: T1 {v1} < blockBase {}", w.name, w.block_base);
-                assert!(tempered_block_value(w.uuid, 10).unwrap() >= v1, "{}", w.name);
+                assert!(
+                    v1 >= w.block_base,
+                    "{}: T1 {v1} < blockBase {}",
+                    w.name,
+                    w.block_base
+                );
+                assert!(
+                    tempered_block_value(w.uuid, 10).unwrap() >= v1,
+                    "{}",
+                    w.name
+                );
             }
-            assert_eq!(tempered_block_value(w.uuid, 0), None, "level 0 is the template");
+            assert_eq!(
+                tempered_block_value(w.uuid, 0),
+                None,
+                "level 0 is the template"
+            );
         }
         for sh in gamedata::SHIELDS.iter() {
             if let Some(v1) = tempered_block_value(sh.uuid, 1) {
                 covered += 1;
-                assert!(v1 >= sh.block_base, "{}: T1 {v1} < blockBase {}", sh.name, sh.block_base);
+                assert!(
+                    v1 >= sh.block_base,
+                    "{}: T1 {v1} < blockBase {}",
+                    sh.name,
+                    sh.block_base
+                );
             }
         }
         assert_eq!(covered, BLOCK_TEMPER.len());
-        assert_eq!(covered, 332 + 46, "332 weapon and 46 shield templates carry a temper table");
+        assert_eq!(
+            covered,
+            332 + 46,
+            "332 weapon and 46 shield templates carry a temper table"
+        );
     }
 
     #[test]
     fn starter_resolves_a_real_item() {
         let s = starter();
-        assert!(s.weapon_template.is_some(), "starter uses a shipped template");
+        assert!(
+            s.weapon_template.is_some(),
+            "starter uses a shipped template"
+        );
         assert_eq!(s.weapon.weight, Some(tables::Weight::Light));
         // Glass Dagger 72.0 + tempering-4 bonus 9.0.
         let base: f32 = s.weapon.base_by_type.iter().map(|(_, v)| *v).sum();
         assert!((base - 81.0).abs() < 1e-3, "starter base {base}");
         // The Chaurus Shield alone (blockBase 240, untempered). The dagger's 36 is NOT
         // added: the shield, when equipped, is the one blocking item (03-D3).
-        assert_eq!(s.block_rating, 240.0, "starter block rating {}", s.block_rating);
+        assert_eq!(
+            s.block_rating, 240.0,
+            "starter block rating {}",
+            s.block_rating
+        );
         assert!(s.has_shield);
         assert_eq!(s.enchants, vec![(DamageType::Shock, 3)]);
     }
@@ -2043,8 +2564,14 @@ mod tests {
         let levels = json!({ "aaaaaaaa-0000-0000-0000-000000000001": 3 });
         let abilities = parse_equipped_abilities(&equipped, &levels);
         assert_eq!(abilities.len(), 2);
-        let a = abilities.iter().find(|a| a.instance_uuid.starts_with("aaaa")).unwrap();
-        let b = abilities.iter().find(|a| a.instance_uuid.starts_with("bbbb")).unwrap();
+        let a = abilities
+            .iter()
+            .find(|a| a.instance_uuid.starts_with("aaaa"))
+            .unwrap();
+        let b = abilities
+            .iter()
+            .find(|a| a.instance_uuid.starts_with("bbbb"))
+            .unwrap();
         assert_eq!(a.level, 3);
         assert_eq!(b.level, 1, "missing level defaults to 1");
     }
@@ -2055,7 +2582,9 @@ mod tests {
         let equipped = json!({ "0": gamedata::ids::FIREBALL });
         let levels = json!({ gamedata::ids::FIREBALL: 250 });
         let a = parse_equipped_abilities(&equipped, &levels);
-        let max = gamedata::ability(gamedata::ids::FIREBALL).unwrap().maximum_level as u8;
+        let max = gamedata::ability(gamedata::ids::FIREBALL)
+            .unwrap()
+            .maximum_level as u8;
         assert_eq!(a[0].level, max);
     }
 
@@ -2064,7 +2593,6 @@ mod tests {
         assert!(parse_equipped_abilities(&Value::Null, &Value::Null).is_empty());
     }
 }
-
 
 #[cfg(test)]
 mod two_handed_tests {
@@ -2217,7 +2745,7 @@ mod two_handed_tests {
             weapon_optimal_block_boost: 1.0,
             ..Default::default()
         };
-        lo.has_shield = has_shield;           // handedness, before the weapon goes on
+        lo.has_shield = has_shield; // handedness, before the weapon goes on
         let w = gamedata::weapon(uuid).expect("template must resolve");
         install_weapon(&mut lo, w, 0);
         lo
@@ -2292,13 +2820,12 @@ mod two_handed_tests {
     }
 }
 
-
 /// D4 (combat-spec ch. 07 / ch. 10 §0.1): perks come from the LEARNED abilities.
 #[cfg(test)]
 mod learned_perk_tests {
-    use super::*;
     use super::super::damage::{DamageModel, RetailDamageModel};
     use super::super::state::{ActiveSide, DamageSource, Fighter};
+    use super::*;
     use blades_lib::user_data::{
         Backpack, Item, ItemPropertiesAll, ItemSingleProperty, SingleEquippedItem, Treasury,
     };
@@ -2319,7 +2846,11 @@ mod learned_perk_tests {
             let slot = Uuid::from_u128(1000 + i as u128);
             lo.equipped_items.0.insert(
                 slot,
-                SingleEquippedItem { id: Uuid::from_u128(2000 + i as u128), slot, item },
+                SingleEquippedItem {
+                    id: Uuid::from_u128(2000 + i as u128),
+                    slot,
+                    item,
+                },
             );
         }
         CompleteInventory {
@@ -2343,6 +2874,69 @@ mod learned_perk_tests {
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-3
+    }
+
+    fn report284_goober_loadout() -> Loadout {
+        let fixture: Value =
+            serde_json::from_str(include_str!("testdata/report284_goober_character.json"))
+                .expect("report #284 fixture JSON");
+        let character: CompleteCharacter =
+            serde_json::from_value(fixture["character"].clone()).expect("fixture character");
+        let loadout: blades_lib::user_data::Loadout =
+            serde_json::from_value(fixture["loadout"].clone()).expect("fixture loadout");
+        let inventory = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout,
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        let mut lo = from_character(&character, &inventory);
+        if let Some(customization) = fixture
+            .get("data")
+            .and_then(|data| data.get("customization"))
+            .or_else(|| fixture.get("customization"))
+        {
+            apply_racial_innates_from_customization(&mut lo, customization);
+        }
+        lo
+    }
+
+    #[test]
+    fn report284_goober_fixture_defensive_resistance_sources() {
+        let lo = report284_goober_loadout();
+        let rating = |ty| {
+            lo.resistances
+                .iter()
+                .filter(|(got, _)| *got == ty)
+                .map(|(_, v)| *v)
+                .sum::<f32>()
+        };
+
+        assert_eq!(lo.display_name, "Huge Goober");
+        assert_eq!(lo.level, 74);
+        assert!(
+            lo.innate_base_resistances.is_empty(),
+            "the report fixture contains no customization/CharacterUID blob, so it cannot prove race"
+        );
+        assert!(
+            close(rating(DamageType::Fire), 0.0),
+            "no equipped Resist Fire enchant"
+        );
+        assert!(
+            close(rating(DamageType::Frost), 21.79089),
+            "equipped gear/template data contributes permanent Frost resistance"
+        );
+        assert!(
+            close(rating(DamageType::Shock), 0.0),
+            "no equipped Resist Shock enchant"
+        );
+        let spell_only = rating(DamageType::None);
+        assert!(
+            close(spell_only, 42.0),
+            "the active loadout's Resist Spells enchant is parsed as spell-only resistance, got {spell_only}"
+        );
     }
 
     fn item_with_enchants(template: Uuid, enchants: &[(&str, u64)]) -> Item {
@@ -2419,12 +3013,31 @@ mod learned_perk_tests {
         assert!(super::super::perks::PerkBonuses::resolve(&lo.abilities, true).is_empty());
 
         let p = &lo.perks;
-        assert!(close(p.healing_surge, 9.6), "HealingSurge r2 = 9.6, got {}", p.healing_surge);
-        assert!(close(p.weapon_bonus(Some(tables::Weight::Light)), 3.43), "Scout r1");
-        assert!(close(p.weapon_bonus(Some(tables::Weight::Versatile)), 4.22), "Armsman r1");
-        assert!(close(p.weapon_bonus(Some(tables::Weight::Heavy)), 6.74), "Barbarian r1");
-        assert!(close(p.element_bonus(DamageType::Poison), 9.0), "AugmentedPoison r1");
-        assert!(close(p.elemental_block_rating, 32.5), "ElementalProtection r1");
+        assert!(
+            close(p.healing_surge, 9.6),
+            "HealingSurge r2 = 9.6, got {}",
+            p.healing_surge
+        );
+        assert!(
+            close(p.weapon_bonus(Some(tables::Weight::Light)), 3.43),
+            "Scout r1"
+        );
+        assert!(
+            close(p.weapon_bonus(Some(tables::Weight::Versatile)), 4.22),
+            "Armsman r1"
+        );
+        assert!(
+            close(p.weapon_bonus(Some(tables::Weight::Heavy)), 6.74),
+            "Barbarian r1"
+        );
+        assert!(
+            close(p.element_bonus(DamageType::Poison), 9.0),
+            "AugmentedPoison r1"
+        );
+        assert!(
+            close(p.elemental_block_rating, 32.5),
+            "ElementalProtection r1"
+        );
         assert!(close(p.enchantment_synergy, 0.07), "EnchantmentSynergy r1");
         assert!(close(p.mettle, 0.20), "Mettle r1");
         assert!(close(p.combat_focus, 8.78), "CombatFocus r1");
@@ -2432,7 +3045,10 @@ mod learned_perk_tests {
         assert_eq!(p.matching_set_armor, 0.0);
         // Not learned by this character: must stay zero.
         assert_eq!(p.max_power, 0.0, "MaximumPower is not in the learned map");
-        assert_eq!(p.conservationist, 0.0, "Conservationist is not in the learned map");
+        assert_eq!(
+            p.conservationist, 0.0,
+            "Conservationist is not in the learned map"
+        );
     }
 
     #[test]
@@ -2449,7 +3065,12 @@ mod learned_perk_tests {
         });
         let lo = from_character(
             &character(Value::Null, learned.clone()),
-            &inventory(vec![weapon, fortify_piece(1), fortify_piece(2), fortify_piece(3)]),
+            &inventory(vec![
+                weapon,
+                fortify_piece(1),
+                fortify_piece(2),
+                fortify_piece(3),
+            ]),
         );
 
         assert!(close(lo.perks.enchantment_synergy, 0.25), "Synergy rank 7");
@@ -2465,7 +3086,15 @@ mod learned_perk_tests {
             "three stacked Fortify Shock properties get +25%, got {fortify_total}",
         );
 
-        let target = Fighter::new(1, 565, Loadout { level: 100, ..Default::default() }, Instant::now());
+        let target = Fighter::new(
+            1,
+            565,
+            Loadout {
+                level: 100,
+                ..Default::default()
+            },
+            Instant::now(),
+        );
         let hit = RetailDamageModel.resolve_attack(
             &lo,
             &target,
@@ -2491,7 +3120,10 @@ mod learned_perk_tests {
             Uuid::parse_str(gamedata::ids::DRAGONBONE_DAGGER).unwrap(),
             &[(WEAPON_SHOCK, 10)],
         );
-        let control = from_character(&character(Value::Null, learned), &inventory(vec![single_weapon]));
+        let control = from_character(
+            &character(Value::Null, learned),
+            &inventory(vec![single_weapon]),
+        );
         let control_hit = RetailDamageModel.resolve_attack(
             &control,
             &target,
@@ -2523,11 +3155,22 @@ mod learned_perk_tests {
             &character(json!({ "0": SCOUT }), json!({ gamedata::ids::FIREBALL: 3 })),
             &inventory(vec![]),
         );
-        assert!(lo.perks.is_empty(), "an equipped-but-unlearned perk must not pay: {:?}", lo.perks);
+        assert!(
+            lo.perks.is_empty(),
+            "an equipped-but-unlearned perk must not pay: {:?}",
+            lo.perks
+        );
 
         // Scout "learned" at level 0.
-        let lo = from_character(&character(Value::Null, json!({ SCOUT: 0 })), &inventory(vec![]));
-        assert!(lo.perks.is_empty(), "level 0 is not learned: {:?}", lo.perks);
+        let lo = from_character(
+            &character(Value::Null, json!({ SCOUT: 0 })),
+            &inventory(vec![]),
+        );
+        assert!(
+            lo.perks.is_empty(),
+            "level 0 is not learned: {:?}",
+            lo.perks
+        );
 
         // No learned map at all.
         let lo = from_character(&character(Value::Null, Value::Null), &inventory(vec![]));
@@ -2535,8 +3178,14 @@ mod learned_perk_tests {
 
         // And the positive case with the same fixture shape, so the two tests above
         // cannot pass by resolving nothing for every input.
-        let lo = from_character(&character(Value::Null, json!({ SCOUT: 1 })), &inventory(vec![]));
-        assert!(close(lo.perks.weapon_bonus(Some(tables::Weight::Light)), 3.43));
+        let lo = from_character(
+            &character(Value::Null, json!({ SCOUT: 1 })),
+            &inventory(vec![]),
+        );
+        assert!(close(
+            lo.perks.weapon_bonus(Some(tables::Weight::Light)),
+            3.43
+        ));
     }
 
     /// `GetHighestAvailableRank`: `min(_maximumLevel, learnedRank + Σ bonus ranks)`.
@@ -2561,11 +3210,17 @@ mod learned_perk_tests {
         let ch = character(Value::Null, json!({ SCOUT: 5 }));
 
         let bare = from_character(&ch, &inventory(vec![]));
-        assert!(close(bare.perks.weapon_bonus(Some(tables::Weight::Light)), 8.52), "Scout r5");
+        assert!(
+            close(bare.perks.weapon_bonus(Some(tables::Weight::Light)), 8.52),
+            "Scout r5"
+        );
 
         let raised = from_character(&ch, &inventory(vec![necklace]));
         assert!(
-            close(raised.perks.weapon_bonus(Some(tables::Weight::Light)), 13.06),
+            close(
+                raised.perks.weapon_bonus(Some(tables::Weight::Light)),
+                13.06
+            ),
             "Scout r5 + 5 bonus ranks = r10 = 13.06, got {}",
             raised.perks.weapon_bonus(Some(tables::Weight::Light)),
         );
