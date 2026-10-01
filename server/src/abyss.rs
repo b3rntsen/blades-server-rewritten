@@ -4,7 +4,7 @@
 //!
 //! `POST /abysses/current`            → `{abyss: null | AbyssWire}`
 //! `POST /abysses/current/start`      → `{abyss: AbyssWire, abyssDungeonGeneratedData: {...}}`
-//! `POST /abysses/current/update`     → `{abyssFutureRewards, character, abyssProgress, inventory}`
+//! `POST /abysses/current/update`     → `{reward?, abyssFutureRewards, character, abyssProgress, inventory}`
 //! `POST /abysses/current/end`        → `{reward, character, wallet, inventory}`
 //!
 //! State is persisted in `characters.server_state` JSONB (`server_state.abyss`).
@@ -24,6 +24,9 @@
 //!   `floors * 195` gold / `floors * 64` XP — one guess produced by dividing a single
 //!   captured total (~2923 gold / 958 XP) by an assumed floor count, i.e. fitted with zero
 //!   degrees of freedom, so its apparent agreement with that total meant nothing.
+//! * Score-gauge rungs (`abyssFutureRewards`) — paid on the `/update` whose action
+//!   crosses them, as a top-level `reward`, once per rung per run; see
+//!   [`grant_reached_rungs`].
 //! * A floor cleared with NO kill grants no per-floor reward
 //!   (`DATA_HAS_GOTTEN_KILL_SINCE_FLOOR_CHANGE` / `_floorsWithNoRewards` in `dump.cs`).
 //!
@@ -47,7 +50,7 @@ use actix_web::{
     web::{self, Json},
 };
 use blades_lib::{
-    economy::{RewardGrant, apply_reward, consume_stackable},
+    economy::{RewardGrant, apply_reward, consume_stackable, grant_chest},
     features::{abyss_rewards, revive},
     server_state::{AbyssRun, AbyssSliceEntry},
     user_data::{CompleteCharacterWithIdWithoutData, CompleteInventory, CompleteInventoryUpdate,
@@ -222,6 +225,7 @@ pub async fn start_abyss(
                 current_floor_index: 0,
                 killed_enemies: Default::default(),
                 collected_enemy_loot: Default::default(),
+                granted_future_rewards: Default::default(),
             };
 
             let wire = run_to_wire(&run, u64::from(player_level));
@@ -458,6 +462,10 @@ struct AbyssProgressWire {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateAbyssResponse {
+    /// The score-gauge rung(s) this request crossed, merged into one block —
+    /// present only on the response that crosses (see [`grant_reached_rungs`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reward: Option<RewardGrant>,
     abyss_future_rewards: Vec<AbyssFutureRewardWire>,
     #[serde(skip_serializing_if = "Option::is_none")]
     abyss_dungeon_generated_data: Option<AbyssDungeonGeneratedData>,
@@ -506,6 +514,27 @@ pub async fn update_abyss(
                 let revive_scrolls =
                     apply_actions(&app_state.static_data.abyss, run, &body.actions);
 
+                // Pay every gauge rung the score now reaches, BEFORE the next rung
+                // is advertised below — retail moves `abyssFutureRewards` on in the
+                // same response that carries the granted `reward`.
+                let rung_reward = grant_reached_rungs(
+                    run,
+                    u64::from(entry.character.0.level),
+                    &mut entry.wallet.0,
+                    &mut entry.inventory.0,
+                    &mut entry.character.0,
+                    &mut tracker,
+                );
+                let rung_backpack = rung_reward.as_ref().is_some_and(|reward| {
+                    !reward.stackable_items.is_empty() || !reward.items.is_empty()
+                });
+                if rung_reward
+                    .as_ref()
+                    .is_some_and(|reward| !reward.chests.is_empty())
+                {
+                    entry.inventory.0.treasury_version += 1;
+                }
+
                 let revive_count = run.revive_count;
                 let future_rewards =
                     build_future_rewards(run.score, u64::from(entry.character.0.level), run.seed);
@@ -533,7 +562,7 @@ pub async fn update_abyss(
                     })
                     .is_ok();
 
-                if looted_inventory || consumed > 0 || charged_revive {
+                if looted_inventory || rung_backpack || consumed > 0 || charged_revive {
                     // Retail increments once per inventory-mutating request, not once
                     // per action in the batch.
                     entry.inventory.0.backpack_version += 1;
@@ -544,6 +573,7 @@ pub async fn update_abyss(
                 let inv = entry.inventory.0.generate_client_update(&tracker);
 
                 Ok::<_, BladeApiError>(Json(UpdateAbyssResponse {
+                    reward: rung_reward,
                     abyss_future_rewards: future_rewards,
                     abyss_dungeon_generated_data,
                     character: CompleteCharacterWithIdWithoutData {
@@ -557,6 +587,7 @@ pub async fn update_abyss(
                 // No active run — lenient: return empty progress rather than 404.
                 let inv = entry.inventory.0.generate_client_update(&tracker);
                 Ok::<_, BladeApiError>(Json(UpdateAbyssResponse {
+                    reward: None,
                     // No active run: nothing to advertise against.
                     abyss_future_rewards: Vec::new(),
                     abyss_dungeon_generated_data: None,
@@ -1157,6 +1188,82 @@ fn collect_enemy_loot(
     grants
 }
 
+/// Pay every score-gauge rung the run has reached and not yet been paid (#294, #8).
+///
+/// The server advertised the next rung (`abyssFutureRewards`) but never paid one:
+/// `/end` pays the per-floor gold/XP and `/update` the corpse loot, and nothing
+/// granted a rung when the score crossed it. Retail paid it on the `/update` whose
+/// action crossed it (captured: the `enemy_killed` response), as a top-level
+/// `reward` — `{"stackableItems":{…}}`, `{"chests":[{"id","tier","level"}]}` or
+/// `{"items":[…]}` — with the matching `inventory.backpack` / `inventory.treasury`
+/// delta, and the SAME response already advertising the next rung. One kill that
+/// crossed 35 and 50 at once came back with both merged into one `reward`.
+///
+/// The reward is [`abyss_rewards::future_reward_for_rung`] — the resolution the
+/// advertisement uses, same seed — so a rung pays exactly what it showed. Each
+/// rung is recorded in `run.granted_future_rewards` before it is applied, which
+/// makes a retried request pay nothing twice. The set lives on the run, and a new
+/// run starts empty, because retail's gauge restarts at rung 35 every run.
+///
+/// Returns the merged grant, `None` when nothing was crossed. Does not bump the
+/// inventory versions; the caller bumps once per request.
+fn grant_reached_rungs(
+    run: &mut AbyssRun,
+    character_level: u64,
+    wallet: &mut CompleteWallet,
+    inventory: &mut CompleteInventory,
+    character: &mut blades_lib::user_data::CompleteCharacter,
+    tracker: &mut InventoryChangeTracker,
+) -> Option<RewardGrant> {
+    let due: Vec<u32> = abyss_rewards::reached_rungs(run.score)
+        .filter(|rung| !run.granted_future_rewards.contains(rung))
+        .collect();
+    if due.is_empty() {
+        return None;
+    }
+
+    let mut total = RewardGrant::default();
+    for rung in due {
+        run.granted_future_rewards.insert(rung);
+        let Some(reward) = abyss_rewards::future_reward_for_rung(rung, character_level, run.seed)
+        else {
+            continue;
+        };
+        for (currency, amount) in reward.currencies {
+            *total.currencies.entry(currency).or_default() += amount;
+        }
+        for (template, count) in reward.stackable_items {
+            *total.stackable_items.entry(template).or_default() += count;
+        }
+        for mut item in reward.items {
+            // The advertised instance id is a function of the run seed, and the
+            // seed is per character, so a later run advertises the same id
+            // again. Granting it twice would overwrite the first copy — and any
+            // tempering on it — so a held id is re-minted.
+            let held = inventory.backpack.items.0.contains_key(&item.id)
+                || inventory
+                    .loadout
+                    .equipped_items
+                    .0
+                    .values()
+                    .any(|equipped| equipped.id == item.id)
+                || total.items.iter().any(|granted| granted.id == item.id);
+            if held {
+                item.id = Uuid::new_v4();
+            }
+            total.items.push(item);
+        }
+        total.chests.extend(reward.chests);
+    }
+
+    apply_reward(&total, wallet, inventory, character, tracker);
+    for chest in &mut total.chests {
+        // Retail echoes the treasury id it assigned: {"id":"1","tier":1,"level":7}.
+        chest.id = Some(grant_chest(inventory, chest.tier, chest.level, tracker));
+    }
+    (!total.is_empty()).then_some(total)
+}
+
 /// Apply one `/update` body's actions to the run, in the order the client sent them.
 ///
 /// Order matters: a body can carry the last kill of a floor AND that floor's
@@ -1695,6 +1802,7 @@ mod tests {
             current_floor_index: n,
             killed_enemies: Default::default(),
             collected_enemy_loot: Default::default(),
+            granted_future_rewards: Default::default(),
         }
     }
 
@@ -2618,6 +2726,294 @@ mod tests {
         assert!(empty.enemy_generated_data.is_empty());
     }
 
+    // ── Score-gauge rungs (#294, #8) ─────────────────────────────────────────
+
+    struct Player {
+        wallet: CompleteWallet,
+        inventory: CompleteInventory,
+        character: blades_lib::user_data::CompleteCharacter,
+    }
+
+    /// A level-40 run on a level-40 floor: every kill is a same-level kill worth 10.
+    fn gauge_fixture() -> (AbyssRun, Player) {
+        let mut run = run_from(&[(1, 40), (2, 40)], 40);
+        run.current_floor_index = 0;
+        for slice in &mut run.slices {
+            slice.completed = false;
+            slice.enemy_killed = false;
+        }
+        run.seed = 0x5EED_294;
+        let mut character = blades_lib::user_data::CompleteCharacter::default();
+        character.level = 40;
+        let player = Player {
+            wallet: CompleteWallet::default(),
+            inventory: CompleteInventory {
+                backpack: Default::default(),
+                loadout: Default::default(),
+                treasury: Default::default(),
+                overflow_treasury: Default::default(),
+                backpack_version: 0,
+                treasury_version: 0,
+            },
+            character,
+        };
+        (run, player)
+    }
+
+    fn kills(n: u64) -> Vec<AbyssUpdateAction> {
+        parse_actions(serde_json::Value::Array((0..n).map(kill).collect()))
+    }
+
+    /// One `/update`: score the actions, then pay what they crossed — the order the
+    /// handler runs them in.
+    fn update(
+        run: &mut AbyssRun,
+        player: &mut Player,
+        actions: &[AbyssUpdateAction],
+        tracker: &mut InventoryChangeTracker,
+    ) -> Option<RewardGrant> {
+        apply_actions(&real_static_abyss(), run, actions);
+        grant_reached_rungs(
+            run,
+            u64::from(player.character.level),
+            &mut player.wallet,
+            &mut player.inventory,
+            &mut player.character,
+            tracker,
+        )
+    }
+
+    fn advertised(run: &AbyssRun, level: u64) -> Option<(u32, RewardGrant)> {
+        build_future_rewards(run.score, level, run.seed)
+            .into_iter()
+            .next()
+            .map(|wire| (wire.score, wire.reward))
+    }
+
+    fn stack_counts(inventory: &CompleteInventory, grant: &RewardGrant) -> Vec<(Uuid, u64)> {
+        let mut counts: Vec<_> = grant
+            .stackable_items
+            .keys()
+            .map(|t| (*t, inventory.backpack.stackable_items.count(*t)))
+            .collect();
+        counts.sort();
+        counts
+    }
+
+    /// NEGATIVE CONTROL — the bug. The update path as it stood (corpse loot +
+    /// scoring) runs the score past the advertised rung and pays nothing for it.
+    #[test]
+    fn the_old_update_path_pays_no_rung() {
+        let gd = game_data();
+        let (mut run, mut player) = gauge_fixture();
+        let (rung, promised) = advertised(&run, 40).unwrap();
+        assert_eq!(rung, 35);
+
+        let actions = kills(4);
+        let mut tracker = InventoryChangeTracker::default();
+        for grant in collect_enemy_loot(&gd, &mut run, &actions) {
+            apply_reward(
+                &grant,
+                &mut player.wallet,
+                &mut player.inventory,
+                &mut player.character,
+                &mut tracker,
+            );
+        }
+        apply_actions(&real_static_abyss(), &mut run, &actions);
+
+        assert_eq!(run.score, 40.0, "the gauge did fill past 35");
+        assert_eq!(
+            advertised(&run, 40).unwrap().0,
+            50,
+            "and the gauge moved on"
+        );
+        for template in promised.stackable_items.keys() {
+            assert_eq!(
+                player.inventory.backpack.stackable_items.count(*template),
+                0,
+                "without the grant step the advertised rung-35 reward never arrives"
+            );
+        }
+        assert!(run.granted_future_rewards.is_empty());
+    }
+
+    /// Crossing one rung pays exactly what was advertised for it, once, and the
+    /// advertisement moves on to the next rung in the same response.
+    #[test]
+    fn crossing_a_rung_pays_what_it_advertised_once() {
+        let (mut run, mut player) = gauge_fixture();
+        let (rung, promised) = advertised(&run, 40).unwrap();
+        assert_eq!(rung, 35);
+        assert!(!promised.is_empty());
+
+        let mut tracker = InventoryChangeTracker::default();
+        assert!(
+            update(&mut run, &mut player, &kills(3), &mut tracker).is_none(),
+            "30 points is below the first rung"
+        );
+        let paid = update(&mut run, &mut player, &kills(1), &mut tracker)
+            .expect("the kill that reaches 40 crosses rung 35");
+        assert_eq!(paid, promised, "the rung pays exactly what it advertised");
+        assert_eq!(
+            run.granted_future_rewards,
+            std::collections::BTreeSet::from([35])
+        );
+        assert_eq!(advertised(&run, 40).unwrap().0, 50, "next rung advertised");
+
+        let after_grant = stack_counts(&player.inventory, &paid);
+        for (template, count) in &after_grant {
+            assert_eq!(*count, promised.stackable_items[template]);
+        }
+        let update_wire = player.inventory.generate_client_update(&tracker);
+        assert!(
+            !update_wire.backpack.stackable_items.is_empty(),
+            "the backpack delta carries the granted stack"
+        );
+
+        // A retried request — the same state handed to the grant again — pays nothing.
+        let mut retry_tracker = InventoryChangeTracker::default();
+        assert!(
+            grant_reached_rungs(
+                &mut run,
+                40,
+                &mut player.wallet,
+                &mut player.inventory,
+                &mut player.character,
+                &mut retry_tracker,
+            )
+            .is_none(),
+            "a rung is paid once per run"
+        );
+        assert_eq!(stack_counts(&player.inventory, &paid), after_grant);
+    }
+
+    /// A run persisted between the two requests (the server_state round trip) still
+    /// remembers what it paid — the idempotency survives the database.
+    #[test]
+    fn the_paid_set_survives_persistence() {
+        let (mut run, mut player) = gauge_fixture();
+        let mut tracker = InventoryChangeTracker::default();
+        update(&mut run, &mut player, &kills(4), &mut tracker).unwrap();
+        let stored = serde_json::to_value(&run).unwrap();
+        assert_eq!(stored["grantedFutureRewards"], serde_json::json!([35]));
+        let mut reloaded: AbyssRun = serde_json::from_value(stored).unwrap();
+        assert!(
+            grant_reached_rungs(
+                &mut reloaded,
+                40,
+                &mut player.wallet,
+                &mut player.inventory,
+                &mut player.character,
+                &mut tracker,
+            )
+            .is_none()
+        );
+
+        // A run stored before this field existed deserializes with nothing paid.
+        let mut legacy = serde_json::to_value(&gauge_fixture().0).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("grantedFutureRewards");
+        let legacy: AbyssRun = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.granted_future_rewards.is_empty());
+    }
+
+    /// One request that crosses two rungs pays both, merged into one `reward` —
+    /// the captured retail shape (a level-79 kill crossing 35 and 50 came back as
+    /// `{"stackableItems":{…},"chests":[{"id":"875","tier":1,"level":79}]}`).
+    #[test]
+    fn crossing_two_rungs_in_one_update_pays_both() {
+        let (mut run, mut player) = gauge_fixture();
+        run.score = 34.0;
+        let rung35 = abyss_rewards::future_reward_for_rung(35, 40, run.seed).unwrap();
+
+        let mut tracker = InventoryChangeTracker::default();
+        let paid = update(&mut run, &mut player, &kills(2), &mut tracker)
+            .expect("34 + 20 crosses 35 and 50");
+        assert_eq!(run.score, 54.0);
+        assert_eq!(
+            run.granted_future_rewards,
+            std::collections::BTreeSet::from([35, 50])
+        );
+        assert_eq!(
+            paid.stackable_items, rung35.stackable_items,
+            "rung 35's stack"
+        );
+        assert_eq!(paid.chests.len(), 1, "rung 50's chest");
+        assert_eq!((paid.chests[0].tier, paid.chests[0].level), (1, 40));
+        let chest_id = paid.chests[0]
+            .id
+            .clone()
+            .expect("the treasury id is echoed");
+        assert!(player.inventory.treasury.get_chest(&chest_id).is_some());
+        assert_eq!(tracker.modified_treasury.added, vec![chest_id]);
+        assert_eq!(advertised(&run, 40).unwrap().0, 70, "next rung advertised");
+
+        let wire = serde_json::to_value(&paid).unwrap();
+        let mut keys: Vec<_> = wire.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, vec!["chests", "stackableItems"]);
+        assert_eq!(wire["chests"][0]["tier"], 1);
+        assert!(wire["chests"][0]["id"].is_string());
+    }
+
+    /// CONTROL: a run that never reaches the first rung is paid nothing, and a run
+    /// that ends there leaves nothing behind for the next run.
+    #[test]
+    fn a_run_below_the_first_rung_pays_nothing() {
+        let (mut run, mut player) = gauge_fixture();
+        let mut tracker = InventoryChangeTracker::default();
+        assert!(update(&mut run, &mut player, &kills(3), &mut tracker).is_none());
+        assert_eq!(run.score, 30.0);
+        assert!(run.granted_future_rewards.is_empty());
+        assert!(player.inventory.backpack.stackable_items.is_empty());
+        assert!(player.inventory.treasury.chests().is_empty());
+        assert_eq!(advertised(&run, 40).unwrap().0, 35, "still climbing to 35");
+    }
+
+    /// The gear rung's instance id is a function of the per-character seed, so a
+    /// second run advertises the same id. Paying it must not overwrite the copy the
+    /// player already holds.
+    #[test]
+    fn a_held_gear_id_is_reminted_not_overwritten() {
+        let (mut run, mut player) = gauge_fixture();
+        let gear = abyss_rewards::future_reward_for_rung(260, 40, run.seed).unwrap();
+        assert_eq!(gear.items.len(), 1, "rung 260 grants one piece of gear");
+        let advertised_id = gear.items[0].id;
+        let mut held = gear.items[0].item.clone();
+        held.tempering_level = 5;
+        player
+            .inventory
+            .backpack
+            .items
+            .0
+            .insert(advertised_id, held);
+
+        run.granted_future_rewards = abyss_rewards::ABYSS_LADDER
+            .iter()
+            .copied()
+            .filter(|r| *r < 260)
+            .collect();
+        run.score = 255.0;
+        let mut tracker = InventoryChangeTracker::default();
+        let paid = update(&mut run, &mut player, &kills(1), &mut tracker).unwrap();
+        assert_eq!(paid.items.len(), 1);
+        assert_ne!(paid.items[0].id, advertised_id, "a held id is re-minted");
+        assert_eq!(
+            player.inventory.backpack.items.0[&advertised_id].tempering_level, 5,
+            "the copy already held is untouched"
+        );
+        assert!(
+            player
+                .inventory
+                .backpack
+                .items
+                .0
+                .contains_key(&paid.items[0].id)
+        );
+    }
 }
 
 #[cfg(test)]

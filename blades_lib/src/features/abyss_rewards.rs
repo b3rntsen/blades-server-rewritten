@@ -130,7 +130,38 @@ pub fn next_future_reward(
         .rungs
         .iter()
         .find(|r| f64::from(r.score) > score)?;
+    Some((rung.score, rung_reward(rung, character_level, run_seed)))
+}
 
+/// Every rung a score has reached (`score >= rung`), lowest first.
+///
+/// The complement of [`next_future_reward`]'s selection: a rung stops being
+/// advertised at exactly the score at which it counts as reached, so a rung is
+/// never both advertised and paid, and never neither.
+pub fn reached_rungs(score: f64) -> impl Iterator<Item = u32> {
+    corpus()
+        .rungs
+        .iter()
+        .map(|r| r.score)
+        .filter(move |rung| f64::from(*rung) <= score)
+}
+
+/// What one rung grants this run — the very reward [`next_future_reward`]
+/// advertised for it, because both resolve through [`rung_reward`] with the same
+/// seed. `None` for a score that is not a rung.
+pub fn future_reward_for_rung(
+    rung_score: u32,
+    character_level: u64,
+    run_seed: i64,
+) -> Option<RewardGrant> {
+    let rung = corpus().rungs.iter().find(|r| r.score == rung_score)?;
+    Some(rung_reward(rung, character_level, run_seed))
+}
+
+/// The single resolution of a rung's reward, shared by the advertisement and the
+/// grant. The draw is a function of the run seed and the rung only — never of
+/// the score that selected it — so advertising and paying cannot disagree.
+fn rung_reward(rung: &Rung, character_level: u64, run_seed: i64) -> RewardGrant {
     let mut grant = RewardGrant::default();
 
     if rung.kind == "chest" {
@@ -142,7 +173,7 @@ pub fn next_future_reward(
             tier: rung.tier.unwrap_or(1),
             level: character_level,
         });
-        return Some((rung.score, grant));
+        return grant;
     }
 
     let total: u64 = rung.results.iter().map(|r| r.n).sum();
@@ -150,7 +181,7 @@ pub fn next_future_reward(
         // A rung we somehow hold no observation for advertises nothing rather
         // than inventing a reward. The score still shows, which is what the
         // player is climbing towards.
-        return Some((rung.score, grant));
+        return grant;
     }
 
     let seed = mix((run_seed as u64) ^ (u64::from(rung.score)).rotate_left(29));
@@ -175,7 +206,7 @@ pub fn next_future_reward(
             item: item.clone(),
         });
     }
-    Some((rung.score, grant))
+    grant
 }
 
 #[cfg(test)]
@@ -315,5 +346,44 @@ mod tests {
         }
         assert!(rung_observations(35) >= 21, "rung 35 had 21 observations");
         assert!(rung_observations(650) >= 2, "rung 650 had 2 observations");
+    }
+
+    /// The grant and the advertisement resolve through one function: whatever a
+    /// rung was advertised as is exactly what it pays.
+    #[test]
+    fn a_rung_pays_what_it_advertised() {
+        for seed in [1i64, 77, -9000, i64::MAX] {
+            for rung in ABYSS_LADDER {
+                let (score, advertised) =
+                    next_future_reward(f64::from(rung) - 1.0, 42, seed).unwrap();
+                assert_eq!(score, rung);
+                let paid = future_reward_for_rung(rung, 42, seed).unwrap();
+                assert_eq!(paid, advertised, "rung {rung} seed {seed}");
+            }
+        }
+        assert!(
+            future_reward_for_rung(36, 42, 1).is_none(),
+            "36 is not a rung"
+        );
+    }
+
+    /// A rung is reached at exactly the score where it stops being advertised.
+    #[test]
+    fn reached_rungs_complement_the_advertised_one() {
+        assert_eq!(reached_rungs(34.9).count(), 0);
+        assert_eq!(reached_rungs(35.0).collect::<Vec<_>>(), vec![35]);
+        assert_eq!(reached_rungs(69.0).collect::<Vec<_>>(), vec![35, 50]);
+        assert_eq!(
+            reached_rungs(10_000.0).collect::<Vec<_>>(),
+            ABYSS_LADDER.to_vec()
+        );
+        for score in [0.0, 34.0, 35.0, 49.9, 50.0, 300.0, 650.0] {
+            let next = next_future_reward(score, 1, 1).map(|(s, _)| s);
+            let last_reached = reached_rungs(score).last();
+            if let Some(next) = next {
+                assert!(f64::from(next) > score);
+                assert!(last_reached.is_none_or(|r| r < next));
+            }
+        }
     }
 }

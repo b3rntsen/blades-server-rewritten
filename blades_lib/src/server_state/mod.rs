@@ -60,6 +60,11 @@ pub struct AbyssRun {
     /// before granting makes a retried update idempotent.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub collected_enemy_loot: BTreeSet<String>,
+    /// Score-gauge rungs (`abyssFutureRewards` scores) already paid this run.
+    /// Recorded before the grant so a retried `/update` cannot pay a rung twice;
+    /// a new run starts empty, as retail's gauge restarts at rung 35 every run.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub granted_future_rewards: BTreeSet<u32>,
 }
 
 /// An in-progress craft job, persisted in `server_state.craft_jobs`. Created by
