@@ -625,6 +625,18 @@ impl MatchInstance {
         matches!(self.combat.phase, FlowState::Finished)
     }
 
+    /// True once the match has a winner. The deciding blow sets it, and from then on
+    /// nothing in this match can need the player's matchmaking ticket again, even though
+    /// the post-match MatchState walk keeps the match registered for ~12 s more.
+    pub fn is_decided(&self) -> bool {
+        self.combat.winner.is_some() || self.is_finished()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn decide_for_test(&mut self, winner: usize) {
+        self.combat.winner = Some(winner);
+    }
+
     /// True while the FSM is still waiting for its peers (`Connecting`) — i.e. the
     /// round-start identity burst has NOT been emitted yet.
     ///
