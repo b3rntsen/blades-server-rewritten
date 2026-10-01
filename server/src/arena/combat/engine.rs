@@ -264,6 +264,19 @@ fn promotion_reward_json(
                 .collect::<std::collections::BTreeMap<_, _>>()),
         );
     }
+    // The rung's fixed currencies (e.g. 50 / 100 Gems for a new arena). They were
+    // credited to the wallet but left off the card, so the victory screen showed no
+    // Gems for a promotion (#297). Same `currencies` map as every other reward block.
+    if !promo.currencies.is_empty() {
+        value.insert(
+            "currencies".into(),
+            serde_json::json!(promo
+                .currencies
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeMap<_, _>>()),
+        );
+    }
     value.insert("characterXp".into(), serde_json::json!(0));
     serde_json::Value::Object(value)
 }
@@ -2288,6 +2301,28 @@ pub(in crate::arena::combat) mod tests {
         assert_eq!(value["chests"][0]["level"], serde_json::json!(86));
         assert_eq!(value["chests"][0]["id"], serde_json::json!("14"));
         assert_eq!(value["characterXp"], serde_json::json!(0));
+    }
+
+    /// #297: reaching a new arena pays Gems (500 cups → 50 at level 86). The wallet got
+    /// them, but the card's `rewardNewLevelArena` had no `currencies`, so the victory
+    /// screen never showed them.
+    #[test]
+    fn a_new_arena_puts_its_gems_on_the_match_end_card() {
+        let promo = crate::arena::arena_ladder::promotion_rewards(499, 500, 86);
+        let value = super::promotion_reward_json(&promo, &[]);
+        assert_eq!(
+            value["currencies"]["470c8f58-a8dd-4c07-8c92-843b785e1139"],
+            serde_json::json!(50)
+        );
+    }
+
+    /// CONTROL: a rung without fixed currencies carries no `currencies` key.
+    #[test]
+    fn a_rung_without_currencies_adds_no_currencies_key() {
+        let promo = crate::arena::arena_ladder::promotion_rewards(180, 206, 86);
+        assert!(promo.currencies.is_empty(), "precondition");
+        let value = super::promotion_reward_json(&promo, &[]);
+        assert!(value.get("currencies").is_none());
     }
 
     /// The op51 REMOVE must reach the wire, not just the state layer.
