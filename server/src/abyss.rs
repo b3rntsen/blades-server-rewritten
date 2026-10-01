@@ -198,15 +198,18 @@ pub async fn start_abyss(
             let seed = generate_seed(character_id);
             let static_abyss = &app_state.static_data.abyss;
 
-            // Honor `startingDifficulty` — the floor the player is resuming from. The
-            // request used to be IGNORED (a `_body` bind), so every run rebuilt from
-            // floor 1 and the client restarted at the bottom regardless of depth (very
-            // visible for a high-level player). `startingDifficulty` is 1-based (floor 1
-            // = a fresh run); clamp to >= 1 and to the 150-floor span. We build the slice
-            // list STARTING at that floor so `currentFloorIndex: 0` (the first slice)
-            // resumes from the requested depth.
-            let start_floor = starting_difficulty.unwrap_or(1).clamp(1, 150);
-            let slices = build_resumed_slices(static_abyss, seed, 150, start_floor);
+            // Honor `startingDifficulty` — the floor the player chose to start from. It
+            // used to be IGNORED (a `_body` bind), so every run restarted at the bottom.
+            //
+            // The run always starts at POSITION 0. The client never reads the requested
+            // floor when it builds the run: `GenerateAbyss` stores it and nothing reads it
+            // back, and `DoGenerateAbyss` walks the slices from position 0, numbering each
+            // floor `slices[0].floorIndex + position` (#294 RE). So the served list must
+            // BEGIN at the chosen floor — which is exactly what retail sends: three
+            // captured `/start`s at startingDifficulty 1 / 15 / 90 are 150 slices each,
+            // sliceIndex 0..149, floorIndex N..N+149 (so past floor 150 when N > 1).
+            let start_floor = starting_difficulty.unwrap_or(1).clamp(1, MAX_START_FLOOR);
+            let slices = build_run_slices(static_abyss, seed, start_floor);
 
             let run = AbyssRun {
                 slices,
@@ -216,7 +219,7 @@ pub async fn start_abyss(
                 score: 0.0,
                 algorithm_version: static_abyss.algorithm_version.max(1),
                 version: 1,
-                current_floor_index: (start_floor - 1) as usize,
+                current_floor_index: 0,
                 killed_enemies: Default::default(),
                 collected_enemy_loot: Default::default(),
             };
@@ -867,29 +870,35 @@ fn build_slices_from(
     slices
 }
 
-/// The slice list a run is SERVED with: always all `total` floors, indexed from 0,
-/// with the floors below `start_floor` already `completed`.
+/// How many floors one run is served with — retail's length for every start floor.
+const RUN_FLOORS: u32 = 150;
+
+/// A sanity cap on `startingDifficulty`. Retail measured a start at floor 90 (run to
+/// 239); the cap only stops a bogus request from building absurd floor numbers.
+const MAX_START_FLOOR: u32 = 10_000;
+
+/// The slice list a run is SERVED with, retail's shape: [`RUN_FLOORS`] floors starting
+/// at `start_floor`, `sliceIndex` = array position, `floorIndex` = `start_floor` +
+/// position, nothing pre-completed.
 ///
-/// A resumed run used to be served only from the resume floor up (`build_slices_from`
-/// directly): Flappety's floor-78 run was 73 slices whose first `sliceIndex` was 77.
-/// Every retail `/abysses/current` capture has `sliceIndex == array position` over all
-/// 150 floors, and the client evidently relies on it: that run failed the character
-/// build at boot (`0-10001-1`) and hung the quest map, and removing only the run fixed
-/// both on the owner's Pixel (2026-09-24). The wire carries no `currentFloorIndex`, so
-/// the client finds its floor as the first uncompleted slice — hence `completed`.
+/// #356 served all 150 floors from floor 1 and marked those below the start floor
+/// `completed`, on the theory that the client starts at the first uncompleted slice.
+/// It does not — the client parses only `dungeonSettingsId`, `difficultyLevel`,
+/// `hardcore` and `floorIndex`, and builds from position 0 — so a floor-149 start put
+/// the player on floor 1 while the server tracked floor 149 (#294).
 ///
-/// `enemy_killed` stays false on those floors: the end-of-run reward pays only
-/// completed-AND-killed floors, and none of these were played in this run.
-fn build_resumed_slices(
+/// Content is per ABSOLUTE floor, so floor 78 of a run started at 78 is the same
+/// dungeon and difficulty as floor 78 of a fresh run.
+fn build_run_slices(
     static_abyss: &blades_lib::static_data::AbyssStaticData,
     seed: i64,
-    total: usize,
     start_floor: u32,
 ) -> Vec<AbyssSliceEntry> {
-    let mut slices = build_slices_from(static_abyss, seed, total, 1);
-    let before = (start_floor.max(1) - 1) as usize;
-    for s in slices.iter_mut().take(before) {
-        s.completed = true;
+    let start_floor = start_floor.max(1);
+    let last_floor = start_floor + RUN_FLOORS - 1;
+    let mut slices = build_slices_from(static_abyss, seed, last_floor as usize, start_floor);
+    for (position, slice) in slices.iter_mut().enumerate() {
+        slice.slice_index = position as u32;
     }
     slices
 }
@@ -1566,60 +1575,54 @@ mod tests {
         assert_eq!(resumed[0].difficulty_level, fresh[39].difficulty_level);
     }
 
-    /// Flappety, 2026-09-24: a floor-78 resume was served 73 slices starting at
-    /// sliceIndex 77; the client could not build the character (0-10001-1). The served
-    /// list must be all 150 floors with sliceIndex == position, like every retail run.
+    /// #294 / retail: a run started at floor N is 150 slices, `sliceIndex` 0..149 and
+    /// `floorIndex` N..N+149, none pre-completed. The three captured retail `/start`s
+    /// (startingDifficulty 1, 15, 90) all have exactly this shape.
     #[test]
-    fn a_resumed_run_is_served_all_floors_indexed_by_position() {
+    fn a_run_starts_at_the_chosen_floor_in_retail_shape() {
         let sd = test_static_abyss();
-        let served = build_resumed_slices(&sd, 12345, 150, 78);
-        assert_eq!(served.len(), 150);
-        for (i, s) in served.iter().enumerate() {
-            assert_eq!(s.slice_index as usize, i, "sliceIndex must equal its position");
-            assert_eq!(s.floor_index as usize, i + 1);
+        for start in [1u32, 15, 90, 149] {
+            let served = build_run_slices(&sd, 12345, start);
+            assert_eq!(served.len(), 150, "start {start}: retail serves 150 floors");
+            for (p, s) in served.iter().enumerate() {
+                assert_eq!(s.slice_index as usize, p, "start {start}: sliceIndex = position");
+                assert_eq!(s.floor_index, start + p as u32, "start {start}: floorIndex = N + position");
+                assert!(!s.completed && !s.enemy_killed, "start {start}: nothing pre-completed");
+            }
         }
-        // The client finds its floor as the first uncompleted slice.
-        assert_eq!(served.iter().position(|s| !s.completed), Some(77), "resumes at floor 78");
-        // Content per absolute floor is unchanged by resuming.
-        let fresh = build_slices_from(&sd, 12345, 150, 1);
-        assert_eq!(served[77].dungeon_settings_id, fresh[77].dungeon_settings_id);
-        assert_eq!(served[77].difficulty_level, fresh[77].difficulty_level);
     }
 
-    /// Floors skipped by resuming are not paid for: the reward counts only floors that
-    /// were completed AND had their enemy killed in this run.
+    /// The client builds from position 0, so the FIRST slice must be the chosen floor.
+    /// This is the assertion #356's shape fails: it put floor 1 first.
     #[test]
-    fn floors_skipped_by_resuming_earn_no_reward() {
+    fn the_first_served_slice_is_the_chosen_floor() {
         let sd = test_static_abyss();
-        let served = build_resumed_slices(&sd, 12345, 150, 40);
-        let run = AbyssRun {
-            slices: served,
-            revive_count: 0,
-            initial_player_level: 40,
-            seed: 12345,
-            score: 0.0,
-            algorithm_version: 1,
-            version: 1,
-            current_floor_index: 39,
-            killed_enemies: Default::default(),
-            collected_enemy_loot: Default::default(),
-        };
-        assert_eq!(rewarded_floors(&run).count(), 0);
+        assert_eq!(build_run_slices(&sd, 12345, 149)[0].floor_index, 149);
     }
 
-    /// CONTROL: a fresh run (floor 1) is unchanged — nothing pre-completed.
+    /// Content is chosen per absolute floor: resuming does not reshuffle the dungeons.
     #[test]
-    fn a_fresh_run_has_nothing_pre_completed() {
+    fn a_resumed_floor_has_the_fresh_runs_content() {
         let sd = test_static_abyss();
-        let served = build_resumed_slices(&sd, 12345, 150, 1);
+        let resumed = build_run_slices(&sd, 12345, 78);
+        let fresh = build_run_slices(&sd, 12345, 1);
+        assert_eq!(resumed[0].dungeon_settings_id, fresh[77].dungeon_settings_id);
+        assert_eq!(resumed[0].difficulty_level, fresh[77].difficulty_level);
+    }
+
+    /// CONTROL: a fresh run is the unchanged floor-1..150 list.
+    #[test]
+    fn a_fresh_run_is_unchanged() {
+        let sd = test_static_abyss();
+        let served = build_run_slices(&sd, 12345, 1);
         let fresh = build_slices_from(&sd, 12345, 150, 1);
         assert_eq!(served.len(), fresh.len());
         for (a, b) in served.iter().zip(fresh.iter()) {
             assert_eq!(a.slice_index, b.slice_index);
+            assert_eq!(a.floor_index, b.floor_index);
             assert_eq!(a.dungeon_settings_id, b.dungeon_settings_id);
             assert_eq!(a.difficulty_level, b.difficulty_level);
         }
-        assert!(served.iter().all(|s| !s.completed));
     }
 
     /// `startingDifficulty` of 1 (or None → 1) yields the original fresh-run slices, and
