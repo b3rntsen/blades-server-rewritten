@@ -2521,6 +2521,16 @@ impl Fighter {
     /// `!HasStatus(RecklessFury 11) && !HasStatus(Paralyzed 9)` — and on a dead actor
     /// (`Actor$$AddStatusEffectInternal@0x1c5700c`). A refused stagger has no status,
     /// so callers must send no op51 and fire no `CausedStagger` hook for it.
+    /// How long a `secs` stagger actually holds THIS fighter: shortened by their
+    /// Shorten Stagger. The op51 that announces the stagger must carry this value —
+    /// retail sent the shortened duration (2.0 s on 61 of 525 high-block stuns), and
+    /// sending the base 2.5 s told the client a bot was stunned for 0.5 s after the
+    /// server had already let it act again (#295).
+    pub fn shortened_stagger_secs(&self, secs: f32) -> f32 {
+        let shorten = self.loadout.shorten_stagger.max(0.0);
+        secs * (1.0 - shorten).max(0.0)
+    }
+
     pub fn apply_stagger_for(&mut self, now: Instant, secs: f32) -> bool {
         // Reckless Fury cannot be stunned. This is the guard whose absence let the
         // production stun in match fffe01ca land 2 s into a 5 s Fury.
@@ -2538,8 +2548,7 @@ impl Fighter {
         if !self.is_staggered(now) {
             self.weakness_rating = 0.0;
         }
-        let shorten = self.loadout.shorten_stagger.max(0.0);
-        let duration = secs * (1.0 - shorten).max(0.0);
+        let duration = self.shortened_stagger_secs(secs);
         self.staggered_until = Some(now + std::time::Duration::from_secs_f32(duration.max(0.05)));
         // A re-stagger does not change the state, so the seam in `force_actor_state`
         // does not see it; it still interrupts a maneuver started from the first
