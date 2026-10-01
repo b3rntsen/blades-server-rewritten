@@ -1075,6 +1075,24 @@ impl MatchRegistry {
         self.matches.lock().unwrap().contains_key(&game_session_id)
     }
 
+    /// The match exists AND is still undecided. A matchmaking ticket stays bound to its
+    /// match only this long: once the match has a winner the player is on the result
+    /// screen, and a new `matches/create` is a new search, not a duplicate (#293).
+    pub fn has_undecided_match(&self, game_session_id: Uuid) -> bool {
+        self.matches
+            .lock()
+            .unwrap()
+            .get(&game_session_id)
+            .is_some_and(|m| !m.instance.is_decided())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn decide_for_test(&self, game_session_id: Uuid, winner: usize) {
+        if let Some(m) = self.matches.lock().unwrap().get_mut(&game_session_id) {
+            m.instance.decide_for_test(winner);
+        }
+    }
+
     /// An ENet peer disconnected. Like [`remove`](Self::remove), but first — if the
     /// peer left a LIVE match with an opponent still present — award that opponent the
     /// match by concession and return the immediate victory frames (already encrypted

@@ -3373,11 +3373,16 @@ pub struct ActiveTickets {
 }
 
 impl ActiveTickets {
+    /// Drop reservations whose match no longer needs them. A matched ticket is kept
+    /// only while its match is still being fought: once it is decided, the post-match
+    /// walk keeps the match registered for ~12 s, and reusing the old ticket during that
+    /// window handed the player's NEXT search a ticket that can never match again — the
+    /// client sat on "waiting for opponent" after every first fight (#293).
     fn prune_locked(by_user: &mut HashMap<Uuid, ActiveTicket>, registry: &MatchRegistry) {
         by_user.retain(|_, ticket| {
             ticket
                 .game_session_id
-                .map(|gsid| registry.has_match(gsid))
+                .map(|gsid| registry.has_undecided_match(gsid))
                 .unwrap_or(true)
         });
     }
@@ -5635,6 +5640,50 @@ mod tests {
         assert_eq!(
             active.reserve_or_existing(user_id, next_ticket, &registry),
             next_ticket
+        );
+    }
+
+    /// #293: the next search, started from the result screen while the finished match
+    /// is still walking its post-match states, must get a NEW ticket. Reusing the old
+    /// one (whose match is decided) left the client waiting forever after fight one.
+    #[test]
+    fn a_new_search_after_a_decided_match_gets_a_fresh_ticket() {
+        let registry = MatchRegistry::new(4);
+        let active = ActiveTickets::default();
+        let user_id = Uuid::new_v4();
+        let first_ticket = Uuid::new_v4();
+        active.reserve_or_existing(user_id, first_ticket, &registry);
+
+        let game_session_id = Uuid::new_v4();
+        assert!(registry.allocate_with_bots(
+            &["psess-decided".to_string()],
+            vec![
+                crate::arena::combat::loadout::starter(),
+                crate::arena::combat::loadout::starter()
+            ],
+            game_session_id,
+            1,
+        ));
+        active.mark_matched(user_id, first_ticket, game_session_id);
+
+        // Control: mid-fight, a duplicate create still reuses the live ticket.
+        assert_eq!(
+            active.reserve_or_existing(user_id, Uuid::new_v4(), &registry),
+            first_ticket
+        );
+
+        // The deciding blow lands; the match stays registered for its post-match walk.
+        registry.decide_for_test(game_session_id, 0);
+        assert!(
+            registry.has_match(game_session_id),
+            "still walking post-match states"
+        );
+
+        let next_ticket = Uuid::new_v4();
+        assert_eq!(
+            active.reserve_or_existing(user_id, next_ticket, &registry),
+            next_ticket,
+            "a decided match must not pin the player's next search to the old ticket"
         );
     }
 
