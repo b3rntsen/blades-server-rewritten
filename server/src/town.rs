@@ -82,6 +82,8 @@ pub async fn get_town(
 ) -> Result<Json<GetTownResponse>, BladeApiError> {
     let character_id = path.into_inner();
 
+    backfill_on_load(&session, app_state.get_ref(), character_id).await;
+
     // Best-effort personalization: serve the requesting character's OWN captured
     // town when we have one. Any miss (no session, character not found, not owned,
     // or no stored town) falls through to the static default — serving the town
@@ -223,6 +225,8 @@ enum CostError {
     AtMaxLevel,
     /// The town isn't high enough level for this building level yet.
     TownLevelTooLow { need: u64, have: u64 },
+    /// The town already holds `_buildingLimit` of this building's family.
+    LimitReached,
 }
 
 impl CostError {
@@ -240,6 +244,7 @@ impl CostError {
             CostError::TownLevelTooLow { .. } => {
                 BladeApiError::new(StatusCode::CONFLICT, TOWN_SERVICE_ID, 3)
             }
+            CostError::LimitReached => BladeApiError::new(StatusCode::CONFLICT, TOWN_SERVICE_ID, 7),
         }
     }
 }
@@ -365,6 +370,99 @@ fn lookup_level_cost(
         max_level,
         prestige,
     })
+}
+
+/// One numeric field of a style's row at a level in `building_upgrades.json`
+/// (`goldCost`, `prestigeForLevel`), `0` when any step is missing.
+fn style_field(
+    building_upgrades: &Value,
+    type_id: Uuid,
+    level: u64,
+    style_id: Option<Uuid>,
+    key: &str,
+) -> u64 {
+    let Some(style_id) = style_id else { return 0 };
+    building_upgrades
+        .get("buildings")
+        .and_then(|b| b.get(type_id.to_string()))
+        .and_then(|b| b.get("levels"))
+        .and_then(|l| l.get(level.to_string()))
+        .and_then(|l| l.get("styleInputs"))
+        .and_then(|s| s.get(style_id.to_string()))
+        .and_then(|s| s.get(key))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+}
+
+/// The price of PLACING `type_id` in `style_id` in this town (tracker #287).
+///
+/// Materials, the town-level gate and the style's gold still come from
+/// `building_upgrades.json`; the base gold and the timer come from the APK's
+/// `constructionGold[n]` / `constructionMs[n]`, n being how many of the
+/// building's family the town already holds. The table's level-0 row was one
+/// flat price per type, measured off whichever placement a capture happened to
+/// catch — a first house priced like a tenth, a first Forge at 15,000 instead
+/// of 600.
+fn placement_cost(
+    building_upgrades: &Value,
+    town: &Value,
+    type_id: Uuid,
+    style_id: Uuid,
+) -> Result<LevelCost, CostError> {
+    let mut cost = lookup_level_cost(building_upgrades, type_id, 0, Some(style_id), true)?;
+    if let Some(spec) = crate::town_construction::data().building(type_id) {
+        let n = crate::town_construction::family_count(town, type_id);
+        if n >= spec.building_limit {
+            return Err(CostError::LimitReached);
+        }
+        if let Some((gold, ms)) = spec.placement(n) {
+            cost.gold =
+                gold + style_field(building_upgrades, type_id, 0, Some(style_id), "goldCost");
+            cost.construction_time_ms = ms;
+        }
+    }
+    Ok(cost)
+}
+
+/// The price of upgrading `type_id` (wearing `style_id`) to `target_level`:
+/// the APK's `upgradeGold[L]` plus the worn style's gold, over `upgradeMs[L]`.
+/// Materials / gate / max level stay with `building_upgrades.json`, and so does
+/// the price of any level the APK has no row for.
+fn upgrade_cost(
+    building_upgrades: &Value,
+    type_id: Uuid,
+    target_level: u64,
+    style_id: Option<Uuid>,
+) -> Result<LevelCost, CostError> {
+    // An upgrade does not re-buy the style it is already wearing.
+    let mut cost = lookup_level_cost(building_upgrades, type_id, target_level, style_id, false)?;
+    if let Some((gold, ms)) = crate::town_construction::data()
+        .building(type_id)
+        .and_then(|b| b.upgrade(target_level))
+    {
+        cost.gold = gold
+            + style_field(
+                building_upgrades,
+                type_id,
+                target_level,
+                style_id,
+                "goldCost",
+            );
+        cost.construction_time_ms = ms;
+    }
+    Ok(cost)
+}
+
+/// Gold to tear down `type_id` while the town holds `n` of its family, the
+/// doomed building included — `destructionGold[n]`. Retail charged exactly this
+/// on all 20 captured destroys whose gold delta was not muddied by another
+/// payout in the same window (0 for the first house of a family, 25 for one of
+/// one, 89 for one of two…). An unknown type costs nothing.
+fn destruction_cost(town: &Value, type_id: Uuid) -> u64 {
+    crate::town_construction::data()
+        .building(type_id)
+        .and_then(|b| b.destruction(crate::town_construction::family_count(town, type_id)))
+        .unwrap_or(0)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -554,15 +652,8 @@ pub async fn upgrade_building(
             let (type_id, style_id, cur_level) = read_building_facts(&town, building_id)
                 .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, TOWN_SERVICE_ID, 1))?;
             let target_level = cur_level + 1;
-            // An upgrade does not re-buy the style it is already wearing.
-            let cost = lookup_level_cost(
-                &globals.building_upgrades,
-                type_id,
-                target_level,
-                style_id,
-                false,
-            )
-            .map_err(|e| e.to_api())?;
+            let cost = upgrade_cost(&globals.building_upgrades, type_id, target_level, style_id)
+                .map_err(|e| e.to_api())?;
 
             // Town-level gate.
             let tl = town_level(&town);
@@ -710,17 +801,20 @@ pub async fn complete_building(
                 &mut entry.wallet.0,
             )?;
 
+            // The build is finished, so this is where retail pays its prestige and
+            // the town can level. Priced BEFORE the transition: whether this is a
+            // placement finishing (which also clears its site) is read off the
+            // `BUILDING` state the transition wipes.
+            // The town's level lives in `town.levelInfo`, which is the only place
+            // retail's wire carries it — a captured character JSON has no
+            // `townLevel` key at all.
+            let prestige = prestige_on_complete(&globals.building_upgrades, &mut town, building_id);
+
             let building = find_building_mut(&mut town, building_id).ok_or_else(|| {
                 BladeApiError::new(StatusCode::NOT_FOUND, TOWN_SERVICE_ID, 1)
             })?;
             apply_complete_transition(building);
 
-            // The build is finished, so this is where retail pays its prestige and
-            // the town can level.
-            // The town's level lives in `town.levelInfo`, which is the only place
-            // retail's wire carries it — a captured character JSON has no
-            // `townLevel` key at all.
-            let prestige = prestige_on_complete(&globals.building_upgrades, &town, building_id);
             if prestige > 0 {
                 apply_prestige_and_level_up(&mut town, prestige);
             }
@@ -818,16 +912,40 @@ fn complete_response(
 /// The level was already bumped when the upgrade was ordered (retail carries the
 /// target level through the UPGRADING state), so the level read here is the one
 /// being finished, which is the one to charge.
-fn prestige_on_complete(building_upgrades: &Value, town: &Value, building_id: Uuid) -> u64 {
+///
+/// A PLACEMENT finishing (level 0, or still `BUILDING`) pays more (tracker #287):
+/// its level-0 `prestigeForLevel`, PLUS the chosen style's level-0 prestige,
+/// PLUS the town-points for every building site it clears for the first time —
+/// see [`crate::town_construction::clear_sites_for`], which also marks those
+/// sites cleared in `town`. Measured on every retail placement completion:
+/// the Town Hall's 525 = 400 + 100 + site 25, a first Forge's 376 = 138 + 88 +
+/// 150, houses 324, 386, 449…, and 111 for a house on a site already cleared.
+/// We paid the 400 / 125 / 100 alone, so every town was short and its level
+/// gates came late. (Retail's Town Hall comes back from this completion at
+/// level 1, which is why the fixture test below sees its 525 against a
+/// level-1 row; ours stays at level 0 and is priced here.)
+fn prestige_on_complete(building_upgrades: &Value, town: &mut Value, building_id: Uuid) -> u64 {
     let Some((type_id, style_id, level)) = read_building_facts(town, building_id) else {
         return 0;
     };
+    let building = find_building(town, building_id);
+    let placing = level == 0
+        || building
+            .and_then(|b| b.get("state"))
+            .and_then(Value::as_str)
+            == Some("BUILDING");
+    if placing {
+        let own = lookup_level_cost(building_upgrades, type_id, 0, None, false)
+            .map(|c| c.prestige)
+            .unwrap_or(0);
+        let style = style_field(building_upgrades, type_id, 0, style_id, "prestigeForLevel");
+        return own + style + crate::town_construction::clear_sites_for(town, building_id);
+    }
     // `style_id: None` on purpose. `lookup_level_cost` ADDS the chosen style's
-    // `prestigeForLevel` on top of the level's, and retail does not: adding it
-    // turns every one of the 70 matching completions into a 10 % overpayment. The
-    // style is paid for separately, when it is chosen — see
-    // [`prestige_on_style_change`].
-    let _ = style_id;
+    // `prestigeForLevel` on top of the level's, and retail does not on an
+    // UPGRADE: adding it turns every one of the 70 matching completions into a
+    // 10 % overpayment. The style is paid for separately, when it is chosen —
+    // see [`prestige_on_style_change`].
     lookup_level_cost(building_upgrades, type_id, level, None, false)
         .map(|c| c.prestige)
         .unwrap_or(0)
@@ -934,13 +1052,13 @@ pub async fn place_building(
             let mut town = take_town(&mut entry, &globals)?;
 
             // Placement is the level-0 build (initial construction on an empty lot).
-            // Placement PICKS the style, so it pays for it.
-            let cost = lookup_level_cost(
+            // Placement PICKS the style, so it pays for it. The price and timer
+            // climb with how many of the family the town already holds.
+            let cost = placement_cost(
                 &globals.building_upgrades,
+                &town,
                 req.building_type,
-                0,
-                Some(req.style_id),
-                true,
+                req.style_id,
             )
             .map_err(|e| e.to_api())?;
 
@@ -1036,7 +1154,8 @@ fn insert_building(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. DESTROY — remove a building; refund nothing (retail doesn't).
+// 4. DESTROY — remove a building; refund nothing (retail doesn't), charge
+//    the APK's destruction gold (see `charge_destruction`).
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize, Debug, Default)]
@@ -1067,9 +1186,7 @@ pub async fn destroy_building(
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
             let mut town = take_town(&mut entry, &app_state_clone)?;
 
-            if !remove_building(&mut town, building_id) {
-                return Err(BladeApiError::new(StatusCode::NOT_FOUND, TOWN_SERVICE_ID, 1));
-            }
+            charge_destruction(&mut town, building_id, &mut entry.wallet.0)?;
 
             let tracker = InventoryChangeTracker::default();
             let inventory = entry.inventory.0.generate_client_update(&tracker);
@@ -1211,6 +1328,44 @@ fn apply_building_style(town: &mut Value, building_id: Uuid, style_id: Uuid) -> 
     // building is no longer showing its default appearance.
     obj.insert("customized".to_string(), json!(true));
     true
+}
+
+/// Tear a building down and bill it: [`destruction_cost`] in gold, priced before
+/// the building leaves the count. 404 for a building the town does not hold, 400
+/// (nothing removed, nothing debited) when the wallet cannot cover it.
+///
+/// Always gold. The request's `gemsPayment` is not honoured here: all captured
+/// destroys sent `false`, so what a gem-paid destroy would cost is unmeasured.
+///
+/// Town XP is left alone and so are the site's `lotsCleared` flags: retail's 23
+/// captured destroys moved the town's experience by exactly zero, and a site
+/// once cleared pays nothing when it is built on again.
+fn charge_destruction(
+    town: &mut Value,
+    building_id: Uuid,
+    wallet: &mut CompleteWallet,
+) -> Result<u64, BladeApiError> {
+    let gold = read_building_facts(town, building_id)
+        .map(|(type_id, _, _)| destruction_cost(town, type_id))
+        .unwrap_or(0);
+    if wallet.balance(GOLD) < gold {
+        return Err(BladeApiError::new(
+            StatusCode::BAD_REQUEST,
+            TOWN_SERVICE_ID,
+            4,
+        ));
+    }
+    if !remove_building(town, building_id) {
+        return Err(BladeApiError::new(
+            StatusCode::NOT_FOUND,
+            TOWN_SERVICE_ID,
+            1,
+        ));
+    }
+    wallet
+        .debit(GOLD, gold)
+        .map_err(BladeApiError::from_economy)?;
+    Ok(gold)
 }
 
 /// Remove a building by id from whichever segment holds it. `true` if removed.
@@ -2283,17 +2438,106 @@ fn take_town(
     entry: &mut CharacterDbEntryTownEconomy,
     app_state: &ServerGlobal,
 ) -> Result<Value, BladeApiError> {
-    match entry.town.take() {
-        Some(JsonDbWrapper(v)) if !v.is_null() => Ok(v),
+    let mut town = match entry.town.take() {
+        Some(JsonDbWrapper(v)) if !v.is_null() => v,
         _ => {
             // No town exists - load from default template
             let town = load_default_town(app_state)?;
 
             // Store it back in the entry so it gets saved
             entry.town = Some(JsonDbWrapper(town.clone()));
-            Ok(town)
+            town
         }
+    };
+    // Before any mutation is priced: a town built under the old rules must have
+    // its sites cleared first, or the next completion would number its site
+    // points from zero.
+    backfill_town_sites_once(
+        &mut entry.server_state.0,
+        &mut town,
+        &app_state.building_upgrades,
+    );
+    Ok(town)
+}
+
+/// The one-time site backfill (tracker #287), gated on
+/// `ServerState::town_sites_backfilled` so it runs once per character. Returns
+/// the town XP granted (0 when it already ran or nothing was owed).
+///
+/// What it pays: for each standing building whose placement has finished and
+/// whose site(s) are still uncleared — i.e. built here before sites were
+/// tracked — the style's level-0 prestige plus the site points for those sites
+/// (numbered after any the district already had cleared), and it clears them.
+/// The level is then recomputed from the same thresholds a completion uses; it
+/// never goes down. Buildings that were destroyed are gone and cannot be
+/// counted, so a town that churned buildings is under-credited by their sites.
+fn backfill_town_sites_once(
+    state: &mut blades_lib::server_state::ServerState,
+    town: &mut Value,
+    building_upgrades: &Value,
+) -> u64 {
+    if state.town_sites_backfilled {
+        return 0;
     }
+    let grant = crate::town_construction::backfill_sites(town, |type_id, style_id| {
+        style_field(building_upgrades, type_id, 0, style_id, "prestigeForLevel")
+    });
+    if grant > 0 {
+        apply_prestige_and_level_up(town, grant);
+    }
+    state.town_sites_backfilled = true;
+    grant
+}
+
+/// Run the backfill when the owner loads their town, so the town XP it owes
+/// shows up on the first look rather than on the first build. Best-effort: any
+/// failure leaves the town as it was, and the next load (or the next mutation,
+/// via [`take_town`]) tries again.
+async fn backfill_on_load(
+    session: &SessionLookedUpMaybe,
+    app_state: &Arc<ServerGlobal>,
+    character_id: Uuid,
+) {
+    let Ok(session) = session.get_session_or_error() else {
+        return;
+    };
+    let user_id = session.session.user_id;
+    let Ok(mut conn) = app_state.db_pool.get().await else {
+        return;
+    };
+    let globals = app_state.clone();
+    let _ = conn
+        .transaction(move |conn| {
+            async move {
+                // Owner-only: `load_town_economy` filters on the session's user,
+                // so a visitor's load 404s here and changes nothing.
+                let mut entry = load_town_economy(conn, character_id, user_id).await?;
+                if entry.server_state.0.town_sites_backfilled {
+                    return Ok(());
+                }
+                let Some(JsonDbWrapper(mut town)) = entry.town.take().filter(|t| !t.0.is_null())
+                else {
+                    // No stored town yet: the default one owes nothing, and
+                    // `take_town` will record the marker when it materialises.
+                    return Ok(());
+                };
+                backfill_town_sites_once(
+                    &mut entry.server_state.0,
+                    &mut town,
+                    &globals.building_upgrades,
+                );
+                use crate::schema::characters;
+                entry.town = Some(JsonDbWrapper(town));
+                diesel::update(characters::table)
+                    .filter(characters::id.eq(character_id))
+                    .set(entry)
+                    .execute(conn)
+                    .await?;
+                Ok::<_, BladeApiError>(())
+            }
+            .scope_boxed()
+        })
+        .await;
 }
 
 /// Apply prestige and check for town level up
@@ -3281,10 +3525,12 @@ mod when_the_town_is_paid {
     /// falls inside a four-minute build-complete-destroy burst whose partial town
     /// payloads cannot say which building a delta belonged to; they are skipped
     /// rather than explained away. On the rest the agreement is 70 of 71 — the one
-    /// exception is the corpus's very first completion, a TownHall whose table row
-    /// says level 1 pays 0 while retail paid 525 — a gap in `building_upgrades.json`
-    /// (every TownHall level above 0 is authored with `prestigeForLevel: 0`), not a
-    /// disagreement with the rule. The test pins it so it cannot grow.
+    /// exception is the corpus's very first completion, a TownHall that retail
+    /// returns at level 1 having paid 525. That is not an upgrade at all but the
+    /// Town Hall's PLACEMENT finishing (400 + style 100 + first site 25); this
+    /// test replays it as a finished level-1 building, so it cannot match. The
+    /// placement rule is pinned in `construction_rules::the_town_hall_pays_525`.
+    /// The test pins the exception so it cannot grow.
     #[test]
     fn a_completion_pays_the_levels_prestige_and_not_the_styles() {
         let table = upgrades();
@@ -3302,8 +3548,8 @@ mod when_the_town_is_paid {
             if level == 0 {
                 continue;
             }
-            let town = town_with(type_id, b["styleId"].as_str(), level);
-            let ours = prestige_on_complete(&table, &town, Uuid::parse_str(BID).unwrap());
+            let mut town = town_with(type_id, b["styleId"].as_str(), level);
+            let ours = prestige_on_complete(&table, &mut town, Uuid::parse_str(BID).unwrap());
             if ours as i64 == delta {
                 agreed += 1;
             } else {
@@ -3419,16 +3665,19 @@ mod when_the_town_is_paid {
         let id = Uuid::parse_str(BID).unwrap();
 
         // Forge level 1 — 180, measured on capture 11405.
-        let forge = town_with(
+        let mut forge = town_with(
             "26fdb92f-a4df-4928-a97b-dee8699af605",
             Some("aa133662-053d-434e-8779-3f2a41d1271e"),
             1,
         );
-        assert_eq!(prestige_on_complete(&table, &forge, id), 180);
+        assert_eq!(prestige_on_complete(&table, &mut forge, id), 180);
 
-        let unknown = town_with("00000000-0000-0000-0000-000000000001", None, 1);
-        assert_eq!(prestige_on_complete(&table, &unknown, id), 0);
-        assert_eq!(prestige_on_complete(&table, &forge, Uuid::from_u128(999)), 0);
+        let mut unknown = town_with("00000000-0000-0000-0000-000000000001", None, 1);
+        assert_eq!(prestige_on_complete(&table, &mut unknown, id), 0);
+        assert_eq!(
+            prestige_on_complete(&table, &mut forge, Uuid::from_u128(999)),
+            0
+        );
     }
 
     /// The structural half of the rule: only the two handlers that retail pays
@@ -3531,4 +3780,463 @@ mod when_the_town_is_paid {
         );
     }
 
+}
+
+/// Tracker #287: what placing, upgrading, finishing and destroying a building
+/// costs and pays, against retail's own numbers.
+///
+/// Each payout test also runs the PREVIOUS rule (`old_*`, the code as it was)
+/// and asserts it gets the retail number wrong — so these fail on the old
+/// behaviour rather than merely agreeing with the new one.
+#[cfg(test)]
+mod construction_rules {
+    use super::*;
+    use serde_json::json;
+
+    const DISTRICT: &str = "9a12c0d3-218c-4ef2-b78c-b6e3bca60719";
+    const TIMBER: &str = "aa133662-053d-434e-8779-3f2a41d1271e";
+    const CASTLE: &str = "c462a43a-0547-4cd0-a755-5c0aff0f74f8";
+    const TOWN_HALL: &str = "a6a2de53-d65c-445a-8b55-d2a73c15b635";
+    const FORGE: &str = "26fdb92f-a4df-4928-a97b-dee8699af605";
+    const ALCHEMIST: &str = "e1dd10fc-8b14-4288-9b23-99b0d58388de";
+    const HOUSE_A: &str = "597f678f-b49e-4559-96a8-266aafeca6ad";
+    const HOUSE_B: &str = "bfd7213e-b988-4237-8847-5e65e898f011";
+    const HOUSE_C: &str = "c2edca96-f1d6-4867-b212-e7ff81517436";
+
+    fn upgrades() -> Value {
+        serde_json::from_str(include_str!("../../deploy/static/building_upgrades.json"))
+            .expect("deploy/static/building_upgrades.json is valid JSON")
+    }
+
+    fn u(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+
+    /// The completion payout as it was before #287: the level's own prestige.
+    fn old_prestige_on_complete(table: &Value, town: &Value, id: Uuid) -> u64 {
+        let (t, _, level) = read_building_facts(town, id).unwrap();
+        lookup_level_cost(table, t, level, None, false)
+            .unwrap()
+            .prestige
+    }
+
+    /// A town of one district: `sites` is `(segment lots, lots already cleared,
+    /// buildings as (typeId, startIndex, level, state))`. Building ids are
+    /// `Uuid::from_u128(segment * 10 + k)`.
+    fn town(sites: &[(usize, usize, &[(&str, u64, u64, &str)])]) -> Value {
+        let mut segments = serde_json::Map::new();
+        for (i, (lots, cleared, buildings)) in sites.iter().enumerate() {
+            let sid = Uuid::from_u128(1_000 + i as u128).to_string();
+            let mut lc = vec![false; *lots];
+            lc.iter_mut().take(*cleared).for_each(|l| *l = true);
+            let mut bs = serde_json::Map::new();
+            for (k, (ty, start, level, state)) in buildings.iter().enumerate() {
+                let bid = Uuid::from_u128((i * 10 + k) as u128).to_string();
+                bs.insert(
+                    bid.clone(),
+                    json!({ "id": bid, "typeId": ty, "styleId": TIMBER, "segmentGroupId": sid,
+                            "level": level, "startIndex": start, "state": state }),
+                );
+            }
+            segments.insert(
+                sid.clone(),
+                json!({ "id": sid, "lotsCleared": lc, "buildings": bs }),
+            );
+        }
+        json!({
+            "levelInfo": { "level": 0, "experiencePoints": 0 },
+            "districts": [{ "id": DISTRICT, "segments": segments }]
+        })
+    }
+
+    fn id(segment: usize, k: usize) -> Uuid {
+        Uuid::from_u128((segment * 10 + k) as u128)
+    }
+
+    fn cleared(town: &Value) -> usize {
+        town["districts"][0]["segments"]
+            .as_object()
+            .unwrap()
+            .values()
+            .flat_map(|s| s["lotsCleared"].as_array().unwrap().clone())
+            .filter(|v| v == &json!(true))
+            .count()
+    }
+
+    // ── Completion prestige ────────────────────────────────────────────────
+
+    /// Retail's first completion in the corpus: the Town Hall, 525 = its
+    /// level-0 400 + Timber 100 + the first site's 25 — which also takes the
+    /// town to level 1 (500).
+    #[test]
+    fn the_town_hall_pays_525() {
+        let table = upgrades();
+        let mut t = town(&[(1, 0, &[(TOWN_HALL, 0, 0, "BUILDING")])]);
+        assert_eq!(
+            old_prestige_on_complete(&table, &t, id(0, 0)),
+            400,
+            "the old rule"
+        );
+        assert_eq!(prestige_on_complete(&table, &mut t, id(0, 0)), 525);
+        assert_eq!(cleared(&t), 1, "its site is now cleared");
+        assert_eq!(apply_prestige_and_level_up(&mut t, 525), 1);
+    }
+
+    /// The first Forge after the Town Hall: 138 (125 + Timber 13) + sites 2 and 3.
+    #[test]
+    fn the_first_forge_pays_376() {
+        let table = upgrades();
+        let mut t = town(&[
+            (1, 1, &[(TOWN_HALL, 0, 0, "NORMAL")]),
+            (2, 0, &[(FORGE, 0, 0, "BUILDING")]),
+        ]);
+        assert_eq!(
+            old_prestige_on_complete(&table, &t, id(1, 0)),
+            125,
+            "the old rule"
+        );
+        assert_eq!(
+            prestige_on_complete(&table, &mut t, id(1, 0)),
+            376,
+            "138 + 88 + 150"
+        );
+        assert_eq!(cleared(&t), 3);
+    }
+
+    /// Consecutive houses on fresh sites after Town Hall + Forge: 111 + site 4, 5, 6…
+    #[test]
+    fn each_house_on_a_new_site_pays_the_next_site() {
+        let table = upgrades();
+        let mut sites: Vec<(usize, usize, &[(&str, u64, u64, &str)])> = vec![
+            (1, 1, &[(TOWN_HALL, 0, 0, "NORMAL")]),
+            (2, 2, &[(FORGE, 0, 1, "NORMAL")]),
+        ];
+        let houses: [&[(&str, u64, u64, &str)]; 6] = [
+            &[(HOUSE_A, 0, 0, "BUILDING")],
+            &[(HOUSE_B, 0, 0, "BUILDING")],
+            &[(HOUSE_C, 0, 0, "BUILDING")],
+            &[(HOUSE_A, 0, 0, "BUILDING")],
+            &[(HOUSE_B, 0, 0, "BUILDING")],
+            &[(HOUSE_A, 0, 0, "BUILDING")],
+        ];
+        sites.extend(houses.iter().map(|h| (1usize, 0usize, *h)));
+        let mut t = town(&sites);
+        let paid: Vec<u64> = (2..8)
+            .map(|s| prestige_on_complete(&table, &mut t, id(s, 0)))
+            .collect();
+        assert_eq!(paid, vec![324, 386, 449, 511, 574, 636]);
+        let old: Vec<u64> = (2..8)
+            .map(|s| old_prestige_on_complete(&table, &town(&sites), id(s, 0)))
+            .collect();
+        assert_eq!(
+            old,
+            vec![100; 6],
+            "the old rule paid every house the same 100"
+        );
+    }
+
+    /// A rebuild on a site already cleared pays only the building: 138 for a
+    /// Forge, 111 for a house. A second Forge on two NEW sites, with three
+    /// cleared before it, pays 138 + 213 + 275 = 626.
+    #[test]
+    fn cleared_sites_pay_once_and_new_ones_continue_the_count() {
+        let table = upgrades();
+        let mut t = town(&[
+            (1, 1, &[(TOWN_HALL, 0, 0, "NORMAL")]),
+            (2, 2, &[(FORGE, 0, 0, "BUILDING")]),
+            (1, 1, &[(HOUSE_B, 0, 0, "BUILDING")]),
+        ]);
+        assert_eq!(prestige_on_complete(&table, &mut t, id(1, 0)), 138);
+        assert_eq!(prestige_on_complete(&table, &mut t, id(2, 0)), 111);
+
+        let mut t = town(&[
+            (1, 1, &[(TOWN_HALL, 0, 0, "NORMAL")]),
+            (2, 2, &[(FORGE, 0, 3, "NORMAL")]),
+            (2, 0, &[(FORGE, 0, 0, "BUILDING")]),
+        ]);
+        assert_eq!(
+            old_prestige_on_complete(&table, &t, id(2, 0)),
+            125,
+            "the old rule"
+        );
+        assert_eq!(prestige_on_complete(&table, &mut t, id(2, 0)), 626);
+    }
+
+    /// An UPGRADE finishing still pays its level's prestige alone, sites untouched.
+    #[test]
+    fn an_upgrade_completion_pays_the_level_only() {
+        let table = upgrades();
+        let mut t = town(&[(2, 0, &[(FORGE, 0, 1, "UPGRADING")])]);
+        assert_eq!(prestige_on_complete(&table, &mut t, id(0, 0)), 180);
+        assert_eq!(cleared(&t), 0);
+    }
+
+    // ── Placement / upgrade prices ─────────────────────────────────────────
+
+    /// Retail placements (gold debited, timer set): the first Forge 600 / 5 s,
+    /// the second 10,100 / 3,605 s; the first House B 350 / 360 s.
+    #[test]
+    fn placement_prices_climb_with_the_family_count() {
+        let table = upgrades();
+        let place =
+            |t: &Value, ty: &str, style: &str| placement_cost(&table, t, u(ty), u(style)).unwrap();
+
+        let empty = town(&[(1, 0, &[])]);
+        let first = place(&empty, FORGE, TIMBER);
+        assert_eq!((first.gold, first.construction_time_ms), (600, 5_000));
+        let old = lookup_level_cost(&table, u(FORGE), 0, Some(u(TIMBER)), true).unwrap();
+        assert_eq!(
+            (old.gold, old.construction_time_ms),
+            (15_000, 3_600_000),
+            "the old rule"
+        );
+        assert_eq!(
+            first.materials.len(),
+            old.materials.len(),
+            "materials are unchanged"
+        );
+
+        let one = town(&[(2, 2, &[(FORGE, 0, 0, "BUILDING")])]);
+        let second = place(&one, FORGE, TIMBER);
+        assert_eq!(
+            (second.gold, second.construction_time_ms),
+            (10_100, 3_605_000)
+        );
+
+        let house = place(&empty, HOUSE_B, TIMBER);
+        assert_eq!((house.gold, house.construction_time_ms), (350, 360_000));
+    }
+
+    /// The three house types share one count: a Castle House A placed with ten
+    /// mixed houses standing (some still building) costs constructionGold[10]
+    /// 21,425 + Castle 3,000 = 24,425 over 18,300 s — measured on retail.
+    #[test]
+    fn houses_are_priced_as_one_family() {
+        let table = upgrades();
+        let ten: Vec<(usize, usize, &[(&str, u64, u64, &str)])> = vec![
+            (1, 1, &[(HOUSE_B, 0, 0, "NORMAL")]),
+            (1, 1, &[(HOUSE_C, 0, 2, "NORMAL")]),
+            (1, 0, &[(HOUSE_B, 0, 0, "BUILDING")]),
+            (1, 1, &[(HOUSE_A, 0, 1, "UPGRADING")]),
+            (1, 1, &[(HOUSE_B, 0, 0, "NORMAL")]),
+            (1, 1, &[(HOUSE_C, 0, 0, "NORMAL")]),
+            (1, 1, &[(HOUSE_B, 0, 0, "NORMAL")]),
+            (1, 1, &[(HOUSE_A, 0, 0, "NORMAL")]),
+            (
+                2,
+                2,
+                &[(HOUSE_B, 0, 0, "NORMAL"), (HOUSE_C, 1, 0, "NORMAL")],
+            ),
+            (2, 2, &[(FORGE, 0, 0, "NORMAL")]),
+        ];
+        let t = town(&ten);
+        assert_eq!(crate::town_construction::family_count(&t, u(HOUSE_A)), 10);
+        let c = placement_cost(&table, &t, u(HOUSE_A), u(CASTLE)).unwrap();
+        assert_eq!((c.gold, c.construction_time_ms), (24_425, 18_300_000));
+    }
+
+    #[test]
+    fn the_building_limit_is_enforced() {
+        let table = upgrades();
+        let two = town(&[
+            (2, 2, &[(FORGE, 0, 1, "NORMAL")]),
+            (2, 0, &[(FORGE, 0, 0, "BUILDING")]),
+        ]);
+        assert_eq!(
+            placement_cost(&table, &two, u(FORGE), u(TIMBER)).unwrap_err(),
+            CostError::LimitReached
+        );
+        assert!(
+            placement_cost(&table, &two, u(ALCHEMIST), u(TIMBER)).is_ok(),
+            "per type"
+        );
+
+        let houses: Vec<(usize, usize, &[(&str, u64, u64, &str)])> = (0..32)
+            .map(|_| (1usize, 1usize, &[(HOUSE_B, 0, 0, "NORMAL")][..]))
+            .collect();
+        let full = town(&houses);
+        assert_eq!(
+            placement_cost(&table, &full, u(HOUSE_A), u(TIMBER)).unwrap_err(),
+            CostError::LimitReached,
+            "32 houses of any type"
+        );
+        use actix_web::ResponseError;
+        assert_eq!(
+            CostError::LimitReached.to_api().status_code(),
+            StatusCode::CONFLICT
+        );
+    }
+
+    /// Upgrade price = upgradeGold[L] + the worn style's gold, over upgradeMs[L].
+    #[test]
+    fn upgrades_use_the_apk_arrays() {
+        let table = upgrades();
+        let up =
+            |ty: &str, level: u64| upgrade_cost(&table, u(ty), level, Some(u(TIMBER))).unwrap();
+        let old = |ty: &str, level: u64| {
+            lookup_level_cost(&table, u(ty), level, Some(u(TIMBER)), false).unwrap()
+        };
+
+        assert_eq!(up(HOUSE_B, 1).construction_time_ms, 1_200_000);
+        assert_eq!(
+            old(HOUSE_B, 1).construction_time_ms,
+            900_000,
+            "the old rule"
+        );
+        assert_eq!(up(HOUSE_B, 2).gold, 15_000 + 100);
+        assert_eq!(old(HOUSE_B, 2).gold, 15_900 + 100, "the old rule");
+        assert_eq!(up(HOUSE_C, 2).construction_time_ms, 2_280_000);
+        assert_eq!(up(ALCHEMIST, 1).construction_time_ms, 1_500_000);
+        assert_eq!(
+            old(ALCHEMIST, 1).construction_time_ms,
+            750_000,
+            "the old rule"
+        );
+        assert_eq!(up(FORGE, 8).gold, 175_395 + 100);
+        // Unchanged where the table already agreed, and the gate still applies.
+        assert_eq!(up(FORGE, 1).gold, old(FORGE, 1).gold);
+        assert_eq!(
+            up(FORGE, 1).require_town_level,
+            old(FORGE, 1).require_town_level
+        );
+        assert_eq!(
+            upgrade_cost(&table, u(FORGE), 10, None).unwrap_err(),
+            CostError::AtMaxLevel
+        );
+    }
+
+    // ── Destroy ────────────────────────────────────────────────────────────
+
+    /// destructionGold[n], n counting the family with the doomed building in
+    /// it: 89 with two houses standing, 25 for the last one (retail, 20 of 20).
+    /// Town XP and cleared sites are left exactly as they were.
+    #[test]
+    fn destroying_charges_the_apk_price_and_keeps_xp_and_sites() {
+        let mut t = town(&[
+            (1, 1, &[(HOUSE_B, 0, 0, "NORMAL")]),
+            (1, 1, &[(HOUSE_A, 0, 0, "NORMAL")]),
+        ]);
+        t["levelInfo"] = json!({ "level": 1, "experiencePoints": 900 });
+        let mut wallet = CompleteWallet::default();
+        wallet.credit(GOLD, 100);
+
+        assert_eq!(
+            charge_destruction(&mut t, id(0, 0), &mut wallet).unwrap(),
+            89
+        );
+        assert_eq!(wallet.balance(GOLD), 11);
+        // 25 for the last house, and 11 gold cannot cover it: refused, untouched.
+        assert!(charge_destruction(&mut t, id(1, 0), &mut wallet).is_err());
+        assert!(
+            find_building(&t, id(1, 0)).is_some(),
+            "an unpaid destroy removes nothing"
+        );
+        assert_eq!(wallet.balance(GOLD), 11);
+        wallet.credit(GOLD, 14);
+        assert_eq!(
+            charge_destruction(&mut t, id(1, 0), &mut wallet).unwrap(),
+            25
+        );
+        assert_eq!(wallet.balance(GOLD), 0);
+
+        assert_eq!(
+            t["levelInfo"],
+            json!({ "level": 1, "experiencePoints": 900 })
+        );
+        assert_eq!(cleared(&t), 2, "cleared sites stay cleared");
+        assert!(
+            charge_destruction(&mut t, id(1, 0), &mut wallet).is_err(),
+            "404 once gone"
+        );
+    }
+
+    // ── One-time backfill ──────────────────────────────────────────────────
+
+    /// Town Hall + 2 Forges + 2 houses built under the old rules: 7 sites, so
+    /// 25+88+150+213+275+338+400 = 1489, plus the level-0 Timber prestige each
+    /// was never paid (TH 100, Forge 13 ×2, house 11 ×2 = 148). Runs once.
+    #[test]
+    fn the_backfill_credits_old_towns_once() {
+        let table = upgrades();
+        let mut t = town(&[
+            (1, 0, &[(TOWN_HALL, 0, 0, "NORMAL")]),
+            (2, 0, &[(FORGE, 0, 2, "NORMAL")]),
+            (2, 0, &[(FORGE, 0, 1, "UPGRADING")]),
+            (
+                2,
+                0,
+                &[(HOUSE_A, 0, 0, "NORMAL"), (HOUSE_B, 1, 1, "NORMAL")],
+            ),
+            // Still being placed: its own completion pays it.
+            (1, 0, &[(HOUSE_C, 0, 0, "BUILDING")]),
+        ]);
+        // Whatever the old rules already banked stays and is added to.
+        t["levelInfo"] = json!({ "level": 1, "experiencePoints": 1150 });
+        let mut state = blades_lib::server_state::ServerState::default();
+
+        let grant = backfill_town_sites_once(&mut state, &mut t, &table);
+        assert_eq!(grant, 1489 + 148);
+        assert!(state.town_sites_backfilled);
+        assert_eq!(t["levelInfo"]["experiencePoints"], json!(1150 + 1637));
+        assert_eq!(t["levelInfo"]["level"], json!(2), "2787 ≥ 2500 → level 2");
+        assert_eq!(cleared(&t), 7);
+
+        // The marker stops a second run…
+        assert_eq!(backfill_town_sites_once(&mut state, &mut t, &table), 0);
+        // …and so do the cleared sites, even if the marker were lost.
+        state.town_sites_backfilled = false;
+        assert_eq!(backfill_town_sites_once(&mut state, &mut t, &table), 0);
+        assert_eq!(t["levelInfo"]["experiencePoints"], json!(2787));
+
+        // The unfinished house is paid when it finishes, numbered after the 7.
+        assert_eq!(prestige_on_complete(&table, &mut t, id(4, 0)), 111 + 463);
+    }
+
+    /// A town that already had its sites cleared (transferred from retail)
+    /// owes nothing, and a fresh default town owes nothing either.
+    #[test]
+    fn the_backfill_leaves_paid_towns_alone() {
+        let table = upgrades();
+        let mut t = town(&[
+            (2, 2, &[(FORGE, 0, 5, "NORMAL")]),
+            (1, 1, &[(TOWN_HALL, 0, 0, "NORMAL")]),
+        ]);
+        let before = t.clone();
+        let mut state = blades_lib::server_state::ServerState::default();
+        assert_eq!(backfill_town_sites_once(&mut state, &mut t, &table), 0);
+        assert_eq!(t, before);
+        assert!(state.town_sites_backfilled, "it still records that it ran");
+
+        let mut fresh: Value =
+            serde_json::from_str(include_str!("../../deploy/static/default_town.json")).unwrap();
+        let mut state = blades_lib::server_state::ServerState::default();
+        assert_eq!(
+            backfill_town_sites_once(&mut state, &mut fresh, &table),
+            0,
+            "the walls and gate of the default town are not building sites"
+        );
+    }
+
+    /// The marker round-trips through the stored JSON and old rows read as unset.
+    #[test]
+    fn the_backfill_marker_persists_in_server_state() {
+        use blades_lib::server_state::ServerState;
+        let old: ServerState = serde_json::from_str("{}").unwrap();
+        assert!(!old.town_sites_backfilled);
+        assert!(
+            serde_json::to_value(&old)
+                .unwrap()
+                .get("townSitesBackfilled")
+                .is_none()
+        );
+        let mut s = ServerState::default();
+        s.town_sites_backfilled = true;
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["townSitesBackfilled"], json!(true));
+        assert!(
+            serde_json::from_value::<ServerState>(v)
+                .unwrap()
+                .town_sites_backfilled
+        );
+    }
 }

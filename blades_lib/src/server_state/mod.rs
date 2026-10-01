@@ -180,6 +180,12 @@ pub struct ServerState {
     /// Previous names for support-driven live-character renames.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_character_renames: Vec<CharacterRenameAuditEntry>,
+    /// Set once the town has had the one-time building-site backfill (tracker
+    /// #287): towns built before the server cleared sites and paid their town
+    /// XP are credited for the sites their standing buildings cover, exactly
+    /// once. Rows written before the field load as `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub town_sites_backfilled: bool,
 }
 
 #[cfg(test)]
