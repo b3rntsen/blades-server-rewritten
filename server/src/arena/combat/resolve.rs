@@ -1385,6 +1385,9 @@ fn stun_the_blocked_attacker(
         return out;
     }
     let obj = combat.fighters[attacker_slot].net_object_id;
+    // The duration the attacker is actually held, after their Shorten Stagger — the
+    // value the client is told below (#295).
+    let secs = combat.fighters[attacker_slot].shortened_stagger_secs(secs);
     info!(
         "combat: slot {attacker_slot} STUNNED {secs:.2}s — its weapon attack was \
          blocked HIGH by slot {blocker_slot} (tracker #31)"
@@ -3404,6 +3407,8 @@ fn apply_shipped_effects_phased(
             // A refused stagger (Fury, paralysis) is not announced.
             if combat.fighters[target_slot].apply_stagger_for(now, secs) {
                 let obj = combat.fighters[target_slot].net_object_id;
+                // Announce the duration actually applied (Shorten Stagger), #295.
+                let secs = combat.fighters[target_slot].shortened_stagger_secs(secs);
                 info!(
                     "combat: slot {target_slot} STAGGERED {secs:.2}s \
                      (hit {last_hit_total:.1} > {threshold:.1}, {ability_uuid})"
@@ -16758,6 +16763,53 @@ mod status_removals_tests {
             c.fighters[0].weakness_rating_against(DamageType::Slashing, now),
             50.4
         );
+    }
+
+    /// The Staggered duration carried by the op51 applies in `out`.
+    fn op51_staggered_secs(out: &[(usize, Vec<u8>)]) -> Vec<f32> {
+        out.iter()
+            .filter_map(|(_, f)| {
+                if f.len() <= 2 || f[1] != 0x36 {
+                    return None;
+                }
+                let nd = arena_proto::parse_netdata(&f[2..]);
+                let is_stagger_apply = nd.int(3) == Some(51)
+                    && nd.int(5) == Some(StatusEffectType::Staggered as u16 as i64)
+                    && nd.props.get(&4) == Some(&arena_proto::NetDataValue::Bool(true));
+                match (is_stagger_apply, nd.props.get(&6)) {
+                    (true, Some(arena_proto::NetDataValue::Float(secs))) => Some(*secs),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    /// #295: an attacker with Shorten Stagger 0.20, high-blocked, is held 2.0 s — and
+    /// the op51 must say 2.0, as retail's did (61 of 525 high-block stuns). It used to
+    /// say the base 2.5, so the client still showed the bot stunned while it acted.
+    #[test]
+    fn a_high_block_stun_announces_the_shortened_duration() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0].loadout.shorten_stagger = 0.20;
+        let out = stun_the_blocked_attacker(&mut c, 0, 1, now);
+        let secs = op51_staggered_secs(&out);
+        assert!(!secs.is_empty(), "the stun is announced");
+        assert!(secs.iter().all(|s| (s - 2.0).abs() < 1e-4), "announced {secs:?}, held 2.0");
+        assert!(c.fighters[0].is_staggered(at(now, 1.95)));
+        assert!(!c.fighters[0].is_staggered(at(now, 2.05)));
+    }
+
+    /// CONTROL: without Shorten Stagger the announced and held duration is 2.5 s.
+    #[test]
+    fn a_high_block_stun_without_shorten_announces_the_base_duration() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let out = stun_the_blocked_attacker(&mut c, 0, 1, now);
+        let secs = op51_staggered_secs(&out);
+        assert!(!secs.is_empty());
+        assert!(secs.iter().all(|s| (s - 2.5).abs() < 1e-4), "announced {secs:?}");
+        assert!(c.fighters[0].is_staggered(at(now, 2.45)));
     }
 
     /// ch08 §4.2: "Paralyse, then high-block the victim's attack. The paralysis
