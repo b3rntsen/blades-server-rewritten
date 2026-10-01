@@ -631,6 +631,51 @@ pub fn spawn_group_loot(spawn_group_id: &Uuid, spawner_index: usize) -> LootTabl
     out
 }
 
+// -- enemies per spawner ----------------------------------------------------
+//
+// A spawn group is `quantity` spawners (the outer list of `enemyGeneratedData`)
+// and each spawner holds `_countPerSpawnerMin..Max` enemies (the inner list).
+// parsed.json kept the first and dropped the second, so every spawner got ONE
+// enemy. The client spawns exactly as many as the inner list holds, so 96 of
+// the APK's 1,956 groups ran short -- fewer kills, less XP, less loot -- and
+// "The Troll Trap" (45c042e1) could not be finished at all: its objective counts
+// the three trolls of group d971b82c, and we sent one (report #301).
+//
+// Retail's inner list was within min..max in 7,666 of 7,666 distinct group
+// generations, and the 13 generations of a min-2/max-3 group were all 3, so the
+// generator fills every spawner to `max`. Built from the APK by
+// `script/extract_spawn_group_counts.py`; compiled in, so a merge ships it.
+static SPAWN_GROUP_COUNTS_RAW: &str = include_str!("../spawn_group_counts.json");
+
+#[derive(Deserialize, Default)]
+struct SpawnGroupCounts {
+    groups: HashMap<Uuid, SpawnGroupCount>,
+}
+
+#[derive(Deserialize)]
+struct SpawnGroupCount {
+    /// Read only by the corpus tests that pin min <= max.
+    #[cfg_attr(not(test), allow(dead_code))]
+    min: u64,
+    max: u64,
+}
+
+fn spawn_group_counts() -> &'static SpawnGroupCounts {
+    static TABLE: std::sync::OnceLock<SpawnGroupCounts> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| serde_json::from_str(SPAWN_GROUP_COUNTS_RAW).unwrap_or_default())
+}
+
+/// How many enemies stand at each spawner of `spawn_group_id`: the APK's
+/// `_countPerSpawnerMax`, or one for a group the APK does not have (our own
+/// content, or a future dungeon) -- the behaviour that preceded #301.
+pub fn enemies_per_spawner(spawn_group_id: &Uuid) -> usize {
+    spawn_group_counts()
+        .groups
+        .get(spawn_group_id)
+        .map_or(1, |c| c.max)
+        .max(1) as usize
+}
+
 /// Is `table_id` one the enemy corpus left out, so that rows generated before
 /// report #236 carry it as an empty result by construction rather than by draw?
 ///
@@ -721,20 +766,30 @@ fn generate_for_dungeon_inner(
             .iter()
             .map(|(spawn_group_id, spawn_group)| {
                 let mut enemies_info = Vec::new();
+                let per_spawner = enemies_per_spawner(spawn_group_id);
                 for spawner_index in 0..spawn_group.quantity.max(1) as usize {
-                    enemies_info.push(vec![DungeonEnemyResult {
-                        enemy_level,
-                        given_xp,
-                        // Retail's fixed per-group result -- the key-holder's key.
-                        spawn_group_loot: spawn_group_loot(spawn_group_id, spawner_index),
-                        loot_table_loot: roll_enemy_loot_with_context(
-                            seed_context,
-                            spawn_group_id,
-                            spawner_index,
-                            0,
-                            enemy_level,
-                        ),
-                    }]);
+                    enemies_info.push(
+                        (0..per_spawner)
+                            .map(|enemy_index| DungeonEnemyResult {
+                                enemy_level,
+                                given_xp,
+                                // Retail's fixed per-group result -- the key-holder's
+                                // key. Every observation was enemy zero.
+                                spawn_group_loot: if enemy_index == 0 {
+                                    spawn_group_loot(spawn_group_id, spawner_index)
+                                } else {
+                                    LootTableResult::default()
+                                },
+                                loot_table_loot: roll_enemy_loot_with_context(
+                                    seed_context,
+                                    spawn_group_id,
+                                    spawner_index,
+                                    enemy_index,
+                                    enemy_level,
+                                ),
+                            })
+                            .collect(),
+                    );
                 }
                 (*spawn_group_id, enemies_info)
             })
@@ -2082,5 +2137,162 @@ mod key_holder_tests {
         }
         // And the gold table is modelled, so it is never "unmodelled".
         assert!(!enemy_table_is_unmodelled(&Uuid::from_u128(GOLD_LOOT_TABLE_ID)));
+    }
+}
+
+/// Report #301: "The Troll Trap" cannot be finished. Its kill objective counts
+/// the trolls of ONE spawner, which retail filled with three; we sent one.
+#[cfg(test)]
+mod spawner_count_tests {
+    use super::*;
+
+    /// GH02_DungeonSettings, the dungeon of "The Troll Trap" (quest 45c042e1).
+    const GH02: &str = "4216705a-c11d-4a6c-ba68-7b4c94adf1ff";
+    /// The troll group its objective counts (spawner b25cbdbd).
+    const TROLLS: &str = "d971b82c-7113-4c95-84da-cbb2a4ad29f3";
+
+    fn game_data() -> GameData {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+        serde_json::from_str(&std::fs::read_to_string(path).expect("read parsed.json"))
+            .expect("parse game data")
+    }
+
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).expect("uuid")
+    }
+
+    /// Per-spawner list lengths in an `enemyGeneratedData` map.
+    fn shape(generated: &DungeonGeneratedData) -> HashMap<Uuid, Vec<usize>> {
+        generated
+            .enemy_generated_data
+            .iter()
+            .map(|(group, spawners)| (*group, spawners.iter().map(Vec::len).collect()))
+            .collect()
+    }
+
+    /// Every spawner whose enemy count is not the APK's max, as
+    /// (group, spawner index, got, want).
+    fn short_spawners(generated: &DungeonGeneratedData) -> Vec<(Uuid, usize, usize, usize)> {
+        let mut out = Vec::new();
+        for (group, spawners) in &generated.enemy_generated_data {
+            let want = spawn_group_counts()
+                .groups
+                .get(group)
+                .map_or(1, |c| c.max as usize);
+            for (i, enemies) in spawners.iter().enumerate() {
+                if enemies.len() != want {
+                    out.push((*group, i, enemies.len(), want));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_counts_sidecar_loads_and_is_sane() {
+        let counts = &spawn_group_counts().groups;
+        assert_eq!(counts.len(), 1956, "the APK has 1,956 enemy spawn groups");
+        assert_eq!(counts.values().filter(|c| c.max > 1).count(), 96);
+        for (group, c) in counts {
+            assert!(
+                1 <= c.min && c.min <= c.max,
+                "{group}: {}..{}",
+                c.min,
+                c.max
+            );
+        }
+        assert_eq!(enemies_per_spawner(&uuid(TROLLS)), 3);
+        // Not an APK group (our own content, a future dungeon): one, as before.
+        assert_eq!(enemies_per_spawner(&Uuid::nil()), 1);
+    }
+
+    /// THE BUG, against retail's own answer: `/quests/45c042e1…/accept`
+    /// (api_captures 64099) sent this dungeon one spawner per group, three
+    /// trolls in d971b82c, two spiders each in d8f00672 and 4e41da9a, and one
+    /// enemy everywhere else.
+    #[test]
+    fn the_troll_trap_matches_retails_accept() {
+        let generated = generate_for_dungeon(&game_data(), &uuid(GH02), 14, 100).unwrap();
+        let retail: HashMap<Uuid, Vec<usize>> = [
+            (TROLLS, 3),
+            ("d8f00672-6937-410c-b17c-11a91aedded2", 2),
+            ("4e41da9a-dd8d-4a3b-8be5-d7c99e86beb8", 2),
+            ("f5408a4f-15a5-4ffb-a84a-5ae2f10f7b05", 1),
+            ("e7855391-22dc-438f-8ccc-3e5387dea24f", 1),
+            ("56ea94f0-b613-4fd3-8bee-e0e193db63a8", 1),
+            ("aa1d8511-a559-40d4-aea8-40c08e0d9846", 1),
+            ("b28562b5-03c7-48f8-b9ef-c12d0966d7b7", 1),
+        ]
+        .into_iter()
+        .map(|(g, n)| (uuid(g), vec![n]))
+        .collect();
+        assert_eq!(shape(&generated), retail);
+    }
+
+    /// IDENTITY across the whole game: every spawner of every group holds the
+    /// APK's max -- and the 96 groups above one are all actually exercised.
+    #[test]
+    fn every_spawner_holds_the_apks_max() {
+        let game_data = game_data();
+        let mut multi_seen = std::collections::HashSet::new();
+        for dungeon_id in game_data.dungeons.keys() {
+            let generated = generate_for_dungeon(&game_data, dungeon_id, 20, 5).unwrap();
+            assert_eq!(short_spawners(&generated), vec![], "dungeon {dungeon_id}");
+            for (group, spawners) in &generated.enemy_generated_data {
+                if spawners.iter().any(|e| e.len() > 1) {
+                    multi_seen.insert(*group);
+                }
+            }
+        }
+        assert_eq!(multi_seen.len(), 96, "a max>1 group was never generated");
+    }
+
+    /// NEGATIVE CONTROL: the identity check above fails on the old shape (one
+    /// enemy per spawner), so it cannot pass vacuously.
+    #[test]
+    fn the_identity_check_rejects_one_enemy_per_spawner() {
+        let mut generated = generate_for_dungeon(&game_data(), &uuid(GH02), 14, 100).unwrap();
+        for enemies in generated.enemy_generated_data.values_mut().flatten() {
+            enemies.truncate(1);
+        }
+        let mut short: Vec<_> = short_spawners(&generated)
+            .into_iter()
+            .map(|(g, _, got, want)| (g.to_string()[..8].to_owned(), got, want))
+            .collect();
+        short.sort();
+        assert_eq!(
+            short,
+            vec![
+                ("4e41da9a".to_owned(), 1, 2),
+                ("d8f00672".to_owned(), 1, 2),
+                ("d971b82c".to_owned(), 1, 3),
+            ]
+        );
+    }
+
+    /// Adding enemies must not re-roll the ones a player could already have
+    /// seen: enemy 0 is exactly the roll it always was, the others are rolled
+    /// with their own index, and the key stays on enemy 0 only.
+    #[test]
+    fn extra_enemies_roll_their_own_loot_and_enemy_zero_is_unchanged() {
+        let dungeon = uuid(GH02);
+        let generated = generate_for_dungeon(&game_data(), &dungeon, 14, 100).unwrap();
+        let trolls = &generated.enemy_generated_data[&uuid(TROLLS)][0];
+        for (enemy_index, troll) in trolls.iter().enumerate() {
+            assert_eq!(
+                serde_json::to_value(&troll.loot_table_loot).unwrap(),
+                serde_json::to_value(roll_enemy_loot(&dungeon, &uuid(TROLLS), 0, enemy_index, 14))
+                    .unwrap(),
+                "troll {enemy_index}"
+            );
+            assert_eq!((troll.enemy_level, troll.given_xp), (14, 100));
+        }
+        // The key-holder (one enemy per spawner) is untouched by this change, and a
+        // multi-enemy group never puts spawnGroupLoot past enemy zero.
+        for spawners in generated.enemy_generated_data.values() {
+            for enemies in spawners {
+                assert!(enemies[1..].iter().all(|e| e.spawn_group_loot.is_empty()));
+            }
+        }
     }
 }
