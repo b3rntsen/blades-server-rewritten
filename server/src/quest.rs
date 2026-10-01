@@ -413,6 +413,71 @@ fn add_missing_enemy_key_loot(
     changed
 }
 
+/// Give a stored row the enemies its short spawners are missing (#301).
+///
+/// Rows generated before #301 hold ONE enemy at every spawner, where the APK
+/// (and retail) put up to six. The client spawns exactly what the row lists, so
+/// "The Troll Trap" -- whose objective counts the three trolls of one spawner --
+/// stays unfinishable for whoever accepted it until the row itself grows.
+///
+/// Only enemies are APPENDED, at the end of a spawner shorter than the fresh
+/// one: every stored enemy keeps its index, level, XP and loot, so a kill the
+/// player already reported still names the same enemy. The new ones take their
+/// spawner's stored level and XP (retail levelled a spawner as one), loot from
+/// the fresh roll at their own index, and never `spawnGroupLoot`, which retail
+/// only ever put on enemy zero. Version-1 rows stay byte-for-byte.
+///
+/// A row whose enemies carry no loot at all predates enemy loot, and
+/// `dungeon_update` credits its corpses from the client's request; the new
+/// enemies join it loot-less so that stays true for the whole row.
+fn add_missing_spawner_enemies(
+    stored: &mut DungeonGeneratedData,
+    fresh: &DungeonGeneratedData,
+) -> bool {
+    if stored.version != 0 {
+        return false;
+    }
+    let has_enemy_loot = stored
+        .enemy_generated_data
+        .values()
+        .flatten()
+        .flatten()
+        .any(|e| !e.loot_table_loot.is_empty() || !e.spawn_group_loot.is_empty());
+
+    let mut changed = false;
+    for (group, fresh_spawners) in &fresh.enemy_generated_data {
+        let Some(stored_spawners) = stored.enemy_generated_data.get_mut(group) else {
+            continue;
+        };
+        for (fresh_enemies, stored_enemies) in fresh_spawners.iter().zip(stored_spawners.iter_mut())
+        {
+            // Not `.first()`: diesel's `first` is in scope here and shadows it.
+            let Some((enemy_level, given_xp)) = stored_enemies[..]
+                .iter()
+                .next()
+                .map(|e| (e.enemy_level, e.given_xp))
+            else {
+                continue;
+            };
+            let have = stored_enemies.len();
+            for fresh_enemy in fresh_enemies.iter().skip(have) {
+                stored_enemies.push(blades_lib::user_data::DungeonEnemyResult {
+                    enemy_level,
+                    given_xp,
+                    spawn_group_loot: Default::default(),
+                    loot_table_loot: if has_enemy_loot {
+                        fresh_enemy.loot_table_loot.clone()
+                    } else {
+                        Default::default()
+                    },
+                });
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
 /// The shipped `quests_daily.json` scaling — the same table the server loads.
 ///
 /// Tests reached for `QuestLevelScaling::default()`, which is EMPTY and therefore
@@ -575,6 +640,143 @@ mod report236_key_holder_repair_tests {
             &mut stored,
             &fresh(EQ15_QUEST, 30)
         ));
+    }
+}
+
+#[cfg(test)]
+mod report301_spawner_repair_tests {
+    use super::*;
+
+    /// "The Troll Trap", and the group its kill objective counts.
+    const TROLL_TRAP: &str = "45c042e1-538b-4079-8b92-06f1d7677b6f";
+    const TROLLS: &str = "d971b82c-7113-4c95-84da-cbb2a4ad29f3";
+    const SPIDERS: [&str; 2] = [
+        "d8f00672-6937-410c-b17c-11a91aedded2",
+        "4e41da9a-dd8d-4a3b-8be5-d7c99e86beb8",
+    ];
+
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+
+    fn fresh(level: i64) -> DungeonGeneratedData {
+        let game_data = super::report85_job_generated_data_tests::game_data();
+        let (_, generated) = generate_quest_data(
+            &game_data,
+            uuid(TROLL_TRAP),
+            level,
+            &blades_lib::static_data::QuestLevelScaling::default(),
+        )
+        .expect("the quest exists");
+        generated.expect("it has a dungeon")
+    }
+
+    /// The row as minted before #301: one enemy at every spawner.
+    fn as_stored_before_the_fix(fresh: &DungeonGeneratedData) -> DungeonGeneratedData {
+        let mut stored = fresh.clone();
+        for enemies in stored.enemy_generated_data.values_mut().flatten() {
+            enemies.truncate(1);
+        }
+        stored
+    }
+
+    fn lens(data: &DungeonGeneratedData, group: &str) -> Vec<usize> {
+        data.enemy_generated_data[&uuid(group)]
+            .iter()
+            .map(Vec::len)
+            .collect()
+    }
+
+    /// THE REPAIR: an accepted Troll Trap grows its one troll to three, keeping
+    /// the troll the player already had exactly as it was, and the new two at
+    /// its level even though the player has levelled since.
+    #[test]
+    fn an_accepted_troll_trap_gains_its_missing_trolls() {
+        let mut stored = as_stored_before_the_fix(&fresh(14));
+        assert_eq!(lens(&stored, TROLLS), vec![1], "the precondition");
+        let kept = serde_json::to_value(&stored.enemy_generated_data[&uuid(TROLLS)][0][0]).unwrap();
+
+        let refreshed_at = fresh(30);
+        assert_ne!(
+            refreshed_at.enemy_generated_data[&uuid(TROLLS)][0][1].enemy_level,
+            stored.enemy_generated_data[&uuid(TROLLS)][0][0].enemy_level,
+            "the precondition: the refresh is at a different level"
+        );
+        assert!(add_missing_spawner_enemies(&mut stored, &refreshed_at));
+
+        assert_eq!(lens(&stored, TROLLS), vec![3]);
+        for spiders in SPIDERS {
+            assert_eq!(lens(&stored, spiders), vec![2], "{spiders}");
+        }
+        let trolls = &stored.enemy_generated_data[&uuid(TROLLS)][0];
+        assert_eq!(serde_json::to_value(&trolls[0]).unwrap(), kept);
+        for (i, troll) in trolls.iter().enumerate().skip(1) {
+            assert_eq!(
+                (troll.enemy_level, troll.given_xp),
+                (trolls[0].enemy_level, trolls[0].given_xp),
+                "troll {i} took the refresh's level, not its spawner's"
+            );
+            assert!(troll.spawn_group_loot.is_empty());
+            assert_eq!(
+                serde_json::to_value(&troll.loot_table_loot).unwrap(),
+                serde_json::to_value(
+                    &refreshed_at.enemy_generated_data[&uuid(TROLLS)][0][i].loot_table_loot
+                )
+                .unwrap(),
+                "troll {i} carries its own roll"
+            );
+        }
+    }
+
+    /// CONTROL: a second /quests poll is a no-op, so the row is not rewritten
+    /// on every refresh.
+    #[test]
+    fn a_second_run_is_a_no_op() {
+        let mut stored = as_stored_before_the_fix(&fresh(14));
+        assert!(add_missing_spawner_enemies(&mut stored, &fresh(14)));
+        let once = serde_json::to_value(&stored).unwrap();
+        assert!(!add_missing_spawner_enemies(&mut stored, &fresh(14)));
+        assert_eq!(serde_json::to_value(&stored).unwrap(), once);
+    }
+
+    /// CONTROL: a row minted with the fix is already full and stays as it is.
+    #[test]
+    fn a_full_row_is_left_alone() {
+        let mut stored = fresh(14);
+        let before = serde_json::to_value(&stored).unwrap();
+        assert!(!add_missing_spawner_enemies(&mut stored, &fresh(30)));
+        assert_eq!(serde_json::to_value(&stored).unwrap(), before);
+    }
+
+    /// CONTROL: retail and imported rows are version 1 and stay byte-for-byte.
+    #[test]
+    fn captured_rows_are_left_alone() {
+        let mut stored = as_stored_before_the_fix(&fresh(14));
+        stored.version = 1;
+        let before = serde_json::to_value(&stored).unwrap();
+        assert!(!add_missing_spawner_enemies(&mut stored, &fresh(14)));
+        assert_eq!(serde_json::to_value(&stored).unwrap(), before);
+    }
+
+    /// A row from before enemy loot gains its trolls WITHOUT loot: one looted
+    /// corpse would switch every other corpse in it to crediting nothing.
+    #[test]
+    fn a_row_that_predates_enemy_loot_gains_loot_less_enemies() {
+        let mut stored = as_stored_before_the_fix(&fresh(14));
+        for enemy in stored.enemy_generated_data.values_mut().flatten().flatten() {
+            enemy.spawn_group_loot = Default::default();
+            enemy.loot_table_loot.clear();
+        }
+        assert!(add_missing_spawner_enemies(&mut stored, &fresh(14)));
+        assert_eq!(lens(&stored, TROLLS), vec![3]);
+        assert!(
+            stored
+                .enemy_generated_data
+                .values()
+                .flatten()
+                .flatten()
+                .all(|e| e.loot_table_loot.is_empty() && e.spawn_group_loot.is_empty())
+        );
     }
 }
 
@@ -1279,7 +1481,16 @@ pub async fn get_quests(
                         character_id_var
                     );
                 }
-                if expanded || refreshed || grew || keyed {
+                let filled = add_missing_spawner_enemies(stored, &fresh);
+                if filled {
+                    log::info!(
+                        "quests: filled the short spawners of quest {} ({}) for character {} (#301)",
+                        row.id,
+                        row.info.0.gld_quest_id,
+                        character_id_var
+                    );
+                }
+                if expanded || refreshed || grew || keyed || filled {
                     use crate::schema::quests;
                     diesel::update(
                         quests::table

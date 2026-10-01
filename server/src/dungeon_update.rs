@@ -2205,4 +2205,66 @@ mod event_kill_rewards_tests {
             );
         }
     }
+
+    /// Report #301: the second and third troll of "The Troll Trap" are real
+    /// enemies. A kill on enemy index 1 or 2 of spawner b25cbdbd's group is
+    /// credited like enemy 0 -- and, the control, it was thrown away as "stale"
+    /// on the old one-enemy row.
+    #[test]
+    fn kills_on_the_extra_trolls_are_credited() {
+        let trolls: Uuid = "d971b82c-7113-4c95-84da-cbb2a4ad29f3".parse().unwrap();
+        let gh02: Uuid = "4216705a-c11d-4a6c-ba68-7b4c94adf1ff".parse().unwrap();
+        let generated =
+            blades_lib::util::dungeon::generate_for_dungeon(&game_data(), &gh02, 14, 48).unwrap();
+
+        let kill_trolls = |generated: &DungeonGeneratedData| {
+            let actions: Vec<_> = (0..3)
+                .map(|enemy| {
+                    serde_json::json!({
+                        "type": "enemy_killed", "spawnGroupId": trolls, "spawnerIndex": 0,
+                        "enemyIndex": enemy, "xpReward": 1.0, "time": 1
+                    })
+                })
+                .collect();
+            let req: DungeonUpdateRequest = serde_json::from_value(serde_json::json!({
+                "currentState": {"b64": ""}, "actions": actions
+            }))
+            .unwrap();
+            let mut state: DungeonState = serde_json::from_value(serde_json::json!({
+                "dungeonStatus": {
+                    "dungeonSettingsIds": [], "reviveCount": 0, "level": 1, "seed": 0,
+                    "currentState": {"b64": ""}, "algorithmVersion": 1, "version": 1
+                }
+            }))
+            .unwrap();
+            let mut character = character();
+            let xp_before = character.character.0.experience;
+            let mut wallet = CompleteWallet::default();
+            let mut tracker = InventoryChangeTracker::default();
+            process_dungeon_actions(
+                &req.actions,
+                generated,
+                &mut state,
+                &mut character,
+                &mut wallet,
+                &mut tracker,
+            );
+            let mut killed: Vec<usize> = state
+                .dungeon_status
+                .enemy_status
+                .iter()
+                .filter(|(i, s)| i.spawner_uuid == trolls && s.killed)
+                .map(|(i, _)| i.enemy_index)
+                .collect();
+            killed.sort();
+            (killed, character.character.0.experience - xp_before)
+        };
+
+        assert_eq!(kill_trolls(&generated), (vec![0, 1, 2], 3 * 48));
+
+        // CONTROL: the row as generated before #301, one troll at the spawner.
+        let mut old = generated.clone();
+        old.enemy_generated_data.get_mut(&trolls).unwrap()[0].truncate(1);
+        assert_eq!(kill_trolls(&old), (vec![0], 48));
+    }
 }
