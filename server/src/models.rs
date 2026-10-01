@@ -87,6 +87,9 @@ pub struct CharacterDbEntryTownEconomy {
     pub wallet: JsonDbWrapper<CompleteWallet>,
     pub inventory: JsonDbWrapper<CompleteInventory>,
     pub town: Option<JsonDbWrapper<Value>>,
+    /// Carries the one-time town backfill marker
+    /// (`ServerState::town_sites_backfilled`).
+    pub server_state: JsonDbWrapper<ServerState>,
 }
 
 impl CharacterHolder for CharacterDbEntryTownEconomy {

@@ -71,6 +71,7 @@ mod social;
 mod static_loader;
 mod status;
 mod town;
+mod town_construction;
 mod util;
 mod wallet;
 
