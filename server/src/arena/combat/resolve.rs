@@ -4276,6 +4276,14 @@ fn condition_tick_count(duration_secs: f32) -> u32 {
 /// and uses the elapsed server-step time.
 const REGEN_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
+/// How much of an in-flight potion is gathered before it is put into the pool.
+///
+/// Not a retail-measured cadence: it bounds the stats traffic. A tier-10 potion
+/// restores ~310 points a second, and paying each point out as it accrues would
+/// change the pool — and so emit an op65 to both players — on nearly every 2 ms
+/// engine step. 100 ms gives the bar ten visible steps a second.
+const RESTORE_PAYOUT_STEP: Duration = Duration::from_millis(100);
+
 /// In-combat stamina/magicka regen rate as a fraction of the pool per second.
 ///
 /// Capture test T3 settled the server-side arena rule: 4%/s of the full maximum,
@@ -5730,24 +5738,44 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
         //
         // Potions are restorations, not regeneration, but they share this elapsed-time
         // pump so a potion and regen landing in the same step produce one stats frame.
+        //
+        // This pass runs every engine step (~2 ms in production), so one step of
+        // even the strongest potion is worth less than a point. It used to floor
+        // each step's share on its own: every step handed over zero while still
+        // counting the share as given, so a tier-10 stamina potion was spent and
+        // restored nothing (report #280 — the bar did not move at all; prod showed
+        // the drinker's stamina pinned at 0 for seconds after +775). The share now
+        // goes into `banked` and is paid out in whole points, in steps of
+        // `RESTORE_PAYOUT_STEP`, so the pool rises smoothly without turning every
+        // 2 ms step into its own op65.
         if let Some(mut pr) = f.pending_restore.take() {
             let give = (pr.per_tick * dt).min(pr.remaining);
             let mult = match pr.affected_stat {
                 0 => f.loadout.healing_multiplier(),
                 _ => 1.0,
             };
-            let amount = (give * mult).floor() as u32;
-            match pr.affected_stat {
-                0 => f.restore_pool(DamageType::Health, amount),
-                1 => f.restore_pool(DamageType::Stamina, amount),
-                2 => f.restore_pool(DamageType::Magicka, amount),
-                _ => {}
-            }
             pr.remaining -= give;
-            // Keep it only while there is something left to give; the rounding
-            // above can leave a sub-point remainder that would otherwise tick
-            // forever handing over zero.
-            if pr.remaining >= 1.0 {
+            pr.banked += give * mult;
+            let finished = pr.remaining <= 0.0;
+            let step = (pr.per_tick * mult * RESTORE_PAYOUT_STEP.as_secs_f32()).max(1.0);
+            if finished || pr.banked >= step {
+                // The last payout rounds, so the potion delivers its full amount
+                // rather than losing the final fraction.
+                let paid = if finished {
+                    pr.banked.round()
+                } else {
+                    pr.banked.floor()
+                };
+                pr.banked -= paid;
+                let amount = paid.max(0.0) as u32;
+                match pr.affected_stat {
+                    0 => f.restore_pool(DamageType::Health, amount),
+                    1 => f.restore_pool(DamageType::Stamina, amount),
+                    2 => f.restore_pool(DamageType::Magicka, amount),
+                    _ => {}
+                }
+            }
+            if !finished {
                 f.pending_restore = Some(pr);
             }
         }
@@ -9143,6 +9171,7 @@ fn on_consume_consumable(
                 affected_stat: r.affected_stat,
                 remaining: r.value,
                 per_tick: r.value / ticks,
+                banked: 0.0,
             });
             info!(
                 "combat: slot {sender} consumed {uuid} (op63 → op64) — \
@@ -10868,6 +10897,160 @@ mod phase4_tests {
             on_c2s_input(&mut combat, 0, &make_request_consume_frame(obj), now).is_empty(),
             "negative control: the same round cannot consume a second potion"
         );
+    }
+
+    /// The pool a restoration potion raises, read off the fighter.
+    fn restored_pool(f: &Fighter, stat: u8) -> u32 {
+        match stat {
+            0 => f.health,
+            1 => f.stamina,
+            _ => f.magicka,
+        }
+    }
+
+    /// Drive the regen pass the way production does — `enet_host` ticks the match
+    /// every ~2 ms — from a drink at `now` for `total_ms`. Returns the drinker's pool
+    /// at each requested checkpoint, plus how many op65 frames reached the drinker.
+    ///
+    /// `drink: false` is the control: identical fight, same clock, no potion.
+    fn run_potion_at_engine_step(
+        uuid: &str,
+        drink: bool,
+        checkpoints_ms: &[u64],
+    ) -> (Vec<u32>, usize, MatchCombat) {
+        const ENGINE_STEP_MS: u64 = 2;
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        let obj = combat.fighters[0].net_object_id;
+        let stat = gamedata::restoration(uuid)
+            .expect("a shipped restoration")
+            .affected_stat;
+        {
+            let f = &mut combat.fighters[0];
+            f.max_health = 3_000;
+            f.health = 1_000;
+            f.max_stamina = 1_000;
+            f.stamina = 0;
+            f.max_magicka = 1_000;
+            f.magicka = 0;
+            f.regen_carry_health = 0.0;
+            f.regen_carry_stamina = 0.0;
+            f.regen_carry_magicka = 0.0;
+        }
+        combat.last_regen_tick = now;
+        if drink {
+            on_c2s_input(
+                &mut combat,
+                0,
+                &make_equip_consumable_frame(obj, uuid, 3),
+                now,
+            );
+            let out = on_c2s_input(&mut combat, 0, &make_request_consume_frame(obj), now);
+            assert!(
+                out.iter()
+                    .any(|(_, f)| messages::user_message_gmid(f) == Some(64)),
+                "the drink must be accepted (op64) for this test to mean anything"
+            );
+        }
+        let end = *checkpoints_ms.iter().max().unwrap();
+        let mut seen = Vec::new();
+        let mut op65_to_drinker = 0;
+        let mut t = 0;
+        while t < end {
+            t += ENGINE_STEP_MS;
+            for (dest, frame) in apply_regen_tick(&mut combat, now + Duration::from_millis(t)) {
+                if dest == 0 && messages::user_message_gmid(&frame) == Some(65) {
+                    op65_to_drinker += 1;
+                }
+            }
+            if checkpoints_ms.contains(&t) {
+                seen.push(restored_pool(&combat.fighters[0], stat));
+            }
+        }
+        (seen, op65_to_drinker, combat)
+    }
+
+    /// Report #280 (HauDrauf): "the stamina bar does not move at all" after drinking.
+    ///
+    /// Prod 2026-09-30 12:11–12:14 UTC: three accepted stamina potions (+775, +675,
+    /// +585), yet every Frost drain that landed on him in the next seconds took 0–3
+    /// stamina, and his own Ward cast two seconds after the +775 logged `stam=0/520`.
+    /// The server never raised the pool, so no frame could show it. The 1 s
+    /// single-tick tests above passed throughout: the loss only appears at the real
+    /// engine step, where each step's share is below one point and was floored away.
+    ///
+    /// Retail s433 (avatar 199, `52e2f139`) shows the drinker's own packed stamina
+    /// rising in the stat frames right after op64: S240 (#80) → 352 (#87) → 472 (#96)
+    /// → 647 (#101). The server must actually raise the pool for that to happen.
+    #[test]
+    fn stamina_potion_restores_its_full_amount_at_the_production_engine_step() {
+        const ULTIMATE_STAMINA: &str = "8da5101c-2e7c-446b-b3bd-d1b9aa5c44f6";
+        let checkpoints = [1_000, 3_000];
+        let (potion, potion_op65, combat) =
+            run_potion_at_engine_step(ULTIMATE_STAMINA, true, &checkpoints);
+        let (control, control_op65, _) =
+            run_potion_at_engine_step(ULTIMATE_STAMINA, false, &checkpoints);
+
+        // Control: without a potion only ordinary regen moves the bar (4 %/s of 1000).
+        assert!(
+            control[1] < 200,
+            "control should be regen only, got {}",
+            control[1]
+        );
+        let gained = potion[1] - control[1];
+        assert!(
+            (774..=776).contains(&gained),
+            "a 775-point potion must restore 775 over the regen-only control, got {gained} \
+             (potion {} vs control {})",
+            potion[1],
+            control[1]
+        );
+        assert!(
+            combat.fighters[0].pending_restore.is_none(),
+            "the potion is finished after its 2.5 s"
+        );
+        // Spread over its duration, not a lump at the end: 1 s in is ~2/5 of it.
+        let at_1s = potion[0] - control[0];
+        assert!(
+            (270..=320).contains(&at_1s),
+            "after 1 s of a 2.5 s potion about 310 should have arrived, got {at_1s}"
+        );
+        // And without flooding the drinker with an op65 per 2 ms step.
+        assert!(
+            potion_op65 <= control_op65 + 30,
+            "the potion may add at most ~one op65 per 100 ms payout: {potion_op65} vs \
+             {control_op65} in the control"
+        );
+        assert!(
+            potion_op65 > control_op65,
+            "the restored stamina must reach the client in op65 stats frames"
+        );
+    }
+
+    /// The same defect hit every restoration, not only stamina: magicka (Ivan's
+    /// report, retail s414 `5bcb4692`: M272 → 423 → 574 → 725 after op64) and health.
+    #[test]
+    fn magicka_and_health_potions_restore_their_full_amount_at_the_production_engine_step() {
+        for (uuid, value) in [
+            ("5bcb4692-3c94-4732-9a27-63868a25ba5f", 775), // Extreme Magicka
+            ("61b31323-8ba2-49f2-befe-f43111c6e2c7", 225), // Health tier 9
+        ] {
+            let r = gamedata::restoration(uuid).expect("a shipped restoration");
+            assert_eq!(r.value as u32, value);
+            let (potion, _, combat) = run_potion_at_engine_step(uuid, true, &[3_000]);
+            let (control, _, _) = run_potion_at_engine_step(uuid, false, &[3_000]);
+            let mult = if r.affected_stat == 0 {
+                combat.fighters[0].loadout.healing_multiplier()
+            } else {
+                1.0
+            };
+            let expect = (value as f32 * mult).round() as u32;
+            let gained = potion[0] - control[0];
+            assert!(
+                gained + 1 >= expect && gained <= expect + 1,
+                "{uuid}: expected ~{expect} restored over the control, got {gained}"
+            );
+        }
     }
 
     /// op56 is a loadout declaration, so it must latch even OUTSIDE the live round —
