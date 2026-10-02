@@ -426,6 +426,73 @@ fn prune_stale_shops(shops: &mut HashMap<Uuid, MerchantWindow>, now: i64) {
     shops.retain(|_, w| w.expiration_ms > now || !w.buybacks.is_empty());
 }
 
+/// The four town buildings that run a merchant: Forge, Enchanter, Workshop and
+/// Alchemist — the building types `shop_stock.json` generates stock for.
+pub(crate) const VENDOR_BUILDING_TYPES: [Uuid; 4] = [
+    uuid::uuid!("26fdb92f-a4df-4928-a97b-dee8699af605"), // Forge
+    uuid::uuid!("82108d94-ebf7-434f-8623-ca66d7504f27"), // Enchanter
+    uuid::uuid!("b6c023e6-3b81-497f-9c2c-f532ecff3bb2"), // Workshop
+    uuid::uuid!("e1dd10fc-8b14-4288-9b23-99b0d58388de"), // Alchemist
+];
+
+pub(crate) fn is_vendor_building(type_id: Uuid) -> bool {
+    VENDOR_BUILDING_TYPES.contains(&type_id)
+}
+
+/// The `shop` object retail's `/towns/current/buildings/{id}/complete` returns for
+/// a vendor building: the shop's id with its sales and revenue emptied, and no
+/// `catalogId`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BuildCompleteShop {
+    id: Uuid,
+    sales: Vec<SaleEntry>,
+    revenue: Vec<RevenueEntry>,
+}
+
+/// Finishing a vendor building's construction or upgrade restocks its merchant
+/// (report #287).
+///
+/// MEASURED, every retail vendor completion in the corpus: 208 of 208 `/complete`
+/// responses for the four vendor types (9 players, `speedUp` true and false) carry
+/// `shop: {id, sales: [], revenue: []}`; 0 of 96 completions of any other building
+/// do. And the next `/shops/{id}` after a completion always opened a NEW catalog —
+/// new id, `start` = that open, the new level's template and gold — including the
+/// 15 cases where the old 10-hour window still had up to 600 minutes to run (Forge
+/// `f7dc114d`, 2026-05-13: 60 minutes left, template `6cda3555` → `57eeb277`,
+/// wallet 685 → 1,174).
+///
+/// We kept the old window until its 10 hours ran out, so a player who upgraded a
+/// shop came back to the previous level's stock and to a merchant whose gold they
+/// had already spent down to 0.
+///
+/// The window is closed here rather than rolled, so the next open rolls it from the
+/// building's new level exactly like any other new window. Live buyback slots
+/// survive, as they do across every other restock.
+pub(crate) fn restock_on_build_complete(
+    shops: &mut HashMap<Uuid, MerchantWindow>,
+    shop_id: Uuid,
+    now: i64,
+) -> BuildCompleteShop {
+    if let Some(mut old) = shops.remove(&shop_id) {
+        old.expire_buybacks(now);
+        if !old.buybacks.is_empty() {
+            shops.insert(
+                shop_id,
+                MerchantWindow {
+                    buybacks: old.buybacks,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    BuildCompleteShop {
+        id: shop_id,
+        sales: Vec::new(),
+        revenue: Vec::new(),
+    }
+}
+
 /// `POST /shops/{id}` — open a vendor (returns its current catalog).
 #[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/shops/{shop_id}")]
 pub async fn open_shop(
@@ -1372,6 +1439,89 @@ mod tests {
             1,
             "the live buyback survives"
         );
+    }
+
+    // ── report #287: finishing a vendor's build restocks it ─────────────────
+
+    fn buyback(shop_id: Uuid, id: u128, expiration: i64) -> Buyback {
+        Buyback {
+            id: Uuid::from_u128(id),
+            shop_id,
+            item: None,
+            stackable_item: None,
+            expiration,
+            price: 5,
+        }
+    }
+
+    /// A drained window with an hour to run is closed by the restock, so the next
+    /// open rolls a new one; buybacks that are still live carry over, dead ones
+    /// do not, and the left-over slot is neither served nor pruned.
+    #[test]
+    fn restock_on_build_complete_closes_the_window_and_keeps_live_buybacks() {
+        let now = 50_000_000i64;
+        let shop = Uuid::from_u128(7);
+        let mut shops = HashMap::new();
+        let mut drained = MerchantWindow {
+            catalog_id: Uuid::new_v4(),
+            start_ms: now - 1000,
+            expiration_ms: now + 3_600_000,
+            bundles: vec![(Uuid::from_u128(0xb1), 4)],
+            wallet_gold: 1174,
+            revenue_gold: -1174,
+            buybacks: vec![
+                buyback(shop, 1, now + 60_000),
+                buyback(shop, 2, now - 1),
+            ],
+            ..Default::default()
+        };
+        drained.sales.insert(Uuid::from_u128(0xb1), 4);
+        shops.insert(shop, drained);
+        assert!(shops[&shop].is_live(now) && shops[&shop].remaining_budget() == 0);
+
+        restock_on_build_complete(&mut shops, shop, now);
+
+        let left = &shops[&shop];
+        assert!(!left.is_live(now), "the next open must roll a new window");
+        assert!(left.sales.is_empty() && left.revenue_gold == 0 && left.bundles.is_empty());
+        assert_eq!(left.buybacks.len(), 1, "only the live buyback survives");
+        assert_eq!(left.buybacks[0].id, Uuid::from_u128(1));
+        prune_stale_shops(&mut shops, now);
+        assert!(shops.contains_key(&shop), "a live buyback keeps its slot");
+    }
+
+    #[test]
+    fn restock_on_build_complete_without_buybacks_forgets_the_window() {
+        let now = 50_000_000i64;
+        let shop = Uuid::from_u128(8);
+        let other = Uuid::from_u128(9);
+        let live = MerchantWindow {
+            catalog_id: Uuid::new_v4(),
+            expiration_ms: now + 3_600_000,
+            ..Default::default()
+        };
+        let mut shops = HashMap::from([(shop, live.clone()), (other, live)]);
+        restock_on_build_complete(&mut shops, shop, now);
+        assert!(!shops.contains_key(&shop));
+        assert!(shops[&other].is_live(now), "only the finished shop restocks");
+        // A shop never opened before has nothing to close and still answers.
+        restock_on_build_complete(&mut shops, Uuid::from_u128(10), now);
+    }
+
+    #[test]
+    fn the_vendor_buildings_are_the_four_with_generated_stock() {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/shop_stock.json");
+        let f = std::fs::File::open(&p).expect("shop_stock.json present");
+        let cfg: shop_gen::ShopStockConfig =
+            serde_json::from_reader(std::io::BufReader::new(f)).expect("shop_stock.json parses");
+        let mut generated: Vec<Uuid> = cfg.generation.keys().copied().collect();
+        let mut vendors = VENDOR_BUILDING_TYPES.to_vec();
+        generated.sort();
+        vendors.sort();
+        assert_eq!(generated, vendors);
+        let house = Uuid::parse_str("597f678f-b49e-4559-96a8-266aafeca6ad").unwrap();
+        assert!(!is_vendor_building(house));
     }
 
     // ── visiting someone else's town ─────────────────────────────────────────

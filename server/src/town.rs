@@ -770,15 +770,19 @@ struct CompleteRequest {
 /// ```
 ///
 /// The wallet on the speed-up path is REQUIRED: it is how the client learns the gems
-/// left it. The other three keys are `Option` so the no-speed-up response is the
-/// bare `{town}` retail sends.
+/// left it. The other keys are `Option` so the no-speed-up response is the bare
+/// `{town}` retail sends.
 ///
-/// We used to send six keys unconditionally, including a `shop` that retail sends on
-/// this endpoint 0 times out of 159. That was not merely noise — a `shop` key here
-/// hands the client an EMPTY stock list for the building it just finished, which is
-/// the shape of a vendor that has nothing to sell. It is dropped, along with the
-/// `validationFlags` retail also does not send here (the town object carries its own
-/// `validationFlags` field, so nothing is lost).
+/// A VENDOR building (Forge, Enchanter, Workshop, Alchemist) adds one key, with or
+/// without the flag: `shop: {id, sales: [], revenue: []}` — its merchant restocked
+/// (report #287, see [`crate::shop::restock_on_build_complete`]). Retail sent it on
+/// 208 of 208 vendor completions and on 0 of 96 completions of anything else.
+///
+/// We used to send six keys unconditionally, including a `shop` of `{"items": []}`
+/// for every building — a shape retail never sends, and one that hands the client
+/// an EMPTY stock list. It is dropped, along with the `validationFlags` retail also
+/// does not send here (the town object carries its own `validationFlags` field, so
+/// nothing is lost).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CompleteResponse {
@@ -791,6 +795,9 @@ struct CompleteResponse {
     /// but retail sends the key and the client's parser expects it).
     #[serde(skip_serializing_if = "Option::is_none")]
     inventory: Option<CompleteInventoryUpdate>,
+    /// The restocked merchant. Vendor buildings only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shop: Option<crate::shop::BuildCompleteShop>,
 }
 
 #[post(
@@ -853,6 +860,13 @@ pub async fn complete_building(
                 apply_prestige_and_level_up(&mut town, prestige);
             }
 
+            let shop = restock_finished_vendor(
+                &town,
+                &mut entry.server_state.0.shops,
+                building_id,
+                now_ms() as i64,
+            );
+
             // No inventory mutation on complete → empty diff, no version bump.
             let tracker = InventoryChangeTracker::default();
             let inventory = entry.inventory.0.generate_client_update(&tracker);
@@ -868,12 +882,28 @@ pub async fn complete_building(
                     .execute(&mut conn)
                     .await?;
 
-                Ok::<_, BladeApiError>(Json(complete_response(speed_up, town_col, wallet, inventory)))
+                Ok::<_, BladeApiError>(Json(complete_response(
+                    speed_up, town_col, wallet, inventory, shop,
+                )))
             }
         }
         .scope_boxed()
     })
     .await
+}
+
+/// A finished VENDOR building restocks its merchant, so the next open rolls the
+/// new level's stock and gold (report #287); any other building has no merchant
+/// and returns `None`. See [`crate::shop::restock_on_build_complete`].
+fn restock_finished_vendor(
+    town: &Value,
+    shops: &mut HashMap<Uuid, blades_lib::features::merchant::MerchantWindow>,
+    building_id: Uuid,
+    now: i64,
+) -> Option<crate::shop::BuildCompleteShop> {
+    let (type_id, _, _) = read_building_facts(town, building_id)?;
+    crate::shop::is_vendor_building(type_id)
+        .then(|| crate::shop::restock_on_build_complete(shops, building_id, now))
 }
 
 /// Bill a `/complete` speed-up against the wallet. The whole billed path minus the
@@ -905,24 +935,28 @@ fn charge_construction_speed_up(
 
 /// Assemble `/complete`'s response for the retail shape (see [`CompleteResponse`]):
 /// `{town}` on a plain completion, `{inventory, town, wallet}` when gems
-/// were spent. Split out so the shape is unit-testable without a database.
+/// were spent, plus `shop` for a vendor building either way. Split out so the
+/// shape is unit-testable without a database.
 fn complete_response(
     speed_up: bool,
     town: Value,
     wallet: CompleteWallet,
     inventory: CompleteInventoryUpdate,
+    shop: Option<crate::shop::BuildCompleteShop>,
 ) -> CompleteResponse {
     if speed_up {
         CompleteResponse {
             town,
             wallet: Some(wallet),
             inventory: Some(inventory),
+            shop,
         }
     } else {
         CompleteResponse {
             town,
             wallet: None,
             inventory: None,
+            shop,
         }
     }
 }
@@ -3406,6 +3440,7 @@ mod tests {
             json!({"levelInfo": {"level": 6}}),
             wallet_with(848),
             inv.clone(),
+            None,
         ))
         .unwrap();
         let keys: Vec<&str> = plain
@@ -3421,6 +3456,7 @@ mod tests {
             json!({"levelInfo": {"level": 6}}),
             wallet_with(848),
             inv,
+            None,
         ))
         .unwrap();
         let obj = sped.as_object().unwrap();
@@ -3431,7 +3467,10 @@ mod tests {
             !obj.contains_key("character"),
             "retail sends no character here"
         );
-        assert!(!obj.contains_key("shop"), "retail sends no shop here");
+        assert!(
+            !obj.contains_key("shop"),
+            "retail sends no shop for a building without a merchant"
+        );
         // The post-deduction balance is the point of returning the wallet at all.
         // The wire wallet is an array of `{currencyId, balance}`.
         let gem_line = sped["wallet"]
@@ -3445,6 +3484,133 @@ mod tests {
             json!(848),
             "the client learns the gem debit from this field"
         );
+    }
+
+    // ── report #287: a finished vendor restocks ──────────────────────────────
+
+    fn town_with_building(bid: Uuid, type_id: &str, level: u64) -> Value {
+        json!({
+            "levelInfo": { "level": 6 },
+            "districts": [{ "segments": { "seg": { "buildings": {
+                bid.to_string(): {
+                    "id": bid.to_string(), "typeId": type_id, "level": level,
+                    "state": "NORMAL", "constructionEnd": 0
+                }
+            }}}}]
+        })
+    }
+
+    /// The level-0 window a player drained before ordering the upgrade: 685 gold,
+    /// all of it spent, an hour still to run — retail Forge `f7dc114d`'s shape.
+    fn drained_live_window(now: i64) -> blades_lib::features::merchant::MerchantWindow {
+        let mut w = blades_lib::features::merchant::MerchantWindow {
+            catalog_id: Uuid::from_u128(0xca7),
+            template_id: Uuid::parse_str("6cda3555-6466-4b76-a3ba-d72ffd2bb2f5").unwrap(),
+            start_ms: now - 9 * 3_600_000,
+            expiration_ms: now + 3_600_000,
+            bundles: vec![(Uuid::from_u128(0xb1), 4)],
+            wallet_gold: 685,
+            revenue_gold: -685,
+            ..Default::default()
+        };
+        w.sales.insert(Uuid::from_u128(0xb1), 1);
+        w
+    }
+
+    /// Retail: every vendor `/complete` reset the shop, and the next open was a new
+    /// catalog for the new level with full gold — even with the old window still
+    /// live (report #287). Before the fix the drained level-0 window survived the
+    /// upgrade, so the player met the old stock and a merchant with 0 gold.
+    #[test]
+    fn completing_a_vendor_build_restocks_its_merchant() {
+        let now = 1_778_634_852_438i64;
+        let bid = Uuid::new_v4();
+        let town = town_with_building(bid, FORGE, 1);
+        let mut shops = HashMap::new();
+        shops.insert(bid, drained_live_window(now));
+        assert_eq!(shops[&bid].remaining_budget(), 0, "control: drained before");
+
+        let shop =
+            restock_finished_vendor(&town, &mut shops, bid, now).expect("a Forge is a vendor");
+        assert!(
+            !shops.get(&bid).is_some_and(|w| w.is_live(now)),
+            "the old level's window must not be served again"
+        );
+        assert_eq!(
+            serde_json::to_value(shop).unwrap(),
+            json!({ "id": bid.to_string(), "sales": [], "revenue": [] }),
+            "retail's shape on 208/208 vendor completions"
+        );
+    }
+
+    /// Negative control: a house has no merchant, so its completion leaves every
+    /// window alone — including a live one belonging to a real shop next door.
+    #[test]
+    fn completing_a_house_leaves_merchants_alone() {
+        let now = 1_778_634_852_438i64;
+        let house = Uuid::new_v4();
+        let forge = Uuid::new_v4();
+        let town = town_with_building(house, "597f678f-b49e-4559-96a8-266aafeca6ad", 2);
+        let mut shops = HashMap::new();
+        shops.insert(forge, drained_live_window(now));
+
+        assert!(restock_finished_vendor(&town, &mut shops, house, now).is_none());
+        assert!(shops[&forge].is_live(now), "another shop's window is untouched");
+    }
+
+    /// Restocking one vendor touches that vendor only.
+    #[test]
+    fn completing_one_vendor_leaves_the_other_vendors_alone() {
+        let now = 1_778_634_852_438i64;
+        let forge = Uuid::new_v4();
+        let alchemist = Uuid::new_v4();
+        let town = town_with_building(forge, FORGE, 3);
+        let mut shops = HashMap::new();
+        shops.insert(forge, drained_live_window(now));
+        shops.insert(alchemist, drained_live_window(now));
+
+        restock_finished_vendor(&town, &mut shops, forge, now).expect("vendor");
+        assert!(!shops.get(&forge).is_some_and(|w| w.is_live(now)));
+        assert!(shops[&alchemist].is_live(now));
+    }
+
+    /// The response carries `shop` for a vendor on both completion paths.
+    #[test]
+    fn a_vendor_completion_sends_the_reset_shop_with_or_without_speed_up() {
+        use blades_lib::user_data::{Backpack, CompleteInventory, Loadout, Treasury};
+        let inv = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: Loadout::default(),
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        }
+        .generate_client_update(&InventoryChangeTracker::default());
+        let bid = Uuid::new_v4();
+        let town = town_with_building(bid, FORGE, 1);
+        for (speed_up, want) in [
+            (false, vec!["shop", "town"]),
+            (true, vec!["inventory", "shop", "town", "wallet"]),
+        ] {
+            let shop = restock_finished_vendor(&town, &mut HashMap::new(), bid, 0);
+            let v = serde_json::to_value(complete_response(
+                speed_up,
+                town.clone(),
+                wallet_with(848),
+                inv.clone(),
+                shop,
+            ))
+            .unwrap();
+            let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            assert_eq!(keys, want, "speedUp: {speed_up}");
+            assert_eq!(v["shop"]["id"], json!(bid.to_string()));
+            assert!(
+                v["shop"].get("catalogId").is_none(),
+                "retail sends no catalogId"
+            );
+        }
     }
 }
 
