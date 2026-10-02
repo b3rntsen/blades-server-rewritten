@@ -1458,16 +1458,22 @@ pub struct ActiveChannel {
 
 /// A potion that is still taking effect.
 ///
-/// `remaining` is what is left to give, `per_tick` what each regen tick hands
-/// over. Both are floats because a 225-point restoration over 2.5 s does not
-/// divide evenly into whole points per second, and rounding each tick
-/// independently would quietly lose several points of the potion.
+/// `remaining` is what is left to give and `per_tick` the rate per SECOND (the
+/// name dates from the 1 s regen tick). Both are floats because a 225-point
+/// restoration over 2.5 s does not divide evenly into whole points.
+///
+/// `banked` holds what has been given but not yet put into the integer pool.
+/// The regen pass runs every engine step (~2 ms), where a whole tier-10 potion
+/// is worth well under one point, so flooring each step on its own handed over
+/// NOTHING and still used the potion up (report #280). The bank carries the
+/// fraction and is paid out in whole points — see `apply_regen_tick`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PendingRestore {
     /// `ActorStats.CoreStats`: 0 Health, 1 Stamina, 2 Magicka.
     pub affected_stat: u8,
     pub remaining: f32,
     pub per_tick: f32,
+    pub banked: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
