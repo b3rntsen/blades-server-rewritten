@@ -378,9 +378,15 @@ pub struct MatchInstance {
     /// `on_c2s` is the only way client bytes enter the engine, so a flag set
     /// there cannot be missed by a path that forgets to update it.
     ///
-    /// A player who never sent a single byte did not play the match — they
-    /// never saw it. See `void_for_a_player_who_never_arrived`.
-    saw_c2s: [bool; 2],
+    /// A player who never sent a single byte during a LIVE round did not play
+    /// the match. See `void_for_a_player_who_never_arrived`.
+    ///
+    /// Live rounds only (#303): every client sends a few frames on its own while
+    /// it connects and sets up (op55 spawning, ready), so "any byte all match"
+    /// was true of everyone and the void had not fired once since it shipped.
+    /// Ivan's client froze on the setup screen twice on 2026-10-01; the bot
+    /// beat a player who never saw the round and he kept both losses.
+    saw_in_round_c2s: [bool; 2],
     /// s2c ENet reliable sequence (used by the raw-socket dev path framing).
     s2c_seq: u16,
     last_heartbeat: Instant,
@@ -492,7 +498,7 @@ impl MatchInstance {
         combat.match_net_object_id = combat.alloc_net_object_id();
         let debug_hold_window = super::debug_hold_window();
         MatchInstance {
-            saw_c2s: [false; 2],
+            saw_in_round_c2s: [false; 2],
             combat,
             ranking,
             s2c_seq: 0,
@@ -699,8 +705,10 @@ impl MatchInstance {
         // Both directions at the one seam — see `trace`. Off unless
         // ARENA_TRACE_DIR is set, and it can never fail a match.
         super::trace::record(&self.combat.game_session_id, "c2s", sender, user_data);
-        if let Some(seen) = self.saw_c2s.get_mut(sender) {
-            *seen = true;
+        if self.combat.phase == FlowState::StateTimeout {
+            if let Some(seen) = self.saw_in_round_c2s.get_mut(sender) {
+                *seen = true;
+            }
         }
         let mut out = self.on_c2s_resolved(sender, user_data, now);
         out.extend(resolve::drain_state_changes(&mut self.combat, now));
@@ -1956,7 +1964,7 @@ impl MatchInstance {
             // generate a support complaint we do not want and cannot answer,
             // and the opponent is ours, so there is no one to be unfair to.
             //
-            // The test is "sent us not one byte all match". `on_c2s` is the only
+            // The test is "sent us not one byte during a live round" (#303). `on_c2s` is the only
             // way client bytes reach the engine, so this cannot be true of a
             // player who actually fought — any tap, block or move sets it. It is
             // deliberately NOT a heuristic about damage or rounds: a player can
@@ -1966,14 +1974,14 @@ impl MatchInstance {
             // Only the cups and the win/loss record are voided. Gold and XP are
             // left alone: taking those back turns one complaint into a different
             // one, and they are not what the policy is about.
-            let never_arrived = !self.saw_c2s.get(slot).copied().unwrap_or(true);
+            let never_arrived = !self.saw_in_round_c2s.get(slot).copied().unwrap_or(true);
             let versus_bot = opponent
                 .map(|o| crate::arena::matchmaker::is_bot_loadout(&self.combat.fighters[o].loadout))
                 .unwrap_or(false);
             let void_result = void_ai_match_result(!never_arrived, versus_bot);
             if void_result {
                 log::warn!(
-                    "arena: voiding result for slot {slot} in {:?} — no c2s all match against a bot; \
+                    "arena: voiding result for slot {slot} in {:?} — no c2s in any live round against a bot; \
                      cups and W/L not recorded (trophy_delta would have been {trophy_delta})",
                     game_session_id
                 );
@@ -3227,6 +3235,30 @@ pub(in crate::arena::combat) mod tests {
         );
         let live = drive_to_live(&mut m, 2, now);
         (m, live)
+    }
+
+    /// #303: Ivan's client froze after setup. It sent its op55 spawning frames
+    /// (every client does, unprompted) and then nothing in any live round, and
+    /// the bot won. Those setup frames used to count as "the player spoke", so
+    /// the void-an-unplayed-bot-loss rule never fired. Only live-round frames
+    /// count now.
+    #[test]
+    fn setup_frames_alone_do_not_count_as_playing() {
+        let now = Instant::now();
+        let mut m = MatchInstance::new(2, 1, vec![], now);
+        let obj = m.combat.fighters[0].net_object_id;
+        m.on_c2s(0, &c2s_handshake(obj, 55), now);
+        let live = drive_to_live(&mut m, 1, now);
+        assert!(
+            !m.saw_in_round_c2s[0],
+            "a setup-only client has not played a live round"
+        );
+        assert!(void_ai_match_result(m.saw_in_round_c2s[0], true));
+
+        // CONTROL: one frame inside the live round and the result stands.
+        m.on_c2s(0, &c2s_handshake(obj, 55), live);
+        assert!(m.saw_in_round_c2s[0], "a live-round frame counts as playing");
+        assert!(!void_ai_match_result(m.saw_in_round_c2s[0], true));
     }
 
     /// Build a c2s carrier-0x36 handshake frame with `gmid` at propId 3 on `player_obj`.
@@ -5677,13 +5709,13 @@ mod void_for_a_player_who_never_arrived {
             .expect("on_c2s still exists");
         let body = &src[start..start + 800];
         assert!(
-            body.contains("saw_c2s"),
+            body.contains("saw_in_round_c2s") && body.contains("FlowState::StateTimeout"),
             "on_c2s no longer records that the player sent anything; every \
              match would look silent and every AI loss would be voided"
         );
         // Control: the needle is real, so a typo here is a red test, not a
         // silently-passing one.
-        assert!(!body.contains("saw_c2s_that_does_not_exist"));
+        assert!(!body.contains("saw_in_round_c2s_that_does_not_exist"));
     }
 
     #[test]
