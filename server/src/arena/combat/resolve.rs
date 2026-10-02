@@ -5131,6 +5131,15 @@ fn alchemy_status_damage_type(status: super::state::StatusEffectType) -> super::
     }
 }
 
+/// The op51 apply for a weapon poison landing on `actor_slot`, to both viewers.
+///
+/// Retail uses two shapes, by effect family (all 69 coated-weapon applications in
+/// the decoded corpus, s394–s616):
+///
+/// - elemental WEAKNESS (100–103): the extended AlchemyInfo shape — propId 7 = 1
+///   and propIds 8..12 = effect, value, duration, charge count, damage type;
+/// - REGEN REDUCTION (120–122, the "Recovery" poisons): the PLAIN shape,
+///   `{5: status, 6: 10.0, 7: 255}` with no AlchemyInfo block (s460 ×2, s615 ×5).
 fn broadcast_alchemy_status_apply(
     combat: &MatchCombat,
     actor_slot: usize,
@@ -5140,50 +5149,57 @@ fn broadcast_alchemy_status_apply(
     charge_count: u8,
     damage_type: super::state::DamageType,
 ) -> Vec<(usize, Vec<u8>)> {
+    use super::state::StatusEffectType;
     let obj = combat.fighters[actor_slot].net_object_id;
-    let frame = messages::change_combat_status_effect_alchemy(
-        obj,
-        true,
-        status,
-        duration,
-        value,
-        charge_count,
-        damage_type,
-    );
+    let frame = match status {
+        StatusEffectType::HealthRegenReduction
+        | StatusEffectType::StaminaRegenReduction
+        | StatusEffectType::MagickaRegenReduction => {
+            messages::change_combat_status_effect(obj, true, status, duration)
+        }
+        _ => messages::change_combat_status_effect_alchemy(
+            obj,
+            true,
+            status,
+            duration,
+            value,
+            charge_count,
+            damage_type,
+        ),
+    };
     (0..combat.fighters.len())
         .map(|slot| (slot, frame.clone()))
         .collect()
 }
 
+/// A resistance potion ("… Immunity to Frost" etc.): the drinker resists
+/// `alchemy.value` more of one element for `alchemy.duration` seconds.
+///
+/// **Server-side only — nothing goes on the wire.** Of the 76 resistance-potion
+/// drinks in the decoded retail corpus (41 of them seen from the drinker's own
+/// client), not one is followed by an op51 for its element: the only 60–63
+/// statuses near them are the four-at-once Resist Elements SPELL applies, at
+/// unrelated times. We used to announce an AlchemyInfo op51 (and, through
+/// `status_timers`, its remove) to both clients — traffic retail never sent.
 fn apply_alchemy_resistance(
     combat: &mut MatchCombat,
     slot: usize,
     alchemy: &super::gamedata::AlchemyConsumable,
     status: super::state::StatusEffectType,
     now: Instant,
-) -> Vec<(usize, Vec<u8>)> {
+) {
     let damage_type = alchemy_status_damage_type(status);
     if damage_type == super::state::DamageType::None {
-        return Vec::new();
+        return;
     }
     let expires = now + Duration::from_secs_f32(alchemy.duration);
     combat.fighters[slot]
         .transient_resistances
         .push((damage_type, alchemy.value, expires));
-    combat.fighters[slot].status_timers.push((status, expires));
     info!(
         "combat: slot {slot} consumed {} — alchemy resistance {:?} +{:.2} for {:.1}s",
         alchemy.uuid, damage_type, alchemy.value, alchemy.duration
     );
-    broadcast_alchemy_status_apply(
-        combat,
-        slot,
-        status,
-        alchemy.duration,
-        alchemy.value,
-        alchemy.charge_count,
-        damage_type,
-    )
 }
 
 fn arm_alchemy_poison(
@@ -5218,6 +5234,21 @@ fn deliver_alchemy_poison(
     };
     if poison.charges_remaining == 0 {
         combat.fighters[attacker_slot].active_poison = None;
+        return Vec::new();
+    }
+    // One charge is ONE application of the poison's status, and a coated hit on a
+    // target still carrying it does nothing: no re-apply, no stacking, no charge
+    // spent. Retail, all 69 coated weapons in the decoded corpus: consecutive
+    // applications are never less than ~10 s apart (the status' own duration),
+    // 36 coatings applied twice and 4 three times (= `ChargeCount` 3) with up to
+    // twelve landed hits in between. We used to apply — and stack, and announce —
+    // on every hit, so three quick swings tripled a weakness and used the coating
+    // up inside a second.
+    if combat.fighters[target_slot]
+        .effects
+        .iter()
+        .any(|e| e.effect == poison.effect && now < e.expires_at)
+    {
         return Vec::new();
     }
 
@@ -9163,7 +9194,16 @@ fn on_consume_consumable(
     // every shipped tier is 2.5 s, and a 225-point heal arriving instantly is
     // a different thing to fight against than one arriving over two and a half
     // seconds. `apply_regen_tick` drains it.
-    let mut effect_frames = Vec::new();
+    //
+    // The amount is FLAT — the shipped value, not scaled by the arena's ×3 health
+    // multiplier — so a 260-point Ultimate Healing is ~9 % of a 2,900-HP arena bar.
+    // That looks small and it is what retail did: across 15 decoded retail health
+    // potions with little or no incoming damage, the drinker's packed health rose
+    // by 0.9–1.2 × the flat value over the 2.5 s (the excess is innate regen), never
+    // ~3 ×. The client code agrees: `RestorationAbility.GetRestorationTotalValue`
+    // returns `_restorationValue` itself in `Absolute` mode (every shipped tier),
+    // and `PvpPlayerActor.RestoreStat` is empty, so the server's number is the one
+    // the bar shows.
     match super::gamedata::restoration(&uuid) {
         Some(r) => {
             let ticks = (r.duration / REGEN_TICK_INTERVAL.as_secs_f32()).max(1.0);
@@ -9184,7 +9224,7 @@ fn on_consume_consumable(
                 .and_then(|a| alchemy_status(a.effect_type).map(|status| (a, status)))
             {
                 Some((alchemy, status)) if alchemy.charge_count == 0 => {
-                    effect_frames = apply_alchemy_resistance(combat, sender, &alchemy, status, now);
+                    apply_alchemy_resistance(combat, sender, &alchemy, status, now);
                 }
                 Some((alchemy, status)) => {
                     arm_alchemy_poison(combat, sender, &alchemy, status);
@@ -9204,17 +9244,21 @@ fn on_consume_consumable(
         .collect();
 
     // ...and the drink VISUAL. gmid 78 `PlayerPlayVFX` existed in the opcode enum
-    // and was emitted by nothing, so a potion healed silently. All 284 captured
-    // op78 frames are potion effects, which is what makes this the right home for
-    // it. Sent to both players: propId 4 is the drinker's first-person effect,
-    // propId 5 the third-person one their opponent sees.
+    // and was emitted by nothing, so a potion healed silently. Sent to both
+    // players: propId 4 is the drinker's first-person effect, propId 5 the
+    // third-person one their opponent sees.
+    //
+    // NOT retail wire behaviour, kept on purpose: in the decoded corpus no op78
+    // falls within 600 ms of any of the 58 health/magicka potion drinks. Retail's
+    // op78 health/magicka effects ride ABSORB heals (op50 + Absorb(17) in the same
+    // frame batch). The visual here answers a player report (#78) and is pending an
+    // owner call — see the arena consumables PR.
     if let Some(vfx) = potion_vfx_for_stat(&uuid) {
         let f = messages::player_play_vfx(obj, vfx.0, vfx.1);
         for slot in 0..combat.fighters.len() {
             out.push((slot, f.clone()));
         }
     }
-    out.extend(effect_frames);
     out
 }
 
@@ -9380,29 +9424,28 @@ mod potion_tests {
             baseline,
         );
 
-        let op51: Vec<_> = out
-            .iter()
-            .filter(|(_, f)| messages::user_message_gmid(f) == Some(51))
-            .collect();
-        assert_eq!(op51.len(), 2, "one alchemy status apply per viewer");
-        let nd = arena_proto::parse_netdata(&op51[0].1[2..]);
-        assert_eq!(nd.int(5), Some(StatusEffectType::FrostResistance as i64));
-        assert_eq!(nd.int(7), Some(1), "AlchemyInfo source");
-        assert_eq!(nd.int(8), Some(StatusEffectType::FrostResistance as i64));
-        approx(super::netdata_f32(&nd, 9).expect("value"), 80.169998);
-        approx(super::netdata_f32(&nd, 10).expect("duration"), 10.0);
-        assert_eq!(nd.int(11), Some(0), "potion charge count");
-        assert_eq!(nd.int(12), Some(DamageType::Frost as i64));
+        // Retail announces nothing for a resistance potion (0 of 76 decoded drinks):
+        // the op64 is the only frame, and the resistance lives on the server.
+        assert!(
+            !out.iter()
+                .any(|(_, f)| messages::user_message_gmid(f) == Some(51)),
+            "a resistance potion sends no op51"
+        );
+        assert!(
+            out.iter()
+                .any(|(_, f)| messages::user_message_gmid(f) == Some(64)),
+            "non-vacuity: the drink itself resolved"
+        );
 
         let alchemy = gamedata::alchemy_consumable(RESIST_FROST_TIER3).unwrap();
-        let _ = super::apply_alchemy_resistance(
+        super::apply_alchemy_resistance(
             &mut control,
             0,
             &alchemy,
             StatusEffectType::FrostResistance,
             now,
         );
-        let _ = super::apply_alchemy_resistance(
+        super::apply_alchemy_resistance(
             &mut control,
             0,
             &alchemy,
@@ -9561,6 +9604,138 @@ mod potion_tests {
         );
     }
 
+    fn op51s(out: &[(usize, Vec<u8>)]) -> Vec<&(usize, Vec<u8>)> {
+        out.iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(51))
+            .collect()
+    }
+
+    /// Retail: a coated weapon re-applies its status only once the previous
+    /// application has run out — consecutive applications are >= ~10 s apart in all
+    /// 69 decoded coatings, with up to twelve landed hits in between — so a hit on a
+    /// target still carrying it neither stacks the weakness, nor re-announces it,
+    /// nor spends a charge. We applied, stacked and announced on EVERY hit.
+    #[test]
+    fn a_coated_hit_on_a_still_weakened_target_neither_stacks_nor_spends_a_charge() {
+        let now = Instant::now();
+        let mut combat = super::tests::make_live_combat(now);
+        set_weapon(&mut combat.fighters[0], DamageType::Slashing, 40.0);
+        combat.fighters[0].equipped_consumable = Some(AVERSION_FROST_TIER3.to_string());
+        let _ = super::on_consume_consumable(&mut combat, 0, now);
+
+        let first = land_weapon_hit(&mut combat, 0, 1, now);
+        assert_eq!(
+            op51s(&first).len(),
+            2,
+            "precondition: the first hit applies"
+        );
+        approx(
+            combat.fighters[1].weakness_rating_against(DamageType::Frost, now),
+            12.76,
+        );
+
+        // A second and third hit inside the 10 s: nothing changes.
+        for ms in [400, 900] {
+            let t = now + Duration::from_millis(ms);
+            let out = land_weapon_hit(&mut combat, 0, 1, t);
+            assert!(op51s(&out).is_empty(), "no re-announce at +{ms} ms");
+            approx(
+                combat.fighters[1].weakness_rating_against(DamageType::Frost, t),
+                12.76,
+            );
+        }
+        assert_eq!(
+            combat.fighters[0]
+                .active_poison
+                .expect("the coating is still on the weapon")
+                .charges_remaining,
+            2,
+            "hits on a target that still carries the weakness spend no charge"
+        );
+
+        // Once it has run out, the next hit applies the second charge.
+        let later = now + Duration::from_millis(10_500);
+        let out = land_weapon_hit(&mut combat, 0, 1, later);
+        assert_eq!(
+            op51s(&out).len(),
+            2,
+            "the second charge re-applies after expiry"
+        );
+        approx(
+            combat.fighters[1].weakness_rating_against(DamageType::Frost, later),
+            12.76,
+        );
+        assert_eq!(
+            combat.fighters[0]
+                .active_poison
+                .expect("one charge left")
+                .charges_remaining,
+            1
+        );
+    }
+
+    /// `ChargeCount` 3 is three applications — the most retail ever shows for one
+    /// coating (4 of 69) — and then the weapon is clean.
+    #[test]
+    fn a_coating_applies_exactly_its_charge_count_then_is_gone() {
+        let now = Instant::now();
+        let mut combat = super::tests::make_live_combat(now);
+        set_weapon(&mut combat.fighters[0], DamageType::Slashing, 40.0);
+        combat.fighters[0].equipped_consumable = Some(AVERSION_FROST_TIER3.to_string());
+        let _ = super::on_consume_consumable(&mut combat, 0, now);
+
+        // Two hits per 11 s window: only the first of each may apply, so the three
+        // charges last three windows rather than a second and a half.
+        let mut applied_at = Vec::new();
+        for i in 0..6u64 {
+            for ms in [0, 500] {
+                let t = now + Duration::from_millis(i * 11_000 + ms);
+                if !op51s(&land_weapon_hit(&mut combat, 0, 1, t)).is_empty() {
+                    applied_at.push((i, ms));
+                }
+            }
+        }
+        assert_eq!(
+            applied_at,
+            vec![(0, 0), (1, 0), (2, 0)],
+            "three charges = one application in each of three windows"
+        );
+        assert!(
+            combat.fighters[0].active_poison.is_none(),
+            "coating used up"
+        );
+    }
+
+    /// The Recovery poisons (regen reduction, statuses 120-122) go out in the
+    /// PLAIN op51 shape — `{5: status, 6: 10.0, 7: 255}`, no AlchemyInfo block —
+    /// unlike the weakness poisons (s460 HealthRegenReduction ×2, s615
+    /// StaminaRegenReduction ×5).
+    #[test]
+    fn a_recovery_poison_is_announced_in_the_plain_op51_shape() {
+        let now = Instant::now();
+        let mut combat = super::tests::make_live_combat(now);
+        set_weapon(&mut combat.fighters[0], DamageType::Slashing, 40.0);
+        combat.fighters[0].equipped_consumable = Some(RECOVERY_POISON_MAGICKA_TIER3.to_string());
+        let _ = super::on_consume_consumable(&mut combat, 0, now);
+
+        let out = land_weapon_hit(&mut combat, 0, 1, now);
+        let op51 = op51s(&out);
+        assert_eq!(op51.len(), 2, "one apply per viewer");
+        let nd = arena_proto::parse_netdata(&op51[0].1[2..]);
+        assert_eq!(
+            nd.int(5),
+            Some(StatusEffectType::MagickaRegenReduction as i64)
+        );
+        approx(super::netdata_f32(&nd, 6).expect("duration"), 10.0);
+        assert_eq!(
+            nd.int(7),
+            Some(255),
+            "no AlchemyInfo source on a recovery poison"
+        );
+        assert_eq!(nd.int(8), None, "no AlchemyInfo block");
+        approx(combat.fighters[1].regen_reduction(2, now), 10.8);
+    }
+
     /// END TO END: drinking must actually PUT the frame on the wire.
     ///
     /// The other tests here check `potion_vfx_for_stat` and the frame builder in
@@ -9588,7 +9763,7 @@ mod potion_tests {
         );
         assert!(
             ids.contains(&78),
-            "drinking must emit the op78 visual — retail sends one on every potion. \
+            "drinking must emit the op78 visual (a #78 UX choice, not retail wire). \
              Got gmids {ids:?}",
         );
 
@@ -11051,6 +11226,32 @@ mod phase4_tests {
                 "{uuid}: expected ~{expect} restored over the control, got {gained}"
             );
         }
+    }
+
+    /// "Health potions do not seem to work in arena" (owner, 2026-10-03). They do:
+    /// prod logs from 2026-10-02 show the full +260 arriving between hits. It LOOKS
+    /// like little because the amount is flat while arena health is ×3, and that is
+    /// retail: 15 decoded retail drinks with little incoming damage rose by
+    /// 0.9-1.2 × the flat value, never ~3 ×. This pins it against a well-meant
+    /// "scale it by the arena multiplier" change.
+    #[test]
+    fn ultimate_healing_restores_its_flat_260_on_an_arena_x3_pool() {
+        const ULTIMATE_HEALING: &str = "c2139cd9-1d9d-4d4e-80b2-133e07440158";
+        let r = gamedata::restoration(ULTIMATE_HEALING).expect("Health Tier 10");
+        assert_eq!((r.affected_stat, r.value), (0, 260.0));
+        let (potion, _, combat) = run_potion_at_engine_step(ULTIMATE_HEALING, true, &[3_000]);
+        let (control, _, _) = run_potion_at_engine_step(ULTIMATE_HEALING, false, &[3_000]);
+        assert_eq!(
+            combat.fighters[0].loadout.healing_multiplier(),
+            1.0,
+            "fixture: no Imperial innate in play"
+        );
+        let gained = potion[0] - control[0];
+        assert!(
+            (259..=261).contains(&gained),
+            "flat 260 over the regen-only control, not 260 × {} — got {gained}",
+            super::super::state::ARENA_HEALTH_MULTIPLIER
+        );
     }
 
     /// op56 is a loadout declaration, so it must latch even OUTSIDE the live round —
