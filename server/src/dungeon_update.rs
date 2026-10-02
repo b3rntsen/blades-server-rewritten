@@ -15,7 +15,7 @@ use blades_lib::user_data::{
     DungeonState, LootTableResult,
 };
 use blades_lib::economy::apply_reward;
-use blades_lib::features::revive;
+use blades_lib::features::{chests, revive};
 use diesel;
 use diesel::{
      prelude::*,
@@ -965,12 +965,16 @@ fn process_dungeon_actions(
                 }
 
                 // The generated tier is signed because retail sent -1 on one
-                // chest spawn. The treasury has no pool below tier 1 and
-                // inventing one would be a fabrication, so a non-positive tier
-                // grants a tier-1 chest — which is exactly what this code did
-                // before the wire was corrected, so no player loses anything.
-                // Only the number the CLIENT is told has changed.
-                let tier = chest_data.tier.max(1) as u64;
+                // chest spawn: the tutorial's first chest,
+                // `TierSpecial_TutorialFirstChest`. Retail put it in the treasury
+                // as tier -1 too and paid it from its own table (report #307);
+                // granting tier 1 made the silver tutorial chest a wooden one.
+                // Any other non-positive tier still grants tier 1.
+                let tier = if chest_data.tier == chests::TUTORIAL_FIRST_CHEST {
+                    chests::TUTORIAL_FIRST_CHEST
+                } else {
+                    chest_data.tier.max(1)
+                };
                 let chest_id = character_data
                     .inventory
                     .0
@@ -1826,6 +1830,24 @@ mod tests {
                 .collected_chests
                 .contains("1d8b6737-114f-4aa6-a7ce-33543dee7082"),
             "the tier -1 chest must be recorded as collected, so a retry cannot mint it again"
+        );
+
+        // Report #307: retail put the tutorial chest in the treasury AS tier -1
+        // (`TierSpecial_TutorialFirstChest`): capture 4807's response lists
+        // `{"id":"1","tier":-1,"level":1}`, and 4816's ordinary chest is tier 1.
+        // We granted tier 1, so the silver tutorial chest opened as a wooden one.
+        let tiers: Vec<serde_json::Value> = character
+            .inventory
+            .0
+            .treasury
+            .chests()
+            .iter()
+            .map(|c| serde_json::to_value(c).unwrap()["tier"].clone())
+            .collect();
+        assert_eq!(
+            tiers,
+            vec![serde_json::json!(-1), serde_json::json!(1)],
+            "the tutorial chest must reach the treasury as tier -1, as on retail"
         );
     }
 

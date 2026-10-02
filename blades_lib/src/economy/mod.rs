@@ -397,7 +397,7 @@ pub fn grant_chest(
     level: u64,
     tracker: &mut InventoryChangeTracker,
 ) -> String {
-    let id = inventory.treasury.add_chest(tier, level);
+    let id = inventory.treasury.add_chest(tier as i64, level);
     tracker.modified_treasury.added.push(id.clone());
     id
 }
