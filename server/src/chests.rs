@@ -84,11 +84,14 @@ pub async fn collect_chest(
                 "{character_id}:{chest_id}:{chest_tier}:{chest_level}:{}",
                 entry.inventory.0.treasury_version
             );
+            // An artifact the character already holds is never handed out again;
+            // retail re-rolled it as a Legendary piece instead (#310).
             let mut reward = chests::roll_loot(
                 &globals.static_data.chest_loots,
                 chest_tier,
                 chest_level,
                 &loot_key,
+                &entry.inventory.0.item_templates(),
             )
                 .unwrap_or_default();
             for item in &mut reward.items {
