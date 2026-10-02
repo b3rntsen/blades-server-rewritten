@@ -137,12 +137,20 @@ pub struct ServerState {
     /// player's first visit (tracker #30). `#[serde(default)]` so rows written
     /// before this field deserialize as an empty map.
     ///
-    /// Keyed by shop id on the VISITING character, so browsing another player's
-    /// vendor tracks a window here rather than on its owner — adequate for the
-    /// buy/sell endpoints we serve, and a noted divergence from retail, which held
-    /// the catalog against the shop itself.
+    /// Only this character's OWN merchants live here. A merchant in someone else's
+    /// town is tracked per visitor in [`Self::visited_shops`] instead.
     #[serde(default)]
     pub shops: HashMap<Uuid, MerchantWindow>,
+    /// This character's own window on a merchant in SOMEONE ELSE's town, keyed by
+    /// `"{ownerCharacterId}:{shopId}"` (see `shop::visited_shop_key` in the server).
+    ///
+    /// Retail held a visited shop's stock per visitor (report #316): of 498
+    /// captured first opens of a visited shop by 9 visitors across 67 owners, none
+    /// showed any sale or revenue but the visitor's own, and 482 of them rolled a
+    /// fresh catalog at that open. Keeping it on the owner's row let one guildmate
+    /// buy the shop empty for everyone. Rows written before this field load empty.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub visited_shops: HashMap<String, MerchantWindow>,
     /// How many times each event-quest INSTANCE has been completed, keyed by the
     /// per-character instance quest id.
     ///

@@ -67,7 +67,7 @@ use uuid::Uuid;
 
 use crate::{
     BladeApiError, ServerGlobal, models::CharacterDbEntryShop, session::SessionLookedUpMaybe,
-    shop_gen, util::check_permission_for_character_and_get_it,
+    shop_gen,
 };
 
 /// Catalog validity window used when the shop isn't a config-driven crafting
@@ -417,7 +417,7 @@ async fn open_or_refresh(
 
 /// Forget windows that expired long enough ago that no buyback can still be live,
 /// so `server_state.shops` cannot grow without bound as a player wanders a town.
-fn prune_stale_shops(shops: &mut HashMap<Uuid, MerchantWindow>, now: i64) {
+fn prune_stale_shops<K: Eq + std::hash::Hash>(shops: &mut HashMap<K, MerchantWindow>, now: i64) {
     for w in shops.values_mut() {
         // Drop dead buyback slots FIRST, or a window whose only remaining slots
         // have expired would be kept forever by the check below.
@@ -627,6 +627,88 @@ fn txn_state(shop_id: Uuid, window: &MerchantWindow) -> ShopTxnState {
     }
 }
 
+/// Book `want` units of `bundle` against `window`: clamp to what the window still
+/// holds, count the sale and, for gold, push `revenue` positive. Returns the units
+/// booked — 0 when the window has none left.
+fn book_sale(
+    window: &mut MerchantWindow,
+    bundle: Uuid,
+    want: u64,
+    unit_price: u64,
+    currency: Uuid,
+) -> u64 {
+    // Finite stock: never sell more than the window still holds.
+    let qty = want.max(1).min(window.remaining_stock(bundle));
+    if qty == 0 {
+        return 0;
+    }
+    *window.sales.entry(bundle).or_insert(0) += qty;
+    // Retail: buying pushes `revenue` POSITIVE, replenishing what the merchant
+    // can spend buying from the player.
+    if currency == GOLD {
+        window.revenue_gold += unit_price.saturating_mul(qty) as i64;
+    }
+    qty
+}
+
+/// Buy `bundles` out of `window` for `buyer`: the gold leaves the buyer, the goods
+/// land in the buyer's backpack, and the sale is booked on `window`. Shared by a
+/// player's own merchants and by a merchant they visit in someone else's town —
+/// the only difference between the two is whose window is passed in.
+fn buy_bundles(
+    globals: &ServerGlobal,
+    window: &mut MerchantWindow,
+    bundles: &[BuyBundle],
+    buyer: &mut CharacterDbEntryShop,
+    tracker: &mut InventoryChangeTracker,
+) -> Result<bool, BladeApiError> {
+    let mut bought_anything = false;
+    for b in bundles {
+        let Some(def) = globals.static_data.shop_bundles.get(&b.id) else {
+            // No price/contents for this bundle — skip rather than hand out
+            // something unpriced. With the APK bundle table this covers all 94
+            // town-vendor bundles, so it should not fire.
+            log::warn!("[shop] bundle {} has no price/grant definition", b.id);
+            continue;
+        };
+        let currency = def.currency_id.unwrap_or(GOLD);
+        let grant = window
+            .generated_grants
+            .get(&b.id)
+            .unwrap_or(&def.grant)
+            .clone();
+        let qty = book_sale(window, b.id, b.quantity, def.price, currency);
+        if qty == 0 {
+            continue;
+        }
+        // An error here aborts the whole transaction, so the booking above is
+        // never persisted for a purchase the buyer could not pay for.
+        buyer
+            .wallet
+            .0
+            .debit(currency, def.price.saturating_mul(qty))
+            .map_err(BladeApiError::from_economy)?;
+        let reward = mint_bundle(
+            &grant,
+            qty,
+            &globals.game_data.items_template,
+            &mut rand::rng(),
+        );
+        apply_reward(
+            &reward,
+            &mut buyer.wallet.0,
+            &mut buyer.inventory.0,
+            &mut buyer.character.0,
+            tracker,
+        );
+        bought_anything = true;
+    }
+    if bought_anything {
+        buyer.inventory.0.backpack_version += 1;
+    }
+    Ok(bought_anything)
+}
+
 /// `POST /shops/{id}/purchase` — buy bundles out of the window's stock.
 ///
 /// Stock is finite: a request for more than remains is clamped, and buying draws
@@ -663,57 +745,7 @@ pub async fn buy_from_shop(
             );
 
             let mut tracker = InventoryChangeTracker::default();
-            let mut bought_anything = false;
-
-            for b in &bundles {
-                let want = b.quantity.max(1);
-                let Some(def) = globals.static_data.shop_bundles.get(&b.id) else {
-                    // No price/contents for this bundle — skip rather than hand out
-                    // something unpriced. With the APK bundle table this covers all
-                    // 94 town-vendor bundles, so it should not fire.
-                    log::warn!("[shop] bundle {} has no price/grant definition", b.id);
-                    continue;
-                };
-                // Finite stock: never sell more than the window still holds.
-                let qty = want.min(window.remaining_stock(b.id));
-                if qty == 0 {
-                    continue;
-                }
-                let currency = def.currency_id.unwrap_or(GOLD);
-                let cost = def.price.saturating_mul(qty);
-                entry
-                    .wallet
-                    .0
-                    .debit(currency, cost)
-                    .map_err(BladeApiError::from_economy)?;
-
-                let grant = window.generated_grants.get(&b.id).unwrap_or(&def.grant);
-                let reward = mint_bundle(
-                    grant,
-                    qty,
-                    &globals.game_data.items_template,
-                    &mut rand::rng(),
-                );
-                apply_reward(
-                    &reward,
-                    &mut entry.wallet.0,
-                    &mut entry.inventory.0,
-                    &mut entry.character.0,
-                    &mut tracker,
-                );
-
-                *window.sales.entry(b.id).or_insert(0) += qty;
-                // Retail: buying pushes `revenue` POSITIVE, replenishing what the
-                // merchant can spend buying from the player.
-                if currency == GOLD {
-                    window.revenue_gold += cost as i64;
-                }
-                bought_anything = true;
-            }
-
-            if bought_anything {
-                entry.inventory.0.backpack_version += 1;
-            }
+            buy_bundles(&globals, &mut window, &bundles, &mut entry, &mut tracker)?;
 
             let inventory = entry.inventory.0.generate_client_update(&tracker);
             let wallet = entry.wallet.0.clone();
@@ -748,11 +780,27 @@ pub async fn buy_from_shop(
 //                                        "social":{"shop":…}}
 // ```
 //
-// The stock, the window and the sales ledger belong to the OWNER — it is their
-// merchant — while the gold and the goods move on the VISITOR. So both character
-// rows are touched, in one transaction, and they are loaded in a fixed order
-// (owner, then visitor) so two players buying from each other at the same moment
-// cannot deadlock on each other's row locks.
+// The merchant's catalog comes from the OWNER's building — its type and level
+// pick the stock band, exactly as for the owner — but the window a visitor trades
+// against is the VISITOR's own: its stock, sales and revenue live on the visitor's
+// row, keyed by owner and shop (report #316). Retail, 1,671 answered requests from
+// 9 visitors across 67 owners and 223 shops:
+//
+// * 0 of 498 first opens of a catalog showed any sale or revenue — not even when
+//   the catalog was hours old, which an owner who sells to their own merchant
+//   would have left negative;
+// * 466 of 466 first purchases came back with `sales` equal to exactly what that
+//   visitor had just bought, and 45 of 45 re-opens showed only that visitor's own
+//   purchases;
+// * 482 of the 498 catalogs started within 5 minutes of that visitor's open
+//   (median under a second) — the visit rolled it, not the owner.
+//
+// We kept the window on the owner's row, so the first guildmate to shop there
+// bought it empty for everyone, owner included.
+//
+// The goods and gold move on the visitor, and the owner's own merchant is never
+// written. The owner's row is still loaded first (owner, then visitor) so a buy
+// in each other's towns at the same instant cannot deadlock on row locks.
 
 /// The `social` envelope retail wraps a visited shop in.
 #[derive(Serialize)]
@@ -783,10 +831,10 @@ struct SocialBuyResponse {
     social: SocialBuyInner,
 }
 
-/// Load another player's character row for writing. Unlike [`load_owned`] the
-/// caller is NOT the owner, so there is no `user_id` ownership filter — the pair
-/// in the URL is the filter, which is also what stops a visitor naming a
-/// character that is not the user they claim to be visiting.
+/// Load another player's character row. Unlike [`load_owned`] the caller is NOT
+/// the owner, so there is no `user_id` ownership filter — the pair in the URL is
+/// the filter, which is also what stops a visitor naming a character that is not
+/// the user they claim to be visiting.
 async fn load_other(
     conn: &mut diesel_async::AsyncPgConnection,
     character_id: Uuid,
@@ -805,6 +853,35 @@ async fn load_other(
         .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))
 }
 
+/// Where a visitor's window on `owner_character_id`'s merchant `shop_id` is kept in
+/// the visitor's `server_state.visited_shops`. The owner is part of the key because
+/// a building instance id is only guaranteed unique within one town.
+pub(crate) fn visited_shop_key(owner_character_id: Uuid, shop_id: Uuid) -> String {
+    format!("{owner_character_id}:{shop_id}")
+}
+
+/// The window `visitor` trades against at `owner`'s merchant `shop_id`.
+///
+/// `roll` is [`window_for`] in production: given the owner's building (`typeId`,
+/// level) and the visitor's previous window, it returns that window while it is
+/// live and rolls a fresh one from the owner's building once it is not. The result
+/// is stored on the VISITOR, and the visitor's expired windows are pruned in the
+/// same step, so wandering many towns cannot grow the map without bound.
+fn visited_window_mut<'a>(
+    owner: &CharacterDbEntryShop,
+    visitor: &'a mut CharacterDbEntryShop,
+    shop_id: Uuid,
+    now: i64,
+    roll: impl FnOnce(Option<(Uuid, u64)>, Option<&MerchantWindow>) -> MerchantWindow,
+) -> &'a mut MerchantWindow {
+    let key = visited_shop_key(owner.id, shop_id);
+    let visited = &mut visitor.server_state.0.visited_shops;
+    let window = roll(stock_building_for(owner, shop_id), visited.get(&key));
+    prune_stale_shops(visited, now);
+    visited.insert(key.clone(), window);
+    visited.get_mut(&key).expect("just inserted")
+}
+
 /// `POST /characters/{visitor}/social/users/{u}/characters/{c}/shops/{s}` — open a
 /// merchant in someone else's town.
 #[post(
@@ -817,31 +894,26 @@ pub async fn open_social_shop(
     _body: Json<Option<Value>>,
 ) -> Result<Json<SocialShopEnvelope<SocialOpenInner>>, BladeApiError> {
     let session = session.get_session_or_error()?;
+    let user_id = session.session.user_id;
     let (visitor_character_id, owner_user_id, owner_character_id, shop_id) = path.into_inner();
     let globals = app_state.get_ref().clone();
     let now = now_ms();
     let mut conn = app_state.db_pool.get().await?;
 
-    // The visitor must be who they say they are before we touch anyone's row.
-    check_permission_for_character_and_get_it(&mut conn, &session.session, visitor_character_id)
-        .await?;
-
     conn.transaction(move |mut conn| {
         async move {
-            let mut owner = load_other(&mut conn, owner_character_id, owner_user_id).await?;
-            let building = stock_building_for(&owner, shop_id);
-            let window = window_for(
-                &globals,
-                shop_id,
-                building,
-                owner.server_state.0.shops.get(&shop_id),
-                now,
-                false,
-            );
-            let wire = window_to_wire(shop_id, &window);
-            owner.server_state.0.shops.insert(shop_id, window);
-            prune_stale_shops(&mut owner.server_state.0.shops, now);
-            write_back(&mut conn, owner).await?;
+            // A visitor's window lives on the visitor; "visiting" your own town
+            // would lock the same row twice. Retail never sent it (0 of 1,673).
+            if owner_character_id == visitor_character_id {
+                return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 20000, 5));
+            }
+            let owner = load_other(&mut conn, owner_character_id, owner_user_id).await?;
+            let mut visitor = load_owned(&mut conn, visitor_character_id, user_id).await?;
+            let window = visited_window_mut(&owner, &mut visitor, shop_id, now, |b, prev| {
+                window_for(&globals, shop_id, b, prev, now, false)
+            });
+            let wire = window_to_wire(shop_id, window);
+            write_back(&mut conn, visitor).await?;
 
             Ok::<_, BladeApiError>(Json(SocialShopEnvelope {
                 social: SocialOpenInner {
@@ -856,12 +928,7 @@ pub async fn open_social_shop(
 }
 
 /// `POST …/social/users/{u}/characters/{c}/shops/{s}/purchase` — buy from someone
-/// else's merchant.
-///
-/// The gold leaves the visitor and the goods arrive in the visitor's backpack; the
-/// stock drawdown and the revenue land on the owner's merchant, exactly as they
-/// would if the owner had bought it themselves. That is what makes a visited shop
-/// run out — retail's stock is per-merchant, not per-visitor.
+/// else's merchant, out of the visitor's own window on it.
 #[post(
     "/blades.bgs.services/api/game/v1/public/characters/{visitor_character_id}/social/users/{owner_user_id}/characters/{owner_character_id}/shops/{shop_id}/purchase"
 )]
@@ -881,71 +948,18 @@ pub async fn buy_from_social_shop(
 
     conn.transaction(move |mut conn| {
         async move {
-            // Owner first, then visitor — a fixed lock order, so two players buying
-            // from each other at once cannot deadlock. Buying from your own shop
-            // through this route would lock the same row twice, which is why that
-            // case is sent to the ordinary vendor path instead.
             if owner_character_id == visitor_character_id {
                 return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 20000, 5));
             }
-            let mut owner = load_other(&mut conn, owner_character_id, owner_user_id).await?;
+            let owner = load_other(&mut conn, owner_character_id, owner_user_id).await?;
             let mut visitor = load_owned(&mut conn, visitor_character_id, user_id).await?;
 
-            let building = stock_building_for(&owner, shop_id);
-            let mut window = window_for(
-                &globals,
-                shop_id,
-                building,
-                owner.server_state.0.shops.get(&shop_id),
-                now,
-                false,
-            );
-
+            let mut window = visited_window_mut(&owner, &mut visitor, shop_id, now, |b, prev| {
+                window_for(&globals, shop_id, b, prev, now, false)
+            })
+            .clone();
             let mut tracker = InventoryChangeTracker::default();
-            let mut bought_anything = false;
-            for b in &bundles {
-                let want = b.quantity.max(1);
-                let Some(def) = globals.static_data.shop_bundles.get(&b.id) else {
-                    log::warn!("[shop] bundle {} has no price/grant definition", b.id);
-                    continue;
-                };
-                let qty = want.min(window.remaining_stock(b.id));
-                if qty == 0 {
-                    continue;
-                }
-                let currency = def.currency_id.unwrap_or(GOLD);
-                let cost = def.price.saturating_mul(qty);
-                visitor
-                    .wallet
-                    .0
-                    .debit(currency, cost)
-                    .map_err(BladeApiError::from_economy)?;
-
-                let grant = window.generated_grants.get(&b.id).unwrap_or(&def.grant);
-                let reward = mint_bundle(
-                    grant,
-                    qty,
-                    &globals.game_data.items_template,
-                    &mut rand::rng(),
-                );
-                apply_reward(
-                    &reward,
-                    &mut visitor.wallet.0,
-                    &mut visitor.inventory.0,
-                    &mut visitor.character.0,
-                    &mut tracker,
-                );
-
-                *window.sales.entry(b.id).or_insert(0) += qty;
-                if currency == GOLD {
-                    window.revenue_gold += cost as i64;
-                }
-                bought_anything = true;
-            }
-
-            if bought_anything {
-                visitor.inventory.0.backpack_version += 1;
-            }
+            buy_bundles(&globals, &mut window, &bundles, &mut visitor, &mut tracker)?;
 
             let inventory = visitor.inventory.0.generate_client_update(&tracker);
             let wallet = visitor.wallet.0.clone();
@@ -954,8 +968,11 @@ pub async fn buy_from_social_shop(
                 character: visitor.character.0.clone(),
             };
             let shop = txn_state(shop_id, &window);
-            owner.server_state.0.shops.insert(shop_id, window);
-            write_back(&mut conn, owner).await?;
+            visitor
+                .server_state
+                .0
+                .visited_shops
+                .insert(visited_shop_key(owner_character_id, shop_id), window);
             write_back(&mut conn, visitor).await?;
 
             Ok::<_, BladeApiError>(Json(SocialBuyResponse {
@@ -1600,6 +1617,175 @@ mod tests {
         assert!(
             body["social"].get("catalog").is_none(),
             "the purchase response carries the shop's ledger, not its catalog"
+        );
+    }
+
+    // ── #316: a merchant in someone else's town is stocked per visitor ────────
+
+    const RING: Uuid = Uuid::from_u128(0x3161);
+    const POTION: Uuid = Uuid::from_u128(0x3162);
+
+    /// The catalog the owner's building would roll: one ring, five potions.
+    fn stocked_window(now: i64) -> MerchantWindow {
+        MerchantWindow {
+            catalog_id: Uuid::new_v4(),
+            start_ms: now,
+            expiration_ms: merchant::expiration_for(now),
+            bundles: vec![(RING, 1), (POTION, 5)],
+            wallet_gold: 1_000,
+            ..Default::default()
+        }
+    }
+
+    /// `window_for`'s contract without a `ServerGlobal`: reuse a live window, else
+    /// roll the owner's catalog.
+    fn roll(
+        now: i64,
+    ) -> impl FnOnce(Option<(Uuid, u64)>, Option<&MerchantWindow>) -> MerchantWindow {
+        move |_, prev| {
+            prev.filter(|w| w.is_live(now))
+                .cloned()
+                .unwrap_or_else(|| stocked_window(now))
+        }
+    }
+
+    /// What `visitor` sees opening `owner`'s merchant — the open route's state step.
+    fn open_as(
+        owner: &CharacterDbEntryShop,
+        visitor: &mut CharacterDbEntryShop,
+        shop: Uuid,
+        now: i64,
+    ) -> MerchantWindow {
+        visited_window_mut(owner, visitor, shop, now, roll(now)).clone()
+    }
+
+    /// `visitor` buying `qty` of `bundle` there — the purchase route's state step.
+    fn buy_as(
+        owner: &CharacterDbEntryShop,
+        visitor: &mut CharacterDbEntryShop,
+        shop: Uuid,
+        bundle: Uuid,
+        qty: u64,
+        now: i64,
+    ) -> u64 {
+        let window = visited_window_mut(owner, visitor, shop, now, roll(now));
+        book_sale(window, bundle, qty, 100, GOLD)
+    }
+
+    /// THE BUG (#316): one guildmate shopping at a merchant left the next one a
+    /// half-empty shop. Retail gave every visitor the full assortment.
+    #[test]
+    fn two_visitors_each_see_the_owners_full_assortment() {
+        let shop = Uuid::from_u128(0x316);
+        let now = 1_780_000_000_000;
+        let owner = shop_entry(shop, 4, 20);
+        let mut a = shop_entry(Uuid::new_v4(), 4, 20);
+        let mut b = shop_entry(Uuid::new_v4(), 4, 20);
+
+        assert_eq!(buy_as(&owner, &mut a, shop, RING, 1, now), 1);
+        assert_eq!(buy_as(&owner, &mut a, shop, POTION, 3, now), 3);
+
+        let seen_by_b = open_as(&owner, &mut b, shop, now + 60_000);
+        assert_eq!(
+            seen_by_b.remaining_stock(RING),
+            1,
+            "B sees the ring A bought"
+        );
+        assert_eq!(seen_by_b.remaining_stock(POTION), 5);
+        assert!(
+            seen_by_b.sales.values().all(|q| *q == 0),
+            "{:?}",
+            seen_by_b.sales
+        );
+        assert_eq!(
+            seen_by_b.revenue_gold, 0,
+            "A's spending is not on B's ledger"
+        );
+
+        let seen_by_a = open_as(&owner, &mut a, shop, now + 60_000);
+        assert_eq!(
+            seen_by_a.remaining_stock(RING),
+            0,
+            "A's own purchase sticks"
+        );
+        assert_eq!(seen_by_a.remaining_stock(POTION), 2);
+        assert_eq!(seen_by_a.revenue_gold, 400);
+    }
+
+    #[test]
+    fn one_visitors_purchase_does_not_reduce_another_visitors_stock() {
+        let shop = Uuid::from_u128(0x316);
+        let now = 1_780_000_000_000;
+        let owner = shop_entry(shop, 4, 20);
+        let mut a = shop_entry(Uuid::new_v4(), 4, 20);
+        let mut b = shop_entry(Uuid::new_v4(), 4, 20);
+
+        // Both open first, then A buys the only ring.
+        open_as(&owner, &mut a, shop, now);
+        open_as(&owner, &mut b, shop, now);
+        assert_eq!(buy_as(&owner, &mut a, shop, RING, 1, now), 1);
+        assert_eq!(
+            buy_as(&owner, &mut a, shop, RING, 1, now),
+            0,
+            "A has none left"
+        );
+
+        assert_eq!(
+            buy_as(&owner, &mut b, shop, RING, 1, now),
+            1,
+            "B can still buy the ring A bought"
+        );
+    }
+
+    #[test]
+    fn a_visitor_never_writes_the_owners_own_merchant() {
+        let shop = Uuid::from_u128(0x316);
+        let now = 1_780_000_000_000;
+        let mut owner = shop_entry(shop, 4, 20);
+        let own = stocked_window(now);
+        owner.server_state.0.shops.insert(shop, own.clone());
+        let mut a = shop_entry(Uuid::new_v4(), 4, 20);
+
+        buy_as(&owner, &mut a, shop, RING, 1, now);
+        buy_as(&owner, &mut a, shop, POTION, 5, now);
+
+        let after = &owner.server_state.0.shops[&shop];
+        assert_eq!(after.catalog_id, own.catalog_id);
+        assert_eq!(after.remaining_stock(RING), 1);
+        assert_eq!(after.remaining_stock(POTION), 5);
+        assert_eq!(after.revenue_gold, 0);
+        assert!(
+            a.server_state.0.shops.is_empty(),
+            "nor is it filed among the visitor's own merchants"
+        );
+    }
+
+    #[test]
+    fn visited_windows_are_per_owner_and_stale_ones_are_pruned() {
+        let shop = Uuid::from_u128(0x316);
+        let now = 1_780_000_000_000;
+        // Two towns that happen to share a building instance id.
+        let owner1 = shop_entry(shop, 4, 20);
+        let owner2 = shop_entry(shop, 4, 20);
+        let mut a = shop_entry(Uuid::new_v4(), 4, 20);
+
+        buy_as(&owner1, &mut a, shop, RING, 1, now);
+        assert_eq!(open_as(&owner2, &mut a, shop, now).remaining_stock(RING), 1);
+        assert_eq!(a.server_state.0.visited_shops.len(), 2);
+
+        // Eleven hours on, visiting owner2 forgets owner1's dead window.
+        let later = now + 11 * 3_600_000;
+        let fresh = open_as(&owner2, &mut a, shop, later);
+        assert_eq!(
+            fresh.start_ms, later,
+            "an expired window re-rolls on the visit"
+        );
+        assert_eq!(a.server_state.0.visited_shops.len(), 1);
+        assert!(
+            a.server_state
+                .0
+                .visited_shops
+                .contains_key(&visited_shop_key(owner2.id, shop))
         );
     }
 
