@@ -1301,6 +1301,11 @@ fn land_due_hits(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)
         if blocked_high {
             combat.fighters[h.sender].reset_combo();
         }
+        // The attacker's FollowThrough (43) is due at this same instant and goes out
+        // AHEAD of the damage: retail sends 43 before the op50 in 2988 of 2988
+        // same-tick pairs. The end-of-tick drain put it after, and on a killing blow
+        // after the whole round-end burst (tracker #305).
+        out.extend(drain_state_changes_for(combat, now, Some(h.sender)));
         out.extend(emit_damage(combat, h.sender, h.target, &resolved, h.due));
         // The hit connected, so the chain advances, blocked or negated alike (02 §4.1,
         // X8). A swing that never landed (target dead, round over) does not reach here.
@@ -5306,7 +5311,7 @@ fn on_round_ended(
     combat.channels.clear();
     combat.pending_hits.clear();
     combat.pending_impacts.clear();
-    for (slot, fighter) in combat.fighters.iter_mut().enumerate() {
+    for fighter in combat.fighters.iter_mut() {
         fighter.clear_scheduled_states();
         // Nothing is left to interrupt, and a maneuver lock must not outlive it.
         fighter.executions.clear();
@@ -5318,7 +5323,10 @@ fn on_round_ended(
         fighter.status_timers.clear();
         fighter.transient_resistances.clear();
         fighter.health_damage_carry = 0.0;
-        if !ended_by_death || slot != loser {
+        // A round TIMEOUT has no killing swing to finish: the survivors go to the
+        // round-end Emote now. After a DEATH the killer keeps playing its swing and
+        // returns to Idle with the result, ~216 ms later (see `PendingRoundEnd`).
+        if !ended_by_death {
             fighter.force_actor_state(ActorStateType::Emote, now);
         }
     }
@@ -5473,8 +5481,10 @@ fn on_round_ended(
         //
         // The LOSER of a death is exempt: it stays Dead, and its op29 below must be the
         // first state frame the clients see for it (12-D5).
-        combat.reset_actor_animations_except(now, ended_by_death.then_some(loser));
-        out.extend(drain_state_changes(combat, now));
+        if !ended_by_death {
+            combat.reset_actor_animations_except(now, None);
+            out.extend(drain_state_changes(combat, now));
+        }
         info!(
             "combat: round-ending {} (round {}) → winner slot {winner} (obj {winner_obj}), loser slot {loser} \
              (obj {loser_obj}); score {:?} (no fighter at {} wins yet) — LOOPING to the next round; \
@@ -5499,17 +5509,113 @@ fn on_round_ended(
         hex(&result_frame)
     );
 
+    let mut death_frames = Vec::new();
+    let mut result_frames = Vec::new();
     for slot in 0..combat.fighters.len() {
         if let Some(dead_frame) = &dead_frame {
-            out.push((slot, dead_frame.clone()));
+            death_frames.push((slot, dead_frame.clone()));
         }
         // 2) op79 flow "RoundEnd" on the Control net-object.
         if let Some(m) = messages::flow_state(combat.flow_controller_id, FlowState::RoundEnd) {
-            out.push((slot, m));
+            death_frames.push((slot, m));
         }
-        out.push((slot, result_frame.clone()));
-        out.push((slot, post_round_update.clone()));
+        // Retail: the killer's 39 Idle < MatchState PostRound(14) < op48, 334/334.
+        result_frames.push((slot, post_round_update.clone()));
+        result_frames.push((slot, result_frame.clone()));
     }
+    if !ended_by_death {
+        out.extend(death_frames);
+        out.extend(result_frames);
+        return out;
+    }
+    // A DEATH: hand the burst to `flush_round_end`, which spreads it over the next
+    // ~216 ms the way retail does (tracker #305, `PendingRoundEnd`).
+    let survivors = (0..combat.fighters.len())
+        .filter(|&s| !combat.fighters[s].is_dead())
+        .collect();
+    let victor = (match_won && !combat.fighters[match_winner].is_dead()).then_some(match_winner);
+    combat.round_end_pending = Some(super::state::PendingRoundEnd {
+        death_at: now,
+        death_frames,
+        survivors,
+        victor,
+        result_frames,
+    });
+    out
+}
+
+/// From the killing op50 to op29 + op79 "RoundEnd": one server tick. Retail never
+/// sends them in the kill's own tick after a melee kill (214/214, min 16 ms).
+/// [`flush_round_end`] sends them on the first tick strictly after the death.
+///
+/// From the killing op50 to the survivors' 39 Idle and the op48 result: retail p50
+/// 216 ms (p10 130, p90 330; n = 212). Until then the killer is left in its
+/// FollowThrough, so the killing swing visibly connects.
+pub(super) const ROUND_RESULT_DELAY: Duration = Duration::from_millis(216);
+
+/// Test-only: append everything a round-ending death in `out` deferred, as the
+/// engine's ticks would deliver it by the time the result is due.
+#[cfg(test)]
+pub(super) fn with_round_end_flushed(
+    combat: &mut MatchCombat,
+    now: Instant,
+    mut out: Vec<(usize, Vec<u8>)>,
+) -> Vec<(usize, Vec<u8>)> {
+    out.extend(flush_round_end(
+        combat,
+        now + ROUND_RESULT_DELAY + Duration::from_millis(1),
+    ));
+    out
+}
+
+/// Put the parts of a round-ending death's burst that are due on the wire.
+///
+/// Called every engine tick, in every phase. Returns nothing outside the window.
+pub fn flush_round_end(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
+    flush_round_end_inner(combat, now, false)
+}
+
+/// As [`flush_round_end`], but releases the whole burst at once — for a match that
+/// is being ended by something else (a concession) inside the window.
+pub fn flush_round_end_now(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
+    flush_round_end_inner(combat, now, true)
+}
+
+fn flush_round_end_inner(
+    combat: &mut MatchCombat,
+    now: Instant,
+    force: bool,
+) -> Vec<(usize, Vec<u8>)> {
+    let mut out = Vec::new();
+    let Some(pending) = combat.round_end_pending.as_mut() else {
+        return out;
+    };
+    if !force && now <= pending.death_at {
+        return out;
+    }
+    out.append(&mut pending.death_frames);
+    if !force && now < pending.death_at + ROUND_RESULT_DELAY {
+        return out;
+    }
+    let Some(pending) = combat.round_end_pending.take() else {
+        return out;
+    };
+    // The killer leaves its swing for Idle — forced, because a survivor that was
+    // already logically Idle may still hold an op53 cast pose on the client (#113).
+    // The match-deciding killer then enters OpponentVictory in the same tick.
+    for &slot in &pending.survivors {
+        if let Some(f) = combat.fighters.get_mut(slot) {
+            f.clear_scheduled_states();
+            f.pending_manual_attack = None;
+            f.active_manual_attack = None;
+            f.force_actor_state(ActorStateType::Idle, now);
+        }
+    }
+    if let Some(f) = pending.victor.and_then(|v| combat.fighters.get_mut(v)) {
+        f.set_actor_state(ActorStateType::OpponentVictory, now);
+    }
+    out.extend(drain_state_changes(combat, now));
+    out.extend(pending.result_frames);
     out
 }
 
@@ -14753,6 +14859,7 @@ mod report_31_high_block_stun {
         c.fighters[1].set_actor_state(ActorStateType::Blocking, now + Duration::from_millis(200));
 
         let out = super::on_round_ending_death(&mut c, 0, now + Duration::from_millis(400));
+        let out = super::with_round_end_flushed(&mut c, now + Duration::from_millis(400), out);
 
         // Find the op29 among the emitted frames and decode it.
         let death = out
@@ -16279,6 +16386,7 @@ mod round_ends_once_tests {
         c.pending_impacts.push(impact(1, now));
 
         let out = land_due_impacts(&mut c, now + Duration::from_millis(1));
+        let out = super::with_round_end_flushed(&mut c, now + Duration::from_millis(1), out);
 
         assert_eq!(
             c.round_winners,
@@ -16324,6 +16432,7 @@ mod round_ends_once_tests {
         });
 
         let out = land_due_hits(&mut c, now + Duration::from_millis(30));
+        let out = super::with_round_end_flushed(&mut c, now + Duration::from_millis(30), out);
 
         assert_eq!(
             c.round_winners,
@@ -16351,6 +16460,7 @@ mod round_ends_once_tests {
         c.pending_impacts.push(impact(0, early));
 
         let out = land_due_impacts(&mut c, now + Duration::from_millis(30));
+        let out = super::with_round_end_flushed(&mut c, now + Duration::from_millis(30), out);
 
         assert_eq!(
             c.round_winners,
@@ -16379,6 +16489,7 @@ mod round_ends_once_tests {
         c.pending_impacts.push(impact(1, now));
 
         let out = land_due_impacts(&mut c, now + Duration::from_millis(1));
+        let out = super::with_round_end_flushed(&mut c, now + Duration::from_millis(1), out);
 
         assert_eq!(c.winner, Some(0), "slot 0 killed first and won the match");
         assert_eq!(
@@ -16428,6 +16539,7 @@ mod round_ends_once_tests {
         });
 
         let out = land_due_hits(&mut c, now + Duration::from_millis(1));
+        let out = super::with_round_end_flushed(&mut c, now + Duration::from_millis(1), out);
 
         assert!(
             c.fighters[0].is_dead() && c.fighters[1].is_dead(),
@@ -18226,7 +18338,8 @@ mod double_ko_cap_tests {
             c.round_outcome(),
             super::super::state::RoundOutcome::DoubleKo
         );
-        on_round_ending_death(c, 0, now)
+        let out = on_round_ending_death(c, 0, now);
+        super::with_round_end_flushed(c, now, out)
     }
 
     /// Viewer 0's op48, parsed.
@@ -18320,6 +18433,7 @@ mod double_ko_cap_tests {
             resistance_scale: 1.0,
         };
         let out = emit_damage(&mut c, 0, 1, &hit, now);
+        let out = super::with_round_end_flushed(&mut c, now, out);
 
         assert!(
             c.fighters[0].is_dead(),
@@ -18455,5 +18569,259 @@ mod report_231_artifact_regen_tick_tests {
             c.fighters[1].magicka > 10,
             "control: unblocked magicka regenerates"
         );
+    }
+}
+
+/// Tracker #305 / #292 — a killing swing must play out on the wire the way retail's
+/// does, or the client cuts it off and the victim "dies without being hit".
+///
+/// Retail, 214 deduplicated melee kills (see `state::PendingRoundEnd`): killer 52 →
+/// +49 ms killer 43 then the killing op50 (same tick) → next tick op29 + op79
+/// "RoundEnd" → ~216 ms killer 39 Idle (+ OpponentVictory on the deciding kill) →
+/// Match PostRound(14) → op48. Nothing for the killer between its 52 and the kill,
+/// and no 44 Recovery after it.
+#[cfg(test)]
+mod report_305_killing_swing {
+    use super::super::loadout::starter;
+    use super::super::state::{ActorStateType, Fighter, FlowState, MatchCombat, WeaponProfile};
+    use std::time::{Duration, Instant};
+
+    const TICK: Duration = Duration::from_millis(16);
+
+    /// One s2c frame as viewer 0 saw it.
+    #[derive(Debug, Clone, PartialEq)]
+    struct F {
+        ms: u128,
+        gmid: i64,
+        obj: i64,
+        /// propId 6: the actor state for the state family.
+        state: Option<i64>,
+        /// The Match object's `MatchState` (carrier 0x35, propId 5).
+        match_state: Option<i64>,
+        /// op79's trigger string.
+        trigger: Option<String>,
+        /// op50 prop 4 health fraction == 0.
+        lethal: bool,
+    }
+
+    fn decode(ms: u128, b: &[u8]) -> Option<F> {
+        if b.len() < 3 {
+            return None;
+        }
+        let p = arena_proto::parse_netdata(&b[2..]);
+        let byte = |id| match p.get(id) {
+            Some(arena_proto::NetDataValue::Byte(v)) => Some(*v as i64),
+            _ => None,
+        };
+        let lethal = matches!(p.get(4), Some(arena_proto::NetDataValue::ULong(w)) if (w >> 52) & 0x3FF == 0);
+        Some(F {
+            ms,
+            gmid: p.int(3)?,
+            obj: p.int(0).unwrap_or(-1),
+            state: byte(6),
+            match_state: (b[1] == 0x35).then(|| byte(5)).flatten(),
+            trigger: p.string(4).map(str::to_string),
+            lethal,
+        })
+    }
+
+    fn bot_match(now: Instant) -> MatchCombat {
+        let mut c = MatchCombat::new(2, 1, now);
+        for slot in 0..2 {
+            let obj = c.alloc_net_object_id();
+            let mut f = Fighter::new(slot, obj, starter(), now);
+            f.loadout.weapon = WeaponProfile {
+                primary_type: Some(super::super::state::DamageType::Slashing),
+                base_by_type: vec![(super::super::state::DamageType::Slashing, 113.82)],
+                weight: Some(super::super::tables::Weight::Light),
+            };
+            f.loadout.weapon_template = None;
+            f.loadout.abilities.clear();
+            c.fighters.push(f);
+        }
+        c.match_net_object_id = c.alloc_net_object_id();
+        c.phase = FlowState::StateTimeout;
+        c.phase_entered = now;
+        c
+    }
+
+    /// Drive the bot (slot 1) until it kills slot 0, ticking the way the engine does
+    /// (`MatchInstance::on_tick`: flush the deferred burst, resolve, drain), and keep
+    /// ticking 400 ms past the kill. Returns viewer 0's timeline.
+    fn bot_kill_timeline(setup: impl Fn(&mut MatchCombat, Instant)) -> (Vec<F>, MatchCombat) {
+        let now = Instant::now();
+        let mut c = bot_match(now);
+        setup(&mut c, now);
+        c.fighters[0].health = 1;
+        let mut t = now;
+        let mut frames = Vec::new();
+        let mut killed_at = None;
+        for _ in 0..600 {
+            t += TICK;
+            let mut out = super::flush_round_end(&mut c, t);
+            if c.phase == FlowState::StateTimeout {
+                out.extend(super::on_tick(&mut c, t, false));
+            }
+            out.extend(super::drain_state_changes(&mut c, t));
+            let ms = (t - now).as_millis();
+            frames.extend(out.iter().filter(|(v, _)| *v == 0).filter_map(|(_, b)| decode(ms, b)));
+            if killed_at.is_none() && c.phase != FlowState::StateTimeout {
+                killed_at = Some(t);
+            }
+            if killed_at.is_some_and(|k| t > k + Duration::from_millis(400)) {
+                break;
+            }
+        }
+        assert!(killed_at.is_some(), "fixture: the bot never killed");
+        (frames, c)
+    }
+
+    /// The retail shape of a killing swing, as a checker that can FAIL.
+    fn retail_kill_shape(f: &[F], killer: i64, victim: i64, deciding: bool) -> Result<(), String> {
+        let at = |pred: &dyn Fn(&F) -> bool| f.iter().position(|x| pred(x));
+        let kill = at(&|x| x.gmid == 50 && x.obj == victim && x.lethal).ok_or("no killing op50")?;
+        let kill_ms = f[kill].ms;
+        // 1. The killer's 52 → 43, and the 43 goes out AHEAD of the killing op50.
+        let ft = at(&|x| x.gmid == 43 && x.obj == killer).ok_or("killer sent no 43")?;
+        if ft > kill || f[ft].ms != kill_ms {
+            return Err(format!("killer 43 must precede the kill op50 in its tick (43 #{ft}, op50 #{kill})"));
+        }
+        let swing = f[..ft].iter().rposition(|x| x.gmid == 52 && x.obj == killer).ok_or("no 52")?;
+        if f[swing + 1..kill].iter().any(|x| x.obj == killer && (x.gmid == 39 || x.gmid == 44)) {
+            return Err("a killer reset between its 52 and the kill".into());
+        }
+        // 2. op29 + op79 RoundEnd: the NEXT tick, never the kill's own.
+        let dead = at(&|x| x.gmid == 29 && x.obj == victim).ok_or("no op29")?;
+        let round_end = at(&|x| x.gmid == 79 && x.trigger.as_deref() == Some("RoundEnd")).ok_or("no RoundEnd")?;
+        for (name, i) in [("op29", dead), ("RoundEnd", round_end)] {
+            let gap = f[i].ms - kill_ms;
+            if gap == 0 || gap > 2 * TICK.as_millis() {
+                return Err(format!("{name} {gap} ms after the kill; retail: the next tick"));
+            }
+        }
+        // 3. The result: killer Idle (+ OpponentVictory) < PostRound(14) < op48, at
+        //    ~216 ms, with nothing for the killer before it.
+        let idle = at(&|x| x.gmid == 39 && x.obj == killer && x.state == Some(ActorStateType::Idle as i64))
+            .ok_or("killer never returned to Idle")?;
+        let post = at(&|x| x.match_state == Some(14)).ok_or("no PostRound")?;
+        let op48 = at(&|x| x.gmid == 48).ok_or("no op48")?;
+        if f[kill + 1..idle].iter().any(|x| x.obj == killer && matches!(x.gmid, 39 | 44 | 52 | 45)) {
+            return Err("the killer's swing was interrupted before the result".into());
+        }
+        let idle_gap = f[idle].ms - kill_ms;
+        let want = super::ROUND_RESULT_DELAY.as_millis();
+        // Timed from the hit's due instant, which the tick grid may emit up to one
+        // tick late; retail's own spread is p10 130 / p90 330 ms.
+        if idle_gap + TICK.as_millis() < want || idle_gap > want + 2 * TICK.as_millis() {
+            return Err(format!("killer Idle {idle_gap} ms after the kill; retail p50 {want}"));
+        }
+        if !(idle < post && post < op48 && f[post].ms == f[idle].ms && f[op48].ms == f[idle].ms) {
+            return Err(format!("result order Idle #{idle} < PostRound #{post} < op48 #{op48}, one tick"));
+        }
+        let victory = at(&|x| x.gmid == 39 && x.obj == killer && x.state == Some(ActorStateType::OpponentVictory as i64));
+        match (deciding, victory) {
+            (true, Some(v)) if idle < v && v < post => {}
+            (true, other) => return Err(format!("deciding kill: OpponentVictory between Idle and PostRound, got {other:?}")),
+            (false, Some(_)) => return Err("OpponentVictory on a non-deciding kill".into()),
+            (false, None) => {}
+        }
+        // 4. No Emote in the window: retail sends it ~3.4 s later.
+        if f.iter().any(|x| x.gmid == 39 && x.state == Some(ActorStateType::Emote as i64)) {
+            return Err("Emote inside the post-kill window".into());
+        }
+        Ok(())
+    }
+
+    fn objs(c: &MatchCombat) -> (i64, i64) {
+        (c.fighters[1].net_object_id as i64, c.fighters[0].net_object_id as i64)
+    }
+
+    #[test]
+    fn a_bot_killing_swing_has_the_retail_shape_in_a_non_final_round() {
+        let (f, c) = bot_kill_timeline(|_, _| {});
+        let (killer, victim) = objs(&c);
+        assert_eq!(c.phase, FlowState::NextState, "fixture: round 1 of 3");
+        retail_kill_shape(&f, killer, victim, false).unwrap_or_else(|e| panic!("{e}\n{f:#?}"));
+    }
+
+    #[test]
+    fn a_match_deciding_bot_kill_adds_opponent_victory() {
+        let (f, c) = bot_kill_timeline(|c, _| {
+            c.rounds_won[1] = 1;
+            c.round_winners.push(Some(1));
+            c.round = 2;
+        });
+        let (killer, victim) = objs(&c);
+        assert_eq!(c.phase, FlowState::RoundEnd, "fixture: the deciding kill");
+        retail_kill_shape(&f, killer, victim, true).unwrap_or_else(|e| panic!("{e}\n{f:#?}"));
+    }
+
+    /// Goober's case: both prod kills landed while he was stunned by the bot's high
+    /// block. Retail's sequence on a staggered target is identical (n = 838).
+    #[test]
+    fn a_killing_swing_on_a_staggered_target_has_the_same_shape() {
+        let (f, c) = bot_kill_timeline(|c, now| {
+            assert!(c.fighters[0].apply_stagger_for(now, 2.5));
+            let _ = c.fighters[0].take_state_changes();
+        });
+        let (killer, victim) = objs(&c);
+        retail_kill_shape(&f, killer, victim, false).unwrap_or_else(|e| panic!("{e}\n{f:#?}"));
+    }
+
+    /// NEGATIVE CONTROL: the checker rejects the burst we used to send — everything in
+    /// the kill's tick, the 43 behind the op50, an Emote right after it. A round
+    /// TIMEOUT still ends that way (nothing to finish), so it reproduces the old shape
+    /// with a lethal op50 spliced in front.
+    #[test]
+    fn the_checker_rejects_the_old_same_tick_burst() {
+        let now = Instant::now();
+        let mut c = bot_match(now);
+        let (killer, victim) = objs(&c);
+        c.fighters[1].set_actor_state(ActorStateType::PlayerAutoAttack, now);
+        let mut frames: Vec<F> = super::drain_state_changes(&mut c, now)
+            .iter()
+            .filter(|(v, _)| *v == 0)
+            .filter_map(|(_, b)| decode(0, b))
+            .collect();
+        let t = now + super::FOLLOW_THROUGH_DELAY;
+        frames.push(F { ms: 50, gmid: 50, obj: victim, state: Some(1), match_state: None, trigger: None, lethal: true });
+        c.fighters[1].set_actor_state(ActorStateType::PlayerFollowThrough, t);
+        let mut out = super::on_round_timeout(&mut c, 1, t);
+        out.extend(super::drain_state_changes(&mut c, t));
+        frames.extend(out.iter().filter(|(v, _)| *v == 0).filter_map(|(_, b)| decode(50, b)));
+        assert!(
+            retail_kill_shape(&frames, killer, victim, false).is_err(),
+            "the old shape must fail the retail checker: {frames:#?}"
+        );
+    }
+
+    /// Control: a hit that does NOT kill keeps the normal swing — 43 ahead of the
+    /// op50, then 44 Recovery a frame later — and no round end.
+    #[test]
+    fn a_non_lethal_hit_keeps_43_first_and_recovers() {
+        let (f, c) = {
+            let now = Instant::now();
+            let mut c = bot_match(now);
+            let mut t = now;
+            let mut frames = Vec::new();
+            for _ in 0..80 {
+                t += TICK;
+                let mut out = super::on_tick(&mut c, t, false);
+                out.extend(super::drain_state_changes(&mut c, t));
+                let ms = (t - now).as_millis();
+                frames.extend(out.iter().filter(|(v, _)| *v == 0).filter_map(|(_, b)| decode(ms, b)));
+            }
+            (frames, c)
+        };
+        let (killer, victim) = objs(&c);
+        assert_eq!(c.phase, FlowState::StateTimeout);
+        let hit = f.iter().position(|x| x.gmid == 50 && x.obj == victim).expect("the bot must hit");
+        let ft = f.iter().position(|x| x.gmid == 43 && x.obj == killer).expect("43");
+        assert!(ft < hit && f[ft].ms == f[hit].ms, "43 precedes the op50 in its tick: {f:#?}");
+        assert!(
+            f[hit..].iter().any(|x| x.gmid == 44 && x.obj == killer),
+            "a non-lethal swing still recovers: {f:#?}"
+        );
+        assert!(!f.iter().any(|x| x.gmid == 29), "nobody died");
     }
 }

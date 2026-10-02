@@ -3720,6 +3720,48 @@ pub struct MatchCombat {
     /// Smoothed ENet RTT per fighter slot. Bot slots remain zero; human slots are
     /// updated by the match registry as packets arrive.
     pub slot_rtt: Vec<Duration>,
+    /// The round-end burst of a round-ending DEATH, decided but not yet on the wire —
+    /// see [`PendingRoundEnd`]. `None` outside that ~216 ms window.
+    pub round_end_pending: Option<PendingRoundEnd>,
+}
+
+/// A round-ending death whose frames retail spreads over the next ~216 ms.
+///
+/// Tracker #305 / #292. Measured over 214 deduplicated retail melee kills (44
+/// sessions, ENet `sentTime`):
+///
+/// ```text
+///   killer 52 AutoAttack        −49 ms
+///   killer 43 FollowThrough       0     (same tick, BEFORE the killing op50: 2988/2988)
+///   victim op50 (health 0)        0
+///   victim op29 Dead            +17 ms  (p10 16 / p90 21; never the kill's own tick)
+///   op79 "RoundEnd"             +17 ms  (same tick as op29)
+///   killer 39 Idle             +216 ms  (p10 130 / p90 330; 212 of 214)
+///   killer 39 OpponentVictory  +216 ms  (same tick as that Idle; match-deciding kill only)
+///   Match → PostRound(14)      +216 ms  (p10 118 / p90 334; after the Idle, 334/334)
+///   op48 MatchPostRoundInfo    +216 ms  (0–4 ms after PostRound)
+///   39 Emote                  ~+3.4 s  (with MatchState → ChooseLoadout(8), both
+///                                       actors; final round: winner only, after 17)
+/// ```
+///
+/// The killer is never sent 44 Recovery (1 of 214) nor any reset between its 52 and
+/// the kill (0 of 209): retail lets the killing swing play out for ~216 ms. We sent
+/// all of it in the kill's own tick, the killer's 43 AFTER the op50 and a forced
+/// Emote right behind it, so the client cut the killing swing off before it
+/// connected — "a final cancelled swing" and a death "without being hit".
+#[derive(Debug, Clone)]
+pub struct PendingRoundEnd {
+    /// When the killing blow landed.
+    pub death_at: Instant,
+    /// op29 + op79 "RoundEnd", built at the death (op29 snapshots the pools and the
+    /// state ring then) and sent one tick later. Emptied once sent.
+    pub death_frames: Vec<(usize, Vec<u8>)>,
+    /// The survivors, who return to Idle when the result goes out.
+    pub survivors: Vec<usize>,
+    /// The match-deciding kill's winner, who also enters `OpponentVictory`.
+    pub victor: Option<usize>,
+    /// Match → PostRound(14) then op48, sent after the survivors' Idle.
+    pub result_frames: Vec<(usize, Vec<u8>)>,
 }
 
 /// A committed swing whose damage has not been applied yet.
@@ -3810,6 +3852,7 @@ impl MatchCombat {
             pending_echoes: Vec::new(),
             pending_impacts: Vec::new(),
             slot_rtt: vec![Duration::ZERO; capacity],
+            round_end_pending: None,
         }
     }
 
