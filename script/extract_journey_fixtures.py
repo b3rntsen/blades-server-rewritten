@@ -428,6 +428,86 @@ def extract_spawn_levels(conn, archive):
 
 
 
+# ── 6b. what a town mutation consumed ────────────────────────────────────────
+
+CHARACTER_RE = re.compile(r"^/characters?/([0-9a-f-]{36})/")
+
+
+def extract_town_materials(conn, archive):
+    """Building materials consumed by every place / upgrade / restyle, all players.
+
+    A mutation response echoes only the stackables it changed, as counts AFTER
+    the call. The count BEFORE is the last count this character's traffic showed
+    for that item (any response, or the full inventory GET), so the consumption
+    is exact unless something unseen moved the item in between. `clean` is
+    False when an item had no earlier count or went UP (a grant landed in the
+    window). An item that drops to zero can be absent from the response; such
+    an item is simply not in `materials`, so a test compares the items retail
+    listed rather than assuming the list is complete.
+    """
+    if archive:
+        body = ("COALESCE(ar.capture_bodies.request_body, c.request_body), "
+                "COALESCE(ar.capture_bodies.response_body, c.response_body)")
+        join = "LEFT JOIN ar.capture_bodies ON c.id = ar.capture_bodies.capture_id"
+    else:
+        body, join = "c.request_body, c.response_body", ""
+    sql = (f"SELECT c.id, c.method, c.url, {body} FROM api_captures c {join} "
+           f"WHERE c.url LIKE ? AND c.response_status = 200 ORDER BY c.id")
+
+    counts = defaultdict(dict)   # character -> {(location, item): count}
+    known = defaultdict(dict)    # character -> running building picture
+    out = []
+    for cid, method, url, req, resp in conn.execute(sql, (RETAIL_PREFIX + "/%",)):
+        path = url[len(RETAIL_PREFIX):].split("?")[0]
+        m = CHARACTER_RE.match(path)
+        resp = _json(resp)
+        if not (m and isinstance(resp, dict)):
+            continue
+        ch = m.group(1)
+        after = {}
+        inv = resp.get("inventory")
+        for loc in ("backpack", "treasury"):
+            part = inv.get(loc) if isinstance(inv, dict) else None
+            for it in (part.get("stackableItems") if isinstance(part, dict) else None) or []:
+                if isinstance(it, dict) and it.get("itemTemplateId"):
+                    after[(loc, it["itemTemplateId"])] = it.get("count", 0)
+        seen = buildings(resp.get("town"))
+
+        op, building_id = classify_town_op(path) if method == "POST" else (None, None)
+        if op in ("place", "upgrade", "style"):
+            req = _json(req) or {}
+            before = known[ch].get(building_id) if building_id else None
+            if op == "place":
+                type_id, style_id, level = req.get("buildingType"), req.get("styleId"), 0
+            else:
+                b = seen.get(building_id) or before
+                type_id = (b or {}).get("typeId")
+                level = (b or {}).get("level")
+                style_id = (UUID_RE.findall(path)[-1] if op == "style"
+                            else (b or {}).get("styleId"))
+            consumed, clean = {}, True
+            for (loc, item), n in after.items():
+                had = counts[ch].get((loc, item))
+                if had is None or n > had:
+                    clean = False
+                    continue
+                consumed[item] = consumed.get(item, 0) + had - n
+            out.append({
+                "captureId": cid, "op": op, "typeId": type_id, "styleId": style_id,
+                "level": level,
+                "previousLevel": (before or {}).get("level"),
+                "previousStyleId": (before or {}).get("styleId"),
+                "materials": consumed, "clean": clean and type_id is not None,
+            })
+
+        if method == "GET" and "/inventories/current" in path:
+            counts[ch] = dict(after)   # a full listing: anything absent is gone
+        else:
+            counts[ch].update(after)
+        known[ch].update(seen)
+    return out
+
+
 # ── 7. the endpoint inventory ────────────────────────────────────────────────
 
 def extract_endpoint_coverage(conn, archive):
@@ -493,6 +573,7 @@ def main():
         ("quest_completions.json", extract_quest_completions(rows)),
         ("objective_rewards.json", extract_objective_rewards(rows)),
         ("spawn_levels.json", extract_spawn_levels(conn, args.archive)),
+        ("town_materials.json", extract_town_materials(conn, args.archive)),
         ("endpoint_coverage.json", extract_endpoint_coverage(conn, args.archive)),
     ]:
         if isinstance(data, dict) and "playerEnemyPairs" in data:
@@ -508,6 +589,9 @@ def main():
             print(f"  {name}: {len(data['playerEnemyPairs'])} pairs", file=sys.stderr)
             continue
         payload = {"_meta": dict(meta, count=len(data)), "observations": data}
+        if name == "town_materials.json":
+            payload["_meta"]["user"] = "(every captured player — see extract_town_materials)"
+            payload["_meta"].pop("captures")  # that count is --user's, not this scan's
         with open(os.path.join(args.out, name), "w") as fh:
             json.dump(payload, fh, indent=1, sort_keys=False)
             fh.write("\n")
