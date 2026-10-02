@@ -306,20 +306,10 @@ async fn build(
 ) -> Result<LeaderboardResult, anyhow::Error> {
     let mut conn = app_state.db_pool.get().await?;
 
-    let total: i64 = sql_query(format!("{RANKED_CTE} SELECT COUNT(*) AS total FROM ranked"))
-        .get_result::<CountRow>(&mut conn)
-        .await?
-        .total;
+    let total = count_entries(&mut conn).await?;
     let total_pages = page_count(total);
 
-    let rows: Vec<RankedRow> = sql_query(format!(
-        "{RANKED_CTE} SELECT id, user_id, name, guild_name, score, streak, rank, wins \
-         FROM ranked ORDER BY rank LIMIT $1 OFFSET $2"
-    ))
-    .bind::<BigInt, _>(PAGE_SIZE)
-    .bind::<BigInt, _>((page - 1) * PAGE_SIZE)
-    .get_results(&mut conn)
-    .await?;
+    let entries = ranked_entries(&mut conn, PAGE_SIZE, (page - 1) * PAGE_SIZE).await?;
 
     // The player's own row may be on any page (retail's capture showed rank 92
     // returned alongside page 1), so it is fetched separately.
@@ -356,9 +346,39 @@ async fn build(
             total_entries: total,
             current_page: page,
             total_pages,
-            entries: rows.into_iter().map(row_to_entry).collect(),
+            entries,
         },
     })
+}
+
+/// How many characters are on the board. Same projection as [`ranked_entries`].
+pub(crate) async fn count_entries(
+    conn: &mut diesel_async::AsyncPgConnection,
+) -> Result<i64, diesel::result::Error> {
+    Ok(sql_query(format!("{RANKED_CTE} SELECT COUNT(*) AS total FROM ranked"))
+        .get_result::<CountRow>(conn)
+        .await?
+        .total)
+}
+
+/// One slice of the board, in board order — THE ranking the client's arena
+/// Leaderboard tab shows. The game handler pages through it; the website's
+/// "all matches" top 100 (`arena::top100_boards::get_arena_game_top`) reads its first slice, so
+/// both answer from one query and cannot disagree about who is where.
+pub(crate) async fn ranked_entries(
+    conn: &mut diesel_async::AsyncPgConnection,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<LeaderboardEntry>, diesel::result::Error> {
+    let rows: Vec<RankedRow> = sql_query(format!(
+        "{RANKED_CTE} SELECT id, user_id, name, guild_name, score, streak, rank, wins \
+         FROM ranked ORDER BY rank LIMIT $1 OFFSET $2"
+    ))
+    .bind::<BigInt, _>(limit)
+    .bind::<BigInt, _>(offset)
+    .get_results(conn)
+    .await?;
+    Ok(rows.into_iter().map(row_to_entry).collect())
 }
 
 #[cfg(test)]

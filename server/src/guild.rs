@@ -1020,6 +1020,61 @@ struct PageQuery {
     page: Option<i64>,
 }
 
+/// Every guild in leaderboard order — THE order `GET /guilds/leaderboard` pages
+/// through, and the one the website's "all matches" guild top 100
+/// (`arena::top100_boards::get_arena_game_guilds`) reads, so the two cannot disagree.
+async fn ranked_guild_rows(conn: &mut AsyncPgConnection) -> Result<Vec<GuildRow>, BladeApiError> {
+    use crate::schema::guilds::dsl::*;
+    Ok(guilds
+        // `id` breaks ties so that equal-trophy guilds keep a stable order
+        // across pages; without it a guild can appear twice or vanish.
+        .order((trophies.desc(), id.asc()))
+        .select(GuildRow::as_select())
+        .load(conn)
+        .await?)
+}
+
+/// One row of the in-game guild leaderboard, projected for the website: the
+/// client's own `rank` and `pvpTrophies`, without descriptions the board never shows.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct GuildBoardEntry {
+    pub rank: i64,
+    pub guild_id: String,
+    pub name: String,
+    pub tag_id: String,
+    pub badge_icon_index: i32,
+    pub member_count: i64,
+    pub trophies: i64,
+}
+
+fn guild_board_from(rows: &[GuildRow], members: &HashMap<String, i64>, limit: usize) -> Vec<GuildBoardEntry> {
+    rows.iter()
+        .take(limit)
+        .enumerate()
+        .map(|(i, g)| GuildBoardEntry {
+            // Same numbering as `guild_leaderboard`'s `entry_for`: position + 1.
+            rank: i as i64 + 1,
+            guild_id: g.id.clone(),
+            name: g.name.clone(),
+            tag_id: g.tag_id.clone(),
+            badge_icon_index: g.badge_icon_index,
+            member_count: members.get(&g.id).copied().unwrap_or(0),
+            trophies: g.trophies,
+        })
+        .collect()
+}
+
+/// The first `limit` guilds of the in-game guild leaderboard, plus how many guilds
+/// it ranks in total.
+pub(crate) async fn guild_board(
+    conn: &mut AsyncPgConnection,
+    limit: usize,
+) -> Result<(i64, Vec<GuildBoardEntry>), BladeApiError> {
+    let rows = ranked_guild_rows(conn).await?;
+    let members = member_counts_by_guild(conn).await?;
+    Ok((rows.len() as i64, guild_board_from(&rows, &members, limit)))
+}
+
 /// `GET /guilds/leaderboard?page=N` ->
 /// `{"guildLeaderboard": {"currentPage", "totalPages", "entries"}, "playerGuildLeaderboardEntry"}`.
 ///
@@ -1042,16 +1097,7 @@ pub async fn guild_leaderboard(
     let mut conn = app_state.db_pool.get().await.unwrap();
     check_permission_for_character_and_get_it(&mut conn, &session.session, character_id).await?;
 
-    let rows: Vec<GuildRow> = {
-        use crate::schema::guilds::dsl::*;
-        guilds
-            // `id` breaks ties so that equal-trophy guilds keep a stable order
-            // across pages; without it a guild can appear twice or vanish.
-            .order((trophies.desc(), id.asc()))
-            .select(GuildRow::as_select())
-            .load(&mut conn)
-            .await?
-    };
+    let rows = ranked_guild_rows(&mut conn).await?;
     let members = member_counts_by_guild(&mut conn).await?;
     let my_guild_id = find_membership(&mut conn, session.session.user_id)
         .await?
@@ -3423,5 +3469,55 @@ mod self_donation_is_refused {
             !body.contains("a needle that is deliberately absent"),
             "the scan matches anything"
         );
+    }
+}
+
+/// The website's "all matches" guild board is the in-game guild leaderboard.
+#[cfg(test)]
+mod website_guild_board {
+    use super::*;
+
+    fn row(id: &str, trophies: i64) -> GuildRow {
+        GuildRow {
+            id: id.into(),
+            name: format!("Guild {id}"),
+            tag_id: "1".into(),
+            guild_type: "OPEN".into(),
+            short_description: "kept off the website".into(),
+            long_description: String::new(),
+            badge_icon_index: 3,
+            region_index: 0,
+            trophies,
+            created_at: 0,
+            exchange_donation_count: 0,
+            grandmaster_since: 0,
+        }
+    }
+
+    /// Ranks are the handler's own numbering (position + 1 in the loaded order),
+    /// trophies are `pvpTrophies`, and members come from the same count.
+    #[test]
+    fn board_rows_carry_the_in_game_rank_trophies_and_members() {
+        // Already in `ranked_guild_rows` order (trophies desc, id asc).
+        let rows = vec![row("b", 900), row("a", 400), row("c", 400)];
+        let members: HashMap<String, i64> = [("b".to_string(), 12), ("c".to_string(), 3)].into();
+        let board = guild_board_from(&rows, &members, 100);
+        let wire: Vec<i64> = rows
+            .iter()
+            .enumerate()
+            .map(|(i, g)| LeaderboardEntry { rank: i as i64 + 1, guild: GuildWire::from_row(g, 0) }.rank)
+            .collect();
+        assert_eq!(board.iter().map(|e| e.rank).collect::<Vec<_>>(), wire);
+        assert_eq!(board[0], GuildBoardEntry {
+            rank: 1,
+            guild_id: "b".into(),
+            name: "Guild b".into(),
+            tag_id: "1".into(),
+            badge_icon_index: 3,
+            member_count: 12,
+            trophies: 900,
+        });
+        assert_eq!(board[1].member_count, 0, "a guild missing from the count has 0 members");
+        assert_eq!(guild_board_from(&rows, &members, 2).len(), 2);
     }
 }

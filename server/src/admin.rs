@@ -72,7 +72,7 @@ use crate::{
 // service id used in the BladeApiError envelope for this dev endpoint. Not a
 // real Blades service id (those are client-facing); picked to be obviously
 // out-of-band so import failures are easy to spot in logs.
-const IMPORT_SERVICE_ID: u64 = 9001;
+pub(crate) const IMPORT_SERVICE_ID: u64 = 9001;
 
 /// `bind-device` error codes inside `IMPORT_SERVICE_ID`. Named because the
 /// endpoint now distinguishes four failures where it used to distinguish two,

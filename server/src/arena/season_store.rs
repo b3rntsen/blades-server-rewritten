@@ -358,6 +358,22 @@ const GUILD_MEMBER_WEIGHT: [f64; 20] = [
     0.10, 0.10, 0.10, 0.10, // 17-20
 ];
 
+/// A guild's score from its members' individual scores: sorted best first, each
+/// weighted by its standing INSIDE the guild ([`GUILD_MEMBER_WEIGHT`]); members past
+/// the 20th add nothing. The one implementation of the guild rule — the season
+/// ladder uses it on trophies, and the website's human-vs-human guild board
+/// (`arena::top100_boards::get_arena_h2h_guilds`) uses it on h2h ratings, so the two cannot drift.
+pub fn guild_weighted_score(mut member_scores: Vec<i64>) -> i64 {
+    // Highest first: the weight is for the member's standing in the guild.
+    member_scores.sort_unstable_by(|a, b| b.cmp(a));
+    let score: f64 = member_scores
+        .iter()
+        .zip(GUILD_MEMBER_WEIGHT.iter())
+        .map(|(t, w)| *t as f64 * w)
+        .sum();
+    score.round() as i64
+}
+
 pub fn guild_standings_from(season_id: Uuid, standings: &[StandingRow]) -> Vec<GuildStandingRow> {
     // Collect each guild's member trophies, then weight them by rank WITHIN the guild.
     let mut members: HashMap<&str, Vec<i64>> = HashMap::new();
@@ -368,20 +384,13 @@ pub fn guild_standings_from(season_id: Uuid, standings: &[StandingRow]) -> Vec<G
     }
     let mut rows: Vec<GuildStandingRow> = members
         .into_iter()
-        .map(|(g, mut trophies)| {
+        .map(|(g, trophies)| {
             let count = trophies.len() as i32;
-            // Highest first: the weight is for the member's standing in the guild.
-            trophies.sort_unstable_by(|a, b| b.cmp(a));
-            let score: f64 = trophies
-                .iter()
-                .zip(GUILD_MEMBER_WEIGHT.iter())
-                .map(|(t, w)| *t as f64 * w)
-                .sum();
             GuildStandingRow {
                 season_id,
                 guild_id: g.to_string(),
                 rank: 0,
-                trophies: score.round() as i64,
+                trophies: guild_weighted_score(trophies),
                 members: count,
             }
         })
