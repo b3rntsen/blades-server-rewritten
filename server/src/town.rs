@@ -4683,3 +4683,188 @@ mod fresh_level1_town {
         check_town_level(&forge, &town).expect("the Forge is unlocked");
     }
 }
+
+/// Report #307: a fresh level-1 character could not place the Town Hall —
+/// every attempt was 400 / code 5, insufficient materials.
+///
+/// The charging RULE was right and the TABLE was wrong. Retail charges a
+/// placement the level's `buildInputs` plus the chosen style's `styleInputs`
+/// (47 of 47 clean non-Town-Hall placements in `town_materials.json`), and the
+/// APK agrees for every building type. But `building_upgrades.json` held the
+/// Town Hall's level-0 `buildInputs` as 104 / 50 / 48 — the Timber TOTAL
+/// retail charged in capture 6200 — where the APK's
+/// `BuildingConstructionDataList` has 87 / 42 / 40 for every style. Adding the
+/// Timber row (17 / 8 / 8) on top asked for 121 / 58 / 56; the tester held 52
+/// of the 58 limestone.
+///
+/// These read the shipped table and the retail fixture, so they fail on the
+/// old table rather than merely agreeing with the new one.
+#[cfg(test)]
+mod placement_materials {
+    use super::*;
+    use std::collections::HashMap;
+
+    const TOWN_HALL: &str = "a6a2de53-d65c-445a-8b55-d2a73c15b635";
+    const TIMBER: &str = "aa133662-053d-434e-8779-3f2a41d1271e";
+    const LUMBER: &str = "e7193116-d761-479b-8a20-5633737977f5";
+    const LIMESTONE: &str = "fd67bbc6-20f4-44a3-9614-28265ebb8c67";
+    const COPPER: &str = "42d91529-c88b-4c5b-815b-b55508b4e7ef";
+
+    fn u(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+
+    fn shipped_upgrades() -> Value {
+        serde_json::from_str(include_str!("../../deploy/static/building_upgrades.json")).unwrap()
+    }
+
+    fn default_town() -> Value {
+        serde_json::from_str(include_str!("../../deploy/static/default_town.json")).unwrap()
+    }
+
+    /// Retail's consumption per place / upgrade / restyle, every captured
+    /// player. See `extract_town_materials` in `script/extract_journey_fixtures.py`.
+    fn retail(op: &str) -> Vec<Value> {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/retail-journey/town_materials.json");
+        let raw = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
+        let json: Value = serde_json::from_str(&raw).expect("valid town_materials.json");
+        json["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|o| o["op"] == op && o["clean"] == true)
+            .cloned()
+            .collect()
+    }
+
+    fn materials(cost: &LevelCost) -> HashMap<Uuid, u64> {
+        cost.materials
+            .iter()
+            .copied()
+            .filter(|(_, q)| *q > 0)
+            .collect()
+    }
+
+    /// Every item retail's response listed was consumed in exactly the amount we
+    /// charge. An item that dropped to zero can be missing from the response, so
+    /// this checks retail's items, not the length of our list.
+    fn disagreements(ours: &HashMap<Uuid, u64>, o: &Value) -> Option<String> {
+        let theirs = o["materials"].as_object().unwrap();
+        let off: Vec<String> = theirs
+            .iter()
+            .filter(|(k, v)| ours.get(&u(k)).copied().unwrap_or(0) != v.as_u64().unwrap())
+            .map(|(k, v)| format!("{}: retail {v}, ours {:?}", &k[..8], ours.get(&u(k))))
+            .collect();
+        (!off.is_empty()).then(|| format!("capture {}: {}", o["captureId"], off.join(", ")))
+    }
+
+    #[test]
+    fn the_town_hall_costs_what_retail_charged_for_it() {
+        // Captures 6200 and 62991, two players: 104 / 50 / 48 and 200 gold.
+        let cost = placement_cost(
+            &shipped_upgrades(),
+            &default_town(),
+            u(TOWN_HALL),
+            u(TIMBER),
+        )
+        .unwrap();
+        assert_eq!(
+            materials(&cost),
+            HashMap::from([(u(LUMBER), 104), (u(LIMESTONE), 50), (u(COPPER), 48)]),
+        );
+        assert_eq!(
+            cost.gold, 200,
+            "construction gold 0 + the Timber style's 200"
+        );
+    }
+
+    #[test]
+    fn a_player_holding_exactly_retails_price_can_place_the_town_hall() {
+        let cost = placement_cost(
+            &shipped_upgrades(),
+            &default_town(),
+            u(TOWN_HALL),
+            u(TIMBER),
+        )
+        .unwrap();
+        let mut wallet = CompleteWallet::default();
+        wallet.credit(GOLD, 200);
+        let mut inv = blades_lib::user_data::CompleteInventory {
+            backpack: Default::default(),
+            loadout: Default::default(),
+            treasury: Default::default(),
+            overflow_treasury: Default::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        inv.backpack.stackable_items.add(u(LUMBER), 104);
+        inv.backpack.stackable_items.add(u(LIMESTONE), 50);
+        inv.backpack.stackable_items.add(u(COPPER), 48);
+        let mut tracker = InventoryChangeTracker::default();
+
+        charge_cost(&cost, false, &mut wallet, &mut inv, &mut tracker)
+            .expect("104 / 50 / 48 and 200 gold is exactly retail's price");
+        assert_eq!(wallet.balance(GOLD), 0);
+        for m in [LUMBER, LIMESTONE, COPPER] {
+            assert_eq!(inv.backpack.stackable_items.count(u(m)), 0, "{m}");
+        }
+    }
+
+    #[test]
+    fn every_clean_retail_placement_paid_the_level_plus_the_chosen_style() {
+        let bu = shipped_upgrades();
+        let obs = retail("place");
+        assert!(
+            obs.len() >= 49,
+            "only {} clean placements in the fixture",
+            obs.len()
+        );
+        let wrong: Vec<String> = obs
+            .iter()
+            .filter_map(|o| {
+                let ty = u(o["typeId"].as_str().unwrap());
+                let style = u(o["styleId"].as_str().unwrap());
+                let cost = placement_cost(&bu, &json!({}), ty, style).unwrap();
+                disagreements(&materials(&cost), o)
+            })
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "{} of {} placements disagree:\n{}",
+            wrong.len(),
+            obs.len(),
+            wrong.join("\n")
+        );
+    }
+
+    /// The control for #160's rule: an upgrade pays the level and never the
+    /// style it already wears.
+    #[test]
+    fn every_clean_retail_upgrade_paid_the_level_only() {
+        let bu = shipped_upgrades();
+        let obs = retail("upgrade");
+        assert!(
+            obs.len() >= 70,
+            "only {} clean upgrades in the fixture",
+            obs.len()
+        );
+        let wrong: Vec<String> = obs
+            .iter()
+            .filter_map(|o| {
+                let ty = u(o["typeId"].as_str().unwrap());
+                let style = o["styleId"].as_str().map(u);
+                let level = o["level"].as_u64().unwrap();
+                let cost = upgrade_cost(&bu, ty, level, style).unwrap();
+                disagreements(&materials(&cost), o)
+            })
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "{} of {} upgrades disagree:\n{}",
+            wrong.len(),
+            obs.len(),
+            wrong.join("\n")
+        );
+    }
+}

@@ -1,0 +1,3774 @@
+{
+ "_meta": {
+  "description": "Retail observations behind the progression tests. Measured, not modelled: every number is read from a captured Bethesda response. Regenerate with script/extract_journey_fixtures.py.",
+  "source": "blades-snapshot-20260607-112415.db",
+  "user": "(every captured player \u2014 see extract_town_materials)",
+  "count": 249
+ },
+ "observations": [
+  {
+   "captureId": 6200,
+   "op": "place",
+   "typeId": "a6a2de53-d65c-445a-8b55-d2a73c15b635",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 104,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 50,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 48
+   },
+   "clean": true
+  },
+  {
+   "captureId": 6405,
+   "op": "place",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 50,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 43,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 32
+   },
+   "clean": true
+  },
+  {
+   "captureId": 6471,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 6479,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9602,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9604,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9605,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9606,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9608,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9609,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9611,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9612,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9614,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9616,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9617,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9619,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9620,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9621,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9623,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9624,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9625,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 9627,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10261,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "e3470241-04e6-4962-bc69-6a57f731b876",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 49,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10262,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10263,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 49,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10265,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10266,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 49,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10267,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10269,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 49,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10270,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10271,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 49,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10273,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10274,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 49,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10275,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10277,
+   "op": "place",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 89,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 76,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 56
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10278,
+   "op": "place",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 89,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 76,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 56
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10280,
+   "op": "place",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 50,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 43,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 32
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10281,
+   "op": "place",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 70,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 60,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10282,
+   "op": "place",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 70,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 60,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 10604,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 1,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 43,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 36,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 27
+   },
+   "clean": true
+  },
+  {
+   "captureId": 11420,
+   "op": "place",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 75,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 64,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 48
+   },
+   "clean": true
+  },
+  {
+   "captureId": 11426,
+   "op": "place",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 75,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 64,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 48
+   },
+   "clean": true
+  },
+  {
+   "captureId": 11717,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 2,
+   "previousLevel": 1,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 67,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 56,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 42
+   },
+   "clean": true
+  },
+  {
+   "captureId": 12364,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 3,
+   "previousLevel": 2,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 90,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 76,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 57
+   },
+   "clean": true
+  },
+  {
+   "captureId": 13633,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 1,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 64,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 53,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 40
+   },
+   "clean": true
+  },
+  {
+   "captureId": 13636,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 13637,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 13699,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 4,
+   "previousLevel": 3,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 105,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 88,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 66
+   },
+   "clean": true
+  },
+  {
+   "captureId": 15314,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 2,
+   "previousLevel": 1,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 99,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 82,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 62
+   },
+   "clean": true
+  },
+  {
+   "captureId": 15315,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 1,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 76,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 63,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 47
+   },
+   "clean": true
+  },
+  {
+   "captureId": 15317,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 1,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 76,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 63,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 47
+   },
+   "clean": true
+  },
+  {
+   "captureId": 15319,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 5,
+   "previousLevel": 4,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 151,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 126,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 95
+   },
+   "clean": true
+  },
+  {
+   "captureId": 15324,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 1,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 60,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 50,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 38
+   },
+   "clean": true
+  },
+  {
+   "captureId": 15326,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 1,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 60,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 50,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 38
+   },
+   "clean": true
+  },
+  {
+   "captureId": 15329,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 2,
+   "previousLevel": 1,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 93,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 78,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 59
+   },
+   "clean": true
+  },
+  {
+   "captureId": 15334,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 1,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 64,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 53,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 40
+   },
+   "clean": true
+  },
+  {
+   "captureId": 17875,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 6,
+   "previousLevel": 5,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 215,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 180,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 135
+   },
+   "clean": true
+  },
+  {
+   "captureId": 17881,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 3,
+   "previousLevel": 2,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 134,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 111,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 84
+   },
+   "clean": true
+  },
+  {
+   "captureId": 17883,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 2,
+   "previousLevel": 1,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 118,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 98,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 73
+   },
+   "clean": true
+  },
+  {
+   "captureId": 17886,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 2,
+   "previousLevel": 1,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 118,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 98,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 73
+   },
+   "clean": true
+  },
+  {
+   "captureId": 17888,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 2,
+   "previousLevel": 1,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 93,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 78,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 59
+   },
+   "clean": true
+  },
+  {
+   "captureId": 17891,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 3,
+   "previousLevel": 2,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 126,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 105,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 80
+   },
+   "clean": true
+  },
+  {
+   "captureId": 18665,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 2,
+   "previousLevel": 1,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 99,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 82,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 62
+   },
+   "clean": true
+  },
+  {
+   "captureId": 20441,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 7,
+   "previousLevel": 6,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 366,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 306,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 230
+   },
+   "clean": true
+  },
+  {
+   "captureId": 20446,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 3,
+   "previousLevel": 2,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 160,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 132,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 99
+   },
+   "clean": true
+  },
+  {
+   "captureId": 20449,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 3,
+   "previousLevel": 2,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 160,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 132,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 99
+   },
+   "clean": true
+  },
+  {
+   "captureId": 20453,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 4,
+   "previousLevel": 3,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 157,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 130,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 98
+   },
+   "clean": true
+  },
+  {
+   "captureId": 20458,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 3,
+   "previousLevel": 2,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 134,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 111,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 84
+   },
+   "clean": true
+  },
+  {
+   "captureId": 20466,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 3,
+   "previousLevel": 2,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 126,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 105,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 80
+   },
+   "clean": true
+  },
+  {
+   "captureId": 20468,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 4,
+   "previousLevel": 3,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 147,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 123,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 93
+   },
+   "clean": true
+  },
+  {
+   "captureId": 23451,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 4,
+   "previousLevel": 3,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 186,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 154,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 115
+   },
+   "clean": true
+  },
+  {
+   "captureId": 23456,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 4,
+   "previousLevel": 3,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 186,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 154,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 115
+   },
+   "clean": true
+  },
+  {
+   "captureId": 23464,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 5,
+   "previousLevel": 4,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 210,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 175,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 133
+   },
+   "clean": true
+  },
+  {
+   "captureId": 23468,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 4,
+   "previousLevel": 3,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 147,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 123,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 93
+   },
+   "clean": true
+  },
+  {
+   "captureId": 23473,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 4,
+   "previousLevel": 3,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 157,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 130,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 98
+   },
+   "clean": true
+  },
+  {
+   "captureId": 23478,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 5,
+   "previousLevel": 4,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 224,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 186,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 140
+   },
+   "clean": true
+  },
+  {
+   "captureId": 25076,
+   "op": "place",
+   "typeId": "597f678f-b49e-4559-96a8-266aafeca6ad",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 24,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 5,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 3,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 20,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 25
+   },
+   "clean": true
+  },
+  {
+   "captureId": 25078,
+   "op": "place",
+   "typeId": "c2edca96-f1d6-4867-b212-e7ff81517436",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 24,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 5,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 3,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 20,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 25
+   },
+   "clean": true
+  },
+  {
+   "captureId": 25081,
+   "op": "upgrade",
+   "typeId": "c2edca96-f1d6-4867-b212-e7ff81517436",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 1,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 197,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 164,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 123
+   },
+   "clean": true
+  },
+  {
+   "captureId": 25083,
+   "op": "upgrade",
+   "typeId": "c2edca96-f1d6-4867-b212-e7ff81517436",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 2,
+   "previousLevel": 1,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 672,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 560,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 420
+   },
+   "clean": true
+  },
+  {
+   "captureId": 25338,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 5,
+   "previousLevel": 4,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 266,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 221,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 165
+   },
+   "clean": true
+  },
+  {
+   "captureId": 25343,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 5,
+   "previousLevel": 4,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 266,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 221,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 165
+   },
+   "clean": true
+  },
+  {
+   "captureId": 25347,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 5,
+   "previousLevel": 4,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 210,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 175,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 133
+   },
+   "clean": true
+  },
+  {
+   "captureId": 25351,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 6,
+   "previousLevel": 5,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 300,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 250,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 190
+   },
+   "clean": true
+  },
+  {
+   "captureId": 25356,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 5,
+   "previousLevel": 4,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 224,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 186,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 140
+   },
+   "clean": true
+  },
+  {
+   "captureId": 25360,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 6,
+   "previousLevel": 5,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 320,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 265,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 200
+   },
+   "clean": true
+  },
+  {
+   "captureId": 26678,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 6,
+   "previousLevel": 5,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 300,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 250,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 190
+   },
+   "clean": true
+  },
+  {
+   "captureId": 26681,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 7,
+   "previousLevel": 6,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 510,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 425,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 323
+   },
+   "clean": true
+  },
+  {
+   "captureId": 26685,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 6,
+   "previousLevel": 5,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 320,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 265,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 200
+   },
+   "clean": true
+  },
+  {
+   "captureId": 26690,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 7,
+   "previousLevel": 6,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 544,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 451,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 340
+   },
+   "clean": true
+  },
+  {
+   "captureId": 26693,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 6,
+   "previousLevel": 5,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 380,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 315,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 235
+   },
+   "clean": true
+  },
+  {
+   "captureId": 26698,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 6,
+   "previousLevel": 5,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 380,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 315,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 235
+   },
+   "clean": true
+  },
+  {
+   "captureId": 27472,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 7,
+   "previousLevel": 6,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 646,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 536,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 400
+   },
+   "clean": true
+  },
+  {
+   "captureId": 27476,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 7,
+   "previousLevel": 6,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 646,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 536,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 400
+   },
+   "clean": true
+  },
+  {
+   "captureId": 27480,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 8,
+   "previousLevel": 7,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 768,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 636,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 480
+   },
+   "clean": true
+  },
+  {
+   "captureId": 27485,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 7,
+   "previousLevel": 6,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 544,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 451,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 340
+   },
+   "clean": true
+  },
+  {
+   "captureId": 27490,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 7,
+   "previousLevel": 6,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 510,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 425,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 323
+   },
+   "clean": true
+  },
+  {
+   "captureId": 27494,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 8,
+   "previousLevel": 7,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 720,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 600,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 456
+   },
+   "clean": true
+  },
+  {
+   "captureId": 28690,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 8,
+   "previousLevel": 7,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 768,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 636,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 480
+   },
+   "clean": true
+  },
+  {
+   "captureId": 29204,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 8,
+   "previousLevel": 7,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 912,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 756,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 564
+   },
+   "clean": true
+  },
+  {
+   "captureId": 29209,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 8,
+   "previousLevel": 7,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 912,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 756,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 564
+   },
+   "clean": true
+  },
+  {
+   "captureId": 29217,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 8,
+   "previousLevel": 7,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 720,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 600,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 456
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30234,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30235,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 49,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30236,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30238,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 49,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30239,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30240,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 49,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30242,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30243,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 49,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30245,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30246,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 49,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30247,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30249,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 49,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30253,
+   "op": "place",
+   "typeId": "bfd7213e-b988-4237-8847-5e65e898f011",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30254,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30255,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 49,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 42
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30257,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30258,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30260,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30261,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30262,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30264,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30265,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30267,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30268,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30269,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30271,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30272,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30273,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30275,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30276,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30278,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30279,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30280,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30282,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30283,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30285,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30286,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30287,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30289,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30290,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30292,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30293,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30294,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30296,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30297,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30299,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30300,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30301,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30303,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30304,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30306,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30307,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30308,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30310,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30311,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30313,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30314,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30315,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30317,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30318,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30320,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30321,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30322,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30324,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30325,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30327,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30328,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30329,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30331,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30332,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30334,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30335,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30336,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30338,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30339,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30341,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30342,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30343,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30345,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30346,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30348,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30349,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30350,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30352,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30353,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30354,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30356,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30357,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30359,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30360,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30362,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30363,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30364,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30366,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30367,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30368,
+   "op": "style",
+   "typeId": "52291bce-3585-49e5-85e4-afbdfa5ba422",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30370,
+   "op": "style",
+   "typeId": "ce2b1c43-3391-499a-80cf-fc4fa6b92718",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "e3470241-04e6-4962-bc69-6a57f731b876",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 164,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 35,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 20,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 137
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30371,
+   "op": "style",
+   "typeId": "488f91a9-7a3b-421e-82a9-e2571915beff",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "e3470241-04e6-4962-bc69-6a57f731b876",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30373,
+   "op": "style",
+   "typeId": "8c6f4962-6522-42fb-bfcb-f653da832d04",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "e3470241-04e6-4962-bc69-6a57f731b876",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30375,
+   "op": "style",
+   "typeId": "8c6f4962-6522-42fb-bfcb-f653da832d04",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30376,
+   "op": "style",
+   "typeId": "8c6f4962-6522-42fb-bfcb-f653da832d04",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30377,
+   "op": "style",
+   "typeId": "8c6f4962-6522-42fb-bfcb-f653da832d04",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30379,
+   "op": "style",
+   "typeId": "8c6f4962-6522-42fb-bfcb-f653da832d04",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30380,
+   "op": "style",
+   "typeId": "8c6f4962-6522-42fb-bfcb-f653da832d04",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 4,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 46
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30381,
+   "op": "style",
+   "typeId": "8c6f4962-6522-42fb-bfcb-f653da832d04",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 0,
+   "previousLevel": 0,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 42,
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 9,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 5,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 35
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30383,
+   "op": "style",
+   "typeId": "a6a2de53-d65c-445a-8b55-d2a73c15b635",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 9,
+   "previousLevel": 9,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 156,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 120,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 312
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30384,
+   "op": "style",
+   "typeId": "a6a2de53-d65c-445a-8b55-d2a73c15b635",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 9,
+   "previousLevel": 9,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 72,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 168,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 156
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30386,
+   "op": "style",
+   "typeId": "a6a2de53-d65c-445a-8b55-d2a73c15b635",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 9,
+   "previousLevel": 9,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 156,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 120,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 312
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30387,
+   "op": "style",
+   "typeId": "a6a2de53-d65c-445a-8b55-d2a73c15b635",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 9,
+   "previousLevel": 9,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 72,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 168,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 156
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30388,
+   "op": "style",
+   "typeId": "a6a2de53-d65c-445a-8b55-d2a73c15b635",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 9,
+   "previousLevel": 9,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 156,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 120,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 312
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30390,
+   "op": "style",
+   "typeId": "a6a2de53-d65c-445a-8b55-d2a73c15b635",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 9,
+   "previousLevel": 9,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 72,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 168,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 156
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30391,
+   "op": "style",
+   "typeId": "a6a2de53-d65c-445a-8b55-d2a73c15b635",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 9,
+   "previousLevel": 9,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 156,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 120,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 312
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30393,
+   "op": "style",
+   "typeId": "a6a2de53-d65c-445a-8b55-d2a73c15b635",
+   "styleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "level": 9,
+   "previousLevel": 9,
+   "previousStyleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "materials": {
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 72,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 168,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 156
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30394,
+   "op": "style",
+   "typeId": "a6a2de53-d65c-445a-8b55-d2a73c15b635",
+   "styleId": "c462a43a-0547-4cd0-a755-5c0aff0f74f8",
+   "level": 10,
+   "previousLevel": 9,
+   "previousStyleId": "1d6696b3-963b-48d4-8924-d43505cb2807",
+   "materials": {
+    "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d": 156,
+    "38d32048-ce01-4390-a4f0-cdb94ef3ce72": 120,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 312
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30430,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 8,
+   "previousLevel": 7,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 516,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 432,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 324
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30431,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 9,
+   "previousLevel": 8,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 1024,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 848,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 640
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30436,
+   "op": "upgrade",
+   "typeId": "b6c023e6-3b81-497f-9c2c-f532ecff3bb2",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 9,
+   "previousLevel": 8,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 1024,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 848,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 640
+   },
+   "clean": true
+  },
+  {
+   "captureId": 30437,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 9,
+   "previousLevel": 8,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 960,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 800,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 608
+   },
+   "clean": true
+  },
+  {
+   "captureId": 35562,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 9,
+   "previousLevel": 8,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 1216,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 1008,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 752
+   },
+   "clean": true
+  },
+  {
+   "captureId": 35567,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 9,
+   "previousLevel": 8,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 1216,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 1008,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 752
+   },
+   "clean": true
+  },
+  {
+   "captureId": 35572,
+   "op": "upgrade",
+   "typeId": "e1dd10fc-8b14-4288-9b23-99b0d58388de",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 9,
+   "previousLevel": 8,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 960,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 800,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 608
+   },
+   "clean": true
+  },
+  {
+   "captureId": 35577,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 9,
+   "previousLevel": 8,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 688,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 576,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 432
+   },
+   "clean": true
+  },
+  {
+   "captureId": 42572,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 1,
+   "previousLevel": 0,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 43,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 36,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 27
+   },
+   "clean": true
+  },
+  {
+   "captureId": 44152,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 2,
+   "previousLevel": 1,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 67,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 56,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 42
+   },
+   "clean": true
+  },
+  {
+   "captureId": 46437,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 3,
+   "previousLevel": 2,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 90,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 76,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 57
+   },
+   "clean": true
+  },
+  {
+   "captureId": 47818,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 4,
+   "previousLevel": 3,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 105,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 88,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 66
+   },
+   "clean": true
+  },
+  {
+   "captureId": 48888,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 5,
+   "previousLevel": 4,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 151,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 126,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 95
+   },
+   "clean": true
+  },
+  {
+   "captureId": 51243,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 6,
+   "previousLevel": 5,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 215,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 180,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 135
+   },
+   "clean": true
+  },
+  {
+   "captureId": 53647,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 7,
+   "previousLevel": 6,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 366,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 306,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 230
+   },
+   "clean": true
+  },
+  {
+   "captureId": 54912,
+   "op": "place",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {},
+   "clean": false
+  },
+  {
+   "captureId": 55033,
+   "op": "place",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 50,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 43,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 32
+   },
+   "clean": true
+  },
+  {
+   "captureId": 56369,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 8,
+   "previousLevel": 7,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 516,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 432,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 324
+   },
+   "clean": true
+  },
+  {
+   "captureId": 58386,
+   "op": "upgrade",
+   "typeId": "82108d94-ebf7-434f-8623-ca66d7504f27",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 2,
+   "previousLevel": 1,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 118,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 73
+   },
+   "clean": true
+  },
+  {
+   "captureId": 58394,
+   "op": "upgrade",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 2,
+   "previousLevel": 1,
+   "previousStyleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "materials": {
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 42
+   },
+   "clean": true
+  },
+  {
+   "captureId": 58404,
+   "op": "place",
+   "typeId": "597f678f-b49e-4559-96a8-266aafeca6ad",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 62991,
+   "op": "place",
+   "typeId": "a6a2de53-d65c-445a-8b55-d2a73c15b635",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 104,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 50,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 48
+   },
+   "clean": true
+  },
+  {
+   "captureId": 63084,
+   "op": "place",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 50,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 43,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 32
+   },
+   "clean": true
+  },
+  {
+   "captureId": 63089,
+   "op": "place",
+   "typeId": "26fdb92f-a4df-4928-a97b-dee8699af605",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 50,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 43,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 32
+   },
+   "clean": true
+  },
+  {
+   "captureId": 63098,
+   "op": "place",
+   "typeId": "597f678f-b49e-4559-96a8-266aafeca6ad",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 63100,
+   "op": "place",
+   "typeId": "597f678f-b49e-4559-96a8-266aafeca6ad",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 63101,
+   "op": "place",
+   "typeId": "597f678f-b49e-4559-96a8-266aafeca6ad",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 63103,
+   "op": "place",
+   "typeId": "597f678f-b49e-4559-96a8-266aafeca6ad",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 63104,
+   "op": "place",
+   "typeId": "597f678f-b49e-4559-96a8-266aafeca6ad",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 63105,
+   "op": "place",
+   "typeId": "597f678f-b49e-4559-96a8-266aafeca6ad",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 63107,
+   "op": "place",
+   "typeId": "597f678f-b49e-4559-96a8-266aafeca6ad",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 63108,
+   "op": "place",
+   "typeId": "597f678f-b49e-4559-96a8-266aafeca6ad",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  },
+  {
+   "captureId": 63110,
+   "op": "place",
+   "typeId": "597f678f-b49e-4559-96a8-266aafeca6ad",
+   "styleId": "aa133662-053d-434e-8779-3f2a41d1271e",
+   "level": 0,
+   "previousLevel": null,
+   "previousStyleId": null,
+   "materials": {
+    "e7193116-d761-479b-8a20-5633737977f5": 28,
+    "fd67bbc6-20f4-44a3-9614-28265ebb8c67": 24,
+    "42d91529-c88b-4c5b-815b-b55508b4e7ef": 18
+   },
+   "clean": true
+  }
+ ]
+}
