@@ -4412,3 +4412,108 @@ mod style_town_level {
         assert!(workshop_menu_holds(&current_gate(&bu)));
     }
 }
+
+/// Can a FRESH level-1 character build? Reports #285 / #273 / #298.
+///
+/// A new character has no town of its own, so it is served `default_town.json`
+/// — town level 0 — and the Forge the blacksmith asks for needs town level 1
+/// ("Construction Level 1 required", #285). Retail got there through the Town
+/// Hall: the first completion in the captured journey is the Town Hall, paying
+/// 525 town XP and taking the town to level 1, and the very next placement is
+/// the Forge at 600 gold (`deploy/retail-journey/town_ops.json`, captures
+/// 6200-6405). These tests replay that path through the handlers' own pricing
+/// and completion functions, starting from the default town every fresh
+/// character is served.
+#[cfg(test)]
+mod fresh_level1_town {
+    use super::*;
+
+    const TOWN_HALL: &str = "a6a2de53-d65c-445a-8b55-d2a73c15b635";
+    const FORGE: &str = "26fdb92f-a4df-4928-a97b-dee8699af605";
+    const TIMBER: &str = "aa133662-053d-434e-8779-3f2a41d1271e";
+    /// The segments retail placed them on (captures 6200 and 6405).
+    const TOWN_HALL_SEGMENT: &str = "2a967439-6476-4974-940a-d6b1b7469eeb";
+    const FORGE_SEGMENT: &str = "2eda57b7-3595-45b1-b1d2-cf8bec2edd7c";
+
+    fn u(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+
+    fn shipped_upgrades() -> Value {
+        serde_json::from_str(include_str!("../../deploy/static/building_upgrades.json")).unwrap()
+    }
+
+    fn default_town() -> Value {
+        serde_json::from_str(include_str!("../../deploy/static/default_town.json")).unwrap()
+    }
+
+    /// Place, then finish, exactly as `place_building` + `complete_building` do.
+    fn place_and_complete(bu: &Value, town: &mut Value, ty: &str, segment: &str) -> u64 {
+        let cost = placement_cost(bu, town, u(ty), u(TIMBER)).unwrap();
+        check_town_level(&cost, town).expect("placement allowed at this town level");
+        let id = Uuid::new_v4();
+        insert_building(town, u(segment), id, u(ty), u(TIMBER), 0, cost.construction_time_ms, 0)
+            .expect("the segment exists in the default town");
+        let prestige = prestige_on_complete(bu, town, id);
+        apply_complete_transition(find_building_mut(town, id).unwrap());
+        apply_prestige_and_level_up(town, prestige);
+        prestige
+    }
+
+    #[test]
+    fn a_fresh_town_reaches_the_forge_through_the_town_hall() {
+        let bu = shipped_upgrades();
+        let mut town = default_town();
+        assert_eq!(town_level(&town), 0, "a fresh character's town starts at level 0");
+
+        // #285 as reported: the Forge is refused at level 0.
+        let forge = placement_cost(&bu, &town, u(FORGE), u(TIMBER)).unwrap();
+        assert!(
+            matches!(
+                check_town_level(&forge, &town),
+                Err(CostError::TownLevelTooLow { need: 1, have: 0 })
+            ),
+            "the Forge needs town level 1"
+        );
+
+        // The Town Hall is open at level 0, at retail's price (capture 6200: -200 gold).
+        let hall = placement_cost(&bu, &town, u(TOWN_HALL), u(TIMBER)).unwrap();
+        assert_eq!(hall.require_town_level, 0);
+        assert_eq!(hall.gold, 200);
+
+        let paid = place_and_complete(&bu, &mut town, TOWN_HALL, TOWN_HALL_SEGMENT);
+        assert_eq!(paid, 525, "retail's first completion (capture 6202)");
+        assert_eq!(town_level(&town), 1, "525 >= 500: town level 1");
+
+        // Now the Forge goes up, at retail's price (capture 6405: -600 gold).
+        let forge = placement_cost(&bu, &town, u(FORGE), u(TIMBER)).unwrap();
+        check_town_level(&forge, &town).expect("the Forge is buildable at town level 1");
+        assert_eq!(forge.gold, 600);
+        place_and_complete(&bu, &mut town, FORGE, FORGE_SEGMENT);
+    }
+
+    /// The towns production already holds in exactly #285's state: a Town Hall
+    /// finished under the old rule, which paid it 400 rather than 525 and left
+    /// the town at level 0 (seven server-provisioned level-2..5 characters, all
+    /// `{"level": 0, "experiencePoints": 400}`). The one-time backfill pays the
+    /// style and site points they were missed, which crosses level 1.
+    #[test]
+    fn a_town_stuck_at_400_is_lifted_to_level_one_by_the_backfill() {
+        let bu = shipped_upgrades();
+        let mut town = default_town();
+        town["levelInfo"] = json!({ "level": 0, "experiencePoints": 400 });
+        let seg = &mut town["districts"][0]["segments"][TOWN_HALL_SEGMENT];
+        assert_eq!(seg["lotsCleared"], json!([false]));
+        // Verbatim shape of the stuck production rows.
+        seg["buildings"] = json!({ "81b97ccf-7424-4626-9fa4-f431bd291936": {
+            "id": "81b97ccf-7424-4626-9fa4-f431bd291936", "level": 0, "state": "NORMAL",
+            "typeId": TOWN_HALL, "styleId": TIMBER, "customized": false, "startIndex": 0,
+            "segmentGroupId": TOWN_HALL_SEGMENT, "constructionEnd": 0 } });
+
+        let mut state = blades_lib::server_state::ServerState::default();
+        assert_eq!(backfill_town_sites_once(&mut state, &mut town, &bu), 125);
+        assert_eq!(town["levelInfo"], json!({ "level": 1, "experiencePoints": 525 }));
+        let forge = placement_cost(&bu, &town, u(FORGE), u(TIMBER)).unwrap();
+        check_town_level(&forge, &town).expect("the Forge is unlocked");
+    }
+}
