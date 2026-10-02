@@ -428,11 +428,21 @@ UPDATE character_versions
 /// Put a version's parked quest rows back under the live character id.
 /// `ON CONFLICT DO NOTHING`: a row minted on the live character since (a job or
 /// event with a deterministic id) is newer than the parked copy and wins.
+///
+/// Columns are named and the NOT NULL ones coalesced back to JSON `null`.
+/// Dialogue quests (MQ04 "Rebuild Town Hall") and older job rows store JSON
+/// `null` in `generated_data` — 113 rows on 54 characters in production — and
+/// `jsonb_populate_record` reads a JSON null as SQL NULL. Inserting that breaks
+/// the NOT NULL constraint and fails the whole switch with a 500, stranding the
+/// player on the alt they switched away to. `info` gets the same guard for the
+/// same reason, though no row holds a JSON-null `info` today. The nullable
+/// columns stay as read: no production row stores JSON `null` in them (counted).
 const UNPARK_QUESTS_SQL: &str = r#"
-INSERT INTO quests
-SELECT (jsonb_populate_record(NULL::quests,
-          e || jsonb_build_object('character_id', $1::text))).*
-  FROM jsonb_array_elements($2) e
+INSERT INTO quests (id, character_id, info, generated_data, dungeon_state, initial_state)
+SELECT r.id, $1, COALESCE(r.info, 'null'::jsonb), COALESCE(r.generated_data, 'null'::jsonb),
+       r.dungeon_state, r.initial_state
+  FROM jsonb_array_elements($2) e,
+       LATERAL jsonb_populate_record(NULL::quests, e) r
 ON CONFLICT DO NOTHING
 "#;
 
@@ -5027,6 +5037,53 @@ mod tests {
             assert_eq!(mine.iter().map(|q| q.id).collect::<Vec<_>>(), vec![first]);
         }
 
+        /// Dialogue quests (MQ04 "Rebuild Town Hall", 3b478dfa…) and older job
+        /// rows store JSON `null` in the NOT NULL `generated_data` column — 113
+        /// rows on 54 characters in production. The round trip must keep that
+        /// JSON null, not turn it into SQL NULL: that INSERT fails the
+        /// constraint, and every switch back to the alt would 500.
+        #[tokio::test]
+        async fn a_quest_with_json_null_generated_data_survives_the_round_trip() {
+            let mut c = db!();
+            let (starter, level1) = (Uuid::new_v4(), Uuid::new_v4());
+            let (cid, uid) =
+                seed_character_on_alt(&mut c, "Adventurer", 48, 10, Some(starter)).await;
+            add_user_row(&mut c, uid).await;
+            let dialogue = Uuid::parse_str("3b478dfa-0000-4000-8000-000000000001").unwrap();
+            diesel::sql_query(
+                "INSERT INTO quests (id, character_id, info, generated_data) \
+                 VALUES ($1, $2, '{\"label\":\"MQ04\"}'::jsonb, 'null'::jsonb)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(dialogue)
+            .bind::<diesel::sql_types::Uuid, _>(cid)
+            .execute(&mut c)
+            .await
+            .unwrap();
+
+            apply_new_alt(&mut c, &new_alt(uid, level1), &appearance_cost())
+                .await
+                .unwrap();
+            apply_switch_alt(&mut c, &switch(uid, starter, None))
+                .await
+                .expect("switching back must not fail on a JSON-null generated_data");
+
+            #[derive(diesel::QueryableByName)]
+            struct Gd {
+                #[diesel(sql_type = diesel::sql_types::Text)]
+                kind: String,
+            }
+            let r: Gd = diesel::sql_query(
+                "SELECT jsonb_typeof(generated_data) AS kind FROM quests \
+                  WHERE id = $1 AND character_id = $2",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(dialogue)
+            .bind::<diesel::sql_types::Uuid, _>(cid)
+            .get_result(&mut c)
+            .await
+            .unwrap();
+            assert_eq!(r.kind, "null", "still JSON null, as it was stored");
+        }
+
         /// "New" must never overwrite an alt that already exists: not the live
         /// one, and not one with kept versions. Both refuse and change nothing —
         /// the website switches to it instead.
@@ -5056,6 +5113,35 @@ mod tests {
                 .unwrap_err();
             assert_eq!(status(&err), actix_web::http::StatusCode::CONFLICT);
             assert_eq!(live(&mut c, cid).await.character["level"], 3);
+        }
+
+        /// A live row with no alt id, and no hint to keep it under, is refused —
+        /// kept under no alt it could never be switched back to. Nothing moves.
+        /// And a hint naming the new alt itself is refused outright.
+        #[tokio::test]
+        async fn a_new_alt_refuses_to_strand_an_unidentified_character() {
+            let mut c = db!();
+            let (cid, uid) = seed_character(&mut c, "Arwald", 61, 10).await;
+            add_user_row(&mut c, uid).await;
+            let q = seed_quest(&mut c, cid, "his").await;
+            let level1 = Uuid::new_v4();
+
+            let err = apply_new_alt(&mut c, &new_alt(uid, level1), &appearance_cost())
+                .await
+                .unwrap_err();
+            assert_eq!(status(&err), actix_web::http::StatusCode::CONFLICT);
+            assert!(format!("{err:?}").contains("error_code: 92"), "{err:?}");
+            assert_eq!(live(&mut c, cid).await.character["level"], 61);
+            assert_eq!(quests_of(&mut c, cid).await.len(), 1);
+            assert_eq!(quests_of(&mut c, cid).await[0].id, q);
+
+            let req = NewAltRequest {
+                outgoing_alt_uuid: Some(level1),
+                ..new_alt(uid, level1)
+            };
+            let err = apply_new_alt(&mut c, &req, &appearance_cost()).await.unwrap_err();
+            assert_eq!(status(&err), actix_web::http::StatusCode::BAD_REQUEST);
+            assert_eq!(live(&mut c, cid).await.character["level"], 61);
         }
 
         /// An account with no character row at all (and no user row: the first
@@ -6637,6 +6723,15 @@ async fn remember_device_alt(
 const NEW_ALT_ALREADY_LIVE: u64 = 90;
 /// This alt already has kept versions — it exists, so `switch-alt` to it.
 const NEW_ALT_EXISTS: u64 = 91;
+/// The live character carries no alt id and the caller named none to keep it
+/// under. Keeping it under NO alt makes it unreachable by `switch-alt`: its own
+/// button on /play would 404 and fall through to re-importing its capture over
+/// it, which throws away everything it earned here. Refuse instead. (517 of 533
+/// live rows had no alt id when this was written.)
+const NEW_ALT_OUTGOING_UNKNOWN: u64 = 92;
+/// `outgoingAltUuid` names the new alt itself — the misfiling
+/// `SNAPSHOT_CHARACTER_SQL` exists to prevent.
+const NEW_ALT_OUTGOING_IS_NEW: u64 = 93;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -6756,6 +6851,22 @@ async fn apply_new_alt(
         .await
         .optional()?;
 
+    if body.outgoing_alt_uuid == Some(body.alt_uuid) {
+        return Err(BladeApiError::new(
+            StatusCode::BAD_REQUEST,
+            IMPORT_SERVICE_ID,
+            NEW_ALT_OUTGOING_IS_NEW,
+        ));
+    }
+    if let Some((_, None)) = live {
+        if body.outgoing_alt_uuid.is_none() {
+            return Err(BladeApiError::new(
+                StatusCode::CONFLICT,
+                IMPORT_SERVICE_ID,
+                NEW_ALT_OUTGOING_UNKNOWN,
+            ));
+        }
+    }
     if let Some((_, Some(live_alt))) = live {
         if live_alt == body.alt_uuid {
             return Err(BladeApiError::new(
