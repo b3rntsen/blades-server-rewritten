@@ -1359,13 +1359,22 @@ fn apply_combat_durability(
     changed
 }
 
-/// Debit one backpack stack for each valid `item_consumed` action.
+/// Debit one unit of the named stackable for each `item_consumed` action, as retail
+/// and the quest-dungeon handler (`dungeon_update::charge_stackable`) both do.
 ///
-/// The equipped-list check prevents an arbitrary material UUID from being destroyed by
-/// a malformed request, while `consume_stackable` prevents the client from consuming an
-/// item it does not own and records the exact inventory diff the response must carry.
-/// Invalid actions stay lenient: ignoring them avoids turning a stale client action into
-/// a generic network error, but never creates inventory or grants an effect.
+/// There is deliberately no check against `loadout.equipped_consumables`. That list is
+/// only filled by an `equippedConsumables` field on `/loadouts/current`, which the client
+/// does not send: 0 of 2,280 retail `/loadouts/current` captures and 0 of 606 retail
+/// inventory reads carry it, and 0 of 540 prod characters hold one. Gating on it ignored
+/// every abyss potion (84 `unequipped template` warnings from 2026-09-16 to 2026-10-03),
+/// so the client healed and the count bounced back on the next sync. Retail debited
+/// the one captured abyss `item_consumed` (Health T10 890 -> 889) and all 110 distinct
+/// captured quest-dungeon ones, with no equipped-slot data on the server at all.
+///
+/// `consume_stackable` keeps it safe: it touches only the named template, leaves the
+/// stack untouched when the player does not own one (never negative), and records the
+/// diff the response must carry. A shortfall is logged, not failed: the same POST
+/// carries the floor's kills and loot, which a 400 would throw away.
 fn apply_item_consumption(
     actions: &[AbyssUpdateAction],
     inventory: &mut CompleteInventory,
@@ -1376,17 +1385,6 @@ fn apply_item_consumption(
         let AbyssUpdateAction::ItemConsumed(action) = action else {
             continue;
         };
-        if !inventory
-            .loadout
-            .equipped_consumables
-            .contains(&action.item_template_id)
-        {
-            log::warn!(
-                "abyss: ignored item_consumed for unequipped template {}",
-                action.item_template_id
-            );
-            continue;
-        }
         match consume_stackable(inventory, action.item_template_id, 1, tracker) {
             Ok(()) => consumed += 1,
             Err(error) => log::warn!(
@@ -2281,38 +2279,96 @@ mod tests {
         );
     }
 
-    #[test]
-    fn item_consumed_debits_only_owned_equipped_stackables() {
-        let potion = Uuid::new_v4();
-        let unequipped = Uuid::new_v4();
-        let mut inventory = CompleteInventory {
+    fn empty_inventory() -> CompleteInventory {
+        CompleteInventory {
             backpack: Default::default(),
             loadout: Default::default(),
             treasury: Default::default(),
             overflow_treasury: Default::default(),
             backpack_version: 0,
             treasury_version: 0,
-        };
-        inventory.backpack.stackable_items.add(potion, 2);
-        inventory.backpack.stackable_items.add(unequipped, 4);
-        inventory.loadout.equipped_consumables.push(potion);
+        }
+    }
+
+    /// The prod shape: the client never sends `equippedConsumables` on
+    /// `/loadouts/current` (0 of 2,280 retail captures; 0 of 540 prod characters hold
+    /// one), so the saved potion-slot list is empty. Retail still debits the drunk
+    /// potion — its one captured abyss `item_consumed` took Health T10 from 890 to 889
+    /// — and the old equipped-list gate ignored every abyss potion instead (84 journal
+    /// warnings since 2026-09-16), handing them back on the next sync.
+    #[test]
+    fn item_consumed_debits_a_potion_that_is_not_in_the_saved_slots() {
+        let health_t10: Uuid = "c2139cd9-1d9d-4d4e-80b2-133e07440158".parse().unwrap();
+        let other = Uuid::new_v4();
+        let mut inventory = empty_inventory();
+        inventory.backpack.stackable_items.add(health_t10, 890);
+        inventory.backpack.stackable_items.add(other, 7);
+        assert!(inventory.loadout.equipped_consumables.is_empty());
 
         let actions = parse_actions(serde_json::json!([
-            {"type": "item_consumed", "itemTemplateId": potion, "time": 1},
-            {"type": "item_consumed", "itemTemplateId": potion, "time": 2},
-            {"type": "item_consumed", "itemTemplateId": potion, "time": 3},
-            {"type": "item_consumed", "itemTemplateId": unequipped, "time": 4}
+            {"type": "item_consumed", "itemTemplateId": health_t10, "time": 1}
         ]));
         let mut tracker = InventoryChangeTracker::default();
 
         assert_eq!(
             apply_item_consumption(&actions, &mut inventory, &mut tracker),
-            2,
-            "two owned potions are consumed; unavailable/unequipped actions are ignored"
+            1
+        );
+        assert_eq!(inventory.backpack.stackable_items.count(health_t10), 889);
+        assert_eq!(
+            inventory.backpack.stackable_items.count(other),
+            7,
+            "other stacks untouched"
+        );
+        let update = inventory.generate_client_update(&tracker);
+        assert_eq!(
+            update.backpack.stackable_items.count(health_t10),
+            889,
+            "the response diff must carry the new count, as retail's did"
+        );
+        assert_eq!(
+            update.backpack.stackable_items.count(other),
+            0,
+            "and nothing else"
+        );
+    }
+
+    /// One unit per action, never below zero, and only the named template moves.
+    #[test]
+    fn item_consumed_debits_owned_stackables_and_never_goes_negative() {
+        let potion = Uuid::new_v4();
+        let equipped = Uuid::new_v4();
+        let untouched = Uuid::new_v4();
+        let mut inventory = empty_inventory();
+        inventory.backpack.stackable_items.add(potion, 2);
+        inventory.backpack.stackable_items.add(equipped, 4);
+        inventory.backpack.stackable_items.add(untouched, 9);
+        inventory.loadout.equipped_consumables.push(equipped);
+
+        let actions = parse_actions(serde_json::json!([
+            {"type": "item_consumed", "itemTemplateId": potion, "time": 1},
+            {"type": "item_consumed", "itemTemplateId": potion, "time": 2},
+            {"type": "item_consumed", "itemTemplateId": potion, "time": 3},
+            {"type": "item_consumed", "itemTemplateId": equipped, "time": 4},
+            {"type": "item_consumed", "itemTemplateId": Uuid::new_v4(), "time": 5}
+        ]));
+        let mut tracker = InventoryChangeTracker::default();
+
+        assert_eq!(
+            apply_item_consumption(&actions, &mut inventory, &mut tracker),
+            3,
+            "two owned potions plus the equipped one; the third potion and the unowned \
+             template are ignored"
         );
         assert_eq!(inventory.backpack.stackable_items.count(potion), 0);
-        assert_eq!(inventory.backpack.stackable_items.count(unequipped), 4);
-        assert!(tracker.modified_backpack.stackable_items.contains(&potion));
+        assert_eq!(inventory.backpack.stackable_items.count(equipped), 3);
+        assert_eq!(inventory.backpack.stackable_items.count(untouched), 9);
+        assert!(
+            !tracker
+                .modified_backpack
+                .stackable_items
+                .contains(&untouched)
+        );
 
         let update = inventory.generate_client_update(&tracker);
         assert!(
