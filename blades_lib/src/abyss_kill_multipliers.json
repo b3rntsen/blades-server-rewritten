@@ -1,0 +1,2223 @@
+{
+ "_meta": {
+  "description": "Abyss kill-score multiplier per floor dungeon (#312). `steps` is [fromEnemyLevel, multiplier] pairs; a step holds until the next.",
+  "notInATable": [
+   "Forest_AbyssEntrance",
+   "Ayleid_AbyssEntrance",
+   "Stone_AbyssEntrance",
+   "Cave_AbyssEntrance"
+  ],
+  "rule": "lowest killScoreMultiplier of any candidate variant at that level (dungeon monsters -> `* Family Abyss` families -> level band -> variant)",
+  "source": "deploy/static/abyss.json dungeonPool + reference/game-defs/enemies.json (APK extraction); regenerate with script/build_abyss_kill_multipliers.py"
+ },
+ "dungeons": {
+  "028dcf09-7006-499f-8cc7-09bb20a7adea": {
+   "families": [
+    "Dremora Raider Family Abyss",
+    "Dremora Warlock Family Abyss"
+   ],
+   "handle": "Ayleid_Dremora_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "04ae4dcd-3693-4e07-962f-1da3d5c3c85e": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss",
+    "Spider Cave Critter Family Abyss",
+    "Spider Cave Monster Family Abyss",
+    "Spider Forest Critter Family Abyss",
+    "Spider Forest Monster Family Abyss"
+   ],
+   "handle": "Cave_SpiderGoblin_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "04d73a53-582b-4a70-bbc4-f02a3d74ef51": {
+   "families": [
+    "Spider Forest Critter Family Abyss",
+    "Spider Forest Monster Family Abyss"
+   ],
+   "handle": "Forest_ForestSpiders_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "04fed881-1f7b-42e9-bae7-4977a8cd02cc": {
+   "families": [
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Storm Atronach Family Abyss"
+   ],
+   "handle": "Cave_Atronach_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "06b1dd29-679b-4478-80de-12208fe450ac": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "handle": "Stone_Necromancer_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "073dcdc8-10c8-4470-8d9f-2edad5570e74": {
+   "families": [
+    "Wisp Critter Family Abyss",
+    "Wisp Monster Family Abyss"
+   ],
+   "handle": "Forest_Wisp_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "0ae7451b-76db-47a8-a345-919f07a47a01": {
+   "families": [
+    "Mercenary Family Abyss"
+   ],
+   "handle": "Test_Stone_Mercenary_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "0b82053f-958e-42e9-b1b7-9232b25a81ef": {
+   "families": [
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Necromancer Family Abyss",
+    "Storm Atronach Family Abyss"
+   ],
+   "handle": "Ayleid_AtronachNecromancer_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "0d6066ba-454e-481a-aa54-bbab22f64e22": {
+   "families": [
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Necromancer Family Abyss",
+    "Storm Atronach Family Abyss"
+   ],
+   "handle": "Cave_AtronachNecromancer_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "0e5671ac-c415-4c6e-affc-44fdca610f1e": {
+   "families": [
+    "Dremora Raider Family Abyss",
+    "Dremora Warlock Family Abyss"
+   ],
+   "handle": "Ayleid_Dremora_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "0ec5e913-6074-4490-abaa-f1802827b007": {
+   "families": [
+    "Spider Forest Critter Family Abyss",
+    "Spider Forest Monster Family Abyss"
+   ],
+   "handle": "Ayleid_ForestSpiders_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "0ef19a96-1051-4b9f-8a4c-5ea3f2396638": {
+   "families": [
+    "Troll Ancient Family Abyss",
+    "Troll Cave Family Abyss",
+    "Troll Family Abyss",
+    "Troll Forest Family Abyss"
+   ],
+   "handle": "Test_Stone_Troll_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "0f120f01-1387-4061-ad54-7c3094390707": {
+   "families": [
+    "Dragon Ancient Frost Family Abyss"
+   ],
+   "handle": "Cave_DragonAncientFrost_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "10cd3637-f935-4f2a-9fd8-465eaabcd33d": {
+   "families": [
+    "Bear Family Abyss"
+   ],
+   "handle": "Cave_Bears_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "1396d90c-c38e-47c6-a9da-6e98c49788e5": {
+   "families": [
+    "Bandit Family Abyss"
+   ],
+   "handle": "Test_Stone_Bandit_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "1543e5f2-0c48-4908-8ca9-02c7dd82bbc3": {
+   "families": [
+    "Wisp Critter Family Abyss",
+    "Wisp Monster Family Abyss"
+   ],
+   "handle": "Cave_Wisp_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "17a30718-3986-459f-913c-460c822de0c1": {
+   "families": [
+    "Skeever Critter Family Abyss"
+   ],
+   "handle": "Stone_Skeevers_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "19c21a26-f324-4506-ae5c-6b9d5ad618ab": {
+   "families": [
+    "Wight Monster Family Abyss"
+   ],
+   "handle": "Ayleid_Wight_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "1a2e2665-190b-4618-ae3e-51e43b1f16d4": {
+   "families": [
+    "Warlord Family Abyss"
+   ],
+   "handle": "Cave_Warlord_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "1e21ec74-c386-4ad7-8fcf-694ba7dc6017": {
+   "families": [
+    "Wisp Critter Family Abyss",
+    "Wisp Monster Family Abyss"
+   ],
+   "handle": "Test_Forest_Wisp_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "1e6dcd50-7309-4ee2-8314-e3605079a37c": {
+   "families": [
+    "Mercenary Family Abyss"
+   ],
+   "handle": "Stone_Mercenary_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "219788af-f3a1-4e48-9f6b-67152a79dec1": {
+   "families": [
+    "Wight Monster Family Abyss"
+   ],
+   "handle": "Test_Stone_Wight_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "22c87784-7e9c-4c91-85a5-d8fc2a312705": {
+   "families": [
+    "Spider Cave Critter Family Abyss",
+    "Spider Cave Monster Family Abyss"
+   ],
+   "handle": "Stone_CaveSpiders_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "23d31b6e-4aea-4a7c-a913-f3ce5e7608f7": {
+   "families": [
+    "Warlord Family Abyss"
+   ],
+   "handle": "Ayleid_Warlord_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "2424d0d3-ca76-49dd-aab0-15f6c6245efc": {
+   "families": [
+    "Mercenary Family Abyss"
+   ],
+   "handle": "Ayleid_Mercenary_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "248d0981-6891-4ed8-b220-139486c63569": {
+   "families": [
+    "Bandit Family Abyss"
+   ],
+   "handle": "Cave_Bandit_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "257ccfb6-f8c3-40a1-85e0-67fc7e2d9985": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss"
+   ],
+   "handle": "Ayleid_Goblin_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "28bbb173-e6bd-495e-b3c9-7aee71755bc3": {
+   "families": [
+    "Necromancer Family Abyss",
+    "Skeleton Family Abyss"
+   ],
+   "handle": "Stone_NecromancerSkeleton_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "28ffdb77-161e-49a4-897e-7a8f679264d6": {
+   "families": [
+    "Spider Cave Critter Family Abyss",
+    "Spider Cave Monster Family Abyss"
+   ],
+   "handle": "Cave_CaveSpiders_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "2975861f-2a74-4f88-8fd7-f1c6a5e85529": {
+   "families": [
+    "Spriggan Family Abyss"
+   ],
+   "handle": "Test_Forest_Spriggan_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "2a372944-6fe2-422a-8577-19c2a980dcf4": {
+   "families": [
+    "Dragon Ancient Frost Family Abyss"
+   ],
+   "handle": "Ayleid_DragonAncientFrost_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "2bc5a9b9-2194-4790-a42a-b728b81b421f": {
+   "families": [
+    "Dragon Undead Family Abyss"
+   ],
+   "handle": "Ayleid_DragonUndead_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "2c0e2b66-2642-409c-a7c9-2184c6c51c6c": {
+   "families": [
+    "Bear Family Abyss",
+    "Wolf Critter Family Abyss"
+   ],
+   "handle": "Ayleid_BearsWolf_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "2e7a1550-6843-48b1-809f-a65f0da0669f": {
+   "families": [
+    "Warlord Family Abyss"
+   ],
+   "handle": "Stone_Warlord_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "2f0b9551-9c2e-4513-a60b-af7bc39ae60e": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "handle": "Cave_Necromancer_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "3010dcc3-ab87-4153-b3b5-f54f5d3cb574": {
+   "families": [
+    "Mercenary Family Abyss"
+   ],
+   "handle": "Forest_Mercenary_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "30b3ee25-c985-49fd-93f3-995ecf666a9c": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "handle": "Ayleid_Skeletons_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "310ae4a6-fb24-4c1f-8319-29e4a65c9f47": {
+   "families": [
+    "Bear Family Abyss"
+   ],
+   "handle": "Cave_Bears_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "34655edb-5b0e-483e-aaf6-f3186d99ed10": {
+   "families": [
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Storm Atronach Family Abyss"
+   ],
+   "handle": "Stone_Atronach_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "39563e49-03d0-4abe-b461-8fda6fa96965": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "handle": "Ayleid_Skeletons_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "3b41a23d-7b3c-45b0-bed4-743373d6a630": {
+   "families": [
+    "Dremora Raider Family Abyss",
+    "Dremora Warlock Family Abyss",
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Storm Atronach Family Abyss"
+   ],
+   "handle": "Cave_AtronachDremora_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "3b5df42b-aaf1-4fa5-8e22-0bd6e64a6960": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "handle": "Cave_Skeletons_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "42a854a1-eb07-4f3f-bfb0-c03a7d391077": {
+   "families": [
+    "Mercenary Family Abyss",
+    "Warlord Family Abyss"
+   ],
+   "handle": "Ayleid_WarlordMercenary_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "437223c0-8cdf-4f94-bf97-a6ace3473154": {
+   "families": [
+    "Spider Forest Critter Family Abyss",
+    "Spider Forest Monster Family Abyss"
+   ],
+   "handle": "Test_Forest_ForestSpiders_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "44e0d7cd-26a1-4183-996b-056a484a5e2e": {
+   "families": [
+    "Mercenary Family Abyss"
+   ],
+   "handle": "Cave_Mercenary_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "45afa850-3fd9-4dcf-933d-cb52f76499d6": {
+   "families": [
+    "Dragon Family Abyss"
+   ],
+   "handle": "Ayleid_Dragon_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "48c042a4-e993-446b-9c70-ee68eba53fdf": {
+   "families": [
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Storm Atronach Family Abyss"
+   ],
+   "handle": "Ayleid_AtronachGoblinWizard_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "4a31b6b7-3c62-4f7d-bd80-5d77f0a5065d": {
+   "families": [
+    "Dremora Raider Family Abyss",
+    "Dremora Warlock Family Abyss"
+   ],
+   "handle": "Test_Stone_Dremora_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "4aee4783-c32c-4dd2-8fa9-2cec42ca32e4": {
+   "families": [
+    "Spriggan Family Abyss",
+    "Wisp Critter Family Abyss",
+    "Wisp Monster Family Abyss"
+   ],
+   "handle": "Cave_SprigganWisp_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "4c793f15-aa4b-406f-be88-9689085fdc05": {
+   "families": [
+    "Spriggan Family Abyss"
+   ],
+   "handle": "Ayleid_Spriggan_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "4c972b57-91c1-44d4-9292-a5fa87957426": {
+   "families": [
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Storm Atronach Family Abyss",
+    "Undead Caster Family Abyss"
+   ],
+   "handle": "Stone_AtronachUndead_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "4de80b69-fe4e-4ed5-a556-71e5b7c82ed0": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss"
+   ],
+   "handle": "Test_Stone_Goblin_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "4e570093-8e51-4752-9e91-3577f0996afe": {
+   "families": [
+    "Troll Ancient Family Abyss",
+    "Troll Cave Family Abyss",
+    "Troll Family Abyss",
+    "Troll Forest Family Abyss"
+   ],
+   "handle": "Ayleid_Troll_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "4e682650-cddc-4326-bf45-3ecefc09bf0e": {
+   "families": [
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Storm Atronach Family Abyss"
+   ],
+   "handle": "Stone_Atronach_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "4f3d44cf-2cf1-4f8e-8f82-a1c075615654": {
+   "families": [
+    "Bear Family Abyss",
+    "Wolf Critter Family Abyss"
+   ],
+   "handle": "Cave_BearsWolf_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "54e3b968-eeac-4506-b697-51d03ba4bdd8": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "handle": "Test_Forest_Necromancer_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "55c7237b-00df-4b89-9a68-ab6b13ca51e8": {
+   "families": [
+    "Troll Ancient Family Abyss",
+    "Troll Cave Family Abyss",
+    "Troll Family Abyss",
+    "Troll Forest Family Abyss"
+   ],
+   "handle": "Stone_Troll_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "58b2b19b-8825-460f-b301-9c8a49a6cf25": {
+   "families": [
+    "Lich Family Abyss",
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss"
+   ],
+   "handle": "Stone_LichesOutcastNether_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "5c5013bc-2037-4d36-96cb-55ae8b5d43cb": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "handle": "Forest_Necromancer_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "5cafa1e5-6ce5-4896-a6f0-762d606d7041": {
+   "families": [
+    "Bear Family Abyss",
+    "Wolf Critter Family Abyss"
+   ],
+   "handle": "Forest_BearsWolf_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "5cc26070-12ac-4adc-b55d-da6fed6934ee": {
+   "families": [
+    "Skeever Critter Family Abyss"
+   ],
+   "handle": "Cave_Skeevers_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "5e57a12f-1dcb-42c7-84f2-b41fd900883d": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "handle": "Test_Forest_Skeletons_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "5f32924f-de10-4c2d-bcd7-8db4a0fdf168": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "handle": "Cave_Necromancer_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "5f4eb184-5aa9-42fc-b538-664d118ea870": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "handle": "Test_Stone_Skeletons_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "6009357f-ef56-4d8b-b1ba-47676ad4f1ef": {
+   "families": [
+    "Spriggan Family Abyss",
+    "Wisp Critter Family Abyss",
+    "Wisp Monster Family Abyss"
+   ],
+   "handle": "Forest_SprigganWisp_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "65375990-e5b3-41cf-b5d3-cbe2c740cb1d": {
+   "families": [
+    "Lich Family Abyss",
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss",
+    "Wight Monster Family Abyss"
+   ],
+   "handle": "Ayleid_LichesOutcastNetherWight_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "65656b1d-713c-40b8-b240-a96270517d8d": {
+   "families": [
+    "Dragon Family Abyss"
+   ],
+   "handle": "Stone_Dragon_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "663053f0-3a46-4012-b004-6cb2e907f33c": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss"
+   ],
+   "handle": "Stone_Goblin_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "6a922e58-0ae0-44d0-bf06-3306efa9dfcd": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss"
+   ],
+   "handle": "Ayleid_Goblin_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "6a9e4c4a-6d9a-43f4-a396-e47725626268": {
+   "families": [
+    "Spider Cave Critter Family Abyss",
+    "Spider Cave Monster Family Abyss",
+    "Spider Forest Critter Family Abyss",
+    "Spider Forest Monster Family Abyss",
+    "Troll Ancient Family Abyss",
+    "Troll Cave Family Abyss",
+    "Troll Family Abyss",
+    "Troll Forest Family Abyss"
+   ],
+   "handle": "Ayleid_TrollSpider_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "6ae20bd9-594d-48fc-b9f6-691428c44406": {
+   "families": [
+    "Spriggan Family Abyss"
+   ],
+   "handle": "Stone_Spriggan_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "6d1ede39-1ddd-4e1b-a1de-b31bca66d882": {
+   "families": [
+    "Spriggan Family Abyss"
+   ],
+   "handle": "Forest_Spriggan_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "6e4476c9-d2d7-45db-a253-dfb47567efff": {
+   "families": [
+    "Wolf Critter Family Abyss"
+   ],
+   "handle": "Cave_Wolves_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "717d4768-decf-4b5c-abd4-6679c9e120e3": {
+   "families": [
+    "Dremora Raider Family Abyss",
+    "Dremora Warlock Family Abyss"
+   ],
+   "handle": "Stone_Dremora_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "7234cbba-986e-450f-b605-c876a8658013": {
+   "families": [
+    "Dremora Raider Family Abyss",
+    "Dremora Warlock Family Abyss",
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Storm Atronach Family Abyss"
+   ],
+   "handle": "Ayleid_AtronachDremora_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "73aa75cb-1109-4e96-b7a2-73e55aaa99a2": {
+   "families": [
+    "Bandit Family Abyss"
+   ],
+   "handle": "Stone_Bandit_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "7638c25a-d230-4935-b969-d84604d86b59": {
+   "families": [
+    "Dragon Ancient Family Abyss"
+   ],
+   "handle": "Ayleid_DragonAncientFire_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "76645b54-bbb9-4b59-b86b-8ce063d0d5cb": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss",
+    "Troll Ancient Family Abyss",
+    "Troll Cave Family Abyss",
+    "Troll Family Abyss",
+    "Troll Forest Family Abyss"
+   ],
+   "handle": "Ayleid_GoblinTroll_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "76a249f4-2c7a-4b07-8573-8147c38fd00b": {
+   "families": [
+    "Wisp Critter Family Abyss",
+    "Wisp Monster Family Abyss"
+   ],
+   "handle": "Test_Stone_Wisp_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "7924c82d-f6b3-4eb6-9edb-9b1349a1da84": {
+   "families": [
+    "Spriggan Family Abyss"
+   ],
+   "handle": "Stone_Spriggan_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "79f1868c-c62e-466b-9849-c86b5f65238e": {
+   "families": [
+    "Bandit Family Abyss"
+   ],
+   "handle": "Test_Forest_Bandit_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "7aa6221d-66fa-4290-a7ca-c86a851e135b": {
+   "families": [
+    "Spider Cave Critter Family Abyss",
+    "Spider Cave Monster Family Abyss"
+   ],
+   "handle": "Test_Stone_CaveSpiders_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "7b416d0a-2657-4e30-b87e-f41cccad07ac": {
+   "families": [
+    "Lich Family Abyss",
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss"
+   ],
+   "handle": "Cave_LichesOutcastNether_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "7f963227-b598-4c8b-88ce-01a3209e0e87": {
+   "families": [
+    "Bear Family Abyss"
+   ],
+   "handle": "Ayleid_Bears_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "8130438a-214c-4824-94fd-872e355efef8": {
+   "families": [
+    "Dragon Undead Family Abyss"
+   ],
+   "handle": "Stone_DragonUndead_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "836df66a-0aaa-49a3-96d4-b587d185ea99": {
+   "families": [
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Storm Atronach Family Abyss",
+    "Undead Caster Family Abyss"
+   ],
+   "handle": "Ayleid_AtronachUndead_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "83a0ce31-26be-46e8-ab37-df42a8b191f9": {
+   "families": [
+    "Lich Family Abyss"
+   ],
+   "handle": "Test_Stone_Liches_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     2
+    ],
+    [
+     29,
+     1
+    ],
+    [
+     38,
+     2
+    ]
+   ]
+  },
+  "84e70169-4e8c-4820-936d-18976b871c8d": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss",
+    "Spider Cave Critter Family Abyss",
+    "Spider Cave Monster Family Abyss",
+    "Spider Forest Critter Family Abyss",
+    "Spider Forest Monster Family Abyss"
+   ],
+   "handle": "Ayleid_SpiderGoblin_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "85bf1a3a-0006-4abf-993c-f483ec7db298": {
+   "families": [
+    "Skeleton Family Abyss",
+    "Wight Monster Family Abyss"
+   ],
+   "handle": "Ayleid_WightSkeleton_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "8c8c57c9-eefb-4d07-a9fc-218ebb7957a7": {
+   "families": [
+    "Lich Family Abyss"
+   ],
+   "handle": "Ayleid_Liches_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     2
+    ],
+    [
+     29,
+     1
+    ],
+    [
+     38,
+     2
+    ]
+   ]
+  },
+  "8d6ce8f8-4264-40c3-a0fa-3b7681057a6f": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "handle": "Forest_Skeletons_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "8e92c452-8905-4686-9ae0-dc11788ff6b9": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss"
+   ],
+   "handle": "Forest_Goblin_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "951be4f9-9d03-4408-9639-50cabc2f0825": {
+   "families": [
+    "Wight Monster Family Abyss"
+   ],
+   "handle": "Cave_Wight_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "957d069b-e203-4172-9186-9df207a33ca2": {
+   "families": [
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Storm Atronach Family Abyss",
+    "Undead Caster Family Abyss"
+   ],
+   "handle": "Cave_AtronachUndead_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "977d272d-8bd8-4f22-b13b-e1dc5aa88a56": {
+   "families": [
+    "Lich Family Abyss",
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss"
+   ],
+   "handle": "Ayleid_LichesOutcastNether_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "98e55718-9fd3-4d7e-b89b-0c6ab314ab25": {
+   "families": [
+    "Dragon Ancient Family Abyss"
+   ],
+   "handle": "Stone_DragonAncientFire_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "99129b95-27bd-4d70-b32d-54ce9ff8e67c": {
+   "families": [
+    "Spriggan Family Abyss",
+    "Wisp Critter Family Abyss",
+    "Wisp Monster Family Abyss"
+   ],
+   "handle": "Ayleid_SprigganWisp_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "9caf32a0-7e63-445a-8cc9-9aea10bc7c16": {
+   "families": [
+    "Troll Ancient Family Abyss",
+    "Troll Cave Family Abyss",
+    "Troll Family Abyss",
+    "Troll Forest Family Abyss"
+   ],
+   "handle": "Ayleid_Troll_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "9daf2260-6dca-4fc5-851e-11f344e09e3c": {
+   "families": [
+    "Mercenary Family Abyss"
+   ],
+   "handle": "Cave_Mercenary_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "9e2a015f-94ca-4837-9ae2-84c996c49bf4": {
+   "families": [
+    "Lich Family Abyss",
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss"
+   ],
+   "handle": "Ayleid_LichesOutcastNether_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "9ff89d72-b1dd-461e-b786-bf6ad0576e3b": {
+   "families": [
+    "Wolf Critter Family Abyss"
+   ],
+   "handle": "Forest_Wolves_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "a072a0da-a4b2-4a5d-85f8-750c9292268a": {
+   "families": [
+    "Wisp Critter Family Abyss",
+    "Wisp Monster Family Abyss"
+   ],
+   "handle": "Ayleid_Wisp_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "a1db3158-30ea-449a-98e1-ea91830f9a08": {
+   "families": [
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Storm Atronach Family Abyss"
+   ],
+   "handle": "Ayleid_Atronach_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "a8625417-72b3-4c96-bfa4-53b66d7d1776": {
+   "families": [
+    "Lich Family Abyss",
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss"
+   ],
+   "handle": "Test_Stone_LichesOutcastNether_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "a883d41b-4334-4622-b6cc-2f6a31d26d6a": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss"
+   ],
+   "handle": "Cave_Goblin_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "a981d71c-d23c-4496-9070-82ce91622e72": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "handle": "Ayleid_Necromancer_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "abb4d904-ff35-4b1f-93c5-f1c6a7686357": {
+   "families": [
+    "Spider Cave Critter Family Abyss",
+    "Spider Cave Monster Family Abyss"
+   ],
+   "handle": "Cave_CaveSpiders_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "ad7a91a8-c47e-47ab-b78f-f7559123a879": {
+   "families": [
+    "Wolf Critter Family Abyss"
+   ],
+   "handle": "Stone_Wolves_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "b1ea02bb-fc98-4209-9f00-8cd828945cdb": {
+   "families": [
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Storm Atronach Family Abyss"
+   ],
+   "handle": "Ayleid_Atronach_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "b31ce7dd-714e-47d3-9d90-24cf9bace655": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "handle": "Stone_Skeletons_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "b5bb6441-2a8d-4982-95bb-879cc4f607c9": {
+   "families": [
+    "Dragon Family Abyss"
+   ],
+   "handle": "Cave_Dragon_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "b8547119-7a93-448d-bdd2-e6d550aba93a": {
+   "families": [
+    "Troll Ancient Family Abyss",
+    "Troll Cave Family Abyss",
+    "Troll Family Abyss",
+    "Troll Forest Family Abyss",
+    "Wisp Critter Family Abyss",
+    "Wisp Monster Family Abyss"
+   ],
+   "handle": "Ayleid_WispTroll_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "b86d3d8e-4287-440c-8095-a28913533d14": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss"
+   ],
+   "handle": "Cave_Goblin_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "b98b7781-21e0-415a-a527-98325f64e82b": {
+   "families": [
+    "Wisp Critter Family Abyss",
+    "Wisp Monster Family Abyss"
+   ],
+   "handle": "Stone_Wisp_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "b9a5a72b-05c0-494e-ba1c-967728a55b6c": {
+   "families": [
+    "Lich Family Abyss"
+   ],
+   "handle": "Cave_Liches_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     2
+    ],
+    [
+     29,
+     1
+    ],
+    [
+     38,
+     2
+    ]
+   ]
+  },
+  "ba1c8452-bdcb-4e66-88d1-f26661c43848": {
+   "families": [
+    "Spider Cave Critter Family Abyss",
+    "Spider Cave Monster Family Abyss",
+    "Spider Forest Critter Family Abyss",
+    "Spider Forest Monster Family Abyss",
+    "Troll Ancient Family Abyss",
+    "Troll Cave Family Abyss",
+    "Troll Family Abyss",
+    "Troll Forest Family Abyss"
+   ],
+   "handle": "Stone_TrollSpider_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "ba3a3dd6-0a38-49c5-8bce-60f83bf11b07": {
+   "families": [
+    "Mercenary Family Abyss"
+   ],
+   "handle": "Test_Forest_Mercenary_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "bb218c80-03f6-4227-882f-8b44bfd9f154": {
+   "families": [
+    "Wolf Critter Family Abyss"
+   ],
+   "handle": "Test_Forest_Wolves_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "bcf94a62-c394-4526-9878-c8bb1312e979": {
+   "families": [
+    "Mercenary Family Abyss"
+   ],
+   "handle": "Ayleid_Mercenary_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "c00b2520-18be-48bc-a208-d97361675fc9": {
+   "families": [
+    "Troll Ancient Family Abyss",
+    "Troll Cave Family Abyss",
+    "Troll Family Abyss",
+    "Troll Forest Family Abyss"
+   ],
+   "handle": "Forest_Troll_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "c211c8e2-fef1-45ae-95ea-9b7295271a17": {
+   "families": [
+    "Troll Ancient Family Abyss",
+    "Troll Cave Family Abyss",
+    "Troll Family Abyss",
+    "Troll Forest Family Abyss"
+   ],
+   "handle": "Cave_Troll_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "c34b918e-16bd-4272-9fd5-808b46232978": {
+   "families": [
+    "Troll Ancient Family Abyss",
+    "Troll Cave Family Abyss",
+    "Troll Family Abyss",
+    "Troll Forest Family Abyss"
+   ],
+   "handle": "Test_Forest_Troll_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "c75ebc53-fcc2-4caf-9dcb-d182f4ba8c4a": {
+   "families": [
+    "Wisp Critter Family Abyss",
+    "Wisp Monster Family Abyss"
+   ],
+   "handle": "Ayleid_Wisp_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "cae943b8-f051-4dfc-a9c3-353b46d2ddfd": {
+   "families": [
+    "Lich Family Abyss",
+    "Skeleton Family Abyss"
+   ],
+   "handle": "Ayleid_LichesSkeleton_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "cbf673a4-994b-4895-9d0e-bf98e5b600ae": {
+   "families": [
+    "Bear Family Abyss"
+   ],
+   "handle": "Forest_Bears_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "cc9c27fd-1917-4b0a-a62e-87cfb07e7c6d": {
+   "families": [
+    "Troll Ancient Family Abyss",
+    "Troll Cave Family Abyss",
+    "Troll Family Abyss",
+    "Troll Forest Family Abyss"
+   ],
+   "handle": "Cave_Troll_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "ce0358f8-2459-4d19-9972-cd5d529a1766": {
+   "families": [
+    "Wight Monster Family Abyss"
+   ],
+   "handle": "Cave_Wight_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "ce6bc7f1-e643-4a85-8d7c-fa101829ba38": {
+   "families": [
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Storm Atronach Family Abyss"
+   ],
+   "handle": "Stone_AtronachGoblinWizard_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "ceaa6f04-eee8-4167-a617-d35810f3b2b1": {
+   "families": [
+    "Spriggan Family Abyss"
+   ],
+   "handle": "Cave_Spriggan_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "cf409329-d93c-413c-9012-24c03a6c4d49": {
+   "families": [
+    "Bandit Family Abyss"
+   ],
+   "handle": "Forest_Bandit_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "d06c756d-aeb6-4184-99e8-546f27670c6d": {
+   "families": [
+    "Dremora Raider Family Abyss",
+    "Dremora Warlock Family Abyss"
+   ],
+   "handle": "Cave_Dremora_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "d30de853-68ca-4360-b060-81aaf182d940": {
+   "families": [
+    "Bandit Family Abyss"
+   ],
+   "handle": "Ayleid_Bandit_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "d3816ae3-1072-409c-a015-d1155a993119": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "handle": "Cave_Skeletons_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "d92e3196-8c47-4b15-becb-6bd459dc15c5": {
+   "families": [
+    "Warlord Family Abyss"
+   ],
+   "handle": "Forest_Warlord_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "d9601fad-0aff-4f1f-9bfa-50399ec3059b": {
+   "families": [
+    "Lich Family Abyss",
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss"
+   ],
+   "handle": "Cave_LichesOutcastNether_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "d9db794b-848a-449e-abe9-df3a2dda8825": {
+   "families": [
+    "Dragon Ancient Frost Family Abyss"
+   ],
+   "handle": "Stone_DragonAncientFrost_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "daefd6cf-da7e-4701-9bb3-bb5d43db0332": {
+   "families": [
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Necromancer Family Abyss",
+    "Storm Atronach Family Abyss"
+   ],
+   "handle": "Stone_AtronachNecromancer_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "dd6a03e7-5754-4d89-ac50-6b7bc0663d80": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss",
+    "Skeleton Family Abyss"
+   ],
+   "handle": "Ayleid_GoblinSkeleton_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "ddd00c28-a1d5-4a62-9dfc-7faaa61315b4": {
+   "families": [
+    "Necromancer Family Abyss",
+    "Skeleton Family Abyss"
+   ],
+   "handle": "Ayleid_NecromancerSkeleton_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "e0af1fc3-1eff-4212-9139-8803b1d23ffa": {
+   "families": [
+    "Necromancer Family Abyss",
+    "Skeleton Family Abyss"
+   ],
+   "handle": "Forest_NecromancerSkeleton_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "e4590fe9-29d8-4333-ab78-47eaf4147eb8": {
+   "families": [
+    "Wight Monster Family Abyss"
+   ],
+   "handle": "Ayleid_Wight_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "e666f78a-2bb2-49ac-8ad7-8a507087f322": {
+   "families": [
+    "Bandit Family Abyss"
+   ],
+   "handle": "Cave_Bandit_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "e81e1397-4d1d-4e43-8eff-baf826679d11": {
+   "families": [
+    "Dremora Raider Family Abyss",
+    "Dremora Warlock Family Abyss"
+   ],
+   "handle": "Forest_Dremora_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "e92332f5-d18d-4f7d-9dc1-90fe4c24dde8": {
+   "families": [
+    "Wolf Critter Family Abyss"
+   ],
+   "handle": "Ayleid_Wolves_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "eb89870c-a6cf-4c1e-9e17-15347d61213a": {
+   "families": [
+    "Bear Family Abyss"
+   ],
+   "handle": "Test_Forest_Bears_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "ebacf26a-d35f-4454-a511-3e74360a3856": {
+   "families": [
+    "Wisp Critter Family Abyss",
+    "Wisp Monster Family Abyss"
+   ],
+   "handle": "Cave_Wisp_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "ec7f53fa-6fae-45e4-ba77-901f4bc1da2d": {
+   "families": [
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Storm Atronach Family Abyss"
+   ],
+   "handle": "Cave_AtronachGoblinWizard_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "eeca6c54-42a1-4fba-bf1d-9ecfbd243f59": {
+   "families": [
+    "Dremora Raider Family Abyss",
+    "Dremora Warlock Family Abyss"
+   ],
+   "handle": "Cave_Dremora_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "ef24eeb3-8181-48e2-ae3d-320bd6f5992c": {
+   "families": [
+    "Lich Family Abyss"
+   ],
+   "handle": "Stone_Liches_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     2
+    ],
+    [
+     29,
+     1
+    ],
+    [
+     38,
+     2
+    ]
+   ]
+  },
+  "ef9bcf3f-5b89-47e5-bbd5-d971c0ba6a3c": {
+   "families": [
+    "Skeever Critter Family Abyss"
+   ],
+   "handle": "Cave_Skeevers_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "f00dea4c-025d-4233-a503-8ab28ef53c80": {
+   "families": [
+    "Dremora Raider Family Abyss",
+    "Dremora Warlock Family Abyss",
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Storm Atronach Family Abyss"
+   ],
+   "handle": "Stone_AtronachDremora_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "f01a78e9-6299-47f7-a14a-68db66c9eb9d": {
+   "families": [
+    "Wight Monster Family Abyss"
+   ],
+   "handle": "Stone_Wight_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "f2c3ade3-73db-4a60-b47f-b20252292e6f": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "handle": "Test_Stone_Necromancer_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "f2dd8509-74a0-4600-a72c-c543fb7aebf1": {
+   "families": [
+    "Dragon Undead Family Abyss"
+   ],
+   "handle": "Stone_DragonUndead_Boss_2Rooms_AbyssDungeonSetting_1",
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "f85ce072-5597-48bc-bdd6-3371e05b1258": {
+   "families": [
+    "Flame Atronach Family Abyss",
+    "Frost Atronach Family Abyss",
+    "Mixed Atronach Family Abyss",
+    "Storm Atronach Family Abyss"
+   ],
+   "handle": "Cave_Atronach_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "f87c2e82-1d6a-4b70-ab4b-1792b6822728": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "handle": "Ayleid_Necromancer_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "f9c1faec-79b2-49e5-a5b3-57bb5ce6a717": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss"
+   ],
+   "handle": "Test_Forest_Goblin_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "fac0a497-8577-44b2-9ef4-f36829c73f44": {
+   "families": [
+    "Spider Cave Critter Family Abyss",
+    "Spider Cave Monster Family Abyss",
+    "Spider Forest Critter Family Abyss",
+    "Spider Forest Monster Family Abyss",
+    "Troll Ancient Family Abyss",
+    "Troll Cave Family Abyss",
+    "Troll Family Abyss",
+    "Troll Forest Family Abyss"
+   ],
+   "handle": "Forest_TrollSpider_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "fb964813-5b11-4159-8986-6a3a9dab5ee3": {
+   "families": [
+    "Lich Family Abyss",
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss",
+    "Skeleton Family Abyss"
+   ],
+   "handle": "Ayleid_LichesOutcastNetherSkeleton_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "fc48e5d1-3723-4c5f-9a30-50683679cd9e": {
+   "families": [
+    "Dragon Undead Family Abyss"
+   ],
+   "handle": "Cave_DragonUndead_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "fc75de59-8eec-4b95-8c8a-e9f81d88507a": {
+   "families": [
+    "Dragon Ancient Family Abyss"
+   ],
+   "handle": "Cave_DragonAncientFire_Boss_2Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "fcfd25b6-dff0-481d-9c84-34cf6945f00d": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss",
+    "Spider Cave Critter Family Abyss",
+    "Spider Cave Monster Family Abyss",
+    "Spider Forest Critter Family Abyss",
+    "Spider Forest Monster Family Abyss"
+   ],
+   "handle": "Forest_SpiderGoblin_3Rooms_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "fcff221d-ffed-4151-9cf9-9f5de0d03be2": {
+   "families": [
+    "Dremora Raider Family Abyss",
+    "Dremora Warlock Family Abyss"
+   ],
+   "handle": "Test_Forest_Dremora_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "fe22c3c8-e4c9-491c-bd85-7c0ba9dc6b31": {
+   "families": [
+    "Skeever Critter Family Abyss"
+   ],
+   "handle": "Test_Stone_Skeevers_AbyssDungeonSetting",
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  }
+ }
+}

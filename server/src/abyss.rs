@@ -51,7 +51,7 @@ use actix_web::{
 };
 use blades_lib::{
     economy::{RewardGrant, apply_reward, consume_stackable, grant_chest},
-    features::{abyss_rewards, revive},
+    features::{abyss_kill_score, abyss_rewards, revive},
     server_state::{AbyssRun, AbyssSliceEntry},
     user_data::{CompleteCharacterWithIdWithoutData, CompleteInventory, CompleteInventoryUpdate,
                 CompleteWallet, DungeonGeneratedData, InventoryChangeTracker},
@@ -1399,16 +1399,14 @@ fn apply_item_consumption(
     consumed
 }
 
-/// The `killScoreMultiplier` used when the server cannot identify the enemy variant.
+/// The `killScoreMultiplier` for a floor whose dungeon is not in the multiplier table.
 ///
 /// Every enemy carries one in the game data (`enemies.json` `variants[*].stats
-/// .killScoreMultiplier`: 0.33 on 22 critter variants, 1.0 on 559, 2.0 on 50 bosses).
-/// The server cannot read it: `deploy/static/parsed.json` keeps only `{"quantity": N}`
-/// for all 1,956 enemy spawn groups — the extractor was narrowed on the enemy path
-/// specifically (item spawn groups in the same file keep their full structure). With no
-/// variant id anywhere in the request or in the generated data, there is nothing to look
-/// the multiplier up by, so every kill scores as a normal enemy. Restoring the variant
-/// to `parsed.json` is a separate extraction job; when it lands, multiply here.
+/// .killScoreMultiplier`: 0.33 on 22 critter variants, 1.0 on 559, 2.0 on 50 bosses),
+/// and the client multiplies every kill by it before filling the reward gauge. Nothing
+/// on the wire names the variant, so the multiplier comes per floor from
+/// [`abyss_kill_score::floor_multiplier`]; this is only for a dungeon that table lacks
+/// (the four `AbyssEntrance` settings, which no slice uses).
 const FALLBACK_KILL_SCORE_MULTIPLIER: f64 = 1.0;
 
 /// Score for `count` kills on `slice`, for a run started at `initial_player_level`.
@@ -1425,7 +1423,13 @@ fn kills_score(
     let Some(slice) = slice else { return 0.0 };
     let level_delta = slice.difficulty_level as i32 - initial_player_level as i32;
     let per_kill = static_abyss.kill_score(level_delta) as f64;
-    FALLBACK_KILL_SCORE_MULTIPLIER * per_kill * count as f64
+    // Scored at 1.0 everywhere, a critter floor ran the server ahead of the client's
+    // gauge, and a rung paid before the client reached it stalls that gauge for the
+    // rest of the run (#312).
+    let multiplier =
+        abyss_kill_score::floor_multiplier(slice.dungeon_settings_id, slice.difficulty_level)
+            .unwrap_or(FALLBACK_KILL_SCORE_MULTIPLIER);
+    multiplier * per_kill * count as f64
 }
 
 /// Which floors of a finished run pay out.
@@ -2918,6 +2922,118 @@ mod tests {
             .remove("grantedFutureRewards");
         let legacy: AbyssRun = serde_json::from_value(legacy).unwrap();
         assert!(legacy.granted_future_rewards.is_empty());
+    }
+
+    /// #312: one kill per request, all the way up — the ladder has ten rungs and the
+    /// handler pays every one of them; nothing stops after the fifth.
+    #[test]
+    fn a_run_climbs_all_ten_rungs() {
+        let (mut run, mut player) = gauge_fixture();
+        let mut paid = Vec::new();
+        for _ in 0..80 {
+            let mut tracker = InventoryChangeTracker::default();
+            let showing = advertised(&run, 40).map(|(rung, _)| rung);
+            if update(&mut run, &mut player, &kills(1), &mut tracker).is_some() {
+                paid.push(showing.expect("a paid rung was advertised first"));
+            }
+        }
+        assert_eq!(paid, abyss_rewards::ABYSS_LADDER.to_vec());
+        assert!(advertised(&run, 40).is_none(), "nothing left to advertise past 650");
+    }
+
+    /// A captured retail run (`initialPlayerLevel` 10, from floor 1): each floor's
+    /// dungeon, its difficulty, and the `enemy_killed` actions sent on it, in order.
+    const RETAIL_RUN_FLOORS: [(&str, u32, u64); 16] = [
+        ("663053f0-3a46-4012-b004-6cb2e907f33c", 1, 3),
+        ("4de80b69-fe4e-4ed5-a556-71e5b7c82ed0", 2, 3),
+        ("1396d90c-c38e-47c6-a9da-6e98c49788e5", 3, 2),
+        ("fe22c3c8-e4c9-491c-bd85-7c0ba9dc6b31", 4, 5),
+        ("44e0d7cd-26a1-4183-996b-056a484a5e2e", 5, 3),
+        ("5cc26070-12ac-4adc-b55d-da6fed6934ee", 6, 6),
+        ("cc9c27fd-1917-4b0a-a62e-87cfb07e7c6d", 7, 2),
+        ("d30de853-68ca-4360-b060-81aaf182d940", 8, 2),
+        ("84e70169-4e8c-4820-936d-18976b871c8d", 9, 6),
+        ("7924c82d-f6b3-4eb6-9edb-9b1349a1da84", 10, 3),
+        ("ad7a91a8-c47e-47ab-b78f-f7559123a879", 12, 6),
+        ("73aa75cb-1109-4e96-b7a2-73e55aaa99a2", 14, 3),
+        ("0ec5e913-6074-4490-abaa-f1802827b007", 16, 6),
+        ("2c0e2b66-2642-409c-a7c9-2184c6c51c6c", 20, 7),
+        ("28ffdb77-161e-49a4-897e-7a8f679264d6", 24, 7),
+        ("4c793f15-aa4b-406f-be88-9689085fdc05", 28, 1),
+    ];
+
+    /// The kill (1-based, over the whole run) on whose response retail paid each rung,
+    /// 35 through 490. Retail's server and the client agree by construction, so these
+    /// are where the client's own gauge crossed.
+    const RETAIL_PAID_AT_KILL: [usize; 9] = [24, 26, 28, 33, 38, 43, 47, 51, 61];
+
+    /// Replays the captured run through the real handler steps, one kill per request,
+    /// and returns the kill each rung was paid on.
+    fn replay_retail_run() -> Vec<usize> {
+        let (_, mut player) = gauge_fixture();
+        let mut run = run_from(&[], 10);
+        run.slices = RETAIL_RUN_FLOORS
+            .iter()
+            .enumerate()
+            .map(|(i, (dungeon, difficulty, _))| slice_for(dungeon, *difficulty, i as u32 + 1))
+            .collect();
+        run.current_floor_index = 0;
+        let completed = parse_actions(serde_json::json!([
+            {"type": "abyss_slice_completed", "time": 1}
+        ]));
+        let mut paid_at = Vec::new();
+        let mut kill_no = 0;
+        for (_, _, floor_kills) in RETAIL_RUN_FLOORS {
+            for _ in 0..floor_kills {
+                kill_no += 1;
+                let mut tracker = InventoryChangeTracker::default();
+                let before = run.granted_future_rewards.len();
+                update(&mut run, &mut player, &kills(1), &mut tracker);
+                paid_at.extend(std::iter::repeat(kill_no).take(run.granted_future_rewards.len() - before));
+            }
+            update(&mut run, &mut player, &completed, &mut InventoryChangeTracker::default());
+        }
+        paid_at
+    }
+
+    /// #312, the defect. The server must never pay a rung before the client's gauge gets
+    /// there: the client then takes that rung as its new floor, its own score sits below
+    /// it, and the gauge stops filling for the rest of the run. Scored at a flat 1.0 the
+    /// critter floors of this captured run put the server ahead from the first rung (35
+    /// paid on kill 18, the client got there on kill 24).
+    #[test]
+    fn the_server_never_pays_a_rung_before_the_clients_gauge_reaches_it() {
+        let paid_at = replay_retail_run();
+        for (rung, (server, client)) in abyss_rewards::ABYSS_LADDER
+            .iter()
+            .zip(paid_at.iter().zip(RETAIL_PAID_AT_KILL))
+        {
+            assert!(
+                *server >= client,
+                "rung {rung} paid on kill {server}, before the client's gauge reached it on kill {client} (all: {paid_at:?})"
+            );
+        }
+        assert_eq!(&paid_at[..2], &RETAIL_PAID_AT_KILL[..2], "the shallow rungs land on retail's kill");
+    }
+
+    /// NEGATIVE CONTROL: the same run scored at a flat 1.0, as the server did, pays the
+    /// first rung six kills early — the replay above can tell the two apart.
+    #[test]
+    fn a_flat_multiplier_pays_the_first_rung_early() {
+        let sd = real_static_abyss();
+        let mut score = 0.0;
+        let mut kill_no = 0;
+        'run: for (_, difficulty, floor_kills) in RETAIL_RUN_FLOORS {
+            for _ in 0..floor_kills {
+                kill_no += 1;
+                score += sd.kill_score(difficulty as i32 - 10) as f64;
+                if score >= 35.0 {
+                    break 'run;
+                }
+            }
+        }
+        assert_eq!(kill_no, 18);
+        assert!(kill_no < RETAIL_PAID_AT_KILL[0]);
     }
 
     /// One request that crosses two rungs pays both, merged into one `reward` —

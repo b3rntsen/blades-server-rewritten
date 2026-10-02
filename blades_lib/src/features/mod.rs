@@ -4,6 +4,7 @@
 //! involved — so it is exhaustively unit-testable against captured fixtures. The
 //! server handlers are thin: load → call these → persist → serialize.
 
+pub mod abyss_kill_score;
 pub mod abyss_rewards;
 pub mod challenges;
 pub mod character_ops;
