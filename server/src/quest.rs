@@ -1139,6 +1139,16 @@ pub async fn get_quests(
                     .collect()
             };
 
+            // Advance the difficulty cycle BEFORE rolling (tracker #313): every later
+            // fetch in this window — and /accept and /complete — rolls from the
+            // stored index, so the first roll must use that same value or the
+            // board's difficulties would shift on the second fetch.
+            if needs_regen {
+                character.character.0.job_difficulty_cycle_index = jobs_gen::next_cycle_index(
+                    &job_pools_def,
+                    character.character.0.job_difficulty_cycle_index,
+                );
+            }
             let (jobs, job_pools) = jobs_gen::generate_replenished(
                 &job_pools_def,
                 character_id_var,
@@ -1187,10 +1197,9 @@ pub async fn get_quests(
                         deleted_quest_ids.extend(stale.iter().copied());
                     }
                 }
-                // Persist the rotation scalars on the character.
+                // Persist the rotation scalars on the character (the cycle index
+                // was advanced above, before the roll).
                 character.character.0.last_jobs_reset_time = reset_boundary;
-                character.character.0.job_difficulty_cycle_index =
-                    jobs_gen::next_cycle_index(&job_pools_def, character.character.0.job_difficulty_cycle_index);
                 {
                     use crate::schema::characters;
                     diesel::update(characters::table)
@@ -3808,10 +3817,39 @@ pub(crate) mod jobs_gen {
             .unwrap_or(level)
     }
 
+    /// The difficulty band (0 = very easy .. 4 = very hard) retail assigns to the
+    /// job at `cycle_pos`: `globals.difficultyCycle[cycle_pos mod len]`, the
+    /// character's `jobDifficultyCycleIndex` plus the job's place on the board.
+    /// `None` when the data carries no cycle.
+    fn cycle_band(pools_def: &Value, cycle_pos: i64) -> Option<usize> {
+        let cycle = pools_def
+            .get("globals")
+            .and_then(|g| g.get("difficultyCycle"))
+            .and_then(Value::as_array)
+            .filter(|c| !c.is_empty())?;
+        let band = cycle[cycle_pos.rem_euclid(cycle.len() as i64) as usize].as_u64()?;
+        Some((band as usize).min(4))
+    }
+
     /// Difficulty-level roll for a job: effective player level offset by the
-    /// per-type, per-level difficulty range from `perTypeDifficulty` (clamped to a
-    /// floor of 1).
-    fn roll_difficulty(pools_def: &Value, job_type: i64, base_level: i64, rng: &mut Rng) -> i64 {
+    /// per-type, per-level difficulty distribution from `perTypeDifficulty`
+    /// (clamped to a floor of 1).
+    ///
+    /// Tracker #313: the offset is drawn from ONE band of that distribution, the
+    /// band the difficulty cycle names, not uniformly over the whole
+    /// `veryEasyMin..=veryHardMax` span. Retail (2026-06-07 snapshot): 37 of 42
+    /// consecutive board refreshes carry exactly the bands
+    /// `difficultyCycle[prevIndex..newIndex]` predicts when measured against
+    /// `initialEPL`, and the 157 jobs seen at levels 1-20 sit at 31% very easy,
+    /// 43% easy, 17% normal, 8% hard, 1% very hard (the cycle: 25/50/15/7.5/2.5).
+    /// The uniform roll put half of every board at hard or very hard.
+    fn roll_difficulty(
+        pools_def: &Value,
+        job_type: i64,
+        base_level: i64,
+        band: Option<usize>,
+        rng: &mut Rng,
+    ) -> i64 {
         let level = base_level.max(1);
         let (mut lo, mut hi) = pools_def
             .get("globals")
@@ -3833,12 +3871,38 @@ pub(crate) mod jobs_gen {
                     if let Some(row) = best.or_else(|| by_level.get(0)) {
                         lo = get_i64(row, "veryEasyMin", lo);
                         hi = get_i64(row, "veryHardMax", hi);
+                        if let Some(band) = band {
+                            (lo, hi) = band_range(row, band, lo, hi);
+                        }
                     }
                 }
             }
         }
         let offset = rng.range_incl(lo, hi);
         (level + offset).max(1)
+    }
+
+    /// `[min, max]` offset of one band of a `difficultyByLevel` row: from that
+    /// band's lower bound to one below the next band's (very hard ends at
+    /// `veryHardMax`). A row without the band thresholds keeps the whole span.
+    fn band_range(row: &Value, band: usize, lo: i64, hi: i64) -> (i64, i64) {
+        const BOUNDS: [&str; 6] = [
+            "veryEasyMin",
+            "easyMin",
+            "normalMin",
+            "hardMin",
+            "veryHardMin",
+            "veryHardMax",
+        ];
+        let band = band.min(4);
+        let (Some(min), Some(next)) = (
+            row.get(BOUNDS[band]).and_then(Value::as_i64),
+            row.get(BOUNDS[band + 1]).and_then(Value::as_i64),
+        ) else {
+            return (lo, hi);
+        };
+        let max = if band == 4 { next } else { next - 1 };
+        (min, max.max(min))
     }
 
     /// Roll a single job Value for a pool + slot. Deterministic via the seed.
@@ -3849,6 +3913,7 @@ pub(crate) mod jobs_gen {
         level: u16,
         reset_boundary: u64,
         slot: u64,
+        cycle_pos: i64,
     ) -> Value {
         let pool_id = get_str(pool, "jobPoolId").unwrap_or("");
         let presentation = get_i64(pool, "presentation", 0);
@@ -3866,7 +3931,8 @@ pub(crate) mod jobs_gen {
         let quest_id = uuid_from_seed(base_seed.wrapping_add(0xA11CE));
         let seed_field: i64 = rng.next_u64() as i64; // signed, matches captured range
         let initial_epl = job_initial_epl(pools_def, level);
-        let difficulty = roll_difficulty(pools_def, job_type, initial_epl, &mut rng);
+        let band = cycle_band(pools_def, cycle_pos);
+        let difficulty = roll_difficulty(pools_def, job_type, initial_epl, band, &mut rng);
 
         let mut objectives = serde_json::Map::new();
         for oid in objective_ids(job_type) {
@@ -4004,7 +4070,7 @@ pub(crate) mod jobs_gen {
         pools_def: &Value,
         character_id: Uuid,
         level: u16,
-        _cycle_index: i64,
+        cycle_index: i64,
         reset_boundary: u64,
         now: u64,
     ) -> (Vec<Value>, Value) {
@@ -4020,6 +4086,9 @@ pub(crate) mod jobs_gen {
 
         let mut jobs = Vec::new();
         let mut timers = Vec::new();
+        // Board position of the pool's first slot: job k on the board takes
+        // difficulty-cycle entry `cycle_index + k`.
+        let mut board_pos = 0i64;
         for pool in pools {
             let pool_id = match get_str(pool, "jobPoolId") {
                 Some(id) => id,
@@ -4037,8 +4106,10 @@ pub(crate) mod jobs_gen {
                     level,
                     reset_boundary,
                     slot,
+                    cycle_index + board_pos + slot as i64,
                 ));
             }
+            board_pos += count as i64;
             let (end_time, next_start) = pool_timers(pool, now, count);
             timers.push(json!({ "id": pool_id, "endTime": end_time, "nextStartTime": next_start }));
         }
@@ -4093,6 +4164,7 @@ pub(crate) mod jobs_gen {
 
         let mut jobs = Vec::new();
         let mut timers = Vec::new();
+        let mut board_pos = 0i64;
         for pool in pools {
             let pool_id = match get_str(pool, "jobPoolId") {
                 Some(id) => id,
@@ -4109,7 +4181,17 @@ pub(crate) mod jobs_gen {
             let mut issued = 0;
             let mut slot = 0;
             while kept < count && issued < max_total {
-                let job = roll_job(pools_def, pool, character_id, level, reset_boundary, slot);
+                // Same cycle positions as `generate`, so a kept job is unchanged.
+                let cycle_pos = cycle_index + board_pos + slot as i64;
+                let job = roll_job(
+                    pools_def,
+                    pool,
+                    character_id,
+                    level,
+                    reset_boundary,
+                    slot,
+                    cycle_pos,
+                );
                 slot += 1;
                 let Some(id) = get_str(&job, "questId").and_then(|s| Uuid::parse_str(s).ok())
                 else {
@@ -4122,6 +4204,7 @@ pub(crate) mod jobs_gen {
                 jobs.push(job);
                 kept += 1;
             }
+            board_pos += count as i64;
 
             let (end_time, next_start) = pool_timers(pool, now, count);
             timers.push(json!({ "id": pool_id, "endTime": end_time, "nextStartTime": next_start }));
@@ -7578,8 +7661,10 @@ mod report_237_duel_arena {
         );
         assert!(jobs_gen::DUEL_DUNGEON_TEMPLATES.contains(&t), "{t}");
 
-        // Control: every value prod served before the fix is unchanged.
-        assert_eq!(duel["difficultyLevel"], 76);
+        // Control: every value prod served before the fix is unchanged — except the
+        // difficulty (prod: 76) and the XP that scales with it, which tracker #313
+        // re-banded onto the retail difficulty cycle.
+        assert_eq!(duel["difficultyLevel"], 70);
         assert_eq!(duel["seed"], -2_524_332_663_550_136_772_i64);
         assert_eq!(js["duelBossId"], "024b4f81-c7ef-4322-a547-ee863b4c02ad");
         assert_eq!(
@@ -7587,7 +7672,7 @@ mod report_237_duel_arena {
             "31be99a6-8557-4e9b-81e6-5503f900b7d2"
         );
         assert_eq!(js["bossLevelDelta"], 7);
-        assert_eq!(js["rewardXp"], 1543);
+        assert_eq!(js["rewardXp"], 1429); // prod: 1543 at difficulty 76
         assert_eq!(js["rewardItemCount"], 0);
         assert_eq!(js["questName"]["key"], "UI.Jobs.Names.Duel.002");
         assert_eq!(
@@ -7629,9 +7714,15 @@ mod report_279_job_difficulty {
     }
 
     fn l100_board(character: Uuid) -> Vec<Value> {
+        l100_board_at(character, 0)
+    }
+
+    /// Characters sit at every point of the 80-entry difficulty cycle, and only a
+    /// few points name the very-hard band, so the sweep below walks them all.
+    fn l100_board_at(character: Uuid, cycle_index: i64) -> Vec<Value> {
         let pools = pools();
         let boundary = jobs_gen::current_reset_boundary(&pools, NOW);
-        jobs_gen::generate(&pools, character, 100, 0, boundary, NOW).0
+        jobs_gen::generate(&pools, character, 100, cycle_index, boundary, NOW).0
     }
 
     #[test]
@@ -7639,7 +7730,8 @@ mod report_279_job_difficulty {
         let mut checked = 0;
         let mut saw_top_retail_level = false;
         for c in 1..=200u128 {
-            for job in l100_board(Uuid::from_u128(c * 0x9E37_79B9_7F4A_7C15)) {
+            let cycle_index = (c % 80) as i64;
+            for job in l100_board_at(Uuid::from_u128(c * 0x9E37_79B9_7F4A_7C15), cycle_index) {
                 let setup = &job["jobSetup"];
                 assert_eq!(
                     setup["initialEPL"], 84,
@@ -7730,6 +7822,169 @@ mod report_279_job_difficulty {
             Some(97),
             "stored job rows preserve the declared level"
         );
+    }
+}
+
+/// Tracker #313 (Raysiel, new character): every job on the board was five-skull
+/// "very hard", the recommended level sat above his own, and it rose as he levelled.
+///
+/// The baseline was right (`initialEPL`, #279) but the offset on top of it was not.
+/// We drew it uniformly over the whole `veryEasyMin..=veryHardMax` span, -2..+9 below
+/// level 20, so half of every board was hard or very hard. Retail draws it from ONE
+/// band of that span, the band `globals.difficultyCycle` (80 entries, already in
+/// `job_pools.json`) names at the character's `jobDifficultyCycleIndex` plus the job's
+/// place on the board.
+///
+/// MEASURED in the 2026-06-07 snapshot, 486 distinct jobs from 13 characters:
+///
+/// ```text
+/// 157 jobs at levels 1-20, difficultyLevel - initialEPL:
+///   -4:2 -3:2 -2:18 -1:27 | 0:38 1:30 | 2:11 3:15 | 4:3 5:9 | 6:1 8:1
+///   very easy 49 (31%) | easy 68 (43%) | normal 26 (17%) | hard 12 (8%) | very hard 2 (1%)
+///   mean +0.58 (the uniform roll: +3.5)
+/// difficultyCycle band weights: 25% / 50% / 15% / 7.5% / 2.5%
+/// 37 of 42 consecutive board refreshes carry exactly the bands
+///   difficultyCycle[prevIndex .. newIndex] predicts (against initialEPL; 26/42 against
+///   character level); the misses are level-1 boards, where the floor of 1 folds
+///   "very easy" into "easy".
+/// ```
+#[cfg(test)]
+mod report_313_job_difficulty_bands {
+    use super::*;
+    use serde_json::Value;
+    use uuid::Uuid;
+
+    const NOW: u64 = 1_790_618_400;
+    const CYCLE_LEN: i64 = 80;
+
+    fn pools() -> Value {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        serde_json::from_str(&std::fs::read_to_string(dir.join("job_pools.json")).unwrap()).unwrap()
+    }
+
+    /// `(difficultyLevel - initialEPL)` for every job on boards rolled at `levels`,
+    /// over many characters and every point of the cycle.
+    fn offsets(levels: std::ops::RangeInclusive<u16>) -> Vec<i64> {
+        let pools = pools();
+        let boundary = jobs_gen::current_reset_boundary(&pools, NOW);
+        let mut out = Vec::new();
+        for level in levels {
+            for c in 0..CYCLE_LEN as u128 {
+                let character = Uuid::from_u128((c + 1) * 0x9E37_79B9_7F4A_7C15 + level as u128);
+                let (jobs, _) =
+                    jobs_gen::generate(&pools, character, level, c as i64, boundary, NOW);
+                for job in jobs {
+                    let epl = job["jobSetup"]["initialEPL"].as_i64().unwrap();
+                    out.push(job["difficultyLevel"].as_i64().unwrap() - epl);
+                }
+            }
+        }
+        out
+    }
+
+    /// Levels 3-17: `initialEPL` 4-19, so the level-1 row applies (bands -2/0/2/4/6..9)
+    /// and the floor of 1 never folds a very-easy roll.
+    #[test]
+    fn low_level_boards_follow_the_retail_band_mix() {
+        let offs = offsets(3..=17);
+        assert!(offs.len() > 3_000, "only {} jobs", offs.len());
+        let n = offs.len() as f64;
+        let share = |f: &dyn Fn(i64) -> bool| offs.iter().filter(|o| f(**o)).count() as f64 / n;
+        let mean = offs.iter().sum::<i64>() as f64 / n;
+
+        let easy_or_below = share(&|o| o < 2);
+        let hard_or_above = share(&|o| o >= 4);
+        // Retail 117/157 = 75% easy or very easy; the uniform roll gave 4/12 = 33%.
+        assert!(
+            (0.65..=0.85).contains(&easy_or_below),
+            "{:.0}% of jobs easy or very easy; retail 75%",
+            easy_or_below * 100.0
+        );
+        // Retail 14/157 = 9% hard or very hard; the uniform roll gave 6/12 = 50%.
+        assert!(
+            hard_or_above <= 0.15,
+            "{:.0}% of jobs hard or very hard; retail 9%",
+            hard_or_above * 100.0
+        );
+        // Retail mean +0.58 over initialEPL; the uniform roll's was +3.5.
+        assert!((0.0..=1.5).contains(&mean), "mean offset {mean:.2}; retail +0.58");
+        // The whole retail span is still reachable, the very-hard top included.
+        assert_eq!(offs.iter().min(), Some(&-2));
+        assert_eq!(offs.iter().max(), Some(&9));
+    }
+
+    /// Each job lands in the band the cycle names for its place on the board.
+    #[test]
+    fn each_job_takes_the_band_the_cycle_names() {
+        let pools = pools();
+        let cycle: Vec<i64> = pools["globals"]["difficultyCycle"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_i64().unwrap())
+            .collect();
+        assert_eq!(cycle.len() as i64, CYCLE_LEN);
+        // Level-1 row: very easy -2..-1, easy 0..1, normal 2..3, hard 4..5, very hard 6..9.
+        let band_of = |o: i64| match o {
+            ..=-1 => 0,
+            0..=1 => 1,
+            2..=3 => 2,
+            4..=5 => 3,
+            _ => 4,
+        };
+        let boundary = jobs_gen::current_reset_boundary(&pools, NOW);
+        for start in 0..CYCLE_LEN {
+            let character = Uuid::from_u128(0x313_0000 + start as u128);
+            let (jobs, _) = jobs_gen::generate(&pools, character, 9, start, boundary, NOW);
+            assert!(jobs.len() >= 4);
+            for (k, job) in jobs.iter().enumerate() {
+                let epl = job["jobSetup"]["initialEPL"].as_i64().unwrap();
+                let offset = job["difficultyLevel"].as_i64().unwrap() - epl;
+                let want = cycle[((start + k as i64) % CYCLE_LEN) as usize];
+                assert_eq!(
+                    band_of(offset),
+                    want,
+                    "cycle index {start}, board slot {k}: offset {offset}"
+                );
+            }
+        }
+    }
+
+    /// Raysiel's level, at the start of the cycle (a fresh character): retail's first
+    /// board on three fresh characters was very easy, easy, normal, easy, very easy,
+    /// hard. Ours, against `initialEPL` 10, must not hold a single very-hard job.
+    #[test]
+    fn a_fresh_level_9_board_is_not_wall_to_wall_very_hard() {
+        let pools = pools();
+        let boundary = jobs_gen::current_reset_boundary(&pools, NOW);
+        let character = Uuid::parse_str("84aeca4f-e7a8-479f-afb5-ec405f3bcce1").unwrap();
+        let (jobs, _) = jobs_gen::generate(&pools, character, 9, 0, boundary, NOW);
+        let offs: Vec<i64> = jobs
+            .iter()
+            .map(|j| {
+                j["difficultyLevel"].as_i64().unwrap()
+                    - j["jobSetup"]["initialEPL"].as_i64().unwrap()
+            })
+            .collect();
+        assert!(offs.iter().all(|o| *o <= 5), "board offsets {offs:?}");
+        assert!(offs.iter().filter(|o| **o <= 1).count() >= 3, "board offsets {offs:?}");
+    }
+
+    /// Replenishing after a completion keeps every surviving job exactly as it was.
+    #[test]
+    fn control_a_replenished_board_keeps_the_surviving_jobs_unchanged() {
+        let pools = pools();
+        let boundary = jobs_gen::current_reset_boundary(&pools, NOW);
+        let character = Uuid::from_u128(0x313);
+        let (base, _) = jobs_gen::generate(&pools, character, 9, 17, boundary, NOW);
+        let done: std::collections::HashSet<Uuid> =
+            [Uuid::parse_str(base[0]["questId"].as_str().unwrap()).unwrap()].into();
+        let (after, _) =
+            jobs_gen::generate_replenished(&pools, character, 9, 17, boundary, NOW, &done);
+        for job in &base[1..] {
+            let same = after.iter().find(|j| j["questId"] == job["questId"]).expect("kept");
+            assert_eq!(same["difficultyLevel"], job["difficultyLevel"]);
+        }
     }
 }
 
@@ -7868,7 +8123,9 @@ mod report_306_daily_job_hang {
         // (id, type, arena it was in, values prod served that must not move)
         for (id, ty, old_arena, gems, xp, name_key) in [
             ("a4a54f84-390f-4031-bf3a-c8fc9e8e11ed", 4, "19a3b1b0-c18b-4f2f-b73f-780f3759fe48", 0, 1476, "UI.Jobs.Names.Gather.004"),
-            ("72217ae0-4bdb-4079-973b-4ca252ee487f", 3, "e7418cc7-01de-4c84-ba00-e221f8783d51", 10, 1593, "UI.Jobs.Names.Rescue.003"),
+            // XP 1517: prod served 1593 before tracker #313 re-banded the difficulty
+            // it scales with; the draw itself is unchanged.
+            ("72217ae0-4bdb-4079-973b-4ca252ee487f", 3, "e7418cc7-01de-4c84-ba00-e221f8783d51", 10, 1517, "UI.Jobs.Names.Rescue.003"),
         ] {
             let j = job(&jobs, id);
             let js = &j["jobSetup"];
