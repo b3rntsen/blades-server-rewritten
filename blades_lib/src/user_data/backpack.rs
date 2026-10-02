@@ -320,12 +320,14 @@ impl Loadout {
 pub struct Chest {
     /// A treasury chest id is a number stored as a string ("1", "2", …).
     pub id: String,
-    pub tier: u64,
+    /// SIGNED: the tutorial's first chest is `TierSpecial_TutorialFirstChest` (-1)
+    /// in the treasury too, as retail listed it (report #307).
+    pub tier: i64,
     pub level: u64,
 }
 
 impl Chest {
-    pub fn new(id: String, tier: u64, level: u64) -> Self {
+    pub fn new(id: String, tier: i64, level: u64) -> Self {
         Chest { id, tier, level }
     }
 }
@@ -365,7 +367,7 @@ impl Treasury {
     }
 
     /// Add a chest of the given tier/level, returning its new id.
-    pub fn add_chest(&mut self, tier: u64, level: u64) -> String {
+    pub fn add_chest(&mut self, tier: i64, level: u64) -> String {
         let id = self.next_id();
         self.chests.push(Chest::new(id.clone(), tier, level));
         id

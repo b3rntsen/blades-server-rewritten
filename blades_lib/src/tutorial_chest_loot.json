@@ -1,0 +1,96 @@
+{
+  "_comment": "Retail loot of the tutorial's first chest (ChestData.ChestRarity.TierSpecial_TutorialFirstChest = -1, spawn 1d8b6737 in quest 5ad30483). Every retail opening in the 2026-06-07 capture snapshot: the dungeon update that collected it added treasury chest {id 1, tier -1, level 1} and the next POST /chests/1/collect returned this reward. Tracker #307.",
+  "_source": "blades-snapshot-20260607-112415.db api_captures (blades.bgs.services); chest-grant updates 667/4807/62904",
+  "samples": [
+    {
+      "captureId": 668,
+      "chestLevel": 1,
+      "reward": {
+        "items": [
+          {
+            "id": "a21ba9ec-83fe-4c93-87dc-cb1d288cbe69",
+            "itemTemplateId": "606c8bf6-9dc7-4c5f-b44b-36eb02306c96",
+            "temperingLevel": 0,
+            "durability": 75.0,
+            "properties": {
+              "ENCHANTING": [
+                {
+                  "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+                  "tier": 1
+                },
+                {
+                  "id": "8f372d6d-2620-42ab-809b-edb4d5d1e528",
+                  "tier": 1
+                }
+              ]
+            }
+          }
+        ],
+        "stackableItems": {
+          "f00f350d-97c2-47cd-a554-e1a37c9ff7f2": 15,
+          "05a7d501-f096-41e9-8443-fd6a090d8425": 1,
+          "b81952e0-c3c8-4a5c-92c0-8215d3eb71af": 20,
+          "42d91529-c88b-4c5b-815b-b55508b4e7ef": 27
+        },
+        "currencies": {
+          "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 59
+        }
+      }
+    },
+    {
+      "captureId": 4809,
+      "chestLevel": 1,
+      "reward": {
+        "items": [
+          {
+            "id": "09be35dc-faf3-49ee-8da5-bb8f57a4cb47",
+            "itemTemplateId": "9814bcf0-a984-49e2-84f6-a8b0f3695f84",
+            "temperingLevel": 0,
+            "durability": 75.0,
+            "properties": {
+              "ENCHANTING": [
+                {
+                  "id": "c40ed851-8777-4d09-b169-0223dae8f67d",
+                  "tier": 1
+                }
+              ]
+            }
+          }
+        ],
+        "stackableItems": {
+          "f00f350d-97c2-47cd-a554-e1a37c9ff7f2": 17,
+          "05a7d501-f096-41e9-8443-fd6a090d8425": 1,
+          "b81952e0-c3c8-4a5c-92c0-8215d3eb71af": 19,
+          "42d91529-c88b-4c5b-815b-b55508b4e7ef": 27
+        },
+        "currencies": {
+          "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 58
+        }
+      }
+    },
+    {
+      "captureId": 62906,
+      "chestLevel": 1,
+      "reward": {
+        "items": [
+          {
+            "id": "aeb1e964-2e68-45ec-bd7c-85706befea7f",
+            "itemTemplateId": "6fe63664-4252-4269-9f51-8546b5f138da",
+            "temperingLevel": 3,
+            "durability": 91.43
+          }
+        ],
+        "stackableItems": {
+          "9d9732a5-cd1c-4a93-8755-0bf92ee65d64": 8,
+          "f00f350d-97c2-47cd-a554-e1a37c9ff7f2": 20,
+          "05a7d501-f096-41e9-8443-fd6a090d8425": 1,
+          "b81952e0-c3c8-4a5c-92c0-8215d3eb71af": 9,
+          "42d91529-c88b-4c5b-815b-b55508b4e7ef": 25
+        },
+        "currencies": {
+          "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 65
+        }
+      }
+    }
+  ]
+}

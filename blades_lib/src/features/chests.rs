@@ -19,6 +19,30 @@ use serde::{Deserialize, Serialize};
 
 use crate::economy::RewardGrant;
 
+/// `ChestData.ChestRarity.TierSpecial_TutorialFirstChest` in the APK: the first
+/// story quest's first chest. Retail generated it, listed it in the treasury and
+/// paid it at this tier, from a table of its own (report #307).
+pub const TUTORIAL_FIRST_CHEST: i64 = -1;
+
+/// Every retail opening of the tutorial chest in the capture snapshot (3). A
+/// scripted starter bundle, not a wooden or silver roll: 58-65 gold, one item
+/// and the same four stackables each time.
+static TUTORIAL_CHEST_LOOT_RAW: &str = include_str!("../tutorial_chest_loot.json");
+
+#[derive(Deserialize)]
+struct TutorialChestLoot {
+    samples: Vec<ChestLootSample>,
+}
+
+fn tutorial_chest_loot() -> &'static [ChestLootSample] {
+    static TABLE: std::sync::OnceLock<Vec<ChestLootSample>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        serde_json::from_str::<TutorialChestLoot>(TUTORIAL_CHEST_LOOT_RAW)
+            .map(|t| t.samples)
+            .unwrap_or_default()
+    })
+}
+
 /// One captured chest opening: the reward, and the level of the chest it came out of.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -122,10 +146,19 @@ fn stable_nonce(key: &str) -> u64 {
 /// Other tiers stay on the capture-derived treasury table.
 pub fn roll_loot(
     tables: &ChestLootTables,
-    tier: u64,
+    tier: i64,
     level: u64,
     chest_key: &str,
 ) -> Option<RewardGrant> {
+    if tier == TUTORIAL_FIRST_CHEST {
+        let pool = tutorial_chest_loot();
+        if !pool.is_empty() {
+            let pick = (stable_nonce(chest_key) as usize) % pool.len();
+            return Some(pool[pick].reward.clone());
+        }
+    }
+    // No other tier below 1 exists in the APK enum; treat one as tier 1.
+    let tier = tier.max(1) as u64;
     crate::features::store_bundles::roll_treasury_chest(tier, level, stable_nonce(chest_key))
         .or_else(|| pick_loot(tables, tier, level, chest_key).cloned())
 }
@@ -226,6 +259,51 @@ mod tests {
             "40 Legendary chests only produced {} distinct rewards",
             seen.len()
         );
+    }
+
+    /// Report #307. The tutorial's first chest is `TierSpecial_TutorialFirstChest`
+    /// (-1) in the treasury, and retail paid it from its own scripted table, not
+    /// the wooden (tier 1) or silver (tier 2) one: in all 3 captured openings,
+    /// 58-65 gold, exactly one item, and the same four starter stackables. A
+    /// tier-1 chest at level 1 paid 176-201 gold and no item.
+    #[test]
+    fn tutorial_first_chest_pays_the_retail_tutorial_bundle() {
+        use crate::user_data::Chest;
+        const TUTORIAL_STACKABLES: [&str; 4] = [
+            "f00f350d-97c2-47cd-a554-e1a37c9ff7f2",
+            "05a7d501-f096-41e9-8443-fd6a090d8425",
+            "b81952e0-c3c8-4a5c-92c0-8215d3eb71af",
+            "42d91529-c88b-4c5b-815b-b55508b4e7ef",
+        ];
+        let chest: Chest =
+            serde_json::from_value(serde_json::json!({"id": "1", "tier": -1, "level": 1}))
+                .expect("retail's treasury listing of the tutorial chest must load");
+
+        let t = tables();
+        let mut seen = HashSet::new();
+        for i in 0..30 {
+            let reward = roll_loot(&t, chest.tier, chest.level, &format!("char-{i}:1:-1:1:0"))
+                .expect("the tutorial chest pays");
+            let gold = reward.currencies[&GOLD];
+            assert!(
+                (58..=65).contains(&gold),
+                "tutorial gold {gold}, retail paid 58-65"
+            );
+            assert_eq!(
+                reward.items.len(),
+                1,
+                "retail's tutorial chest has exactly one item"
+            );
+            for template in TUTORIAL_STACKABLES {
+                let id = template.parse().unwrap();
+                assert!(
+                    reward.stackable_items.contains_key(&id),
+                    "tutorial chest missing starter stackable {template}"
+                );
+            }
+            seen.insert(gold);
+        }
+        assert!(seen.len() > 1, "all three retail bundles must be reachable");
     }
 
     #[test]
