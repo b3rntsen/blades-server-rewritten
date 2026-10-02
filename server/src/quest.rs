@@ -3022,7 +3022,8 @@ pub(crate) mod jobs_gen {
         "3bcfeff9-5b22-4f7c-b1b8-ef4b277f7bc2", // JobArenaVariant_06
     ];
     /// Where a job of this type may be rolled. Only a Duel is narrowed; every other
-    /// type keeps drawing from the full pool exactly as before.
+    /// type keeps drawing from the full pool exactly as before, and [`nameable`]
+    /// then moves a non-duel job that drew an arena into a kitted dungeon.
     pub(super) fn dungeon_pool(job_type: i64) -> &'static [&'static str] {
         if job_type == 5 {
             DUEL_DUNGEON_TEMPLATES
@@ -3257,6 +3258,16 @@ pub(crate) mod jobs_gen {
     /// and critter families), and the five templates with no kit name are the
     /// Arena templates, used by Duels (46/46) and by nothing else.
     ///
+    /// That last fact holds for EVERY non-duel type, not just Explore. A Defeat,
+    /// Rescue or Gather drawn into an arena still had a name (the arena's title),
+    /// so the quest map rendered it, but the client could not start it: tracker
+    /// #306's "Unendlich viel: Holz" was a Gather in `JobArenaVariant_06` and hung
+    /// on tap with no `…/dungeons/current/enter` ever sent. Across 369 characters'
+    /// boards from 2026-09-15 to 2026-10-02, 29% of Defeat/Rescue/Gather jobs sat
+    /// in an arena, yet 0 of the 17 such jobs players entered did (p ≈ 0.003). So
+    /// any non-duel job leaves an arena for a kitted dungeon; the kitted set is
+    /// exactly the 12 templates retail used for non-duel jobs.
+    ///
     /// The replacement is keyed on the job's own seed, so it is deterministic and
     /// consumes no rng draw: every other value on the board stays what it was.
     fn nameable<'a>(
@@ -3280,16 +3291,17 @@ pub(crate) mod jobs_gen {
                 Some(usable[(base_seed % usable.len() as u64) as usize])
             }
         };
-        match job_type {
-            0 if !has_name(prim_fam) => {
-                (dungeon, swap(ENEMY_FAMILIES, &has_name).unwrap_or(prim_fam))
-            }
-            1 if !has_kit(dungeon) => (
-                swap(DUNGEON_TEMPLATES, &has_kit).unwrap_or(dungeon),
-                prim_fam,
-            ),
-            _ => (dungeon, prim_fam),
-        }
+        let dungeon = if job_type != 5 && !has_kit(dungeon) {
+            swap(DUNGEON_TEMPLATES, &has_kit).unwrap_or(dungeon)
+        } else {
+            dungeon
+        };
+        let prim_fam = if job_type == 0 && !has_name(prim_fam) {
+            swap(ENEMY_FAMILIES, &has_name).unwrap_or(prim_fam)
+        } else {
+            prim_fam
+        };
+        (dungeon, prim_fam)
     }
 
     /// `(nameElements, descriptionElements)` for one rolled job.
@@ -3870,9 +3882,9 @@ pub(crate) mod jobs_gen {
         let sec_fam = rng.pick(ENEMY_FAMILIES).copied().unwrap_or("");
         let boss_fam = rng.pick(ENEMY_FAMILIES).copied().unwrap_or(prim_fam);
         // A Defeat names its primary enemy and an Explore names its dungeon kit, and
-        // both pools above hold ids retail never used there (see `nameable`). Swap
-        // such a draw for one that can be named, AFTER the draws so no other value
-        // on the board moves.
+        // both pools above hold ids retail never used there; no non-duel job is ever
+        // in an arena (see `nameable`). Swap such a draw, AFTER the draws so no other
+        // value on the board moves.
         let (dungeon, prim_fam) = nameable(job_type, dungeon, prim_fam, base_seed);
 
         let primary_count = if job_type == 5 {
@@ -4041,6 +4053,14 @@ pub(crate) mod jobs_gen {
     /// same size, and includes generated data only for the new replacement. The
     /// completed row we keep in `quests` is the window-local memory that keeps the
     /// replacement stable until the next reset prunes old job rows.
+    ///
+    /// Only up to the pool's `maxTotal`, though (tracker #306). In the 2026-06-07
+    /// snapshot all 19 completed standard-pool jobs (`maxTotal` 100) were replaced
+    /// in the `/complete` response, and none of the 6 completed featured or boss
+    /// jobs (`maxTotal` 1) were: the board shrank by one, no generated data was
+    /// sent, and every later `/quests` in that window still had no job from the
+    /// pool. Refilling the featured slot is what gave HauDrauf a second
+    /// "highlighted" job on 2026-10-01, the one that could not be started.
     pub fn generate_replenished(
         pools_def: &Value,
         character_id: Uuid,
@@ -4083,15 +4103,19 @@ pub(crate) mod jobs_gen {
                 count = count.min(max_active_global);
             }
 
+            // Completed jobs count against `maxTotal` too; a missing value is no cap.
+            let max_total = get_u64(pool, "maxTotal", u64::MAX);
             let mut kept = 0;
+            let mut issued = 0;
             let mut slot = 0;
-            while kept < count {
+            while kept < count && issued < max_total {
                 let job = roll_job(pools_def, pool, character_id, level, reset_boundary, slot);
                 slot += 1;
                 let Some(id) = get_str(&job, "questId").and_then(|s| Uuid::parse_str(s).ok())
                 else {
                     continue;
                 };
+                issued += 1;
                 if completed_job_ids.contains(&id) {
                     continue;
                 }
@@ -5936,11 +5960,13 @@ mod report92_job_completion_reward_tests {
     }
 
     /// Report #279: HauDrauf completed one job (`21c4b74d...`) and then had five
-    /// live job rows left in storage, but retail replaces the completed job inside
-    /// the same reset window. The board must therefore keep those five exact rows,
-    /// drop the completed one, and add one deterministic replacement.
+    /// live job rows left in storage. That job was the weekly BOSS duel, and a boss
+    /// or featured pool (`maxTotal` 1) is not refilled in its window (report #306:
+    /// 0 of 6 such retail completions were). So the board is exactly those five
+    /// rows; the standard-pool refill is covered by
+    /// `report_306_daily_job_hang::a_completed_standard_job_is_still_replaced`.
     #[test]
-    fn completed_jobs_are_replenished_for_the_rest_of_the_window() {
+    fn a_completed_boss_job_leaves_the_other_five_and_no_replacement() {
         let pools = job_pools();
         let character = Uuid::parse_str("489620db-7f90-4a03-bb7c-f7e92a9c73cb").unwrap();
         let now = 1_790_661_960; // 2026-09-29 06:06 UTC
@@ -5967,7 +5993,11 @@ mod report92_job_completion_reward_tests {
         );
         let replenished_ids = job_ids(&replenished);
 
-        assert_eq!(replenished.len(), base.len(), "retail keeps the board full");
+        assert_eq!(
+            replenished.len(),
+            base.len() - 1,
+            "a completed boss job is not replaced in its window"
+        );
         assert!(
             !replenished_ids.contains(&completed),
             "the completed job must be deleted from the client board"
@@ -5986,11 +6016,7 @@ mod report92_job_completion_reward_tests {
             );
         }
         let replacements: Vec<_> = replenished_ids.difference(&base_ids).collect();
-        assert_eq!(
-            replacements.len(),
-            1,
-            "exactly one new job replaces the one deleted"
-        );
+        assert!(replacements.is_empty(), "no replacement: {replacements:?}");
     }
 
     /// Negative control for the report #279 fix: an untouched board takes the old
@@ -7406,10 +7432,15 @@ mod quest_map_wedge_2026_09_25 {
             goblins["primaryEnemyFamilyId"],
             "9137d218-6f05-4e8f-a5e5-1c63c61c95ca"
         );
-        assert_eq!(
+        // Report #306: this Defeat was rolled into `JobArenaVariant_04`, where no
+        // non-duel job can be started. It moves to a kitted dungeon; its enemy and
+        // name stay.
+        assert_ne!(
             goblins["dungeonTemplateId"],
             "dbfd45fe-8c8c-4c8d-83c6-9b4566afc788"
         );
+        assert!(!jobs_gen::DUEL_DUNGEON_TEMPLATES
+            .contains(&goblins["dungeonTemplateId"].as_str().unwrap()));
         assert_eq!(
             goblins["questName"]["dynamicElements"][0]["localizationValue"],
             "Enemy.Name.Goblin.Wizard"
@@ -7699,5 +7730,210 @@ mod report_279_job_difficulty {
             Some(97),
             "stored job rows preserve the declared level"
         );
+    }
+}
+
+/// Tracker #306 (HauDrauf, 2026-10-02 05:06 UTC): the highlighted job
+/// "Unendlich viel: Holz" (`UI.Jobs.Names.Gather.007` + Lumber, 13 Gems) hung on
+/// tap and no `…/dungeons/current/enter` was ever sent.
+///
+/// Rebuilt from his character id and the reset window, that job was
+/// `36df4240-…`: slot 1 of the Thursday featured pool, i.e. a REPLACEMENT minted
+/// after he completed the featured job `33ec5677-…` on 2026-10-01 05:28, and a
+/// Gather rolled into `JobArenaVariant_06`. Retail does neither: a featured or
+/// boss pool (`maxTotal` 1) is not refilled once completed, and no non-duel job is
+/// ever in an arena. Its disappearance after relaunch was the 05:00 daily reset.
+#[cfg(test)]
+mod report_306_daily_job_hang {
+    use super::jobs_gen;
+    use serde_json::Value;
+    use std::collections::HashSet;
+    use uuid::Uuid;
+
+    const HAUDRAUF: &str = "489620db-7f90-4a03-bb7c-f7e92a9c73cb";
+    /// 2026-10-02 03:01:31 UTC — his last `/quests` before the hang (Oct 1 window).
+    const OCT1_FETCH: u64 = 1_790_910_091;
+    /// 2026-10-02 05:09:56 UTC — the relaunch `/quests` (Oct 2 window).
+    const OCT2_FETCH: u64 = 1_790_917_796;
+    const STANDARD_POOL: &str = "4956c6ab-1832-4edd-8bee-561b79f83ee2";
+    const BOSS_POOL: &str = "361da91e-6860-4c31-a447-4010cbaad1dd";
+    /// The weekly "featured" pool active during the Thursday game-day.
+    const THURSDAY_FEATURED_POOL: &str = "df666a07-3539-426a-916e-ccdba580cb1d";
+
+    fn pools() -> Value {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        serde_json::from_str(&std::fs::read_to_string(dir.join("job_pools.json")).unwrap()).unwrap()
+    }
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+    fn ids(jobs: &[Value]) -> HashSet<Uuid> {
+        jobs.iter().map(|j| uuid(j["questId"].as_str().unwrap())).collect()
+    }
+    fn board(now: u64, completed: &[&str]) -> Vec<Value> {
+        let pools = pools();
+        let boundary = jobs_gen::current_reset_boundary(&pools, now);
+        let completed: HashSet<Uuid> = completed.iter().map(|s| uuid(s)).collect();
+        jobs_gen::generate_replenished(&pools, uuid(HAUDRAUF), 100, 0, boundary, now, &completed).0
+    }
+    fn job<'a>(jobs: &'a [Value], id: &str) -> &'a Value {
+        jobs.iter()
+            .find(|j| j["questId"] == id)
+            .unwrap_or_else(|| panic!("{id} is not on this board"))
+    }
+    fn is_arena(job: &Value) -> bool {
+        jobs_gen::DUEL_DUNGEON_TEMPLATES
+            .contains(&job["jobSetup"]["dungeonTemplateId"].as_str().unwrap())
+    }
+
+    /// The jobs he completed in the Oct 1 window (prod journal, 05:23 and 05:28).
+    const DONE_BOSS: &str = "313ada72-cf93-4559-bda8-99719155e672";
+    const DONE_FEATURED: &str = "33ec5677-352a-4205-9290-4fd3d1770127";
+    /// The replacements the old code minted; the second is "Unendlich viel: Holz".
+    const REFILLED_BOSS: &str = "3091050e-c10b-4905-a1d1-4455fcec3b05";
+    const UNENDLICH_VIEL_HOLZ: &str = "36df4240-b3c3-4d6b-be62-57e83b00fb4e";
+
+    #[test]
+    fn a_completed_featured_or_boss_job_is_not_replaced() {
+        let untouched = board(OCT1_FETCH, &[]);
+        // Control: these really are his Oct 1 board's boss and featured jobs.
+        assert_eq!(job(&untouched, DONE_BOSS)["jobPoolId"], BOSS_POOL);
+        assert_eq!(job(&untouched, DONE_FEATURED)["jobPoolId"], THURSDAY_FEATURED_POOL);
+        assert_eq!(untouched.len(), 6, "4 standard + boss + featured");
+
+        let after = board(OCT1_FETCH, &[DONE_BOSS, DONE_FEATURED]);
+        let after_ids = ids(&after);
+        for gone in [DONE_BOSS, DONE_FEATURED, REFILLED_BOSS, UNENDLICH_VIEL_HOLZ] {
+            assert!(!after_ids.contains(&uuid(gone)), "{gone} is on the board");
+        }
+        assert!(
+            after.iter().all(|j| j["jobPoolId"] == STANDARD_POOL),
+            "retail leaves a completed maxTotal-1 pool empty for the window"
+        );
+        assert_eq!(after.len(), 4, "the board shrinks by the two, as retail's did");
+        let standard: HashSet<Uuid> = untouched
+            .iter()
+            .filter(|j| j["jobPoolId"] == STANDARD_POOL)
+            .map(|j| uuid(j["questId"].as_str().unwrap()))
+            .collect();
+        assert_eq!(after_ids, standard, "the four standard jobs are untouched");
+    }
+
+    /// Negative control: the standard pool (`maxTotal` 100) still refills, which is
+    /// what retail did for all 19 captured standard-pool completions.
+    #[test]
+    fn a_completed_standard_job_is_still_replaced() {
+        let untouched = board(OCT1_FETCH, &[]);
+        let done = untouched
+            .iter()
+            .find(|j| j["jobPoolId"] == STANDARD_POOL)
+            .unwrap()["questId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let after = board(OCT1_FETCH, &[&done]);
+        assert_eq!(after.len(), untouched.len(), "the board stays full");
+        assert!(!ids(&after).contains(&uuid(&done)));
+        let new: Vec<&Value> = after
+            .iter()
+            .filter(|j| !ids(&untouched).contains(&uuid(j["questId"].as_str().unwrap())))
+            .collect();
+        assert_eq!(new.len(), 1, "exactly one replacement");
+        assert_eq!(new[0]["jobPoolId"], STANDARD_POOL);
+    }
+
+    /// His board after the relaunch (these six ids are the rows prod stored at
+    /// 05:09:56) carried a Gather in `JobArenaVariant_05` and a Rescue in
+    /// `JobArenaVariant_01` — the same shape as the job that hung. They move to a
+    /// kitted dungeon, and nothing else about them, or about the rest, moves.
+    #[test]
+    fn non_duel_jobs_leave_the_arenas_and_nothing_else_moves() {
+        let jobs = board(OCT2_FETCH, &[]);
+        assert_eq!(
+            ids(&jobs),
+            [
+                "a4a54f84-390f-4031-bf3a-c8fc9e8e11ed",
+                "72217ae0-4bdb-4079-973b-4ca252ee487f",
+                "f5a09068-c422-4fe8-a5ab-e028233e1dcd",
+                "1220dc37-9166-4364-be77-a3ff32fe40aa",
+                "8e86eb3a-4398-4ef3-9a8d-7e63e27605f7",
+                "de78d8f4-bff9-4942-a6d0-dd288b44535d",
+            ]
+            .iter()
+            .map(|s| uuid(s))
+            .collect::<HashSet<_>>(),
+            "not the board prod stored for him"
+        );
+
+        // (id, type, arena it was in, values prod served that must not move)
+        for (id, ty, old_arena, gems, xp, name_key) in [
+            ("a4a54f84-390f-4031-bf3a-c8fc9e8e11ed", 4, "19a3b1b0-c18b-4f2f-b73f-780f3759fe48", 0, 1476, "UI.Jobs.Names.Gather.004"),
+            ("72217ae0-4bdb-4079-973b-4ca252ee487f", 3, "e7418cc7-01de-4c84-ba00-e221f8783d51", 10, 1593, "UI.Jobs.Names.Rescue.003"),
+        ] {
+            let j = job(&jobs, id);
+            let js = &j["jobSetup"];
+            assert_eq!(js["jobType"], ty);
+            assert_ne!(js["dungeonTemplateId"], old_arena, "{id} still in its arena");
+            assert!(!is_arena(j), "{id} moved into another arena");
+            let names = js["questName"]["dynamicElements"].as_array().unwrap();
+            let place = names.last().unwrap()["localizationValue"].as_str().unwrap();
+            assert!(place.starts_with("UI.Jobs.Location.Name."), "{id}: {place}");
+            assert_eq!(js["rewardGemCount"], gems);
+            assert_eq!(js["rewardXp"], xp);
+            assert_eq!(js["questName"]["key"], name_key);
+        }
+        let gather = &job(&jobs, "a4a54f84-390f-4031-bf3a-c8fc9e8e11ed")["jobSetup"];
+        assert_eq!(gather["gatherItemId"], "da767378-8c00-43c1-a5eb-705d7d2f7306");
+        assert_eq!(gather["gatherItemCount"], 6);
+
+        // Control: the jobs that were not in an arena keep the dungeon prod served.
+        for (id, dungeon) in [
+            ("f5a09068-c422-4fe8-a5ab-e028233e1dcd", "18e81559-3561-47ef-b73e-9f3bc34ba0b8"),
+            ("1220dc37-9166-4364-be77-a3ff32fe40aa", "86e6a720-caa4-4b13-b8b8-73f3dcf049a2"),
+            ("de78d8f4-bff9-4942-a6d0-dd288b44535d", "57d639c2-ec4c-4e6b-9995-ff6a7ef3e712"),
+            // The Duel stays in its arena.
+            ("8e86eb3a-4398-4ef3-9a8d-7e63e27605f7", "a9386df1-5b26-462b-9c56-de9cb371c790"),
+        ] {
+            assert_eq!(job(&jobs, id)["jobSetup"]["dungeonTemplateId"], dungeon, "{id}");
+        }
+    }
+
+    /// Retail, 2026-06-07 snapshot: 0 of 417 non-duel jobs in an arena, and each
+    /// of Defeat, Explore, Rescue and Gather used all 12 kitted templates.
+    #[test]
+    fn no_non_duel_job_is_ever_in_an_arena() {
+        let pools = pools();
+        let mut per_type = std::collections::BTreeMap::<i64, HashSet<String>>::new();
+        let mut checked = 0;
+        for c in 1..=200u128 {
+            for day in 0..28u64 {
+                let now = OCT2_FETCH + day * 86_400;
+                let boundary = jobs_gen::current_reset_boundary(&pools, now);
+                let (jobs, _) =
+                    jobs_gen::generate(&pools, Uuid::from_u128(c * 0x9E37_79B9), 60, 0, boundary, now);
+                for j in jobs {
+                    let js = &j["jobSetup"];
+                    let ty = js["jobType"].as_i64().unwrap();
+                    if ty == 5 {
+                        assert!(is_arena(&j), "a Duel left the arenas: {}", j["questId"]);
+                        continue;
+                    }
+                    assert!(!is_arena(&j), "jobType {ty} in an arena: {}", j["questId"]);
+                    for e in js["questName"]["dynamicElements"].as_array().unwrap() {
+                        let v = e["localizationValue"].as_str().unwrap_or("");
+                        assert!(!v.starts_with("UI.Arena."), "{} named {v}", j["questId"]);
+                    }
+                    per_type
+                        .entry(ty)
+                        .or_default()
+                        .insert(js["dungeonTemplateId"].as_str().unwrap().to_string());
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 15_000, "only {checked} non-duel jobs checked");
+        for (ty, used) in &per_type {
+            assert_eq!(used.len(), 12, "jobType {ty} used {used:?}");
+        }
     }
 }
