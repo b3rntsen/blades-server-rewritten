@@ -1230,12 +1230,16 @@ pub async fn purchase_global_shop(
             // Rolled HERE rather than beside the recorded grant because only inside
             // the transaction do we know who is buying and how many times they have
             // bought before. The purchase count is the nonce, so buying the same
-            // bundle twice in a row cannot return the same thing.
+            // bundle twice in a row cannot return the same thing. The character id
+            // is folded in so two players at the same level do not walk the same
+            // sequence of chests. The held templates are what keep an artifact the
+            // buyer already owns from being handed out again (#310).
             let reward = {
-                blades_lib::features::store_bundles::roll_bundle(
+                blades_lib::features::store_bundles::roll_bundle_for(
                     &product_id,
                     u64::from(entry.character.0.level),
-                    bought_before,
+                    bought_before ^ (character_id.as_u128() as u64).rotate_left(29),
+                    &entry.inventory.0.item_templates(),
                 )
                 .unwrap_or(reward)
             };

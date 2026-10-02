@@ -13,9 +13,10 @@
 //! same thing however many times the client retries. The handler re-mints the
 //! instanced item ids before granting (capture ids would collide across players).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::economy::RewardGrant;
 
@@ -141,14 +142,17 @@ fn stable_nonce(key: &str) -> u64 {
 
 /// Roll the grant for a chest open.
 ///
-/// Tier-5 treasury captures are too sparse to use directly (one opening), while
-/// the retail Legendary chest corpus has thousands of same-shaped chest rewards.
-/// Other tiers stay on the capture-derived treasury table.
+/// Tier-5 (Legendary) and tier-4 (Elder) treasury captures are too sparse to use
+/// directly (one and eleven openings), while the retail Legendary and Epic store
+/// chest corpora hold 4,697 and 405 same-shaped chest rewards. Other tiers stay on
+/// the capture-derived treasury table. `owned` is every item template the
+/// character holds: an artifact among them is never paid again (#310).
 pub fn roll_loot(
     tables: &ChestLootTables,
     tier: i64,
     level: u64,
     chest_key: &str,
+    owned: &HashSet<Uuid>,
 ) -> Option<RewardGrant> {
     if tier == TUTORIAL_FIRST_CHEST {
         let pool = tutorial_chest_loot();
@@ -159,7 +163,7 @@ pub fn roll_loot(
     }
     // No other tier below 1 exists in the APK enum; treat one as tier 1.
     let tier = tier.max(1) as u64;
-    crate::features::store_bundles::roll_treasury_chest(tier, level, stable_nonce(chest_key))
+    crate::features::store_bundles::roll_treasury_chest(tier, level, stable_nonce(chest_key), owned)
         .or_else(|| pick_loot(tables, tier, level, chest_key).cloned())
 }
 
@@ -251,7 +255,7 @@ mod tests {
 
         let mut seen = HashSet::new();
         for i in 0..40 {
-            let reward = roll_loot(&t, 5, 90, &format!("legendary-{i}")).unwrap();
+            let reward = roll_loot(&t, 5, 90, &format!("legendary-{i}"), &HashSet::new()).unwrap();
             seen.insert(serde_json::to_string(&reward).unwrap());
         }
         assert!(
@@ -282,7 +286,8 @@ mod tests {
         let t = tables();
         let mut seen = HashSet::new();
         for i in 0..30 {
-            let reward = roll_loot(&t, chest.tier, chest.level, &format!("char-{i}:1:-1:1:0"))
+            let key = format!("char-{i}:1:-1:1:0");
+            let reward = roll_loot(&t, chest.tier, chest.level, &key, &HashSet::new())
                 .expect("the tutorial chest pays");
             let gold = reward.currencies[&GOLD];
             assert!(
@@ -309,6 +314,6 @@ mod tests {
     #[test]
     fn lower_tiers_still_use_the_treasury_table() {
         let t = tables();
-        assert_eq!(roll_loot(&t, 1, 1, "1").unwrap().currencies[&GOLD], 100);
+        assert_eq!(roll_loot(&t, 1, 1, "1", &HashSet::new()).unwrap().currencies[&GOLD], 100);
     }
 }

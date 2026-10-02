@@ -24,6 +24,8 @@
 //! TEMPLATE is fixed and whose enchant roll varies. They are handled by the
 //! authored-contents path, not here.
 
+use std::collections::HashSet;
+
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -137,6 +139,78 @@ const STORE_CHEST_ALIASES: [(Uuid, Uuid); 3] = [
 const LEGENDARY_CHEST_PRODUCT_ID: Uuid =
     Uuid::from_u128(0x1275d959_bbe5_460d_8f6a_1c31106a8eb2);
 
+/// The Epic Chest (750 gems). The APK catalogue sells it as `chests: [{_rarity: 4}]`,
+/// i.e. `ChestRarity.Tier4`, the Elder Chest — so its corpus is the Elder corpus.
+const EPIC_CHEST_PRODUCT_ID: Uuid = Uuid::from_u128(0x7bf00a9c_6a08_4b55_a60d_53915baa38a3);
+
+/// Every item template carrying the APK's `Item.Tag.Artifact`
+/// (`8511534e-ef06-4e6a-910a-745a2cc72a47`): the 24 unique artifacts.
+pub const ARTIFACT_TEMPLATES: [Uuid; 24] = [
+    Uuid::from_u128(0x05862206_b6db_4cd4_9f7a_ed2e03fc90af), // Ring of Namira
+    Uuid::from_u128(0x12c4920e_a9e0_4498_b134_3ce66fb9558f), // Savior's Hide
+    Uuid::from_u128(0x21ed2758_5cf5_4b7d_9047_59bbdbd61820), // Onyx Cleaver
+    Uuid::from_u128(0x21f8b677_c1a9_4d5f_87ef_294fc6ba4ba5), // Ebony Blade
+    Uuid::from_u128(0x23607f09_a103_4ed3_a0de_33e0498f8018), // Warlock's Ring
+    Uuid::from_u128(0x4b59cdbe_f857_4673_9e40_741ca06aa5d0), // Spellbane
+    Uuid::from_u128(0x4e841f5e_c5d7_47cd_899a_116846dbbfc0), // Bloodthirst
+    Uuid::from_u128(0x515450b1_ab21_4cbf_a8ed_c4e0e51df4c0), // Dragon's Blight
+    Uuid::from_u128(0x59c720fb_d761_4ad1_b14c_2aa8c1a4d554), // Mace of Molag Bal
+    Uuid::from_u128(0x6ab76008_dd08_461f_bdcc_6373799ea489), // Rueful Axe
+    Uuid::from_u128(0x7d2dfa88_e7ca_4fd6_a173_862cfb077c04), // Stendarr's Hammer
+    Uuid::from_u128(0x86a4ad9d_e2e8_49cd_9642_b553475b6580), // Pandemonium
+    Uuid::from_u128(0x899b63a7_6eb7_4689_a450_8c6b507763c6), // Guardian's Claymore
+    Uuid::from_u128(0x8a69bdb2_d179_4f2d_984a_322f9397aedf), // Rimelink
+    Uuid::from_u128(0x9107fb63_f88b_45fa_bca9_7fe2f9bceb2c), // Chillrend
+    Uuid::from_u128(0x975509a9_196f_41c9_8df4_6f0e2d1f02ce), // Lord's Mail
+    Uuid::from_u128(0x9a22b59a_cdbc_4987_bf4a_0cc812428aeb), // Spellbreaker
+    Uuid::from_u128(0xa0d7dd5e_692e_4fbb_bbf2_19c6a874f3f5), // Mehrunes' Razor
+    Uuid::from_u128(0xaf7759d9_f38e_4384_bf36_1de0c3d150a7), // Volendrung
+    Uuid::from_u128(0xbe1484e6_c156_47db_bdab_3cf5b75096a0), // Chrysamere
+    Uuid::from_u128(0xca1e2d0f_b902_4c82_b8d6_e82b83dcc9e0), // Dawnbreaker
+    Uuid::from_u128(0xda0cf5aa_6d37_48da_8b18_3f4e914145d3), // Onyx Saber
+    Uuid::from_u128(0xdef810af_e9f5_4e23_9247_1edf391d82e1), // Ebony Mail
+    Uuid::from_u128(0xe86a6f9a_4e40_40d6_a9dd_1036b4190caa), // Fork of Horripilation
+];
+
+pub fn is_artifact(template: &Uuid) -> bool {
+    ARTIFACT_TEMPLATES.contains(template)
+}
+
+/// The number of item slots every reward in the band has. Retail's chest paid
+/// that many regular pieces; a reward with more carries the artifact slot.
+fn core_slots(band: &Band) -> usize {
+    band.results.iter().map(|r| r.reward.items.len()).min().unwrap_or(0)
+}
+
+/// What retail paid in the artifact slot when it was NOT an artifact: one per
+/// observation, with the buyer level band it was paid in. Retail's
+/// `LootEnhancementData` sets `artifactFallbackRarityLevel: 4` (Legendary) and
+/// `artifactFallbackLootRarityLevelId` = "Legendary - High (Chests)"; these are
+/// the pieces that rule produced. It is one global setting, so every chest
+/// product's observations are pooled.
+fn artifact_fallbacks() -> &'static [(u64, u64, Item)] {
+    static TABLE: std::sync::OnceLock<Vec<(u64, u64, Item)>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut out = Vec::new();
+        for band in corpus().products.iter().flat_map(|p| &p.by_level) {
+            let core = core_slots(band);
+            for r in &band.results {
+                for item in r.reward.items.iter().skip(core) {
+                    if !is_artifact(&item.item_template_id) {
+                        out.push((band.min_buyer_level, band.max_buyer_level, item.clone()));
+                    }
+                }
+            }
+        }
+        out
+    })
+}
+
+#[cfg(test)]
+fn artifact_fallback_templates() -> HashSet<Uuid> {
+    artifact_fallbacks().iter().map(|(_, _, i)| i.item_template_id).collect()
+}
+
 /// The mined product that backs `product_id`: its own, else its promo twin's.
 fn corpus_product(product_id: &Uuid) -> Option<&'static Product> {
     let mined_as = STORE_CHEST_ALIASES
@@ -165,6 +239,74 @@ pub fn bundle_observations(product_id: &Uuid) -> u64 {
 /// `None` when the product is not a randomised bundle, which leaves every other
 /// product on the existing recorded-grant path.
 pub fn roll_bundle(product_id: &Uuid, buyer_level: u64, nonce: u64) -> Option<RewardGrant> {
+    roll_bundle_for(product_id, buyer_level, nonce, &HashSet::new())
+}
+
+/// How far `level` sits outside `min..=max` (0 inside).
+fn level_distance(level: u64, min: u64, max: u64) -> u64 {
+    if level < min {
+        min - level
+    } else {
+        level.saturating_sub(max)
+    }
+}
+
+/// One whole recorded reward from the band, weighted by its count.
+fn draw(band: &Band, seed: u64) -> Option<&Drawn> {
+    let total: u64 = band.results.iter().map(|r| r.n).sum();
+    if total == 0 {
+        return None;
+    }
+    let mut pick = seed % total;
+    band.results
+        .iter()
+        .find(|r| {
+            if pick < r.n {
+                true
+            } else {
+                pick -= r.n;
+                false
+            }
+        })
+        .or(band.results.last())
+}
+
+/// A retail artifact-slot fallback for a buyer at `level`: one paid in a band
+/// containing the level, else in the nearest band that paid any.
+fn artifact_fallback(level: u64, seed: u64) -> Option<&'static Item> {
+    let all = artifact_fallbacks();
+    let nearest = all.iter().map(|(lo, hi, _)| level_distance(level, *lo, *hi)).min()?;
+    let candidates: Vec<&Item> = all
+        .iter()
+        .filter(|(lo, hi, _)| level_distance(level, *lo, *hi) == nearest)
+        .map(|(_, _, item)| item)
+        .collect();
+    Some(candidates[(seed % candidates.len() as u64) as usize])
+}
+
+/// [`roll_bundle`] for a buyer who already holds the item templates in `owned`.
+///
+/// THE POOL (#310). A band is a bank of 60-250 whole recorded rewards, and
+/// replaying one whole reward per purchase meant a level-15 buyer could only
+/// ever see 63 different Legendary chests: Sephoris bought 165 and got 58
+/// distinct, each about three times. Retail rolled every slot on its own — 4,697
+/// purchases, 4,697 distinct rewards. So the roll is composed from retail parts
+/// of the SAME band: gold, stackables, town XP and the optional artifact slot
+/// from one recorded reward, and each regular item slot from its own
+/// independently drawn reward, position for position (slot 0 and slot 1 roll
+/// different item families, so they are never mixed). Nothing is invented and
+/// the payout stays in the band's observed range.
+///
+/// THE ARTIFACT RULE (#310). An artifact is unique. An artifact the buyer
+/// already holds — or one this same chest already paid — is replaced by a
+/// piece retail itself paid in the artifact slot, as `LootEnhancementData`'s
+/// "Legendary - High (Chests)" fallback dictates.
+pub fn roll_bundle_for(
+    product_id: &Uuid,
+    buyer_level: u64,
+    nonce: u64,
+    owned: &HashSet<Uuid>,
+) -> Option<RewardGrant> {
     let product = corpus_product(product_id)?;
 
     // The band containing the buyer's level, else the nearest one — a level above
@@ -175,58 +317,75 @@ pub fn roll_bundle(product_id: &Uuid, buyer_level: u64, nonce: u64) -> Option<Re
         .iter()
         .find(|b| buyer_level >= b.min_buyer_level && buyer_level <= b.max_buyer_level)
         .or_else(|| {
-            product.by_level.iter().min_by_key(|b| {
-                if buyer_level < b.min_buyer_level {
-                    b.min_buyer_level - buyer_level
-                } else {
-                    buyer_level.saturating_sub(b.max_buyer_level)
-                }
-            })
+            product
+                .by_level
+                .iter()
+                .min_by_key(|b| level_distance(buyer_level, b.min_buyer_level, b.max_buyer_level))
         })?;
 
-    let total: u64 = band.results.iter().map(|r| r.n).sum();
-    if total == 0 {
-        return None;
-    }
     let seed = mix(product_id.as_u128() as u64 ^ mix(nonce) ^ buyer_level.rotate_left(13));
-    let mut pick = seed % total;
-    let drawn = band
-        .results
-        .iter()
-        .find(|r| {
-            if pick < r.n {
-                true
-            } else {
-                pick -= r.n;
-                false
+    let base = draw(band, seed)?;
+    let core = core_slots(band);
+
+    let mut items: Vec<Item> = Vec::with_capacity(base.reward.items.len());
+    for slot in 0..core {
+        let slot_seed = mix(seed ^ 0xA076_1D64_78BD_642F_u64.wrapping_mul(slot as u64 + 1));
+        items.push(draw(band, slot_seed)?.reward.items[slot].clone());
+    }
+    items.extend(base.reward.items.iter().skip(core).cloned());
+
+    let mut paid_artifacts = HashSet::new();
+    for (ordinal, item) in items.iter_mut().enumerate() {
+        let template = item.item_template_id;
+        if !is_artifact(&template) {
+            continue;
+        }
+        if owned.contains(&template) || !paid_artifacts.insert(template) {
+            let fallback_seed = mix(seed ^ 0xE703_7ED1_A0B4_28DB ^ ordinal as u64);
+            match artifact_fallback(buyer_level, fallback_seed) {
+                Some(fallback) => *item = fallback.clone(),
+                // Unreachable with the shipped corpus (asserted in tests); never
+                // pay a duplicate artifact even then.
+                None => item.item_template_id = Uuid::nil(),
             }
-        })
-        .unwrap_or(band.results.last()?);
+        }
+    }
+    items.retain(|i| !i.item_template_id.is_nil());
 
     let mut grant = RewardGrant {
-        currencies: drawn.reward.currencies.clone(),
-        stackable_items: drawn.reward.stackable_items.clone(),
-        town_xp: drawn.reward.town_xp,
+        currencies: base.reward.currencies.clone(),
+        stackable_items: base.reward.stackable_items.clone(),
+        town_xp: base.reward.town_xp,
         ..RewardGrant::default()
     };
-    for (ordinal, item) in drawn.reward.items.iter().enumerate() {
+    for (ordinal, item) in items.into_iter().enumerate() {
         grant.items.push(RewardItem {
             // A fresh instance per purchase. The frozen ids in the capture-derived
             // grants are what made buying twice overwrite the first item.
             id: instance_uuid(seed, ordinal),
-            item: item.clone(),
+            item,
         });
     }
     Some(grant)
 }
 
 /// Roll a treasury chest through the retail store-chest corpus when the treasury
-/// table is too thin to model the tier. Tier 5 has one captured treasury open but
-/// 4,697 retail Legendary chest purchases with the same reward shape.
-pub fn roll_treasury_chest(tier: u64, chest_level: u64, nonce: u64) -> Option<RewardGrant> {
-    (tier == 5)
-        .then(|| roll_bundle(&LEGENDARY_CHEST_PRODUCT_ID, chest_level, nonce))
-        .flatten()
+/// table is too thin to model the tier. Tier 5 (Legendary) has one captured
+/// treasury open but 4,697 retail Legendary chest purchases with the same reward
+/// shape; tier 4 (Elder) has eleven opens, at levels 54-94 only, against 405 Epic
+/// Chest purchases — the product the APK catalogue sells as `_rarity: 4`.
+pub fn roll_treasury_chest(
+    tier: u64,
+    chest_level: u64,
+    nonce: u64,
+    owned: &HashSet<Uuid>,
+) -> Option<RewardGrant> {
+    let product = match tier {
+        5 => LEGENDARY_CHEST_PRODUCT_ID,
+        4 => EPIC_CHEST_PRODUCT_ID,
+        _ => return None,
+    };
+    roll_bundle_for(&product, chest_level, nonce, owned)
 }
 
 #[cfg(test)]
@@ -414,5 +573,180 @@ mod tests {
     #[test]
     fn an_unknown_product_does_not_roll() {
         assert!(roll_bundle(&Uuid::from_u128(0xDEAD), 30, 1).is_none());
+    }
+
+    // ---- #310: Legendary chests repeat, and artifacts drop more than once ----
+
+    const LEGENDARY_PROMO: &str = BIG;
+    /// Pandemonium, the artifact Sephoris holds three of.
+    const PANDEMONIUM: Uuid = Uuid::from_u128(0x86a4ad9d_e2e8_49cd_9642_b553475b6580);
+
+    /// What a player sees: gold, stackables and each item minus its instance id.
+    fn fingerprint(g: &RewardGrant) -> String {
+        let mut stack: Vec<_> = g.stackable_items.iter().collect();
+        stack.sort();
+        let items: Vec<String> = g
+            .items
+            .iter()
+            .map(|i| serde_json::to_string(&i.item).unwrap())
+            .collect();
+        format!("{}|{stack:?}|{items:?}", gold_of(g))
+    }
+
+    fn legendary() -> Uuid {
+        LEGENDARY_PROMO.parse().unwrap()
+    }
+
+    /// THE BUG. Sephoris (level 15) bought 165 Legendary chests. The level-15-17
+    /// band holds 63 whole recorded rewards and the server replayed one of them
+    /// per purchase, so 165 chests could only ever be 63 different chests, each
+    /// seen about three times: 58 distinct in his exact sequence. Retail never
+    /// repeated one in 4,697 purchases.
+    #[test]
+    fn legendary_chests_at_one_level_do_not_cycle_through_a_small_bank() {
+        let mut seen = HashSet::new();
+        for nonce in 0..165u64 {
+            seen.insert(fingerprint(&roll_bundle(&legendary(), 15, nonce).unwrap()));
+        }
+        assert!(
+            seen.len() >= 160,
+            "165 Legendary chests at level 15 were only {} different chests",
+            seen.len()
+        );
+    }
+
+    /// THE SECOND BUG. Retail never granted an artifact the character already
+    /// held — 0 duplicates across 2,386 artifact holdings in 576 retail inventory
+    /// listings — and the APK's `LootEnhancementData` says why: a held artifact
+    /// falls back to a `Legendary - High (Chests)` piece. Sephoris holds three
+    /// Pandemonium from exactly this sequence.
+    #[test]
+    fn a_held_artifact_is_never_rolled_again() {
+        for level in [3u64, 7, 15, 20, 27, 60] {
+            let mut owned = HashSet::new();
+            let mut artifacts = Vec::new();
+            for nonce in 0..600u64 {
+                let g = roll_bundle_for(&legendary(), level, nonce, &owned).unwrap();
+                for item in &g.items {
+                    let t = item.item.item_template_id;
+                    if is_artifact(&t) {
+                        assert!(
+                            !owned.contains(&t),
+                            "level {level}, chest {nonce}: granted artifact {t} a second time"
+                        );
+                        artifacts.push(t);
+                    }
+                    owned.insert(t);
+                }
+            }
+            let distinct: HashSet<_> = artifacts.iter().collect();
+            assert_eq!(distinct.len(), artifacts.len(), "level {level}: {artifacts:?}");
+        }
+    }
+
+    /// The replacement is retail's: the chest keeps its shape and its other
+    /// contents, and the artifact slot pays a non-artifact piece that retail
+    /// itself paid in that slot. Retail player 78f2b668 shows it seven times —
+    /// e.g. holding Pandemonium at level 18, the slot paid an Orcish Scaled Shield.
+    #[test]
+    fn a_duplicate_artifact_becomes_a_retail_legendary_piece() {
+        let nonce = (0..5_000u64)
+            .find(|&n| {
+                roll_bundle(&legendary(), 15, n)
+                    .unwrap()
+                    .items
+                    .iter()
+                    .any(|i| i.item.item_template_id == PANDEMONIUM)
+            })
+            .expect("control: Pandemonium must be rollable at level 15");
+        let fresh = roll_bundle(&legendary(), 15, nonce).unwrap();
+        let held = roll_bundle_for(&legendary(), 15, nonce, &HashSet::from([PANDEMONIUM])).unwrap();
+
+        assert_eq!(held.items.len(), fresh.items.len(), "the slot is replaced, not dropped");
+        assert_eq!(held.currencies, fresh.currencies, "only the artifact slot changes");
+        assert_eq!(held.stackable_items, fresh.stackable_items);
+        let fallbacks = artifact_fallback_templates();
+        for (a, b) in fresh.items.iter().zip(&held.items) {
+            if a.item.item_template_id == PANDEMONIUM {
+                let t = b.item.item_template_id;
+                assert!(!is_artifact(&t), "replaced with another artifact {t}");
+                assert!(fallbacks.contains(&t), "{t} was never a retail artifact-slot payout");
+            } else {
+                assert_eq!(a.item, b.item);
+            }
+        }
+    }
+
+    /// A widened roll must still be made of retail parts: each item slot draws from
+    /// what retail paid in that slot within the band, and gold stays inside the
+    /// band's observed range. This is the control on the widening.
+    #[test]
+    fn a_composed_chest_is_made_of_retail_parts() {
+        let product = corpus_product(&legendary()).unwrap();
+        for band in &product.by_level {
+            let level = band.min_buyer_level;
+            let golds: Vec<u64> =
+                band.results.iter().map(|r| r.reward.currencies[&gold_id()]).collect();
+            let (lo, hi) = (*golds.iter().min().unwrap(), *golds.iter().max().unwrap());
+            let slot_pool = |k: usize| -> HashSet<String> {
+                band.results
+                    .iter()
+                    .filter_map(|r| r.reward.items.get(k))
+                    .map(|i| serde_json::to_string(i).unwrap())
+                    .collect()
+            };
+            let (s0, s1) = (slot_pool(0), slot_pool(1));
+            for nonce in 0..200u64 {
+                let g = roll_bundle(&legendary(), level, nonce).unwrap();
+                let gold = gold_of(&g);
+                assert!((lo..=hi).contains(&gold), "level {level}: gold {gold} not in {lo}..={hi}");
+                assert!((2..=3).contains(&g.items.len()), "level {level}: {} items", g.items.len());
+                assert!(s0.contains(&serde_json::to_string(&g.items[0].item).unwrap()));
+                assert!(s1.contains(&serde_json::to_string(&g.items[1].item).unwrap()));
+            }
+        }
+    }
+
+    /// Elder chests (tier 4) had the same thin-pool problem as Legendary ones before
+    /// #215: eleven captured treasury opens, so a tier-4 chest at a given level
+    /// picks among one or two bundles. The APK's own catalogue sells the Epic Chest
+    /// as `_rarity: 4`, and retail's 405 Epic purchases are the Elder corpus.
+    #[test]
+    fn elder_treasury_chests_roll_from_the_epic_chest_corpus() {
+        let mut seen = HashSet::new();
+        for nonce in 0..40u64 {
+            let g = roll_treasury_chest(4, 60, nonce, &HashSet::new())
+                .expect("a tier-4 chest must roll from the Epic corpus");
+            assert!(g.chests.is_empty());
+            seen.insert(fingerprint(&g));
+        }
+        assert!(seen.len() >= 38, "40 Elder chests gave {} distinct", seen.len());
+        assert!(roll_treasury_chest(3, 60, 1, &HashSet::new()).is_none(), "tier 3 keeps its table");
+    }
+
+    /// The artifact list is the APK's `Item.Tag.Artifact` set, and every artifact
+    /// the store corpus pays is on it.
+    #[test]
+    fn the_artifact_list_covers_every_artifact_the_corpus_pays() {
+        assert_eq!(ARTIFACT_TEMPLATES.len(), 24);
+        assert!(is_artifact(&PANDEMONIUM));
+        let paid: HashSet<Uuid> = corpus()
+            .products
+            .iter()
+            .flat_map(|p| &p.by_level)
+            .flat_map(|b| &b.results)
+            .flat_map(|r| &r.reward.items)
+            .filter(|i| {
+                i.properties.enchanting.is_empty() && i.tempering_level == 0 && i.grade.is_none()
+            })
+            .map(|i| i.item_template_id)
+            .collect();
+        for t in paid {
+            assert!(is_artifact(&t), "{t} is paid bare (no enchant/temper/grade) but not listed");
+        }
+    }
+
+    fn gold_id() -> Uuid {
+        GOLD.parse().unwrap()
     }
 }

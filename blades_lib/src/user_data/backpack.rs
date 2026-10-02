@@ -440,6 +440,24 @@ pub struct CompleteInventoryUpdate {
 }
 
 impl CompleteInventory {
+    /// Every item template the character holds as an instanced item, carried or
+    /// equipped. What a "do you already own this artifact" check reads (#310).
+    pub fn item_templates(&self) -> HashSet<Uuid> {
+        self.backpack
+            .items
+            .0
+            .values()
+            .map(|item| item.item_template_id)
+            .chain(
+                self.loadout
+                    .equipped_items
+                    .0
+                    .values()
+                    .map(|equipped| equipped.item.item_template_id),
+            )
+            .collect()
+    }
+
     pub fn generate_client_update(
         &self,
         tracker: &InventoryChangeTracker,
