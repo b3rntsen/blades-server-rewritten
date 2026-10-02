@@ -23,6 +23,13 @@
 //!   many sites the district had cleared before it. A cleared site stays
 //!   cleared: rebuilding on it pays no site points again, and destroying never
 //!   takes XP back.
+//! * **The town-level gate** for building or upgrading TO level L in style S is
+//!   `styles[S].requireTownLevel[L]` (report #287). The APK keeps it per style
+//!   per level and nowhere else: a Workshop is town level 3 in Timber or Stone
+//!   but 5 in Castle. `building_upgrades.json` had one number per level (the
+//!   first style's — Castle's, for a Workshop) and the server took the max of
+//!   that and a hand-authored style value, so every Workshop asked for 5 and a
+//!   level-3 town that the build menu offered one got a 409.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -50,6 +57,21 @@ pub(crate) struct BuildingConstruction {
     pub upgrade_gold: Vec<u64>,
     pub upgrade_ms: Vec<u64>,
     pub destruction_gold: Vec<u64>,
+    /// Per style: the `_styles[j]._levels[k]` values, indexed by level.
+    #[serde(default)]
+    pub styles: HashMap<Uuid, StyleLevels>,
+}
+
+/// One style's per-level rows. The extractor also writes `prestigeForLevel` /
+/// `prestigeForStyle` beside these; the server does not read them (prestige is
+/// still paid from `building_upgrades.json` and the measured
+/// `style_prestige.json`; the level prestige agrees with the APK for every
+/// shop / house / town hall row, and the style prestige agrees with every
+/// measured restyle the server pays).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StyleLevels {
+    pub require_town_level: Vec<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +115,17 @@ impl BuildingConstruction {
     pub fn upgrade(&self, level: u64) -> Option<(u64, u64)> {
         let i = level as usize;
         Some((*self.upgrade_gold.get(i)?, *self.upgrade_ms.get(i)?))
+    }
+
+    /// Town level needed to build/upgrade TO `level` in `style`. Exact index
+    /// only: a style or level the APK has no row for returns `None`, and the
+    /// caller falls back to `building_upgrades.json`.
+    pub fn require_town_level(&self, style: Uuid, level: u64) -> Option<u64> {
+        self.styles
+            .get(&style)?
+            .require_town_level
+            .get(level as usize)
+            .copied()
     }
 
     /// Gold to destroy one while `n` of its family stand, itself included.

@@ -337,7 +337,12 @@ fn lookup_level_cost(
                 gold = gold.saturating_add(style_gold);
             }
 
-            // Check if the style has a requireTownLevel
+            // FALLBACK ONLY. Placement and upgrade replace this with the APK's
+            // per-style per-level value (`required_town_level`, report #287);
+            // it survives for a building/style/level the APK table lacks. Of
+            // the three ways to read this table, the max agrees with the APK
+            // most often (173 of 218 rows; the style row alone 90, the level
+            // row alone 132) and never gates lower than either row.
             if let Some(style_require) = style_data.get("requireTownLevel").and_then(Value::as_u64) {
                 require_town_level = std::cmp::max(require_town_level, style_require);
             }
@@ -394,9 +399,39 @@ fn style_field(
         .unwrap_or(0)
 }
 
+/// The town level needed to bring `type_id` in `style_id` to `level`: the
+/// APK's `_styles[style]._levels[level]._requireTownLevel` (report #287), or
+/// `fallback` (the old `building_upgrades.json` value, level row maxed with the
+/// style row) when the APK table has no row for that building, style or level —
+/// or no style is known. The APK value is used as-is, never maxed with the
+/// table: the table's level row is just the first style's number (Castle's,
+/// for a Workshop), which is what asked 5 of a Timber Workshop.
+fn required_town_level(type_id: Uuid, style_id: Option<Uuid>, level: u64, fallback: u64) -> u64 {
+    style_id
+        .and_then(|style| {
+            crate::town_construction::data()
+                .building(type_id)?
+                .require_town_level(style, level)
+        })
+        .unwrap_or(fallback)
+}
+
+/// Refuse with `TownLevelTooLow` (409, code 3) when `town` is below the gate.
+fn check_town_level(cost: &LevelCost, town: &Value) -> Result<(), CostError> {
+    let have = town_level(town);
+    if have < cost.require_town_level {
+        return Err(CostError::TownLevelTooLow {
+            need: cost.require_town_level,
+            have,
+        });
+    }
+    Ok(())
+}
+
 /// The price of PLACING `type_id` in `style_id` in this town (tracker #287).
 ///
-/// Materials, the town-level gate and the style's gold still come from
+/// The town-level gate is the APK's for the chosen style at level 0 (see
+/// [`required_town_level`]). Materials and the style's gold still come from
 /// `building_upgrades.json`; the base gold and the timer come from the APK's
 /// `constructionGold[n]` / `constructionMs[n]`, n being how many of the
 /// building's family the town already holds. The table's level-0 row was one
@@ -410,6 +445,8 @@ fn placement_cost(
     style_id: Uuid,
 ) -> Result<LevelCost, CostError> {
     let mut cost = lookup_level_cost(building_upgrades, type_id, 0, Some(style_id), true)?;
+    cost.require_town_level =
+        required_town_level(type_id, Some(style_id), 0, cost.require_town_level);
     if let Some(spec) = crate::town_construction::data().building(type_id) {
         let n = crate::town_construction::family_count(town, type_id);
         if n >= spec.building_limit {
@@ -426,8 +463,10 @@ fn placement_cost(
 
 /// The price of upgrading `type_id` (wearing `style_id`) to `target_level`:
 /// the APK's `upgradeGold[L]` plus the worn style's gold, over `upgradeMs[L]`.
-/// Materials / gate / max level stay with `building_upgrades.json`, and so does
-/// the price of any level the APK has no row for.
+/// The gate is the APK's for the style the building already wears at
+/// `target_level` (see [`required_town_level`]). Materials / max level stay
+/// with `building_upgrades.json`, and so does the price of any level the APK
+/// has no row for.
 fn upgrade_cost(
     building_upgrades: &Value,
     type_id: Uuid,
@@ -436,6 +475,8 @@ fn upgrade_cost(
 ) -> Result<LevelCost, CostError> {
     // An upgrade does not re-buy the style it is already wearing.
     let mut cost = lookup_level_cost(building_upgrades, type_id, target_level, style_id, false)?;
+    cost.require_town_level =
+        required_town_level(type_id, style_id, target_level, cost.require_town_level);
     if let Some((gold, ms)) = crate::town_construction::data()
         .building(type_id)
         .and_then(|b| b.upgrade(target_level))
@@ -656,14 +697,7 @@ pub async fn upgrade_building(
                 .map_err(|e| e.to_api())?;
 
             // Town-level gate.
-            let tl = town_level(&town);
-            if tl < cost.require_town_level {
-                return Err(CostError::TownLevelTooLow {
-                    need: cost.require_town_level,
-                    have: tl,
-                }
-                .to_api());
-            }
+            check_town_level(&cost, &town).map_err(|e| e.to_api())?;
 
             // Charge (gold/gems + materials); fails cleanly on insufficient funds.
             let mut tracker = InventoryChangeTracker::default();
@@ -1062,14 +1096,7 @@ pub async fn place_building(
             )
             .map_err(|e| e.to_api())?;
 
-            let tl = town_level(&town);
-            if tl < cost.require_town_level {
-                return Err(CostError::TownLevelTooLow {
-                    need: cost.require_town_level,
-                    have: tl,
-                }
-                .to_api());
-            }
+            check_town_level(&cost, &town).map_err(|e| e.to_api())?;
 
             let mut tracker = InventoryChangeTracker::default();
             charge_cost(
@@ -4238,5 +4265,150 @@ mod construction_rules {
                 .unwrap()
                 .town_sites_backfilled
         );
+    }
+}
+
+/// Report #287: the town-level gate is the APK's, per style per level.
+#[cfg(test)]
+mod style_town_level {
+    use super::*;
+    use actix_web::ResponseError;
+
+    const WORKSHOP: &str = "b6c023e6-3b81-497f-9c2c-f532ecff3bb2";
+    const CASTLE: &str = "c462a43a-0547-4cd0-a755-5c0aff0f74f8";
+    const TIMBER: &str = "aa133662-053d-434e-8779-3f2a41d1271e";
+    const STONE: &str = "1d6696b3-963b-48d4-8924-d43505cb2807";
+
+    fn u(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+
+    fn shipped() -> Value {
+        serde_json::from_str(include_str!("../../deploy/static/building_upgrades.json"))
+            .expect("deploy/static/building_upgrades.json is valid JSON")
+    }
+
+    fn town_at(level: u64) -> Value {
+        json!({ "levelInfo": { "level": level, "experiencePoints": 0 }, "districts": [] })
+    }
+
+    /// What the server now asks: placement at level 0, an upgrade above it.
+    fn current_gate(bu: &Value) -> impl Fn(Uuid, Uuid, u64) -> u64 + '_ {
+        move |t, s, l| {
+            let cost = if l == 0 {
+                placement_cost(bu, &town_at(0), t, s)
+            } else {
+                upgrade_cost(bu, t, l, Some(s))
+            };
+            cost.unwrap_or_else(|e| panic!("{t}/{s}/{l}: {e:?}")).require_town_level
+        }
+    }
+
+    /// The rule before #287: the level row's requirement, raised to the chosen
+    /// style row's when that is higher.
+    fn old_max_gate(bu: &Value) -> impl Fn(Uuid, Uuid, u64) -> u64 + '_ {
+        move |t, s, l| {
+            let row = &bu["buildings"][t.to_string()]["levels"][l.to_string()];
+            let base = row["requireTownLevel"].as_u64().unwrap_or(0);
+            let style = row["styleInputs"][s.to_string()]["requireTownLevel"].as_u64();
+            style.map_or(base, |v| base.max(v))
+        }
+    }
+
+    /// The tracker #287 situation, as a predicate over a gate rule: a level-3
+    /// town may place a Workshop in Timber and in Stone, and may not in Castle.
+    fn workshop_menu_holds(gate: &dyn Fn(Uuid, Uuid, u64) -> u64) -> bool {
+        let at3 = |s: &str| gate(u(WORKSHOP), u(s), 0) <= 3;
+        at3(TIMBER) && at3(STONE) && !at3(CASTLE)
+    }
+
+    #[test]
+    fn a_level_3_town_places_a_timber_workshop_and_is_refused_a_castle_one() {
+        let bu = shipped();
+        let town = town_at(3);
+        for style in [TIMBER, STONE] {
+            let cost = placement_cost(&bu, &town, u(WORKSHOP), u(style)).unwrap();
+            assert_eq!(cost.require_town_level, 3, "style {style}");
+            assert_eq!(check_town_level(&cost, &town), Ok(()), "style {style}");
+        }
+
+        let castle = placement_cost(&bu, &town, u(WORKSHOP), u(CASTLE)).unwrap();
+        let refused = check_town_level(&castle, &town).unwrap_err();
+        assert_eq!(refused, CostError::TownLevelTooLow { need: 5, have: 3 });
+        let api = refused.to_api();
+        assert_eq!(api.status_code(), StatusCode::CONFLICT);
+        assert_eq!(api.error_code(), 3);
+        // ...and a level-5 town gets the Castle one.
+        assert_eq!(check_town_level(&castle, &town_at(5)), Ok(()));
+    }
+
+    /// An upgrade is gated by the style the building already wears: a Timber
+    /// Workshop goes to level 1 and 2 at town level 3, a Castle one waits for 5.
+    #[test]
+    fn an_upgrade_is_gated_by_the_buildings_current_style() {
+        let bu = shipped();
+        let town = town_at(3);
+        for level in [1, 2] {
+            let timber = upgrade_cost(&bu, u(WORKSHOP), level, Some(u(TIMBER))).unwrap();
+            assert_eq!(timber.require_town_level, 3, "Timber L{level}");
+            assert_eq!(check_town_level(&timber, &town), Ok(()));
+            let castle = upgrade_cost(&bu, u(WORKSHOP), level, Some(u(CASTLE))).unwrap();
+            assert_eq!(castle.require_town_level, 5, "Castle L{level}");
+            assert!(check_town_level(&castle, &town).is_err());
+        }
+        // Level 3 is town level 4 in Timber/Stone, 5 in Castle.
+        assert_eq!(
+            upgrade_cost(&bu, u(WORKSHOP), 3, Some(u(STONE))).unwrap().require_town_level,
+            4
+        );
+        // A building with no style on record keeps the table's level value.
+        assert_eq!(
+            upgrade_cost(&bu, u(WORKSHOP), 1, None).unwrap().require_town_level,
+            bu["buildings"][WORKSHOP]["levels"]["1"]["requireTownLevel"].as_u64().unwrap()
+        );
+    }
+
+    /// Identity: for EVERY building, style and level the APK lists, the gate
+    /// the server applies is the APK's `_requireTownLevel` — nothing from
+    /// `building_upgrades.json` leaks through. The embedded table is the APK
+    /// extraction (regenerate with `script/extract_building_construction.py`);
+    /// the Workshop's first three levels are pinned as literals from the dump.
+    #[test]
+    fn every_building_style_level_gate_is_the_apks() {
+        let bu = shipped();
+        let gate = current_gate(&bu);
+        let apk = crate::town_construction::data();
+        let mut checked = 0;
+        for (type_id, building) in &apk.buildings {
+            for (style_id, levels) in &building.styles {
+                for (level, want) in levels.require_town_level.iter().enumerate() {
+                    assert_eq!(
+                        gate(*type_id, *style_id, level as u64),
+                        *want,
+                        "{type_id} style {style_id} level {level}"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 218, "every (building, style, level) the APK lists");
+
+        let w = apk.building(u(WORKSHOP)).unwrap();
+        for (style, want) in [(CASTLE, [5, 5, 5]), (TIMBER, [3, 3, 3]), (STONE, [3, 3, 3])] {
+            let got: Vec<u64> = (0..3).map(|l| w.require_town_level(u(style), l).unwrap()).collect();
+            assert_eq!(got, want, "Workshop {style}");
+        }
+    }
+
+    /// Negative control: the same Workshop predicate under the old
+    /// level-vs-style `max()` rule fails — it asks 5 of a Timber Workshop —
+    /// so the tests above discriminate the fix rather than passing either way.
+    #[test]
+    fn the_old_max_rule_fails_the_workshop_test() {
+        let bu = shipped();
+        let old = old_max_gate(&bu);
+        assert_eq!(old(u(WORKSHOP), u(TIMBER), 0), 5);
+        assert!(!workshop_menu_holds(&old));
+        assert!(workshop_menu_holds(&current_gate(&bu)));
     }
 }

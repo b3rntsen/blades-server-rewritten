@@ -12,7 +12,14 @@ ScriptableObjects (tracker #287):
         _upgradeTimesInSeconds[L]          …and how long that takes
         _softCurrencyCostDestruction[n]    gold to tear one down while n stand
         _buildingLimit                     how many the town may hold
-    plus `_lotSize` and the building category.
+    plus `_lotSize` and the building category; and per STYLE per LEVEL
+    (`_styles[j]._levels[k]`, report #287):
+        _requireTownLevel                  town level needed to build / upgrade TO
+                                           level k in style j — there is no
+                                           per-building requirement, only these
+        _prestigeForLevel, _prestigeForStyle   town XP (recorded for comparison;
+                                           the server still pays prestige from
+                                           building_upgrades.json + style_prestige.json)
   * `common` / TownPointsData — `_pointsRewardedForBuildingSites[]`: per
     district, the town XP paid for the k-th building site ever cleared.
 
@@ -101,6 +108,33 @@ def seconds_to_ms(values, what):
     return out
 
 
+def per_style_levels(entry):
+    """`{styleId: {editorName, requireTownLevel[k], prestigeForLevel[k],
+    prestigeForStyle[k]}}`, k = `_level`. A style may list a level twice (Ruins
+    lists level 2 three times); the copies must agree, and the levels must run
+    0..n without a gap so an array index IS the level."""
+    fields = ("_requireTownLevel", "_prestigeForLevel", "_prestigeForStyle")
+    out = {}
+    for st in entry.get("_styles") or []:
+        sid = uid(st.get("_stylePointer"))
+        by_level = {}
+        for lv in st.get("_levels") or []:
+            row = tuple(int(lv.get(f, 0)) for f in fields)
+            prev = by_level.setdefault(lv["_level"], row)
+            if prev != row:
+                sys.exit(f"{entry.get('_editorName')}/{sid}: level {lv['_level']} listed twice, differently")
+        if sorted(by_level) != list(range(len(by_level))):
+            sys.exit(f"{entry.get('_editorName')}/{sid}: levels {sorted(by_level)} are not 0..n")
+        rows = [by_level[k] for k in range(len(by_level))]
+        out[sid] = {
+            "editorName": st.get("_editorName"),
+            "requireTownLevel": [r[0] for r in rows],
+            "prestigeForLevel": [r[1] for r in rows],
+            "prestigeForStyle": [r[2] for r in rows],
+        }
+    return dict(sorted(out.items()))
+
+
 def build(construction, points):
     buildings = {}
     for e in construction["_templateList"]:
@@ -124,6 +158,7 @@ def build(construction, points):
             "upgradeGold": list(d["_softCurrencyCostUpgrade"]),
             "upgradeMs": seconds_to_ms(d["_upgradeTimesInSeconds"], type_id),
             "destructionGold": list(d["_softCurrencyCostDestruction"]),
+            "styles": per_style_levels(e),
         }
     lot_points = {
         uid(p["_districtId"]): list(p["_pointsRewarded"])
@@ -135,12 +170,15 @@ def build(construction, points):
             "town XP, from the APK. Regenerate with script/extract_building_construction.py.",
             "sources": [
                 "gameplaymetadata: BuildingConstructionDataList._templateList[]._districts[0]",
+                "gameplaymetadata: BuildingConstructionDataList._templateList[]._styles[]._levels[]",
                 "common: TownPointsData._pointsRewardedForBuildingSites",
             ],
             "indexing": "constructionGold/constructionMs/destructionGold[n]: n = buildings of "
             "the same family standing in the town (any state) before the action; "
             "upgradeGold/upgradeMs[L]: L = level being upgraded TO; lotPoints[district][k]: "
-            "town XP for the k-th site cleared in that district.",
+            "town XP for the k-th site cleared in that district; "
+            "styles[styleId].requireTownLevel/prestigeForLevel/prestigeForStyle[k]: k = the level "
+            "built or upgraded TO, in that style.",
         },
         "lotPoints": lot_points,
         "buildings": dict(sorted(buildings.items())),
