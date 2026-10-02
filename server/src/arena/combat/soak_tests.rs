@@ -520,11 +520,13 @@ fn run_match(
                         .iter()
                         .filter(|&&p| nd.string(p).is_some_and(|w| !w.is_empty()))
                         .count();
-                    let score: usize = m.combat.rounds_won.iter().map(|&w| w as usize).sum();
-                    if decided != score {
+                    // The k-th round result names exactly k decided rounds. (Judged by
+                    // position rather than against the score after the batch: one
+                    // batch can carry a death's deferred result AND a concession's.)
+                    if decided != o.round_results_sent {
                         return Err(format!(
-                            "op48 carries {decided} decided rounds but the score is {:?}",
-                            m.combat.rounds_won
+                            "op48 #{} carries {decided} decided rounds (score now {:?})",
+                            o.round_results_sent, m.combat.rounds_won
                         ));
                     }
                 }

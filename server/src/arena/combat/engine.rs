@@ -967,6 +967,15 @@ impl MatchInstance {
             return Vec::new(); // solo / bot — nobody to award the match to
         };
 
+        // A concession inside a round-ending death's ~216 ms window: that round was
+        // decided first, so its burst (op29, RoundEnd, Idle, PostRound, its op48) goes
+        // out in full, ahead of the concession's own result.
+        let pending_death_burst = if self.combat.round_end_pending.is_some() {
+            resolve::flush_round_end_now(&mut self.combat, now)
+        } else {
+            Vec::new()
+        };
+
         // The departure counts as the final round, won by the survivor. op48 is
         // cumulative, so it carries every completed round plus this one.
         self.combat.round_winners.push(Some(winner));
@@ -994,7 +1003,10 @@ impl MatchInstance {
             &self.combat.game_session_id,
         );
 
-        let mut out = Vec::new();
+        // A concession inside a round-ending death's ~216 ms window supersedes that
+        // round's still-unsent result: its op48 would name fewer rounds than the
+        // concession just recorded. The death itself (op29 + RoundEnd) still goes out.
+        let mut out = pending_death_burst;
         for slot in 0..self.combat.fighters.len() {
             out.push((slot, result.clone()));
             if let Some(m) = messages::flow_state(self.combat.flow_controller_id, FlowState::RoundEnd) {
@@ -1031,7 +1043,10 @@ impl MatchInstance {
     /// a lapsed block, so for a player who stops sending input mid-swing this is the
     /// path that finishes the animation.
     pub fn on_tick(&mut self, connected: usize, now: Instant) -> Vec<(usize, Vec<u8>)> {
-        let mut out = self.on_tick_resolved(connected, now);
+        // A round-ending death's burst is spread over the next ~216 ms (tracker #305,
+        // `state::PendingRoundEnd`); release whatever part of it is due first.
+        let mut out = resolve::flush_round_end(&mut self.combat, now);
+        out.extend(self.on_tick_resolved(connected, now));
         out.extend(resolve::drain_state_changes(&mut self.combat, now));
         super::trace::record_outbound(&self.combat.game_session_id, &out);
         out
@@ -1251,6 +1266,9 @@ impl MatchInstance {
             // final-round timers, then finish the match — so the client shows a clean
             // result and returns to the lobby instead of timing out ("error 3").
             // [MATCH_STATE_MATCHEND_PROGRESSION]
+            // The post-round walks wait for the death burst's result (PostRound + op48)
+            // to be on the wire: a Ready press must not skip ahead of it.
+            FlowState::RoundEnd | FlowState::NextState if self.combat.round_end_pending.is_some() => {}
             FlowState::RoundEnd => {
                 if let Some(&(state, hold_before, timeout)) =
                     MATCH_STATE_MATCHEND_PROGRESSION.get(self.combat.matchend_step)
@@ -1282,6 +1300,16 @@ impl MatchInstance {
                             self.combat.matchend_step + 1,
                             MATCH_STATE_MATCHEND_PROGRESSION.len(),
                         );
+                        // The winner takes the Emote pose once the match is decided on
+                        // the wire. Retail: winner only, never the loser, 191-1439 ms
+                        // (p50 559) after → BackendMatchEnd(17), n = 94; sent with the
+                        // 17 step, the nearest beat this walk has (tracker #305).
+                        if matches!(state, MatchState::BackendMatchEnd) {
+                            if let Some(f) = self.combat.winner.and_then(|w| self.combat.fighters.get_mut(w)) {
+                                f.force_actor_state(super::state::ActorStateType::Emote, now);
+                            }
+                            out.extend(resolve::drain_state_changes(&mut self.combat, now));
+                        }
                         self.broadcast_match_state(&mut out, state, timeout);
                         // THE VICTORY CARD BELONGS TO THE VICTORY SCREEN.
                         //
@@ -1354,6 +1382,17 @@ impl MatchInstance {
                             MATCH_STATE_INTERROUND_PROGRESSION.len(),
                             self.combat.round,
                         );
+                        // Both actors take the round-end Emote pose in the tick that
+                        // enters ChooseLoadout(8), Emote first: retail 194/194
+                        // non-final kills, victim and killer alike, 0 to −5 ms before
+                        // the → 8 (tracker #305). Never earlier — the killer's swing
+                        // and the result own the first ~216 ms.
+                        if matches!(state, MatchState::ChooseLoadout) {
+                            for f in self.combat.fighters.iter_mut() {
+                                f.force_actor_state(super::state::ActorStateType::Emote, now);
+                            }
+                            out.extend(resolve::drain_state_changes(&mut self.combat, now));
+                        }
                         self.broadcast_match_state(&mut out, state, timeout);
                         // Every inter-round op55 is PAIRED with an op79
                         // `MatchStateChangeRequest` in retail — 866 frames across 44
@@ -3107,7 +3146,15 @@ pub(in crate::arena::combat) mod tests {
         let mut t = start;
         for _ in 0..40 {
             t += Duration::from_millis(500);
-            let out = swing(m, attacker, t);
+            let mut out = swing(m, attacker, t);
+            // A killing blow's burst is spread over the next ~216 ms (tracker #305):
+            // tick once more when it is all due, and hand the test the whole of it.
+            if m.phase() != FlowState::StateTimeout {
+                t += super::super::resolve::FOLLOW_THROUGH_DELAY
+                    + super::super::resolve::ROUND_RESULT_DELAY
+                    + Duration::from_millis(2);
+                out.extend(m.on_tick(2, t));
+            }
             let is_op29 = |b: &[u8]| {
                 b.len() > 3 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(29)
             };
@@ -3622,6 +3669,58 @@ pub(in crate::arena::combat) mod tests {
         );
     }
 
+    /// **Tracker #305 — the round-end Emote waits for ChooseLoadout.** Retail sends 39
+    /// Emote for BOTH actors in the tick that enters ChooseLoadout(8), ahead of the
+    /// MatchState frame (194/194 non-final kills, ~3.4 s after the kill), and never in
+    /// the ~216 ms after the kill, where the killer's swing and the result go out.
+    /// Sending it with the kill cut the killing swing off on the client.
+    #[test]
+    fn the_round_end_emote_rides_choose_loadout_for_both_actors() {
+        let (mut m, t0) = live_inst(2);
+        let (death, t) = swing_until_death(&mut m, 0, t0);
+        let objs = [
+            m.combat.fighters[0].net_object_id as i64,
+            m.combat.fighters[1].net_object_id as i64,
+        ];
+        let is_emote = |b: &[u8]| {
+            b.len() > 2
+                && b[1] == 0x36
+                && arena_proto::parse_netdata(&b[2..]).int(3) == Some(39)
+                && arena_proto::parse_netdata(&b[2..]).int(6) == Some(ActorStateType::Emote as i64)
+        };
+        let match_state = |b: &[u8]| {
+            (b.len() > 2 && b[1] == 0x35)
+                .then(|| match arena_proto::parse_netdata(&b[2..]).get(5) {
+                    Some(arena_proto::NetDataValue::Byte(v)) => Some(*v),
+                    _ => None,
+                })
+                .flatten()
+        };
+        assert!(
+            !death.iter().any(|(_, b)| is_emote(b)),
+            "no Emote with the kill or its result"
+        );
+        let step = Duration::from_millis(50);
+        for i in 1..=200u32 {
+            let out: Vec<_> = m.on_tick(2, t + step * i).into_iter().filter(|(v, _)| *v == 0).collect();
+            let choose = out.iter().position(|(_, b)| match_state(b) == Some(MatchState::ChooseLoadout as u8));
+            let emotes: Vec<i64> = out
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, b))| is_emote(b))
+                .map(|(n, (_, b))| {
+                    assert!(choose.is_some_and(|c| n < c), "Emote outside / after the ChooseLoadout tick");
+                    arena_proto::parse_netdata(&b[2..]).int(0).unwrap()
+                })
+                .collect();
+            if choose.is_some() {
+                assert_eq!(emotes, objs.to_vec(), "both actors Emote, ahead of → ChooseLoadout(8)");
+                return;
+            }
+        }
+        panic!("the walk never reached ChooseLoadout");
+    }
+
     /// **12-D5 / #227 — a round-1 death must be SHOWN.** The client displays a death
     /// only from op29, and `PvpAvatar$$CheckShouldForceServerState@0x1792864` skips a
     /// state message whose history indices it already holds. The fork used to drain a
@@ -3664,12 +3763,13 @@ pub(in crate::arena::combat) mod tests {
                 !loser.contains(&39),
                 "viewer {viewer}: no 39 for the loser in the death burst, got {loser:?}"
             );
-            // Control: the WINNER is still returned to the round-end Emote pose.
+            // Control: the WINNER leaves its killing swing for Idle with the result
+            // (retail 212/214; the Emote waits for ChooseLoadout — tracker #305).
             assert!(
                 death.iter().filter(|(v, _)| *v == viewer).filter_map(|(_, b)| state_frame(b)).any(
-                    |(obj, g, s)| obj == winner_obj && g == 39 && s == Some(ActorStateType::Emote as i64)
+                    |(obj, g, s)| obj == winner_obj && g == 39 && s == Some(ActorStateType::Idle as i64)
                 ),
-                "viewer {viewer}: the winner's round-end 39 Emote must still go out"
+                "viewer {viewer}: the winner's post-kill 39 Idle must go out"
             );
         }
 
