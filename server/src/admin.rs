@@ -362,6 +362,7 @@ async fn snapshot_character(
     user_id: Uuid,
     source_alt_uuid: Option<Uuid>,
     reason: &str,
+    park_quests: bool,
 ) -> Result<Uuid, diesel::result::Error> {
     use diesel_async::RunQueryDsl as _;
 
@@ -380,10 +381,121 @@ async fn snapshot_character(
         // about to write over a row it believes exists.
         return Err(diesel::result::Error::NotFound);
     }
+    if park_quests {
+        park_quests_in_version(conn, character_id, version_id).await?;
+    }
     log::info!(
         "[versions] kept a snapshot of character {character_id} (user {user_id}, reason {reason}) as {version_id}"
     );
     Ok(version_id)
+}
+
+/// Where a version keeps the quest rows of the character it was taken of.
+///
+/// Inside the version's `server_state` rather than a column of its own so the
+/// change needs no migration: production pulls the binary on merge, while the
+/// box's `migrations/` only moves on a manual `arena.sh sync`, and a binary that
+/// names a missing column fails every import. `server_state` is copied verbatim
+/// into versions and is never read by a live code path from there, and the key
+/// is stripped before a version is written back onto the live row.
+const PARKED_QUESTS_KEY: &str = "parkedQuests";
+
+/// Copy the character's quest rows into the version just taken of it, then
+/// remove them from the live table.
+///
+/// WHY. `quests` is keyed by `characters.id`, and a user has ONE live row that
+/// every alt takes turns occupying — so before this, the quest rows did not
+/// travel with the alt. Whatever the outgoing alt had accepted stayed on the
+/// board of whatever came in next. A level-48 starter clone carries a dozen
+/// mid-game story quests seeded from the template's capture (prod, 26 clones,
+/// 328 rows); a fresh level-1 character arriving on that row would have found
+/// all of them on its quest map, with dungeons generated at the old level. Jobs
+/// and event instances have deterministic ids per character id, so the insert-
+/// or-keep upsert in `get_quests` would have kept the OLD level's rows too.
+///
+/// Every column is kept (`to_jsonb` of the whole row, minus the character id it
+/// will be re-keyed to), so a dungeon in progress survives the round trip.
+const PARK_QUESTS_SQL: &str = r#"
+UPDATE character_versions
+   SET server_state = server_state || jsonb_build_object(
+         'parkedQuests',
+         COALESCE((SELECT jsonb_agg(to_jsonb(q) - 'character_id')
+                     FROM quests q
+                    WHERE q.character_id = $2), '[]'::jsonb))
+ WHERE id = $1
+"#;
+
+/// Put a version's parked quest rows back under the live character id.
+/// `ON CONFLICT DO NOTHING`: a row minted on the live character since (a job or
+/// event with a deterministic id) is newer than the parked copy and wins.
+///
+/// Columns are named and the NOT NULL ones coalesced back to JSON `null`.
+/// Dialogue quests (MQ04 "Rebuild Town Hall") and older job rows store JSON
+/// `null` in `generated_data` — 113 rows on 54 characters in production — and
+/// `jsonb_populate_record` reads a JSON null as SQL NULL. Inserting that breaks
+/// the NOT NULL constraint and fails the whole switch with a 500, stranding the
+/// player on the alt they switched away to. `info` gets the same guard for the
+/// same reason, though no row holds a JSON-null `info` today. The nullable
+/// columns stay as read: no production row stores JSON `null` in them (counted).
+const UNPARK_QUESTS_SQL: &str = r#"
+INSERT INTO quests (id, character_id, info, generated_data, dungeon_state, initial_state)
+SELECT r.id, $1, COALESCE(r.info, 'null'::jsonb), COALESCE(r.generated_data, 'null'::jsonb),
+       r.dungeon_state, r.initial_state
+  FROM jsonb_array_elements($2) e,
+       LATERAL jsonb_populate_record(NULL::quests, e) r
+ON CONFLICT DO NOTHING
+"#;
+
+async fn park_quests_in_version(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    version_id: Uuid,
+) -> Result<(), diesel::result::Error> {
+    use diesel_async::RunQueryDsl as _;
+    diesel::sql_query(PARK_QUESTS_SQL)
+        .bind::<diesel::sql_types::Uuid, _>(version_id)
+        .bind::<diesel::sql_types::Uuid, _>(character_id)
+        .execute(conn)
+        .await?;
+    diesel::delete(quests::table.filter(quests::character_id.eq(character_id)))
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Take the parked quest rows out of a version's `server_state`, leaving the
+/// state that belongs on the live row. `None` for a version taken before quests
+/// were parked: it never knew its quests, so the caller must not pretend it did.
+fn take_parked_quests(server_state: &mut Value) -> Option<Value> {
+    server_state
+        .as_object_mut()?
+        .remove(PARKED_QUESTS_KEY)
+        .filter(Value::is_array)
+}
+
+async fn unpark_quests(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    parked: Value,
+) -> Result<(), diesel::result::Error> {
+    use diesel_async::RunQueryDsl as _;
+    diesel::sql_query(UNPARK_QUESTS_SQL)
+        .bind::<diesel::sql_types::Uuid, _>(character_id)
+        .bind::<diesel::sql_types::Jsonb, _>(parked)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Should an import park the live character's quests before writing over it?
+///
+/// Yes whenever the incoming character is a DIFFERENT one — the outgoing alt's
+/// accepted quests are its own and must not appear on the newcomer's board.
+/// No only when both sides are known to be the same alt: a re-import of the
+/// character already live keeps the progress made here since, which is what the
+/// `do_nothing` quest seeding below has always promised.
+fn import_parks_quests(live_alt: Option<Uuid>, incoming_alt: Option<Uuid>) -> bool {
+    !(live_alt.is_some() && live_alt == incoming_alt)
 }
 
 #[post("/blades.bgs.services/api/dev/v1/import-character")]
@@ -528,12 +640,20 @@ pub async fn import_character(
                 // refusing a transfer because the archive is missing would be a
                 // worse failure than the one this prevents.
                 if !created {
+                    let live_alt: Option<Uuid> = characters::table
+                        .filter(characters::id.eq(character_id))
+                        .select(characters::source_alt_uuid)
+                        .first::<Option<Uuid>>(&mut conn)
+                        .await
+                        .optional()?
+                        .flatten();
                     let _ = snapshot_character(
                         &mut conn,
                         character_id,
                         user_id,
                         body.source_alt_uuid,
                         "import",
+                        import_parks_quests(live_alt, incoming_alt),
                     )
                     .await;
                 }
@@ -4063,13 +4183,20 @@ mod tests {
     /// either would be a mock of the part being tested. They SKIP without
     /// TEST_DATABASE_URL (CI provides one) rather than failing.
     mod character_versions {
-        use super::super::{apply_restore, apply_switch_alt, snapshot_character, SwitchAltRequest};
+        use super::super::{
+            apply_new_alt, apply_restore, apply_switch_alt, import_parks_quests, snapshot_character,
+            NewAltRequest, SwitchAltRequest,
+        };
         use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
         use uuid::Uuid;
 
         /// `characters` and `character_versions` as the migrations define them.
         /// One statement per entry: Postgres refuses to prepare several at once.
-        const SCHEMA: [&str; 3] = [
+        const SCHEMA: [&str; 5] = [
+            "CREATE TABLE users ( \
+                 id UUID PRIMARY KEY, \
+                 secret_id UUID UNIQUE NOT NULL, \
+                 data JSONB NOT NULL)",
             "CREATE TABLE characters ( \
                  id UUID PRIMARY KEY, \
                  user_id UUID NOT NULL, \
@@ -4078,8 +4205,18 @@ mod tests {
                  inventory JSONB NOT NULL, \
                  wallet JSONB NOT NULL, \
                  town JSONB, \
-                 server_state JSONB NOT NULL, \
+                 server_state JSONB NOT NULL DEFAULT '{}'::jsonb, \
                  source_alt_uuid UUID)",
+            // As production has it: the quest-table migration plus the
+            // dungeon_state / initial_state columns added after it.
+            "CREATE TABLE quests ( \
+                 id UUID NOT NULL, \
+                 character_id UUID NOT NULL REFERENCES characters(id), \
+                 info JSONB NOT NULL, \
+                 generated_data JSONB NOT NULL, \
+                 dungeon_state JSONB, \
+                 initial_state JSONB, \
+                 PRIMARY KEY (id, character_id))",
             "CREATE TABLE character_versions ( \
                  id UUID PRIMARY KEY, \
                  character_id UUID NOT NULL, \
@@ -4246,7 +4383,7 @@ mod tests {
             let (cid, uid) = seed_character(&mut c, "Taheen", 72, 4200).await;
             let alt = Uuid::new_v4();
 
-            let vid = snapshot_character(&mut c, cid, uid, Some(alt), "import")
+            let vid = snapshot_character(&mut c, cid, uid, Some(alt), "import", false)
                 .await
                 .unwrap();
             let v = version(&mut c, vid).await;
@@ -4271,7 +4408,7 @@ mod tests {
             let mut c = db!();
             let (cid, uid) = seed_character(&mut c, "Flappety", 30, 10).await;
 
-            let vid = snapshot_character(&mut c, cid, uid, None, "import")
+            let vid = snapshot_character(&mut c, cid, uid, None, "import", false)
                 .await
                 .unwrap();
 
@@ -4288,7 +4425,7 @@ mod tests {
         async fn a_version_without_an_alt_id_is_still_kept() {
             let mut c = db!();
             let (cid, uid) = seed_character(&mut c, "Swanne", 100, 0).await;
-            let vid = snapshot_character(&mut c, cid, uid, None, "import")
+            let vid = snapshot_character(&mut c, cid, uid, None, "import", false)
                 .await
                 .unwrap();
             assert_eq!(version(&mut c, vid).await.source_alt_uuid, None);
@@ -4301,7 +4438,7 @@ mod tests {
             let mut c = db!();
             let (cid, uid) = seed_character(&mut c, "Ronnie", 40, 100).await;
 
-            let first = snapshot_character(&mut c, cid, uid, None, "import")
+            let first = snapshot_character(&mut c, cid, uid, None, "import", false)
                 .await
                 .unwrap();
             // Whatever the day of play did, here a level-up.
@@ -4313,7 +4450,7 @@ mod tests {
             .execute(&mut c)
             .await
             .unwrap();
-            let second = snapshot_character(&mut c, cid, uid, None, "import")
+            let second = snapshot_character(&mut c, cid, uid, None, "import", false)
                 .await
                 .unwrap();
 
@@ -4328,7 +4465,7 @@ mod tests {
         async fn restoring_puts_the_kept_row_back() {
             let mut c = db!();
             let (cid, uid) = seed_character(&mut c, "Taheen", 72, 4200).await;
-            let kept = snapshot_character(&mut c, cid, uid, None, "import")
+            let kept = snapshot_character(&mut c, cid, uid, None, "import", false)
                 .await
                 .unwrap();
 
@@ -4357,7 +4494,7 @@ mod tests {
         async fn restoring_first_keeps_what_it_is_about_to_replace() {
             let mut c = db!();
             let (cid, uid) = seed_character(&mut c, "Viventus", 60, 1).await;
-            let kept = snapshot_character(&mut c, cid, uid, None, "import")
+            let kept = snapshot_character(&mut c, cid, uid, None, "import", false)
                 .await
                 .unwrap();
             diesel::sql_query(
@@ -4405,7 +4542,7 @@ mod tests {
             .await
             .unwrap();
 
-            let vid = snapshot_character(&mut c, cid, uid, None, "import")
+            let vid = snapshot_character(&mut c, cid, uid, None, "import", false)
                 .await
                 .expect("an unparseable row must still be archivable");
             let v = version(&mut c, vid).await;
@@ -4420,7 +4557,7 @@ mod tests {
         async fn snapshotting_a_missing_character_fails_rather_than_no_ops() {
             let mut c = db!();
             assert!(
-                snapshot_character(&mut c, Uuid::new_v4(), Uuid::new_v4(), None, "import")
+                snapshot_character(&mut c, Uuid::new_v4(), Uuid::new_v4(), None, "import", false)
                     .await
                     .is_err()
             );
@@ -4494,7 +4631,7 @@ mod tests {
             let (cid, uid) = seed_character_on_alt(&mut c, "Taheen", 72, 10, Some(leaving)).await;
 
             // The caller passes the INCOMING alt, as import_character does.
-            let vid = snapshot_character(&mut c, cid, uid, Some(arriving), "import")
+            let vid = snapshot_character(&mut c, cid, uid, Some(arriving), "import", false)
                 .await
                 .unwrap();
 
@@ -4512,7 +4649,7 @@ mod tests {
             let mut c = db!();
             let alt = Uuid::new_v4();
             let (cid, uid) = seed_character(&mut c, "Legacy", 5, 0).await;
-            let vid = snapshot_character(&mut c, cid, uid, Some(alt), "import")
+            let vid = snapshot_character(&mut c, cid, uid, Some(alt), "import", false)
                 .await
                 .unwrap();
             assert_eq!(version(&mut c, vid).await.source_alt_uuid, Some(alt));
@@ -4536,7 +4673,7 @@ mod tests {
             .execute(&mut c)
             .await
             .unwrap();
-            snapshot_character(&mut c, cid, uid, None, "import").await.unwrap();
+            snapshot_character(&mut c, cid, uid, None, "import", false).await.unwrap();
 
             // Back on A, and A is played up to level 41.
             diesel::sql_query(
@@ -4573,7 +4710,7 @@ mod tests {
             let mut c = db!();
             let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
             let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_a)).await;
-            snapshot_character(&mut c, cid, uid, Some(alt_b), "import").await.unwrap();
+            snapshot_character(&mut c, cid, uid, Some(alt_b), "import", false).await.unwrap();
             // Give alt_b a version of its own to switch to.
             diesel::sql_query(
                 "UPDATE character_versions SET source_alt_uuid = $1 WHERE user_id = $2",
@@ -4676,7 +4813,7 @@ mod tests {
         async fn restoring_with_no_live_character_is_a_conflict() {
             let mut c = db!();
             let (cid, uid) = seed_character(&mut c, "Gone", 10, 0).await;
-            let kept = snapshot_character(&mut c, cid, uid, None, "import")
+            let kept = snapshot_character(&mut c, cid, uid, None, "import", false)
                 .await
                 .unwrap();
             diesel::sql_query("DELETE FROM characters WHERE id = $1")
@@ -4690,6 +4827,403 @@ mod tests {
                 actix_web::ResponseError::status_code(&err),
                 actix_web::http::StatusCode::CONFLICT
             );
+        }
+
+        // --- quests travel with their alt; a fresh level-1 alt ------------
+
+        /// One quest row on `character_id`, with a dungeon in progress so the
+        /// round trip has to carry every column, not just the id.
+        async fn seed_quest(conn: &mut AsyncPgConnection, character_id: Uuid, label: &str) -> Uuid {
+            let id = Uuid::new_v4();
+            diesel::sql_query(
+                "INSERT INTO quests (id, character_id, info, generated_data, dungeon_state) \
+                 VALUES ($1, $2, $3::jsonb, '{\"level\":48}'::jsonb, '{\"room\":3}'::jsonb)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .bind::<diesel::sql_types::Uuid, _>(character_id)
+            .bind::<diesel::sql_types::Text, _>(serde_json::json!({ "label": label }).to_string())
+            .execute(conn)
+            .await
+            .unwrap();
+            id
+        }
+
+        #[derive(diesel::QueryableByName)]
+        struct QuestRow {
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            id: Uuid,
+            #[diesel(sql_type = diesel::sql_types::Jsonb)]
+            info: serde_json::Value,
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
+            dungeon_state: Option<serde_json::Value>,
+        }
+
+        async fn quests_of(conn: &mut AsyncPgConnection, character_id: Uuid) -> Vec<QuestRow> {
+            diesel::sql_query(
+                "SELECT id, info, dungeon_state FROM quests WHERE character_id = $1 ORDER BY id",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(character_id)
+            .get_results(conn)
+            .await
+            .unwrap()
+        }
+
+        #[derive(diesel::QueryableByName)]
+        struct FreshLiveRow {
+            #[diesel(sql_type = diesel::sql_types::Jsonb)]
+            character: serde_json::Value,
+            #[diesel(sql_type = diesel::sql_types::Jsonb)]
+            data: serde_json::Value,
+            #[diesel(sql_type = diesel::sql_types::Jsonb)]
+            inventory: serde_json::Value,
+            #[diesel(sql_type = diesel::sql_types::Jsonb)]
+            wallet: serde_json::Value,
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
+            town: Option<serde_json::Value>,
+            #[diesel(sql_type = diesel::sql_types::Jsonb)]
+            server_state: serde_json::Value,
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+            source_alt_uuid: Option<Uuid>,
+        }
+
+        async fn fresh_live(conn: &mut AsyncPgConnection, user_id: Uuid) -> FreshLiveRow {
+            diesel::sql_query(
+                "SELECT character, data, inventory, wallet, town, server_state, source_alt_uuid \
+                   FROM characters WHERE user_id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(user_id)
+            .get_result(conn)
+            .await
+            .unwrap()
+        }
+
+        /// The shipped cost table: 50 Gems for a look change.
+        fn appearance_cost() -> serde_json::Value {
+            serde_json::from_str(include_str!("../../deploy/static/appearance_change_cost.json"))
+                .unwrap()
+        }
+
+        fn new_alt(user_id: Uuid, alt_uuid: Uuid) -> NewAltRequest {
+            NewAltRequest {
+                user_id,
+                alt_uuid,
+                name: Some("Adventurer".into()),
+                tag_id: Some("0427".into()),
+                customization: None,
+                outgoing_alt_uuid: None,
+                device_id: None,
+            }
+        }
+
+        async fn add_user_row(conn: &mut AsyncPgConnection, id: Uuid) {
+            diesel::sql_query(
+                "INSERT INTO users (id, secret_id, data) VALUES ($1, $2, '{}'::jsonb)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+            .execute(conn)
+            .await
+            .unwrap();
+        }
+
+        fn status(err: &crate::BladeApiError) -> actix_web::http::StatusCode {
+            actix_web::ResponseError::status_code(err)
+        }
+
+        /// The /play "start a level-1 character" path end to end on the row:
+        /// the character it replaces is KEPT under its own alt with its quests,
+        /// and what is live is a genuinely fresh character — level 1, retail
+        /// starter loadout, no abilities, the creation allowance, the default
+        /// town, empty server state and an empty quest board.
+        #[tokio::test]
+        async fn a_new_alt_replaces_the_live_character_and_keeps_it() {
+            let mut c = db!();
+            let (starter, level1) = (Uuid::new_v4(), Uuid::new_v4());
+            let (cid, uid) =
+                seed_character_on_alt(&mut c, "Adventurer", 48, 1_000_000, Some(starter)).await;
+            add_user_row(&mut c, uid).await;
+            seed_quest(&mut c, cid, "mid-game story").await;
+            seed_quest(&mut c, cid, "level-48 job").await;
+
+            let out = apply_new_alt(&mut c, &new_alt(uid, level1), &appearance_cost())
+                .await
+                .unwrap();
+
+            assert_eq!(out.character_id, cid, "the user's one live row is reused");
+            assert_eq!(out.was_playing, Some(starter));
+            assert!(!out.created);
+            assert_eq!((out.name.as_str(), out.level), ("Adventurer", 1));
+
+            let live = fresh_live(&mut c, uid).await;
+            assert_eq!(live.source_alt_uuid, Some(level1));
+            assert_eq!(live.character["level"], 1);
+            assert_eq!(live.character["tagId"], "0427");
+            assert!(
+                live.character.get("abilities").is_none()
+                    && live.character.get("equippedAbilities").is_none(),
+                "retail level-1 characters carry no abilities (0 of 53)"
+            );
+            let equipped = &live.inventory["loadout"]["equippedItems"];
+            assert_eq!(
+                equipped
+                    .as_array()
+                    .map(Vec::len)
+                    .or_else(|| equipped.as_object().map(|o| o.len())),
+                Some(4),
+                "retail's four-piece starter loadout, got {equipped}"
+            );
+            assert_eq!(live.wallet, serde_json::json!([
+                { "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139", "balance": 50 }
+            ]), "exactly the creation allowance, not the starter's million gold");
+            assert!(
+                live.data["customization"].as_object().is_some_and(|o| !o.is_empty()),
+                "an empty customization is the unloadable character of report #191"
+            );
+            assert_eq!(live.town, None, "no town of its own: get_town serves the level-0 default");
+            assert_eq!(
+                live.server_state,
+                serde_json::to_value(blades_lib::server_state::ServerState::default()).unwrap(),
+                "no server-side history: the old alt's gift claims stay with it"
+            );
+            assert!(quests_of(&mut c, cid).await.is_empty(), "the old alt's quests left with it");
+
+            let kept = version(&mut c, out.left_behind_saved_as.unwrap()).await;
+            assert_eq!((kept.name.as_str(), kept.level), ("Adventurer", 48));
+            assert_eq!(kept.reason, "new-alt");
+            assert_eq!(kept.source_alt_uuid, Some(starter), "filed under the alt it was");
+            assert_eq!(kept.server_state["claimedGifts"], serde_json::json!(["ebony-mail"]));
+            assert_eq!(
+                kept.server_state["parkedQuests"].as_array().map(Vec::len),
+                Some(2),
+                "both quest rows are kept with the version"
+            );
+        }
+
+        /// And back: switching to the old alt brings its quests back under the
+        /// live character id — dungeon state included — while the level-1 alt's
+        /// own quests go with ITS version.
+        #[tokio::test]
+        async fn switching_back_from_a_new_alt_brings_its_quests_back() {
+            let mut c = db!();
+            let (starter, level1) = (Uuid::new_v4(), Uuid::new_v4());
+            let (cid, uid) =
+                seed_character_on_alt(&mut c, "Adventurer", 48, 10, Some(starter)).await;
+            add_user_row(&mut c, uid).await;
+            let story = seed_quest(&mut c, cid, "mid-game story").await;
+
+            apply_new_alt(&mut c, &new_alt(uid, level1), &appearance_cost())
+                .await
+                .unwrap();
+            let first = seed_quest(&mut c, cid, "level-1 first quest").await;
+
+            let out = apply_switch_alt(&mut c, &switch(uid, starter, None)).await.unwrap();
+            assert_eq!(out.was_playing, Some(level1));
+            assert_eq!(live(&mut c, cid).await.character["level"], 48);
+            assert!(
+                live(&mut c, cid).await.server_state.get("parkedQuests").is_none(),
+                "the parking key never reaches the live row"
+            );
+            let back = quests_of(&mut c, cid).await;
+            assert_eq!(back.len(), 1);
+            assert_eq!(back[0].id, story);
+            assert_eq!(back[0].info["label"], "mid-game story");
+            assert_eq!(back[0].dungeon_state, Some(serde_json::json!({"room": 3})));
+
+            // The level-1 alt is a real alt now: it can be switched back to,
+            // with its own quest.
+            apply_switch_alt(&mut c, &switch(uid, level1, None)).await.unwrap();
+            assert_eq!(live(&mut c, cid).await.character["level"], 1);
+            let mine = quests_of(&mut c, cid).await;
+            assert_eq!(mine.iter().map(|q| q.id).collect::<Vec<_>>(), vec![first]);
+        }
+
+        /// Dialogue quests (MQ04 "Rebuild Town Hall", 3b478dfa…) and older job
+        /// rows store JSON `null` in the NOT NULL `generated_data` column — 113
+        /// rows on 54 characters in production. The round trip must keep that
+        /// JSON null, not turn it into SQL NULL: that INSERT fails the
+        /// constraint, and every switch back to the alt would 500.
+        #[tokio::test]
+        async fn a_quest_with_json_null_generated_data_survives_the_round_trip() {
+            let mut c = db!();
+            let (starter, level1) = (Uuid::new_v4(), Uuid::new_v4());
+            let (cid, uid) =
+                seed_character_on_alt(&mut c, "Adventurer", 48, 10, Some(starter)).await;
+            add_user_row(&mut c, uid).await;
+            let dialogue = Uuid::parse_str("3b478dfa-0000-4000-8000-000000000001").unwrap();
+            diesel::sql_query(
+                "INSERT INTO quests (id, character_id, info, generated_data) \
+                 VALUES ($1, $2, '{\"label\":\"MQ04\"}'::jsonb, 'null'::jsonb)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(dialogue)
+            .bind::<diesel::sql_types::Uuid, _>(cid)
+            .execute(&mut c)
+            .await
+            .unwrap();
+
+            apply_new_alt(&mut c, &new_alt(uid, level1), &appearance_cost())
+                .await
+                .unwrap();
+            apply_switch_alt(&mut c, &switch(uid, starter, None))
+                .await
+                .expect("switching back must not fail on a JSON-null generated_data");
+
+            #[derive(diesel::QueryableByName)]
+            struct Gd {
+                #[diesel(sql_type = diesel::sql_types::Text)]
+                kind: String,
+            }
+            let r: Gd = diesel::sql_query(
+                "SELECT jsonb_typeof(generated_data) AS kind FROM quests \
+                  WHERE id = $1 AND character_id = $2",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(dialogue)
+            .bind::<diesel::sql_types::Uuid, _>(cid)
+            .get_result(&mut c)
+            .await
+            .unwrap();
+            assert_eq!(r.kind, "null", "still JSON null, as it was stored");
+        }
+
+        /// "New" must never overwrite an alt that already exists: not the live
+        /// one, and not one with kept versions. Both refuse and change nothing —
+        /// the website switches to it instead.
+        #[tokio::test]
+        async fn a_new_alt_never_restarts_an_existing_one() {
+            let mut c = db!();
+            let level1 = Uuid::new_v4();
+            let (cid, uid) = seed_character_on_alt(&mut c, "Kirill", 3, 10, Some(level1)).await;
+            add_user_row(&mut c, uid).await;
+
+            let err = apply_new_alt(&mut c, &new_alt(uid, level1), &appearance_cost())
+                .await
+                .unwrap_err();
+            assert_eq!(status(&err), actix_web::http::StatusCode::CONFLICT);
+            assert_eq!(live(&mut c, cid).await.character["level"], 3);
+
+            // Now level1 is a kept version and another alt is live.
+            snapshot_character(&mut c, cid, uid, None, "import", false).await.unwrap();
+            diesel::sql_query("UPDATE characters SET source_alt_uuid = $2 WHERE id = $1")
+                .bind::<diesel::sql_types::Uuid, _>(cid)
+                .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+                .execute(&mut c)
+                .await
+                .unwrap();
+            let err = apply_new_alt(&mut c, &new_alt(uid, level1), &appearance_cost())
+                .await
+                .unwrap_err();
+            assert_eq!(status(&err), actix_web::http::StatusCode::CONFLICT);
+            assert_eq!(live(&mut c, cid).await.character["level"], 3);
+        }
+
+        /// A live row with no alt id, and no hint to keep it under, is refused —
+        /// kept under no alt it could never be switched back to. Nothing moves.
+        /// And a hint naming the new alt itself is refused outright.
+        #[tokio::test]
+        async fn a_new_alt_refuses_to_strand_an_unidentified_character() {
+            let mut c = db!();
+            let (cid, uid) = seed_character(&mut c, "Arwald", 61, 10).await;
+            add_user_row(&mut c, uid).await;
+            let q = seed_quest(&mut c, cid, "his").await;
+            let level1 = Uuid::new_v4();
+
+            let err = apply_new_alt(&mut c, &new_alt(uid, level1), &appearance_cost())
+                .await
+                .unwrap_err();
+            assert_eq!(status(&err), actix_web::http::StatusCode::CONFLICT);
+            assert!(format!("{err:?}").contains("error_code: 92"), "{err:?}");
+            assert_eq!(live(&mut c, cid).await.character["level"], 61);
+            assert_eq!(quests_of(&mut c, cid).await.len(), 1);
+            assert_eq!(quests_of(&mut c, cid).await[0].id, q);
+
+            let req = NewAltRequest {
+                outgoing_alt_uuid: Some(level1),
+                ..new_alt(uid, level1)
+            };
+            let err = apply_new_alt(&mut c, &req, &appearance_cost()).await.unwrap_err();
+            assert_eq!(status(&err), actix_web::http::StatusCode::BAD_REQUEST);
+            assert_eq!(live(&mut c, cid).await.character["level"], 61);
+        }
+
+        /// An account with no character row at all (and no user row: the first
+        /// import is what creates one) gets both.
+        #[tokio::test]
+        async fn a_new_alt_on_an_empty_account_creates_the_character() {
+            let mut c = db!();
+            let (uid, level1) = (Uuid::new_v4(), Uuid::new_v4());
+
+            let out = apply_new_alt(&mut c, &new_alt(uid, level1), &appearance_cost())
+                .await
+                .unwrap();
+
+            assert!(out.created);
+            assert_eq!(out.was_playing, None);
+            assert_eq!(out.left_behind_saved_as, None);
+            let live = fresh_live(&mut c, uid).await;
+            assert_eq!(live.source_alt_uuid, Some(level1));
+            assert_eq!(live.character["level"], 1);
+        }
+
+        /// A row with no alt of its own (a starter clone, or anything imported
+        /// before alt tracking) is filed under the caller's hint — and the hint
+        /// is ignored when the row knows its alt.
+        #[tokio::test]
+        async fn an_unstamped_row_is_kept_under_the_outgoing_hint() {
+            let mut c = db!();
+            let hint = Uuid::new_v4();
+            let (_cid, uid) = seed_character(&mut c, "Adventurer", 48, 10).await;
+            add_user_row(&mut c, uid).await;
+            let req = NewAltRequest {
+                outgoing_alt_uuid: Some(hint),
+                ..new_alt(uid, Uuid::new_v4())
+            };
+            let out = apply_new_alt(&mut c, &req, &appearance_cost()).await.unwrap();
+            assert_eq!(
+                version(&mut c, out.left_behind_saved_as.unwrap()).await.source_alt_uuid,
+                Some(hint)
+            );
+
+            let own = Uuid::new_v4();
+            let (_cid, uid) = seed_character_on_alt(&mut c, "Taheen", 72, 10, Some(own)).await;
+            add_user_row(&mut c, uid).await;
+            let req = NewAltRequest {
+                outgoing_alt_uuid: Some(hint),
+                ..new_alt(uid, Uuid::new_v4())
+            };
+            let out = apply_new_alt(&mut c, &req, &appearance_cost()).await.unwrap();
+            assert_eq!(
+                version(&mut c, out.left_behind_saved_as.unwrap()).await.source_alt_uuid,
+                Some(own),
+                "a row that knows its alt is filed under it"
+            );
+        }
+
+        /// CONTROL: restoring a version taken before quests were kept leaves
+        /// the quest table exactly as it was. Such a version has nothing to put
+        /// in their place, so emptying the board would only lose rows.
+        #[tokio::test]
+        async fn restoring_a_version_without_kept_quests_leaves_quests_alone() {
+            let mut c = db!();
+            let (cid, uid) = seed_character(&mut c, "Swanne", 100, 0).await;
+            let kept = snapshot_character(&mut c, cid, uid, None, "import", false)
+                .await
+                .unwrap();
+            let q = seed_quest(&mut c, cid, "still here").await;
+
+            apply_restore(&mut c, kept).await.unwrap();
+
+            let rows = quests_of(&mut c, cid).await;
+            assert_eq!(rows.iter().map(|r| r.id).collect::<Vec<_>>(), vec![q]);
+        }
+
+        /// The import rule: park unless both sides are known to be one alt.
+        #[test]
+        fn an_import_parks_quests_unless_it_is_the_same_alt() {
+            let (a, b) = (Some(Uuid::new_v4()), Some(Uuid::new_v4()));
+            assert!(!import_parks_quests(a, a), "re-import of the live alt keeps progress");
+            assert!(import_parks_quests(a, b));
+            assert!(import_parks_quests(None, a));
+            assert!(import_parks_quests(a, None));
+            assert!(import_parks_quests(None, None), "unknown is not 'the same'");
         }
     }
 
@@ -5733,7 +6267,7 @@ async fn apply_restore(
     use crate::schema::character_versions::dsl as cv;
     use crate::schema::characters::dsl as ch;
 
-    let (user_id, source_alt_uuid, character, data, inventory, wallet, town, server_state): (
+    let (user_id, source_alt_uuid, character, data, inventory, wallet, town, mut server_state): (
         Uuid,
         Option<Uuid>,
         serde_json::Value,
@@ -5766,9 +6300,21 @@ async fn apply_restore(
         .await
         .map_err(|_| BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 7))?;
 
+    // A version that kept its quests brings them back, and the state being
+    // replaced keeps its own. A version from before quests were kept leaves the
+    // quest table exactly as it was — it has nothing to put in their place.
+    let parked = take_parked_quests(&mut server_state);
+
     // Undoable, for the same reason the table exists at all.
-    let replaced_saved_as = snapshot_character(conn, character_id, user_id, source_alt_uuid, "restore")
-        .await
+    let replaced_saved_as = snapshot_character(
+        conn,
+        character_id,
+        user_id,
+        source_alt_uuid,
+        "restore",
+        parked.is_some(),
+    )
+    .await
         .map_err(|_| {
             BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
         })?;
@@ -5785,6 +6331,11 @@ async fn apply_restore(
         .execute(conn)
         .await
         .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
+    if let Some(parked) = parked {
+        unpark_quests(conn, character_id, parked).await.map_err(|_| {
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
+        })?;
+    }
 
     log::info!(
         "[versions] restored version {version_id} onto character {character_id} \
@@ -6065,14 +6616,18 @@ async fn apply_switch_alt(
     // KEEP WHAT WE ARE LEAVING, before anything is overwritten. This is the
     // half the owner actually asked for: going back must find the alt as it was
     // left, not as it was last transferred.
+    //
+    // Its quest rows go with it (see `park_quests_in_version`): they are the
+    // outgoing alt's, and the alt arriving brings its own.
     let left_behind_saved_as =
-        snapshot_character(conn, character_id, body.user_id, was_playing, "switch")
+        snapshot_character(conn, character_id, body.user_id, was_playing, "switch", true)
             .await
             .map_err(|_| {
                 BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
             })?;
 
-    let (restored_from, character, data, inventory, wallet, town, server_state) = target;
+    let (restored_from, character, data, inventory, wallet, town, mut server_state) = target;
+    let parked = take_parked_quests(&mut server_state);
     diesel::update(ch::characters.filter(ch::id.eq(character_id)))
         .set((
             ch::character.eq(character),
@@ -6086,6 +6641,11 @@ async fn apply_switch_alt(
         .execute(conn)
         .await
         .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
+    if let Some(parked) = parked {
+        unpark_quests(conn, character_id, parked).await.map_err(|_| {
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
+        })?;
+    }
 
     remember_device_alt(conn, body).await?;
 
@@ -6145,4 +6705,312 @@ async fn remember_device_alt(
     .await
     .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// A brand-new level-1 alt, started from the website (/play).
+//
+// Players asked to play from level 1 with the character saved to their account
+// (reports #273, #285, #298). The server already mints a fresh level-1
+// character for a device it does not recognise, but that one belongs to a
+// throwaway account: it is lost on reinstall and set aside on the next account
+// link. This puts the SAME fresh character (`character::fresh_character`) on the
+// player's own account, as an alt like any other: the character it replaces is
+// kept as a version under its own alt, and going back is a `switch-alt`.
+// ---------------------------------------------------------------------------
+
+/// The live row is already this alt — switch to it, do not restart it.
+const NEW_ALT_ALREADY_LIVE: u64 = 90;
+/// This alt already has kept versions — it exists, so `switch-alt` to it.
+const NEW_ALT_EXISTS: u64 = 91;
+/// The live character carries no alt id and the caller named none to keep it
+/// under. Keeping it under NO alt makes it unreachable by `switch-alt`: its own
+/// button on /play would 404 and fall through to re-importing its capture over
+/// it, which throws away everything it earned here. Refuse instead. (517 of 533
+/// live rows had no alt id when this was written.)
+const NEW_ALT_OUTGOING_UNKNOWN: u64 = 92;
+/// `outgoingAltUuid` names the new alt itself — the misfiling
+/// `SNAPSHOT_CHARACTER_SQL` exists to prevent.
+const NEW_ALT_OUTGOING_IS_NEW: u64 = 93;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewAltRequest {
+    pub user_id: Uuid,
+    /// The identity the new character is an alt OF. Must be new to this user:
+    /// "new" never overwrites an alt that has history.
+    pub alt_uuid: Uuid,
+    /// Display name; blank or absent falls back to the server's starter name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The game's 4-digit name discriminator. Absent keeps the default.
+    #[serde(default)]
+    pub tag_id: Option<String>,
+    /// `data.customization` (race, sex, face). Absent or empty gets the same
+    /// default look a server-provisioned starter gets.
+    #[serde(default)]
+    pub customization: Option<Value>,
+    /// What to file the OUTGOING character under when its row carries no alt of
+    /// its own (rows from before alt tracking, and starter clones). Never used
+    /// when the row knows its alt. Never the new alt: that is the misfiling
+    /// `SNAPSHOT_CHARACTER_SQL` warns about.
+    #[serde(default)]
+    pub outgoing_alt_uuid: Option<Uuid>,
+    #[serde(default)]
+    pub device_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewAltResponse {
+    pub character_id: Uuid,
+    pub now_playing: Uuid,
+    pub was_playing: Option<Uuid>,
+    /// The version the character it replaced was kept as.
+    pub left_behind_saved_as: Option<Uuid>,
+    /// True when the account had no character row at all.
+    pub created: bool,
+    pub name: String,
+    pub level: i32,
+}
+
+/// `POST /…/dev/v1/characters/new-alt` — start a fresh level-1 alt and make it
+/// the live character.
+#[post("/blades.bgs.services/api/dev/v1/characters/new-alt")]
+pub async fn new_alt(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    body: web::Json<NewAltRequest>,
+) -> Result<Json<NewAltResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let body = body.into_inner();
+    let appearance_cost = app_state.appearance_change_cost.clone();
+
+    let mut conn = app_state
+        .db_pool
+        .get()
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5))?;
+
+    conn.transaction(move |mut conn| {
+        async move { apply_new_alt(&mut conn, &body, &appearance_cost).await }.scope_boxed()
+    })
+    .await
+    .map(Json)
+}
+
+/// The display name a new alt gets: the caller's, trimmed and bounded, or the
+/// server's starter name.
+fn new_alt_name(name: Option<&str>) -> String {
+    let trimmed = name.map(str::trim).unwrap_or("");
+    if trimmed.is_empty() {
+        crate::character::STARTER_NAME.to_string()
+    } else {
+        trimmed.chars().take(64).collect()
+    }
+}
+
+/// The work of [`new_alt`], separated so it can be tested against a real
+/// database without an HTTP stack. Caller supplies the transaction: a snapshot
+/// without the write it protected, or a write without its snapshot, must not be
+/// possible.
+async fn apply_new_alt(
+    conn: &mut diesel_async::AsyncPgConnection,
+    body: &NewAltRequest,
+    appearance_cost: &Value,
+) -> Result<NewAltResponse, BladeApiError> {
+    use crate::schema::character_versions::dsl as cv;
+    use crate::schema::characters::dsl as ch;
+
+    let internal = |_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8);
+
+    // A user row first: an account with no character has none until its first
+    // import, and characters.user_id is a foreign key to it.
+    let existing_user: i64 = users::table
+        .filter(users::id.eq(body.user_id))
+        .count()
+        .get_result(conn)
+        .await?;
+    if existing_user == 0 {
+        insert_into(users::table)
+            .values(UserDBEntry {
+                id: body.user_id,
+                secret_id: Uuid::new_v4(),
+                data: JsonDbWrapper(UserAccount::new_random()),
+            })
+            .execute(conn)
+            .await?;
+    }
+
+    // Lock the live row: this is the same read-modify-write `switch-alt` does.
+    let live: Option<(Uuid, Option<Uuid>)> = ch::characters
+        .filter(ch::user_id.eq(body.user_id))
+        .select((ch::id, ch::source_alt_uuid))
+        .for_update()
+        .first(conn)
+        .await
+        .optional()?;
+
+    if body.outgoing_alt_uuid == Some(body.alt_uuid) {
+        return Err(BladeApiError::new(
+            StatusCode::BAD_REQUEST,
+            IMPORT_SERVICE_ID,
+            NEW_ALT_OUTGOING_IS_NEW,
+        ));
+    }
+    if let Some((_, None)) = live {
+        if body.outgoing_alt_uuid.is_none() {
+            return Err(BladeApiError::new(
+                StatusCode::CONFLICT,
+                IMPORT_SERVICE_ID,
+                NEW_ALT_OUTGOING_UNKNOWN,
+            ));
+        }
+    }
+    if let Some((_, Some(live_alt))) = live {
+        if live_alt == body.alt_uuid {
+            return Err(BladeApiError::new(
+                StatusCode::CONFLICT,
+                IMPORT_SERVICE_ID,
+                NEW_ALT_ALREADY_LIVE,
+            ));
+        }
+    }
+    let kept: i64 = cv::character_versions
+        .filter(cv::user_id.eq(body.user_id))
+        .filter(cv::source_alt_uuid.eq(body.alt_uuid))
+        .count()
+        .get_result(conn)
+        .await?;
+    if kept > 0 {
+        return Err(BladeApiError::new(
+            StatusCode::CONFLICT,
+            IMPORT_SERVICE_ID,
+            NEW_ALT_EXISTS,
+        ));
+    }
+
+    let name = new_alt_name(body.name.as_deref());
+    let customization = body
+        .customization
+        .clone()
+        .filter(Value::is_object)
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    let crate::character::FreshCharacter {
+        mut character,
+        data,
+        inventory,
+        wallet,
+    } = crate::character::fresh_character(appearance_cost, name, customization);
+    if let Some(tag) = body
+        .tag_id
+        .as_deref()
+        .filter(|t| t.len() == 4 && t.chars().all(|c| c.is_ascii_digit()))
+    {
+        character.tag_id = tag.to_string();
+    }
+    let level = character.level as i32;
+    let name = character.name.clone();
+
+    let (character_id, was_playing, left_behind_saved_as, created) = match live {
+        Some((character_id, was_playing)) => {
+            // KEEP WHAT WE ARE LEAVING, filed under its own alt, with its quests.
+            let saved = snapshot_character(
+                conn,
+                character_id,
+                body.user_id,
+                body.outgoing_alt_uuid,
+                "new-alt",
+                true,
+            )
+            .await
+            .map_err(internal)?;
+            // Everything that belongs to the character is replaced, not merged:
+            // a fresh character has no town of its own (get_town serves the
+            // level-0 default) and no server-side history — gift claims, craft
+            // jobs, abyss run and the rest start empty, as they do for one the
+            // server provisions itself.
+            diesel::update(ch::characters.filter(ch::id.eq(character_id)))
+                .set((
+                    ch::character.eq(JsonDbWrapper(character)),
+                    ch::data.eq(JsonDbWrapper(data)),
+                    ch::inventory.eq(JsonDbWrapper(inventory)),
+                    ch::wallet.eq(JsonDbWrapper(wallet)),
+                    ch::town.eq(None::<Value>),
+                    ch::server_state.eq(JsonDbWrapper(ServerState::default())),
+                    ch::source_alt_uuid.eq(Some(body.alt_uuid)),
+                ))
+                .execute(conn)
+                .await
+                .map_err(internal)?;
+            (character_id, was_playing, Some(saved), false)
+        }
+        None => {
+            let character_id = Uuid::new_v4();
+            insert_into(characters::table)
+                .values(CharacterDbEntry {
+                    id: character_id,
+                    user_id: body.user_id,
+                    character: JsonDbWrapper(character),
+                    data: JsonDbWrapper(data),
+                    wallet: JsonDbWrapper(wallet),
+                    inventory: JsonDbWrapper(inventory),
+                    town: None,
+                })
+                .execute(conn)
+                .await?;
+            diesel::update(ch::characters.filter(ch::id.eq(character_id)))
+                .set(ch::source_alt_uuid.eq(Some(body.alt_uuid)))
+                .execute(conn)
+                .await?;
+            (character_id, None, None, true)
+        }
+    };
+
+    // The creation allowance is already in the wallet; the ledger only records
+    // it. In a savepoint, so a ledger problem cannot abort the creation.
+    if let Some((currency, amount)) = crate::character_data::parse_appearance_cost(appearance_cost) {
+        let _ = conn
+            .transaction::<_, diesel::result::Error, _>(|c| {
+                async move {
+                    crate::character::record_creation_allowance(
+                        c,
+                        character_id,
+                        currency,
+                        amount,
+                        "new-alt",
+                    )
+                    .await
+                }
+                .scope_boxed()
+            })
+            .await;
+    }
+
+    remember_device_alt(
+        conn,
+        &SwitchAltRequest {
+            user_id: body.user_id,
+            alt_uuid: body.alt_uuid,
+            device_id: body.device_id.clone(),
+        },
+    )
+    .await?;
+
+    log::info!(
+        "[versions] user {} started a new level-1 alt {} on character {character_id} \
+         (left {was_playing:?}, kept as {left_behind_saved_as:?})",
+        body.user_id,
+        body.alt_uuid,
+    );
+
+    Ok(NewAltResponse {
+        character_id,
+        now_playing: body.alt_uuid,
+        was_playing,
+        left_behind_saved_as,
+        created,
+        name,
+        level,
+    })
 }

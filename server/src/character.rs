@@ -140,27 +140,33 @@ async fn create_characters(
     Ok(web::Json(created))
 }
 
-/// Build and persist one fresh character with retail's starter loadout.
+/// The four parts of a brand-new level-1 character, before it has a row.
+pub(crate) struct FreshCharacter {
+    pub character: CompleteCharacter,
+    pub data: CompleteCharacterData,
+    pub inventory: CompleteInventory,
+    pub wallet: CompleteWallet,
+}
+
+/// Build a brand-new level-1 character: retail's starter loadout, the one-time
+/// creation allowance (#193), loadable bootstrap data, and no abilities — which
+/// is what retail's own level-1 characters carried (0 of 53 measured).
 ///
-/// Extracted from the POST route so the anonymous-login path can call it too.
-/// Our shipped APK has the FTUE patched out, so it never POSTs here: it asks
-/// for its characters, and if the list comes back empty it sits on the loading
-/// screen forever with every request answered 200. See
-/// [`ensure_starter_character`].
-pub(crate) async fn build_starter_character(
-    app_state: &ServerGlobal,
-    owner: Uuid,
+/// The ONE definition of "a fresh character". The anonymous-login starter, the
+/// game's own create route and the website's "start a level-1 character"
+/// (`dev/v1/characters/new-alt`) all build from here, so they cannot drift into
+/// three different ideas of what a new character is.
+pub(crate) fn fresh_character(
+    appearance_cost: &Value,
     name: String,
     customization: serde_json::Value,
-) -> Result<CharacterCreationResponse, diesel::result::Error> {
+) -> FreshCharacter {
     let mut new_character = CompleteCharacter::default();
     new_character.name = name;
 
     let mut new_data = CompleteCharacterData::default();
     new_data.customization = customization;
     make_bootstrap_data_loadable(&mut new_data, &new_character.name);
-
-    let character_uuid = Uuid::new_v4();
 
     let mut equipped_items = HashMap::new();
     let item1_slot_uuid = Uuid::from_str("417e79de-c810-42f8-8273-f9759df6ae25").unwrap();
@@ -251,12 +257,42 @@ pub(crate) async fn build_starter_character(
         treasury_version: 0,
     };
 
+    FreshCharacter {
+        character: new_character,
+        data: new_data,
+        inventory,
+        wallet: starter_wallet(appearance_cost),
+    }
+}
+
+/// Build and persist one fresh character with retail's starter loadout.
+///
+/// Extracted from the POST route so the anonymous-login path can call it too.
+/// Our shipped APK has the FTUE patched out, so it never POSTs here: it asks
+/// for its characters, and if the list comes back empty it sits on the loading
+/// screen forever with every request answered 200. See
+/// [`ensure_starter_character`].
+pub(crate) async fn build_starter_character(
+    app_state: &ServerGlobal,
+    owner: Uuid,
+    name: String,
+    customization: serde_json::Value,
+) -> Result<CharacterCreationResponse, diesel::result::Error> {
+    let FreshCharacter {
+        character: new_character,
+        data: new_data,
+        inventory,
+        wallet,
+    } = fresh_character(&app_state.appearance_change_cost, name, customization);
+
+    let character_uuid = Uuid::new_v4();
+
     let to_insert = CharacterDbEntry {
         id: character_uuid,
         user_id: owner,
         character: JsonDbWrapper(new_character),
         data: JsonDbWrapper(new_data),
-        wallet: JsonDbWrapper(starter_wallet(&app_state.appearance_change_cost)),
+        wallet: JsonDbWrapper(wallet),
         inventory: JsonDbWrapper(inventory.clone()),
         // Fresh character → no captured town; get_town serves default_town.json.
         town: None,
@@ -408,7 +444,7 @@ fn customization_visual(data: &CompleteCharacterData) -> Option<&str> {
 /// both win the same character, so the caller credits only when this returns
 /// `Ok(true)`. A missing table is an error, which the caller treats as "not
 /// granted" — the grant is skipped entirely rather than repeated.
-async fn record_creation_allowance(
+pub(crate) async fn record_creation_allowance(
     conn: &mut diesel_async::AsyncPgConnection,
     character: Uuid,
     currency: Uuid,

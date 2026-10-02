@@ -757,6 +757,7 @@ async fn main() -> Result<()> {
                     .service(admin::restore_character_version)
                     .service(admin::list_alts)
                     .service(admin::switch_alt)
+                    .service(admin::new_alt)
                     .service(admin::set_ai_mimic)
                     .service(admin::list_ai_mimics)
                     .service(admin::get_arena_ranking_config)
