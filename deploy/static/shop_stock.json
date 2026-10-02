@@ -55,7 +55,8 @@
       "howItWorks": "For an opened shop the server resolves the building's typeId + current level from the character's town, looks up generation[typeId], filters itemPool to entries with tier <= levels[level].tierCap, then deterministically rolls maxItems weighted picks (seed = shopId + refresh-window index, so stock is stable within a window and re-rolls each window). Missing typeId/level -> falls back to the capture-derived templates (never empty).",
       "purpose": "ADMIN-EDITABLE shop stock model. Where generation.<buildingTypeId>.levelPools has an entry for a level, that level uses capture-measured retail bundle ids and quantity bands; unmeasured levels fall back to the authored tiered itemPool approximation.",
       "reloadHook": "generation is pure data; a future admin route can hot-reload this file and rebuild ServerGlobal.shop_stock without a restart (see shop_gen.rs).",
-      "shopTypeAttribution": "The 4 pools were attributed to Forge/Alchemist/Enchanter/Workshop by clustering the capture-derived catalog templates on shared bundle ids (captures do NOT label shop type). Forge=weapons/armor/smithing mats, Alchemist=ingredients/potions, Enchanter=soul gems/enchant mats, Workshop=building/decoration mats. AUTHOR APPROXIMATION \u2014 safe for an admin to re-attribute a bundle by moving it between pools."
+      "shopTypeAttribution": "The 4 pools were attributed to Forge/Alchemist/Enchanter/Workshop by clustering the capture-derived catalog templates on shared bundle ids (captures do NOT label shop type). Forge=weapons/armor/smithing mats, Alchemist=ingredients/potions, Enchanter=soul gems/enchant mats, Workshop=building/decoration mats. AUTHOR APPROXIMATION \u2014 safe for an admin to re-attribute a bundle by moving it between pools.",
+      "levelPoolsSource": "script/extract_shop_level_stock.py (report #309): each retail shop open labelled with its building's level from the latest town-bearing response (towns/current, upgrade, complete, styles, buildings); open states seen {'NORMAL': 261}; one template per level verified."
     },
     "confidence": {
       "captureDerivedTemplates": "MEDIUM (real observed catalogs, but not level-keyed)",
@@ -2797,16 +2798,15 @@
       ],
       "levels": {
         "0": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 3,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 4 bundles (21 catalogs)",
           "_source": "level 0 seeded from level 1's authored params; retail level-0 catalogs were observed for all four shop types",
           "_unlockedPoolSize": 36,
-          "maxItems": 5,
+          "maxItems": 4,
           "priceMultiplier": 1.0,
           "refreshSeconds": 36000,
           "tierCap": 2,
           "tierCapLabel": "Superior",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "21 retail catalogs, template 6cda3555-6466-4b76-a3ba-d72ffd2bb2f5; script/extract_shop_level_stock.py"
         },
         "1": {
           "_unlockedPoolSize": 36,
@@ -2815,121 +2815,116 @@
           "refreshSeconds": 36000,
           "tierCap": 2,
           "tierCapLabel": "Superior",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "3 retail catalogs, template 57eeb277-7d37-432e-b99b-f78184af7b9d; script/extract_shop_level_stock.py",
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 5 bundles (3 catalogs)"
         },
         "2": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 3,
+          "_maxItemsSource": "DERIVED: no retail open at this level; bundles of measured levels 1 and 3, quantities between theirs",
           "_unlockedPoolSize": 36,
           "maxItems": 5,
           "priceMultiplier": 1.15,
           "refreshSeconds": 36000,
           "tierCap": 2,
-          "tierCapLabel": "Superior"
+          "tierCapLabel": "Superior",
+          "_retailMeasuredStock": "DERIVED: no retail open at this level; bundles of measured levels 1 and 3, quantities between theirs"
         },
         "3": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 4,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 6 bundles (1 catalogs)",
           "_unlockedPoolSize": 54,
           "maxItems": 6,
           "priceMultiplier": 1.3,
           "refreshSeconds": 36000,
           "tierCap": 3,
           "tierCapLabel": "Remarkable",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "1 retail catalogs, template 22f3c1c1-37d8-4130-9d85-9ee18e525452; script/extract_shop_level_stock.py"
         },
         "4": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 4,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 6 bundles (1 catalogs)",
           "_unlockedPoolSize": 72,
           "maxItems": 6,
           "priceMultiplier": 1.45,
           "refreshSeconds": 36000,
           "tierCap": 4,
           "tierCapLabel": "Exquisite",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "1 retail catalogs, template 19af7f63-f43b-4043-9301-0616405d5315; script/extract_shop_level_stock.py"
         },
         "5": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 5,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 7 bundles (1 catalogs)",
           "_unlockedPoolSize": 89,
           "maxItems": 7,
           "priceMultiplier": 1.6,
           "refreshSeconds": 36000,
           "tierCap": 5,
           "tierCapLabel": "Magnificent",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "1 retail catalogs, template 0f02aaf7-e6b6-46ad-8260-d842cdfd7b58; script/extract_shop_level_stock.py"
         },
         "6": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 6,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 8 bundles (1 catalogs)",
           "_unlockedPoolSize": 107,
-          "maxItems": 9,
+          "maxItems": 8,
           "priceMultiplier": 1.75,
           "refreshSeconds": 36000,
           "tierCap": 6,
           "tierCapLabel": "Flawless",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "1 retail catalogs, template 35cb07be-58b4-4e25-b3d7-8c4fe58ff8f3; script/extract_shop_level_stock.py"
         },
         "7": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 6,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 9 bundles (4 catalogs)",
           "_unlockedPoolSize": 125,
-          "maxItems": 10,
+          "maxItems": 9,
           "priceMultiplier": 1.9,
           "refreshSeconds": 36000,
           "tierCap": 7,
           "tierCapLabel": "Exemplary",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "4 retail catalogs, template 3182aed5-5f32-46f7-b544-1493416aeb2e; script/extract_shop_level_stock.py"
         },
         "8": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 7,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 10 bundles (4 catalogs)",
           "_unlockedPoolSize": 143,
           "maxItems": 10,
           "priceMultiplier": 2.05,
           "refreshSeconds": 36000,
           "tierCap": 8,
           "tierCapLabel": "Sublime",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "4 retail catalogs, template 71bdad1d-cf24-43b1-9fc9-e8b4ffd350f7; script/extract_shop_level_stock.py"
         },
         "9": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 8,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 11 bundles (30 catalogs)",
           "_unlockedPoolSize": 160,
           "maxItems": 11,
           "priceMultiplier": 2.2,
           "refreshSeconds": 36000,
           "tierCap": 10,
           "tierCapLabel": "Mythical",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "30 retail catalogs, template ba55cc62-a232-4ba7-baa1-237acdbb9ed9; script/extract_shop_level_stock.py"
         }
       },
       "merchantGold": {
         "0": {
-          "bandMax": 707,
-          "bandMin": 565,
+          "bandMax": 724,
+          "bandMin": 545,
           "baseGold": 636,
           "capturedCatalogTemplateId": "6cda3555-6466-4b76-a3ba-d72ffd2bb2f5",
           "observations": 22,
-          "source": "MEASURED"
+          "source": "MEASURED",
+          "_note": "band widened for report #309 to hold every retail wallet seen at this level (was 565..707); retail wallets [545, 562, 569, 569, 575, 581, 591, 599, 634, 635, 642, 646, 667, 672, 677, 685, 700, 701, 703, 704, 724]"
         },
         "1": {
-          "_note": "no shop of any type was ever captured at level 1; the cross-type interpolation lands above the measured level-2 value, so this is authored just below it",
-          "bandMax": 1000,
-          "bandMin": 800,
-          "baseGold": 900,
-          "observations": 0,
-          "source": "AUTHORED"
+          "bandMax": 1374,
+          "bandMin": 1099,
+          "baseGold": 1237,
+          "capturedCatalogTemplateId": "57eeb277-7d37-432e-b99b-f78184af7b9d",
+          "observations": 3,
+          "source": "MEASURED",
+          "_note": "remeasured for report #309 (was AUTHORED); retail wallets [1174, 1264, 1272]"
         },
         "2": {
-          "_note": "SUSPECT: n=2 from a single catalog seen twice; this base is less than half the level-2 share the other three shop types show",
-          "bandMax": 1304,
-          "bandMin": 1044,
-          "baseGold": 1174,
-          "capturedCatalogTemplateId": "57eeb277-7d37-432e-b99b-f78184af7b9d",
-          "observations": 2,
-          "source": "MEASURED"
+          "bandMax": 2265,
+          "bandMin": 1812,
+          "baseGold": 2039,
+          "observations": 0,
+          "source": "INTERPOLATED",
+          "_note": "no retail open at this level; geometric between measured levels 1 and 3 (report #309; the old row carried level 1's template)"
         },
         "3": {
           "bandMax": 3733,
@@ -2992,130 +2987,236 @@
       "levelPools": {
         "0": [
           {
-            "bundleId": "1299b573-85b0-4160-8969-f52d005c15ca",
-            "tier": 1,
-            "weight": 5,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "154dfee2-c1e1-4c0f-b63e-d530fbe7ac90",
-            "tier": 1,
-            "weight": 9,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "1e4c597b-a1f8-430e-88e0-5c25d9c64660",
-            "tier": 1,
-            "weight": 7,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "36118693-28d9-4f6d-9ce1-5dc741adc64e",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 3,
-            "maxQuantity": 3
-          },
-          {
-            "bundleId": "6f1cd22d-4ab1-4fb1-a103-ba041ffb9929",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "6f525c3e-a024-4779-bf24-ab9c2d862cc0",
-            "tier": 1,
-            "weight": 8,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "7334deaf-b2fc-435d-84f7-aa192349f877",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 6,
-            "maxQuantity": 6
-          },
-          {
             "bundleId": "7f8e899a-ede9-405e-977b-eb8cb5e9ff37",
-            "tier": 1,
-            "weight": 24,
+            "weight": 421,
             "minQuantity": 3,
-            "maxQuantity": 9
+            "maxQuantity": 9,
+            "_retailListed": "21/21"
           },
           {
             "bundleId": "bc606a47-861d-48da-b12b-cf1b544c937b",
-            "tier": 1,
-            "weight": 22,
+            "weight": 235,
             "minQuantity": 3,
-            "maxQuantity": 9
+            "maxQuantity": 9,
+            "_retailListed": "19/21"
+          },
+          {
+            "bundleId": "1e4c597b-a1f8-430e-88e0-5c25d9c64660",
+            "weight": 48,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "9/21"
+          },
+          {
+            "bundleId": "6f525c3e-a024-4779-bf24-ab9c2d862cc0",
+            "weight": 41,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "8/21"
           },
           {
             "bundleId": "cfae9f77-f701-4506-a483-df7ce78b08ec",
-            "tier": 1,
-            "weight": 8,
+            "weight": 36,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "7/21"
           },
           {
-            "bundleId": "d68f1c78-2020-4843-8dba-d41861e08b50",
-            "tier": 1,
-            "weight": 1,
+            "bundleId": "1299b573-85b0-4160-8969-f52d005c15ca",
+            "weight": 31,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "6/21"
+          },
+          {
+            "bundleId": "154dfee2-c1e1-4c0f-b63e-d530fbe7ac90",
+            "weight": 31,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "6/21"
           },
           {
             "bundleId": "dbb7679e-9b22-476d-945d-7c773f039b30",
-            "tier": 1,
-            "weight": 6,
+            "weight": 15,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "3/21"
           },
           {
             "bundleId": "fe566ad8-6369-4a97-abf8-69948f36226c",
-            "tier": 1,
-            "weight": 2,
+            "weight": 14,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "3/21"
+          },
+          {
+            "bundleId": "6f1cd22d-4ab1-4fb1-a103-ba041ffb9929",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "2/21"
           }
         ],
         "1": [
           {
+            "bundleId": "7f8e899a-ede9-405e-977b-eb8cb5e9ff37",
+            "weight": 53,
+            "minQuantity": 6,
+            "maxQuantity": 8,
+            "_retailListed": "3/3"
+          },
+          {
+            "bundleId": "36118693-28d9-4f6d-9ce1-5dc741adc64e",
+            "weight": 28,
+            "minQuantity": 3,
+            "maxQuantity": 4,
+            "_retailListed": "2/3"
+          },
+          {
+            "bundleId": "7334deaf-b2fc-435d-84f7-aa192349f877",
+            "weight": 28,
+            "minQuantity": 3,
+            "maxQuantity": 6,
+            "_retailListed": "2/3"
+          },
+          {
+            "bundleId": "bc606a47-861d-48da-b12b-cf1b544c937b",
+            "weight": 28,
+            "minQuantity": 6,
+            "maxQuantity": 8,
+            "_retailListed": "2/3"
+          },
+          {
+            "bundleId": "154dfee2-c1e1-4c0f-b63e-d530fbe7ac90",
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/3"
+          },
+          {
             "bundleId": "3275a818-93d1-41f7-9801-01017788f615",
-            "tier": 1,
-            "weight": 2,
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/3"
+          },
+          {
+            "bundleId": "641ada7e-10fb-4ff7-8900-597c7b6b4023",
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/3"
+          },
+          {
+            "bundleId": "9feb325d-5786-4d8b-bf89-5f5c6de9223c",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/3"
+          },
+          {
+            "bundleId": "cfae9f77-f701-4506-a483-df7ce78b08ec",
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/3"
+          },
+          {
+            "bundleId": "d68f1c78-2020-4843-8dba-d41861e08b50",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/3"
+          }
+        ],
+        "2": [
+          {
+            "bundleId": "154dfee2-c1e1-4c0f-b63e-d530fbe7ac90",
+            "weight": 11,
+            "minQuantity": 2,
+            "maxQuantity": 2
+          },
+          {
+            "bundleId": "17034568-deee-4aa9-aa75-68b2cb8ab1be",
+            "weight": 1,
+            "minQuantity": 1,
+            "maxQuantity": 1
+          },
+          {
+            "bundleId": "3275a818-93d1-41f7-9801-01017788f615",
+            "weight": 11,
+            "minQuantity": 2,
+            "maxQuantity": 2
+          },
+          {
+            "bundleId": "36118693-28d9-4f6d-9ce1-5dc741adc64e",
+            "weight": 28,
+            "minQuantity": 4,
+            "maxQuantity": 6
+          },
+          {
+            "bundleId": "52fc2f9f-963a-4ed7-bf67-ad0ffbf321f9",
+            "weight": 1,
             "minQuantity": 1,
             "maxQuantity": 1
           },
           {
             "bundleId": "641ada7e-10fb-4ff7-8900-597c7b6b4023",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
+            "weight": 11,
+            "minQuantity": 2,
+            "maxQuantity": 2
           },
           {
             "bundleId": "7334deaf-b2fc-435d-84f7-aa192349f877",
-            "tier": 1,
-            "weight": 2,
+            "weight": 28,
+            "minQuantity": 4,
+            "maxQuantity": 9
+          },
+          {
+            "bundleId": "7f8e899a-ede9-405e-977b-eb8cb5e9ff37",
+            "weight": 27,
+            "minQuantity": 8,
+            "maxQuantity": 9
+          },
+          {
+            "bundleId": "9feb325d-5786-4d8b-bf89-5f5c6de9223c",
+            "weight": 10,
+            "minQuantity": 2,
+            "maxQuantity": 2
+          },
+          {
+            "bundleId": "bc606a47-861d-48da-b12b-cf1b544c937b",
+            "weight": 28,
+            "minQuantity": 9,
+            "maxQuantity": 12
+          },
+          {
+            "bundleId": "ccf878a1-d250-4537-b625-9a2ad69db54e",
+            "weight": 1,
             "minQuantity": 3,
             "maxQuantity": 3
           },
           {
-            "bundleId": "7f8e899a-ede9-405e-977b-eb8cb5e9ff37",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 7,
-            "maxQuantity": 7
+            "bundleId": "cfae9f77-f701-4506-a483-df7ce78b08ec",
+            "weight": 11,
+            "minQuantity": 2,
+            "maxQuantity": 2
           },
           {
-            "bundleId": "9feb325d-5786-4d8b-bf89-5f5c6de9223c",
-            "tier": 1,
-            "weight": 2,
+            "bundleId": "d68f1c78-2020-4843-8dba-d41861e08b50",
+            "weight": 10,
+            "minQuantity": 2,
+            "maxQuantity": 2
+          },
+          {
+            "bundleId": "eef8680b-7b2e-4b9b-a39d-8916962fe294",
+            "weight": 1,
+            "minQuantity": 2,
+            "maxQuantity": 2
+          },
+          {
+            "bundleId": "f421e8fc-ce16-46ba-9cf5-ab3365badb94",
+            "weight": 1,
             "minQuantity": 1,
             "maxQuantity": 1
           }
@@ -3123,883 +3224,841 @@
         "3": [
           {
             "bundleId": "17034568-deee-4aa9-aa75-68b2cb8ab1be",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "52fc2f9f-963a-4ed7-bf67-ad0ffbf321f9",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "7f8e899a-ede9-405e-977b-eb8cb5e9ff37",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 11,
-            "maxQuantity": 11
+            "maxQuantity": 11,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "ccf878a1-d250-4537-b625-9a2ad69db54e",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 4,
-            "maxQuantity": 4
+            "maxQuantity": 4,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "eef8680b-7b2e-4b9b-a39d-8916962fe294",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 3,
-            "maxQuantity": 3
+            "maxQuantity": 3,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "f421e8fc-ce16-46ba-9cf5-ab3365badb94",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "1/1"
           }
         ],
         "4": [
           {
             "bundleId": "1bc40132-2d4f-458d-b9bd-d5263953a0a8",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "3617556f-940e-4da3-bb53-ec9164966a01",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 2,
-            "maxQuantity": 2
+            "maxQuantity": 2,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "934803e6-fd5b-401e-8144-38f5575c0f79",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "acf9718b-7ee2-4385-bef9-e5fd821df8cb",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 7,
-            "maxQuantity": 7
+            "maxQuantity": 7,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "bf34b182-e32b-42f8-b6ac-ecff95385f61",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "eef8680b-7b2e-4b9b-a39d-8916962fe294",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 6,
-            "maxQuantity": 6
+            "maxQuantity": 6,
+            "_retailListed": "1/1"
           }
         ],
         "5": [
           {
             "bundleId": "36118693-28d9-4f6d-9ce1-5dc741adc64e",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 9,
-            "maxQuantity": 9
+            "maxQuantity": 9,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "3617556f-940e-4da3-bb53-ec9164966a01",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 5,
-            "maxQuantity": 5
+            "maxQuantity": 5,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "41fabcb0-a5fb-4d23-a4c6-d359dff6eca2",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 2,
-            "maxQuantity": 2
+            "maxQuantity": 2,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "50c1e12e-bca3-4f81-a7f1-6cc779397d5c",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 2,
-            "maxQuantity": 2
+            "maxQuantity": 2,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "a48fe7b3-072f-4c4e-a072-cbc3a78a8a16",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "acf9718b-7ee2-4385-bef9-e5fd821df8cb",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 7,
-            "maxQuantity": 7
+            "maxQuantity": 7,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "eef8680b-7b2e-4b9b-a39d-8916962fe294",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 9,
-            "maxQuantity": 9
+            "maxQuantity": 9,
+            "_retailListed": "1/1"
           }
         ],
         "6": [
           {
-            "bundleId": "2bd6b2a1-d82c-424b-a4b6-32d1d7f7f612",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
             "bundleId": "3617556f-940e-4da3-bb53-ec9164966a01",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 7,
-            "maxQuantity": 7
-          },
-          {
-            "bundleId": "3bc67f54-89ce-4061-979f-a004a89225a1",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "3cd0b563-71ec-4d55-80b5-4b57861947cc",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 2,
-            "maxQuantity": 2
+            "maxQuantity": 7,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "41fabcb0-a5fb-4d23-a4c6-d359dff6eca2",
-            "tier": 1,
-            "weight": 3,
+            "weight": 1,
             "minQuantity": 5,
-            "maxQuantity": 7
+            "maxQuantity": 5,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "50c1e12e-bca3-4f81-a7f1-6cc779397d5c",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 3,
-            "maxQuantity": 3
+            "maxQuantity": 3,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "60f7dfac-f1d9-43e5-ad9c-6cd5ba2ab233",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "67c26b59-6447-4d2f-9c9b-06296fb2c6de",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "6b0df8db-ecf4-4f57-86bb-fa853502a604",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "7b4260e9-7305-45ca-a663-c7a1d1f8119a",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "9074c3bb-1539-42f0-86dc-64c81177ab85",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "975ad618-7194-4171-b95a-39c198e901b0",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "b035f7b3-21d3-4f3e-83cb-5b1ec3d5f093",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "c5aa2496-ca55-4aa1-9b1c-b621a6b62de3",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "d1ead58e-eab1-40b9-a4d8-95718566ba4a",
-            "tier": 1,
-            "weight": 3,
+            "weight": 1,
             "minQuantity": 2,
-            "maxQuantity": 6
+            "maxQuantity": 2,
+            "_retailListed": "1/1"
           }
         ],
         "7": [
           {
-            "bundleId": "29f4838f-d1a9-4ade-94d6-369fb0c81b0e",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "2bd6b2a1-d82c-424b-a4b6-32d1d7f7f612",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "35665d6d-4b4f-4c12-b646-b641cda126f9",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "3617556f-940e-4da3-bb53-ec9164966a01",
-            "tier": 1,
-            "weight": 4,
-            "minQuantity": 9,
-            "maxQuantity": 12
-          },
-          {
             "bundleId": "3bc67f54-89ce-4061-979f-a004a89225a1",
-            "tier": 1,
-            "weight": 6,
-            "minQuantity": 2,
-            "maxQuantity": 5
+            "weight": 76,
+            "minQuantity": 1,
+            "maxQuantity": 2,
+            "_retailListed": "4/4"
           },
           {
             "bundleId": "3cd0b563-71ec-4d55-80b5-4b57861947cc",
-            "tier": 1,
-            "weight": 6,
+            "weight": 75,
             "minQuantity": 1,
-            "maxQuantity": 5
+            "maxQuantity": 3,
+            "_retailListed": "4/4"
           },
           {
             "bundleId": "41fabcb0-a5fb-4d23-a4c6-d359dff6eca2",
-            "tier": 1,
-            "weight": 4,
-            "minQuantity": 8,
-            "maxQuantity": 9
-          },
-          {
-            "bundleId": "4a2cf84d-f6dc-4951-84ab-ee3eeb1be416",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "4eb63f66-d7f6-4083-b8c0-bc369f241fa5",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "50c1e12e-bca3-4f81-a7f1-6cc779397d5c",
-            "tier": 1,
-            "weight": 5,
+            "weight": 76,
             "minQuantity": 7,
-            "maxQuantity": 10
-          },
-          {
-            "bundleId": "54e1da6f-1a7f-402f-b8b7-6e7400c24175",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "60f7dfac-f1d9-43e5-ad9c-6cd5ba2ab233",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 5,
-            "maxQuantity": 5
-          },
-          {
-            "bundleId": "67c26b59-6447-4d2f-9c9b-06296fb2c6de",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "8fb3b92d-4070-4ad5-b07a-d73ebd401873",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 3,
-            "maxQuantity": 3
-          },
-          {
-            "bundleId": "96d52011-e025-47bd-a676-bed283ff077e",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 9,
+            "_retailListed": "4/4"
           },
           {
             "bundleId": "d1ead58e-eab1-40b9-a4d8-95718566ba4a",
-            "tier": 1,
-            "weight": 6,
-            "minQuantity": 3,
-            "maxQuantity": 5
+            "weight": 75,
+            "minQuantity": 4,
+            "maxQuantity": 6,
+            "_retailListed": "4/4"
           },
           {
-            "bundleId": "d26f6067-6d4d-45e5-8a03-fa337e98682d",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
+            "bundleId": "3617556f-940e-4da3-bb53-ec9164966a01",
+            "weight": 53,
+            "minQuantity": 9,
+            "maxQuantity": 12,
+            "_retailListed": "3/4"
           },
           {
-            "bundleId": "fbec59d9-636e-40e3-a3c2-0fd80fc2f17a",
-            "tier": 1,
-            "weight": 2,
+            "bundleId": "2bd6b2a1-d82c-424b-a4b6-32d1d7f7f612",
+            "weight": 25,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "2/4"
+          },
+          {
+            "bundleId": "50c1e12e-bca3-4f81-a7f1-6cc779397d5c",
+            "weight": 24,
+            "minQuantity": 7,
+            "maxQuantity": 8,
+            "_retailListed": "2/4"
+          },
+          {
+            "bundleId": "60f7dfac-f1d9-43e5-ad9c-6cd5ba2ab233",
+            "weight": 25,
+            "minQuantity": 5,
+            "maxQuantity": 5,
+            "_retailListed": "2/4"
+          },
+          {
+            "bundleId": "67c26b59-6447-4d2f-9c9b-06296fb2c6de",
+            "weight": 24,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "2/4"
           },
           {
             "bundleId": "fe53006f-04af-49d4-b602-e5dc35a9a6af",
-            "tier": 1,
-            "weight": 2,
+            "weight": 25,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "2/4"
+          },
+          {
+            "bundleId": "4a2cf84d-f6dc-4951-84ab-ee3eeb1be416",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "4eb63f66-d7f6-4083-b8c0-bc369f241fa5",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "54e1da6f-1a7f-402f-b8b7-6e7400c24175",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "9074c3bb-1539-42f0-86dc-64c81177ab85",
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "96d52011-e025-47bd-a676-bed283ff077e",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "975ad618-7194-4171-b95a-39c198e901b0",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "c5aa2496-ca55-4aa1-9b1c-b621a6b62de3",
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
           }
         ],
         "8": [
           {
-            "bundleId": "198d21d6-805b-4d41-a5f4-2a7bff03aff7",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "2bd6b2a1-d82c-424b-a4b6-32d1d7f7f612",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
             "bundleId": "3bc67f54-89ce-4061-979f-a004a89225a1",
-            "tier": 1,
-            "weight": 4,
+            "weight": 80,
             "minQuantity": 1,
-            "maxQuantity": 5
+            "maxQuantity": 5,
+            "_retailListed": "4/4"
           },
           {
             "bundleId": "3cd0b563-71ec-4d55-80b5-4b57861947cc",
-            "tier": 1,
-            "weight": 4,
+            "weight": 81,
             "minQuantity": 2,
-            "maxQuantity": 5
-          },
-          {
-            "bundleId": "41fabcb0-a5fb-4d23-a4c6-d359dff6eca2",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 6,
-            "maxQuantity": 7
-          },
-          {
-            "bundleId": "41fd19fc-02d8-4ae3-aee7-c394ec982009",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "4eb63f66-d7f6-4083-b8c0-bc369f241fa5",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "50c1e12e-bca3-4f81-a7f1-6cc779397d5c",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 9,
-            "maxQuantity": 12
-          },
-          {
-            "bundleId": "60f7dfac-f1d9-43e5-ad9c-6cd5ba2ab233",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 8,
-            "maxQuantity": 8
-          },
-          {
-            "bundleId": "67c26b59-6447-4d2f-9c9b-06296fb2c6de",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "6b0df8db-ecf4-4f57-86bb-fa853502a604",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "7269f28f-6524-4235-962e-13c553ca9a77",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 5,
+            "_retailListed": "4/4"
           },
           {
             "bundleId": "8fb3b92d-4070-4ad5-b07a-d73ebd401873",
-            "tier": 1,
-            "weight": 4,
+            "weight": 79,
             "minQuantity": 1,
-            "maxQuantity": 3
+            "maxQuantity": 3,
+            "_retailListed": "4/4"
           },
           {
-            "bundleId": "96d52011-e025-47bd-a676-bed283ff077e",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "a5321a6a-89e8-44af-8472-8db5c4111314",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "adec08db-0d4a-47fc-a96a-299fce58e821",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "ba527f6a-51b1-40b2-84cb-2830dee825be",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
+            "bundleId": "50c1e12e-bca3-4f81-a7f1-6cc779397d5c",
+            "weight": 52,
+            "minQuantity": 9,
+            "maxQuantity": 12,
+            "_retailListed": "3/4"
           },
           {
             "bundleId": "d1ead58e-eab1-40b9-a4d8-95718566ba4a",
-            "tier": 1,
-            "weight": 3,
+            "weight": 51,
             "minQuantity": 3,
-            "maxQuantity": 9
+            "maxQuantity": 9,
+            "_retailListed": "3/4"
           },
           {
-            "bundleId": "dafac41a-221b-4250-8366-fa66e4f86a21",
-            "tier": 1,
-            "weight": 2,
+            "bundleId": "41fabcb0-a5fb-4d23-a4c6-d359dff6eca2",
+            "weight": 25,
+            "minQuantity": 6,
+            "maxQuantity": 7,
+            "_retailListed": "2/4"
+          },
+          {
+            "bundleId": "4eb63f66-d7f6-4083-b8c0-bc369f241fa5",
+            "weight": 25,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "2/4"
+          },
+          {
+            "bundleId": "67c26b59-6447-4d2f-9c9b-06296fb2c6de",
+            "weight": 25,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "2/4"
           },
           {
             "bundleId": "fbec59d9-636e-40e3-a3c2-0fd80fc2f17a",
-            "tier": 1,
-            "weight": 1,
+            "weight": 25,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "2/4"
+          },
+          {
+            "bundleId": "198d21d6-805b-4d41-a5f4-2a7bff03aff7",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "29f4838f-d1a9-4ade-94d6-369fb0c81b0e",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "2bd6b2a1-d82c-424b-a4b6-32d1d7f7f612",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "35665d6d-4b4f-4c12-b646-b641cda126f9",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "41fd19fc-02d8-4ae3-aee7-c394ec982009",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "60f7dfac-f1d9-43e5-ad9c-6cd5ba2ab233",
+            "weight": 11,
+            "minQuantity": 8,
+            "maxQuantity": 8,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "6b0df8db-ecf4-4f57-86bb-fa853502a604",
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "7269f28f-6524-4235-962e-13c553ca9a77",
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "96d52011-e025-47bd-a676-bed283ff077e",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "a5321a6a-89e8-44af-8472-8db5c4111314",
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "adec08db-0d4a-47fc-a96a-299fce58e821",
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "ba527f6a-51b1-40b2-84cb-2830dee825be",
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "d26f6067-6d4d-45e5-8a03-fa337e98682d",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
+          },
+          {
+            "bundleId": "dafac41a-221b-4250-8366-fa66e4f86a21",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/4"
           }
         ],
         "9": [
           {
-            "bundleId": "077f93f0-c24c-4a0c-a954-b9c2f6a1d979",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "198d21d6-805b-4d41-a5f4-2a7bff03aff7",
-            "tier": 1,
-            "weight": 5,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "20a80c14-db73-4d55-b1f2-c8e10a128a95",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "29f4838f-d1a9-4ade-94d6-369fb0c81b0e",
-            "tier": 1,
-            "weight": 6,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "2bd6b2a1-d82c-424b-a4b6-32d1d7f7f612",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "303c98fb-f2d3-4bf4-bf25-14faae853ba2",
-            "tier": 1,
-            "weight": 8,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "35665d6d-4b4f-4c12-b646-b641cda126f9",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "3bc67f54-89ce-4061-979f-a004a89225a1",
-            "tier": 1,
-            "weight": 13,
-            "minQuantity": 3,
-            "maxQuantity": 6
-          },
-          {
-            "bundleId": "3cd0b563-71ec-4d55-80b5-4b57861947cc",
-            "tier": 1,
-            "weight": 15,
-            "minQuantity": 3,
-            "maxQuantity": 6
-          },
-          {
-            "bundleId": "41fabcb0-a5fb-4d23-a4c6-d359dff6eca2",
-            "tier": 1,
-            "weight": 14,
-            "minQuantity": 9,
-            "maxQuantity": 12
-          },
-          {
-            "bundleId": "41fd19fc-02d8-4ae3-aee7-c394ec982009",
-            "tier": 1,
-            "weight": 4,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "4a2cf84d-f6dc-4951-84ab-ee3eeb1be416",
-            "tier": 1,
-            "weight": 8,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "4e7865fe-b1b9-45f3-af6d-ea5f4cb9cade",
-            "tier": 1,
-            "weight": 30,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "4eb63f66-d7f6-4083-b8c0-bc369f241fa5",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "50c1e12e-bca3-4f81-a7f1-6cc779397d5c",
-            "tier": 1,
-            "weight": 14,
-            "minQuantity": 9,
-            "maxQuantity": 12
-          },
-          {
-            "bundleId": "51d46dfe-4316-4fe7-8415-eb8714de23fb",
-            "tier": 1,
-            "weight": 8,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "52a894a7-cce4-4bcb-9394-713f5e7bdc2d",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "52cb90a0-0905-427f-8d5e-544b43d8c171",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "54e1da6f-1a7f-402f-b8b7-6e7400c24175",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "5f3215c4-fab9-49be-9617-19fc41fbb41d",
-            "tier": 1,
-            "weight": 4,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "60f7dfac-f1d9-43e5-ad9c-6cd5ba2ab233",
-            "tier": 1,
-            "weight": 10,
-            "minQuantity": 6,
-            "maxQuantity": 9
-          },
-          {
-            "bundleId": "67c26b59-6447-4d2f-9c9b-06296fb2c6de",
-            "tier": 1,
-            "weight": 5,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "68d9254d-fe6d-4514-9c35-358b45c00814",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "6a17458d-6ce2-4216-913f-8cbf1cfe466c",
-            "tier": 1,
-            "weight": 7,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "6b0df8db-ecf4-4f57-86bb-fa853502a604",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "6d2d2ac9-2dcd-4481-8c70-8b816801ae4f",
-            "tier": 1,
-            "weight": 6,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "7269f28f-6524-4235-962e-13c553ca9a77",
-            "tier": 1,
-            "weight": 6,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "72cee2cf-e03a-4537-8f24-fce5d70fda5c",
-            "tier": 1,
-            "weight": 6,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
             "bundleId": "7bae9c4d-5925-4804-96e1-8080038c99cd",
-            "tier": 1,
-            "weight": 32,
+            "weight": 1351,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "30/30"
           },
           {
             "bundleId": "8fb3b92d-4070-4ad5-b07a-d73ebd401873",
-            "tier": 1,
-            "weight": 32,
+            "weight": 1332,
             "minQuantity": 2,
-            "maxQuantity": 5
+            "maxQuantity": 5,
+            "_retailListed": "30/30"
           },
           {
-            "bundleId": "9074c3bb-1539-42f0-86dc-64c81177ab85",
-            "tier": 1,
-            "weight": 2,
+            "bundleId": "4e7865fe-b1b9-45f3-af6d-ea5f4cb9cade",
+            "weight": 874,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "28/30"
           },
           {
-            "bundleId": "96d52011-e025-47bd-a676-bed283ff077e",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
+            "bundleId": "3cd0b563-71ec-4d55-80b5-4b57861947cc",
+            "weight": 209,
+            "minQuantity": 3,
+            "maxQuantity": 6,
+            "_retailListed": "15/30"
           },
           {
-            "bundleId": "971dd360-d755-4f01-98b3-01c196611d09",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
+            "bundleId": "50c1e12e-bca3-4f81-a7f1-6cc779397d5c",
+            "weight": 184,
+            "minQuantity": 9,
+            "maxQuantity": 12,
+            "_retailListed": "14/30"
           },
           {
-            "bundleId": "975ad618-7194-4171-b95a-39c198e901b0",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
+            "bundleId": "3bc67f54-89ce-4061-979f-a004a89225a1",
+            "weight": 156,
+            "minQuantity": 3,
+            "maxQuantity": 6,
+            "_retailListed": "12/30"
           },
           {
-            "bundleId": "9a849918-3fdb-466b-9821-d6d311813ad4",
-            "tier": 1,
-            "weight": 4,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "9e0748a9-c351-456b-92dd-7a28c7494f98",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "a257b51d-ee2f-4c6c-a53c-51f1ed359d6e",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "a5321a6a-89e8-44af-8472-8db5c4111314",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "aa624dbc-89d5-4b51-9f72-70621b59c5eb",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "adec08db-0d4a-47fc-a96a-299fce58e821",
-            "tier": 1,
-            "weight": 6,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "ba527f6a-51b1-40b2-84cb-2830dee825be",
-            "tier": 1,
-            "weight": 6,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "c5aa2496-ca55-4aa1-9b1c-b621a6b62de3",
-            "tier": 1,
-            "weight": 4,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "c89322c3-6cd4-45a2-9512-6f3fae0b0272",
-            "tier": 1,
-            "weight": 7,
-            "minQuantity": 1,
-            "maxQuantity": 1
+            "bundleId": "41fabcb0-a5fb-4d23-a4c6-d359dff6eca2",
+            "weight": 153,
+            "minQuantity": 9,
+            "maxQuantity": 12,
+            "_retailListed": "12/30"
           },
           {
             "bundleId": "d1ead58e-eab1-40b9-a4d8-95718566ba4a",
-            "tier": 1,
-            "weight": 12,
+            "weight": 142,
             "minQuantity": 6,
-            "maxQuantity": 9
+            "maxQuantity": 9,
+            "_retailListed": "11/30"
           },
           {
-            "bundleId": "d26f6067-6d4d-45e5-8a03-fa337e98682d",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
+            "bundleId": "60f7dfac-f1d9-43e5-ad9c-6cd5ba2ab233",
+            "weight": 108,
+            "minQuantity": 6,
+            "maxQuantity": 9,
+            "_retailListed": "9/30"
           },
           {
-            "bundleId": "dafac41a-221b-4250-8366-fa66e4f86a21",
-            "tier": 1,
-            "weight": 7,
+            "bundleId": "303c98fb-f2d3-4bf4-bf25-14faae853ba2",
+            "weight": 92,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "8/30"
           },
           {
-            "bundleId": "e3c7d49f-d121-433a-ba1b-172f421fc6e7",
-            "tier": 1,
-            "weight": 1,
+            "bundleId": "4a2cf84d-f6dc-4951-84ab-ee3eeb1be416",
+            "weight": 94,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "8/30"
           },
           {
-            "bundleId": "e65836e5-7732-4fe4-8ae1-b87e390b1ce7",
-            "tier": 1,
-            "weight": 4,
+            "bundleId": "51d46dfe-4316-4fe7-8415-eb8714de23fb",
+            "weight": 92,
             "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "f2c65514-0d86-4934-8591-023006c784bc",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "fbec59d9-636e-40e3-a3c2-0fd80fc2f17a",
-            "tier": 1,
-            "weight": 6,
-            "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "8/30"
           },
           {
             "bundleId": "fe53006f-04af-49d4-b602-e5dc35a9a6af",
-            "tier": 1,
-            "weight": 8,
+            "weight": 82,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "7/30"
+          },
+          {
+            "bundleId": "6a17458d-6ce2-4216-913f-8cbf1cfe466c",
+            "weight": 66,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "6/30"
+          },
+          {
+            "bundleId": "7269f28f-6524-4235-962e-13c553ca9a77",
+            "weight": 70,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "6/30"
+          },
+          {
+            "bundleId": "72cee2cf-e03a-4537-8f24-fce5d70fda5c",
+            "weight": 66,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "6/30"
+          },
+          {
+            "bundleId": "adec08db-0d4a-47fc-a96a-299fce58e821",
+            "weight": 68,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "6/30"
+          },
+          {
+            "bundleId": "c89322c3-6cd4-45a2-9512-6f3fae0b0272",
+            "weight": 66,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "6/30"
+          },
+          {
+            "bundleId": "dafac41a-221b-4250-8366-fa66e4f86a21",
+            "weight": 68,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "6/30"
+          },
+          {
+            "bundleId": "fbec59d9-636e-40e3-a3c2-0fd80fc2f17a",
+            "weight": 70,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "6/30"
+          },
+          {
+            "bundleId": "198d21d6-805b-4d41-a5f4-2a7bff03aff7",
+            "weight": 54,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "5/30"
+          },
+          {
+            "bundleId": "29f4838f-d1a9-4ade-94d6-369fb0c81b0e",
+            "weight": 54,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "5/30"
+          },
+          {
+            "bundleId": "6d2d2ac9-2dcd-4481-8c70-8b816801ae4f",
+            "weight": 56,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "5/30"
+          },
+          {
+            "bundleId": "ba527f6a-51b1-40b2-84cb-2830dee825be",
+            "weight": 52,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "5/30"
+          },
+          {
+            "bundleId": "5f3215c4-fab9-49be-9617-19fc41fbb41d",
+            "weight": 43,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "4/30"
+          },
+          {
+            "bundleId": "67c26b59-6447-4d2f-9c9b-06296fb2c6de",
+            "weight": 41,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "4/30"
+          },
+          {
+            "bundleId": "e65836e5-7732-4fe4-8ae1-b87e390b1ce7",
+            "weight": 42,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "4/30"
+          },
+          {
+            "bundleId": "077f93f0-c24c-4a0c-a954-b9c2f6a1d979",
+            "weight": 31,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "20a80c14-db73-4d55-b1f2-c8e10a128a95",
+            "weight": 31,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "2bd6b2a1-d82c-424b-a4b6-32d1d7f7f612",
+            "weight": 34,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "35665d6d-4b4f-4c12-b646-b641cda126f9",
+            "weight": 31,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "41fd19fc-02d8-4ae3-aee7-c394ec982009",
+            "weight": 33,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "4eb63f66-d7f6-4083-b8c0-bc369f241fa5",
+            "weight": 33,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "52cb90a0-0905-427f-8d5e-544b43d8c171",
+            "weight": 30,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "54e1da6f-1a7f-402f-b8b7-6e7400c24175",
+            "weight": 32,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "68d9254d-fe6d-4514-9c35-358b45c00814",
+            "weight": 33,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "6b0df8db-ecf4-4f57-86bb-fa853502a604",
+            "weight": 32,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "971dd360-d755-4f01-98b3-01c196611d09",
+            "weight": 33,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "975ad618-7194-4171-b95a-39c198e901b0",
+            "weight": 32,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "9a849918-3fdb-466b-9821-d6d311813ad4",
+            "weight": 30,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "9e0748a9-c351-456b-92dd-7a28c7494f98",
+            "weight": 33,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "a5321a6a-89e8-44af-8472-8db5c4111314",
+            "weight": 34,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "aa624dbc-89d5-4b51-9f72-70621b59c5eb",
+            "weight": 33,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "c5aa2496-ca55-4aa1-9b1c-b621a6b62de3",
+            "weight": 31,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "d26f6067-6d4d-45e5-8a03-fa337e98682d",
+            "weight": 31,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/30"
+          },
+          {
+            "bundleId": "9074c3bb-1539-42f0-86dc-64c81177ab85",
+            "weight": 23,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "2/30"
+          },
+          {
+            "bundleId": "96d52011-e025-47bd-a676-bed283ff077e",
+            "weight": 22,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "2/30"
+          },
+          {
+            "bundleId": "a257b51d-ee2f-4c6c-a53c-51f1ed359d6e",
+            "weight": 23,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "2/30"
+          },
+          {
+            "bundleId": "f2c65514-0d86-4934-8591-023006c784bc",
+            "weight": 23,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "2/30"
+          },
+          {
+            "bundleId": "52a894a7-cce4-4bcb-9394-713f5e7bdc2d",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/30"
+          },
+          {
+            "bundleId": "e3c7d49f-d121-433a-ba1b-172f421fc6e7",
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/30"
           }
         ]
       }
@@ -4270,76 +4329,78 @@
       "levels": {
         "0": {
           "_enchantGate": "Frost/Poison/Stamina/Magicka enchant offers are tier>=4 and stay locked until the shop level raises tierCap to reach them.",
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 3,
+          "_maxItemsSource": "DERIVED: no retail open at this level; measured level 2's bundles, quantities scaled by this shop's per-level growth 1.14^-2",
           "_source": "level 0 seeded from level 1's authored params; retail level-0 catalogs were observed for all four shop types",
           "_unlockedPoolSize": 8,
           "maxItems": 4,
           "priceMultiplier": 1.0,
           "refreshSeconds": 36000,
           "tierCap": 2,
-          "tierCapLabel": "Superior"
+          "tierCapLabel": "Superior",
+          "_retailMeasuredStock": "DERIVED: no retail open at this level; measured level 2's bundles, quantities scaled by this shop's per-level growth 1.14^-2"
         },
         "1": {
           "_enchantGate": "Frost/Poison/Stamina/Magicka enchant offers are tier>=4 and stay locked until the shop level raises tierCap to reach them.",
           "_unlockedPoolSize": 8,
-          "maxItems": 3,
+          "maxItems": 4,
           "priceMultiplier": 1.0,
           "refreshSeconds": 36000,
           "tierCap": 2,
-          "tierCapLabel": "Superior"
+          "tierCapLabel": "Superior",
+          "_maxItemsSource": "DERIVED: no retail open at this level; measured level 2's bundles, quantities scaled by this shop's per-level growth 1.14^-1",
+          "_retailMeasuredStock": "DERIVED: no retail open at this level; measured level 2's bundles, quantities scaled by this shop's per-level growth 1.14^-1"
         },
         "2": {
           "_enchantGate": "Frost/Poison/Stamina/Magicka enchant offers are tier>=4 and stay locked until the shop level raises tierCap to reach them.",
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 3,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 4 bundles (2 catalogs)",
           "_unlockedPoolSize": 8,
-          "maxItems": 5,
+          "maxItems": 4,
           "priceMultiplier": 1.15,
           "refreshSeconds": 36000,
           "tierCap": 2,
           "tierCapLabel": "Superior",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "2 retail catalogs, template 8d03ef4f-80ff-4f3d-aefa-e10a262eca42; script/extract_shop_level_stock.py"
         },
         "3": {
           "_enchantGate": "Frost/Poison/Stamina/Magicka enchant offers are tier>=4 and stay locked until the shop level raises tierCap to reach them.",
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 4,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 5 bundles (2 catalogs)",
           "_unlockedPoolSize": 12,
           "maxItems": 5,
           "priceMultiplier": 1.3,
           "refreshSeconds": 36000,
           "tierCap": 3,
-          "tierCapLabel": "Remarkable"
+          "tierCapLabel": "Remarkable",
+          "_retailMeasuredStock": "2 retail catalogs, template 528d52b5-2692-4117-bfba-c6a89702aeeb; script/extract_shop_level_stock.py"
         },
         "4": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 4,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 5 bundles (2 catalogs)",
           "_unlockedPoolSize": 16,
           "maxItems": 5,
           "priceMultiplier": 1.45,
           "refreshSeconds": 36000,
           "tierCap": 4,
           "tierCapLabel": "Exquisite",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "2 retail catalogs, template e4b84020-f892-45d4-8c51-1a32dafb6e85; script/extract_shop_level_stock.py"
         },
         "5": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 5 bundles (2 catalogs)",
           "_unlockedPoolSize": 19,
           "maxItems": 5,
           "priceMultiplier": 1.6,
           "refreshSeconds": 36000,
           "tierCap": 5,
           "tierCapLabel": "Magnificent",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "2 retail catalogs, template b77374eb-1a75-4070-9475-0c39e2b8fe1f; script/extract_shop_level_stock.py"
         },
         "6": {
           "_unlockedPoolSize": 23,
-          "maxItems": 6,
+          "maxItems": 5,
           "priceMultiplier": 1.75,
           "refreshSeconds": 36000,
           "tierCap": 6,
-          "tierCapLabel": "Flawless"
+          "tierCapLabel": "Flawless",
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 5 bundles (2 catalogs)",
+          "_retailMeasuredStock": "2 retail catalogs, template 1f46ed69-74ac-431d-85d1-75b467cb1a15; script/extract_shop_level_stock.py"
         },
         "7": {
           "_unlockedPoolSize": 27,
@@ -4348,28 +4409,28 @@
           "refreshSeconds": 36000,
           "tierCap": 7,
           "tierCapLabel": "Exemplary",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "3 retail catalogs, template ec7b3a8e-ef07-4e7c-a17f-1686f7f4eb2d; script/extract_shop_level_stock.py",
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 5 bundles (3 catalogs)"
         },
         "8": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 7,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 5 bundles (2 catalogs)",
           "_unlockedPoolSize": 31,
           "maxItems": 5,
           "priceMultiplier": 2.05,
           "refreshSeconds": 36000,
           "tierCap": 8,
-          "tierCapLabel": "Sublime"
+          "tierCapLabel": "Sublime",
+          "_retailMeasuredStock": "2 retail catalogs, template 21867080-14d7-4b28-abd0-746b88d9c401; script/extract_shop_level_stock.py"
         },
         "9": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 8,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 6 bundles (23 catalogs)",
           "_unlockedPoolSize": 34,
           "maxItems": 6,
           "priceMultiplier": 2.2,
           "refreshSeconds": 36000,
           "tierCap": 10,
           "tierCapLabel": "Mythical",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "23 retail catalogs, template 6392702d-47d3-4717-92c1-d193604ac998; script/extract_shop_level_stock.py"
         }
       },
       "merchantGold": {
@@ -4382,11 +4443,12 @@
           "source": "MEASURED"
         },
         "1": {
-          "bandMax": 1564,
-          "bandMin": 1252,
-          "baseGold": 1408,
+          "bandMax": 1688,
+          "bandMin": 1351,
+          "baseGold": 1519,
           "observations": 0,
-          "source": "INTERPOLATED_LOW_CONFIDENCE"
+          "source": "INTERPOLATED",
+          "_note": "no retail open at this level; geometric between measured levels 0 and 2 (report #309)"
         },
         "2": {
           "bandMax": 3340,
@@ -4421,18 +4483,22 @@
           "source": "MEASURED"
         },
         "6": {
-          "bandMax": 14638,
-          "bandMin": 11710,
-          "baseGold": 13174,
-          "observations": 0,
-          "source": "INTERPOLATED"
+          "bandMax": 15602,
+          "bandMin": 12482,
+          "baseGold": 14042,
+          "capturedCatalogTemplateId": "1f46ed69-74ac-431d-85d1-75b467cb1a15",
+          "observations": 2,
+          "source": "MEASURED",
+          "_note": "remeasured for report #309 (was INTERPOLATED); retail wallets [13896, 14188]"
         },
         "7": {
-          "bandMax": 18431,
-          "bandMin": 14745,
-          "baseGold": 16588,
-          "observations": 0,
-          "source": "INTERPOLATED"
+          "bandMax": 20645,
+          "bandMin": 16516,
+          "baseGold": 18581,
+          "capturedCatalogTemplateId": "ec7b3a8e-ef07-4e7c-a17f-1686f7f4eb2d",
+          "observations": 3,
+          "source": "MEASURED",
+          "_note": "remeasured for report #309 (was INTERPOLATED); retail wallets [16851, 19362, 19529]"
         },
         "8": {
           "bandMax": 26020,
@@ -4453,539 +4519,675 @@
       },
       "shopType": "enchanter",
       "levelPools": {
-        "2": [
+        "0": [
           {
             "bundleId": "0a06d78a-68a2-4b0d-9530-4c708cf8e0e2",
-            "tier": 1,
-            "weight": 3,
+            "weight": 24,
             "minQuantity": 2,
-            "maxQuantity": 3
+            "maxQuantity": 2
           },
           {
             "bundleId": "0e27aaa2-4285-49af-8419-492e70713665",
-            "tier": 1,
-            "weight": 3,
+            "weight": 10,
             "minQuantity": 1,
-            "maxQuantity": 2
-          },
-          {
-            "bundleId": "11be7ed7-7283-4963-a25c-71cf555d2d2d",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 2,
-            "maxQuantity": 2
-          },
-          {
-            "bundleId": "337a0bbc-2408-49a9-9dca-598863bdd210",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 2,
-            "maxQuantity": 3
+            "maxQuantity": 1
           },
           {
             "bundleId": "4658e66e-66da-4073-b6e0-e2dad7298487",
-            "tier": 1,
-            "weight": 1,
+            "weight": 10,
             "minQuantity": 1,
             "maxQuantity": 1
           },
           {
             "bundleId": "5c15b3fd-fa88-4a9c-936d-7ec953306a6c",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 3,
-            "maxQuantity": 3
-          },
-          {
-            "bundleId": "76889fa6-4f69-4425-be4a-81ff991903aa",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 5,
-            "maxQuantity": 5
-          },
-          {
-            "bundleId": "8c2ff41b-b24f-4dca-9e4c-ac134f8d1701",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "9dc5121b-3fdf-43b2-b15f-7f21cfefc2bc",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "a62855ec-f7ec-48bb-953d-6cd8ecb681dc",
-            "tier": 1,
-            "weight": 3,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "c6b1c416-9634-4e06-8f06-92a385d6bca9",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 5,
-            "maxQuantity": 5
-          },
-          {
-            "bundleId": "e273e44a-fd4c-4084-8013-0bbb31fd3b1b",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "e3c631c8-801a-427a-8007-fc6fb1ad5183",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 6,
-            "maxQuantity": 6
-          }
-        ],
-        "4": [
-          {
-            "bundleId": "337a0bbc-2408-49a9-9dca-598863bdd210",
-            "tier": 1,
-            "weight": 2,
+            "weight": 10,
             "minQuantity": 2,
             "maxQuantity": 2
           },
           {
-            "bundleId": "4294a2f2-d4ef-431a-9865-b9750098643c",
-            "tier": 1,
-            "weight": 2,
+            "bundleId": "76889fa6-4f69-4425-be4a-81ff991903aa",
+            "weight": 10,
+            "minQuantity": 4,
+            "maxQuantity": 4
+          },
+          {
+            "bundleId": "a62855ec-f7ec-48bb-953d-6cd8ecb681dc",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1
+          },
+          {
+            "bundleId": "e273e44a-fd4c-4084-8013-0bbb31fd3b1b",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1
+          }
+        ],
+        "1": [
+          {
+            "bundleId": "0a06d78a-68a2-4b0d-9530-4c708cf8e0e2",
+            "weight": 24,
+            "minQuantity": 2,
+            "maxQuantity": 3
+          },
+          {
+            "bundleId": "0e27aaa2-4285-49af-8419-492e70713665",
+            "weight": 10,
             "minQuantity": 1,
             "maxQuantity": 1
           },
           {
             "bundleId": "4658e66e-66da-4073-b6e0-e2dad7298487",
-            "tier": 1,
-            "weight": 2,
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1
+          },
+          {
+            "bundleId": "5c15b3fd-fa88-4a9c-936d-7ec953306a6c",
+            "weight": 10,
             "minQuantity": 3,
             "maxQuantity": 3
           },
           {
-            "bundleId": "74a7c3fb-6524-46a9-ab9a-50b4977e630e",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 9,
-            "maxQuantity": 9
+            "bundleId": "76889fa6-4f69-4425-be4a-81ff991903aa",
+            "weight": 10,
+            "minQuantity": 4,
+            "maxQuantity": 4
+          },
+          {
+            "bundleId": "a62855ec-f7ec-48bb-953d-6cd8ecb681dc",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1
+          },
+          {
+            "bundleId": "e273e44a-fd4c-4084-8013-0bbb31fd3b1b",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1
+          }
+        ],
+        "2": [
+          {
+            "bundleId": "0a06d78a-68a2-4b0d-9530-4c708cf8e0e2",
+            "weight": 24,
+            "minQuantity": 2,
+            "maxQuantity": 3,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "0e27aaa2-4285-49af-8419-492e70713665",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "4658e66e-66da-4073-b6e0-e2dad7298487",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "5c15b3fd-fa88-4a9c-936d-7ec953306a6c",
+            "weight": 10,
+            "minQuantity": 3,
+            "maxQuantity": 3,
+            "_retailListed": "1/2"
           },
           {
             "bundleId": "76889fa6-4f69-4425-be4a-81ff991903aa",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 9,
-            "maxQuantity": 9
+            "weight": 10,
+            "minQuantity": 5,
+            "maxQuantity": 5,
+            "_retailListed": "1/2"
           },
           {
-            "bundleId": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
-            "tier": 1,
-            "weight": 4,
-            "minQuantity": 8,
-            "maxQuantity": 8
+            "bundleId": "a62855ec-f7ec-48bb-953d-6cd8ecb681dc",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
           },
           {
-            "bundleId": "a4195313-4055-443e-9223-0cc10975500a",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 8,
-            "maxQuantity": 8
+            "bundleId": "e273e44a-fd4c-4084-8013-0bbb31fd3b1b",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          }
+        ],
+        "3": [
+          {
+            "bundleId": "337a0bbc-2408-49a9-9dca-598863bdd210",
+            "weight": 26,
+            "minQuantity": 2,
+            "maxQuantity": 3,
+            "_retailListed": "2/2"
           },
           {
-            "bundleId": "a52da45d-5a6b-439c-92a6-7bc04048058f",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 13,
-            "maxQuantity": 13
+            "bundleId": "0e27aaa2-4285-49af-8419-492e70713665",
+            "weight": 10,
+            "minQuantity": 2,
+            "maxQuantity": 2,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "11be7ed7-7283-4963-a25c-71cf555d2d2d",
+            "weight": 10,
+            "minQuantity": 2,
+            "maxQuantity": 2,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "8c2ff41b-b24f-4dca-9e4c-ac134f8d1701",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "9dc5121b-3fdf-43b2-b15f-7f21cfefc2bc",
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "a62855ec-f7ec-48bb-953d-6cd8ecb681dc",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "c6b1c416-9634-4e06-8f06-92a385d6bca9",
+            "weight": 10,
+            "minQuantity": 5,
+            "maxQuantity": 5,
+            "_retailListed": "1/2"
           },
           {
             "bundleId": "e3c631c8-801a-427a-8007-fc6fb1ad5183",
-            "tier": 1,
-            "weight": 2,
+            "weight": 10,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
+            "weight": 10,
+            "minQuantity": 6,
+            "maxQuantity": 6,
+            "_retailListed": "1/2"
+          }
+        ],
+        "4": [
+          {
+            "bundleId": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
+            "weight": 26,
+            "minQuantity": 8,
+            "maxQuantity": 8,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "337a0bbc-2408-49a9-9dca-598863bdd210",
+            "weight": 10,
+            "minQuantity": 2,
+            "maxQuantity": 2,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "4294a2f2-d4ef-431a-9865-b9750098643c",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "4658e66e-66da-4073-b6e0-e2dad7298487",
+            "weight": 10,
+            "minQuantity": 3,
+            "maxQuantity": 3,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "74a7c3fb-6524-46a9-ab9a-50b4977e630e",
+            "weight": 10,
+            "minQuantity": 9,
+            "maxQuantity": 9,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "76889fa6-4f69-4425-be4a-81ff991903aa",
+            "weight": 10,
+            "minQuantity": 9,
+            "maxQuantity": 9,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "a4195313-4055-443e-9223-0cc10975500a",
+            "weight": 10,
+            "minQuantity": 8,
+            "maxQuantity": 8,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "a52da45d-5a6b-439c-92a6-7bc04048058f",
+            "weight": 10,
+            "minQuantity": 13,
+            "maxQuantity": 13,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "e3c631c8-801a-427a-8007-fc6fb1ad5183",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
           }
         ],
         "5": [
           {
-            "bundleId": "01ada486-b642-43b2-8776-e444dbe9343e",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
             "bundleId": "3cb7b827-75f6-48f1-ae6b-47743e128e58",
-            "tier": 1,
-            "weight": 3,
+            "weight": 23,
             "minQuantity": 1,
-            "maxQuantity": 2
-          },
-          {
-            "bundleId": "6352e99e-27a5-4b45-86ca-8af17357584d",
-            "tier": 1,
-            "weight": 4,
-            "minQuantity": 2,
-            "maxQuantity": 3
-          },
-          {
-            "bundleId": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 11,
-            "maxQuantity": 11
-          },
-          {
-            "bundleId": "8a00a800-2a43-419c-b9e9-731016f9f7d6",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 2,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "a4195313-4055-443e-9223-0cc10975500a",
-            "tier": 1,
-            "weight": 5,
+            "weight": 23,
             "minQuantity": 9,
-            "maxQuantity": 15
+            "maxQuantity": 10,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "8a00a800-2a43-419c-b9e9-731016f9f7d6",
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
           },
           {
             "bundleId": "a52da45d-5a6b-439c-92a6-7bc04048058f",
-            "tier": 1,
-            "weight": 2,
+            "weight": 10,
             "minQuantity": 17,
-            "maxQuantity": 17
+            "maxQuantity": 17,
+            "_retailListed": "1/2"
           },
           {
             "bundleId": "c511ee9f-0525-48d6-a650-8fc364144c32",
-            "tier": 1,
-            "weight": 1,
+            "weight": 10,
             "minQuantity": 2,
-            "maxQuantity": 2
-          },
-          {
-            "bundleId": "c60c71e7-8bc3-4495-95c8-fbaee3c6860e",
-            "tier": 1,
-            "weight": 4,
-            "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 2,
+            "_retailListed": "1/2"
           },
           {
             "bundleId": "c6b1c416-9634-4e06-8f06-92a385d6bca9",
-            "tier": 1,
-            "weight": 1,
+            "weight": 10,
             "minQuantity": 10,
-            "maxQuantity": 10
-          },
-          {
-            "bundleId": "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 12,
-            "maxQuantity": 12
+            "maxQuantity": 10,
+            "_retailListed": "1/2"
           },
           {
             "bundleId": "ecdbf98b-2ec8-4030-8f13-625756d363c7",
-            "tier": 1,
-            "weight": 2,
+            "weight": 10,
             "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "ee486683-c721-4bd6-8619-78cc00e34acc",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "f6b6cb92-9d0b-481a-85ed-e2af0c1bb306",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 3,
-            "maxQuantity": 3
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
           },
           {
             "bundleId": "fa5ac64d-b3ec-4956-910b-fb821e14eb37",
-            "tier": 1,
-            "weight": 1,
+            "weight": 10,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          }
+        ],
+        "6": [
+          {
+            "bundleId": "6352e99e-27a5-4b45-86ca-8af17357584d",
+            "weight": 23,
+            "minQuantity": 2,
+            "maxQuantity": 3,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "c60c71e7-8bc3-4495-95c8-fbaee3c6860e",
+            "weight": 23,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "01ada486-b642-43b2-8776-e444dbe9343e",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
+            "weight": 10,
+            "minQuantity": 11,
+            "maxQuantity": 11,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "a4195313-4055-443e-9223-0cc10975500a",
+            "weight": 10,
+            "minQuantity": 15,
+            "maxQuantity": 15,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
+            "weight": 10,
+            "minQuantity": 12,
+            "maxQuantity": 12,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "ee486683-c721-4bd6-8619-78cc00e34acc",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "f6b6cb92-9d0b-481a-85ed-e2af0c1bb306",
+            "weight": 10,
+            "minQuantity": 3,
+            "maxQuantity": 3,
+            "_retailListed": "1/2"
           }
         ],
         "7": [
           {
-            "bundleId": "337a0bbc-2408-49a9-9dca-598863bdd210",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 3,
-            "maxQuantity": 3
-          },
-          {
-            "bundleId": "3cb7b827-75f6-48f1-ae6b-47743e128e58",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "6352e99e-27a5-4b45-86ca-8af17357584d",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 2,
-            "maxQuantity": 2
-          },
-          {
             "bundleId": "74a7c3fb-6524-46a9-ab9a-50b4977e630e",
-            "tier": 1,
-            "weight": 2,
+            "weight": 27,
             "minQuantity": 15,
-            "maxQuantity": 16
+            "maxQuantity": 16,
+            "_retailListed": "2/3"
           },
           {
             "bundleId": "75e74693-d221-47eb-92e4-e8ac7079084c",
-            "tier": 1,
-            "weight": 3,
+            "weight": 28,
             "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "76889fa6-4f69-4425-be4a-81ff991903aa",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 16,
-            "maxQuantity": 16
+            "maxQuantity": 1,
+            "_retailListed": "2/3"
           },
           {
             "bundleId": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
-            "tier": 1,
-            "weight": 3,
+            "weight": 28,
             "minQuantity": 14,
-            "maxQuantity": 15
-          },
-          {
-            "bundleId": "972dbe8d-0b75-4df2-9160-9d535f257b88",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "a4195313-4055-443e-9223-0cc10975500a",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 18,
-            "maxQuantity": 18
+            "maxQuantity": 15,
+            "_retailListed": "2/3"
           },
           {
             "bundleId": "a52da45d-5a6b-439c-92a6-7bc04048058f",
-            "tier": 1,
-            "weight": 7,
+            "weight": 28,
             "minQuantity": 24,
-            "maxQuantity": 30
+            "maxQuantity": 24,
+            "_retailListed": "2/3"
+          },
+          {
+            "bundleId": "337a0bbc-2408-49a9-9dca-598863bdd210",
+            "weight": 11,
+            "minQuantity": 3,
+            "maxQuantity": 3,
+            "_retailListed": "1/3"
+          },
+          {
+            "bundleId": "6352e99e-27a5-4b45-86ca-8af17357584d",
+            "weight": 11,
+            "minQuantity": 2,
+            "maxQuantity": 2,
+            "_retailListed": "1/3"
+          },
+          {
+            "bundleId": "972dbe8d-0b75-4df2-9160-9d535f257b88",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/3"
           },
           {
             "bundleId": "c511ee9f-0525-48d6-a650-8fc364144c32",
-            "tier": 1,
-            "weight": 2,
+            "weight": 11,
             "minQuantity": 2,
-            "maxQuantity": 2
+            "maxQuantity": 2,
+            "_retailListed": "1/3"
           },
           {
             "bundleId": "c60c71e7-8bc3-4495-95c8-fbaee3c6860e",
-            "tier": 1,
-            "weight": 3,
+            "weight": 10,
             "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 20,
-            "maxQuantity": 20
+            "maxQuantity": 1,
+            "_retailListed": "1/3"
           },
           {
             "bundleId": "ecdbf98b-2ec8-4030-8f13-625756d363c7",
-            "tier": 1,
-            "weight": 1,
+            "weight": 10,
             "minQuantity": 2,
-            "maxQuantity": 2
+            "maxQuantity": 2,
+            "_retailListed": "1/3"
           },
           {
             "bundleId": "ee486683-c721-4bd6-8619-78cc00e34acc",
-            "tier": 1,
-            "weight": 3,
+            "weight": 10,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "1/3"
+          }
+        ],
+        "8": [
+          {
+            "bundleId": "a52da45d-5a6b-439c-92a6-7bc04048058f",
+            "weight": 25,
+            "minQuantity": 30,
+            "maxQuantity": 30,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "3cb7b827-75f6-48f1-ae6b-47743e128e58",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "76889fa6-4f69-4425-be4a-81ff991903aa",
+            "weight": 11,
+            "minQuantity": 16,
+            "maxQuantity": 16,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "a4195313-4055-443e-9223-0cc10975500a",
+            "weight": 11,
+            "minQuantity": 18,
+            "maxQuantity": 18,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "c60c71e7-8bc3-4495-95c8-fbaee3c6860e",
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
+            "weight": 10,
+            "minQuantity": 20,
+            "maxQuantity": 20,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "ee486683-c721-4bd6-8619-78cc00e34acc",
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
           },
           {
             "bundleId": "f6b6cb92-9d0b-481a-85ed-e2af0c1bb306",
-            "tier": 1,
-            "weight": 2,
+            "weight": 10,
             "minQuantity": 3,
-            "maxQuantity": 3
+            "maxQuantity": 3,
+            "_retailListed": "1/2"
           },
           {
             "bundleId": "fa5ac64d-b3ec-4956-910b-fb821e14eb37",
-            "tier": 1,
-            "weight": 2,
+            "weight": 10,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
           }
         ],
         "9": [
           {
-            "bundleId": "01ada486-b642-43b2-8776-e444dbe9343e",
-            "tier": 1,
-            "weight": 17,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
             "bundleId": "337a0bbc-2408-49a9-9dca-598863bdd210",
-            "tier": 1,
-            "weight": 18,
+            "weight": 33,
             "minQuantity": 2,
-            "maxQuantity": 4
+            "maxQuantity": 4,
+            "_retailListed": "11/23"
           },
           {
-            "bundleId": "3cb7b827-75f6-48f1-ae6b-47743e128e58",
-            "tier": 1,
-            "weight": 12,
+            "bundleId": "01ada486-b642-43b2-8776-e444dbe9343e",
+            "weight": 30,
             "minQuantity": 1,
-            "maxQuantity": 2
-          },
-          {
-            "bundleId": "58e21cd6-98ac-4055-941c-c73c7259f1a9",
-            "tier": 1,
-            "weight": 8,
-            "minQuantity": 2,
-            "maxQuantity": 3
-          },
-          {
-            "bundleId": "6352e99e-27a5-4b45-86ca-8af17357584d",
-            "tier": 1,
-            "weight": 16,
-            "minQuantity": 2,
-            "maxQuantity": 4
-          },
-          {
-            "bundleId": "74a7c3fb-6524-46a9-ab9a-50b4977e630e",
-            "tier": 1,
-            "weight": 7,
-            "minQuantity": 18,
-            "maxQuantity": 22
-          },
-          {
-            "bundleId": "75e74693-d221-47eb-92e4-e8ac7079084c",
-            "tier": 1,
-            "weight": 15,
-            "minQuantity": 1,
-            "maxQuantity": 2
-          },
-          {
-            "bundleId": "76889fa6-4f69-4425-be4a-81ff991903aa",
-            "tier": 1,
-            "weight": 6,
-            "minQuantity": 18,
-            "maxQuantity": 22
-          },
-          {
-            "bundleId": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
-            "tier": 1,
-            "weight": 9,
-            "minQuantity": 18,
-            "maxQuantity": 22
-          },
-          {
-            "bundleId": "87817655-c5f3-4370-b0dd-35701634ec00",
-            "tier": 1,
-            "weight": 12,
-            "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "10/23"
           },
           {
             "bundleId": "972dbe8d-0b75-4df2-9160-9d535f257b88",
-            "tier": 1,
-            "weight": 17,
+            "weight": 30,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "10/23"
           },
           {
-            "bundleId": "a4195313-4055-443e-9223-0cc10975500a",
-            "tier": 1,
-            "weight": 10,
-            "minQuantity": 18,
-            "maxQuantity": 21
+            "bundleId": "6352e99e-27a5-4b45-86ca-8af17357584d",
+            "weight": 25,
+            "minQuantity": 2,
+            "maxQuantity": 4,
+            "_retailListed": "9/23"
+          },
+          {
+            "bundleId": "75e74693-d221-47eb-92e4-e8ac7079084c",
+            "weight": 26,
+            "minQuantity": 1,
+            "maxQuantity": 2,
+            "_retailListed": "9/23"
           },
           {
             "bundleId": "a52da45d-5a6b-439c-92a6-7bc04048058f",
-            "tier": 1,
-            "weight": 15,
+            "weight": 26,
             "minQuantity": 27,
-            "maxQuantity": 33
+            "maxQuantity": 33,
+            "_retailListed": "9/23"
           },
           {
-            "bundleId": "c60c71e7-8bc3-4495-95c8-fbaee3c6860e",
-            "tier": 1,
-            "weight": 12,
+            "bundleId": "87817655-c5f3-4370-b0dd-35701634ec00",
+            "weight": 19,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "7/23"
           },
           {
             "bundleId": "c6b1c416-9634-4e06-8f06-92a385d6bca9",
-            "tier": 1,
-            "weight": 11,
+            "weight": 19,
             "minQuantity": 18,
-            "maxQuantity": 22
-          },
-          {
-            "bundleId": "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
-            "tier": 1,
-            "weight": 9,
-            "minQuantity": 18,
-            "maxQuantity": 19
+            "maxQuantity": 22,
+            "_retailListed": "7/23"
           },
           {
             "bundleId": "ecdbf98b-2ec8-4030-8f13-625756d363c7",
-            "tier": 1,
-            "weight": 12,
+            "weight": 19,
             "minQuantity": 2,
-            "maxQuantity": 3
+            "maxQuantity": 3,
+            "_retailListed": "7/23"
           },
           {
             "bundleId": "ee486683-c721-4bd6-8619-78cc00e34acc",
-            "tier": 1,
-            "weight": 13,
+            "weight": 19,
             "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "f6b6cb92-9d0b-481a-85ed-e2af0c1bb306",
-            "tier": 1,
-            "weight": 8,
-            "minQuantity": 2,
-            "maxQuantity": 3
+            "maxQuantity": 1,
+            "_retailListed": "7/23"
           },
           {
             "bundleId": "fa5ac64d-b3ec-4956-910b-fb821e14eb37",
-            "tier": 1,
-            "weight": 13,
+            "weight": 19,
             "minQuantity": 1,
-            "maxQuantity": 1
+            "maxQuantity": 1,
+            "_retailListed": "7/23"
+          },
+          {
+            "bundleId": "3cb7b827-75f6-48f1-ae6b-47743e128e58",
+            "weight": 16,
+            "minQuantity": 1,
+            "maxQuantity": 2,
+            "_retailListed": "6/23"
+          },
+          {
+            "bundleId": "a4195313-4055-443e-9223-0cc10975500a",
+            "weight": 15,
+            "minQuantity": 18,
+            "maxQuantity": 21,
+            "_retailListed": "6/23"
+          },
+          {
+            "bundleId": "c60c71e7-8bc3-4495-95c8-fbaee3c6860e",
+            "weight": 16,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "6/23"
+          },
+          {
+            "bundleId": "58e21cd6-98ac-4055-941c-c73c7259f1a9",
+            "weight": 13,
+            "minQuantity": 2,
+            "maxQuantity": 3,
+            "_retailListed": "5/23"
+          },
+          {
+            "bundleId": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
+            "weight": 13,
+            "minQuantity": 18,
+            "maxQuantity": 22,
+            "_retailListed": "5/23"
+          },
+          {
+            "bundleId": "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
+            "weight": 13,
+            "minQuantity": 18,
+            "maxQuantity": 19,
+            "_retailListed": "5/23"
+          },
+          {
+            "bundleId": "74a7c3fb-6524-46a9-ab9a-50b4977e630e",
+            "weight": 10,
+            "minQuantity": 18,
+            "maxQuantity": 22,
+            "_retailListed": "4/23"
+          },
+          {
+            "bundleId": "76889fa6-4f69-4425-be4a-81ff991903aa",
+            "weight": 10,
+            "minQuantity": 18,
+            "maxQuantity": 22,
+            "_retailListed": "4/23"
+          },
+          {
+            "bundleId": "f6b6cb92-9d0b-481a-85ed-e2af0c1bb306",
+            "weight": 10,
+            "minQuantity": 2,
+            "maxQuantity": 3,
+            "_retailListed": "4/23"
           }
         ]
       }
@@ -5332,100 +5534,105 @@
       ],
       "levels": {
         "0": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 3,
+          "_maxItemsSource": "DERIVED: no retail open at this level; measured level 2's bundles, quantities scaled by this shop's per-level growth 1.25^-2",
           "_source": "level 0 seeded from level 1's authored params; retail level-0 catalogs were observed for all four shop types",
           "_unlockedPoolSize": 11,
-          "maxItems": 4,
+          "maxItems": 5,
           "priceMultiplier": 1.0,
           "refreshSeconds": 36000,
           "tierCap": 2,
-          "tierCapLabel": "Superior"
+          "tierCapLabel": "Superior",
+          "_retailMeasuredStock": "DERIVED: no retail open at this level; measured level 2's bundles, quantities scaled by this shop's per-level growth 1.25^-2"
         },
         "1": {
           "_unlockedPoolSize": 11,
-          "maxItems": 3,
+          "maxItems": 5,
           "priceMultiplier": 1.0,
           "refreshSeconds": 36000,
           "tierCap": 2,
-          "tierCapLabel": "Superior"
+          "tierCapLabel": "Superior",
+          "_maxItemsSource": "DERIVED: no retail open at this level; measured level 2's bundles, quantities scaled by this shop's per-level growth 1.25^-1",
+          "_retailMeasuredStock": "DERIVED: no retail open at this level; measured level 2's bundles, quantities scaled by this shop's per-level growth 1.25^-1"
         },
         "2": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 3,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 5 bundles (1 catalogs)",
           "_unlockedPoolSize": 11,
           "maxItems": 5,
           "priceMultiplier": 1.15,
           "refreshSeconds": 36000,
           "tierCap": 2,
-          "tierCapLabel": "Superior"
+          "tierCapLabel": "Superior",
+          "_retailMeasuredStock": "1 retail catalogs, template 86f8cc4a-0789-4f9e-84e7-e68138e49ad3; script/extract_shop_level_stock.py"
         },
         "3": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 4,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 5 bundles (2 catalogs)",
           "_unlockedPoolSize": 16,
           "maxItems": 5,
           "priceMultiplier": 1.3,
           "refreshSeconds": 36000,
           "tierCap": 3,
-          "tierCapLabel": "Remarkable"
+          "tierCapLabel": "Remarkable",
+          "_retailMeasuredStock": "2 retail catalogs, template 726fee55-bc6d-447f-b9ce-52e6b83c6e00; script/extract_shop_level_stock.py"
         },
         "4": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 4,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 6 bundles (2 catalogs)",
           "_unlockedPoolSize": 22,
           "maxItems": 6,
           "priceMultiplier": 1.45,
           "refreshSeconds": 36000,
           "tierCap": 4,
-          "tierCapLabel": "Exquisite"
+          "tierCapLabel": "Exquisite",
+          "_retailMeasuredStock": "2 retail catalogs, template e2f3206b-ae97-4e78-b738-1e4da1f96da1; script/extract_shop_level_stock.py"
         },
         "5": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 5,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 6 bundles (2 catalogs)",
           "_unlockedPoolSize": 27,
           "maxItems": 6,
           "priceMultiplier": 1.6,
           "refreshSeconds": 36000,
           "tierCap": 5,
-          "tierCapLabel": "Magnificent"
+          "tierCapLabel": "Magnificent",
+          "_retailMeasuredStock": "2 retail catalogs, template 96be3d96-f932-466a-97d5-49a88140fe56; script/extract_shop_level_stock.py"
         },
         "6": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 6,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 7 bundles (2 catalogs)",
           "_unlockedPoolSize": 32,
           "maxItems": 7,
           "priceMultiplier": 1.75,
           "refreshSeconds": 36000,
           "tierCap": 6,
-          "tierCapLabel": "Flawless"
+          "tierCapLabel": "Flawless",
+          "_retailMeasuredStock": "2 retail catalogs, template e54ee929-0da4-49f3-b198-91177fd682b5; script/extract_shop_level_stock.py"
         },
         "7": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 6,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 7 bundles (2 catalogs)",
           "_unlockedPoolSize": 38,
           "maxItems": 7,
           "priceMultiplier": 1.9,
           "refreshSeconds": 36000,
           "tierCap": 7,
-          "tierCapLabel": "Exemplary"
+          "tierCapLabel": "Exemplary",
+          "_retailMeasuredStock": "2 retail catalogs, template 96539ca0-f639-42b2-aa26-3bd98bfb98ab; script/extract_shop_level_stock.py"
         },
         "8": {
           "_unlockedPoolSize": 43,
-          "maxItems": 7,
+          "maxItems": 8,
           "priceMultiplier": 2.05,
           "refreshSeconds": 36000,
           "tierCap": 8,
-          "tierCapLabel": "Sublime"
+          "tierCapLabel": "Sublime",
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 8 bundles (2 catalogs)",
+          "_retailMeasuredStock": "2 retail catalogs, template 9fd01835-2ca5-4864-9d3d-7928f9097cff; script/extract_shop_level_stock.py"
         },
         "9": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 8 bundles (21 catalogs)",
           "_unlockedPoolSize": 48,
           "maxItems": 8,
           "priceMultiplier": 2.2,
           "refreshSeconds": 36000,
           "tierCap": 10,
-          "tierCapLabel": "Mythical"
+          "tierCapLabel": "Mythical",
+          "_retailMeasuredStock": "21 retail catalogs, template c584e8e6-6698-4814-a700-495e8bd0ef1d; script/extract_shop_level_stock.py"
         }
       },
       "merchantGold": {
@@ -5438,11 +5645,12 @@
           "source": "MEASURED"
         },
         "1": {
-          "bandMax": 1860,
-          "bandMin": 1488,
-          "baseGold": 1674,
+          "bandMax": 2268,
+          "bandMin": 1815,
+          "baseGold": 2041,
           "observations": 0,
-          "source": "INTERPOLATED_LOW_CONFIDENCE"
+          "source": "INTERPOLATED",
+          "_note": "no retail open at this level; geometric between measured levels 0 and 2 (report #309)"
         },
         "2": {
           "bandMax": 4931,
@@ -5462,11 +5670,12 @@
         },
         "4": {
           "bandMax": 10527,
-          "bandMin": 8421,
+          "bandMin": 8143,
           "baseGold": 9474,
           "capturedCatalogTemplateId": "e2f3206b-ae97-4e78-b738-1e4da1f96da1",
           "observations": 2,
-          "source": "MEASURED"
+          "source": "MEASURED",
+          "_note": "band widened for report #309 to hold every retail wallet seen at this level (was 8421..10527); retail wallets [8143, 9474]"
         },
         "5": {
           "bandMax": 13886,
@@ -5478,11 +5687,12 @@
         },
         "6": {
           "bandMax": 19296,
-          "bandMin": 15436,
+          "bandMin": 14735,
           "baseGold": 17366,
           "capturedCatalogTemplateId": "e54ee929-0da4-49f3-b198-91177fd682b5",
           "observations": 2,
-          "source": "MEASURED"
+          "source": "MEASURED",
+          "_note": "band widened for report #309 to hold every retail wallet seen at this level (was 15436..19296); retail wallets [14735, 17366]"
         },
         "7": {
           "bandMax": 22214,
@@ -5493,22 +5703,772 @@
           "source": "MEASURED"
         },
         "8": {
-          "bandMax": 31181,
-          "bandMin": 24945,
-          "baseGold": 28063,
-          "observations": 0,
-          "source": "INTERPOLATED"
+          "bandMax": 30039,
+          "bandMin": 24031,
+          "baseGold": 27035,
+          "capturedCatalogTemplateId": "9fd01835-2ca5-4864-9d3d-7928f9097cff",
+          "observations": 2,
+          "source": "MEASURED",
+          "_note": "remeasured for report #309 (was INTERPOLATED); retail wallets [26147, 27923]"
         },
         "9": {
           "bandMax": 38572,
-          "bandMin": 30858,
+          "bandMin": 30582,
           "baseGold": 34715,
           "capturedCatalogTemplateId": "c584e8e6-6698-4814-a700-495e8bd0ef1d",
           "observations": 112,
-          "source": "MEASURED"
+          "source": "MEASURED",
+          "_note": "band widened for report #309 to hold every retail wallet seen at this level (was 30858..38572); retail wallets [30582, 31242, 31627, 32038, 32607, 33375, 33533, 34272, 34967, 35320, 35364, 35410, 35885, 35917, 36250, 36286, 36697, 36754, 36921, 37092, 38336]"
         }
       },
-      "shopType": "workshop"
+      "shopType": "workshop",
+      "levelPools": {
+        "0": [
+          {
+            "bundleId": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+            "weight": 1,
+            "minQuantity": 10,
+            "maxQuantity": 10
+          },
+          {
+            "bundleId": "7bfd1e3b-97b8-4617-8e46-597c58943cc2",
+            "weight": 1,
+            "minQuantity": 3,
+            "maxQuantity": 3
+          },
+          {
+            "bundleId": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+            "weight": 1,
+            "minQuantity": 3,
+            "maxQuantity": 3
+          },
+          {
+            "bundleId": "eaa68229-3264-4a1f-b18a-74832fc172d6",
+            "weight": 1,
+            "minQuantity": 5,
+            "maxQuantity": 5
+          },
+          {
+            "bundleId": "fa3f5d6f-8982-4193-b968-3fed2b18e147",
+            "weight": 1,
+            "minQuantity": 1,
+            "maxQuantity": 1
+          }
+        ],
+        "1": [
+          {
+            "bundleId": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+            "weight": 1,
+            "minQuantity": 13,
+            "maxQuantity": 13
+          },
+          {
+            "bundleId": "7bfd1e3b-97b8-4617-8e46-597c58943cc2",
+            "weight": 1,
+            "minQuantity": 4,
+            "maxQuantity": 4
+          },
+          {
+            "bundleId": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+            "weight": 1,
+            "minQuantity": 3,
+            "maxQuantity": 3
+          },
+          {
+            "bundleId": "eaa68229-3264-4a1f-b18a-74832fc172d6",
+            "weight": 1,
+            "minQuantity": 6,
+            "maxQuantity": 6
+          },
+          {
+            "bundleId": "fa3f5d6f-8982-4193-b968-3fed2b18e147",
+            "weight": 1,
+            "minQuantity": 1,
+            "maxQuantity": 1
+          }
+        ],
+        "2": [
+          {
+            "bundleId": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+            "weight": 1,
+            "minQuantity": 16,
+            "maxQuantity": 16,
+            "_retailListed": "1/1"
+          },
+          {
+            "bundleId": "7bfd1e3b-97b8-4617-8e46-597c58943cc2",
+            "weight": 1,
+            "minQuantity": 5,
+            "maxQuantity": 5,
+            "_retailListed": "1/1"
+          },
+          {
+            "bundleId": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+            "weight": 1,
+            "minQuantity": 4,
+            "maxQuantity": 4,
+            "_retailListed": "1/1"
+          },
+          {
+            "bundleId": "eaa68229-3264-4a1f-b18a-74832fc172d6",
+            "weight": 1,
+            "minQuantity": 8,
+            "maxQuantity": 8,
+            "_retailListed": "1/1"
+          },
+          {
+            "bundleId": "fa3f5d6f-8982-4193-b968-3fed2b18e147",
+            "weight": 1,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/1"
+          }
+        ],
+        "3": [
+          {
+            "bundleId": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+            "weight": 26,
+            "minQuantity": 21,
+            "maxQuantity": 22,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "16b94858-6a39-4b53-b360-b944514407a8",
+            "weight": 10,
+            "minQuantity": 25,
+            "maxQuantity": 25,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "30e7f3ff-9b8e-4dba-a2a5-3d2ac4e29caa",
+            "weight": 10,
+            "minQuantity": 5,
+            "maxQuantity": 5,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "7bfd1e3b-97b8-4617-8e46-597c58943cc2",
+            "weight": 10,
+            "minQuantity": 6,
+            "maxQuantity": 6,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "911b5429-ecb7-4a6a-a02e-511860a153ea",
+            "weight": 11,
+            "minQuantity": 7,
+            "maxQuantity": 7,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+            "weight": 10,
+            "minQuantity": 6,
+            "maxQuantity": 6,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "bbe35800-9ae8-4ddc-aa8a-8333b41c51c4",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "cb3c5974-a02e-48a6-9de2-028e0bfbd446",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "f30a903c-0887-4605-910f-fe5ce1b454c3",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          }
+        ],
+        "4": [
+          {
+            "bundleId": "16b94858-6a39-4b53-b360-b944514407a8",
+            "weight": 16,
+            "minQuantity": 27,
+            "maxQuantity": 29,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "30e7f3ff-9b8e-4dba-a2a5-3d2ac4e29caa",
+            "weight": 17,
+            "minQuantity": 5,
+            "maxQuantity": 5,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+            "weight": 17,
+            "minQuantity": 28,
+            "maxQuantity": 28,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+            "weight": 16,
+            "minQuantity": 7,
+            "maxQuantity": 9,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "7df7c157-3fdf-4193-8308-9246a6cf6bc0",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "cb3c5974-a02e-48a6-9de2-028e0bfbd446",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "d62bedb3-2797-4129-910c-778833b0df26",
+            "weight": 10,
+            "minQuantity": 6,
+            "maxQuantity": 6,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "eaa68229-3264-4a1f-b18a-74832fc172d6",
+            "weight": 10,
+            "minQuantity": 6,
+            "maxQuantity": 6,
+            "_retailListed": "1/2"
+          }
+        ],
+        "5": [
+          {
+            "bundleId": "16b94858-6a39-4b53-b360-b944514407a8",
+            "weight": 17,
+            "minQuantity": 32,
+            "maxQuantity": 35,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+            "weight": 17,
+            "minQuantity": 34,
+            "maxQuantity": 38,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+            "weight": 17,
+            "minQuantity": 8,
+            "maxQuantity": 13,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "eaa68229-3264-4a1f-b18a-74832fc172d6",
+            "weight": 17,
+            "minQuantity": 7,
+            "maxQuantity": 8,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "30e7f3ff-9b8e-4dba-a2a5-3d2ac4e29caa",
+            "weight": 10,
+            "minQuantity": 8,
+            "maxQuantity": 8,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "3d8e3f51-ce5b-4d68-aa3d-f3d36d46cdd7",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "7bfd1e3b-97b8-4617-8e46-597c58943cc2",
+            "weight": 10,
+            "minQuantity": 6,
+            "maxQuantity": 6,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "911b5429-ecb7-4a6a-a02e-511860a153ea",
+            "weight": 10,
+            "minQuantity": 8,
+            "maxQuantity": 8,
+            "_retailListed": "1/2"
+          }
+        ],
+        "6": [
+          {
+            "bundleId": "16b94858-6a39-4b53-b360-b944514407a8",
+            "weight": 19,
+            "minQuantity": 40,
+            "maxQuantity": 47,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+            "weight": 19,
+            "minQuantity": 40,
+            "maxQuantity": 46,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+            "weight": 19,
+            "minQuantity": 8,
+            "maxQuantity": 15,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "d62bedb3-2797-4129-910c-778833b0df26",
+            "weight": 19,
+            "minQuantity": 7,
+            "maxQuantity": 8,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "30e7f3ff-9b8e-4dba-a2a5-3d2ac4e29caa",
+            "weight": 10,
+            "minQuantity": 10,
+            "maxQuantity": 10,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "3d8e3f51-ce5b-4d68-aa3d-f3d36d46cdd7",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "7bfd1e3b-97b8-4617-8e46-597c58943cc2",
+            "weight": 10,
+            "minQuantity": 7,
+            "maxQuantity": 7,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "7df7c157-3fdf-4193-8308-9246a6cf6bc0",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "c2a95ba6-2c97-473a-b013-9f79c3b7ea17",
+            "weight": 10,
+            "minQuantity": 12,
+            "maxQuantity": 12,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "eaa68229-3264-4a1f-b18a-74832fc172d6",
+            "weight": 10,
+            "minQuantity": 10,
+            "maxQuantity": 10,
+            "_retailListed": "1/2"
+          }
+        ],
+        "7": [
+          {
+            "bundleId": "16b94858-6a39-4b53-b360-b944514407a8",
+            "weight": 19,
+            "minQuantity": 51,
+            "maxQuantity": 52,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+            "weight": 19,
+            "minQuantity": 51,
+            "maxQuantity": 58,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+            "weight": 20,
+            "minQuantity": 7,
+            "maxQuantity": 10,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "d62bedb3-2797-4129-910c-778833b0df26",
+            "weight": 19,
+            "minQuantity": 6,
+            "maxQuantity": 7,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "30e7f3ff-9b8e-4dba-a2a5-3d2ac4e29caa",
+            "weight": 10,
+            "minQuantity": 9,
+            "maxQuantity": 9,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "4303443d-50d7-40b2-8514-338f6683ac24",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "81be0d03-38dc-4398-ba1a-77a906ba2432",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "911b5429-ecb7-4a6a-a02e-511860a153ea",
+            "weight": 10,
+            "minQuantity": 13,
+            "maxQuantity": 13,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "c2a95ba6-2c97-473a-b013-9f79c3b7ea17",
+            "weight": 10,
+            "minQuantity": 12,
+            "maxQuantity": 12,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "c3380941-d2e6-4031-a2a5-ce4aa06e28a7",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          }
+        ],
+        "8": [
+          {
+            "bundleId": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+            "weight": 21,
+            "minQuantity": 78,
+            "maxQuantity": 93,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "7bfd1e3b-97b8-4617-8e46-597c58943cc2",
+            "weight": 21,
+            "minQuantity": 13,
+            "maxQuantity": 14,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+            "weight": 21,
+            "minQuantity": 9,
+            "maxQuantity": 15,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "c2a95ba6-2c97-473a-b013-9f79c3b7ea17",
+            "weight": 21,
+            "minQuantity": 11,
+            "maxQuantity": 16,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "16b94858-6a39-4b53-b360-b944514407a8",
+            "weight": 10,
+            "minQuantity": 99,
+            "maxQuantity": 99,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "30e7f3ff-9b8e-4dba-a2a5-3d2ac4e29caa",
+            "weight": 10,
+            "minQuantity": 9,
+            "maxQuantity": 9,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "81be0d03-38dc-4398-ba1a-77a906ba2432",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "911b5429-ecb7-4a6a-a02e-511860a153ea",
+            "weight": 10,
+            "minQuantity": 9,
+            "maxQuantity": 9,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "bbe35800-9ae8-4ddc-aa8a-8333b41c51c4",
+            "weight": 10,
+            "minQuantity": 3,
+            "maxQuantity": 3,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "d62bedb3-2797-4129-910c-778833b0df26",
+            "weight": 10,
+            "minQuantity": 9,
+            "maxQuantity": 9,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "eaa68229-3264-4a1f-b18a-74832fc172d6",
+            "weight": 10,
+            "minQuantity": 16,
+            "maxQuantity": 16,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "f30a903c-0887-4605-910f-fe5ce1b454c3",
+            "weight": 10,
+            "minQuantity": 2,
+            "maxQuantity": 2,
+            "_retailListed": "1/2"
+          }
+        ],
+        "9": [
+          {
+            "bundleId": "16b94858-6a39-4b53-b360-b944514407a8",
+            "weight": 904,
+            "minQuantity": 175,
+            "maxQuantity": 199,
+            "_retailListed": "21/21"
+          },
+          {
+            "bundleId": "77bd02df-98c1-46f1-b170-1415bc6b51ae",
+            "weight": 902,
+            "minQuantity": 175,
+            "maxQuantity": 200,
+            "_retailListed": "21/21"
+          },
+          {
+            "bundleId": "bb560dd3-bb0f-4259-9a9d-4553cdf5903d",
+            "weight": 756,
+            "minQuantity": 12,
+            "maxQuantity": 25,
+            "_retailListed": "20/21"
+          },
+          {
+            "bundleId": "c2a95ba6-2c97-473a-b013-9f79c3b7ea17",
+            "weight": 227,
+            "minQuantity": 10,
+            "maxQuantity": 18,
+            "_retailListed": "14/21"
+          },
+          {
+            "bundleId": "7bfd1e3b-97b8-4617-8e46-597c58943cc2",
+            "weight": 177,
+            "minQuantity": 11,
+            "maxQuantity": 20,
+            "_retailListed": "12/21"
+          },
+          {
+            "bundleId": "911b5429-ecb7-4a6a-a02e-511860a153ea",
+            "weight": 136,
+            "minQuantity": 10,
+            "maxQuantity": 18,
+            "_retailListed": "10/21"
+          },
+          {
+            "bundleId": "eaa68229-3264-4a1f-b18a-74832fc172d6",
+            "weight": 101,
+            "minQuantity": 10,
+            "maxQuantity": 20,
+            "_retailListed": "8/21"
+          },
+          {
+            "bundleId": "d62bedb3-2797-4129-910c-778833b0df26",
+            "weight": 87,
+            "minQuantity": 9,
+            "maxQuantity": 12,
+            "_retailListed": "7/21"
+          },
+          {
+            "bundleId": "2a2a60a5-7077-45eb-8510-82438c2e93d1",
+            "weight": 45,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "4/21"
+          },
+          {
+            "bundleId": "30e7f3ff-9b8e-4dba-a2a5-3d2ac4e29caa",
+            "weight": 34,
+            "minQuantity": 11,
+            "maxQuantity": 13,
+            "_retailListed": "3/21"
+          },
+          {
+            "bundleId": "3d8e3f51-ce5b-4d68-aa3d-f3d36d46cdd7",
+            "weight": 33,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/21"
+          },
+          {
+            "bundleId": "7df7c157-3fdf-4193-8308-9246a6cf6bc0",
+            "weight": 33,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/21"
+          },
+          {
+            "bundleId": "81be0d03-38dc-4398-ba1a-77a906ba2432",
+            "weight": 34,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/21"
+          },
+          {
+            "bundleId": "839d1afb-5adc-4439-9a9d-61cc99c8b91e",
+            "weight": 34,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/21"
+          },
+          {
+            "bundleId": "9e9bc089-db9a-489e-a3e5-0d141c31faa4",
+            "weight": 33,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/21"
+          },
+          {
+            "bundleId": "ac8e97ce-786a-4cbc-9514-f6e1951b568d",
+            "weight": 34,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "3/21"
+          },
+          {
+            "bundleId": "bbe35800-9ae8-4ddc-aa8a-8333b41c51c4",
+            "weight": 34,
+            "minQuantity": 2,
+            "maxQuantity": 4,
+            "_retailListed": "3/21"
+          },
+          {
+            "bundleId": "f30a903c-0887-4605-910f-fe5ce1b454c3",
+            "weight": 33,
+            "minQuantity": 2,
+            "maxQuantity": 3,
+            "_retailListed": "3/21"
+          },
+          {
+            "bundleId": "0f840160-10fd-439f-b831-e96633c32eef",
+            "weight": 21,
+            "minQuantity": 2,
+            "maxQuantity": 4,
+            "_retailListed": "2/21"
+          },
+          {
+            "bundleId": "3403bc36-9497-4655-99b8-d8f8908b6ad3",
+            "weight": 21,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "2/21"
+          },
+          {
+            "bundleId": "3a2c9f8a-01dd-462d-8c9e-a5098dd99104",
+            "weight": 22,
+            "minQuantity": 2,
+            "maxQuantity": 2,
+            "_retailListed": "2/21"
+          },
+          {
+            "bundleId": "42f859b4-3a9f-42dd-ae33-1606fa2c0dda",
+            "weight": 23,
+            "minQuantity": 3,
+            "maxQuantity": 3,
+            "_retailListed": "2/21"
+          },
+          {
+            "bundleId": "83070358-f432-4041-a8da-b5714528be5a",
+            "weight": 23,
+            "minQuantity": 2,
+            "maxQuantity": 3,
+            "_retailListed": "2/21"
+          },
+          {
+            "bundleId": "8dcc79c4-1bae-4f7e-81fd-5f08ecb70074",
+            "weight": 24,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "2/21"
+          },
+          {
+            "bundleId": "c3380941-d2e6-4031-a2a5-ce4aa06e28a7",
+            "weight": 22,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "2/21"
+          },
+          {
+            "bundleId": "ef7e10c4-3890-45d2-add8-f798fc471376",
+            "weight": 21,
+            "minQuantity": 3,
+            "maxQuantity": 4,
+            "_retailListed": "2/21"
+          },
+          {
+            "bundleId": "fa3f5d6f-8982-4193-b968-3fed2b18e147",
+            "weight": 21,
+            "minQuantity": 2,
+            "maxQuantity": 4,
+            "_retailListed": "2/21"
+          },
+          {
+            "bundleId": "4303443d-50d7-40b2-8514-338f6683ac24",
+            "weight": 10,
+            "minQuantity": 3,
+            "maxQuantity": 3,
+            "_retailListed": "1/21"
+          },
+          {
+            "bundleId": "6ecdb3f0-bbf3-4ec6-ac93-bb6fa8e437a0",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/21"
+          },
+          {
+            "bundleId": "82af7d0e-752f-4242-bcdd-231bcacf3cf1",
+            "weight": 11,
+            "minQuantity": 4,
+            "maxQuantity": 4,
+            "_retailListed": "1/21"
+          },
+          {
+            "bundleId": "87bc3704-fa15-499a-8fbb-439be8186ac8",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/21"
+          },
+          {
+            "bundleId": "94b2b398-bac1-4086-9497-ddcbdab919c2",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/21"
+          },
+          {
+            "bundleId": "cb3c5974-a02e-48a6-9de2-028e0bfbd446",
+            "weight": 11,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/21"
+          }
+        ]
+      }
     },
     "e1dd10fc-8b14-4288-9b23-99b0d58388de": {
       "editorName": "Alchemist",
@@ -6503,8 +7463,7 @@
       ],
       "levels": {
         "0": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 3,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 4 bundles (1 catalogs)",
           "_source": "level 0 seeded from level 1's authored params; retail level-0 catalogs were observed for all four shop types",
           "_unlockedPoolSize": 32,
           "maxItems": 4,
@@ -6512,102 +7471,97 @@
           "refreshSeconds": 36000,
           "tierCap": 2,
           "tierCapLabel": "Superior",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "1 retail catalogs, template f5bd89ad-20ab-4ad6-b36f-2f35ab18657d; script/extract_shop_level_stock.py"
         },
         "1": {
           "_unlockedPoolSize": 32,
-          "maxItems": 3,
+          "maxItems": 4,
           "priceMultiplier": 1.0,
           "refreshSeconds": 36000,
           "tierCap": 2,
-          "tierCapLabel": "Superior"
+          "tierCapLabel": "Superior",
+          "_maxItemsSource": "DERIVED: no retail open at this level; bundles of measured levels 0 and 2, quantities between theirs",
+          "_retailMeasuredStock": "DERIVED: no retail open at this level; bundles of measured levels 0 and 2, quantities between theirs"
         },
         "2": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 3,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 5 bundles (1 catalogs)",
           "_unlockedPoolSize": 32,
-          "maxItems": 6,
+          "maxItems": 5,
           "priceMultiplier": 1.15,
           "refreshSeconds": 36000,
           "tierCap": 2,
           "tierCapLabel": "Superior",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "1 retail catalogs, template 572484f0-c3db-4c4a-af9a-85269246141f; script/extract_shop_level_stock.py"
         },
         "3": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 4,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 6 bundles (2 catalogs)",
           "_unlockedPoolSize": 47,
           "maxItems": 6,
           "priceMultiplier": 1.3,
           "refreshSeconds": 36000,
           "tierCap": 3,
           "tierCapLabel": "Remarkable",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "2 retail catalogs, template 2e857ad8-9b7f-494f-94f8-c4617faca5d4; script/extract_shop_level_stock.py"
         },
         "4": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 4,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 6 bundles (2 catalogs)",
           "_unlockedPoolSize": 63,
           "maxItems": 6,
           "priceMultiplier": 1.45,
           "refreshSeconds": 36000,
           "tierCap": 4,
           "tierCapLabel": "Exquisite",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "2 retail catalogs, template 7d37c5ca-b23b-46f5-ab38-7ada8d214dbd; script/extract_shop_level_stock.py"
         },
         "5": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 5,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 6 bundles (2 catalogs)",
           "_unlockedPoolSize": 79,
           "maxItems": 6,
           "priceMultiplier": 1.6,
           "refreshSeconds": 36000,
           "tierCap": 5,
           "tierCapLabel": "Magnificent",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "2 retail catalogs, template 06845382-98a4-4d38-bf88-25259a3ad1ec; script/extract_shop_level_stock.py"
         },
         "6": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 6,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 7 bundles (1 catalogs)",
           "_unlockedPoolSize": 94,
           "maxItems": 7,
           "priceMultiplier": 1.75,
           "refreshSeconds": 36000,
           "tierCap": 6,
           "tierCapLabel": "Flawless",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "1 retail catalogs, template 2efd189e-8a3e-4ba1-9310-0ca063bd4b16; script/extract_shop_level_stock.py"
         },
         "7": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 6,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 7 bundles (2 catalogs)",
           "_unlockedPoolSize": 110,
-          "maxItems": 8,
+          "maxItems": 7,
           "priceMultiplier": 1.9,
           "refreshSeconds": 36000,
           "tierCap": 7,
           "tierCapLabel": "Exemplary",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "2 retail catalogs, template b7679dd3-3a7b-4ee8-a54d-9dc773759ec9; script/extract_shop_level_stock.py"
         },
         "8": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
-          "_maxItemsWas": 7,
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 8 bundles (2 catalogs)",
           "_unlockedPoolSize": 126,
           "maxItems": 8,
           "priceMultiplier": 2.05,
           "refreshSeconds": 36000,
           "tierCap": 8,
           "tierCapLabel": "Sublime",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "2 retail catalogs, template b8e4de27-e9f6-44bf-84ad-b24672bbf513; script/extract_shop_level_stock.py"
         },
         "9": {
-          "_maxItemsSource": "MEASURED (retail catalog.bundles length)",
+          "_maxItemsSource": "MEASURED: every retail catalog at this level listed 8 bundles (17 catalogs)",
           "_unlockedPoolSize": 141,
           "maxItems": 8,
           "priceMultiplier": 2.2,
           "refreshSeconds": 36000,
           "tierCap": 10,
           "tierCapLabel": "Mythical",
-          "_retailMeasuredStock": "api_captures joined to nearest prior GET /towns/current in 20260607-112415 snapshot; see tracker #277."
+          "_retailMeasuredStock": "17 retail catalogs, template db68b372-246d-47e4-b9dd-3199d2ca7be5; script/extract_shop_level_stock.py"
         }
       },
       "merchantGold": {
@@ -6620,11 +7574,12 @@
           "source": "MEASURED"
         },
         "1": {
-          "bandMax": 1290,
-          "bandMin": 1032,
-          "baseGold": 1161,
+          "bandMax": 1181,
+          "bandMin": 945,
+          "baseGold": 1063,
           "observations": 0,
-          "source": "INTERPOLATED_LOW_CONFIDENCE"
+          "source": "INTERPOLATED",
+          "_note": "no retail open at this level; geometric between measured levels 0 and 2 (report #309)"
         },
         "2": {
           "bandMax": 2037,
@@ -6643,12 +7598,13 @@
           "source": "MEASURED"
         },
         "4": {
-          "bandMax": 5206,
+          "bandMax": 5208,
           "bandMin": 4164,
           "baseGold": 4685,
           "capturedCatalogTemplateId": "7d37c5ca-b23b-46f5-ab38-7ada8d214dbd",
           "observations": 2,
-          "source": "MEASURED"
+          "source": "MEASURED",
+          "_note": "band widened for report #309 to hold every retail wallet seen at this level (was 4164..5206); retail wallets [4685, 5208]"
         },
         "5": {
           "bandMax": 8516,
@@ -6676,19 +7632,21 @@
         },
         "8": {
           "bandMax": 22678,
-          "bandMin": 18142,
+          "bandMin": 17330,
           "baseGold": 20410,
           "capturedCatalogTemplateId": "b8e4de27-e9f6-44bf-84ad-b24672bbf513",
           "observations": 3,
-          "source": "MEASURED"
+          "source": "MEASURED",
+          "_note": "band widened for report #309 to hold every retail wallet seen at this level (was 18142..22678); retail wallets [17330, 19309]"
         },
         "9": {
-          "bandMax": 26768,
+          "bandMax": 26951,
           "bandMin": 21414,
           "baseGold": 24091,
           "capturedCatalogTemplateId": "db68b372-246d-47e4-b9dd-3199d2ca7be5",
           "observations": 134,
-          "source": "MEASURED"
+          "source": "MEASURED",
+          "_note": "band widened for report #309 to hold every retail wallet seen at this level (was 21414..26768); retail wallets [21749, 22039, 22056, 22288, 22862, 23281, 23547, 23959, 24157, 24852, 25595, 26184, 26233, 26371, 26473, 26704, 26951]"
         }
       },
       "shopType": "alchemist",
@@ -6696,28 +7654,72 @@
         "0": [
           {
             "bundleId": "c330a88f-cb2a-4ac9-8964-dcdffcc4dff6",
-            "tier": 1,
+            "weight": 1,
+            "minQuantity": 2,
+            "maxQuantity": 2,
+            "_retailListed": "1/1"
+          },
+          {
+            "bundleId": "c6b1c416-9634-4e06-8f06-92a385d6bca9",
+            "weight": 1,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/1"
+          },
+          {
+            "bundleId": "ce2ed41b-9192-4a91-ba93-243e650a143b",
+            "weight": 1,
+            "minQuantity": 5,
+            "maxQuantity": 5,
+            "_retailListed": "1/1"
+          },
+          {
+            "bundleId": "d571b1ae-e0d1-423b-a50d-caca21ff78c0",
+            "weight": 1,
+            "minQuantity": 2,
+            "maxQuantity": 2,
+            "_retailListed": "1/1"
+          }
+        ],
+        "1": [
+          {
+            "bundleId": "035ff947-d142-4a47-940a-213a15682593",
+            "weight": 1,
+            "minQuantity": 5,
+            "maxQuantity": 5
+          },
+          {
+            "bundleId": "7156bf44-a6e4-4651-b90e-7734a59dfd76",
+            "weight": 1,
+            "minQuantity": 7,
+            "maxQuantity": 7
+          },
+          {
+            "bundleId": "a52da45d-5a6b-439c-92a6-7bc04048058f",
+            "weight": 1,
+            "minQuantity": 4,
+            "maxQuantity": 4
+          },
+          {
+            "bundleId": "c330a88f-cb2a-4ac9-8964-dcdffcc4dff6",
             "weight": 1,
             "minQuantity": 2,
             "maxQuantity": 2
           },
           {
             "bundleId": "c6b1c416-9634-4e06-8f06-92a385d6bca9",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 1,
             "maxQuantity": 1
           },
           {
             "bundleId": "ce2ed41b-9192-4a91-ba93-243e650a143b",
-            "tier": 1,
             "weight": 1,
-            "minQuantity": 5,
-            "maxQuantity": 5
+            "minQuantity": 8,
+            "maxQuantity": 8
           },
           {
             "bundleId": "d571b1ae-e0d1-423b-a50d-caca21ff78c0",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 2,
             "maxQuantity": 2
@@ -6726,626 +7728,563 @@
         "2": [
           {
             "bundleId": "035ff947-d142-4a47-940a-213a15682593",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 6,
-            "maxQuantity": 6
-          },
-          {
-            "bundleId": "1ffd8efc-3c31-4550-8093-0a04f19f1a14",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 2,
-            "maxQuantity": 2
-          },
-          {
-            "bundleId": "3059daf9-5d16-445d-8024-405dd988c433",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 6,
-            "maxQuantity": 6
+            "maxQuantity": 6,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "7156bf44-a6e4-4651-b90e-7734a59dfd76",
-            "tier": 1,
-            "weight": 4,
+            "weight": 1,
             "minQuantity": 9,
-            "maxQuantity": 14
-          },
-          {
-            "bundleId": "76889fa6-4f69-4425-be4a-81ff991903aa",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 4,
-            "maxQuantity": 4
-          },
-          {
-            "bundleId": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 5,
-            "maxQuantity": 5
+            "maxQuantity": 9,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "a52da45d-5a6b-439c-92a6-7bc04048058f",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 5,
-            "maxQuantity": 5
+            "maxQuantity": 5,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "c330a88f-cb2a-4ac9-8964-dcdffcc4dff6",
-            "tier": 1,
-            "weight": 2,
+            "weight": 1,
             "minQuantity": 2,
-            "maxQuantity": 2
+            "maxQuantity": 2,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "ce2ed41b-9192-4a91-ba93-243e650a143b",
-            "tier": 1,
-            "weight": 4,
+            "weight": 1,
             "minQuantity": 12,
-            "maxQuantity": 14
+            "maxQuantity": 12,
+            "_retailListed": "1/1"
           }
         ],
         "3": [
           {
-            "bundleId": "035ff947-d142-4a47-940a-213a15682593",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 11,
-            "maxQuantity": 12
-          },
-          {
-            "bundleId": "084d83f3-9ab3-4b31-8700-9ca0acadc22f",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 3,
-            "maxQuantity": 3
-          },
-          {
             "bundleId": "1ffd8efc-3c31-4550-8093-0a04f19f1a14",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 3,
-            "maxQuantity": 3
-          },
-          {
-            "bundleId": "27bff5fd-4eb9-4a77-9997-59aced4e0116",
-            "tier": 1,
-            "weight": 1,
+            "weight": 16,
             "minQuantity": 2,
-            "maxQuantity": 2
+            "maxQuantity": 3,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "3059daf9-5d16-445d-8024-405dd988c433",
-            "tier": 1,
-            "weight": 2,
+            "weight": 16,
             "minQuantity": 5,
-            "maxQuantity": 9
-          },
-          {
-            "bundleId": "343dee43-56d5-49a7-99b7-08f0ed0f32f7",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 6,
-            "maxQuantity": 6
+            "maxQuantity": 6,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "7156bf44-a6e4-4651-b90e-7734a59dfd76",
-            "tier": 1,
-            "weight": 2,
+            "weight": 17,
             "minQuantity": 13,
-            "maxQuantity": 16
+            "maxQuantity": 14,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
-            "tier": 1,
-            "weight": 1,
+            "weight": 16,
             "minQuantity": 2,
-            "maxQuantity": 2
+            "maxQuantity": 5,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "035ff947-d142-4a47-940a-213a15682593",
+            "weight": 10,
+            "minQuantity": 11,
+            "maxQuantity": 11,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "76889fa6-4f69-4425-be4a-81ff991903aa",
+            "weight": 10,
+            "minQuantity": 4,
+            "maxQuantity": 4,
+            "_retailListed": "1/2"
           },
           {
             "bundleId": "a4195313-4055-443e-9223-0cc10975500a",
-            "tier": 1,
-            "weight": 1,
+            "weight": 10,
             "minQuantity": 2,
-            "maxQuantity": 2
+            "maxQuantity": 2,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "ce2ed41b-9192-4a91-ba93-243e650a143b",
+            "weight": 10,
+            "minQuantity": 14,
+            "maxQuantity": 14,
+            "_retailListed": "1/2"
           }
         ],
         "4": [
           {
             "bundleId": "035ff947-d142-4a47-940a-213a15682593",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 14,
-            "maxQuantity": 14
+            "weight": 16,
+            "minQuantity": 12,
+            "maxQuantity": 14,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "27bff5fd-4eb9-4a77-9997-59aced4e0116",
-            "tier": 1,
-            "weight": 2,
+            "weight": 16,
             "minQuantity": 2,
-            "maxQuantity": 2
+            "maxQuantity": 2,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "3059daf9-5d16-445d-8024-405dd988c433",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 10,
-            "maxQuantity": 10
+            "weight": 17,
+            "minQuantity": 9,
+            "maxQuantity": 10,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "7156bf44-a6e4-4651-b90e-7734a59dfd76",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 17,
-            "maxQuantity": 17
+            "weight": 16,
+            "minQuantity": 16,
+            "maxQuantity": 17,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "084d83f3-9ab3-4b31-8700-9ca0acadc22f",
+            "weight": 10,
+            "minQuantity": 3,
+            "maxQuantity": 3,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "343dee43-56d5-49a7-99b7-08f0ed0f32f7",
+            "weight": 10,
+            "minQuantity": 6,
+            "maxQuantity": 6,
+            "_retailListed": "1/2"
           },
           {
             "bundleId": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
-            "tier": 1,
-            "weight": 2,
+            "weight": 10,
             "minQuantity": 2,
-            "maxQuantity": 2
+            "maxQuantity": 2,
+            "_retailListed": "1/2"
           },
           {
             "bundleId": "c1553588-4c92-4452-a21c-5a58c4cf9f42",
-            "tier": 1,
-            "weight": 2,
+            "weight": 10,
             "minQuantity": 4,
-            "maxQuantity": 4
+            "maxQuantity": 4,
+            "_retailListed": "1/2"
           }
         ],
         "5": [
           {
             "bundleId": "14052e18-2a06-4f5a-8fd7-bdd1a6946052",
-            "tier": 1,
-            "weight": 3,
+            "weight": 10,
             "minQuantity": 2,
-            "maxQuantity": 3
+            "maxQuantity": 3,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "3059daf9-5d16-445d-8024-405dd988c433",
-            "tier": 1,
-            "weight": 3,
+            "weight": 10,
             "minQuantity": 13,
-            "maxQuantity": 13
-          },
-          {
-            "bundleId": "343dee43-56d5-49a7-99b7-08f0ed0f32f7",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 10,
-            "maxQuantity": 10
+            "maxQuantity": 13,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "6040d60e-b507-4067-bdfc-6c4fd69677bf",
-            "tier": 1,
-            "weight": 3,
+            "weight": 10,
             "minQuantity": 2,
-            "maxQuantity": 4
+            "maxQuantity": 4,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "a52da45d-5a6b-439c-92a6-7bc04048058f",
-            "tier": 1,
-            "weight": 3,
+            "weight": 10,
             "minQuantity": 8,
-            "maxQuantity": 10
-          },
-          {
-            "bundleId": "c6b1c416-9634-4e06-8f06-92a385d6bca9",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 7,
-            "maxQuantity": 7
+            "maxQuantity": 10,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "ef26cbc3-a8df-47c4-a594-29ef458e077b",
-            "tier": 1,
-            "weight": 3,
+            "weight": 10,
             "minQuantity": 8,
-            "maxQuantity": 8
+            "maxQuantity": 8,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "343dee43-56d5-49a7-99b7-08f0ed0f32f7",
+            "weight": 10,
+            "minQuantity": 10,
+            "maxQuantity": 10,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "c6b1c416-9634-4e06-8f06-92a385d6bca9",
+            "weight": 10,
+            "minQuantity": 7,
+            "maxQuantity": 7,
+            "_retailListed": "1/2"
           }
         ],
         "6": [
           {
             "bundleId": "035ff947-d142-4a47-940a-213a15682593",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 18,
-            "maxQuantity": 18
+            "maxQuantity": 18,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "3059daf9-5d16-445d-8024-405dd988c433",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 17,
-            "maxQuantity": 17
+            "maxQuantity": 17,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "343dee43-56d5-49a7-99b7-08f0ed0f32f7",
-            "tier": 1,
-            "weight": 3,
+            "weight": 1,
             "minQuantity": 12,
-            "maxQuantity": 17
+            "maxQuantity": 12,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "41f02b12-4539-42b5-b660-84aab0e9fd01",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 3,
-            "maxQuantity": 3
-          },
-          {
-            "bundleId": "4ca0bd50-6ce6-46fc-ac5a-f7330ad9a44f",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 6,
-            "maxQuantity": 6
+            "maxQuantity": 3,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "74a7c3fb-6524-46a9-ab9a-50b4977e630e",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 8,
-            "maxQuantity": 8
-          },
-          {
-            "bundleId": "7cc1bb62-d65d-4145-b5b6-b9711c79f1ad",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 3,
-            "maxQuantity": 3
+            "maxQuantity": 8,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 3,
-            "maxQuantity": 3
-          },
-          {
-            "bundleId": "a52da45d-5a6b-439c-92a6-7bc04048058f",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 5,
-            "maxQuantity": 5
-          },
-          {
-            "bundleId": "bef00b7f-72e8-4070-b68c-6dc234776976",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 10,
-            "maxQuantity": 10
+            "maxQuantity": 3,
+            "_retailListed": "1/1"
           },
           {
             "bundleId": "c6b1c416-9634-4e06-8f06-92a385d6bca9",
-            "tier": 1,
             "weight": 1,
             "minQuantity": 4,
-            "maxQuantity": 4
-          },
-          {
-            "bundleId": "db17e05a-baeb-4d44-95cb-562969e860b5",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 4,
-            "maxQuantity": 4
-          },
-          {
-            "bundleId": "ef26cbc3-a8df-47c4-a594-29ef458e077b",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 12,
-            "maxQuantity": 12
+            "maxQuantity": 4,
+            "_retailListed": "1/1"
           }
         ],
         "7": [
           {
-            "bundleId": "3059daf9-5d16-445d-8024-405dd988c433",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 20,
-            "maxQuantity": 20
-          },
-          {
-            "bundleId": "343dee43-56d5-49a7-99b7-08f0ed0f32f7",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 20,
-            "maxQuantity": 20
-          },
-          {
-            "bundleId": "474ccc59-c7cd-4c6d-97c9-b18fc8df2fd9",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 4,
-            "maxQuantity": 4
-          },
-          {
             "bundleId": "4ca0bd50-6ce6-46fc-ac5a-f7330ad9a44f",
-            "tier": 1,
-            "weight": 4,
-            "minQuantity": 8,
-            "maxQuantity": 8
-          },
-          {
-            "bundleId": "74a7c3fb-6524-46a9-ab9a-50b4977e630e",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 5,
-            "maxQuantity": 5
+            "weight": 19,
+            "minQuantity": 6,
+            "maxQuantity": 8,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "7cc1bb62-d65d-4145-b5b6-b9711c79f1ad",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 4,
-            "maxQuantity": 4
-          },
-          {
-            "bundleId": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 7,
-            "maxQuantity": 7
-          },
-          {
-            "bundleId": "9a012169-1f6d-4356-b230-c9ed7e28d724",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 2,
-            "maxQuantity": 2
-          },
-          {
-            "bundleId": "a52da45d-5a6b-439c-92a6-7bc04048058f",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 10,
-            "maxQuantity": 10
+            "weight": 19,
+            "minQuantity": 3,
+            "maxQuantity": 4,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "bef00b7f-72e8-4070-b68c-6dc234776976",
-            "tier": 1,
-            "weight": 4,
+            "weight": 19,
             "minQuantity": 8,
-            "maxQuantity": 11
+            "maxQuantity": 10,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "ef26cbc3-a8df-47c4-a594-29ef458e077b",
-            "tier": 1,
-            "weight": 4,
-            "minQuantity": 13,
-            "maxQuantity": 16
+            "weight": 19,
+            "minQuantity": 12,
+            "maxQuantity": 13,
+            "_retailListed": "2/2"
           },
           {
-            "bundleId": "fe82c152-6fd7-443d-bc7a-d2996ec54eb8",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 3,
-            "maxQuantity": 3
+            "bundleId": "3059daf9-5d16-445d-8024-405dd988c433",
+            "weight": 10,
+            "minQuantity": 20,
+            "maxQuantity": 20,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "343dee43-56d5-49a7-99b7-08f0ed0f32f7",
+            "weight": 10,
+            "minQuantity": 17,
+            "maxQuantity": 17,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "474ccc59-c7cd-4c6d-97c9-b18fc8df2fd9",
+            "weight": 10,
+            "minQuantity": 4,
+            "maxQuantity": 4,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
+            "weight": 10,
+            "minQuantity": 7,
+            "maxQuantity": 7,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "a52da45d-5a6b-439c-92a6-7bc04048058f",
+            "weight": 10,
+            "minQuantity": 5,
+            "maxQuantity": 5,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "db17e05a-baeb-4d44-95cb-562969e860b5",
+            "weight": 10,
+            "minQuantity": 4,
+            "maxQuantity": 4,
+            "_retailListed": "1/2"
           }
         ],
         "8": [
           {
-            "bundleId": "3059daf9-5d16-445d-8024-405dd988c433",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 20,
-            "maxQuantity": 20
-          },
-          {
             "bundleId": "343dee43-56d5-49a7-99b7-08f0ed0f32f7",
-            "tier": 1,
-            "weight": 2,
+            "weight": 13,
             "minQuantity": 18,
-            "maxQuantity": 18
+            "maxQuantity": 20,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "4ca0bd50-6ce6-46fc-ac5a-f7330ad9a44f",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 9,
-            "maxQuantity": 9
+            "weight": 13,
+            "minQuantity": 8,
+            "maxQuantity": 9,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "74a7c3fb-6524-46a9-ab9a-50b4977e630e",
-            "tier": 1,
-            "weight": 2,
+            "weight": 13,
             "minQuantity": 5,
-            "maxQuantity": 5
+            "maxQuantity": 5,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "a52da45d-5a6b-439c-92a6-7bc04048058f",
-            "tier": 1,
-            "weight": 2,
+            "weight": 13,
             "minQuantity": 9,
-            "maxQuantity": 9
+            "maxQuantity": 10,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "bef00b7f-72e8-4070-b68c-6dc234776976",
-            "tier": 1,
-            "weight": 2,
+            "weight": 13,
             "minQuantity": 11,
-            "maxQuantity": 11
-          },
-          {
-            "bundleId": "ec0c90cf-7af6-407a-889a-65c03bc317a1",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 2,
-            "maxQuantity": 2
+            "maxQuantity": 11,
+            "_retailListed": "2/2"
           },
           {
             "bundleId": "fe82c152-6fd7-443d-bc7a-d2996ec54eb8",
-            "tier": 1,
-            "weight": 2,
+            "weight": 13,
             "minQuantity": 2,
-            "maxQuantity": 2
+            "maxQuantity": 3,
+            "_retailListed": "2/2"
+          },
+          {
+            "bundleId": "3059daf9-5d16-445d-8024-405dd988c433",
+            "weight": 10,
+            "minQuantity": 20,
+            "maxQuantity": 20,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "9a012169-1f6d-4356-b230-c9ed7e28d724",
+            "weight": 10,
+            "minQuantity": 2,
+            "maxQuantity": 2,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "ec0c90cf-7af6-407a-889a-65c03bc317a1",
+            "weight": 10,
+            "minQuantity": 2,
+            "maxQuantity": 2,
+            "_retailListed": "1/2"
+          },
+          {
+            "bundleId": "ef26cbc3-a8df-47c4-a594-29ef458e077b",
+            "weight": 10,
+            "minQuantity": 16,
+            "maxQuantity": 16,
+            "_retailListed": "1/2"
           }
         ],
         "9": [
           {
-            "bundleId": "02ddf06b-4e8c-4bc3-8185-fb7df774c836",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 3,
-            "maxQuantity": 3
-          },
-          {
-            "bundleId": "207ef7f6-0ebf-4563-97bf-eca5d7e13911",
-            "tier": 1,
-            "weight": 4,
-            "minQuantity": 3,
-            "maxQuantity": 4
-          },
-          {
-            "bundleId": "2210c67b-328e-48e5-a143-ad1a5714f59e",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 1,
-            "maxQuantity": 1
-          },
-          {
-            "bundleId": "3059daf9-5d16-445d-8024-405dd988c433",
-            "tier": 1,
-            "weight": 16,
-            "minQuantity": 21,
-            "maxQuantity": 26
-          },
-          {
-            "bundleId": "343dee43-56d5-49a7-99b7-08f0ed0f32f7",
-            "tier": 1,
-            "weight": 27,
-            "minQuantity": 17,
-            "maxQuantity": 23
-          },
-          {
-            "bundleId": "3bc241b5-6c5e-4d65-88ac-ee79fdcb1a1a",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 5,
-            "maxQuantity": 5
-          },
-          {
-            "bundleId": "4ca0bd50-6ce6-46fc-ac5a-f7330ad9a44f",
-            "tier": 1,
-            "weight": 22,
-            "minQuantity": 8,
-            "maxQuantity": 14
-          },
-          {
-            "bundleId": "6b36d95d-b9e2-43cc-aa18-88cf402b7937",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 3,
-            "maxQuantity": 3
-          },
-          {
-            "bundleId": "72587e1a-39e3-48ba-a98b-27b046b96f8c",
-            "tier": 1,
-            "weight": 2,
+            "bundleId": "ec0c90cf-7af6-407a-889a-65c03bc317a1",
+            "weight": 659,
             "minQuantity": 2,
-            "maxQuantity": 2
-          },
-          {
-            "bundleId": "74a7c3fb-6524-46a9-ab9a-50b4977e630e",
-            "tier": 1,
-            "weight": 13,
-            "minQuantity": 3,
-            "maxQuantity": 8
-          },
-          {
-            "bundleId": "76889fa6-4f69-4425-be4a-81ff991903aa",
-            "tier": 1,
-            "weight": 8,
-            "minQuantity": 3,
-            "maxQuantity": 8
-          },
-          {
-            "bundleId": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
-            "tier": 1,
-            "weight": 9,
-            "minQuantity": 3,
-            "maxQuantity": 8
-          },
-          {
-            "bundleId": "814f52c4-0285-4414-9d21-24ba2ff45a20",
-            "tier": 1,
-            "weight": 4,
-            "minQuantity": 2,
-            "maxQuantity": 3
-          },
-          {
-            "bundleId": "8b10a4c8-730c-4f75-be14-cf95509f1b47",
-            "tier": 1,
-            "weight": 1,
-            "minQuantity": 3,
-            "maxQuantity": 3
-          },
-          {
-            "bundleId": "a4195313-4055-443e-9223-0cc10975500a",
-            "tier": 1,
-            "weight": 16,
-            "minQuantity": 3,
-            "maxQuantity": 8
-          },
-          {
-            "bundleId": "a52da45d-5a6b-439c-92a6-7bc04048058f",
-            "tier": 1,
-            "weight": 19,
-            "minQuantity": 5,
-            "maxQuantity": 12
+            "maxQuantity": 4,
+            "_retailListed": "17/17"
           },
           {
             "bundleId": "bef00b7f-72e8-4070-b68c-6dc234776976",
-            "tier": 1,
-            "weight": 28,
+            "weight": 371,
             "minQuantity": 11,
-            "maxQuantity": 17
+            "maxQuantity": 17,
+            "_retailListed": "15/17"
           },
           {
-            "bundleId": "c6b1c416-9634-4e06-8f06-92a385d6bca9",
-            "tier": 1,
-            "weight": 10,
-            "minQuantity": 3,
-            "maxQuantity": 8
+            "bundleId": "343dee43-56d5-49a7-99b7-08f0ed0f32f7",
+            "weight": 289,
+            "minQuantity": 17,
+            "maxQuantity": 23,
+            "_retailListed": "14/17"
           },
           {
-            "bundleId": "c7ca5ee2-2e59-45b3-b512-82915b3e7ff3",
-            "tier": 1,
-            "weight": 7,
-            "minQuantity": 3,
-            "maxQuantity": 4
-          },
-          {
-            "bundleId": "ec0c90cf-7af6-407a-889a-65c03bc317a1",
-            "tier": 1,
-            "weight": 32,
-            "minQuantity": 2,
-            "maxQuantity": 4
-          },
-          {
-            "bundleId": "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
-            "tier": 1,
-            "weight": 8,
-            "minQuantity": 4,
-            "maxQuantity": 6
-          },
-          {
-            "bundleId": "ee0ef15a-d2f4-46f2-865b-399ff7a91c21",
-            "tier": 1,
-            "weight": 2,
-            "minQuantity": 3,
-            "maxQuantity": 3
+            "bundleId": "4ca0bd50-6ce6-46fc-ac5a-f7330ad9a44f",
+            "weight": 203,
+            "minQuantity": 8,
+            "maxQuantity": 14,
+            "_retailListed": "12/17"
           },
           {
             "bundleId": "ef26cbc3-a8df-47c4-a594-29ef458e077b",
-            "tier": 1,
-            "weight": 21,
+            "weight": 171,
             "minQuantity": 14,
-            "maxQuantity": 19
+            "maxQuantity": 19,
+            "_retailListed": "11/17"
+          },
+          {
+            "bundleId": "a52da45d-5a6b-439c-92a6-7bc04048058f",
+            "weight": 147,
+            "minQuantity": 5,
+            "maxQuantity": 12,
+            "_retailListed": "10/17"
+          },
+          {
+            "bundleId": "3059daf9-5d16-445d-8024-405dd988c433",
+            "weight": 124,
+            "minQuantity": 21,
+            "maxQuantity": 26,
+            "_retailListed": "9/17"
+          },
+          {
+            "bundleId": "a4195313-4055-443e-9223-0cc10975500a",
+            "weight": 106,
+            "minQuantity": 3,
+            "maxQuantity": 8,
+            "_retailListed": "8/17"
+          },
+          {
+            "bundleId": "74a7c3fb-6524-46a9-ab9a-50b4977e630e",
+            "weight": 86,
+            "minQuantity": 3,
+            "maxQuantity": 8,
+            "_retailListed": "7/17"
+          },
+          {
+            "bundleId": "7f3ed5b5-5c53-47ba-85ee-056a710ce3b2",
+            "weight": 60,
+            "minQuantity": 3,
+            "maxQuantity": 8,
+            "_retailListed": "5/17"
+          },
+          {
+            "bundleId": "c6b1c416-9634-4e06-8f06-92a385d6bca9",
+            "weight": 61,
+            "minQuantity": 3,
+            "maxQuantity": 8,
+            "_retailListed": "5/17"
+          },
+          {
+            "bundleId": "76889fa6-4f69-4425-be4a-81ff991903aa",
+            "weight": 47,
+            "minQuantity": 3,
+            "maxQuantity": 8,
+            "_retailListed": "4/17"
+          },
+          {
+            "bundleId": "c7ca5ee2-2e59-45b3-b512-82915b3e7ff3",
+            "weight": 45,
+            "minQuantity": 3,
+            "maxQuantity": 4,
+            "_retailListed": "4/17"
+          },
+          {
+            "bundleId": "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
+            "weight": 46,
+            "minQuantity": 4,
+            "maxQuantity": 6,
+            "_retailListed": "4/17"
+          },
+          {
+            "bundleId": "207ef7f6-0ebf-4563-97bf-eca5d7e13911",
+            "weight": 22,
+            "minQuantity": 3,
+            "maxQuantity": 4,
+            "_retailListed": "2/17"
+          },
+          {
+            "bundleId": "814f52c4-0285-4414-9d21-24ba2ff45a20",
+            "weight": 22,
+            "minQuantity": 2,
+            "maxQuantity": 3,
+            "_retailListed": "2/17"
+          },
+          {
+            "bundleId": "02ddf06b-4e8c-4bc3-8185-fb7df774c836",
+            "weight": 11,
+            "minQuantity": 3,
+            "maxQuantity": 3,
+            "_retailListed": "1/17"
+          },
+          {
+            "bundleId": "2210c67b-328e-48e5-a143-ad1a5714f59e",
+            "weight": 10,
+            "minQuantity": 1,
+            "maxQuantity": 1,
+            "_retailListed": "1/17"
+          },
+          {
+            "bundleId": "3bc241b5-6c5e-4d65-88ac-ee79fdcb1a1a",
+            "weight": 10,
+            "minQuantity": 5,
+            "maxQuantity": 5,
+            "_retailListed": "1/17"
+          },
+          {
+            "bundleId": "6b36d95d-b9e2-43cc-aa18-88cf402b7937",
+            "weight": 11,
+            "minQuantity": 3,
+            "maxQuantity": 3,
+            "_retailListed": "1/17"
+          },
+          {
+            "bundleId": "72587e1a-39e3-48ba-a98b-27b046b96f8c",
+            "weight": 12,
+            "minQuantity": 2,
+            "maxQuantity": 2,
+            "_retailListed": "1/17"
+          },
+          {
+            "bundleId": "8b10a4c8-730c-4f75-be14-cf95509f1b47",
+            "weight": 11,
+            "minQuantity": 3,
+            "maxQuantity": 3,
+            "_retailListed": "1/17"
+          },
+          {
+            "bundleId": "ee0ef15a-d2f4-46f2-865b-399ff7a91c21",
+            "weight": 12,
+            "minQuantity": 3,
+            "maxQuantity": 3,
+            "_retailListed": "1/17"
           }
         ]
       }

@@ -390,37 +390,39 @@ mod tests {
         }
     }
 
+    /// Retail's Enchanter keeps whole enchant families locked until the shop is
+    /// upgraded: no frost salts before level 3, no sapphire before 5, no emerald
+    /// before 6. Our authored `tier` numbers do not encode that (they rank by
+    /// price, and retail's level-2 Enchanter already sold tier-8 Void Salts), so
+    /// this pins the gate to what retail actually listed. Levels 0-1 were never
+    /// captured and are derived from level 2, so they must inherit the same lock.
     #[test]
-    fn enchanter_l1_excludes_high_tier_gated_enchants() {
+    fn enchanter_low_levels_keep_retails_locked_families_locked() {
         let cfg = load_committed();
         let ench = ty(ENCHANTER);
-        let b = cfg.generation.get(&ench).unwrap();
-        let cap1 = b.levels.get("1").unwrap().tier_cap;
-
-        // There ARE gated (tier >= 4) enchant bundles in the pool...
-        let gated: Vec<Uuid> = b
-            .item_pool
-            .iter()
-            .filter(|e| e.tier >= 4)
-            .map(|e| e.bundle_id)
-            .collect();
-        assert!(
-            !gated.is_empty(),
-            "enchanter pool has gated tier>=4 bundles"
-        );
-        // ...and L1's tierCap is below that gate, so none can be rolled at L1.
-        assert!(cap1 < 4, "enchanter L1 tierCap {cap1} < gate 4");
-
-        // Roll many windows at L1 and confirm no gated bundle ever appears.
-        let gated_set: std::collections::HashSet<Uuid> = gated.into_iter().collect();
+        let locked = [
+            ("ec869ed3-e8ee-4aa2-9063-d6e12e7321cc", "Frost Salts", 3),
+            ("3cb7b827-75f6-48f1-ae6b-47743e128e58", "Sapphire", 5),
+            ("c60c71e7-8bc3-4495-95c8-fbaee3c6860e", "Emerald", 6),
+            (
+                "01ada486-b642-43b2-8776-e444dbe9343e",
+                "Gold Emerald Ring",
+                6,
+            ),
+        ];
         let shop = Uuid::new_v4();
-        for w in 0..64 {
-            for entry in generate_catalog(&cfg, &ench, 1, &shop, w) {
-                assert!(
-                    !gated_set.contains(&entry.id),
-                    "gated enchant {} leaked into L1 stock (window {w})",
-                    entry.id
-                );
+        for (id, name, first_retail_level) in locked {
+            let id = ty(id);
+            for level in 0..first_retail_level {
+                for w in 0..64 {
+                    assert!(
+                        generate_catalog(&cfg, &ench, level, &shop, w)
+                            .iter()
+                            .all(|b| b.id != id),
+                        "{name} offered by a level-{level} Enchanter (window {w}); retail first \
+                         listed it at level {first_retail_level}"
+                    );
+                }
             }
         }
     }
@@ -684,6 +686,231 @@ mod tests {
             "a52da45d-5a6b-439c-92a6-7bc04048058f",
             27,
             33,
+        );
+    }
+
+    // ── Report #309: stock per building level, pinned to retail ────────────────
+    //
+    // Every number below is a retail measurement from the 2026-06-07 capture
+    // snapshot, with each shop open labelled by its building's level from the
+    // latest town-bearing response (script/extract_shop_level_stock.py). All
+    // opens were of a building in the NORMAL state, and every catalog template
+    // maps to exactly one level.
+
+    const LUMBER: &str = "77bd02df-98c1-46f1-b170-1415bc6b51ae";
+    const LIMESTONE: &str = "16b94858-6a39-4b53-b360-b944514407a8";
+
+    /// Retail Workshop lumber and limestone per building level:
+    /// `(level, lumber band, limestone band)`; `None` = retail never listed it.
+    const RETAIL_WORKSHOP_STACKS: &[(u64, (u64, u64), Option<(u64, u64)>)] = &[
+        (2, (16, 16), None),
+        (3, (21, 22), Some((25, 25))),
+        (4, (28, 28), Some((27, 29))),
+        (5, (34, 38), Some((32, 35))),
+        (6, (40, 46), Some((40, 47))),
+        (7, (51, 58), Some((51, 52))),
+        (8, (78, 93), Some((99, 99))),
+        (9, (175, 200), Some((175, 199))),
+    ];
+
+    /// The reported case: a level-4 Workshop offered one limestone. Retail's
+    /// level-4 Workshop listed 27-29.
+    #[test]
+    fn a_level_4_workshop_sells_limestone_by_the_stack_as_retail_did() {
+        let cfg = load_committed();
+        let workshop = ty(WORKSHOP);
+        let limestone = ty(LIMESTONE);
+        let shop = ty("902859f2-c817-4ad1-b6dc-0a7cc8cba79b");
+        let mut listed = 0;
+        for w in 0..256 {
+            if let Some(b) = generate_catalog(&cfg, &workshop, 4, &shop, w)
+                .into_iter()
+                .find(|b| b.id == limestone)
+            {
+                listed += 1;
+                assert!(
+                    (27..=29).contains(&b.quantity),
+                    "level-4 Workshop limestone {} (window {w}); retail listed 27..29",
+                    b.quantity
+                );
+            }
+        }
+        // Retail listed it in 2 of 2 level-4 catalogs.
+        assert!(
+            listed >= 128,
+            "level-4 Workshop listed limestone in only {listed}/256 windows"
+        );
+    }
+
+    /// The stacks grow with every upgrade, exactly as retail's did.
+    #[test]
+    fn workshop_stacks_grow_with_the_building_level_as_retail() {
+        let cfg = load_committed();
+        let (lumber, limestone) = (ty(LUMBER), ty(LIMESTONE));
+        for &(level, lumber_band, limestone_band) in RETAIL_WORKSHOP_STACKS {
+            let pool = measured_pool(&cfg, &ty(WORKSHOP), level);
+            assert_eq!(
+                measured_band(pool, lumber),
+                Some(lumber_band),
+                "Workshop L{level} lumber"
+            );
+            assert_eq!(
+                measured_band(pool, limestone),
+                limestone_band,
+                "Workshop L{level} limestone"
+            );
+        }
+        // Levels 0-1 were never captured: they must still be smaller than level 2,
+        // not the old 1..4 fallback and not bigger than an upgraded shop.
+        let l2 = measured_band(measured_pool(&cfg, &ty(WORKSHOP), 2), lumber).unwrap();
+        let mut prev = 0;
+        for level in 0..=1u64 {
+            let (lo, hi) = measured_band(measured_pool(&cfg, &ty(WORKSHOP), level), lumber)
+                .unwrap_or_else(|| panic!("Workshop L{level} stocks no lumber"));
+            assert!(
+                lo > 4,
+                "Workshop L{level} lumber {lo}..{hi} is the old 1..4 fallback"
+            );
+            assert!(
+                hi < l2.0,
+                "Workshop L{level} lumber {lo}..{hi} >= level 2's {l2:?}"
+            );
+            assert!(lo > prev, "Workshop lumber does not grow into L{level}");
+            prev = lo;
+        }
+    }
+
+    /// Retail's Workshop listed lumber and limestone in 21 of 21 level-9
+    /// catalogs. The pick weights are fitted so ours does too, near enough.
+    #[test]
+    fn a_level_9_workshop_nearly_always_lists_lumber_and_limestone() {
+        let cfg = load_committed();
+        let workshop = ty(WORKSHOP);
+        let shop = Uuid::new_v4();
+        let (lumber, limestone) = (ty(LUMBER), ty(LIMESTONE));
+        let (mut both, n) = (0, 2000);
+        for w in 0..n {
+            let out = generate_catalog(&cfg, &workshop, 9, &shop, w);
+            if out.iter().any(|b| b.id == lumber) && out.iter().any(|b| b.id == limestone) {
+                both += 1;
+            }
+        }
+        assert!(
+            both * 100 >= n * 90,
+            "level-9 Workshop listed lumber and limestone together in {both}/{n} windows; retail 21/21"
+        );
+    }
+
+    /// Retail's catalog length per building level (constant within a level):
+    /// `[level 0..9]`, `0` = no retail open at that level.
+    const RETAIL_CATALOG_LENGTH: [(&str, [usize; 10]); 4] = [
+        (FORGE, [4, 5, 0, 6, 6, 7, 8, 9, 10, 11]),
+        (ENCHANTER, [0, 0, 4, 5, 5, 5, 5, 5, 5, 6]),
+        (WORKSHOP, [0, 0, 5, 5, 6, 6, 7, 7, 8, 8]),
+        (ALCHEMIST, [4, 0, 5, 6, 6, 6, 7, 7, 8, 8]),
+    ];
+
+    #[test]
+    fn every_measured_level_lists_as_many_bundles_as_retail() {
+        let cfg = load_committed();
+        let shop = Uuid::new_v4();
+        for (type_id, lengths) in RETAIL_CATALOG_LENGTH {
+            for (level, &want) in lengths.iter().enumerate() {
+                if want == 0 {
+                    continue;
+                }
+                let got = generate_catalog(&cfg, &ty(type_id), level as u64, &shop, 7).len();
+                assert_eq!(
+                    got, want,
+                    "{type_id} level {level} lists {got} bundles, retail {want}"
+                );
+            }
+        }
+    }
+
+    /// The old pools were filed one level low: a catalog opened right after an
+    /// upgrade finished was labelled with the level before it. Each bundle below
+    /// was in our level-N pool but retail only ever listed it from level N+1.
+    #[test]
+    fn no_level_pool_holds_the_next_levels_stock() {
+        let cfg = load_committed();
+        let cases = [
+            (
+                ALCHEMIST,
+                6,
+                "7cc1bb62-d65d-4145-b5b6-b9711c79f1ad",
+                "Health Potion T6 (retail L7+)",
+            ),
+            (
+                FORGE,
+                6,
+                "2bd6b2a1-d82c-424b-a4b6-32d1d7f7f612",
+                "Glass Dagger (retail L7+)",
+            ),
+            (
+                FORGE,
+                0,
+                "7334deaf-b2fc-435d-84f7-aa192349f877",
+                "Leather (retail L1)",
+            ),
+            (
+                ENCHANTER,
+                2,
+                "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
+                "Frost Salts (retail L3+)",
+            ),
+        ];
+        for (type_id, level, bundle, what) in cases {
+            let pool = measured_pool(&cfg, &ty(type_id), level);
+            assert!(
+                measured_band(pool, ty(bundle)).is_none(),
+                "{type_id} level-{level} pool still holds {what}"
+            );
+        }
+    }
+
+    /// Every merchant wallet retail showed must fit its level's gold band. The
+    /// Forge's level-1 row was an invented 800..1,000; retail's three level-1
+    /// Forges held 1,174, 1,264 and 1,272.
+    #[test]
+    fn merchant_gold_bands_hold_every_retail_wallet() {
+        let cfg = load_committed();
+        // (shop, level, lowest and highest retail wallet at that level)
+        let wallets = [
+            (FORGE, 0, 545, 724),
+            (FORGE, 1, 1174, 1272),
+            (FORGE, 9, 22066, 26907),
+            (ENCHANTER, 6, 13896, 14188),
+            (ENCHANTER, 7, 16851, 19529),
+            (WORKSHOP, 4, 8143, 9474),
+            (WORKSHOP, 8, 26147, 27923),
+            (WORKSHOP, 9, 30582, 38336),
+            (ALCHEMIST, 8, 17330, 19309),
+            (ALCHEMIST, 9, 21749, 26951),
+        ];
+        for (type_id, level, lo, hi) in wallets {
+            let band = cfg
+                .merchant_gold(&ty(type_id), level)
+                .unwrap_or_else(|| panic!("{type_id} level {level} has no gold band"));
+            assert!(
+                band.band_min <= lo && hi <= band.band_max,
+                "{type_id} level {level} gold band {}..{} misses retail wallets {lo}..{hi}",
+                band.band_min,
+                band.band_max
+            );
+        }
+        // The level-2 Forge row used to hold the level-1 catalog's gold.
+        let forge = ty(FORGE);
+        let l1 = cfg.merchant_gold(&forge, 1).unwrap().base_gold;
+        let l2 = cfg.merchant_gold(&forge, 2).unwrap().base_gold;
+        let l3 = cfg.merchant_gold(&forge, 3).unwrap().base_gold;
+        assert!(
+            l1 < l2 && l2 < l3,
+            "Forge gold not rising 1->2->3: {l1}, {l2}, {l3}"
+        );
+        assert!(
+            l1 >= 1174,
+            "Forge level-1 base gold {l1} below every retail level-1 wallet"
         );
     }
 
