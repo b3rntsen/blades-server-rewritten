@@ -317,8 +317,6 @@ fn roll_generated_jewelry_for_window(
             changed |= crate::jewelry_roll::roll_generated_jewelry(
                 &mut item.item,
                 &app_state.game_data.items_template,
-                &app_state.static_data.enchanting,
-                &app_state.static_data.jewelry_roll_ranges,
                 &mut rng,
             );
         }
@@ -576,6 +574,11 @@ struct BuyResponse {
 /// static definition carries a placeholder — same as chests.rs). Generated
 /// jewelry rolls are already stored on the merchant window; legacy/fallback bare
 /// jewelry still gets the old grade-only roll here.
+///
+/// A town merchant never sells enchanted gear (#321): none of retail's town-shop
+/// purchases carried ENCHANTING (4/4 rings and necklaces, 2/2 weapons and
+/// armour). Clearing it here also covers windows persisted before the fix,
+/// whose `generatedGrants` still hold the old Sigil-count enchantments.
 fn mint_bundle<R: rand::Rng + ?Sized>(
     grant: &blades_lib::economy::RewardGrant,
     qty: u64,
@@ -591,6 +594,7 @@ fn mint_bundle<R: rand::Rng + ?Sized>(
         for item in &grant.items {
             let mut fresh = item.clone();
             fresh.id = Uuid::new_v4();
+            fresh.item.properties.enchanting.clear();
             crate::jewelry_grade::grade_if_bare(&mut fresh.item, items, rng);
             reward.items.push(fresh);
         }
@@ -1814,24 +1818,6 @@ mod tests {
         serde_json::from_value(all[id].clone()).expect("bundle parses")
     }
 
-    fn deploy_enchanting() -> blades_lib::static_data::EnchantingData {
-        let p = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../deploy/static/enchanting.json"
-        );
-        serde_json::from_str(&std::fs::read_to_string(p).expect("enchanting.json"))
-            .expect("enchanting parses")
-    }
-
-    fn deploy_jewelry_ranges() -> blades_lib::static_data::JewelryRollRanges {
-        let p = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../deploy/static/jewelry_roll_ranges.json"
-        );
-        serde_json::from_str(&std::fs::read_to_string(p).expect("jewelry_roll_ranges.json"))
-            .expect("jewelry ranges parse")
-    }
-
     /// The two bundles the reporter bought, which retail sold graded.
     const GOLD_EMERALD_RING: &str = "01ada486-b642-43b2-8776-e444dbe9343e";
     const GOLD_EMERALD_NECKLACE: &str = "ee486683-c721-4bd6-8619-78cc00e34acc";
@@ -1926,14 +1912,12 @@ mod tests {
         crate::jewelry_roll::roll_generated_jewelry(
             &mut generated.items[0].item,
             deploy_items(),
-            &deploy_enchanting(),
-            &deploy_jewelry_ranges(),
             &mut roll_rng,
         );
         let shown = generated.items[0].item.clone();
         assert!(
-            !shown.properties.enchanting.is_empty(),
-            "generated stock must show rolled enchants"
+            shown.grade.is_some() && !shown.properties.grading.is_empty(),
+            "generated stock must carry its rolled grade"
         );
 
         let mut purchase_rng = crate::jewelry_roll::seeded(&[b"purchase"], 99);
@@ -1942,6 +1926,130 @@ mod tests {
         assert_eq!(item.grade, shown.grade);
         assert_eq!(item.properties, shown.properties);
         assert_eq!(item.item_template_id, shown.item_template_id);
+    }
+
+    /// Every ring/necklace bundle a town merchant can carry.
+    fn deploy_jewelry_bundles() -> Vec<(String, blades_lib::static_data::ShopBundle)> {
+        let p = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static/shop_bundles.json"
+        );
+        let all: serde_json::Map<String, Value> =
+            serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+        all.into_iter()
+            .filter_map(|(id, raw)| {
+                let def: blades_lib::static_data::ShopBundle = serde_json::from_value(raw).ok()?;
+                def.grant
+                    .items
+                    .iter()
+                    .any(|i| {
+                        crate::jewelry_roll::is_jewelry_template(
+                            i.item.item_template_id,
+                            deploy_items(),
+                        )
+                    })
+                    .then_some((id, def))
+            })
+            .collect()
+    }
+
+    /// The retail shape of a town-merchant ring or necklace, measured on the 4
+    /// jewellery items among the 1,516 retail `POST /shops/{id}/purchase`
+    /// responses (prod capture archive, 2026-05-09..06-30): `grade` 1..=3 with
+    /// that many GRADING properties (the random skills), and no ENCHANTING at
+    /// all — a blank for the player to enchant.
+    fn assert_retail_merchant_jewelry(where_: &str, it: &blades_lib::user_data::Item) {
+        let grade = it.grade.unwrap_or_else(|| panic!("{where_}: no grade"));
+        assert!(
+            !it.properties.grading.is_empty() && it.properties.grading.len() <= 3,
+            "{where_}: {} GRADING",
+            it.properties.grading.len()
+        );
+        assert_eq!(
+            grade,
+            it.properties.grading.iter().map(|p| p.tier).sum::<u64>(),
+            "{where_}: grade must equal the GRADING tiers"
+        );
+        assert!(
+            it.properties.enchanting.is_empty(),
+            "{where_}: retail merchant jewellery was a blank, got {} ENCHANTING",
+            it.properties.enchanting.len()
+        );
+        assert_eq!(it.arcane_tier, None, "{where_}: arcaneTier on a blank");
+    }
+
+    /// Roll a bundle the way `roll_generated_jewelry_for_window` does.
+    fn roll_like_the_window(
+        grant: &mut blades_lib::economy::RewardGrant,
+        rng: &mut rand::rngs::StdRng,
+    ) {
+        for item in &mut grant.items {
+            crate::jewelry_roll::roll_generated_jewelry(&mut item.item, deploy_items(), rng);
+        }
+    }
+
+    /// THE BUG (#321): Enchanter stock was rolled with the Sigil store's measured
+    /// ENCHANTING counts (mostly 3), so a ring bought in town arrived with three
+    /// secondary enchantments and no primary. Retail sold every one blank.
+    #[test]
+    fn generated_merchant_jewelry_is_a_blank_with_random_skills() {
+        let bundles = deploy_jewelry_bundles();
+        assert!(
+            bundles.len() >= 16,
+            "the sweep must cover the merchant jewellery: {}",
+            bundles.len()
+        );
+        let mut grades = std::collections::HashSet::new();
+        for (id, def) in &bundles {
+            for nonce in 0..12 {
+                let mut grant = def.grant.clone();
+                let mut rng = crate::jewelry_roll::seeded(&[id.as_bytes()], nonce);
+                roll_like_the_window(&mut grant, &mut rng);
+                for ri in &grant.items {
+                    assert_retail_merchant_jewelry(id, &ri.item);
+                    grades.insert(ri.item.grade.unwrap());
+                }
+            }
+        }
+        assert!(
+            grades.len() > 1,
+            "skills must be random, got grades {grades:?}"
+        );
+    }
+
+    /// A window rolled before this fix is persisted for up to ten hours with
+    /// enchanted jewellery in `generatedGrants`. Buying from it must still hand
+    /// over the blank — the GRADING roll it showed stays, the ENCHANTING goes.
+    /// The fixture is the shape SpaceMunk's alt received (grade 5, 3 + 3).
+    #[test]
+    fn a_window_rolled_before_the_fix_still_sells_a_blank() {
+        use rand::SeedableRng;
+        let prop = |s: &str, tier| blades_lib::user_data::ItemSingleProperty {
+            id: Uuid::parse_str(s).unwrap(),
+            tier,
+        };
+        let mut grant = deploy_bundle(GOLD_EMERALD_RING).grant;
+        let item = &mut grant.items[0].item;
+        item.grade = Some(5);
+        item.properties.grading = vec![
+            prop("6bc19568-2f76-4c0e-8482-dee16629dc5b", 2),
+            prop("41e72fea-cc55-41c6-b89c-e9ccc88a17f3", 2),
+            prop("ede8bce4-de2c-4ca5-bc44-c214f15189ba", 1),
+        ];
+        item.properties.enchanting = vec![
+            prop("848e02b4-32ae-4e1b-809c-83bca039542a", 1),
+            prop("262ece9b-bd65-4876-b698-5926ca4422be", 1),
+            prop("98757a01-33b8-40ea-bb45-6acd89811ae3", 1),
+        ];
+        let shown = grant.items[0].item.clone();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(321);
+        let bought = mint_bundle(&grant, 2, deploy_items(), &mut rng);
+        assert_eq!(bought.items.len(), 2);
+        for ri in &bought.items {
+            assert_retail_merchant_jewelry("stale window", &ri.item);
+            assert_eq!(ri.item.grade, shown.grade, "the shown grade is kept");
+            assert_eq!(ri.item.properties.grading, shown.properties.grading);
+        }
     }
 
     /// NEGATIVE CONTROL: gear that wears is never graded, and keeps its durability.
