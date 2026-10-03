@@ -92,6 +92,7 @@ pub async fn get_town(
         // `backfill_on_load` already persisted this; repeat it on the copy we
         // serve so a failed write cannot hand the client the #320 lock-out.
         mark_named_town_validated(&mut town);
+        assign_generic_shop_npcs(&mut town);
         return Ok(Json(GetTownResponse { town }));
     }
 
@@ -242,6 +243,95 @@ fn mark_named_town_validated(town: &mut Value) -> bool {
         }
         None => false,
     }
+}
+
+/// `npcIndex` 0: the building type's own named keeper (Lond at the Forge).
+/// The client's `BuildingNPCsManager.DEFAULT_BUILDING_NPC_INDEX`.
+const DEFAULT_SHOP_NPC: u64 = 0;
+
+/// The generic shopkeepers' `npcIndex` range. Retail's 37 second shops (14
+/// towns, 2026-06-07 snapshot) used 1 through 20. A town holds at most four
+/// (two of each of four shop types, `buildingLimit` 2), so the pool never runs
+/// dry.
+const GENERIC_SHOP_NPCS: std::ops::RangeInclusive<u64> = 1..=20;
+
+/// The building types with a shopkeeper: Forge (Lond), Enchanter, Alchemist and
+/// Workshop. Houses and the Town Hall also carry `npcIndex` on retail, but every
+/// one of them holds 0, so only these four have a keeper to duplicate.
+const SHOP_TYPES: [&str; 4] = [
+    "26fdb92f-a4df-4928-a97b-dee8699af605", // Forge
+    "82108d94-ebf7-434f-8623-ca66d7504f27", // EnchantersShop
+    "e1dd10fc-8b14-4288-9b23-99b0d58388de", // AlchemistShop
+    "b6c023e6-3b81-497f-9c2c-f532ecff3bb2", // WorkShop
+];
+
+/// Report #330: give every shop type exactly one named keeper. Returns whether
+/// the town changed.
+///
+/// Until #330 `place_building` dropped the client's `npcIndex`, so every shop
+/// built here loaded as index 0 — the type's named NPC — and a second Forge was
+/// a second Lond. For each shop type this keeps the named keeper on one shop
+/// (one already stored with an explicit 0, else the highest level, else the
+/// lowest id) and gives the others a generic keeper the town does not use yet,
+/// picked by building id so the choice is stable. Shops missing the key get it
+/// written, as retail always sends it. Idempotent: a town in retail's shape is
+/// left untouched.
+fn assign_generic_shop_npcs(town: &mut Value) -> bool {
+    struct Shop {
+        id: Uuid,
+        ty: &'static str,
+        level: u64,
+        npc: Option<u64>,
+    }
+    let shops: Vec<Shop> = town
+        .get("districts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|d| d.get("segments").and_then(Value::as_object))
+        .flat_map(|segs| segs.values())
+        .filter_map(|s| s.get("buildings").and_then(Value::as_object))
+        .flat_map(|b| b.values())
+        .filter_map(|b| {
+            let ty = b.get("typeId").and_then(Value::as_str)?;
+            let ty = *SHOP_TYPES.iter().find(|t| **t == ty)?;
+            Some(Shop {
+                id: b.get("id").and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok())?,
+                ty,
+                level: b.get("level").and_then(Value::as_u64).unwrap_or(0),
+                npc: b.get("npcIndex").and_then(Value::as_u64),
+            })
+        })
+        .collect();
+
+    let mut free: Vec<u64> = GENERIC_SHOP_NPCS
+        .filter(|g| !shops.iter().any(|s| s.npc == Some(*g)))
+        .collect();
+    let mut assign: Vec<(Uuid, u64)> = vec![];
+    for ty in SHOP_TYPES {
+        // The client reads a missing index as 0, so keyless shops are named too.
+        let mut named: Vec<&Shop> = shops
+            .iter()
+            .filter(|s| s.ty == ty && s.npc.unwrap_or(DEFAULT_SHOP_NPC) == DEFAULT_SHOP_NPC)
+            .collect();
+        named.sort_by_key(|s| (s.npc.is_none(), std::cmp::Reverse(s.level), s.id));
+        for (i, shop) in named.into_iter().enumerate() {
+            if i == 0 {
+                if shop.npc.is_none() {
+                    assign.push((shop.id, DEFAULT_SHOP_NPC));
+                }
+            } else if !free.is_empty() {
+                let pick = (shop.id.as_u128() % free.len() as u128) as usize;
+                assign.push((shop.id, free.remove(pick)));
+            }
+        }
+    }
+    for (id, npc) in &assign {
+        if let Some(obj) = find_building_mut(town, *id).and_then(Value::as_object_mut) {
+            obj.insert("npcIndex".to_string(), json!(npc));
+        }
+    }
+    !assign.is_empty()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1140,8 +1230,9 @@ struct PlaceRequest {
     segment_group_id: Uuid,
     #[serde(default)]
     start_index: u64,
+    /// The shopkeeper the client chose for this building (report #330). Retail
+    /// stores and returns it unchanged; see [`insert_building`].
     #[serde(default)]
-    #[allow(dead_code)]
     npc_index: Option<u64>,
     #[serde(default)]
     gems_payment: bool,
@@ -1198,6 +1289,7 @@ pub async fn place_building(
                 req.building_type,
                 req.style_id,
                 req.start_index,
+                req.npc_index.unwrap_or(DEFAULT_SHOP_NPC),
                 cost.construction_time_ms,
                 now_ms(),
             )
@@ -1222,6 +1314,7 @@ fn insert_building(
     type_id: Uuid,
     style_id: Uuid,
     start_index: u64,
+    npc_index: u64,
     construction_time_ms: u64,
     now: u64,
 ) -> Option<()> {
@@ -1247,6 +1340,10 @@ fn insert_building(
                     "segmentGroupId": segment_group_id.to_string(),
                     "level": 0,
                     "startIndex": start_index,
+                    // The keeper the client chose, stored as sent: retail echoed
+                    // it on 50 of 50 placements (report #330). Dropping it made
+                    // every second shop load with the first one's named NPC.
+                    "npcIndex": npc_index,
                     "constructionEnd": now + construction_time_ms,
                     "customized": false,
                     // BUILDING, not UPGRADING. Retail distinguishes the two and the
@@ -2562,6 +2659,8 @@ fn take_town(
     // A town named before #320 was fixed is persisted validated by whichever
     // write comes next, so no response hands the client the stale 0 again.
     mark_named_town_validated(&mut town);
+    // A town built before #330 has a second Lond; heal it before the response.
+    assign_generic_shop_npcs(&mut town);
     // Before any mutation is priced: a town built under the old rules must have
     // its sites cleared first, or the next completion would number its site
     // points from zero.
@@ -2657,8 +2756,8 @@ async fn backfill_on_load(
 /// town or the marker changed and so must be written back.
 ///
 /// The site backfill runs once per character (its marker); the #320 name
-/// repair is idempotent on its own, so it runs on every load and costs nothing
-/// once the flag is set. It must not hide behind the backfill marker: every
+/// repair and the #330 shopkeeper repair are idempotent on their own, so they
+/// run on every load and cost nothing once the town is healed. It must not hide behind the backfill marker: every
 /// character that already loaded a town has that marker, newmunk included.
 fn repair_town_on_load(
     state: &mut blades_lib::server_state::ServerState,
@@ -2666,6 +2765,7 @@ fn repair_town_on_load(
     building_upgrades: &Value,
 ) -> bool {
     let mut changed = mark_named_town_validated(town);
+    changed |= assign_generic_shop_npcs(town);
     if !state.town_sites_backfilled {
         backfill_town_sites_once(state, town, building_upgrades);
         changed = true;
@@ -3234,7 +3334,7 @@ mod tests {
         let bid = Uuid::new_v4();
         let ty = Uuid::parse_str(FORGE).unwrap();
         let st = Uuid::parse_str(STYLE).unwrap();
-        insert_building(&mut town, seg, bid, ty, st, 0, 5000, 1_000).unwrap();
+        insert_building(&mut town, seg, bid, ty, st, 0, 0, 5000, 1_000).unwrap();
         let b = &town["districts"][0]["segments"][seg.to_string()]["buildings"][bid.to_string()];
         assert_eq!(b["level"], json!(0));
         // BUILDING, not UPGRADING — see `placing_says_building_and_upgrading_says_upgrading`.
@@ -4035,7 +4135,7 @@ mod when_the_town_is_paid {
             "districts": [{ "segments": { seg.to_string(): {"id": seg.to_string()} } }]
         });
         let placed = Uuid::from_u128(6);
-        insert_building(&mut town, seg, placed, Uuid::from_u128(7), Uuid::from_u128(8), 0, 900, 0)
+        insert_building(&mut town, seg, placed, Uuid::from_u128(7), Uuid::from_u128(8), 0, 0, 900, 0)
             .expect("the segment exists");
         assert_eq!(
             town["districts"][0]["segments"][seg.to_string()]["buildings"]
@@ -4690,7 +4790,7 @@ mod fresh_level1_town {
         let cost = placement_cost(bu, town, u(ty), u(TIMBER)).unwrap();
         check_town_level(&cost, town).expect("placement allowed at this town level");
         let id = Uuid::new_v4();
-        insert_building(town, u(segment), id, u(ty), u(TIMBER), 0, cost.construction_time_ms, 0)
+        insert_building(town, u(segment), id, u(ty), u(TIMBER), 0, 0, cost.construction_time_ms, 0)
             .expect("the segment exists in the default town");
         let prestige = prestige_on_complete(bu, town, id);
         apply_complete_transition(find_building_mut(town, id).unwrap());
@@ -5033,5 +5133,239 @@ mod town_name_validation {
         let start = src.find("fn take_town(").expect("take_town exists");
         let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
         assert!(body.contains("mark_named_town_validated(&mut town)"));
+    }
+}
+
+/// Report #330: a town built from scratch on our server had two Londs — every
+/// second Forge, Enchanter, Alchemist and Workshop wore the first one's named
+/// keeper instead of a generic shopkeeper.
+///
+/// Retail's rule, measured on the 2026-06-07 snapshot: the CLIENT picks the
+/// keeper (`BuildingNPCsManager.GetNPCIndexForBuildingType`: the type's named NPC
+/// while it is free, else an unused generic one) and sends it as `npcIndex`;
+/// the server stores and returns it unchanged — 50 of 50 placements, six of them
+/// non-zero (5, 10, 19, 1, 14, 18). Across 14 retail towns every shop type held
+/// exactly one `npcIndex` 0, and all 37 second shops held a generic index in
+/// 1..=20, never repeated within a town, even across types. We dropped the
+/// field, so every shop loaded as index 0.
+#[cfg(test)]
+mod shop_npcs {
+    use super::*;
+
+    const FORGE: &str = "26fdb92f-a4df-4928-a97b-dee8699af605";
+    const ENCHANTER: &str = "82108d94-ebf7-434f-8623-ca66d7504f27";
+    const ALCHEMIST: &str = "e1dd10fc-8b14-4288-9b23-99b0d58388de";
+    const WORKSHOP: &str = "b6c023e6-3b81-497f-9c2c-f532ecff3bb2";
+    const HOUSE_A: &str = "597f678f-b49e-4559-96a8-266aafeca6ad";
+    const TIMBER: &str = "aa133662-053d-434e-8779-3f2a41d1271e";
+
+    fn u(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+
+    fn building(id: u128, ty: &str, level: u64, npc: Option<u64>) -> (String, Value) {
+        let id = Uuid::from_u128(id).to_string();
+        let mut b = json!({
+            "id": id, "typeId": ty, "styleId": TIMBER, "level": level,
+            "startIndex": 0, "constructionEnd": 0, "customized": false, "state": "NORMAL",
+        });
+        if let Some(n) = npc {
+            b["npcIndex"] = json!(n);
+        }
+        (id, b)
+    }
+
+    fn town_of(buildings: Vec<(String, Value)>) -> Value {
+        let mut segs = serde_json::Map::new();
+        for (i, (id, b)) in buildings.into_iter().enumerate() {
+            let seg = Uuid::from_u128(10_000 + i as u128).to_string();
+            segs.insert(seg.clone(), json!({ "id": seg, "buildings": { id: b } }));
+        }
+        json!({ "levelInfo": {"level": 9}, "districts": [{ "segments": segs }], "validationFlags": 0 })
+    }
+
+    fn npc_of(town: &Value, id: u128) -> Value {
+        find_building_mut(&mut town.clone(), Uuid::from_u128(id)).unwrap()["npcIndex"].clone()
+    }
+
+    /// `(typeId, npcIndex)` of every shop, with an absent index as `None`.
+    fn shop_npcs(town: &Value) -> Vec<(String, Option<u64>)> {
+        let mut out = vec![];
+        for d in town["districts"].as_array().unwrap() {
+            for s in d["segments"].as_object().unwrap().values() {
+                for b in s["buildings"].as_object().into_iter().flat_map(|b| b.values()) {
+                    let ty = b["typeId"].as_str().unwrap().to_string();
+                    if [FORGE, ENCHANTER, ALCHEMIST, WORKSHOP].contains(&ty.as_str()) {
+                        out.push((ty, b.get("npcIndex").and_then(Value::as_u64)));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// What the player sees: a type's named keeper on more than one shop, or a
+    /// generic keeper on two shops. An absent index loads as 0 on the client.
+    fn duplicate_keepers(town: &Value) -> Vec<String> {
+        let mut named: HashMap<String, u32> = HashMap::new();
+        let mut generic: HashMap<u64, u32> = HashMap::new();
+        for (ty, npc) in shop_npcs(town) {
+            match npc.unwrap_or(0) {
+                0 => *named.entry(ty).or_default() += 1,
+                g => *generic.entry(g).or_default() += 1,
+            }
+        }
+        let mut dups: Vec<String> = named
+            .into_iter()
+            .filter(|(_, n)| *n > 1)
+            .map(|(ty, n)| format!("{n} named keepers of {ty}"))
+            .collect();
+        dups.extend(generic.into_iter().filter(|(_, n)| *n > 1).map(|(g, n)| format!("{n} shops share generic {g}")));
+        dups
+    }
+
+    /// newmunk on prod (character_versions 7a1588a4, built here from scratch):
+    /// two of each shop, all eight without an `npcIndex`.
+    fn newmunk_town() -> Value {
+        town_of(vec![
+            building(1, FORGE, 1, None),
+            building(2, FORGE, 0, None),
+            building(3, ENCHANTER, 0, None),
+            building(4, ENCHANTER, 0, None),
+            building(5, ALCHEMIST, 0, None),
+            building(6, ALCHEMIST, 0, None),
+            building(7, WORKSHOP, 0, None),
+            building(8, WORKSHOP, 1, None),
+            building(9, HOUSE_A, 0, None),
+        ])
+    }
+
+    #[test]
+    fn a_placed_building_keeps_the_npc_the_client_chose() {
+        // Capture 10280: a second Forge, `npcIndex` 10 in the request, and the
+        // building in retail's response carries `"npcIndex": 10`.
+        let req: PlaceRequest = serde_json::from_value(json!({
+            "buildingType": FORGE, "styleId": TIMBER,
+            "segmentGroupId": "2a967439-6476-4974-940a-d6b1b7469eeb",
+            "startIndex": 0, "npcIndex": 10, "gemsPayment": false,
+        }))
+        .unwrap();
+        let seg = req.segment_group_id;
+        let mut town = json!({ "districts": [{ "segments": { seg.to_string(): {"id": seg.to_string()} } }] });
+        let id = Uuid::from_u128(42);
+        insert_building(
+            &mut town,
+            seg,
+            id,
+            req.building_type,
+            req.style_id,
+            req.start_index,
+            req.npc_index.unwrap_or(DEFAULT_SHOP_NPC),
+            900,
+            0,
+        )
+        .unwrap();
+        let b = &town["districts"][0]["segments"][seg.to_string()]["buildings"][id.to_string()];
+        assert_eq!(b["npcIndex"], json!(10), "retail echoes the client's npcIndex");
+    }
+
+    #[test]
+    fn a_first_shop_is_stored_with_its_named_keeper() {
+        // 44 of the 50 retail placements sent 0 and got 0 back: the key is
+        // present, not left for the client to default.
+        let seg = Uuid::from_u128(5);
+        let mut town = json!({ "districts": [{ "segments": { seg.to_string(): {"id": seg.to_string()} } }] });
+        insert_building(&mut town, seg, Uuid::from_u128(6), u(FORGE), u(TIMBER), 0, 0, 900, 0).unwrap();
+        assert_eq!(shop_npcs(&town), vec![(FORGE.to_string(), Some(0))]);
+    }
+
+    #[test]
+    fn newmunks_town_gets_one_named_keeper_per_shop_type_on_load() {
+        let mut town = newmunk_town();
+        assert_eq!(duplicate_keepers(&town).len(), 4, "precondition: two Londs and three more pairs");
+
+        assert!(assign_generic_shop_npcs(&mut town), "the repaired town must be written back");
+        assert!(duplicate_keepers(&town).is_empty(), "{:?}", duplicate_keepers(&town));
+
+        let npcs = shop_npcs(&town);
+        assert!(npcs.iter().all(|(_, n)| n.is_some()), "every shop carries the key, as on retail");
+        for ty in [FORGE, ENCHANTER, ALCHEMIST, WORKSHOP] {
+            let mine: Vec<u64> = npcs.iter().filter(|(t, _)| t == ty).map(|(_, n)| n.unwrap()).collect();
+            assert_eq!(mine.iter().filter(|n| **n == 0).count(), 1, "{ty}: one named keeper");
+            assert!(
+                mine.iter().filter(|n| **n != 0).all(|n| GENERIC_SHOP_NPCS.contains(n)),
+                "{ty}: the second keeper is from retail's generic range: {mine:?}"
+            );
+        }
+
+        // Idempotent: the next load writes nothing.
+        let before = town.clone();
+        assert!(!assign_generic_shop_npcs(&mut town));
+        assert_eq!(town, before);
+    }
+
+    #[test]
+    fn the_shop_that_keeps_the_named_keeper_is_the_most_built_up_one() {
+        // newmunk's Forge 183ef6a8 is level 1, its twin level 0: the upgraded one
+        // is the shop the player has been using, so it keeps Lond.
+        let mut town = newmunk_town();
+        assign_generic_shop_npcs(&mut town);
+        assert_eq!(npc_of(&town, 1), json!(0));
+        assert_ne!(npc_of(&town, 2), json!(0));
+        // A shop already stored with an explicit 0 keeps it over a keyless twin.
+        let mut mixed = town_of(vec![building(1, FORGE, 9, None), building(2, FORGE, 0, Some(0))]);
+        assign_generic_shop_npcs(&mut mixed);
+        assert_eq!(npc_of(&mixed, 2), json!(0));
+        assert_ne!(npc_of(&mixed, 1), json!(0));
+    }
+
+    #[test]
+    fn a_retail_town_is_left_exactly_as_it_is() {
+        // spacemunk's live town (imported from retail): each type one 0 and one
+        // generic. Houses are not shops — retail houses all hold 0.
+        let mut town = town_of(vec![
+            building(1, FORGE, 9, Some(0)),
+            building(2, FORGE, 9, Some(11)),
+            building(3, ENCHANTER, 9, Some(4)),
+            building(4, ENCHANTER, 9, Some(0)),
+            building(5, ALCHEMIST, 9, Some(1)),
+            building(6, ALCHEMIST, 9, Some(0)),
+            building(7, WORKSHOP, 9, Some(8)),
+            building(8, WORKSHOP, 9, Some(0)),
+            building(9, HOUSE_A, 2, Some(0)),
+            building(10, HOUSE_A, 2, Some(0)),
+        ]);
+        let before = town.clone();
+        assert!(!assign_generic_shop_npcs(&mut town));
+        assert_eq!(town, before);
+    }
+
+    #[test]
+    fn a_generic_keeper_already_in_the_town_is_not_handed_out_again() {
+        // The client draws generics from one pool for every type (no retail
+        // town repeats one, even across types), so a repair must skip any the
+        // town already uses. Occupy all but one of retail's 1..=20 and the
+        // second Forge can only get the one left.
+        let mut shops = vec![building(1, FORGE, 1, None), building(2, FORGE, 0, None)];
+        for g in 1..=19u64 {
+            shops.push(building(100 + g as u128, WORKSHOP, 1, Some(g)));
+        }
+        let mut town = town_of(shops);
+        assert!(assign_generic_shop_npcs(&mut town));
+        assert_eq!(npc_of(&town, 2), json!(20));
+        assert!(duplicate_keepers(&town).is_empty(), "{:?}", duplicate_keepers(&town));
+    }
+
+    #[test]
+    fn every_load_and_every_mutation_runs_the_repair() {
+        let src = include_str!("town.rs");
+        for f in ["fn take_town(", "fn repair_town_on_load("] {
+            let start = src.find(f).expect("exists");
+            let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+            assert!(body.contains("assign_generic_shop_npcs("), "{f} must run the #330 repair");
+        }
+        let start = src.find("pub async fn get_town(").unwrap();
+        let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+        assert!(body.contains("assign_generic_shop_npcs(&mut town)"), "the served copy is repaired too");
     }
 }
