@@ -1080,6 +1080,27 @@ pub fn damage_negated(defender_net_object_id: i32) -> Vec<u8> {
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
+/// `StopAbility` (60) — the server ends an ability step the client cannot end alone.
+///
+/// Carrier `0x36` on the CASTER's Avatar, GMID at propId 3, the ability's uuid at
+/// propId 4 (`StopAbilityMessage._abilityId`, dump.cs:588914). Retail layout, every
+/// Blizzard Armor break in the decoded corpus (s399, s517, s572):
+/// `{0: casterObj, 1: 56 Avatar, 2: 1 Authority, 3: 60, 4: abilityUuid}`, sent in the
+/// same millisecond as the op51 remove of `ElementalStormArmor` (16).
+///
+/// The storm armors need it: their client step (`AbilityDoStormArmor`) has no
+/// duration — `GetRemainingDuration` returns `float.MaxValue` — so the armor's
+/// animation runs until the server stops it (report #332).
+pub fn stop_ability(avatar_net_object_id: i32, ability_uuid: &str) -> Vec<u8> {
+    let mut w = NetDataWriter::new();
+    w.int(0, avatar_net_object_id)
+        .byte(1, NetObjectType::Avatar as u8)
+        .byte(2, NetRole::Authority as u8)
+        .byte(3, GameMessageId::StopAbility as u8)
+        .string(4, ability_uuid);
+    frame(MSGTYPE_USERMESSAGE, w.finish())
+}
+
 /// Build a `RequestExecuteAbility` (gmid 37) c2s frame for `ability_uuid` on the
 /// caster's actual Avatar net object.
 ///

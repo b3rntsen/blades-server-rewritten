@@ -2448,12 +2448,22 @@ fn apply_ability_impact(
                     }
                     let channel_secs =
                         (total_ticks as f32) * super::damage::CHANNEL_TICK_INTERVAL_SECS;
+                    // A storm armor's stream has no length of its own: it lasts as
+                    // long as the ice (`AbilityDoStormArmor` is built with duration -1
+                    // and completes only when its health reaches 0). Retail ran one
+                    // for 58 ticks / 11.6 s on a shield nobody broke. It is ended by
+                    // `emit_status_removals` when the shield breaks, or by the round.
+                    let remaining_ticks = if is_storm_armor(ability_uuid, level) {
+                        u32::MAX
+                    } else {
+                        total_ticks - 1
+                    };
                     combat.channels.push(super::state::ActiveChannel {
                         caster_slot: sender,
                         target_slot,
                         ability_uuid: ability_uuid.to_string(),
                         ability_level: level,
-                        remaining_ticks: total_ticks - 1,
+                        remaining_ticks,
                         magicka_full_at_cast,
                         next_tick_at: now
                             + Duration::from_secs_f32(super::damage::CHANNEL_TICK_INTERVAL_SECS),
@@ -3743,11 +3753,27 @@ fn emit_damage_with_outcome(
             restore_cooldown_secs: 0.0,
         }
     };
+    let health_of = |cs: &[(super::state::DamageType, f32)]| -> f32 {
+        cs.iter()
+            .filter(|(t, _)| super::damage::is_health_type(*t))
+            .map(|(_, v)| *v)
+            .sum()
+    };
+    let before_pools = health_of(&components);
     let non_dodge = combat.fighters[target_slot].apply_non_dodge_negation_pools(
         resolved.source,
         &mut components,
         now,
     );
+    // What Ward / Absorb / a storm armor ate of this hit, and what is left of them —
+    // the two numbers a "did my Blizzard Armor work?" report needs (#332).
+    let pool_absorbed = (before_pools - health_of(&components)).max(0.0);
+    let pool_left: f32 = combat.fighters[target_slot]
+        .negation_pools
+        .iter()
+        .filter(|p| p.source != super::state::DamageNegationSource::Dodge)
+        .map(|p| p.remaining.max(0.0))
+        .sum();
     neg.heal += non_dodge.heal;
     neg.restore_magicka += non_dodge.restore_magicka;
     neg.restore_cooldown_secs += non_dodge.restore_cooldown_secs;
@@ -3808,7 +3834,8 @@ fn emit_damage_with_outcome(
         let defender_obj = combat.fighters[target_slot].net_object_id;
         info!(
             "combat damage: slot {attacker_slot} → slot {target_slot} | source {:?} side {:?} | \
-             NEGATED by a pool (heal +{:.0}) → op66 DamageNegated, no HP loss",
+             NEGATED by a pool (heal +{:.0}) → op66 DamageNegated, no HP loss \
+             pool_absorbed={pool_absorbed:.1} pool_left={pool_left:.1}",
             resolved.source, resolved.active_side, neg.heal,
         );
         let frame = messages::damage_negated(defender_obj);
@@ -3923,7 +3950,7 @@ fn emit_damage_with_outcome(
     };
     let dealt = hp_before.saturating_sub(hp_after);
     info!(
-        "combat event: gsid={} attacker_slot={attacker_slot} attacker={} target_slot={target_slot} target={} source={:?} side={:?} components={components:?} total={total:.1} pct_max_hp={pct:.1} hp={hp_before}->{hp_after} dealt={dealt} drained_stam={drained_stam} drained_mag={drained_mag} ravaged_stam={rav_s} ravaged_mag={rav_m} ravaged_hp={rav_h} shield_ravaged=({sr_s},{sr_m},{sr_h}) max_stam_now={} max_mag_now={} blocked={} target_state={:?} target_block_phase={:?}",
+        "combat event: gsid={} attacker_slot={attacker_slot} attacker={} target_slot={target_slot} target={} source={:?} side={:?} components={components:?} total={total:.1} pool_absorbed={pool_absorbed:.1} pool_left={pool_left:.1} pct_max_hp={pct:.1} hp={hp_before}->{hp_after} dealt={dealt} drained_stam={drained_stam} drained_mag={drained_mag} ravaged_stam={rav_s} ravaged_mag={rav_m} ravaged_hp={rav_h} shield_ravaged=({sr_s},{sr_m},{sr_h}) max_stam_now={} max_mag_now={} blocked={} target_state={:?} target_block_phase={:?}",
         combat.game_session_id,
         combat.fighters[attacker_slot].loadout.display_name,
         combat.fighters[target_slot].loadout.display_name,
@@ -4797,6 +4824,7 @@ fn apply_continuous_area_damage(combat: &mut MatchCombat, now: Instant) -> Vec<(
 /// each expiry site, because expiry happens in three places and two of them are
 /// input handlers with no route to the wire.
 fn emit_status_removals(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
+    use super::state::StatusEffectType;
     let mut out = Vec::new();
     for slot in 0..combat.fighters.len() {
         let lapsed = combat.fighters[slot].drain_lapsed_statuses(now);
@@ -4811,6 +4839,47 @@ fn emit_status_removals(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, V
             for dest in 0..combat.fighters.len() {
                 out.push((dest, frame.clone()));
             }
+            if status == StatusEffectType::ElementalStormArmor {
+                out.extend(stop_storm_armor(combat, slot));
+            }
+        }
+    }
+    out
+}
+
+/// Does this ability rank put up storm-armor ice (`_shieldHealth`)? Blizzard /
+/// Firestorm / Tempest Armor — `StormArmorAbility`.
+fn is_storm_armor(ability_uuid: &str, level: u8) -> bool {
+    super::gamedata::ability_rank_clamped(ability_uuid, u16::from(level.max(1)))
+        .and_then(|r| r.shield_health())
+        .is_some_and(|h| h > 0.0)
+}
+
+/// The caster's storm-armor ice just broke: end its tick stream and tell both
+/// clients to stop the ability (op60), as retail does in the same instant as the
+/// op51 remove of `ElementalStormArmor` (report #332). The client step has no
+/// duration of its own, so without op60 the armor animation runs to round end.
+/// A round end clears `channels` first and sends no op60 — retail sends none there.
+fn stop_storm_armor(combat: &mut MatchCombat, caster: usize) -> Vec<(usize, Vec<u8>)> {
+    let mut stopped: Vec<String> = Vec::new();
+    for ch in combat.channels.iter_mut() {
+        if ch.caster_slot == caster
+            && ch.remaining_ticks > 0
+            && is_storm_armor(&ch.ability_uuid, ch.ability_level)
+        {
+            ch.remaining_ticks = 0;
+            if !stopped.contains(&ch.ability_uuid) {
+                stopped.push(ch.ability_uuid.clone());
+            }
+        }
+    }
+    let obj = combat.fighters[caster].net_object_id;
+    let mut out = Vec::new();
+    for uuid in stopped {
+        info!("combat: slot {caster} storm-armor ice broke → op60 StopAbility ({uuid})");
+        let frame = messages::stop_ability(obj, &uuid);
+        for dest in 0..combat.fighters.len() {
+            out.push((dest, frame.clone()));
         }
     }
     out
@@ -19207,5 +19276,150 @@ mod report_305_killing_swing {
             "a non-lethal swing still recovers: {f:#?}"
         );
         assert!(!f.iter().any(|x| x.gmid == 29), "nobody died");
+    }
+}
+
+/// Report #332 — Blizzard Armor's ice must END when it breaks, on the wire.
+///
+/// Retail, every Blizzard Armor cast in the decoded corpus (s399 ×3, s517, s572 ×3):
+/// the 0-dps ContinuousSpell stream (an op66 on the opponent every 0.2 s) runs for
+/// as long as the shield holds — 58 ticks / 11.6 s on an unbroken one — and the
+/// instant a hit breaks it the server sends op51 remove `ElementalStormArmor` (16)
+/// AND op60 `StopAbility(uuid)` together (same millisecond in all six breaks), after
+/// which no tick follows. The client step `AbilityDoStormArmor` has no duration
+/// (`GetRemainingDuration` returns `float.MaxValue`, `GetExecutionSteps` passes -1),
+/// so without op60 the caster's armor animation runs to the end of the round.
+#[cfg(test)]
+mod report_332_storm_armor_tests {
+    use super::super::loadout::starter;
+    use super::super::state::{DamageType, EquippedAbility, Fighter, FlowState, MatchCombat};
+    use super::*;
+
+    const BLIZZARD: &str = "c4b48518-e847-4f3d-81a2-2856bdb4ed98";
+
+    fn live(now: Instant) -> MatchCombat {
+        let mut c = MatchCombat::new(2, 2, now);
+        for slot in 0..2 {
+            let obj = c.alloc_net_object_id();
+            c.fighters.push(Fighter::new(slot, obj, starter(), now));
+        }
+        c.match_net_object_id = c.alloc_net_object_id();
+        c.phase = FlowState::StateTimeout;
+        c.round = 1;
+        c
+    }
+
+    fn cast_blizzard(c: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
+        let tag = super::super::loadout::ability_tag_for_template(BLIZZARD);
+        c.fighters[0].loadout.abilities.push(EquippedAbility {
+            instance_uuid: BLIZZARD.to_string(),
+            level: 1,
+            tag,
+        });
+        c.fighters[0].magicka = c.fighters[0].max_magicka.max(1_000);
+        c.fighters[0].max_magicka = c.fighters[0].magicka;
+        let frame = messages::request_execute_ability(c.fighters[0].net_object_id, BLIZZARD);
+        let ea = input::parse_execute_ability(&frame).expect("synthesised op37 must parse");
+        resolve_ability_cast(c, 0, 1, &frame, &ea, now)
+    }
+
+    /// The part of `on_tick` this feature lives in, in `on_tick`'s order.
+    fn step(c: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
+        let mut out = emit_status_removals(c, now);
+        out.extend(apply_channel_ticks(c, now));
+        out
+    }
+
+    fn count(out: &[(usize, Vec<u8>)], gmid: u8) -> usize {
+        out.iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(gmid))
+            .count()
+    }
+
+    fn stop_abilities(out: &[(usize, Vec<u8>)]) -> Vec<(usize, i64, String)> {
+        out.iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(60))
+            .map(|(v, f)| {
+                let nd = arena_proto::parse_netdata(&f[2..]);
+                (*v, nd.int(0).unwrap_or(-1), nd.string(4).unwrap_or("").to_string())
+            })
+            .collect()
+    }
+
+    fn at(now: Instant, secs: f32) -> Instant {
+        now + Duration::from_secs_f32(secs)
+    }
+
+    /// Retail ran the stream 11.6 s on a shield nobody broke; we cut it at a fixed
+    /// 5 s (`ELEMENTAL_STATUS_DURATION`, 25 ticks). Control: no op60 while it holds.
+    #[test]
+    fn an_unbroken_blizzard_armor_keeps_ticking_past_five_seconds() {
+        let now = Instant::now();
+        let mut c = live(now);
+        let out = cast_blizzard(&mut c, now);
+        assert_eq!(c.fighters[0].negation_pools.len(), 1, "the ice is up: {out:?}");
+        let mut late_ticks = 0;
+        let mut stops = 0;
+        for k in 1..=50 {
+            let t = at(now, 0.2 * k as f32 + 0.001);
+            let o = step(&mut c, t);
+            stops += count(&o, 60);
+            if k > 30 {
+                late_ticks += count(&o, 66);
+            }
+        }
+        assert!(late_ticks > 0, "the 0-dps stream must run while the shield holds (6-10 s)");
+        assert_eq!(stops, 0, "no StopAbility while the shield holds");
+    }
+
+    /// The breaking hit: op51 remove 16 AND op60 StopAbility(uuid) on the CASTER, to
+    /// both viewers, then no more ticks.
+    #[test]
+    fn breaking_the_ice_stops_the_ability_and_its_ticks() {
+        let now = Instant::now();
+        let mut c = live(now);
+        cast_blizzard(&mut c, now);
+        for k in 1..=5 {
+            step(&mut c, at(now, 0.2 * k as f32 + 0.001));
+        }
+        let caster_obj = c.fighters[0].net_object_id as i64;
+        // Break it: 116 HP of ice eats half of each hit, so 400 physical exhausts it.
+        let mut hit = vec![(DamageType::Slashing, 400.0)];
+        c.fighters[0].apply_negation_pools(&mut hit);
+        assert!(c.fighters[0].negation_pools.is_empty(), "the ice broke");
+
+        let o = step(&mut c, at(now, 1.15));
+        let stops = stop_abilities(&o);
+        assert_eq!(
+            stops,
+            vec![(0, caster_obj, BLIZZARD.to_string()), (1, caster_obj, BLIZZARD.to_string())],
+            "op60 StopAbility(Blizzard Armor) on the caster, to both viewers"
+        );
+        assert_eq!(
+            o.iter()
+                .filter(|(_, f)| messages::user_message_gmid(f) == Some(51))
+                .count(),
+            2,
+            "op51 remove ElementalStormArmor to both viewers"
+        );
+        assert_eq!(count(&o, 66), 0, "the breaking step carries no tick");
+        let mut after = Vec::new();
+        for k in 7..=40 {
+            after.extend(step(&mut c, at(now, 0.2 * k as f32 + 0.001)));
+        }
+        assert_eq!(count(&after, 66), 0, "no tick after the ice is gone");
+        assert!(stop_abilities(&after).is_empty(), "StopAbility is sent once");
+    }
+
+    /// Retail op60: `{0: casterObj, 1: 56 Avatar, 2: 1 Authority, 3: 60, 4: uuid}`.
+    #[test]
+    fn stop_ability_frame_matches_the_retail_layout() {
+        let f = messages::stop_ability(788, BLIZZARD);
+        let nd = arena_proto::parse_netdata(&f[2..]);
+        assert_eq!(nd.int(0), Some(788));
+        assert_eq!(nd.int(1), Some(56));
+        assert_eq!(nd.int(2), Some(1));
+        assert_eq!(nd.int(3), Some(60));
+        assert_eq!(nd.string(4), Some(BLIZZARD));
     }
 }
