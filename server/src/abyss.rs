@@ -24,6 +24,8 @@
 //!   `floors * 195` gold / `floors * 64` XP — one guess produced by dividing a single
 //!   captured total (~2923 gold / 958 XP) by an assumed floor count, i.e. fitted with zero
 //!   degrees of freedom, so its apparent agreement with that total meant nothing.
+//!   Plus retail's `/end` package — one material or soul-gem stack, drawn by
+//!   character level from the retail packages (#294); see [`end_reward`].
 //! * Score-gauge rungs (`abyssFutureRewards`) — paid on the `/update` whose action
 //!   crosses them, as a top-level `reward`, once per rung per run; see
 //!   [`grant_reached_rungs`].
@@ -70,6 +72,7 @@ use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use rand::RngExt;
 use uuid::Uuid;
 
 use crate::{
@@ -211,7 +214,10 @@ pub async fn start_abyss(
             // NOT the character level: the client scores and shows everything against
             // its own Effective Player Level (see [`initial_player_level`], #294).
             let player_level = initial_player_level(&app_state.job_pools, character_level);
-            let seed = generate_seed(character_id);
+            // A fresh seed per RUN, not per character (#294: "I always get the same
+            // two rewards"). Persisted on the run, so /current, /update and /end of
+            // this run all resolve the same draws.
+            let seed = generate_run_seed(character_id, rand::rng().random());
             let static_abyss = &app_state.static_data.abyss;
 
             // Honor `startingDifficulty` — the floor the player chose to start from. It
@@ -676,7 +682,11 @@ pub async fn end_abyss(
             // difficulty sat above the level the run started at. Lenient: no active run
             // → no reward.
             let reward = match entry.server_state.0.abyss.as_ref() {
-                Some(run) => end_run_reward(&app_state.static_data.abyss, run),
+                Some(run) => end_reward(
+                    &app_state.static_data.abyss,
+                    run,
+                    u64::from(entry.character.0.level),
+                ),
                 None => RewardGrant::default(),
             };
 
@@ -782,6 +792,22 @@ fn generate_seed(character_id: Uuid) -> i64 {
     let hi = i64::from_le_bytes(b[0..8].try_into().unwrap());
     let lo = i64::from_le_bytes(b[8..16].try_into().unwrap());
     hi ^ lo
+}
+
+/// The seed of ONE run: the character's seed mixed with a per-run `nonce` (random
+/// at `/start`), folded into an `i32`.
+///
+/// Retail gave every run its own seed — the same character's two captured runs
+/// carried 842607555, then 1458169631 — and every captured seed fits an `int`,
+/// which is what the client's `ResponseAbyssData._seed` is. A seed from the
+/// character id alone handed every run of a character the same draw at every
+/// rung and the same deep-floor dungeons (#294).
+fn generate_run_seed(character_id: Uuid, nonce: u64) -> i64 {
+    let mut z = (generate_seed(character_id) as u64 ^ nonce).wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    i64::from(z as u32 as i32)
 }
 
 /// Pick the dungeon-settings id for a DEEP floor (past the fixed slices).
@@ -1361,10 +1387,10 @@ fn grant_reached_rungs(
             *total.stackable_items.entry(template).or_default() += count;
         }
         for mut item in reward.items {
-            // The advertised instance id is a function of the run seed, and the
-            // seed is per character, so a later run advertises the same id
-            // again. Granting it twice would overwrite the first copy — and any
-            // tempering on it — so a held id is re-minted.
+            // The advertised instance id is a function of the run seed. Seeds are
+            // per run now, but two runs can still meet on one, and granting an id
+            // twice would overwrite the first copy — and any tempering on it — so
+            // a held id is re-minted.
             let held = inventory.backpack.items.0.contains_key(&item.id)
                 || inventory
                     .loadout
@@ -1589,6 +1615,24 @@ fn kills_score(
     )
     .unwrap_or(FALLBACK_KILL_SCORE_MULTIPLIER);
     multiplier * per_kill * count as f64
+}
+
+/// Everything `/end` pays: the per-floor gold and XP ([`end_run_reward`]) plus the
+/// package of one stackable — a material or a stack of soul gems — that retail paid
+/// on 16 of 18 captured `/end`s ([`abyss_rewards::end_package`]). The package does
+/// not need a rewarded floor: two captured runs that cleared none still paid four
+/// soul gems.
+fn end_reward(
+    static_abyss: &blades_lib::static_data::AbyssStaticData,
+    run: &AbyssRun,
+    character_level: u64,
+) -> RewardGrant {
+    let mut reward = end_run_reward(static_abyss, run);
+    let package = abyss_rewards::end_package(run.score, character_level, run.seed);
+    for (template, count) in package.stackable_items {
+        *reward.stackable_items.entry(template).or_default() += count;
+    }
+    reward
 }
 
 /// Which floors of a finished run pay out.
@@ -3815,6 +3859,213 @@ mod tests {
             .filter_map(|(k, v)| Some((k.parse().ok()?, v.as_u64()? as u32)))
             .collect();
         assert_eq!(shipped, RETAIL_EPL_BY_LEVEL.iter().copied().collect());
+    }
+
+    // ── Per-run seed, rewards by level, the /end package (#294) ─────────────
+
+    /// #294's reporter, a level-100 character.
+    const HAUDRAUF: &str = "489620db-7f90-4a03-bb7c-f7e92a9c73cb";
+
+    fn template_of(grant: &RewardGrant) -> Option<Uuid> {
+        grant.stackable_items.keys().next().copied()
+    }
+
+    /// Drive a run floor by floor, one `/update` per kill as retail sent them, and
+    /// return every rung's reward as it was paid, then what `/end` pays.
+    fn drive(
+        level: u32,
+        ipl: u32,
+        seed: i64,
+        floors: &[(u32, &str, u32, &[&str])],
+    ) -> (Vec<(u32, RewardGrant)>, RewardGrant) {
+        let mut run = run_from(&floors.iter().map(|f| (f.0, f.2)).collect::<Vec<_>>(), ipl);
+        run.current_floor_index = 0;
+        run.seed = seed;
+        for (slice, floor) in run.slices.iter_mut().zip(floors) {
+            slice.dungeon_settings_id = Uuid::parse_str(floor.1).unwrap();
+            slice.completed = false;
+            slice.enemy_killed = false;
+        }
+        let (_, mut player) = gauge_fixture();
+        player.character.level = level as u16;
+        let mut tracker = InventoryChangeTracker::default();
+        let mut paid = Vec::new();
+        let mut time = 0;
+        for (_, _, _, groups) in floors {
+            for group in *groups {
+                time += 1;
+                let before = run.granted_future_rewards.clone();
+                let action = parse_actions(serde_json::json!([{
+                    "type": "enemy_killed", "spawnGroupId": group, "spawnerIndex": 0,
+                    "enemyIndex": 0, "xpReward": 0.0, "time": time
+                }]));
+                update(&mut run, &mut player, &action, &mut tracker);
+                let mut fresh: Vec<u32> =
+                    run.granted_future_rewards.difference(&before).copied().collect();
+                fresh.sort();
+                for rung in fresh {
+                    paid.push((
+                        rung,
+                        abyss_rewards::future_reward_for_rung(rung, u64::from(level), run.seed).unwrap(),
+                    ));
+                }
+            }
+            let completed =
+                parse_actions(serde_json::json!([{"type": "abyss_slice_completed", "time": 0}]));
+            update(&mut run, &mut player, &completed, &mut tracker);
+        }
+        let end = end_reward(&real_static_abyss(), &run, u64::from(level));
+        (paid, end)
+    }
+
+    /// Retail gave each run its own seed; ours came from the character id alone, so
+    /// every run of a character drew the same reward at every rung (#294: "I always
+    /// get the same two rewards"). Seeds are now per run, in `int` range like
+    /// retail's, and the same character's runs draw different rewards.
+    #[test]
+    fn two_runs_of_the_same_character_get_different_rewards() {
+        let id = Uuid::parse_str(HAUDRAUF).unwrap();
+        let seeds: Vec<i64> = (0..64u64).map(|nonce| generate_run_seed(id, nonce)).collect();
+        let distinct: std::collections::HashSet<_> = seeds.iter().collect();
+        assert_eq!(distinct.len(), seeds.len(), "every run gets its own seed");
+        for seed in &seeds {
+            assert!(i32::try_from(*seed).is_ok(), "{seed} does not fit the client's int");
+        }
+        assert_ne!(generate_run_seed(id, 1), generate_run_seed(id, 2));
+
+        let draws: std::collections::HashSet<_> = seeds
+            .iter()
+            .map(|seed| {
+                let rung = |r| abyss_rewards::future_reward_for_rung(r, 100, *seed).unwrap();
+                (template_of(&rung(35)), template_of(&rung(70)))
+            })
+            .collect();
+        assert!(draws.len() > 8, "64 runs drew only {} different (35, 70) pairs", draws.len());
+
+        // Negative control: the old per-character seed is one seed for every run.
+        assert_eq!(generate_seed(id), generate_seed(id));
+    }
+
+    /// The seed is stored on the run, so a run that is re-read (`/current`) or
+    /// reloaded from the database mid-way keeps every reward it advertised.
+    #[test]
+    fn a_resumed_run_keeps_its_rewards() {
+        let id = Uuid::parse_str(HAUDRAUF).unwrap();
+        let (mut run, _) = gauge_fixture();
+        run.seed = generate_run_seed(id, 0xC0FFEE);
+        run.score = 40.0;
+        let ladder = |run: &AbyssRun| -> Vec<RewardGrant> {
+            abyss_rewards::ABYSS_LADDER
+                .iter()
+                .map(|r| abyss_rewards::future_reward_for_rung(*r, 100, run.seed).unwrap())
+                .collect()
+        };
+        let before = (ladder(&run), advertised(&run, 100), end_reward(&real_static_abyss(), &run, 100));
+        let wire = serde_json::to_value(run_to_wire(&run, 100)).unwrap();
+        assert_eq!(wire["seed"], serde_json::json!(run.seed), "the client sees the run's seed");
+
+        let reloaded: AbyssRun = serde_json::from_value(serde_json::to_value(&run).unwrap()).unwrap();
+        assert_eq!(reloaded.seed, run.seed);
+        let after = (
+            ladder(&reloaded),
+            advertised(&reloaded, 100),
+            end_reward(&real_static_abyss(), &reloaded, 100),
+        );
+        assert_eq!(before.0, after.0, "every rung");
+        assert_eq!(before.1, after.1, "the advertised rung");
+        assert_eq!(before.2, after.2, "the /end package");
+    }
+
+    /// #294's run: level 100 from floor 149. Rung 35 is a material, 50 the wooden
+    /// chest at the character's level, 70 one of the high-level kinds retail paid
+    /// level 66-100 characters (Nightshade, Giant's Toe, Chaurus Chitin, Malachite
+    /// Ingot) — on #471's kill schedule, which this must not move.
+    #[test]
+    fn a_level_100_run_from_floor_149_pays_retails_high_level_table() {
+        let ipl = initial_player_level(&real_job_pools(), 100);
+        let floors = level_100_run_from_149(ipl);
+        let rung_70 = [
+            "4d7420db-8042-4946-a43f-e0b3bd9bec81", // Nightshade
+            "a4d5e792-5a27-4bb3-851f-e0917c0962db", // Giant's Toe
+            "8ef9f10c-3c46-492c-9a00-29fd1626d85e", // Chaurus Chitin
+            "85ed5500-3581-4699-8095-4b5ff6514355", // Malachite Ingot
+        ]
+        .map(|u| Uuid::parse_str(u).unwrap());
+        let low_level_70 = [
+            "fbf96b07-e9aa-4157-8761-10179fa05138", // Garlic
+            "92b77b2f-bd33-469f-8aad-8a228b9537eb", // Brass Ingot
+        ]
+        .map(|u| Uuid::parse_str(u).unwrap());
+        let id = Uuid::parse_str(HAUDRAUF).unwrap();
+        let mut seventies = std::collections::HashSet::new();
+        for nonce in 0..40u64 {
+            let (paid, end) = drive(100, ipl, generate_run_seed(id, nonce), &floors);
+            let rungs: Vec<u32> = paid.iter().map(|(r, _)| *r).collect();
+            assert_eq!(rungs, vec![35, 50, 70, 95, 135, 190, 260, 360], "#471's schedule");
+            let at = |r: u32| &paid.iter().find(|(x, _)| *x == r).unwrap().1;
+            assert_eq!(at(35).stackable_items.len(), 1, "rung 35 is one material");
+            assert_eq!(at(50).chests.len(), 1);
+            assert_eq!((at(50).chests[0].tier, at(50).chests[0].level), (1, 100), "wooden chest, level 100");
+            let seventy = template_of(at(70)).unwrap();
+            assert!(rung_70.contains(&seventy), "nonce {nonce}: rung 70 drew {seventy}");
+            assert!(!low_level_70.contains(&seventy));
+            seventies.insert(seventy);
+            assert!(!end.currencies.is_empty(), "/end pays the floors' gold");
+            assert_eq!(end.stackable_items.len(), 1, "and one package stack");
+        }
+        assert!(seventies.len() >= 3, "runs vary at rung 70: {seventies:?}");
+    }
+
+    /// The low-level control for the same change: a level-7 character from floor 1
+    /// still draws retail's level 3-7 results at rung 70 (Garlic, Brass Ingot).
+    #[test]
+    fn a_level_7_run_from_floor_1_still_pays_the_low_level_table() {
+        let ipl = initial_player_level(&real_job_pools(), 7);
+        let floors = served_run(ipl, 1, 30, MIXED_KILLS);
+        let allowed = [
+            "fbf96b07-e9aa-4157-8761-10179fa05138", // Garlic
+            "92b77b2f-bd33-469f-8aad-8a228b9537eb", // Brass Ingot
+        ]
+        .map(|u| Uuid::parse_str(u).unwrap());
+        let id = Uuid::parse_str("78f2b668-97ff-45d0-99fa-7343fd059480").unwrap();
+        for nonce in 0..20u64 {
+            let (paid, end) = drive(7, ipl, generate_run_seed(id, nonce), &floors);
+            let seventy = paid.iter().find(|(r, _)| *r == 70).expect("the run reaches rung 70");
+            assert!(allowed.contains(&template_of(&seventy.1).unwrap()));
+            let fifty = paid.iter().find(|(r, _)| *r == 50).unwrap();
+            assert_eq!(fifty.1.chests[0].level, 7);
+            assert_eq!(end.stackable_items.len(), 1, "/end pays its package");
+        }
+    }
+
+    /// `/end` is the floors' gold and XP plus the package. Retail paid the package
+    /// with no rewarded floor at all (two level-66 runs: four soul gems, no gold),
+    /// and nothing to a run that scored nothing (level 8, no kill).
+    #[test]
+    fn end_pays_the_package_beside_the_floor_gold() {
+        let sd = real_static_abyss();
+        let mut nothing = run_from(&[(15, 15)], 11);
+        nothing.slices[0].completed = false;
+        nothing.slices[0].enemy_killed = false;
+        nothing.score = 0.0;
+        assert_eq!(end_reward(&sd, &nothing, 8), RewardGrant::default());
+
+        let mut no_floor = run_from(&[(89, 100)], 67);
+        no_floor.slices[0].completed = false;
+        no_floor.slices[0].enemy_killed = false;
+        no_floor.score = 30.0;
+        let paid = end_reward(&sd, &no_floor, 66);
+        assert!(paid.currencies.is_empty() && paid.character_xp == 0, "no rewarded floor, no gold");
+        assert_eq!(paid.stackable_items.len(), 1, "but the package is paid");
+
+        let floors = run_from(&[(149, 100)], 84);
+        let mut scored = floors;
+        scored.score = 120.0;
+        let with_package = end_reward(&sd, &scored, 100);
+        let gold_only = end_run_reward(&sd, &scored);
+        assert_eq!(with_package.currencies, gold_only.currencies);
+        assert_eq!(with_package.character_xp, gold_only.character_xp);
+        assert_eq!(with_package.stackable_items.len(), 1);
     }
 }
 

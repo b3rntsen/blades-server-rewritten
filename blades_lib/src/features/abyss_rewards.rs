@@ -19,11 +19,18 @@
 //!   as `enemy_loot.json` and for the same reason: a result is what retail
 //!   produced, kept whole.
 //!
-//! THE CORPUS IS THIN, and says so. 71 distinct observations across ten rungs,
-//! against 49,602 for enemy loot; rungs 190, 260, 490 and 650 rest on fewer than
-//! five each, and rung 650 on a single distinct result. That is weak data. It is
-//! still strictly better than advertising rung 1 of 10 forever, and every rung
-//! carries its own observation count so nobody has to guess how thin it is.
+//! THE CORPUS IS THIN, and says so. One observation per retail run and rung —
+//! 25 runs reached rung 35, 13 rung 70, and rungs 190-650 rest on four or fewer
+//! (650 on one). Every observation carries the character level it was made at.
+//!
+//! BY LEVEL, NOT BY ONE POOL (#294). The pools are drawn per [`LEVEL_BANDS`]:
+//! retail's rung 70 paid a level-3 or level-7 character Brass Ingot or Garlic and
+//! a level 66-100 one Nightshade, Giant's Toe, Chaurus Chitin or Malachite Ingot
+//! (27-35 of them). The first corpus dropped the level, so a level-100 character
+//! at floor 149 could be handed six Garlic.
+//!
+//! THE `/end` PACKAGE. Retail's `/end` paid one stackable besides the per-floor
+//! gold and XP — a material, or a stack of soul gems — see [`end_package`].
 
 use std::collections::HashMap;
 
@@ -42,8 +49,11 @@ static ABYSS_FUTURE_REWARDS_RAW: &str = include_str!("../abyss_future_rewards.js
 pub const ABYSS_LADDER: [u32; 10] = [35, 50, 70, 95, 135, 190, 260, 360, 490, 650];
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Corpus {
     rungs: Vec<Rung>,
+    #[serde(default)]
+    end_package: EndPackage,
 }
 
 #[derive(Deserialize)]
@@ -56,14 +66,33 @@ struct Rung {
     tier: Option<u64>,
     #[serde(default)]
     observations: u64,
+    /// One entry per retail RUN that was advertised this rung.
     #[serde(default)]
-    results: Vec<DrawnResult>,
+    results: Vec<LevelledResult>,
 }
 
+/// One retail observation, kept with the character level it was made at — the
+/// level is what decides which pool a character draws from (#294).
 #[derive(Deserialize)]
-struct DrawnResult {
+struct LevelledResult {
+    level: u64,
     reward: ObservedReward,
-    n: u64,
+}
+
+#[derive(Deserialize, Default)]
+struct EndPackage {
+    #[serde(default)]
+    observations: Vec<EndObservation>,
+}
+
+/// One retail `/end`. `package` is the stackable it paid on top of gold/XP, or
+/// `None` for a run that paid none (both such runs scored under
+/// [`END_PACKAGE_MIN_SCORE`]).
+#[derive(Deserialize)]
+struct EndObservation {
+    level: u64,
+    #[serde(default)]
+    package: Option<ObservedReward>,
 }
 
 /// One observed reward body. `Item` deserializes straight from retail's own
@@ -81,7 +110,7 @@ fn corpus() -> &'static Corpus {
     static TABLE: std::sync::OnceLock<Corpus> = std::sync::OnceLock::new();
     TABLE.get_or_init(|| {
         serde_json::from_str(ABYSS_FUTURE_REWARDS_RAW)
-            .unwrap_or_else(|_| Corpus { rungs: Vec::new() })
+            .unwrap_or_else(|_| Corpus { rungs: Vec::new(), end_package: EndPackage::default() })
     })
 }
 
@@ -103,6 +132,87 @@ fn instance_uuid(seed: u64, ordinal: usize) -> Uuid {
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     Uuid::from_bytes(b)
+}
+
+/// The character-level bands a reward pool is drawn from.
+///
+/// Retail's tables are keyed by level, not depth: a level-34 character at floor
+/// 118 was advertised the same rung-70 kinds (Nightshade, Chaurus Chitin,
+/// Quicksilver) as a level-40 one at floor 43, while level 3 and 7 at floor 1 got
+/// Brass Ingot and Garlic. The observed levels cluster as 3-8, 34-57 and 64-100,
+/// and the bands follow those clusters. The first corpus threw the level away, so
+/// a level-100 character drew level-3 results (#294).
+pub const LEVEL_BANDS: [std::ops::RangeInclusive<u64>; 3] = [0..=19, 20..=59, 60..=u64::MAX];
+
+fn band(level: u64) -> usize {
+    LEVEL_BANDS
+        .iter()
+        .position(|b| b.contains(&level))
+        .unwrap_or(LEVEL_BANDS.len() - 1)
+}
+
+/// The observations a character of `level` draws from: those in its own band, or —
+/// for a rung no retail run in that band reached — the band of the observation
+/// nearest in level. Never empty unless `observations` is.
+fn level_pool<T>(observations: &[T], level: u64, level_of: impl Fn(&T) -> u64) -> Vec<&T> {
+    let own = band(level);
+    let target = if observations.iter().any(|o| band(level_of(o)) == own) {
+        own
+    } else {
+        match observations
+            .iter()
+            .map(&level_of)
+            .min_by_key(|l| (l.abs_diff(level), *l))
+        {
+            Some(nearest) => band(nearest),
+            None => return Vec::new(),
+        }
+    };
+    observations
+        .iter()
+        .filter(|o| band(level_of(o)) == target)
+        .collect()
+}
+
+/// The lowest run score that earns the `/end` package.
+///
+/// Retail paid a package on 16 of 18 captured `/end`s. The two that paid none
+/// are the two lowest-scoring runs: no kill at all (level 8), and three kills on
+/// floor 49 at initialPlayerLevel 59 — delta -10, one point a kill, at most 6 even
+/// were all three bosses. The lowest-scoring run that WAS paid killed 38 enemies
+/// at delta -13 and below, one point each, so at least 38 × 0.33 = 12.5. The
+/// threshold lies in (6, 12.5]; 10 is one same-level kill.
+pub const END_PACKAGE_MIN_SCORE: f64 = 10.0;
+
+/// The `/end` package: one stackable on top of the per-floor gold and XP — a
+/// crafting material, or a stack of soul gems (#294: "randomly up to 7 greater,
+/// glorious or transcendent soul gems, but not every run").
+///
+/// Drawn whole from the retail packages paid in the character's level band. In
+/// the 60+ band that is 5 soul-gem stacks (4-6 Greater/Grand/Elevated/Glorious)
+/// in 10 runs; below level 60 retail paid none in 6. Seeded from the run, so a
+/// retried `/end` pays the same thing. Gear, which retail added to 3 of the 4
+/// runs that passed rung 360, is not modelled here.
+pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGrant {
+    let mut grant = RewardGrant::default();
+    if score < END_PACKAGE_MIN_SCORE {
+        return grant;
+    }
+    let paid: Vec<&EndObservation> = corpus()
+        .end_package
+        .observations
+        .iter()
+        .filter(|o| o.package.is_some())
+        .collect();
+    let pool = level_pool(&paid, character_level, |o| o.level);
+    if pool.is_empty() {
+        return grant;
+    }
+    let seed = mix((run_seed as u64) ^ 0xE4D0_A55E_5EED_0294);
+    if let Some(package) = &pool[(seed % pool.len() as u64) as usize].package {
+        grant.stackable_items = package.stackable_items.clone();
+    }
+    grant
 }
 
 /// The number of observations behind a rung, for tests and diagnostics.
@@ -176,8 +286,8 @@ fn rung_reward(rung: &Rung, character_level: u64, run_seed: i64) -> RewardGrant 
         return grant;
     }
 
-    let total: u64 = rung.results.iter().map(|r| r.n).sum();
-    if total == 0 {
+    let pool = level_pool(&rung.results, character_level, |r| r.level);
+    if pool.is_empty() {
         // A rung we somehow hold no observation for advertises nothing rather
         // than inventing a reward. The score still shows, which is what the
         // player is climbing towards.
@@ -185,19 +295,7 @@ fn rung_reward(rung: &Rung, character_level: u64, run_seed: i64) -> RewardGrant 
     }
 
     let seed = mix((run_seed as u64) ^ (u64::from(rung.score)).rotate_left(29));
-    let mut pick = seed % total;
-    let drawn = rung
-        .results
-        .iter()
-        .find(|r| {
-            if pick < r.n {
-                true
-            } else {
-                pick -= r.n;
-                false
-            }
-        })
-        .unwrap_or(&rung.results[rung.results.len() - 1]);
+    let drawn = pool[(seed % pool.len() as u64) as usize];
 
     grant.stackable_items = drawn.reward.stackable_items.clone();
     for (ordinal, item) in drawn.reward.items.iter().enumerate() {
@@ -344,8 +442,9 @@ mod tests {
                 "rung {score} claims zero observations"
             );
         }
-        assert!(rung_observations(35) >= 21, "rung 35 had 21 observations");
-        assert!(rung_observations(650) >= 2, "rung 650 had 2 observations");
+        assert_eq!(rung_observations(35), 25, "25 retail runs reached rung 35");
+        assert_eq!(rung_observations(70), 13, "13 retail runs reached rung 70");
+        assert_eq!(rung_observations(650), 1, "one retail run reached rung 650");
     }
 
     /// The grant and the advertisement resolve through one function: whatever a
@@ -384,6 +483,130 @@ mod tests {
                 assert!(f64::from(next) > score);
                 assert!(last_reached.is_none_or(|r| r < next));
             }
+        }
+    }
+
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+
+    const NIGHTSHADE: &str = "4d7420db-8042-4946-a43f-e0b3bd9bec81";
+    const GIANTS_TOE: &str = "a4d5e792-5a27-4bb3-851f-e0917c0962db";
+    const CHAURUS_CHITIN: &str = "8ef9f10c-3c46-492c-9a00-29fd1626d85e";
+    const MALACHITE_INGOT: &str = "85ed5500-3581-4699-8095-4b5ff6514355";
+    const GARLIC: &str = "fbf96b07-e9aa-4157-8761-10179fa05138";
+    const BRASS_INGOT: &str = "92b77b2f-bd33-469f-8aad-8a228b9537eb";
+    /// Greater, Elevated, Grand, Glorious — the four retail `/end` paid.
+    const SOUL_GEMS_PAID: [&str; 4] = [
+        "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+        "a3351353-f613-4368-bac7-05783f857b07",
+        "68d7941e-8c8d-47bf-9f66-becb058f1817",
+        "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+    ];
+    /// Every soul gem, Petty to Transcendent.
+    const ALL_SOUL_GEMS: [&str; 10] = [
+        "19ce1a65-057f-4f34-a0ed-27de7c085662", "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+        "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029", "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+        "3932e499-441e-4c6d-b671-9a03131ebe6f", "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+        "a3351353-f613-4368-bac7-05783f857b07", "68d7941e-8c8d-47bf-9f66-becb058f1817",
+        "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb", "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+    ];
+
+    fn single_stack(grant: &RewardGrant) -> (Uuid, u64) {
+        assert_eq!(grant.stackable_items.len(), 1, "one stack per draw: {:?}", grant.stackable_items);
+        let (k, v) = grant.stackable_items.iter().next().unwrap();
+        (*k, *v)
+    }
+
+    /// #294: "at floor 149 ... then either Nightshade, Giant's Toe or Moon Sugar".
+    /// Retail's rung 70 for a level 66-100 character: Nightshade x4, Giant's Toe,
+    /// Chaurus Chitin, Malachite Ingot — 27-35 of them. Never the level-3/7 results.
+    #[test]
+    fn a_level_100_character_draws_rung_70_from_the_high_level_table() {
+        let allowed = [NIGHTSHADE, GIANTS_TOE, CHAURUS_CHITIN, MALACHITE_INGOT].map(uuid);
+        let mut seen = std::collections::HashSet::new();
+        for seed in 0..500i64 {
+            let grant = future_reward_for_rung(70, 100, seed).unwrap();
+            let (item, count) = single_stack(&grant);
+            assert!(allowed.contains(&item), "seed {seed}: level 100 drew {item}");
+            assert!((27..=35).contains(&count), "seed {seed}: {count} is outside retail's 27-35");
+            seen.insert(item);
+        }
+        assert!(seen.contains(&uuid(NIGHTSHADE)) && seen.contains(&uuid(GIANTS_TOE)));
+    }
+
+    /// The low-level control: a level-7 character keeps retail's level 3-7 results.
+    #[test]
+    fn a_low_level_character_draws_rung_70_from_the_low_level_table() {
+        let allowed = [GARLIC, BRASS_INGOT].map(uuid);
+        for seed in 0..200i64 {
+            let (item, count) = single_stack(&future_reward_for_rung(70, 7, seed).unwrap());
+            assert!(allowed.contains(&item), "seed {seed}: level 7 drew {item}");
+            assert!(count <= 6);
+        }
+    }
+
+    /// Every rung resolves to something at every level, including the rungs a band
+    /// has no retail observation for (rung 650 has one, at level 7).
+    #[test]
+    fn every_rung_pays_at_every_level() {
+        for level in [1u64, 7, 19, 20, 40, 59, 60, 84, 100] {
+            for rung in ABYSS_LADDER {
+                let g = future_reward_for_rung(rung, level, 3).unwrap();
+                assert!(
+                    !g.stackable_items.is_empty() || !g.items.is_empty() || !g.chests.is_empty(),
+                    "rung {rung} at level {level} paid nothing"
+                );
+            }
+        }
+        // A band without its own observation borrows the nearest one in level: a
+        // level-50 character's rung 260 is the level-66/81 Glass gear, not Hide.
+        let gear = future_reward_for_rung(260, 50, 1).unwrap();
+        let hide_helmet = uuid("4a9fd901-aaf8-40bd-941e-971febf4daf8");
+        assert!(gear.items.iter().all(|i| i.item.item_template_id != hide_helmet));
+    }
+
+    /// #294: "at the end of a run, randomly up to 7 greater, glorious or
+    /// transcendent soul gems, but not every run". Retail, level 60 and up: 5 of 10
+    /// paid packages were a soul-gem stack of 4-6 (Greater, Grand, Elevated,
+    /// Glorious x2); below level 60, 0 of 6.
+    #[test]
+    fn the_end_soul_gem_roll_matches_retails_frequency_and_range() {
+        let paid_kinds = SOUL_GEMS_PAID.map(uuid);
+        let all_gems = ALL_SOUL_GEMS.map(uuid);
+        let runs = 20_000;
+        let mut gems = 0;
+        let mut kinds = std::collections::HashSet::new();
+        for seed in 0..runs {
+            let grant = end_package(100.0, 100, seed);
+            let (item, count) = single_stack(&grant);
+            if all_gems.contains(&item) {
+                gems += 1;
+                assert!(paid_kinds.contains(&item), "seed {seed}: a gem retail never paid: {item}");
+                assert!((4..=6).contains(&count), "seed {seed}: {count} gems, retail paid 4-6");
+                kinds.insert(item);
+            }
+        }
+        let rate = f64::from(gems) / runs as f64;
+        assert!((0.4..=0.6).contains(&rate), "soul gems on {rate:.3} of level-100 /ends, retail 5/10");
+        assert_eq!(kinds.len(), 4, "all four retail gem kinds come up");
+
+        for level in [3u64, 7, 34, 57] {
+            for seed in 0..2_000i64 {
+                let (item, _) = single_stack(&end_package(100.0, level, seed));
+                assert!(!all_gems.contains(&item), "level {level} seed {seed}: retail paid no gems below 60");
+            }
+        }
+    }
+
+    /// No package below the threshold; the same run always pays the same package.
+    #[test]
+    fn the_end_package_needs_a_score_and_is_stable_per_run() {
+        assert_eq!(end_package(0.0, 100, 1), RewardGrant::default());
+        assert_eq!(end_package(END_PACKAGE_MIN_SCORE - 0.01, 100, 1), RewardGrant::default());
+        assert_ne!(end_package(END_PACKAGE_MIN_SCORE, 100, 1), RewardGrant::default());
+        for seed in [1i64, -7, i64::MAX] {
+            assert_eq!(end_package(50.0, 100, seed), end_package(50.0, 100, seed));
         }
     }
 }
