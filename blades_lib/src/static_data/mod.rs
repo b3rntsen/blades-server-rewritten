@@ -357,6 +357,23 @@ pub struct AbyssDepthBand {
     pub tier_weights: HashMap<String, u32>,
 }
 
+/// One `AbyssSlice` ScriptableObject (APK `AbyssData`): a dungeon the Abyss may serve
+/// at any `difficultyLevel` in `minLevel..=maxLevel`, once `requiredQuestId` (if any)
+/// is completed, with `randomWeight` (0 = never; the `Forest_*` slices).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AbyssSliceDef {
+    #[serde(default)]
+    pub name: String,
+    pub dungeon_settings_id: Uuid,
+    pub min_level: u32,
+    pub max_level: u32,
+    #[serde(default)]
+    pub random_weight: f64,
+    #[serde(default)]
+    pub required_quest_id: Option<Uuid>,
+}
+
 /// One entry of the `dungeonPool`: an abyss dungeon-setting the client can render.
 /// `monsters[0]` (a mixed-case family token) resolves to a tier via `monster_tiers`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -408,6 +425,13 @@ pub struct AbyssStaticData {
     /// Every abyss dungeon-setting the client can render, keyed by its UUID.
     #[serde(default)]
     pub dungeon_pool: HashMap<Uuid, AbyssDungeonDef>,
+    /// The client's own `AbyssData` list of `AbyssSlice` assets — retail's generation
+    /// table. Every one of the 3,900 slices in the 26 captured retail runs is a dungeon
+    /// listed here at a `difficultyLevel` inside its `levelRange`. When present it
+    /// replaces `dungeonPool` + `depthBands` + `randomPool` for floors past
+    /// `fixedSlices` (see `server/src/abyss.rs`); absent → that older picker.
+    #[serde(default)]
+    pub abyss_slices: Vec<AbyssSliceDef>,
     /// `AbyssScaling_Backend` scalars. Only `slices_count` and
     /// `slices_count_above_player_level` are measured; the rest are still guessed.
     #[serde(default)]

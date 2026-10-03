@@ -231,7 +231,11 @@ pub async fn start_abyss(
             // captured `/start`s at startingDifficulty 1 / 15 / 90 are 150 slices each,
             // sliceIndex 0..149, floorIndex N..N+149 (so past floor 150 when N > 1).
             let start_floor = starting_difficulty.unwrap_or(1).clamp(1, MAX_START_FLOOR);
-            let slices = build_run_slices(static_abyss, seed, start_floor, player_level);
+            // Retail served a quest-gated slice (Skeletons, Liches, Warlord, ...) only to
+            // a character that had finished its quest — see [`retail_deep_floors`].
+            let has_completed = completed_quest_gate(&entry.character.0.completed_quests);
+            let slices =
+                build_run_slices(static_abyss, seed, start_floor, player_level, &has_completed);
 
             let run = AbyssRun {
                 slices,
@@ -810,7 +814,11 @@ fn generate_run_seed(character_id: Uuid, nonce: u64) -> i64 {
     i64::from(z as u32 as i32)
 }
 
-/// Pick the dungeon-settings id for a DEEP floor (past the fixed slices).
+/// The FALLBACK pick for a deep floor (past the fixed slices), used only when
+/// `abyss.json` has no `abyssSlices` — see [`retail_deep_floors`], which replaced it.
+/// Its bands and tiers were designed, not measured: floors 80-149 came out a third
+/// Liches Outcast Nether and a quarter dragons, and floors past 150 (no band) cycled
+/// `randomPool`, Atronach and Dremora only (#294).
 ///
 /// When `dungeonPool` + `depthBands` are loaded: seeded weighted-random over the pool,
 /// each dungeon weighted by `depthBands[floor].tierWeights[ monsterTiers[dungeon] ]`, so
@@ -875,6 +883,91 @@ fn pick_deep_dungeon(
         .unwrap_or_else(Uuid::nil)
 }
 
+/// The dungeons retail's own table serves on deep floors `first_floor..=last_floor`
+/// of a run at `initial_player_level` (#294). One entry per floor; `None` where the
+/// table has nothing eligible (never for difficulties 1-100), and an empty list when
+/// `abyss.json` carries no `abyssSlices` — both fall back to [`pick_deep_dungeon`].
+///
+/// THE RULE, from the client's `AbyssSlice` assets checked against the 3,900 slices
+/// of 26 captured retail runs:
+///
+/// * a slice is ELIGIBLE on a floor when its `levelRange` contains the floor's
+///   `difficultyLevel` (3,900 of 3,900 captured slices are), its `randomWeight` is
+///   above 0 (the `Forest_*` slices are 0 and never appear), and its required quest is
+///   completed (the level 4-38 runs never got any of the quest-gated deep dungeons);
+/// * the eligible DUNGEONS are dealt from a shuffle bag: drawn by weight, each once
+///   before any repeats. Retail's per-dungeon counts are flat — the 2,730
+///   difficulty-100 floors of the 20 runs with every quest done fit equal shares of
+///   the 33 eligible dungeons (chi-square 7 on 32 df) and not the weights (37) — and a
+///   dungeon rarely recurs within a few floors (0.3% of repeat gaps are 1-3 floors;
+///   independent draws give 11%, the bag 0.6%).
+///
+/// From floor `ipl + 14` every floor is difficulty 100, where 33 dungeons are eligible:
+/// Dremora, Atronach and mixed Atronach/Dremora (15), Skeletons (6), Liches Outcast
+/// Nether (5), Liches (4) and Warlord (3) — no dragon, whose slices stop at 95-99.
+///
+/// The bag makes floor N depend on the floors before it, so the walk always starts at
+/// the first deep floor: a run resumed at floor N gets the floor-N dungeon a fresh run
+/// would have reached.
+fn retail_deep_floors(
+    static_abyss: &blades_lib::static_data::AbyssStaticData,
+    seed: i64,
+    first_floor: u32,
+    last_floor: u32,
+    initial_player_level: u32,
+    has_completed: &dyn Fn(Uuid) -> bool,
+) -> Vec<Option<Uuid>> {
+    if static_abyss.abyss_slices.is_empty() || last_floor < first_floor {
+        return Vec::new();
+    }
+    let mut dealt: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    (first_floor..=last_floor)
+        .map(|floor| {
+            let difficulty = slice_difficulty(floor, initial_player_level);
+            // Eligible dungeons in a stable (uuid) order; a dungeon two slices share
+            // (Stone_Liches_2Rooms) is ONE dungeon — retail served it no more often
+            // than the rest.
+            let mut eligible: std::collections::BTreeMap<Uuid, f64> = Default::default();
+            for slice in &static_abyss.abyss_slices {
+                if slice.random_weight > 0.0
+                    && (slice.min_level..=slice.max_level).contains(&difficulty)
+                    && slice.required_quest_id.is_none_or(|quest| has_completed(quest))
+                {
+                    let weight = eligible.entry(slice.dungeon_settings_id).or_insert(0.0);
+                    *weight = weight.max(slice.random_weight);
+                }
+            }
+            if eligible.is_empty() {
+                return None;
+            }
+            let mut bag: Vec<(Uuid, f64)> =
+                eligible.iter().filter(|(id, _)| !dealt.contains(*id)).map(|(id, w)| (*id, *w)).collect();
+            if bag.is_empty() {
+                dealt.clear();
+                bag = eligible.into_iter().collect();
+            }
+            let total: f64 = bag.iter().map(|(_, w)| w).sum();
+            let mut x = (deep_floor_roll(seed, floor) >> 11) as f64 / (1u64 << 53) as f64 * total;
+            let mut pick = bag[bag.len() - 1].0;
+            for (id, weight) in &bag {
+                if x < *weight {
+                    pick = *id;
+                    break;
+                }
+                x -= weight;
+            }
+            dealt.insert(pick);
+            Some(pick)
+        })
+        .collect()
+}
+
+/// Whether the character has completed `quest`, read from `character.completedQuests`
+/// (an object keyed by quest id; a missing or non-object value completes nothing).
+fn completed_quest_gate(completed_quests: &serde_json::Value) -> impl Fn(Uuid) -> bool + '_ {
+    move |quest: Uuid| completed_quests.get(quest.to_string()).is_some()
+}
+
 /// Deterministic 64-bit roll from `(seed, floor)` (splitmix64-style finalizer). Same
 /// inputs → same roll, so resume-at-floor and a fresh full run agree per absolute floor.
 fn deep_floor_roll(seed: i64, floor: u32) -> u64 {
@@ -903,11 +996,21 @@ fn build_slices_from(
     total: usize,
     start_floor: u32,
     initial_player_level: u32,
+    has_completed: &dyn Fn(Uuid) -> bool,
 ) -> Vec<AbyssSliceEntry> {
     let start_floor = start_floor.max(1);
     // Number of slices remaining from `start_floor` to the top (`total`).
     let remaining = (total as u32).saturating_sub(start_floor - 1) as usize;
     let mut slices = Vec::with_capacity(remaining);
+    let first_deep_floor = static_abyss.fixed_slices.len() as u32 + 1;
+    let retail = retail_deep_floors(
+        static_abyss,
+        seed,
+        first_deep_floor,
+        total as u32,
+        initial_player_level,
+        has_completed,
+    );
     for k in 0..remaining {
         let floor = start_floor + k as u32; // absolute 1-based floor
         let abs = (floor - 1) as usize; // absolute 0-based floor
@@ -916,11 +1019,11 @@ fn build_slices_from(
         let diff = slice_difficulty(floor, initial_player_level);
         let dungeon_uuid = if abs < static_abyss.fixed_slices.len() {
             static_abyss.fixed_slices[abs].dungeon_settings_id
+        } else if let Some(Some(id)) = retail.get((floor - first_deep_floor) as usize) {
+            // Deep floor: retail's own slice table (#294).
+            *id
         } else {
-            // Deep floor: the dungeon is picked by seeded, depth-weighted random over
-            // `dungeonPool` (weak monsters shallow, tough deep); with that data absent it
-            // degrades to the legacy `randomPool` cycling — reusing `(seed + floor)` so a
-            // resumed run is still deterministic per absolute floor.
+            // No `abyssSlices` in the static file: the older designed picker.
             pick_deep_dungeon(static_abyss, seed, floor, abs)
         };
         slices.push(AbyssSliceEntry {
@@ -1065,6 +1168,7 @@ fn build_run_slices(
     seed: i64,
     start_floor: u32,
     initial_player_level: u32,
+    has_completed: &dyn Fn(Uuid) -> bool,
 ) -> Vec<AbyssSliceEntry> {
     let start_floor = start_floor.max(1);
     let last_floor = start_floor + RUN_FLOORS - 1;
@@ -1074,6 +1178,7 @@ fn build_run_slices(
         last_floor as usize,
         start_floor,
         initial_player_level,
+        has_completed,
     );
     for (position, slice) in slices.iter_mut().enumerate() {
         slice.slice_index = position as u32;
@@ -1090,8 +1195,12 @@ fn build_slices(
     seed: i64,
     n: usize,
 ) -> Vec<AbyssSliceEntry> {
-    build_slices_from(static_abyss, seed, n, 1, TEST_IPL)
+    build_slices_from(static_abyss, seed, n, 1, TEST_IPL, &ALL_QUESTS)
 }
+
+/// A character that has finished every quest (the slice-building tests' default).
+#[cfg(test)]
+const ALL_QUESTS: fn(Uuid) -> bool = |_| true;
 
 /// The initialPlayerLevel the slice-building tests run at — the captured run's.
 #[cfg(test)]
@@ -1799,7 +1908,7 @@ mod tests {
     fn served_difficulties_are_the_captured_retail_ones() {
         let sd = real_static_abyss();
         for (ipl, start, head, rest_is_100) in RETAIL_STARTS {
-            let served = build_run_slices(&sd, 7, start, ipl);
+            let served = build_run_slices(&sd, 7, start, ipl, &ALL_QUESTS);
             assert_eq!(served.len(), 150);
             for (position, slice) in served.iter().enumerate() {
                 let expected = match head.get(position) {
@@ -1833,7 +1942,7 @@ mod tests {
             sd.multiplier_for_offset(row as i32).0
         };
         for ipl in [1, 4, 9, 10, 13, 30, 60, 75] {
-            for slice in build_run_slices(&sd, 7, 1, ipl).iter().take(80) {
+            for slice in build_run_slices(&sd, 7, 1, ipl, &ALL_QUESTS).iter().take(80) {
                 let paid = sd
                     .multiplier_for_offset(slice.difficulty_level as i32 - ipl as i32)
                     .0;
@@ -1853,7 +1962,7 @@ mod tests {
     fn deep_floor_dungeon_pick_is_depth_appropriate_and_deterministic() {
         let (sd, weak, tough) = test_static_abyss_with_new_keys();
         let seed = 7i64;
-        let fresh = build_slices_from(&sd, seed, 150, 1, TEST_IPL);
+        let fresh = build_slices_from(&sd, seed, 150, 1, TEST_IPL, &ALL_QUESTS);
 
         // Shallow deep-band (floors 25-40): only tier 1 weighted → the weak cave.
         for s in fresh.iter().filter(|s| (25..=40).contains(&s.floor_index)) {
@@ -1865,7 +1974,7 @@ mod tests {
         }
 
         // Determinism: a run resumed at floor 45 yields the SAME floor-45 content.
-        let resumed = build_slices_from(&sd, seed, 150, 45, TEST_IPL);
+        let resumed = build_slices_from(&sd, seed, 150, 45, TEST_IPL, &ALL_QUESTS);
         assert_eq!(resumed[0].floor_index, 45);
         assert_eq!(resumed[0].dungeon_settings_id, fresh[44].dungeon_settings_id);
         assert_eq!(resumed[0].difficulty_level, fresh[44].difficulty_level);
@@ -1930,14 +2039,14 @@ mod tests {
         let seed = 12345i64;
 
         // Resume at floor 40.
-        let resumed = build_slices_from(&sd, seed, 150, 40, TEST_IPL);
+        let resumed = build_slices_from(&sd, seed, 150, 40, TEST_IPL, &ALL_QUESTS);
         assert_eq!(resumed.len(), 150 - 39, "floors 40..=150");
         assert_eq!(resumed[0].floor_index, 40, "first slice is the requested floor");
         assert_eq!(resumed[0].slice_index, 39, "slice_index is absolute (floor-1)");
         assert_eq!(resumed.last().unwrap().floor_index, 150, "runs to the top floor");
 
         // The per-floor content matches a fresh full run at the same absolute floor.
-        let fresh = build_slices_from(&sd, seed, 150, 1, TEST_IPL);
+        let fresh = build_slices_from(&sd, seed, 150, 1, TEST_IPL, &ALL_QUESTS);
         assert_eq!(
             resumed[0].dungeon_settings_id, fresh[39].dungeon_settings_id,
             "floor 40 content is stable whether resumed or reached fresh"
@@ -1952,7 +2061,7 @@ mod tests {
     fn a_run_starts_at_the_chosen_floor_in_retail_shape() {
         let sd = test_static_abyss();
         for start in [1u32, 15, 90, 149] {
-            let served = build_run_slices(&sd, 12345, start, TEST_IPL);
+            let served = build_run_slices(&sd, 12345, start, TEST_IPL, &ALL_QUESTS);
             assert_eq!(served.len(), 150, "start {start}: retail serves 150 floors");
             for (p, s) in served.iter().enumerate() {
                 assert_eq!(s.slice_index as usize, p, "start {start}: sliceIndex = position");
@@ -1967,15 +2076,15 @@ mod tests {
     #[test]
     fn the_first_served_slice_is_the_chosen_floor() {
         let sd = test_static_abyss();
-        assert_eq!(build_run_slices(&sd, 12345, 149, TEST_IPL)[0].floor_index, 149);
+        assert_eq!(build_run_slices(&sd, 12345, 149, TEST_IPL, &ALL_QUESTS)[0].floor_index, 149);
     }
 
     /// Content is chosen per absolute floor: resuming does not reshuffle the dungeons.
     #[test]
     fn a_resumed_floor_has_the_fresh_runs_content() {
         let sd = test_static_abyss();
-        let resumed = build_run_slices(&sd, 12345, 78, TEST_IPL);
-        let fresh = build_run_slices(&sd, 12345, 1, TEST_IPL);
+        let resumed = build_run_slices(&sd, 12345, 78, TEST_IPL, &ALL_QUESTS);
+        let fresh = build_run_slices(&sd, 12345, 1, TEST_IPL, &ALL_QUESTS);
         assert_eq!(resumed[0].dungeon_settings_id, fresh[77].dungeon_settings_id);
         assert_eq!(resumed[0].difficulty_level, fresh[77].difficulty_level);
     }
@@ -1984,8 +2093,8 @@ mod tests {
     #[test]
     fn a_fresh_run_is_unchanged() {
         let sd = test_static_abyss();
-        let served = build_run_slices(&sd, 12345, 1, TEST_IPL);
-        let fresh = build_slices_from(&sd, 12345, 150, 1, TEST_IPL);
+        let served = build_run_slices(&sd, 12345, 1, TEST_IPL, &ALL_QUESTS);
+        let fresh = build_slices_from(&sd, 12345, 150, 1, TEST_IPL, &ALL_QUESTS);
         assert_eq!(served.len(), fresh.len());
         for (a, b) in served.iter().zip(fresh.iter()) {
             assert_eq!(a.slice_index, b.slice_index);
@@ -2002,13 +2111,13 @@ mod tests {
     fn build_slices_from_floor_one_matches_fresh() {
         let sd = test_static_abyss();
         let seed = 7i64;
-        let fresh = build_slices_from(&sd, seed, 150, 1, TEST_IPL);
+        let fresh = build_slices_from(&sd, seed, 150, 1, TEST_IPL, &ALL_QUESTS);
         assert_eq!(fresh.len(), 150);
         assert_eq!(fresh[0].floor_index, 1);
         assert_eq!(fresh[0].slice_index, 0);
 
         // Resume at the top floor → exactly one slice (floor 150).
-        let top = build_slices_from(&sd, seed, 150, 150, TEST_IPL);
+        let top = build_slices_from(&sd, seed, 150, 150, TEST_IPL, &ALL_QUESTS);
         assert_eq!(top.len(), 1);
         assert_eq!(top[0].floor_index, 150);
         assert_eq!(top[0].slice_index, 149);
@@ -3017,11 +3126,11 @@ mod tests {
     #[test]
     fn a_resumed_runs_first_slice_is_the_resumed_floor() {
         let sd = test_static_abyss();
-        let slices = build_slices_from(&sd, 12345, 150, 78, TEST_IPL);
+        let slices = build_slices_from(&sd, 12345, 150, 78, TEST_IPL, &ALL_QUESTS);
         assert_eq!(slices[0].floor_index, 78);
         // The guard that matters: whatever start_abyss serves must come from
         // slices[0], whose dungeon is NOT the floor-1 dungeon.
-        let floor1 = build_slices_from(&sd, 12345, 150, 1, TEST_IPL)[0].dungeon_settings_id;
+        let floor1 = build_slices_from(&sd, 12345, 150, 1, TEST_IPL, &ALL_QUESTS)[0].dungeon_settings_id;
         assert_ne!(
             slices[0].dungeon_settings_id, floor1,
             "a floor-78 resume must not be handed the floor-1 dungeon"
@@ -3033,7 +3142,7 @@ mod tests {
     #[test]
     fn a_start_floor_past_the_top_is_empty_not_stuck() {
         let sd = test_static_abyss();
-        assert!(build_slices_from(&sd, 1, 150, 151, TEST_IPL).is_empty());
+        assert!(build_slices_from(&sd, 1, 150, 151, TEST_IPL, &ALL_QUESTS).is_empty());
     }
 
     #[test]
@@ -3631,7 +3740,7 @@ mod tests {
         count: usize,
         kills: &'static [&'static str],
     ) -> Vec<(u32, &'static str, u32, &'static [&'static str])> {
-        build_run_slices(&real_static_abyss(), 0x294, start, ipl)
+        build_run_slices(&real_static_abyss(), 0x294, start, ipl, &ALL_QUESTS)
             .iter()
             .take(count)
             .map(|s| (s.floor_index, "f00dea4c-025d-4233-a503-8ab28ef53c80", s.difficulty_level, kills))
@@ -3812,7 +3921,7 @@ mod tests {
     fn a_level_7_character_is_served_the_captured_retail_run() {
         let ipl = initial_player_level(&real_job_pools(), 7);
         assert_eq!(ipl, 10);
-        let served = build_run_slices(&real_static_abyss(), 7, 1, ipl);
+        let served = build_run_slices(&real_static_abyss(), 7, 1, ipl, &ALL_QUESTS);
         let (_, _, head, _) = RETAIL_STARTS[0];
         let difficulties: Vec<u32> =
             served.iter().take(head.len()).map(|s| s.difficulty_level).collect();
@@ -3859,6 +3968,230 @@ mod tests {
             .filter_map(|(k, v)| Some((k.parse().ok()?, v.as_u64()? as u32)))
             .collect();
         assert_eq!(shipped, RETAIL_EPL_BY_LEVEL.iter().copied().collect());
+    }
+
+    // ── The deep-floor roster: retail's AbyssSlice table (#294) ──────────────
+
+    /// Dungeon family (`dungeonPool[id].monsters[0]`) of every served floor, by band.
+    fn family_mix(
+        sd: &AbyssStaticData,
+        runs: &[(u32, u32)],
+        seeds: std::ops::Range<i64>,
+        has_completed: &dyn Fn(Uuid) -> bool,
+    ) -> std::collections::HashMap<&'static str, std::collections::HashMap<String, usize>> {
+        let mut mix: std::collections::HashMap<&'static str, std::collections::HashMap<String, usize>> =
+            Default::default();
+        for &(ipl, start) in runs {
+            for seed in seeds.clone() {
+                for s in build_run_slices(sd, seed, start, ipl, has_completed) {
+                    let band = match s.floor_index {
+                        0..=79 => "<80",
+                        80..=148 => "80-148",
+                        _ => "149+",
+                    };
+                    let family = sd.dungeon_pool[&s.dungeon_settings_id].monsters[0].clone();
+                    *mix.entry(band).or_default().entry(family).or_default() += 1;
+                }
+            }
+        }
+        mix
+    }
+
+    /// The (initialPlayerLevel, start floor) of the 20 captured retail runs whose
+    /// characters had the quest-gated content, and the families those runs were
+    /// served, by floor band — measured from the 3,000 slices of their `/start`s.
+    const RETAIL_GATED_RUNS: [(u32, u32); 20] = [
+        (40, 15), (40, 27), (45, 43), (45, 43), (57, 145), (59, 49), (64, 15), (67, 67),
+        (67, 89), (67, 89), (72, 35), (72, 35), (75, 90), (76, 145), (76, 145), (76, 149),
+        (79, 125), (81, 81), (81, 149), (84, 149),
+    ];
+    const RETAIL_MIX_80_148: [(&str, usize); 7] = [
+        ("Skeletons", 167), ("Atronach", 162), ("Dremora", 161), ("LichesOutcastNether", 136),
+        ("Liches", 107), ("AtronachDremora", 86), ("Warlord", 81),
+    ];
+    const RETAIL_MIX_149_UP: [(&str, usize); 7] = [
+        ("Dremora", 321), ("Skeletons", 304), ("Atronach", 302), ("LichesOutcastNether", 270),
+        ("Liches", 207), ("AtronachDremora", 155), ("Warlord", 146),
+    ];
+
+    fn share(mix: &std::collections::HashMap<String, usize>, family: &str) -> f64 {
+        let total: usize = mix.values().sum();
+        *mix.get(family).unwrap_or(&0) as f64 / total as f64
+    }
+
+    /// #294: "From about floor 80 the enemy structure changes: mostly Dremora and
+    /// warlocks, skeletons, one warmaster, a lich now and then". Retail's captured
+    /// family shares per band, against the same twenty (ipl, start) runs served by us.
+    /// Before this the 80-148 band was a third Liches Outcast Nether and a quarter
+    /// dragons, and 149+ only Atronach/Dremora.
+    #[test]
+    fn deep_floor_family_mix_matches_retail_per_band() {
+        let sd = real_static_abyss();
+        let mix = family_mix(&sd, &RETAIL_GATED_RUNS, 0..40, &ALL_QUESTS);
+        for (band, retail, tolerance) in [
+            ("80-148", &RETAIL_MIX_80_148[..], 0.03),
+            ("149+", &RETAIL_MIX_149_UP[..], 0.03),
+        ] {
+            let ours = &mix[band];
+            let total: usize = retail.iter().map(|(_, n)| n).sum();
+            let mut covered = 0.0;
+            for (family, n) in retail {
+                let want = *n as f64 / total as f64;
+                let got = share(ours, family);
+                covered += got;
+                assert!(
+                    (got - want).abs() <= tolerance,
+                    "{band} {family}: ours {got:.3}, retail {want:.3} ({ours:?})"
+                );
+            }
+            // Retail's 80-148 had 4 stray slices of 1,204 (2 dragons at difficulty
+            // 83-87, a troll, a lich-skeleton): nothing else beyond the seven families.
+            assert!(covered >= 0.98, "{band}: {:.3} outside retail's seven families: {ours:?}", 1.0 - covered);
+        }
+        assert!(
+            !mix["149+"].keys().any(|f| f.starts_with("Dragon")),
+            "retail served no dragon past floor 148: {:?}",
+            mix["149+"]
+        );
+        // Below 80 retail was a broad mix; the same top families lead.
+        let low = &mix["<80"];
+        for family in ["Atronach", "Skeletons", "Dremora", "Liches", "LichesOutcastNether", "Warlord"] {
+            assert!(share(low, family) >= 0.03, "<80 {family}: {:.3} ({low:?})", share(low, family));
+        }
+    }
+
+    /// #294's own character: level 100 (ipl 84), from floor 149, every quest done (all
+    /// ten gating quests are on its `completedQuests`). Every run meets Dremora,
+    /// skeletons and a warlord; liches are under a third of the floors, not all of them.
+    #[test]
+    fn a_level_100_run_from_floor_149_meets_the_retail_roster() {
+        let sd = real_static_abyss();
+        let ipl = initial_player_level(&real_job_pools(), 100);
+        assert_eq!(ipl, 84);
+        let random_pool: std::collections::HashSet<Uuid> = sd.random_pool.iter().copied().collect();
+        for seed in 0..200i64 {
+            let served = build_run_slices(&sd, seed, 149, ipl, &ALL_QUESTS);
+            assert_eq!((served[0].floor_index, served.len()), (149, 150));
+            let mut families: std::collections::HashMap<String, usize> = Default::default();
+            for s in &served {
+                assert_eq!(s.difficulty_level, 100);
+                *families.entry(sd.dungeon_pool[&s.dungeon_settings_id].monsters[0].clone()).or_default() += 1;
+            }
+            let n = |f: &str| *families.get(f).unwrap_or(&0);
+            let liches = n("Liches") + n("LichesOutcastNether");
+            assert!(liches * 100 <= 30 * 150, "seed {seed}: {liches}/150 lich floors {families:?}");
+            assert!(n("Dremora") + n("AtronachDremora") >= 20, "seed {seed}: {families:?}");
+            assert!(n("Skeletons") >= 10 && n("Warlord") >= 5, "seed {seed}: {families:?}");
+            assert!(!families.keys().any(|f| f.starts_with("Dragon")), "seed {seed}: {families:?}");
+            // Past floor 150 it is no longer the 15-dungeon randomPool cycle.
+            assert!(served.iter().skip(2).any(|s| !random_pool.contains(&s.dungeon_settings_id)));
+            // The bag: 33 dungeons over 150 floors, each 3-6 times (retail: 1-6).
+            let mut per_dungeon: std::collections::HashMap<Uuid, usize> = Default::default();
+            for s in &served {
+                *per_dungeon.entry(s.dungeon_settings_id).or_default() += 1;
+            }
+            assert_eq!(per_dungeon.len(), 33, "seed {seed}");
+            assert!(per_dungeon.values().all(|c| (3..=6).contains(c)), "seed {seed}: {per_dungeon:?}");
+        }
+        // The reporter's runs are ONE floor each (start, a kill, /end), so floor 149
+        // alone is what they meet. The designed band served it 31% lich dungeons and
+        // 34% dragons; retail's table: 9 lich of 33 dungeons, no dragon.
+        let mut first: std::collections::HashMap<String, usize> = Default::default();
+        for seed in 0..1000i64 {
+            let s = &build_run_slices(&sd, seed, 149, ipl, &ALL_QUESTS)[0];
+            *first.entry(sd.dungeon_pool[&s.dungeon_settings_id].monsters[0].clone()).or_default() += 1;
+        }
+        let lich = share(&first, "Liches") + share(&first, "LichesOutcastNether");
+        assert!((0.22..=0.33).contains(&lich), "floor 149 liches {lich:.3}: {first:?}");
+        let dremora_atronach = share(&first, "Dremora") + share(&first, "Atronach") + share(&first, "AtronachDremora");
+        assert!((0.40..=0.51).contains(&dremora_atronach), "floor 149 {dremora_atronach:.3}: {first:?}");
+        assert!(!first.keys().any(|f| f.starts_with("Dragon")), "{first:?}");
+    }
+
+    /// The low-level control: a level-7 character (ipl 10, the captured run's) with no
+    /// gating quest done. Floors 1-24 are the fixed retail ladder, unchanged; every deep
+    /// floor is one of the 15 ungated Atronach/Dremora dungeons — exactly what retail
+    /// served the level 4-38 runs (15 distinct deep dungeons, 640 floors, all in this set).
+    #[test]
+    fn a_low_level_run_without_the_quests_keeps_the_ungated_roster() {
+        let sd = real_static_abyss();
+        let ipl = initial_player_level(&real_job_pools(), 7);
+        assert_eq!(ipl, 10);
+        let none = completed_quest_gate(&serde_json::Value::Null);
+        let random_pool: std::collections::HashSet<Uuid> = sd.random_pool.iter().copied().collect();
+        for seed in 0..50i64 {
+            let served = build_run_slices(&sd, seed, 1, ipl, &none);
+            for (s, fixed) in served.iter().zip(&sd.fixed_slices) {
+                assert_eq!(s.dungeon_settings_id, fixed.dungeon_settings_id, "floor {}", s.floor_index);
+            }
+            let deep: std::collections::HashSet<Uuid> =
+                served[24..].iter().map(|s| s.dungeon_settings_id).collect();
+            assert_eq!(deep, random_pool, "seed {seed}: the ungated deep roster is retail's 15");
+        }
+    }
+
+    /// The gate reads `completedQuests`: with the skeleton quests done and nothing else,
+    /// skeletons join the ungated roster and liches do not.
+    #[test]
+    fn the_quest_gate_reads_completed_quests() {
+        let sd = real_static_abyss();
+        let skeleton_quests = serde_json::json!({
+            "bd82425a-dfa4-47b2-a091-b4dea4c2ce15": 1,
+            "d4a88399-0518-4b72-872c-de8cbb191dae": 1,
+        });
+        let gate = completed_quest_gate(&skeleton_quests);
+        let mix = family_mix(&sd, &[(84, 149)], 0..20, &gate);
+        let deep = &mix["149+"];
+        assert!(share(deep, "Skeletons") > 0.2, "{deep:?}");
+        assert!(!deep.keys().any(|f| f.starts_with("Liches") || f == "Warlord"), "{deep:?}");
+    }
+
+    /// Resuming does not reshuffle: the bag is walked from the first deep floor, so
+    /// floor 149 of a run started there is floor 149 of the same run reached from below.
+    #[test]
+    fn a_resumed_deep_floor_has_the_fresh_runs_dungeon_with_the_real_table() {
+        let sd = real_static_abyss();
+        for (seed, ipl, start) in [(1i64, 84u32, 149u32), (2, 10, 40), (3, 75, 90)] {
+            let resumed = build_slices_from(&sd, seed, 300, start, ipl, &ALL_QUESTS);
+            let fresh = build_slices_from(&sd, seed, 300, 1, ipl, &ALL_QUESTS);
+            for (r, f) in resumed.iter().zip(&fresh[(start - 1) as usize..]) {
+                assert_eq!((r.floor_index, r.dungeon_settings_id), (f.floor_index, f.dungeon_settings_id));
+            }
+        }
+    }
+
+    /// Every dungeon the table can serve is one the server can generate a floor for,
+    /// and every captured retail slice's (dungeon, difficulty) is eligible — spot-checked
+    /// on the dungeons and difficulty extremes the captures pinned.
+    #[test]
+    fn every_table_dungeon_generates_and_the_captured_extremes_are_eligible() {
+        let sd = real_static_abyss();
+        let gd = game_data();
+        assert_eq!(sd.abyss_slices.len(), 161);
+        for slice in sd.abyss_slices.iter().filter(|s| s.random_weight > 0.0) {
+            assert!(sd.dungeon_pool.contains_key(&slice.dungeon_settings_id), "{}", slice.name);
+            assert!(
+                blades_lib::util::dungeon::generate_for_dungeon(&gd, &slice.dungeon_settings_id, 100, 0).is_some(),
+                "{} has no generated data",
+                slice.name
+            );
+        }
+        // (handle, difficulty) pairs retail served, from its lowest and highest uses.
+        for (handle, difficulty) in [
+            ("Stone_Atronach_2Rooms_AbyssDungeonSetting", 28),
+            ("Cave_Troll_3Rooms_AbyssDungeonSetting", 95),
+            ("Cave_Skeletons_2Rooms_AbyssDungeonSetting", 19),
+            ("Ayleid_DragonAncientFire_Boss_2Rooms_AbyssDungeonSetting", 87),
+            ("Test_Stone_Dremora_AbyssDungeonSetting", 100),
+        ] {
+            let id = sd.dungeon_pool.iter().find(|(_, d)| d.handle == handle).map(|(id, _)| *id).unwrap();
+            assert!(
+                sd.abyss_slices.iter().any(|s| s.dungeon_settings_id == id
+                    && s.random_weight > 0.0
+                    && (s.min_level..=s.max_level).contains(&difficulty)),
+                "{handle} at {difficulty}"
+            );
+        }
     }
 
     // ── Per-run seed, rewards by level, the /end package (#294) ─────────────
