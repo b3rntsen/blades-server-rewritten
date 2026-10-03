@@ -3119,8 +3119,28 @@ pub(crate) mod jobs_gen {
     const GOLD_BASE: u64 = 107;
     /// Spread around the fitted gold line.
     const GOLD_JITTER: u64 = 180;
-    /// How often a job pays NO gold: 148 of 802 retail jobs, 18.5%.
+    /// RETIRED: the old roll's chance of a job paying no gold (148 of 802). Those
+    /// 148 were the featured and boss jobs, which pay gems instead (#306); the draw
+    /// is still made so later rolls keep their positions in the stream.
     const ZERO_GOLD_PER_MILLE: u64 = 185;
+    /// Salt for the side stream a standard job takes its gold jitter from when the
+    /// retired zero-gold draw hit.
+    const GOLD_SIDE_STREAM: u64 = 0x601D_5EED;
+    /// Gems a featured (`presentation` 1) job pays: 84 of 84 distinct retail jobs,
+    /// every level band 1-100.
+    pub const FEATURED_JOB_GEMS: u64 = 4;
+    /// Gems a boss (`presentation` 2) job pays: 27 of 27 distinct retail jobs.
+    pub const BOSS_JOB_GEMS: u64 = 12;
+
+    /// A job's `rewardGemCount`, which retail fixes by its pool's presentation and
+    /// never by the secret room (0 of 109 standard secret-room jobs paid gems).
+    pub fn job_gem_reward(presentation: i64) -> u64 {
+        match presentation {
+            1 => FEATURED_JOB_GEMS,
+            2 => BOSS_JOB_GEMS,
+            _ => 0,
+        }
+    }
 
     /// Objective template IDs are fixed per job type in the captures.
     fn objective_ids(job_type: i64) -> &'static [&'static str] {
@@ -3668,6 +3688,13 @@ pub(crate) mod jobs_gen {
                 reward.currencies.insert(id, count);
             }
         }
+        // Gems are a currency too: retail's /complete for a 4-gem featured job paid
+        // `currencies: {gems: 4}` (captures 9303, 11388, 18482) and for a 12-gem
+        // boss job `{gems: 12}` (11253, 37130).
+        let gems = get_u64(&setup, "rewardGemCount", 0);
+        if gems > 0 {
+            *reward.currencies.entry(blades_lib::economy::GEMS).or_insert(0) += gems;
+        }
         reward
     }
 
@@ -3970,17 +3997,26 @@ pub(crate) mod jobs_gen {
         // spread, and the negative result that stopped it being exact.
         let d = difficulty.max(1) as u64;
         let reward_xp = d * XP_PER_DIFFICULTY + XP_BASE + rng.below(XP_JITTER);
-        // 148 of the 802 (18.5%) pay NO gold at all — a shape we never produced,
-        // so a zero draw comes first and the curve only applies to the rest.
-        let reward_item_count = if rng.below(1000) < ZERO_GOLD_PER_MILLE {
-            0
+        // A featured or boss job pays a flat gem count INSTEAD of gold; a standard
+        // job pays gold and never gems (tracker #306, `report_306_job_gems`). The
+        // draws are the retired roll's, in the same order and under the same
+        // conditions, so nothing rolled after them (name, gather item, duel boss)
+        // moves. A standard job whose retired zero-gold draw hit takes its jitter
+        // from a side stream for the same reason.
+        let retired_zero_gold = rng.below(1000) < ZERO_GOLD_PER_MILLE;
+        let gold_jitter = if retired_zero_gold {
+            Rng::new(base_seed ^ GOLD_SIDE_STREAM).below(GOLD_JITTER)
         } else {
-            (d * GOLD_PER_DIFFICULTY + GOLD_BASE + rng.below(GOLD_JITTER)) / 10 * 10
+            rng.below(GOLD_JITTER)
         };
-        let reward_gem = if secret_room && rng.below(3) == 0 {
-            rng.range_incl(6, 15) as u64
-        } else {
+        if secret_room && rng.below(3) == 0 {
+            rng.range_incl(6, 15);
+        }
+        let reward_gem = job_gem_reward(presentation);
+        let reward_item_count = if reward_gem > 0 {
             0
+        } else {
+            (d * GOLD_PER_DIFFICULTY + GOLD_BASE + gold_jitter) / 10 * 10
         };
         let initial_epl = initial_epl.max(1) as u64;
 
@@ -4832,17 +4868,29 @@ mod report92_reward_curve {
         );
     }
 
-    /// THE shape we never produced: retail pays no gold at all on 18.5% of jobs.
+    /// Retail's 148 no-gold jobs (18.5%) were not a random share: they were the
+    /// featured and boss jobs, which pay gems instead (#306). In 463 distinct retail
+    /// jobs, 111 of 111 gem jobs pay no gold and 352 of 352 standard jobs pay gold.
     #[test]
-    fn some_jobs_pay_no_gold_at_all() {
-        let s = sample();
-        let zero = s.iter().filter(|(_, _, g)| *g == 0).count();
-        let share = zero as f64 / s.len() as f64;
-        assert!(
-            (0.10..=0.28).contains(&share),
-            "{:.1}% of jobs paid no gold; retail is 18.5% and the old roll was 0%",
-            share * 100.0
-        );
+    fn the_jobs_that_pay_no_gold_are_exactly_the_gem_jobs() {
+        let pools = job_pools();
+        let boundary = current_reset_boundary(&pools, NOW_WED);
+        let (mut gem_jobs, mut gold_jobs) = (0, 0);
+        for seed in 0..60u128 {
+            let c = uuid::Uuid::from_u128(CHAR.as_u128().wrapping_add(seed));
+            for level in [10u16, 30, 50, 70, 90] {
+                for j in generate(&pools, c, level, 0, boundary, NOW_WED).0 {
+                    let gems = j["jobSetup"]["rewardGemCount"].as_u64().unwrap();
+                    let gold = j["jobSetup"]["rewardItemCount"].as_u64().unwrap();
+                    assert!(
+                        (gems > 0) != (gold > 0),
+                        "a job pays gems or gold, never both or neither: {gems} gems, {gold} gold"
+                    );
+                    if gems > 0 { gem_jobs += 1 } else { gold_jobs += 1 }
+                }
+            }
+        }
+        assert!(gem_jobs > 0 && gold_jobs > 0, "the sample holds both kinds");
     }
 
     /// Gold stays a round ten, as every captured value is.
@@ -8125,7 +8173,9 @@ mod report_306_daily_job_hang {
             ("a4a54f84-390f-4031-bf3a-c8fc9e8e11ed", 4, "19a3b1b0-c18b-4f2f-b73f-780f3759fe48", 0, 1476, "UI.Jobs.Names.Gather.004"),
             // XP 1517: prod served 1593 before tracker #313 re-banded the difficulty
             // it scales with; the draw itself is unchanged.
-            ("72217ae0-4bdb-4079-973b-4ca252ee487f", 3, "e7418cc7-01de-4c84-ba00-e221f8783d51", 10, 1517, "UI.Jobs.Names.Rescue.003"),
+            // Gems 0: prod served a 10-gem secret-room roll on this standard job;
+            // retail pays standard jobs no gems (#306, `report_306_job_gems`).
+            ("72217ae0-4bdb-4079-973b-4ca252ee487f", 3, "e7418cc7-01de-4c84-ba00-e221f8783d51", 0, 1517, "UI.Jobs.Names.Rescue.003"),
         ] {
             let j = job(&jobs, id);
             let js = &j["jobSetup"];
@@ -8192,5 +8242,185 @@ mod report_306_daily_job_hang {
         for (ty, used) in &per_type {
             assert_eq!(used.len(), 12, "jobType {ty} used {used:?}");
         }
+    }
+}
+
+/// Tracker #306 follow-up (HauDrauf, 2026-10-03): "the two new daily jobs are here,
+/// but no gem reward is set." His Oct 3 board's highlighted jobs, the boss Duel
+/// `4b25489e-…` and the Friday featured Rescue `71b53f82-…`, both showed 0 gems
+/// and paid gold.
+///
+/// MINED from the retail snapshot (222 `/quests` bodies, 13 characters, 463
+/// distinct jobs, levels 1-100):
+///
+/// ```text
+/// pool                      jobs  rewardGemCount   rewardItemCount (gold)
+/// standard (presentation 0)  352  0 on 352         > 0 on 352
+/// featured weekly (1)         84  4 on 84          0 on 84
+/// boss weekly (2)             27  12 on 27         0 on 27
+/// featured daily (1, daily)    0  (dormant)
+/// ```
+///
+/// Flat in every level band, and not tied to the secret room: 0 of 109 standard
+/// secret-room jobs paid gems, while 44 of the 84 featured gem jobs had no secret
+/// room. Every job /complete for a gem job paid `currencies: {gems: N}` and no gold
+/// (captures 9303, 11388, 18482: 4; 11253, 37130: 12).
+///
+/// Our roll gave gems only on a third of secret-room jobs (6-15, any pool) and never
+/// on a boss Duel (no secret room), and `job_completion_reward` never paid gems.
+#[cfg(test)]
+mod report_306_job_gems {
+    use super::jobs_gen;
+    use blades_lib::economy::GEMS;
+    use serde_json::{json, Value};
+    use uuid::Uuid;
+
+    const HAUDRAUF: &str = "489620db-7f90-4a03-bb7c-f7e92a9c73cb";
+    /// 2026-10-03 05:06 UTC, inside the window his prod board was rolled for
+    /// (`lastJobsResetTime` 1791003600, `jobDifficultyCycleIndex` 60).
+    const OCT3_FETCH: u64 = 1_791_004_000;
+    const GOLD: Uuid = Uuid::from_u128(0xf8d27767_a85e_4fd6_a5bb_bf8a13d0daa2);
+
+    fn pools() -> Value {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        serde_json::from_str(&std::fs::read_to_string(dir.join("job_pools.json")).unwrap()).unwrap()
+    }
+
+    fn presentation_of(pools: &Value, pool_id: &str) -> i64 {
+        pools["jobPools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["jobPoolId"] == pool_id)
+            .and_then(|p| p["presentation"].as_i64())
+            .unwrap_or_else(|| panic!("unknown pool {pool_id}"))
+    }
+
+    /// Every job across many characters, levels and every weekday, tagged with
+    /// its pool's presentation.
+    fn sample() -> Vec<(i64, Value)> {
+        let pools = pools();
+        let mut out = Vec::new();
+        for day in 0..7u64 {
+            let now = OCT3_FETCH + day * 86_400;
+            let boundary = jobs_gen::current_reset_boundary(&pools, now);
+            for seed in 0..40u128 {
+                let c = Uuid::from_u128(0x306_0000 + seed);
+                for level in [1u16, 20, 45, 70, 100] {
+                    for j in jobs_gen::generate(&pools, c, level, 0, boundary, now).0 {
+                        let p = presentation_of(&pools, j["jobPoolId"].as_str().unwrap());
+                        out.push((p, j));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn gems(j: &Value) -> u64 {
+        j["jobSetup"]["rewardGemCount"].as_u64().unwrap()
+    }
+    fn gold(j: &Value) -> u64 {
+        j["jobSetup"]["rewardItemCount"].as_u64().unwrap()
+    }
+
+    #[test]
+    fn a_featured_job_pays_four_gems_and_no_gold() {
+        let featured: Vec<_> = sample().into_iter().filter(|(p, _)| *p == 1).collect();
+        assert!(featured.len() >= 7 * 40, "every weekday rolls a featured job");
+        for (_, j) in &featured {
+            assert_eq!(gems(j), 4, "retail: 84 of 84 featured jobs paid 4 gems");
+            assert_eq!(gold(j), 0, "retail: 84 of 84 featured jobs paid no gold");
+        }
+    }
+
+    #[test]
+    fn a_boss_job_pays_twelve_gems_and_no_gold() {
+        let boss: Vec<_> = sample().into_iter().filter(|(p, _)| *p == 2).collect();
+        assert!(!boss.is_empty());
+        for (_, j) in &boss {
+            assert_eq!(gems(j), 12, "retail: 27 of 27 boss jobs paid 12 gems");
+            assert_eq!(gold(j), 0, "retail: 27 of 27 boss jobs paid no gold");
+        }
+    }
+
+    /// The control, and the secret-room half of the old rule.
+    #[test]
+    fn a_standard_job_pays_gold_and_never_gems_secret_room_or_not() {
+        let standard: Vec<_> = sample().into_iter().filter(|(p, _)| *p == 0).collect();
+        let secret = standard.iter().filter(|(_, j)| j["jobSetup"]["secretRoom"] == true).count();
+        assert!(secret > 100, "the sample holds secret-room standard jobs ({secret})");
+        for (_, j) in &standard {
+            assert_eq!(gems(j), 0, "retail: 0 of 352 standard jobs paid gems");
+            assert!(gold(j) > 0, "retail: 352 of 352 standard jobs paid gold");
+        }
+    }
+
+    /// Identity test against retail's own /complete: capture 9303 (featured, 4
+    /// gems, 94 xp) and 11253 (boss, 12 gems, 148 xp) paid exactly these.
+    #[test]
+    fn completing_a_gem_job_pays_the_gems() {
+        for (gems, xp) in [(4u64, 94u64), (12, 148)] {
+            let job = json!({
+                "questId": "00000000-0000-0000-0000-000000000306",
+                "jobSetup": {
+                    "rewardGemCount": gems,
+                    "rewardItemId": GOLD.to_string(),
+                    "rewardItemCount": 0,
+                    "rewardXp": xp,
+                },
+            });
+            let r = jobs_gen::job_completion_reward(&job);
+            assert_eq!(r.currencies.len(), 1, "{:?}", r.currencies);
+            assert_eq!(r.currencies.get(&GEMS), Some(&gems));
+            assert_eq!(r.character_xp, xp);
+        }
+        // Control: a standard job still pays its gold and no gems.
+        let r = jobs_gen::job_completion_reward(&json!({
+            "jobSetup": {"rewardGemCount": 0, "rewardItemId": GOLD.to_string(),
+                         "rewardItemCount": 520, "rewardXp": 310},
+        }));
+        assert_eq!(r.currencies.get(&GOLD), Some(&520));
+        assert!(!r.currencies.contains_key(&GEMS));
+    }
+
+    /// His actual Oct 3 board (these six ids are the rows prod stored at the 05:00
+    /// reset). The highlighted two now pay gems; every other value — ids, names,
+    /// dungeons, difficulty, XP, the standard jobs' gold — is what prod served, so
+    /// the fix moves no other draw.
+    #[test]
+    fn his_oct3_board_pays_gems_on_the_highlighted_jobs_and_nothing_else_moves() {
+        let pools = pools();
+        let boundary = jobs_gen::current_reset_boundary(&pools, OCT3_FETCH);
+        assert_eq!(boundary, 1_791_003_600, "his stored lastJobsResetTime");
+        let c = Uuid::parse_str(HAUDRAUF).unwrap();
+        let jobs = jobs_gen::generate(&pools, c, 100, 60, boundary, OCT3_FETCH).0;
+        // (id, pool prefix, difficulty, xp, name, gems, gold)
+        let want = [
+            ("a398cf65-6793-4a69-928e-f3492bb78ea9", "4956c6ab", 76, 1550, "UI.Jobs.Names.Defeat.009", 0, 1640),
+            ("346135d3-ad76-4658-b0f2-af7fb77c4a0d", "4956c6ab", 79, 1610, "UI.Jobs.Names.Rescue.006", 0, 1650),
+            ("01cda05c-b403-4ef6-97ed-a987f47b4a69", "4956c6ab", 75, 1480, "UI.Jobs.Names.Rescue.004", 0, 1650),
+            ("de1a54e3-7889-4e9b-a6d3-e24f344fdb5d", "4956c6ab", 73, 1459, "UI.Jobs.Names.Rescue.001", 0, 1570),
+            // boss Duel: prod served 0 gems / 1620 gold
+            ("4b25489e-7f63-4bac-8680-69f150deaa40", "361da91e", 75, 1510, "UI.Jobs.Names.Duel.002", 12, 0),
+            // Friday featured Rescue: prod served 0 gems / 1660 gold
+            ("71b53f82-cab9-4580-8012-ffba1c12d9c5", "8501a030", 81, 1624, "UI.Jobs.Names.Rescue.001", 4, 0),
+        ];
+        assert_eq!(jobs.len(), want.len());
+        for (id, pool, d, xp, name, gem, gold_) in want {
+            let j = jobs.iter().find(|j| j["questId"] == id).unwrap_or_else(|| panic!("{id} missing"));
+            let s = &j["jobSetup"];
+            assert!(j["jobPoolId"].as_str().unwrap().starts_with(pool), "{id}");
+            assert_eq!(j["difficultyLevel"], d, "{id}");
+            assert_eq!(s["rewardXp"], xp, "{id}");
+            assert_eq!(s["questName"]["key"], name, "{id}");
+            assert_eq!(s["rewardGemCount"], gem, "{id}");
+            assert_eq!(s["rewardItemCount"], gold_, "{id}");
+        }
+        assert_eq!(
+            jobs.iter().find(|j| j["questId"] == "4b25489e-7f63-4bac-8680-69f150deaa40").unwrap()
+                ["jobSetup"]["duelBossId"],
+            "01d82726-527f-4601-929c-182acd3fa9b7"
+        );
     }
 }
