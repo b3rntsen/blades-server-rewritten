@@ -193,6 +193,10 @@ pub const END_PACKAGE_MIN_SCORE: f64 = 10.0;
 /// in 10 runs; below level 60 retail paid none in 6. Seeded from the run, so a
 /// retried `/end` pays the same thing. Gear, which retail added to 3 of the 4
 /// runs that passed rung 360, is not modelled here.
+///
+/// A soul-gem stack is TRANSCENDENT, 4-7 of them, one time in
+/// [`TRANSCENDENT_ONE_IN`] — see [`TRANSCENDENT_SOUL_GEM`] for why that rests on
+/// players' reports and not on a capture.
 pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGrant {
     let mut grant = RewardGrant::default();
     if score < END_PACKAGE_MIN_SCORE {
@@ -212,8 +216,47 @@ pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGra
     if let Some(package) = &pool[(seed % pool.len() as u64) as usize].package {
         grant.stackable_items = package.stackable_items.clone();
     }
+    let is_soul_gems = !grant.stackable_items.is_empty()
+        && grant.stackable_items.keys().all(|id| SOUL_GEMS.contains(&id.to_string().as_str()));
+    let upgrade = mix(seed ^ 0x7EA5_CE4D_E400_0294);
+    if is_soul_gems && upgrade % TRANSCENDENT_ONE_IN == 0 {
+        let count = 4 + (upgrade >> 32) % 4; // 4..=7
+        grant.stackable_items =
+            HashMap::from([(Uuid::parse_str(TRANSCENDENT_SOUL_GEM).unwrap(), count)]);
+    }
     grant
 }
+
+/// The ten soul gems, Petty (SoulGem1) to Transcendent (SoulGem10).
+const SOUL_GEMS: [&str; 10] = [
+    "19ce1a65-057f-4f34-a0ed-27de7c085662",
+    "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+    "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+    "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+    "3932e499-441e-4c6d-b671-9a03131ebe6f",
+    "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+    "a3351353-f613-4368-bac7-05783f857b07",
+    "68d7941e-8c8d-47bf-9f66-becb058f1817",
+    "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+    TRANSCENDENT_SOUL_GEM,
+];
+
+/// Transcendent Soul Gem (SoulGem10).
+///
+/// NOT FROM A CAPTURE. None of the 18 captured retail `/end`s paid one (their gem
+/// stacks were 4-6 Greater, Grand, Elevated or Glorious). #294's reporter, a
+/// level-100 player, reports retail's `/end` paying "up to 7 greater, glorious or
+/// transcendent soul gems, but not every run", backed by a screenshot, and that
+/// players on Discord put the highest count at 7. The APK's server-only
+/// `AbyssScaling_Backend.PackageRewardTier` has an `_upgradeChance` the captures
+/// cannot measure. So: the retail gem frequency is kept as it was, and a gem stack
+/// is upgraded to 4-7 Transcendent one time in [`TRANSCENDENT_ONE_IN`] — an
+/// assumption sized so that the 5 captured high-level gem stacks containing none is
+/// unremarkable (0.8^5 = 0.33).
+pub const TRANSCENDENT_SOUL_GEM: &str = "d94bab85-53d5-4c9c-a637-acd94fc66c98";
+
+/// One soul-gem stack in this many is Transcendent — see [`TRANSCENDENT_SOUL_GEM`].
+pub const TRANSCENDENT_ONE_IN: u64 = 5;
 
 /// The number of observations behind a rung, for tests and diagnostics.
 pub fn rung_observations(score: u32) -> u64 {
@@ -569,27 +612,40 @@ mod tests {
     /// #294: "at the end of a run, randomly up to 7 greater, glorious or
     /// transcendent soul gems, but not every run". Retail, level 60 and up: 5 of 10
     /// paid packages were a soul-gem stack of 4-6 (Greater, Grand, Elevated,
-    /// Glorious x2); below level 60, 0 of 6.
+    /// Glorious x2); below level 60, 0 of 6. Transcendent (4-7) is the reporter's
+    /// and Discord's account, not a capture — see [`TRANSCENDENT_SOUL_GEM`].
     #[test]
     fn the_end_soul_gem_roll_matches_retails_frequency_and_range() {
         let paid_kinds = SOUL_GEMS_PAID.map(uuid);
         let all_gems = ALL_SOUL_GEMS.map(uuid);
         let runs = 20_000;
         let mut gems = 0;
+        let mut transcendent = 0;
+        let mut counts = std::collections::BTreeSet::new();
         let mut kinds = std::collections::HashSet::new();
         for seed in 0..runs {
             let grant = end_package(100.0, 100, seed);
             let (item, count) = single_stack(&grant);
             if all_gems.contains(&item) {
                 gems += 1;
-                assert!(paid_kinds.contains(&item), "seed {seed}: a gem retail never paid: {item}");
-                assert!((4..=6).contains(&count), "seed {seed}: {count} gems, retail paid 4-6");
+                if item == uuid(TRANSCENDENT_SOUL_GEM) {
+                    transcendent += 1;
+                    assert!((4..=7).contains(&count), "seed {seed}: {count} transcendent, reported up to 7");
+                    counts.insert(count);
+                } else {
+                    assert!(paid_kinds.contains(&item), "seed {seed}: a gem retail never paid: {item}");
+                    assert!((4..=6).contains(&count), "seed {seed}: {count} gems, retail paid 4-6");
+                }
                 kinds.insert(item);
             }
         }
         let rate = f64::from(gems) / runs as f64;
         assert!((0.4..=0.6).contains(&rate), "soul gems on {rate:.3} of level-100 /ends, retail 5/10");
-        assert_eq!(kinds.len(), 4, "all four retail gem kinds come up");
+        assert_eq!(kinds.len(), 5, "the four retail gem kinds and Transcendent come up");
+        // #294's report: transcendent stacks, up to 7. One gem stack in five.
+        let upgraded = f64::from(transcendent) / f64::from(gems);
+        assert!((0.17..=0.23).contains(&upgraded), "transcendent on {upgraded:.3} of gem stacks");
+        assert_eq!(counts, (4..=7).collect(), "4 to 7 transcendent gems");
 
         for level in [3u64, 7, 34, 57] {
             for seed in 0..2_000i64 {

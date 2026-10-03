@@ -8,7 +8,8 @@
         "dungeonPool: every *AbyssDungeonSetting from the APK Unity bundles (deploy/static/parsed.json 'dungeons'); handle/environment/monsters/enemyCount are read directly from DungeonSettingsScriptableObject.",
         "monsterTiers authoritativeFloor: the floor each family first appears on the captured fixed ladder.",
         "scaling model FIELD NAMES: read from il2cpp dump.cs AbyssScaling / AbyssScaling_Backend / AbyssSlice / AbyssScaling.PerFloorData / AbyssScaling.AbyssScalingCurveEntry ScriptableObjects.",
-        "scalingCurve + perFloorRewards + killScores + scalingBackend.slicesCountAbovePlayerLevel: AbyssScaling ScriptableObject (APK Unity bundles). The curve is cross-checked byte-identical against an independent extraction (blades-capture/reference/game-defs/abyss.json scaling_curve); the per-floor rows and the negative-offset multiplier of 1.0 are confirmed exact against 18 retail /end captures."
+        "scalingCurve + perFloorRewards + killScores + scalingBackend.slicesCountAbovePlayerLevel: AbyssScaling ScriptableObject (APK Unity bundles). The curve is cross-checked byte-identical against an independent extraction (blades-capture/reference/game-defs/abyss.json scaling_curve); the per-floor rows and the negative-offset multiplier of 1.0 are confirmed exact against 18 retail /end captures.",
+        "abyssSlices: the APK's AbyssData list of AbyssSlice assets (dungeon, levelRange, requiredQuest, randomWeight), via blades-capture reference/game-defs/abyss.json; script/build_abyss_slices.py. Checked against all 3,900 slices of the 26 captured retail runs: every one is a listed dungeon at a difficultyLevel inside its range (#294)."
       ],
       "GUESSED": [
         "difficultyCurve floors 25-150: smooth continuation (+6/floor from 100, cap 400). Prod only pinned difficulty 100 for the random pool.",
@@ -30,7 +31,8 @@
       "scalingBackend": "MIXED. slicesCount + slicesCountAbovePlayerLevel authoritative; maxDifficulty, hardcoreSliceDifficultyOffset and minimumSuccessRating still guessed (server-only asset).",
       "scalingCurve": "AUTHORITATIVE. {entries:[{difficultyOffset, goldBonusMultiplier, xpBonusMultiplier}]} - step function on (sliceDifficultyLevel - initialPlayerLevel); below offset 0 the multiplier is 1.0 (no entry applies).",
       "perFloorRewards": "AUTHORITATIVE. {entries:[{floor, baseGoldReward, baseXPReward}]} - 150 rows keyed by wire floorIndex; the base reward for clearing a floor before the scalingCurve multiplier.",
-      "killScores": "AUTHORITATIVE. {sameLevelKillScore, underLeveledKillScore[100], overLeveledKillScore[60]} - in-run score per kill by enemyLevel - initialPlayerLevel."
+      "killScores": "AUTHORITATIVE. {sameLevelKillScore, underLeveledKillScore[100], overLeveledKillScore[60]} - in-run score per kill by enemyLevel - initialPlayerLevel.",
+      "abyssSlices": "AUTHORITATIVE. Retail's generation table. Floors past fixedSlices are drawn from it: eligible = levelRange contains the floor's difficultyLevel, randomWeight > 0, requiredQuestId completed; drawn by weight from a shuffle bag (each eligible dungeon once before any repeats), which reproduces retail's near-equal per-dungeon counts. Supersedes randomPool / dungeonPool tiers / depthBands for slice picking (they remain the fallback when this key is absent)."
     },
     "_wiring": "server/src/abyss.rs reads fixedSlices/randomPool/futureRewards/algorithmVersion/difficultyCurve/depthBands/dungeonPool/monsterTiers for run generation, and perFloorRewards + scalingCurve + killScores for /update scoring and /end rewards. blades_lib::static_data::AbyssStaticData is the deserializer."
   },
@@ -3621,5 +3623,1295 @@
       1
     ]
   },
-  "_futureRewardLadderNote": "WIRED 2026-09-17 (#172). The ladder has TEN score rungs -- 35, 50, 70, 95, 135, 190, 260, 360, 490, 650 -- and the wire carries exactly ONE element, the NEXT unreached rung (707/707 captured observations). Both the ladder and the CONTENTS of every rung now live in blades_lib/src/abyss_future_rewards.json and are served by blades_lib::features::abyss_rewards::next_future_reward. The earlier note here said the contents were 'a server-side loot table nobody has'; that was wrong -- they are in the captures under the wire key `abyssFutureRewards`, and the earlier search looked for `futureRewards`. Rungs 50 and 360 need no table at all: the tier is fixed per rung and the chest's level is the character's own level in 72 of 72 observations. `futureRewards` below is NO LONGER READ by the wire and is kept only so older deployments of this file still parse."
+  "_futureRewardLadderNote": "WIRED 2026-09-17 (#172). The ladder has TEN score rungs -- 35, 50, 70, 95, 135, 190, 260, 360, 490, 650 -- and the wire carries exactly ONE element, the NEXT unreached rung (707/707 captured observations). Both the ladder and the CONTENTS of every rung now live in blades_lib/src/abyss_future_rewards.json and are served by blades_lib::features::abyss_rewards::next_future_reward. The earlier note here said the contents were 'a server-side loot table nobody has'; that was wrong -- they are in the captures under the wire key `abyssFutureRewards`, and the earlier search looked for `futureRewards`. Rungs 50 and 360 need no table at all: the tier is fixed per rung and the chest's level is the character's own level in 72 of 72 observations. `futureRewards` below is NO LONGER READ by the wire and is kept only so older deployments of this file still parse.",
+  "abyssSlices": [
+    {
+      "name": "Ayleid_AtronachDremora_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "7234cbba-986e-450f-b605-c876a8658013",
+      "minLevel": 29,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_AtronachGoblinWizard_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "48c042a4-e993-446b-9c70-ee68eba53fdf",
+      "minLevel": 25,
+      "maxLevel": 48,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_AtronachNecromancer_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "0b82053f-958e-42e9-b1b7-9232b25a81ef",
+      "minLevel": 25,
+      "maxLevel": 59,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_AtronachUndead_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "836df66a-0aaa-49a3-96d4-b587d185ea99",
+      "minLevel": 25,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_Atronach_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "b1ea02bb-fc98-4209-9f00-8cd828945cdb",
+      "minLevel": 25,
+      "maxLevel": 100,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_Atronach_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "a1db3158-30ea-449a-98e1-ea91830f9a08",
+      "minLevel": 25,
+      "maxLevel": 100,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_Bandit_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "d30de853-68ca-4360-b060-81aaf182d940",
+      "minLevel": 1,
+      "maxLevel": 27,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_BearsWolf_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "2c0e2b66-2642-409c-a7c9-2184c6c51c6c",
+      "minLevel": 4,
+      "maxLevel": 30,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_Bears_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "7f963227-b598-4c8b-88ce-01a3209e0e87",
+      "minLevel": 4,
+      "maxLevel": 30,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_DragonAncientFire_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "7638c25a-d230-4935-b969-d84604d86b59",
+      "minLevel": 33,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": "b4d3bf8d-3ac9-450c-bf46-9d1591d0d855"
+    },
+    {
+      "name": "Ayleid_DragonAncientFrost_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "2a372944-6fe2-422a-8577-19c2a980dcf4",
+      "minLevel": 33,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": "b4d3bf8d-3ac9-450c-bf46-9d1591d0d855"
+    },
+    {
+      "name": "Ayleid_Dragon_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "45afa850-3fd9-4dcf-933d-cb52f76499d6",
+      "minLevel": 20,
+      "maxLevel": 95,
+      "randomWeight": 0.7,
+      "requiredQuestId": "b4d3bf8d-3ac9-450c-bf46-9d1591d0d855"
+    },
+    {
+      "name": "Ayleid_Dragonundead_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "2bc5a9b9-2194-4790-a42a-b728b81b421f",
+      "minLevel": 46,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": "b4d3bf8d-3ac9-450c-bf46-9d1591d0d855"
+    },
+    {
+      "name": "Ayleid_Dremora_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "028dcf09-7006-499f-8cc7-09bb20a7adea",
+      "minLevel": 29,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_Dremora_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "0e5671ac-c415-4c6e-affc-44fdca610f1e",
+      "minLevel": 29,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_ForestSpiders_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "0ec5e913-6074-4490-abaa-f1802827b007",
+      "minLevel": 9,
+      "maxLevel": 17,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_GoblinSkeleton_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "dd6a03e7-5754-4d89-ac50-6b7bc0663d80",
+      "minLevel": 1,
+      "maxLevel": 53,
+      "randomWeight": 1,
+      "requiredQuestId": "bd82425a-dfa4-47b2-a091-b4dea4c2ce15"
+    },
+    {
+      "name": "Ayleid_Goblin_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "257ccfb6-f8c3-40a1-85e0-67fc7e2d9985",
+      "minLevel": 1,
+      "maxLevel": 53,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_Goblin_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "6a922e58-0ae0-44d0-bf06-3306efa9dfcd",
+      "minLevel": 1,
+      "maxLevel": 53,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_LichesOutcastNetherSkeleton_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "fb964813-5b11-4159-8986-6a3a9dab5ee3",
+      "minLevel": 31,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": "378307c6-0a23-41f8-b721-5282fa0a8a2b"
+    },
+    {
+      "name": "Ayleid_LichesOutcastNetherWight_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "65375990-e5b3-41cf-b5d3-cbe2c740cb1d",
+      "minLevel": 31,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": "3266dae7-9899-4996-b615-697e05b4061e"
+    },
+    {
+      "name": "Ayleid_LichesOutcastNether_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "977d272d-8bd8-4f22-b13b-e1dc5aa88a56",
+      "minLevel": 16,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": "378307c6-0a23-41f8-b721-5282fa0a8a2b"
+    },
+    {
+      "name": "Ayleid_LichesOutcastNether_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "9e2a015f-94ca-4837-9ae2-84c996c49bf4",
+      "minLevel": 16,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": "378307c6-0a23-41f8-b721-5282fa0a8a2b"
+    },
+    {
+      "name": "Ayleid_LichesSkeleton_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "cae943b8-f051-4dfc-a9c3-353b46d2ddfd",
+      "minLevel": 41,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": "4f552ec2-83d7-4b13-b290-c78ef6816939"
+    },
+    {
+      "name": "Ayleid_Liches_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "8c8c57c9-eefb-4d07-a9fc-218ebb7957a7",
+      "minLevel": 20,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": "4f552ec2-83d7-4b13-b290-c78ef6816939"
+    },
+    {
+      "name": "Ayleid_Mercenary_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "bcf94a62-c394-4526-9878-c8bb1312e979",
+      "minLevel": 5,
+      "maxLevel": 52,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_Mercenary_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "2424d0d3-ca76-49dd-aab0-15f6c6245efc",
+      "minLevel": 5,
+      "maxLevel": 52,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_NecromancerSkeleton_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "ddd00c28-a1d5-4a62-9dfc-7faaa61315b4",
+      "minLevel": 12,
+      "maxLevel": 59,
+      "randomWeight": 0.7,
+      "requiredQuestId": "bd82425a-dfa4-47b2-a091-b4dea4c2ce15"
+    },
+    {
+      "name": "Ayleid_Necromancer_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "a981d71c-d23c-4496-9070-82ce91622e72",
+      "minLevel": 12,
+      "maxLevel": 59,
+      "randomWeight": 1,
+      "requiredQuestId": "f4a9bc81-e652-45d0-ab1c-dc184c06ecd6"
+    },
+    {
+      "name": "Ayleid_Necromancer_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "f87c2e82-1d6a-4b70-ab4b-1792b6822728",
+      "minLevel": 12,
+      "maxLevel": 59,
+      "randomWeight": 0.7,
+      "requiredQuestId": "f4a9bc81-e652-45d0-ab1c-dc184c06ecd6"
+    },
+    {
+      "name": "Ayleid_Skeletons_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "30b3ee25-c985-49fd-93f3-995ecf666a9c",
+      "minLevel": 1,
+      "maxLevel": 100,
+      "randomWeight": 1,
+      "requiredQuestId": "bd82425a-dfa4-47b2-a091-b4dea4c2ce15"
+    },
+    {
+      "name": "Ayleid_Skeletons_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "39563e49-03d0-4abe-b461-8fda6fa96965",
+      "minLevel": 1,
+      "maxLevel": 100,
+      "randomWeight": 1,
+      "requiredQuestId": "bd82425a-dfa4-47b2-a091-b4dea4c2ce15"
+    },
+    {
+      "name": "Ayleid_SpiderGoblin_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "84e70169-4e8c-4820-936d-18976b871c8d",
+      "minLevel": 9,
+      "maxLevel": 17,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_SprigganWisp_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "99129b95-27bd-4d70-b32d-54ce9ff8e67c",
+      "minLevel": 24,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_Spriggan_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "4c793f15-aa4b-406f-be88-9689085fdc05",
+      "minLevel": 3,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_TrollSpider_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "6a9e4c4a-6d9a-43f4-a396-e47725626268",
+      "minLevel": 9,
+      "maxLevel": 15,
+      "randomWeight": 1,
+      "requiredQuestId": "4439f370-5da7-4154-92fc-44ce2a4fe2b4"
+    },
+    {
+      "name": "Ayleid_Troll_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "4e570093-8e51-4752-9e91-3577f0996afe",
+      "minLevel": 7,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_Troll_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "9caf32a0-7e63-445a-8cc9-9aea10bc7c16",
+      "minLevel": 7,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_WarlordMercenary_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "42a854a1-eb07-4f3f-bfb0-c03a7d391077",
+      "minLevel": 35,
+      "maxLevel": 52,
+      "randomWeight": 1,
+      "requiredQuestId": "4a246d55-d582-4222-aa3d-b6ce09816854"
+    },
+    {
+      "name": "Ayleid_Warlord_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "23d31b6e-4aea-4a7c-a913-f3ce5e7608f7",
+      "minLevel": 26,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": "4a246d55-d582-4222-aa3d-b6ce09816854"
+    },
+    {
+      "name": "Ayleid_WightSkeleton_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "85bf1a3a-0006-4abf-993c-f483ec7db298",
+      "minLevel": 5,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": "bd82425a-dfa4-47b2-a091-b4dea4c2ce15"
+    },
+    {
+      "name": "Ayleid_Wight_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "e4590fe9-29d8-4333-ab78-47eaf4147eb8",
+      "minLevel": 5,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": "bd82425a-dfa4-47b2-a091-b4dea4c2ce15"
+    },
+    {
+      "name": "Ayleid_Wight_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "19c21a26-f324-4506-ae5c-6b9d5ad618ab",
+      "minLevel": 5,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": "bd82425a-dfa4-47b2-a091-b4dea4c2ce15"
+    },
+    {
+      "name": "Ayleid_WispTroll_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "b8547119-7a93-448d-bdd2-e6d550aba93a",
+      "minLevel": 24,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_Wisp_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "c75ebc53-fcc2-4caf-9dcb-d182f4ba8c4a",
+      "minLevel": 24,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_Wisp_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "a072a0da-a4b2-4a5d-85f8-750c9292268a",
+      "minLevel": 24,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Ayleid_Wolf_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "e92332f5-d18d-4f7d-9dc1-90fe4c24dde8",
+      "minLevel": 4,
+      "maxLevel": 30,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_AtronachDremora_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "3b41a23d-7b3c-45b0-bed4-743373d6a630",
+      "minLevel": 29,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_AtronachGoblinWizard_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "ec7f53fa-6fae-45e4-ba77-901f4bc1da2d",
+      "minLevel": 25,
+      "maxLevel": 48,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_AtronachNecromancer_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "0d6066ba-454e-481a-aa54-bbab22f64e22",
+      "minLevel": 25,
+      "maxLevel": 59,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_AtronachUndead_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "957d069b-e203-4172-9186-9df207a33ca2",
+      "minLevel": 25,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Atronach_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "f85ce072-5597-48bc-bdd6-3371e05b1258",
+      "minLevel": 25,
+      "maxLevel": 100,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Atronach_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "04fed881-1f7b-42e9-bae7-4977a8cd02cc",
+      "minLevel": 25,
+      "maxLevel": 100,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Bandit_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "248d0981-6891-4ed8-b220-139486c63569",
+      "minLevel": 1,
+      "maxLevel": 27,
+      "randomWeight": 0.8,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Bandit_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "e666f78a-2bb2-49ac-8ad7-8a507087f322",
+      "minLevel": 1,
+      "maxLevel": 27,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_BearsWolf_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "4f3d44cf-2cf1-4f8e-8f82-a1c075615654",
+      "minLevel": 4,
+      "maxLevel": 30,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Bears_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "10cd3637-f935-4f2a-9fd8-465eaabcd33d",
+      "minLevel": 4,
+      "maxLevel": 30,
+      "randomWeight": 0.8,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Bears_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "310ae4a6-fb24-4c1f-8319-29e4a65c9f47",
+      "minLevel": 4,
+      "maxLevel": 30,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_CaveSpiders_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "abb4d904-ff35-4b1f-93c5-f1c6a7686357",
+      "minLevel": 18,
+      "maxLevel": 26,
+      "randomWeight": 0.8,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_CaveSpiders_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "28ffdb77-161e-49a4-897e-7a8f679264d6",
+      "minLevel": 18,
+      "maxLevel": 26,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_DragonAncientFire_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "fc75de59-8eec-4b95-8c8a-e9f81d88507a",
+      "minLevel": 33,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": "b4d3bf8d-3ac9-450c-bf46-9d1591d0d855"
+    },
+    {
+      "name": "Cave_DragonAncientFrost_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "0f120f01-1387-4061-ad54-7c3094390707",
+      "minLevel": 33,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": "b4d3bf8d-3ac9-450c-bf46-9d1591d0d855"
+    },
+    {
+      "name": "Cave_Dragon_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "b5bb6441-2a8d-4982-95bb-879cc4f607c9",
+      "minLevel": 20,
+      "maxLevel": 95,
+      "randomWeight": 0.7,
+      "requiredQuestId": "b4d3bf8d-3ac9-450c-bf46-9d1591d0d855"
+    },
+    {
+      "name": "Cave_Dragonundead_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "fc48e5d1-3723-4c5f-9a30-50683679cd9e",
+      "minLevel": 46,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": "b4d3bf8d-3ac9-450c-bf46-9d1591d0d855"
+    },
+    {
+      "name": "Cave_Dremora_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "d06c756d-aeb6-4184-99e8-546f27670c6d",
+      "minLevel": 29,
+      "maxLevel": 150,
+      "randomWeight": 0.8,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Dremora_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "eeca6c54-42a1-4fba-bf1d-9ecfbd243f59",
+      "minLevel": 29,
+      "maxLevel": 150,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Goblin_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "b86d3d8e-4287-440c-8095-a28913533d14",
+      "minLevel": 1,
+      "maxLevel": 53,
+      "randomWeight": 0.8,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Goblin_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "a883d41b-4334-4622-b6cc-2f6a31d26d6a",
+      "minLevel": 1,
+      "maxLevel": 53,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_LichesOutcastNether_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "d9601fad-0aff-4f1f-9bfa-50399ec3059b",
+      "minLevel": 16,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": "9e52b8f2-7e66-4b4a-8a42-21b54a615939"
+    },
+    {
+      "name": "Cave_LichesOutcastNether_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "7b416d0a-2657-4e30-b87e-f41cccad07ac",
+      "minLevel": 16,
+      "maxLevel": 150,
+      "randomWeight": 0.7,
+      "requiredQuestId": "9e52b8f2-7e66-4b4a-8a42-21b54a615939"
+    },
+    {
+      "name": "Cave_Liches_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "b9a5a72b-05c0-494e-ba1c-967728a55b6c",
+      "minLevel": 20,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": "4f552ec2-83d7-4b13-b290-c78ef6816939"
+    },
+    {
+      "name": "Cave_Mercenary_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "9daf2260-6dca-4fc5-851e-11f344e09e3c",
+      "minLevel": 5,
+      "maxLevel": 52,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Mercenary_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "44e0d7cd-26a1-4183-996b-056a484a5e2e",
+      "minLevel": 5,
+      "maxLevel": 52,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Necromancer_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "5f32924f-de10-4c2d-bcd7-8db4a0fdf168",
+      "minLevel": 12,
+      "maxLevel": 59,
+      "randomWeight": 0.8,
+      "requiredQuestId": "f4a9bc81-e652-45d0-ab1c-dc184c06ecd6"
+    },
+    {
+      "name": "Cave_Necromancer_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "2f0b9551-9c2e-4513-a60b-af7bc39ae60e",
+      "minLevel": 12,
+      "maxLevel": 59,
+      "randomWeight": 0.7,
+      "requiredQuestId": "f4a9bc81-e652-45d0-ab1c-dc184c06ecd6"
+    },
+    {
+      "name": "Cave_Skeevers_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "5cc26070-12ac-4adc-b55d-da6fed6934ee",
+      "minLevel": 2,
+      "maxLevel": 22,
+      "randomWeight": 0.8,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Skeevers_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "ef9bcf3f-5b89-47e5-bbd5-d971c0ba6a3c",
+      "minLevel": 2,
+      "maxLevel": 22,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Skeletons_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "d3816ae3-1072-409c-a015-d1155a993119",
+      "minLevel": 1,
+      "maxLevel": 100,
+      "randomWeight": 0.8,
+      "requiredQuestId": "d4a88399-0518-4b72-872c-de8cbb191dae"
+    },
+    {
+      "name": "Cave_Skeletons_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "3b5df42b-aaf1-4fa5-8e22-0bd6e64a6960",
+      "minLevel": 1,
+      "maxLevel": 100,
+      "randomWeight": 0.7,
+      "requiredQuestId": "d4a88399-0518-4b72-872c-de8cbb191dae"
+    },
+    {
+      "name": "Cave_SpiderGoblin_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "04ae4dcd-3693-4e07-962f-1da3d5c3c85e",
+      "minLevel": 9,
+      "maxLevel": 17,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_SprigganWisp_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "4aee4783-c32c-4dd2-8fa9-2cec42ca32e4",
+      "minLevel": 24,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Spriggan_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "ceaa6f04-eee8-4167-a617-d35810f3b2b1",
+      "minLevel": 3,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Troll_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "c211c8e2-fef1-45ae-95ea-9b7295271a17",
+      "minLevel": 7,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Troll_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "cc9c27fd-1917-4b0a-a62e-87cfb07e7c6d",
+      "minLevel": 7,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Warlord_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "1a2e2665-190b-4618-ae3e-51e43b1f16d4",
+      "minLevel": 26,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": "4a246d55-d582-4222-aa3d-b6ce09816854"
+    },
+    {
+      "name": "Cave_Wight_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "ce0358f8-2459-4d19-9972-cd5d529a1766",
+      "minLevel": 5,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": "bd82425a-dfa4-47b2-a091-b4dea4c2ce15"
+    },
+    {
+      "name": "Cave_Wight_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "951be4f9-9d03-4408-9639-50cabc2f0825",
+      "minLevel": 5,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": "bd82425a-dfa4-47b2-a091-b4dea4c2ce15"
+    },
+    {
+      "name": "Cave_Wisp_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "ebacf26a-d35f-4454-a511-3e74360a3856",
+      "minLevel": 24,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Wisp_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "1543e5f2-0c48-4908-8ca9-02c7dd82bbc3",
+      "minLevel": 24,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Cave_Wolf_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "6e4476c9-d2d7-45db-a253-dfb47567efff",
+      "minLevel": 4,
+      "maxLevel": 30,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Forest_Bandit_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "cf409329-d93c-413c-9012-24c03a6c4d49",
+      "minLevel": 1,
+      "maxLevel": 27,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Forest_BearsWolf_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "5cafa1e5-6ce5-4896-a6f0-762d606d7041",
+      "minLevel": 4,
+      "maxLevel": 30,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Forest_Bears_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "cbf673a4-994b-4895-9d0e-bf98e5b600ae",
+      "minLevel": 4,
+      "maxLevel": 30,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Forest_Dremora_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "e81e1397-4d1d-4e43-8eff-baf826679d11",
+      "minLevel": 28,
+      "maxLevel": 150,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Forest_ForestSpiders_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "04d73a53-582b-4a70-bbc4-f02a3d74ef51",
+      "minLevel": 9,
+      "maxLevel": 17,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Forest_Goblin_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "8e92c452-8905-4686-9ae0-dc11788ff6b9",
+      "minLevel": 1,
+      "maxLevel": 53,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Forest_Mercenary_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "3010dcc3-ab87-4153-b3b5-f54f5d3cb574",
+      "minLevel": 5,
+      "maxLevel": 52,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Forest_NecromancerSkeleton_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "e0af1fc3-1eff-4212-9139-8803b1d23ffa",
+      "minLevel": 12,
+      "maxLevel": 59,
+      "randomWeight": 0,
+      "requiredQuestId": "bd82425a-dfa4-47b2-a091-b4dea4c2ce15"
+    },
+    {
+      "name": "Forest_Necromancer_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "5c5013bc-2037-4d36-96cb-55ae8b5d43cb",
+      "minLevel": 12,
+      "maxLevel": 59,
+      "randomWeight": 0,
+      "requiredQuestId": "f4a9bc81-e652-45d0-ab1c-dc184c06ecd6"
+    },
+    {
+      "name": "Forest_Skeletons_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "5e57a12f-1dcb-42c7-84f2-b41fd900883d",
+      "minLevel": 1,
+      "maxLevel": 59,
+      "randomWeight": 0,
+      "requiredQuestId": "d4a88399-0518-4b72-872c-de8cbb191dae"
+    },
+    {
+      "name": "Forest_SpiderGoblin_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "fcfd25b6-dff0-481d-9c84-34cf6945f00d",
+      "minLevel": 9,
+      "maxLevel": 17,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Forest_SprigganWisp_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "6009357f-ef56-4d8b-b1ba-47676ad4f1ef",
+      "minLevel": 8,
+      "maxLevel": 51,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Forest_Spriggan_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "6d1ede39-1ddd-4e1b-a1de-b31bca66d882",
+      "minLevel": 5,
+      "maxLevel": 57,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Forest_TrollSpider_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "fac0a497-8577-44b2-9ef4-f36829c73f44",
+      "minLevel": 9,
+      "maxLevel": 15,
+      "randomWeight": 0,
+      "requiredQuestId": "4439f370-5da7-4154-92fc-44ce2a4fe2b4"
+    },
+    {
+      "name": "Forest_Troll_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "c00b2520-18be-48bc-a208-d97361675fc9",
+      "minLevel": 7,
+      "maxLevel": 15,
+      "randomWeight": 0,
+      "requiredQuestId": "4439f370-5da7-4154-92fc-44ce2a4fe2b4"
+    },
+    {
+      "name": "Forest_Warlord_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "d92e3196-8c47-4b15-becb-6bd459dc15c5",
+      "minLevel": 35,
+      "maxLevel": 150,
+      "randomWeight": 0,
+      "requiredQuestId": "4a246d55-d582-4222-aa3d-b6ce09816854"
+    },
+    {
+      "name": "Forest_Wisp_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "073dcdc8-10c8-4470-8d9f-2edad5570e74",
+      "minLevel": 8,
+      "maxLevel": 51,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Forest_Wolf_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "9ff89d72-b1dd-461e-b786-bf6ad0576e3b",
+      "minLevel": 4,
+      "maxLevel": 30,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_AtronachDremora_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "f00dea4c-025d-4233-a503-8ab28ef53c80",
+      "minLevel": 29,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_AtronachGoblinWizard_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "ce6bc7f1-e643-4a85-8d7c-fa101829ba38",
+      "minLevel": 25,
+      "maxLevel": 48,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_AtronachNecromancer_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "daefd6cf-da7e-4701-9bb3-bb5d43db0332",
+      "minLevel": 25,
+      "maxLevel": 59,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_AtronachUndead_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "4c972b57-91c1-44d4-9292-a5fa87957426",
+      "minLevel": 25,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_Atronach_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "4e682650-cddc-4326-bf45-3ecefc09bf0e",
+      "minLevel": 25,
+      "maxLevel": 100,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_Atronach_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "34655edb-5b0e-483e-aaf6-f3186d99ed10",
+      "minLevel": 25,
+      "maxLevel": 100,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_Bandit_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "73aa75cb-1109-4e96-b7a2-73e55aaa99a2",
+      "minLevel": 1,
+      "maxLevel": 27,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_CaveSpiders_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "22c87784-7e9c-4c91-85a5-d8fc2a312705",
+      "minLevel": 18,
+      "maxLevel": 26,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_DragonAncientFire_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "98e55718-9fd3-4d7e-b89b-0c6ab314ab25",
+      "minLevel": 33,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": "b4d3bf8d-3ac9-450c-bf46-9d1591d0d855"
+    },
+    {
+      "name": "Stone_DragonAncientFrost_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "d9db794b-848a-449e-abe9-df3a2dda8825",
+      "minLevel": 33,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": "b4d3bf8d-3ac9-450c-bf46-9d1591d0d855"
+    },
+    {
+      "name": "Stone_Dragon_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "65656b1d-713c-40b8-b240-a96270517d8d",
+      "minLevel": 20,
+      "maxLevel": 95,
+      "randomWeight": 0.7,
+      "requiredQuestId": "b4d3bf8d-3ac9-450c-bf46-9d1591d0d855"
+    },
+    {
+      "name": "Stone_Dragonundead_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "8130438a-214c-4824-94fd-872e355efef8",
+      "minLevel": 46,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": "b4d3bf8d-3ac9-450c-bf46-9d1591d0d855"
+    },
+    {
+      "name": "Stone_Dremora_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "717d4768-decf-4b5c-abd4-6679c9e120e3",
+      "minLevel": 29,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_Goblin_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "663053f0-3a46-4012-b004-6cb2e907f33c",
+      "minLevel": 1,
+      "maxLevel": 53,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_LichesOutcastNether_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "ef24eeb3-8181-48e2-ae3d-320bd6f5992c",
+      "minLevel": 20,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": "378307c6-0a23-41f8-b721-5282fa0a8a2b"
+    },
+    {
+      "name": "Stone_Liches_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "ef24eeb3-8181-48e2-ae3d-320bd6f5992c",
+      "minLevel": 20,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": "4f552ec2-83d7-4b13-b290-c78ef6816939"
+    },
+    {
+      "name": "Stone_Mercenary_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "1e6dcd50-7309-4ee2-8314-e3605079a37c",
+      "minLevel": 5,
+      "maxLevel": 52,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_NecromancerSkeleton_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "28bbb173-e6bd-495e-b3c9-7aee71755bc3",
+      "minLevel": 12,
+      "maxLevel": 59,
+      "randomWeight": 1,
+      "requiredQuestId": "bd82425a-dfa4-47b2-a091-b4dea4c2ce15"
+    },
+    {
+      "name": "Stone_Necromancer_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "06b1dd29-679b-4478-80de-12208fe450ac",
+      "minLevel": 12,
+      "maxLevel": 59,
+      "randomWeight": 1,
+      "requiredQuestId": "f4a9bc81-e652-45d0-ab1c-dc184c06ecd6"
+    },
+    {
+      "name": "Stone_Skeevers_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "17a30718-3986-459f-913c-460c822de0c1",
+      "minLevel": 2,
+      "maxLevel": 22,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_Skeletons_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "b31ce7dd-714e-47d3-9d90-24cf9bace655",
+      "minLevel": 1,
+      "maxLevel": 100,
+      "randomWeight": 1,
+      "requiredQuestId": "d4a88399-0518-4b72-872c-de8cbb191dae"
+    },
+    {
+      "name": "Stone_Spriggan_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "7924c82d-f6b3-4eb6-9edb-9b1349a1da84",
+      "minLevel": 3,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_Spriggan_3Rooms_AbyssSlice",
+      "dungeonSettingsId": "6ae20bd9-594d-48fc-b9f6-691428c44406",
+      "minLevel": 3,
+      "maxLevel": 99,
+      "randomWeight": 0.7,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_Troll_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "55c7237b-00df-4b89-9a68-ab6b13ca51e8",
+      "minLevel": 7,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_Warlord_Boss_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "2e7a1550-6843-48b1-809f-a65f0da0669f",
+      "minLevel": 26,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": "4a246d55-d582-4222-aa3d-b6ce09816854"
+    },
+    {
+      "name": "Stone_Wight_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "219788af-f3a1-4e48-9f6b-67152a79dec1",
+      "minLevel": 5,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": "bd82425a-dfa4-47b2-a091-b4dea4c2ce15"
+    },
+    {
+      "name": "Stone_Wisp_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "b98b7781-21e0-415a-a527-98325f64e82b",
+      "minLevel": 24,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Stone_Wolf_2Rooms_AbyssSlice",
+      "dungeonSettingsId": "ad7a91a8-c47e-47ab-b78f-f7559123a879",
+      "minLevel": 4,
+      "maxLevel": 30,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Test_Forest_Bandit_AbyssSlice",
+      "dungeonSettingsId": "79f1868c-c62e-466b-9849-c86b5f65238e",
+      "minLevel": 1,
+      "maxLevel": 27,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Test_Forest_Bears_AbyssSlice",
+      "dungeonSettingsId": "eb89870c-a6cf-4c1e-9e17-15347d61213a",
+      "minLevel": 4,
+      "maxLevel": 30,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Test_Forest_Dremora_AbyssSlice",
+      "dungeonSettingsId": "fcff221d-ffed-4151-9cf9-9f5de0d03be2",
+      "minLevel": 28,
+      "maxLevel": 150,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Test_Forest_ForestSpiders_AbyssSlice",
+      "dungeonSettingsId": "437223c0-8cdf-4f94-bf97-a6ace3473154",
+      "minLevel": 9,
+      "maxLevel": 17,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Test_Forest_Goblin_AbyssSlice",
+      "dungeonSettingsId": "f9c1faec-79b2-49e5-a5b3-57bb5ce6a717",
+      "minLevel": 1,
+      "maxLevel": 53,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Test_Forest_Mercenary_AbyssSlice",
+      "dungeonSettingsId": "ba3a3dd6-0a38-49c5-8bce-60f83bf11b07",
+      "minLevel": 5,
+      "maxLevel": 52,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Test_Forest_Necromancer_AbyssSlice",
+      "dungeonSettingsId": "54e3b968-eeac-4506-b697-51d03ba4bdd8",
+      "minLevel": 12,
+      "maxLevel": 59,
+      "randomWeight": 0,
+      "requiredQuestId": "f4a9bc81-e652-45d0-ab1c-dc184c06ecd6"
+    },
+    {
+      "name": "Test_Forest_Skeletons_AbyssSlice",
+      "dungeonSettingsId": "5e57a12f-1dcb-42c7-84f2-b41fd900883d",
+      "minLevel": 1,
+      "maxLevel": 59,
+      "randomWeight": 0,
+      "requiredQuestId": "d4a88399-0518-4b72-872c-de8cbb191dae"
+    },
+    {
+      "name": "Test_Forest_Spriggan_AbyssSlice",
+      "dungeonSettingsId": "2975861f-2a74-4f88-8fd7-f1c6a5e85529",
+      "minLevel": 5,
+      "maxLevel": 57,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Test_Forest_Troll_AbyssSlice",
+      "dungeonSettingsId": "c34b918e-16bd-4272-9fd5-808b46232978",
+      "minLevel": 7,
+      "maxLevel": 15,
+      "randomWeight": 0,
+      "requiredQuestId": "4439f370-5da7-4154-92fc-44ce2a4fe2b4"
+    },
+    {
+      "name": "Test_Forest_Wisp_AbyssSlice",
+      "dungeonSettingsId": "1e21ec74-c386-4ad7-8fcf-694ba7dc6017",
+      "minLevel": 8,
+      "maxLevel": 51,
+      "randomWeight": 0,
+      "requiredQuestId": "4439f370-5da7-4154-92fc-44ce2a4fe2b4"
+    },
+    {
+      "name": "Test_Forest_Wolf_AbyssSlice",
+      "dungeonSettingsId": "bb218c80-03f6-4227-882f-8b44bfd9f154",
+      "minLevel": 4,
+      "maxLevel": 30,
+      "randomWeight": 0,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Test_Stone_Bandit_AbyssSlice",
+      "dungeonSettingsId": "1396d90c-c38e-47c6-a9da-6e98c49788e5",
+      "minLevel": 1,
+      "maxLevel": 27,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Test_Stone_CaveSpiders_AbyssSlice",
+      "dungeonSettingsId": "7aa6221d-66fa-4290-a7ca-c86a851e135b",
+      "minLevel": 18,
+      "maxLevel": 26,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Test_Stone_Dremora_AbyssSlice",
+      "dungeonSettingsId": "4a31b6b7-3c62-4f7d-bd80-5d77f0a5065d",
+      "minLevel": 29,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Test_Stone_Goblin_AbyssSlice",
+      "dungeonSettingsId": "4de80b69-fe4e-4ed5-a556-71e5b7c82ed0",
+      "minLevel": 1,
+      "maxLevel": 53,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Test_Stone_LichesOutcastNether_AbyssSlice",
+      "dungeonSettingsId": "a8625417-72b3-4c96-bfa4-53b66d7d1776",
+      "minLevel": 16,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": "378307c6-0a23-41f8-b721-5282fa0a8a2b"
+    },
+    {
+      "name": "Test_Stone_Liches_AbyssSlice",
+      "dungeonSettingsId": "83a0ce31-26be-46e8-ab37-df42a8b191f9",
+      "minLevel": 20,
+      "maxLevel": 150,
+      "randomWeight": 1,
+      "requiredQuestId": "4f552ec2-83d7-4b13-b290-c78ef6816939"
+    },
+    {
+      "name": "Test_Stone_Mercenary_AbyssSlice",
+      "dungeonSettingsId": "0ae7451b-76db-47a8-a345-919f07a47a01",
+      "minLevel": 5,
+      "maxLevel": 52,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Test_Stone_Necromancer_AbyssSlice",
+      "dungeonSettingsId": "f2c3ade3-73db-4a60-b47f-b20252292e6f",
+      "minLevel": 12,
+      "maxLevel": 59,
+      "randomWeight": 1,
+      "requiredQuestId": "f4a9bc81-e652-45d0-ab1c-dc184c06ecd6"
+    },
+    {
+      "name": "Test_Stone_Skeevers_AbyssSlice",
+      "dungeonSettingsId": "fe22c3c8-e4c9-491c-bd85-7c0ba9dc6b31",
+      "minLevel": 2,
+      "maxLevel": 22,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Test_Stone_Skeletons_AbyssSlice",
+      "dungeonSettingsId": "5f4eb184-5aa9-42fc-b538-664d118ea870",
+      "minLevel": 1,
+      "maxLevel": 100,
+      "randomWeight": 1,
+      "requiredQuestId": "d4a88399-0518-4b72-872c-de8cbb191dae"
+    },
+    {
+      "name": "Test_Stone_Troll_AbyssSlice",
+      "dungeonSettingsId": "0ef19a96-1051-4b9f-8a4c-5ea3f2396638",
+      "minLevel": 7,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": null
+    },
+    {
+      "name": "Test_Stone_Wight_AbyssSlice",
+      "dungeonSettingsId": "219788af-f3a1-4e48-9f6b-67152a79dec1",
+      "minLevel": 5,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": "bd82425a-dfa4-47b2-a091-b4dea4c2ce15"
+    },
+    {
+      "name": "Test_Stone_Wisp_AbyssSlice",
+      "dungeonSettingsId": "76a249f4-2c7a-4b07-8573-8147c38fd00b",
+      "minLevel": 24,
+      "maxLevel": 99,
+      "randomWeight": 1,
+      "requiredQuestId": "b4d3bf8d-3ac9-450c-bf46-9d1591d0d855"
+    }
+  ]
 }
