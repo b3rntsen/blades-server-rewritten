@@ -950,6 +950,16 @@ fn slice_difficulty(floor: u32, initial_player_level: u32) -> u32 {
     difficulty.min(MAX_SLICE_DIFFICULTY)
 }
 
+/// `job_pools.json` `globals.initialEplByPlayerLevel` as of 2026-10-03 — (character level,
+/// retail EPL), measured from the 2026-06-07 retail job boards. The fallback when the
+/// static file lacks the table; a test keeps the two identical.
+const RETAIL_EPL_BY_LEVEL: [(u32, u32); 34] = [
+    (1, 1), (2, 2), (3, 4), (4, 7), (5, 7), (6, 7), (7, 10), (8, 10), (10, 12), (15, 17),
+    (17, 19), (18, 20), (19, 21), (20, 22), (21, 23), (22, 24), (23, 25), (24, 26), (25, 26),
+    (26, 28), (27, 30), (28, 31), (29, 32), (30, 33), (31, 34), (40, 45), (41, 46), (42, 47),
+    (43, 48), (57, 60), (62, 63), (79, 75), (86, 78), (100, 84),
+];
+
 /// The `initialPlayerLevel` a run is started at: our estimate of the client's Effective
 /// Player Level, which is what the client scores kills and shows bonuses against (module
 /// docs). Retail's server sent the client's exact EPL; it blends the character level with
@@ -958,25 +968,38 @@ fn slice_difficulty(floor: u32, initial_player_level: u32) -> u32 {
 /// `jobSetup.initialEPL` — the same quantity), linearly interpolated between measured
 /// levels and rounded. Exact on seven of the ten captured Abyss `/start` pairs and within
 /// 3 of the rest (8→10 for 11, 38→43 for 40, 66→66 for 67) — the character level misses
-/// all ten, by up to 16. Falls back to the character level when the table is absent.
+/// all ten, by up to 16. Never more than [`CLIENT_EPL_MARGIN`] below a captured pair,
+/// which is the direction that would put the server's gauge ahead of the client's.
 ///
 /// The level-100 end of this is what deep runs need. Every floor from `ipl + 14` up is
 /// difficulty 100; with the character level (100) as ipl the server scored those kills
 /// same-level, 10 apiece, while a client at a retail EPL (83-84 at level 100) scored them
-/// 30 — and the gauge stuck on the first rung the client reached alone (#294).
+/// 30 — and the gauge stuck on the first rung the client reached alone (#294). So a
+/// static file without the table falls back to [`RETAIL_EPL_BY_LEVEL`], never to the
+/// character level.
 fn initial_player_level(job_pools: &serde_json::Value, character_level: u32) -> u32 {
     let level = character_level.max(1);
-    let Some(table) = job_pools
+    let from_static: Option<Vec<(u32, u32)>> = job_pools
         .get("globals")
         .and_then(|g| g.get("initialEplByPlayerLevel"))
         .and_then(serde_json::Value::as_object)
-    else {
-        return level;
-    };
-    let mut points: Vec<(u32, u32)> = table
-        .iter()
-        .filter_map(|(k, v)| Some((k.parse().ok()?, u32::try_from(v.as_u64()?).ok()?)))
-        .collect();
+        .map(|table| {
+            table
+                .iter()
+                .filter_map(|(k, v)| Some((k.parse().ok()?, u32::try_from(v.as_u64()?).ok()?)))
+                .collect()
+        })
+        .filter(|points: &Vec<(u32, u32)>| !points.is_empty());
+    let mut points = from_static.unwrap_or_else(|| {
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| {
+            log::warn!(
+                "abyss: job_pools.json has no globals.initialEplByPlayerLevel; \
+                 starting runs from the compiled-in retail EPL table"
+            )
+        });
+        RETAIL_EPL_BY_LEVEL.to_vec()
+    });
     points.sort_unstable();
     let below = points.iter().rev().find(|(at, _)| *at <= level).copied();
     let above = points.iter().find(|(at, _)| *at >= level).copied();
@@ -1515,6 +1538,32 @@ fn apply_item_consumption(
 /// a dungeon neither table holds (the four `AbyssEntrance` settings, which no slice uses).
 const FALLBACK_KILL_SCORE_MULTIPLIER: f64 = 1.0;
 
+/// How far ABOVE our [`initial_player_level`] estimate the client's real Effective Player
+/// Level may sit without the server's gauge running ahead of it. Two of the ten captured
+/// (level → ipl) pairs are one above the estimate (8→11 against 10, 66→67 against 66).
+const CLIENT_EPL_MARGIN: i32 = 1;
+
+/// The per-kill score the server books for `level_delta = enemyLevel - ipl`: never more
+/// than a client at any EPL up to `ipl + CLIENT_EPL_MARGIN` scores for the same kill.
+///
+/// Running AHEAD of the client is the failure that cannot recover: a rung paid before
+/// the client reaches it stalls its gauge for the rest of the run (#312). Running behind
+/// only delays a rung. The ipl is an estimate (#294), so the server scores the kill as if
+/// the client's EPL were `CLIENT_EPL_MARGIN` higher, and caps it at the table's flat tail
+/// (30): the table is not monotonic (delta 6 → 40, delta 7+ → 30), so on floor `ipl + 3`
+/// (difficulty `ipl + 6`) the raw 40 outscored every client below the estimate. Capped,
+/// the score is non-decreasing in the delta, so a client whose delta is at least ours
+/// minus the margin always scores at least as much. Floors past the flat tail (every
+/// deep floor) still score exactly what the client does. A client at exactly the
+/// estimate lags by a few kills per rung on near-level floors.
+fn never_ahead_kill_score(
+    static_abyss: &blades_lib::static_data::AbyssStaticData,
+    level_delta: i32,
+) -> i64 {
+    let flat_tail = static_abyss.kill_score(i32::MAX / 2);
+    static_abyss.kill_score(level_delta - CLIENT_EPL_MARGIN).min(flat_tail)
+}
+
 /// Score for `count` kills on `slice`, for a run started at `initial_player_level`.
 ///
 /// The enemy level is the slice's own `difficulty_level` — the value the server itself
@@ -1529,7 +1578,7 @@ fn kills_score(
 ) -> f64 {
     let Some(slice) = slice else { return 0.0 };
     let level_delta = slice.difficulty_level as i32 - initial_player_level as i32;
-    let per_kill = static_abyss.kill_score(level_delta) as f64;
+    let per_kill = never_ahead_kill_score(static_abyss, level_delta) as f64;
     // The server must cross each gauge rung on the kill the client does (#312). Scored
     // at 1.0 everywhere it ran ahead on critter floors; scored at the floor's lowest
     // multiplier it ran behind on mixed ones, leaving the client's gauge pinned full.
@@ -3237,7 +3286,13 @@ mod tests {
                 "rung {rung} paid on kill {server}, before the client's gauge reached it on kill {client} (all: {paid_at:?})"
             );
         }
-        assert_eq!(&paid_at[..2], &RETAIL_PAID_AT_KILL[..2], "the shallow rungs land on retail's kill");
+        // With the one-level EPL margin (`never_ahead_kill_score`) the rungs land after
+        // retail's, never before. These kills name no spawn group, so they score at the
+        // floor's LOWEST multiplier, which trails on its own (#468); the spawn-group
+        // replay `replaying_the_retail_run_never_pays_ahead_of_retails_client` trails by 5.
+        for (server, client) in paid_at.iter().zip(RETAIL_PAID_AT_KILL) {
+            assert!(server - client <= 13, "trailed retail by {} kills: {paid_at:?}", server - client);
+        }
     }
 
     /// NEGATIVE CONTROL: the same run scored at a flat 1.0, as the server did, pays the
@@ -3422,27 +3477,38 @@ mod tests {
     /// The report: "the gauge isn't showing the progress after the first one". The
     /// client fills the gauge from its own score and moves it on only when a response
     /// carries `reward`, so every rung has to be paid on the kill that crosses it on
-    /// the client. Retail did exactly that; replaying its kills must pay each rung on
-    /// the same kill. The per-floor table (lowest multiplier of the floor) paid 2 of 9
-    /// on time and the rest up to 7 kills late — by kill 58, when it paid 360, the
-    /// client had passed 490 — leaving the gauge pinned full.
+    /// the client. Retail did exactly that: its client, at the run's EPL 10 and the
+    /// spawn-group multipliers, reaches each rung on the kill retail paid it. The
+    /// per-floor table (lowest multiplier of the floor) paid 2 of 9 on time and the rest
+    /// up to 7 kills late — by kill 58, when it paid 360, the client had passed 490 —
+    /// leaving the gauge pinned full.
+    ///
+    /// Our server no longer knows the EPL exactly, so it scores with a one-level margin
+    /// ([`never_ahead_kill_score`]): replaying the same kills it must never pay a rung
+    /// before the client reaches it, and trails by a bounded number of kills.
     #[test]
-    fn replaying_the_retail_run_pays_every_rung_on_retails_kill() {
+    fn replaying_the_retail_run_never_pays_ahead_of_retails_client() {
+        let retail_paid = vec![
+            (24, vec![35]),
+            (26, vec![50]),
+            (28, vec![70]),
+            (33, vec![95]),
+            (38, vec![135]),
+            (43, vec![190]),
+            (47, vec![260]),
+            (51, vec![360]),
+            (61, vec![490]),
+        ];
         assert_eq!(
-            replay(10, &RETAIL_RUN_IPL10),
-            vec![
-                (24, vec![35]),
-                (26, vec![50]),
-                (28, vec![70]),
-                (33, vec![95]),
-                (38, vec![135]),
-                (43, vec![190]),
-                (47, vec![260]),
-                (51, vec![360]),
-                (61, vec![490]),
-            ],
+            client_gauge(10, &RETAIL_RUN_IPL10),
+            retail_paid,
             "retail paid these rungs on these kills (captures 12117 ... 12222), and no others"
         );
+        let server = replay(10, &RETAIL_RUN_IPL10);
+        let (early, lag) = early_and_lag(&server, &retail_paid);
+        println!("ipl-10 retail replay: server {server:?}, worst lag {lag}");
+        assert!(early.is_empty(), "paid before the client reached {early:?}");
+        assert!(lag <= MAX_LAG_KILLS, "a rung trailed the client by {lag} kills");
     }
 
     /// The deep run: one kill crossed 35 and 50 at once (retail merged both into one
@@ -3505,23 +3571,58 @@ mod tests {
         "473b13bd-0e2a-4efe-9c72-be5746d1ba33",
     ];
 
-    /// The first four floors #294's run serves from floor 149 at `ipl`, each cleared
-    /// with retail's deep-floor kills — twelve kills.
-    fn level_100_run_from_149(ipl: u32) -> Vec<(u32, &'static str, u32, &'static [&'static str])> {
-        build_run_slices(&real_static_abyss(), 0x294, 149, ipl)
+    /// A mixed floor's kills: a critter (0.33), an ordinary enemy and a deep-floor one,
+    /// so the never-ahead sweeps cover every multiplier, not just 1.0.
+    const MIXED_KILLS: &[&str] = &[
+        "998b8cd8-75e2-4826-af97-253bd1ad378a",
+        "17fca83f-dfe0-484c-a1e8-6a96c104f621",
+        "473b13bd-0e2a-4efe-9c72-be5746d1ba33",
+    ];
+
+    /// The first `count` floors a run started at floor `start` and `ipl` serves, each
+    /// cleared with `kills`.
+    fn served_run(
+        ipl: u32,
+        start: u32,
+        count: usize,
+        kills: &'static [&'static str],
+    ) -> Vec<(u32, &'static str, u32, &'static [&'static str])> {
+        build_run_slices(&real_static_abyss(), 0x294, start, ipl)
             .iter()
-            .take(4)
-            .map(|s| {
-                (s.floor_index, "f00dea4c-025d-4233-a503-8ab28ef53c80", s.difficulty_level, DEEP_FLOOR_KILLS)
-            })
+            .take(count)
+            .map(|s| (s.floor_index, "f00dea4c-025d-4233-a503-8ab28ef53c80", s.difficulty_level, kills))
             .collect()
+    }
+
+    /// The first four floors #294's run serves from floor 149 at `ipl` — twelve kills.
+    fn level_100_run_from_149(ipl: u32) -> Vec<(u32, &'static str, u32, &'static [&'static str])> {
+        served_run(ipl, 149, 4, DEEP_FLOOR_KILLS)
+    }
+
+    /// The most kills a rung may trail the client by on the replays and sweeps below.
+    const MAX_LAG_KILLS: usize = 12;
+
+    /// Every rung the server paid before the client's gauge reached it, and the worst
+    /// number of kills a paid rung trailed the client by.
+    fn early_and_lag(server: &[(usize, Vec<u32>)], client: &[(usize, Vec<u32>)]) -> (Vec<u32>, usize) {
+        let reached = |rung: u32| client.iter().find(|(_, rungs)| rungs.contains(&rung)).map(|(k, _)| *k);
+        let (mut early, mut lag) = (Vec::new(), 0);
+        for (kill, rungs) in server {
+            for rung in rungs {
+                match reached(*rung) {
+                    Some(at) if at <= *kill => lag = lag.max(kill - at),
+                    _ => early.push(*rung),
+                }
+            }
+        }
+        (early, lag)
     }
 
     /// #294's level-100 character, run from floor 149: the server pays every rung on the
     /// kill the client's gauge reaches it, for any EPL a level-100 client can have (retail
     /// measured 83-84; the range here is wider) — and `/end` pays the bonus the client
     /// shows. Every one of these floors is difficulty 100, so each kill sits on the
-    /// kill-score table's flat tail (delta >= 7 → 30) on both sides.
+    /// kill-score table's flat tail (delta >= 7 → 30) on both sides, margin or not.
     #[test]
     fn a_level_100_run_from_floor_149_pays_every_rung_on_the_clients_kill() {
         let ipl = initial_player_level(&real_job_pools(), 100);
@@ -3555,6 +3656,86 @@ mod tests {
         assert_eq!(shown.0, 6.0);
     }
 
+    /// The same character with a weaker client (EPL 77) starting at floor 87 = ipl + 3,
+    /// difficulty 90: the raw table scores that first floor at delta 6 → 40, the client
+    /// at delta 13 → 30, and the server paid 35 on kill 1 before the client's gauge got
+    /// there. With the margin and the flat-tail cap it never runs ahead.
+    #[test]
+    fn a_level_100_run_from_floor_87_never_pays_ahead_of_a_weaker_client() {
+        let ipl = initial_player_level(&real_job_pools(), 100);
+        let floors = served_run(ipl, 87, 6, DEEP_FLOOR_KILLS);
+        assert_eq!((floors[0].0, floors[0].2), (87, 90));
+        let sd = real_static_abyss();
+        assert_eq!(sd.kill_score(90 - ipl as i32), 40, "the spike the server used to book");
+        let server = replay(ipl, &floors);
+        let client = client_gauge(77, &floors);
+        let (early, lag) = early_and_lag(&server, &client);
+        assert!(early.is_empty(), "paid ahead of the client: {early:?} (server {server:?}, client {client:?})");
+        assert!(lag <= MAX_LAG_KILLS, "lag {lag}");
+    }
+
+    /// The kill-score table's spike: floor ipl + 3 is difficulty ipl + 6, which the raw
+    /// table scores 40 and every delta above it 30. A level-50 character (estimate 54)
+    /// starting at floor 57 against clients below the estimate, down to 7 below.
+    #[test]
+    fn the_spike_floor_never_pays_ahead_of_a_client_below_the_estimate() {
+        let ipl = initial_player_level(&real_job_pools(), 50);
+        assert_eq!(ipl, 54);
+        let floors = served_run(ipl, ipl + 3, 8, MIXED_KILLS);
+        assert_eq!(floors[0].2, ipl + 6);
+        let server = replay(ipl, &floors);
+        for epl in ipl - 7..ipl {
+            let (early, _) = early_and_lag(&server, &client_gauge(epl, &floors));
+            assert!(early.is_empty(), "client EPL {epl}: paid ahead {early:?}");
+        }
+    }
+
+    /// A client one level ABOVE the estimate — the direction two of the ten captured
+    /// pairs lean (8→11 against 10, 66→67 against 66) — on floors at and below ipl + 3,
+    /// where the deltas are small and every level counts.
+    #[test]
+    fn a_client_one_above_the_estimate_is_never_paid_ahead() {
+        let pools = real_job_pools();
+        for level in [8, 10, 50, 66] {
+            let ipl = initial_player_level(&pools, level);
+            for start in [1, ipl.saturating_sub(5).max(1), ipl, ipl + 3] {
+                let floors: Vec<_> = served_run(ipl, start, 8, MIXED_KILLS)
+                    .into_iter()
+                    .filter(|f| f.0 <= ipl + 3)
+                    .collect();
+                if floors.is_empty() {
+                    continue;
+                }
+                let server = replay(ipl, &floors);
+                let (early, _) = early_and_lag(&server, &client_gauge(ipl + 1, &floors));
+                assert!(early.is_empty(), "level {level}, start {start}: paid ahead {early:?}");
+            }
+        }
+    }
+
+    /// The reviewer's sweep: levels 10, 50 and 100, starts at ipl .. ipl + 3 (where the
+    /// raw table broke 24-100% of runs for realistic mismatches), every client EPL from
+    /// 7 below the estimate to 1 above. Never ahead, and a bounded lag.
+    #[test]
+    fn starts_at_the_estimate_never_pay_ahead_for_any_nearby_client_epl() {
+        let pools = real_job_pools();
+        for level in [10, 50, 100] {
+            let ipl = initial_player_level(&pools, level);
+            for start in ipl..=ipl + 3 {
+                let floors = served_run(ipl, start, 10, MIXED_KILLS);
+                let server = replay(ipl, &floors);
+                for epl in ipl.saturating_sub(7).max(1)..=ipl + 1 {
+                    let (early, lag) = early_and_lag(&server, &client_gauge(epl, &floors));
+                    assert!(
+                        early.is_empty(),
+                        "level {level}, start {start}, client EPL {epl}: paid ahead {early:?}"
+                    );
+                    assert!(lag <= MAX_LAG_KILLS, "level {level}, start {start}, EPL {epl}: lag {lag}");
+                }
+            }
+        }
+    }
+
     /// What #468 shipped and #294 reported ("the bar fills and gets stuck ... no reward
     /// except gold"): `initialPlayerLevel` = the character level, 100. Every deep floor is
     /// then same-level on the server (10 a kill) while the client, at a retail EPL of 84,
@@ -3581,8 +3762,8 @@ mod tests {
 
     /// The low end of the same estimate reproduces the captured low-level `/start`: a
     /// level-7 character (78f2b668) was served initialPlayerLevel 10 and retail's
-    /// difficulty ladder, whose kills `replaying_the_retail_run_pays_every_rung_on_retails_kill`
-    /// replays rung for rung.
+    /// difficulty ladder, whose kills `replaying_the_retail_run_never_pays_ahead_of_retails_client`
+    /// replays.
     #[test]
     fn a_level_7_character_is_served_the_captured_retail_run() {
         let ipl = initial_player_level(&real_job_pools(), 7);
@@ -3595,7 +3776,9 @@ mod tests {
     }
 
     /// The estimate against all ten captured (character level → initialPlayerLevel)
-    /// pairs: within 3 everywhere, where the character level is off by up to 16.
+    /// pairs, by direction. A captured EPL ABOVE the estimate puts the server's gauge
+    /// ahead, so it may be at most [`CLIENT_EPL_MARGIN`] above; below only costs lag,
+    /// at most 3. The character level is off by up to 16.
     #[test]
     fn the_initial_player_level_estimate_tracks_the_captured_pairs() {
         let pools = real_job_pools();
@@ -3604,11 +3787,34 @@ mod tests {
             (66, 67), (79, 75), (81, 76), (93, 81), (100, 84),
         ];
         for (level, retail) in pairs {
-            let estimate = initial_player_level(&pools, level);
-            assert!(estimate.abs_diff(retail) <= 3, "level {level}: {estimate} vs retail {retail}");
+            let estimate = initial_player_level(&pools, level) as i32;
+            let retail = retail as i32;
+            assert!(retail - estimate <= CLIENT_EPL_MARGIN, "level {level}: estimate {estimate} under retail {retail}");
+            assert!(estimate - retail <= 3, "level {level}: estimate {estimate} over retail {retail}");
         }
-        assert_eq!(initial_player_level(&serde_json::Value::Null, 42), 42, "no table → level");
         assert_eq!(initial_player_level(&pools, 0), 1);
+    }
+
+    /// A static file without the table falls back to the compiled-in copy — never to the
+    /// character level, which is #468's bug — and the copy is the shipped table.
+    #[test]
+    fn a_missing_epl_table_falls_back_to_the_compiled_in_one() {
+        let pools = real_job_pools();
+        for level in [1, 7, 42, 66, 100] {
+            assert_eq!(
+                initial_player_level(&serde_json::Value::Null, level),
+                initial_player_level(&pools, level),
+                "level {level}"
+            );
+        }
+        assert_eq!(initial_player_level(&serde_json::Value::Null, 100), 84);
+        let shipped: std::collections::BTreeMap<u32, u32> = pools["globals"]["initialEplByPlayerLevel"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter_map(|(k, v)| Some((k.parse().ok()?, v.as_u64()? as u32)))
+            .collect();
+        assert_eq!(shipped, RETAIL_EPL_BY_LEVEL.iter().copied().collect());
     }
 }
 
