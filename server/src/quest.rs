@@ -1991,10 +1991,56 @@ pub(crate) fn event_milestone_reward(
     let mut reward = tmpl.payout(completion)?;
     if completion + 1 == tmpl.milestone_count() {
         if let Some(final_reward) = &tmpl.final_reward {
-            merge_reward(&mut reward, final_reward);
+            if !reward_already_carries(&reward, final_reward) {
+                merge_reward(&mut reward, final_reward);
+            }
         }
     }
+    grant_currencies_to_the_wallet(&mut reward);
     Some(reward)
+}
+
+/// Whether `reward` already holds every id of `extra` at least `extra`'s amount,
+/// counting an id whether it sits under `currencies` or `stackableItems`.
+///
+/// `payableRewards` is the `/complete` BODY retail sent, and for the last tier that
+/// body already includes `finalReward`: 13/13 captured final completions whose
+/// template ships the same `finalReward` (report #324). Merging it again paid the
+/// bonus twice. A template whose captured last tier is from another season lacks
+/// it, and still gets it added — the documented model is `rewards[last] +
+/// finalReward`.
+fn reward_already_carries(reward: &RewardGrant, extra: &RewardGrant) -> bool {
+    let amount = |id: &Uuid| {
+        reward.currencies.get(id).copied().unwrap_or(0)
+            + reward.stackable_items.get(id).copied().unwrap_or(0)
+    };
+    extra
+        .currencies
+        .iter()
+        .chain(extra.stackable_items.iter())
+        .all(|(id, n)| amount(id) >= *n)
+}
+
+/// Move gold, sigils and gems out of `stackableItems` into `currencies`.
+///
+/// `rewards[]` and `finalReward` list currencies as stackable items — that is the
+/// DISPLAY form the client draws its milestone ladder from. Retail's `/complete`
+/// grants them under `currencies`: 0 currency ids under `stackableItems` in 155
+/// captured event completions. Granting one as a stackable put a "gems" item in the
+/// backpack and left the final-tier rewards screen hanging (report #324: every
+/// final completion of an event whose `finalReward` is gold or gems, 5/5 on prod).
+fn grant_currencies_to_the_wallet(reward: &mut RewardGrant) {
+    let ids: Vec<Uuid> = reward
+        .stackable_items
+        .keys()
+        .copied()
+        .filter(|id| blades_lib::economy::is_currency(*id))
+        .collect();
+    for id in ids {
+        if let Some(n) = reward.stackable_items.remove(&id) {
+            *reward.currencies.entry(id).or_insert(0) += n;
+        }
+    }
 }
 
 /// What completing ordinary quest `quest_id` pays.
@@ -5919,12 +5965,96 @@ mod event_quest_tests {
         let final_reward = tmpl.final_reward.as_ref().expect("shipped");
         let last = serde_json::to_value(&paid[4]).unwrap();
         for (id, n) in &final_reward.stackable_items {
-            let got = last["stackableItems"][id.to_string()].as_u64().unwrap_or(0);
+            let got = last["stackableItems"][id.to_string()].as_u64().unwrap_or(0)
+                + last["currencies"][id.to_string()].as_u64().unwrap_or(0);
             assert!(
                 got >= *n,
                 "the last milestone must include the finalReward's {n} of {id}, got {got}"
             );
         }
+    }
+
+    /// Report #324: the last tier paid `finalReward` twice and granted gold or gems
+    /// as a backpack item, and the client's rewards screen never closed. These are
+    /// the 13 captured retail final-tier `/complete` rewards whose template ships
+    /// the same `finalReward` (snapshot 20260607, `api_captures` ids); ours must be
+    /// the same grant, field for field.
+    #[test]
+    fn the_last_tier_pays_what_retail_paid_on_its_final_complete() {
+        let sd = static_data();
+        let cases: &[(u32, &str, &str)] = &[
+            (1928, "a846b491-b439-447d-a8a1-9c2611522610", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":27,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":63000},"stackableItems":{"bafe6ed5-6473-4a4c-aef5-421d3af5c8cb":5}}"#),
+            (14396, "0dd37f6b-28ad-4cb7-8e12-2ebbf43fb366", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":15},"stackableItems":{"b74a5c55-a687-4604-aa59-ba3ddfddcd2a":96}}"#),
+            (27198, "26eb6ab5-2d8c-4993-820e-ada79f6f00a8", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":20},"stackableItems":{"19ce1a65-057f-4f34-a0ed-27de7c085662":5}}"#),
+            (34025, "2d1200ee-ecb8-4ea6-9892-54d1f538d83d", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"f11fb90b-b441-4d72-a33f-50d14d3d6778":140,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":216}}"#),
+            (36532, "816ff4c8-b56f-4645-bd2a-29bc7c1baf96", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":16,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":25200}}"#),
+            (38669, "a85408a6-7107-433d-b616-50105080574e", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5":3,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":216}}"#),
+            (39364, "f4023a38-195a-4977-bfbc-f443a257566f", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":20,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":38000},"stackableItems":{"21e6557f-17ca-4bd3-9379-00184efe0edc":24}}"#),
+            (40877, "a008cbbc-a164-4183-8b69-470ac8cd5707", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":15,"c64bcb53-41f4-41ba-892a-fe2cca423caa":21},"stackableItems":{"e7193116-d761-479b-8a20-5633737977f5":410}}"#),
+            (43620, "2290ab73-8f56-4dba-a4f0-7a23270eb93c", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":22},"stackableItems":{"e7193116-d761-479b-8a20-5633737977f5":372,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":560}}"#),
+            (48242, "9181f784-9eb8-4872-953d-30ba8b6bc9d1", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":32},"stackableItems":{"16e102fb-b1c0-42de-8106-0aa27e77f7f0":3,"85ed5500-3581-4699-8095-4b5ff6514355":96}}"#),
+            (49507, "a1aafdc9-a35c-45c9-89f6-27f7d3a628e6", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"1c5c5ce3-178b-4938-89f3-faf3fa7f0664":24,"e7193116-d761-479b-8a20-5633737977f5":410}}"#),
+            (52104, "cd66c93c-5086-4311-b0f6-e90af54099b2", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":24},"stackableItems":{"790a188b-3fa0-4f38-99d9-bc8d3675bc46":5}}"#),
+            (62711, "01121c2f-6806-4b8c-998e-adc5d0e21db7", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"16e102fb-b1c0-42de-8106-0aa27e77f7f0":3,"e7193116-d761-479b-8a20-5633737977f5":276}}"#),
+        ];
+        for (capture, gld, retail) in cases {
+            let gld: Uuid = gld.parse().unwrap();
+            let tiers = sd.event_quests.templates[&gld].milestone_count();
+            let paid = event_milestone_reward(&sd, Uuid::from_u128(0xE7), &quest(gld), tiers - 1)
+                .expect("the last tier pays");
+            let retail: RewardGrant = serde_json::from_str(retail).unwrap();
+            assert_eq!(paid, retail, "capture {capture} ({gld}): final tier");
+        }
+    }
+
+    /// No event milestone may grant gold, sigils or gems as a backpack item:
+    /// 0 of 155 captured event `/complete` rewards do.
+    #[test]
+    fn no_event_milestone_grants_a_currency_as_an_item() {
+        let sd = static_data();
+        let mut checked = 0;
+        for (gld, tmpl) in &sd.event_quests.templates {
+            for tier in 0..tmpl.milestone_count() {
+                let r = event_milestone_reward(&sd, Uuid::from_u128(0xE7), &quest(*gld), tier)
+                    .expect("every tier pays");
+                for id in r.stackable_items.keys() {
+                    assert!(
+                        !blades_lib::economy::is_currency(*id),
+                        "{gld} tier {}: currency {id} granted as a stackable item",
+                        tier + 1
+                    );
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked >= 200, "checked {checked} milestones");
+    }
+
+    /// A template whose captured last tier lacks `finalReward` (a different season's
+    /// capture) still pays it on top, and pays it once.
+    #[test]
+    fn a_final_reward_missing_from_the_captured_last_tier_is_added_once() {
+        let sd = static_data();
+        let mut added = 0;
+        for (gld, tmpl) in &sd.event_quests.templates {
+            let Some(bonus) = tmpl.final_reward.as_ref() else { continue };
+            let last = tmpl.milestone_count() - 1;
+            let base = tmpl.payout(last).expect("last tier");
+            if reward_already_carries(&base, bonus) {
+                continue;
+            }
+            let paid = event_milestone_reward(&sd, Uuid::from_u128(0xE7), &quest(*gld), last)
+                .expect("last tier pays");
+            for (id, n) in &bonus.stackable_items {
+                let before = base.currencies.get(id).copied().unwrap_or(0)
+                    + base.stackable_items.get(id).copied().unwrap_or(0);
+                let after = paid.currencies.get(id).copied().unwrap_or(0)
+                    + paid.stackable_items.get(id).copied().unwrap_or(0);
+                assert_eq!(after, before + n, "{gld}: {id}");
+            }
+            added += 1;
+        }
+        assert!(added > 0, "the committed data has such templates (20 at the time of #324)");
     }
 
     /// An ordinary quest resolves its reward through `gldQuestId`, and every quest
