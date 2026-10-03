@@ -2426,64 +2426,132 @@ mod exchange_amount_tests {
         }
     }
 
-    /// The amounts must come from the retail table, not a hardcoded 10/5. Asserted
-    /// differentially across several items so it cannot pass on a constant.
-    #[test]
-    fn exchange_amounts_are_item_specific() {
-        let u = |s: &str| uuid::Uuid::parse_str(s).unwrap();
-        // Transcendent Soul Gem: one, donated one at a time.
-        assert_eq!(
-            exchange_amounts_for(u("d94bab85-53d5-4c9c-a637-acd94fc66c98")),
-            (1, 1)
-        );
-        // Iron Ingot.
-        assert_eq!(
-            exchange_amounts_for(u("55e82826-2d68-469c-8870-753665ca62cd")),
-            (3, 1)
-        );
-        // Limestone — the big town-building material.
-        assert_eq!(
-            exchange_amounts_for(u("fd67bbc6-20f4-44a3-9614-28265ebb8c67")),
-            (50, 10)
-        );
-        // Honeycomb keeps the common 10/5.
-        assert_eq!(
-            exchange_amounts_for(u("7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50")),
-            (10, 5)
-        );
+    fn u(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
     }
 
-    /// An item retail never showed us falls back to the corpus's modal pair rather
-    /// than to something invented.
-    #[test]
-    fn an_unknown_item_falls_back_to_the_modal_pair() {
-        assert_eq!(
-            exchange_amounts_for(uuid::Uuid::nil()),
-            (10, 5),
-            "749 of 1,626 observed exchanges are 10/5"
-        );
-    }
+    /// The ten soul gems, Petty (SoulGem1) to Transcendent (SoulGem10).
+    const SOUL_GEMS: [&str; 10] = [
+        "19ce1a65-057f-4f34-a0ed-27de7c085662",
+        "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+        "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+        "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+        "3932e499-441e-4c6d-b671-9a03131ebe6f",
+        "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+        "a3351353-f613-4368-bac7-05783f857b07",
+        "68d7941e-8c8d-47bf-9f66-becb058f1817",
+        "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+        "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+    ];
 
-    /// Every mined row must be self-consistent: a donation cannot exceed the request,
-    /// and neither may be zero. Guards against a bad regeneration of the table.
+    /// Report #325: a SoulGem5 request was created as 10 wanted / 5 per donation,
+    /// because only soul gems 7–10 had ever been seen in a capture and everything
+    /// else fell back to 10/5. The client's own table asks for ONE soul gem of every
+    /// tier, donated whole, at every town level.
     #[test]
-    fn the_mined_table_is_self_consistent() {
-        for (t, req, max) in EXCHANGE_AMOUNTS {
-            assert!(*req > 0, "{t} requests {req}");
-            assert!(*max > 0, "{t} allows a {max} donation");
-            assert!(
-                max <= req,
-                "{t}: one donation ({max}) exceeds the whole request ({req})"
-            );
-            assert!(
-                uuid::Uuid::parse_str(t).is_ok(),
-                "{t} is not a uuid — the table was generated wrong"
-            );
+    fn every_soul_gem_is_requested_one_at_a_time() {
+        for gem in SOUL_GEMS {
+            for town_level in 0..=12 {
+                assert_eq!(
+                    exchange_amounts(u(gem), town_level),
+                    Some((1, 1)),
+                    "{gem} at town level {town_level}"
+                );
+            }
         }
+    }
+
+    /// The request size is `requestAmount × multiplier[requester's town level]`,
+    /// and one donation is `ceil(requested × donationPercentage / 100)`. Every pair
+    /// below was observed on retail (263 unique captured exchanges, all reproduced).
+    #[test]
+    fn amounts_scale_with_the_requesters_town_level() {
+        let limestone = u("fd67bbc6-20f4-44a3-9614-28265ebb8c67");
+        assert_eq!(exchange_amounts(limestone, 1), Some((10, 2)));
+        assert_eq!(exchange_amounts(limestone, 5), Some((30, 6)));
+        assert_eq!(exchange_amounts(limestone, 10), Some((50, 10)));
+        let clay = u("42d91529-c88b-4c5b-815b-b55508b4e7ef");
+        assert_eq!(exchange_amounts(clay, 3), Some((12, 3)), "ceil(2.4)");
+        assert_eq!(exchange_amounts(clay, 7), Some((24, 5)), "ceil(4.8)");
+        let crystal = u("8ac9076c-cba9-4cf4-a8a5-d2303aab22b0");
+        assert_eq!(exchange_amounts(crystal, 5), Some((2, 1)));
+        assert_eq!(exchange_amounts(crystal, 10), Some((3, 1)));
+        // No multiplier ladder: an Iron Ingot is 3/1 at any town level.
+        let iron = u("55e82826-2d68-469c-8870-753665ca62cd");
+        assert_eq!(exchange_amounts(iron, 1), Some((3, 1)));
+        assert_eq!(exchange_amounts(iron, 10), Some((3, 1)));
+        // Honeycomb, the common retail 10/5, only at town level 9+.
+        let honeycomb = u("7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50");
+        assert_eq!(exchange_amounts(honeycomb, 10), Some((10, 5)));
+        assert_eq!(exchange_amounts(honeycomb, 1), Some((2, 1)));
+    }
+
+    /// A town with no level yet counts as level 1; past the ladder it clamps to 10.
+    #[test]
+    fn town_level_is_clamped_to_the_ladder() {
+        let lumber = u("e7193116-d761-479b-8a20-5633737977f5");
+        assert_eq!(exchange_amounts(lumber, 0), exchange_amounts(lumber, 1));
+        assert_eq!(exchange_amounts(lumber, 99), exchange_amounts(lumber, 10));
+    }
+
+    /// The client only offers items in its `GuildExchangeData` table. Anything else
+    /// is not requestable, rather than silently becoming a 10/5 request.
+    #[test]
+    fn an_item_the_client_cannot_request_is_refused() {
+        assert_eq!(exchange_amounts(Uuid::nil(), 10), None);
+        // A weapon template is not on the exchange.
         assert_eq!(
-            EXCHANGE_AMOUNTS.len(),
-            36,
-            "36 templates were mined from retail"
+            exchange_amounts(u("622d1317-bb1a-4e0a-a0b6-cf85c6fc94b1"), 10),
+            None
+        );
+    }
+
+    #[test]
+    fn the_client_table_is_complete_and_self_consistent() {
+        assert_eq!(GUILD_EXCHANGE_DATA.len(), 65, "65 entries in GuildExchangeData");
+        for (t, base, mults, pct) in GUILD_EXCHANGE_DATA {
+            assert!(Uuid::parse_str(t).is_ok(), "{t} is not a uuid");
+            assert!(*base > 0 && *pct > 0 && *pct <= 100, "{t}");
+            assert!(mults.iter().all(|m| *m >= 1), "{t}");
+            assert!(mults.windows(2).all(|w| w[0] <= w[1]), "{t} ladder decreases");
+        }
+    }
+
+    /// Report #325's second half: the donor held 3 of the item and the request
+    /// asked for 5 per donation, so the debit failed with a 400 and the client
+    /// restarted. Retail gives what the donor has — captured donations of 2 into a
+    /// 10/5 Glow Dust request and of 1 into a 10/2 Lumber request.
+    #[test]
+    fn a_donor_gives_what_they_hold() {
+        assert_eq!(donation_amount(5, 10, 3), 3, "short donor gives all 3");
+        assert_eq!(donation_amount(5, 10, 50), 5, "a full donation");
+        assert_eq!(donation_amount(5, 4, 50), 4, "never past the request");
+        assert_eq!(donation_amount(1, 1, 3), 1);
+        assert_eq!(donation_amount(5, 10, 0), 0, "nothing to give");
+        assert_eq!(donation_amount(5, 0, 9), 0, "request already full");
+    }
+
+    /// Retail's donate response carries `guildExchangeDonation.reward.currencies`:
+    /// the donor is paid the item's sell value per unit given (100% for every row of
+    /// the client table). Measured 21/21 in the snapshot: 5 Honeycomb (sellValue 10)
+    /// → 50 gold, 1 Glorious Soul Gem (679) → 679. We sent no such key.
+    #[test]
+    fn a_donation_pays_the_donor_the_items_sell_value() {
+        let honeycomb = u("7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50");
+        let prices = blades_lib::features::merchant::SellPrices::from_json(
+            &json!({ "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50": { "sellValue": 10 } }),
+            &json!({}),
+        );
+        let info = donation_reward(&prices, honeycomb, 5);
+        assert_eq!(
+            serde_json::to_value(&info).unwrap(),
+            json!({ "reward": { "currencies": { "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 50 } } })
+        );
+        // An unpriced item still carries the (empty) reward object.
+        let none = donation_reward(&prices, Uuid::nil(), 5);
+        assert_eq!(
+            serde_json::to_value(&none).unwrap(),
+            json!({ "reward": { "currencies": {} } })
         );
     }
 
@@ -2505,74 +2573,139 @@ mod exchange_amount_tests {
     }
 }
 
-/// Per-item guild-exchange amounts, `(itemTemplateId, requestedAmount, maxDonationAmount)`.
+/// The client's own guild-exchange table — the `GuildExchangeData` ScriptableObject
+/// (`BGS.Game.Social.GuildExchange._exchanges`, 65 `ItemGuildExchangeData` rows) read
+/// out of the APK's bundles. Each row is
+/// `(itemTemplateId, _requestAmount, _requestAmountMultipliers by town level 1..=10,
+/// _donationPercentage)`; `_donationReturnedSoftCurrencyPercentage` is 100 in every
+/// row, so it is not carried.
 ///
-/// Every request used to be created with a hardcoded `requestedAmount: 10,
-/// maxDonationAmount: 5`, for every item. Retail did not work that way: mined from
-/// 1,626 exchange objects across 863 captured `guilds/current/exchanges` responses,
-/// there are **14 distinct (requested, maxDonation) pairs** over 36 item templates —
-/// 1/1 for a Transcendent Soul Gem, 3/1 for an Iron Ingot, 50/10 for Limestone.
+/// A request asks for `_requestAmount × multiplier[requester's town level]`, and one
+/// donation is `ceil(requested × _donationPercentage / 100)`. Checked against retail:
+/// all 263 unique exchanges in the prod capture corpus (36 templates, every
+/// town-level variant of Limestone/Lumber/Clay/Crystal included) are reproduced, and
+/// the 16 captured creates were all made at town level 10.
 ///
-/// `maxDonationAmount` is the size of ONE donation, not a number of donations
-/// required, and retail permits partial redemption (captures 9658→9659: a request
-/// for 10 got a single donation of 5, and the requester redeemed exactly 5).
-///
-/// Four templates were observed with more than one pair — Limestone, Lumber, Copper
-/// and Crystal, all town-building materials whose requests appear to scale. The modal
-/// pair is used; the alternatives are recorded here so the choice is visible:
-///   Limestone 50/10 (110 of 120; also 30/6, 10/2)
-///   Lumber    50/10 ( 97 of 118; also 40/8, 30/6, 10/2, 20/4)
-///   Copper    30/6  ( 50 of  75; also 24/5, 12/3)
-///   Crystal    2/1  (  9 of  13; also 3/1)
-const EXCHANGE_AMOUNTS: &[(&str, i64, i64)] = &[
-    ("4577fb2b-47f7-4112-b870-1479e2529b06", 10, 5), // Dragon Claw
-    ("05b4dd6b-796f-4088-a772-0e33ea3db976", 10, 5), // Frost Salts
-    ("7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50", 10, 5), // Honeycomb
-    ("fd67bbc6-20f4-44a3-9614-28265ebb8c67", 50, 10), // Limestone
-    ("e7193116-d761-479b-8a20-5633737977f5", 50, 10), // Lumber
-    ("f9181a67-b094-4c37-a145-ced9dfe610d6", 5, 1),  // Daedra Heart
-    ("d94bab85-53d5-4c9c-a637-acd94fc66c98", 1, 1),  // Transcendent Soul Gem
-    ("42d91529-c88b-4c5b-815b-b55508b4e7ef", 30, 6), // Copper
-    ("07f380dd-f123-4ef7-9b12-8b9fdb03c3e1", 10, 5), // Imp Stool
-    ("89ece62c-9ff6-470a-a152-d45ef4e0c222", 3, 1),  // Pearl
-    ("d523932f-8c7f-4192-9112-5dbd60883c2b", 5, 1),  // Dragon Bones
-    ("fe3567e0-ec8e-4f41-8e77-a56f861ab898", 10, 5), // Daedroth Tooth
-    ("8b7d0044-3a38-4ee0-af45-d2892b0f508d", 10, 5), // Deathbell
-    ("a4d5e792-5a27-4bb3-851f-e0917c0962db", 8, 4),  // Giant's Toe
-    ("f1c5c03c-5297-48fb-a9d2-5f32bffb467c", 10, 5), // Fire Salts
-    ("34ddfe0e-5119-4e52-8eef-a77b6bc810a7", 5, 1),  // Dragon Scales
-    ("bafe6ed5-6473-4a4c-aef5-421d3af5c8cb", 1, 1),  // Glorious Soul Gem
-    ("68d7941e-8c8d-47bf-9f66-becb058f1817", 1, 1),  // Grand Soul Gem
-    ("55e82826-2d68-469c-8870-753665ca62cd", 3, 1),  // Iron Ingot
-    ("74f091b5-fd88-464b-a98a-f60a5e8a0f25", 3, 1),  // Orichalcum Ingot
-    ("70f2c013-813e-4f63-8b29-7a54a13b5e58", 1, 1),  // Faerite
-    ("e80bee76-f92c-4005-9eff-20d1e8c64d24", 4, 1),  // Quicksilver Ingot
-    ("8ac9076c-cba9-4cf4-a8a5-d2303aab22b0", 2, 1),  // Crystal
-    ("9d9732a5-cd1c-4a93-8755-0bf92ee65d64", 3, 1),  // Leather
-    ("75112030-b248-49b0-9c70-0da8dea150d1", 5, 1),  // Ebony Ingot
-    ("b81952e0-c3c8-4a5c-92c0-8215d3eb71af", 3, 1),  // Steel Ingot
-    ("9687d83c-aa7b-4cf3-a69f-0bba8204fa61", 10, 5), // Glow Dust
-    ("16e102fb-b1c0-42de-8106-0aa27e77f7f0", 1, 1),  // Diamond
-    ("f00f350d-97c2-47cd-a554-e1a37c9ff7f2", 10, 5), // Lavender
-    ("51f7612f-a797-4417-8a92-493b0aae7f45", 3, 1),  // Pelt
-    ("a3351353-f613-4368-bac7-05783f857b07", 1, 1),  // Elevated Soul Gem
-    ("4312b0ed-e397-4815-9693-a511ecda71de", 4, 1),  // Moonstone Ingot
-    ("10c54e43-a2a1-4833-9491-4c19149f43b5", 10, 5), // Void Salts
-    ("85ed5500-3581-4699-8095-4b5ff6514355", 4, 1),  // Malachite Ingot
-    ("9df9233f-e7b9-47e8-bc75-f37707917759", 3, 1),  // Garnet
-    ("b94c2028-dba7-44bd-b6f9-6f85ab0195b6", 3, 1),  // Seeds
+/// This replaces a 36-row table mined from captures, which fell back to 10/5 for any
+/// item retail happened not to show us — including soul gems 1–6, which the client
+/// asks for ONE at a time like every other gem (report #325).
+const GUILD_EXCHANGE_DATA: &[(&str, i64, [i64; 10], i64)] = &[
+    ("e7193116-d761-479b-8a20-5633737977f5", 10, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 20), // Lumber
+    ("fd67bbc6-20f4-44a3-9614-28265ebb8c67", 10, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 20), // Limestone
+    ("42d91529-c88b-4c5b-815b-b55508b4e7ef", 6, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 20), // Clay
+    ("55e82826-2d68-469c-8870-753665ca62cd", 3, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // IronBar
+    ("51f7612f-a797-4417-8a92-493b0aae7f45", 3, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // AnimalHide
+    ("b81952e0-c3c8-4a5c-92c0-8215d3eb71af", 3, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // SteelIngot
+    ("9d9732a5-cd1c-4a93-8755-0bf92ee65d64", 3, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // Leather
+    ("b74a5c55-a687-4604-aa59-ba3ddfddcd2a", 3, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // SilverIngot
+    ("b604fd80-25b0-4bfb-8cc3-aad05bef96c0", 3, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // ScribChitin
+    ("74f091b5-fd88-464b-a98a-f60a5e8a0f25", 3, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // OrichalcumIngot
+    ("f11fb90b-b441-4d72-a33f-50d14d3d6778", 4, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // DwarvenIngot
+    ("e80bee76-f92c-4005-9eff-20d1e8c64d24", 4, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // QuickSilverIngot
+    ("4312b0ed-e397-4815-9693-a511ecda71de", 4, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // MoonstoneOre
+    ("85ed5500-3581-4699-8095-4b5ff6514355", 4, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // MalachiteIngot
+    ("8ef9f10c-3c46-492c-9a00-29fd1626d85e", 4, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // ChaurusChitin
+    ("75112030-b248-49b0-9c70-0da8dea150d1", 5, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // EbonyIngot
+    ("ba9fe442-2cf8-48a8-9416-6d91c2a00cab", 5, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // StalhrimIngot
+    ("f9181a67-b094-4c37-a145-ced9dfe610d6", 5, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // DaedraHeart
+    ("d523932f-8c7f-4192-9112-5dbd60883c2b", 5, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // DragonBone
+    ("34ddfe0e-5119-4e52-8eef-a77b6bc810a7", 5, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // DragonScale
+    ("fbf96b07-e9aa-4157-8761-10179fa05138", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // Garlic
+    ("f00f350d-97c2-47cd-a554-e1a37c9ff7f2", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // Lavender
+    ("0e59a8f9-8a47-48a0-afac-8c3053cc778c", 4, [1, 1, 1, 1, 1, 1, 2, 2, 2, 2], 50), // Histcarp
+    ("200d62f5-7de2-4a6c-979a-43df30d6fd86", 4, [1, 1, 1, 1, 1, 1, 2, 2, 2, 2], 50), // BlueDartwing
+    ("dba6adde-b1f3-4146-8155-91426652495a", 6, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 50), // Ectoplasm
+    ("0de08119-d316-4933-a5d3-8ef702d4efdc", 6, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 50), // MoonSugar
+    ("4d7420db-8042-4946-a43f-e0b3bd9bec81", 8, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 50), // Nightshade
+    ("a4d5e792-5a27-4bb3-851f-e0917c0962db", 8, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 50), // GiantsToe
+    ("fe3567e0-ec8e-4f41-8e77-a56f861ab898", 10, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 50), // DaedrothTooth
+    ("4577fb2b-47f7-4112-b870-1479e2529b06", 10, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 50), // DragonClaw
+    ("f1c5c03c-5297-48fb-a9d2-5f32bffb467c", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // FireSalts
+    ("05b4dd6b-796f-4088-a772-0e33ea3db976", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // FrostSalts
+    ("10c54e43-a2a1-4833-9491-4c19149f43b5", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // VoidSalts
+    ("8b7d0044-3a38-4ee0-af45-d2892b0f508d", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // Deathbell
+    ("07f380dd-f123-4ef7-9b12-8b9fdb03c3e1", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // ImpStool
+    ("7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // Honeycomb
+    ("9687d83c-aa7b-4cf3-a69f-0bba8204fa61", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // GlowDust
+    ("19ce1a65-057f-4f34-a0ed-27de7c085662", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem1
+    ("790a188b-3fa0-4f38-99d9-bc8d3675bc46", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem2
+    ("eca5bd64-5e5d-4d0d-bfa3-b6fd427be029", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem3
+    ("1ba210b4-8cca-4f2f-b942-8fab80a52fd8", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem4
+    ("3932e499-441e-4c6d-b671-9a03131ebe6f", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem5
+    ("a1d41da0-51e0-4a80-ba9a-b8e9046be27e", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem6
+    ("a3351353-f613-4368-bac7-05783f857b07", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem7
+    ("68d7941e-8c8d-47bf-9f66-becb058f1817", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem8
+    ("bafe6ed5-6473-4a4c-aef5-421d3af5c8cb", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem9
+    ("d94bab85-53d5-4c9c-a637-acd94fc66c98", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem10
+    ("89ece62c-9ff6-470a-a152-d45ef4e0c222", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Pearl
+    ("92b77b2f-bd33-469f-8aad-8a228b9537eb", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Brass
+    ("3ca59113-a093-4cc8-8389-0f578ad94851", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Topaz
+    ("9df9233f-e7b9-47e8-bc75-f37707917759", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Garnet
+    ("3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Amethyst
+    ("cf4b1b42-a736-4aa1-99b8-baca9f9c2276", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 33), // Ruby
+    ("71bb8562-07ad-4f18-855a-96f9156b8e6b", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // GoldIngot
+    ("014606cd-8898-4c1d-8029-63220a179c47", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // Sapphire
+    ("4d1231be-d3fa-4282-81b2-0f7bed4aabff", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // Emerald
+    ("16e102fb-b1c0-42de-8106-0aa27e77f7f0", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // Diamond
+    ("ab97efe1-bae9-4d16-8fd9-e05bad9ecb95", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // Atronite
+    ("70f2c013-813e-4f63-8b29-7a54a13b5e58", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // Faerite
+    ("38d32048-ce01-4390-a4f0-cdb94ef3ce72", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Bronze
+    ("61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Marble
+    ("574ab81c-1ba1-4127-a4aa-e9cbba5767ad", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Fabric
+    ("b94c2028-dba7-44bd-b6f9-6f85ab0195b6", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Seed
+    ("6bd960ca-9af3-4b33-9ec0-5c06d50ad43e", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Dye
+    ("8ac9076c-cba9-4cf4-a8a5-d2303aab22b0", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Crystal
 ];
 
-/// The `(requestedAmount, maxDonationAmount)` for an item, or the 10/5 default for a
-/// template retail never showed us. 10/5 is the most common pair in the corpus (749
-/// of 1,626), so an unknown item gets the modal behaviour rather than an invented one.
-pub fn exchange_amounts_for(item_template_id: uuid::Uuid) -> (i64, i64) {
+/// `(requestedAmount, maxDonationAmount)` for an item requested by a character whose
+/// town is at `town_level`, or `None` for an item the client does not offer on the
+/// exchange. A town with no level yet counts as level 1; the ladder tops out at 10.
+pub fn exchange_amounts(item_template_id: Uuid, town_level: u64) -> Option<(i64, i64)> {
     let s = item_template_id.to_string();
-    EXCHANGE_AMOUNTS
-        .iter()
-        .find(|(t, _, _)| *t == s)
-        .map(|(_, req, max)| (*req, *max))
-        .unwrap_or((10, 5))
+    let (_, base, multipliers, pct) = GUILD_EXCHANGE_DATA.iter().find(|(t, ..)| *t == s)?;
+    let requested = base * multipliers[(town_level.clamp(1, 10) - 1) as usize];
+    let max_donation = ((requested * pct + 99) / 100).max(1);
+    Some((requested, max_donation))
+}
+
+/// How many units one donation moves: a full `maxDonationAmount`, but never more
+/// than the request still needs nor more than the donor holds. Retail takes what a
+/// short donor has — captured donations of 2 into a 10/5 Glow Dust request and of 1
+/// into a 10/2 Lumber request — where we used to refuse with a 400 (report #325).
+fn donation_amount(max_donation: i64, remaining: i64, owned: u64) -> u64 {
+    (max_donation.min(remaining).max(0) as u64).min(owned)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuildExchangeDonationReward {
+    currencies: HashMap<Uuid, u64>,
+}
+
+/// `guildExchangeDonation` in the donate response: `{"reward":{"currencies":{gold:N}}}`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuildExchangeDonationInfo {
+    reward: GuildExchangeDonationReward,
+}
+
+/// The donor's reward: the item's sell value per unit given
+/// (`_donationReturnedSoftCurrencyPercentage` is 100 for every row). Measured 21/21
+/// in the snapshot, e.g. 5 Honeycomb (sellValue 10) → 50 gold, 1 Glorious Soul Gem
+/// (679) → 679.
+fn donation_reward(
+    prices: &blades_lib::features::merchant::SellPrices,
+    item_template_id: Uuid,
+    amount: u64,
+) -> GuildExchangeDonationInfo {
+    let gold = prices.stackable_price(item_template_id, amount);
+    let mut currencies = HashMap::new();
+    if gold > 0 {
+        currencies.insert(blades_lib::economy::GOLD, gold);
+    }
+    GuildExchangeDonationInfo {
+        reward: GuildExchangeDonationReward { currencies },
+    }
 }
 
 #[derive(Serialize)]
@@ -2581,8 +2714,12 @@ struct CreateExchangeResponse {
     guild_exchange: GuildExchangeWire,
 }
 
-/// `POST /guilds/current/exchanges` — create an exchange request (requestedAmount=10,
-/// maxDonationAmount=5, donationSum=0).
+/// `POST /guilds/current/exchanges` — create an exchange request. The amounts come
+/// from the client's `GuildExchangeData` table scaled by the requester's town level
+/// ([`exchange_amounts`]); an item the client cannot request is refused. Stamps the
+/// character's `lastGuildExchangeRequestTime`, as retail did (15/15 captured creates
+/// are followed by a character carrying `lastGuildExchangeRequestTime ==
+/// creationTime`).
 #[post(
     "/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/exchanges"
 )]
@@ -2603,7 +2740,23 @@ pub async fn create_exchange(
         .await?
         .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, GUILD_SERVICE_ID, 1))?;
 
-    let (requested_amount, max_donation_amount) = exchange_amounts_for(item_template_id);
+    let town_level = {
+        use crate::schema::characters::dsl as c;
+        let town: Option<Value> = c::characters
+            .filter(c::id.eq(character_id))
+            .select(c::town)
+            .first(&mut conn)
+            .await
+            .optional()?
+            .flatten();
+        town.as_ref()
+            .and_then(|t| t.get("levelInfo"))
+            .and_then(|l| l.get("level"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
+    let (requested_amount, max_donation_amount) = exchange_amounts(item_template_id, town_level)
+        .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, GUILD_SERVICE_ID, 15))?;
     let ts = now_secs();
     let row = GuildExchangeRow {
         id: Uuid::new_v4().to_string(),
@@ -2618,13 +2771,22 @@ pub async fn create_exchange(
         creation_time: ts,
         redeemed: false,
     };
-    {
-        use crate::schema::guild_exchanges;
-        diesel::insert_into(guild_exchanges::table)
-            .values(&row)
-            .execute(&mut conn)
-            .await?;
-    }
+    let row = conn
+        .transaction(move |conn| {
+            async move {
+                use crate::schema::guild_exchanges;
+                diesel::insert_into(guild_exchanges::table)
+                    .values(&row)
+                    .execute(conn)
+                    .await?;
+                let mut entry = load_economy(conn, character_id, user_id).await?;
+                entry.character.0.last_guild_exchange_request_time = ts.max(0) as u64;
+                write_economy(conn, entry).await?;
+                Ok::<_, BladeApiError>(row)
+            }
+            .scope_boxed()
+        })
+        .await?;
     Ok(Json(CreateExchangeResponse {
         guild_exchange: GuildExchangeWire::from_row(&row, false),
     }))
@@ -2644,10 +2806,12 @@ struct DonateResponse {
     wallet: CompleteWallet,
     inventory: CompleteInventoryUpdate,
     character: CompleteCharacterWithIdWithoutData,
+    /// Retail sends this on every donate (21/21 captured); we omitted it.
+    guild_exchange_donation: GuildExchangeDonationInfo,
 }
 
-/// `POST /guilds/current/exchanges/donate` — donate `maxDonationAmount` of the
-/// `itemTemplateId` stackable from the donor's backpack. The donor must be in the same
+/// `POST /guilds/current/exchanges/donate` — donate up to `maxDonationAmount` of the
+/// `itemTemplateId` stackable from the donor's backpack ([`donation_amount`]). The donor must be in the same
 /// guild as the requester. The item is debited from the donor's inventory.
 #[post(
     "/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/exchanges/donate"
@@ -2670,6 +2834,7 @@ pub async fn donate_exchange(
     let m = find_membership(&mut conn, donor_user_id)
         .await?
         .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, GUILD_SERVICE_ID, 1))?;
+    let app = app_state.clone();
 
     conn.transaction(move |conn| {
         async move {
@@ -2776,17 +2941,18 @@ pub async fn donate_exchange(
                     13,
                 ));
             }
-            let donate_amount = exchange.max_donation_amount.min(remaining).max(0) as u64;
-            if donate_amount == 0 {
-                return Err(BladeApiError::new(
-                    StatusCode::CONFLICT,
-                    GUILD_SERVICE_ID,
-                    13,
-                ));
-            }
-
-            // Debit the donor's stackable.
+            // Debit the donor's stackable — up to `maxDonationAmount`, capped by what
+            // the request still needs and by what the donor holds. A donor holding
+            // none still gets the economy refusal from `consume_stackable`.
             let mut entry = load_economy(conn, donor_character_id, donor_user_id).await?;
+            let owned = entry
+                .inventory
+                .0
+                .backpack
+                .stackable_items
+                .count(exchange.item_template_id);
+            let donate_amount =
+                donation_amount(exchange.max_donation_amount, remaining, owned).max(1);
             let mut tracker = InventoryChangeTracker::default();
             consume_stackable(
                 &mut entry.inventory.0,
@@ -2796,6 +2962,16 @@ pub async fn donate_exchange(
             )
             .map_err(BladeApiError::from_economy)?;
             entry.inventory.0.backpack_version += 1;
+
+            // Pay the donor and stamp the character the way retail's response does
+            // (`guildExchangeDonationCount` +1, `lastGuildExchangeDonationTime` = now).
+            let guild_exchange_donation =
+                donation_reward(&app.sell_prices, exchange.item_template_id, donate_amount);
+            for (currency, amount) in &guild_exchange_donation.reward.currencies {
+                entry.wallet.0.credit(*currency, *amount);
+            }
+            entry.character.0.guild_exchange_donation_count += 1;
+            entry.character.0.last_guild_exchange_donation_time = now_secs().max(0) as u64;
 
             let inventory_update = entry.inventory.0.generate_client_update(&tracker);
             let wallet = entry.wallet.0.clone();
@@ -2862,6 +3038,7 @@ pub async fn donate_exchange(
                 wallet,
                 inventory: inventory_update,
                 character: character_out,
+                guild_exchange_donation,
             }))
         }
         .scope_boxed()
