@@ -4,13 +4,18 @@
 //! snapshot has 251 global-shop jewelry grants from randomized jewelry bundles,
 //! all distinct; the named Sigil jewelry offers themselves were not bought in
 //! that snapshot, so `deploy/static/jewelry_roll_ranges.json` records the measured
-//! count/grade ranges and this module draws property ids from the APK pools.
+//! count/grade ranges of those Sigil grants and this module draws property ids
+//! from the APK pools.
+//!
+//! Town merchants are different (#321): every retail town-shop ring/necklace was
+//! a blank — a rolled grade and GRADING, never ENCHANTING — so the Sigil counts
+//! must not be applied to Enchanter stock.
 
 use std::collections::HashMap;
 
 use blades_lib::{
     game_data::GameDataItem,
-    static_data::{EnchantingData, JewelryRollRanges, SecondaryEnchantTable},
+    static_data::{EnchantingData, SecondaryEnchantTable},
     user_data::{Item, ItemSingleProperty},
 };
 use rand::{rngs::StdRng, Rng, RngExt, SeedableRng};
@@ -44,44 +49,6 @@ pub fn is_jewelry_template(template: Uuid, items: &HashMap<Uuid, GameDataItem>) 
         items.get(&template).map(|i| i.r#type),
         Some(jewelry_grade::RING | jewelry_grade::NECKLACE)
     )
-}
-
-fn weighted_key<R: Rng + ?Sized>(rng: &mut R, weights: &HashMap<String, u64>) -> Option<u64> {
-    let total: u64 = weights.values().copied().sum();
-    if total == 0 {
-        return None;
-    }
-    let mut pick = rng.random_range(0..total);
-    let mut entries: Vec<_> = weights.iter().collect();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-    for (key, weight) in entries {
-        if pick < *weight {
-            return key.parse::<u64>().ok();
-        }
-        pick -= *weight;
-    }
-    None
-}
-
-fn measured_count<R: Rng + ?Sized>(template: Uuid, ranges: &JewelryRollRanges, rng: &mut R) -> u64 {
-    let Some(tier) = ranges.template_tier(&template) else {
-        return 0;
-    };
-    // The snapshot's randomized jewelry bundles reached item tier 7. For higher
-    // Sigil/Enchanter jewelry, use the highest measured tier rather than inventing
-    // a broader count range.
-    let measured_tier = if ranges.tier_range(tier).is_some() {
-        tier
-    } else {
-        (1..=tier)
-            .rev()
-            .find(|t| ranges.tier_range(*t).is_some())
-            .unwrap_or(0)
-    };
-    ranges
-        .tier_range(measured_tier)
-        .and_then(|r| weighted_key(rng, &r.enchanting_count))
-        .unwrap_or(0)
 }
 
 fn weighted_index<R: Rng + ?Sized>(rng: &mut R, weights: &[f64]) -> Option<usize> {
@@ -131,11 +98,13 @@ pub fn roll_enchanting_exact<R: Rng + ?Sized>(
     out
 }
 
+/// Roll a town merchant's ring or necklace the way retail sold it: a fresh
+/// grade with its GRADING (the random skills), and no ENCHANTING — a blank the
+/// player enchants. Retail's 4 town-shop jewellery purchases (1,516 purchase
+/// responses, 2026-05-09..06-30) were graded 1..=3 with 0 ENCHANTING each.
 pub fn roll_generated_jewelry<R: Rng + ?Sized>(
     item: &mut Item,
     items: &HashMap<Uuid, GameDataItem>,
-    enchanting: &EnchantingData,
-    ranges: &JewelryRollRanges,
     rng: &mut R,
 ) -> bool {
     let Some(item_type) = items.get(&item.item_template_id).map(|i| i.r#type) else {
@@ -150,17 +119,7 @@ pub fn roll_generated_jewelry<R: Rng + ?Sized>(
         item.tempering_level = 0;
         item.durability = 0.0;
     }
-    let count = measured_count(item.item_template_id, ranges, rng);
-    let tier = ranges
-        .template_tier(&item.item_template_id)
-        .unwrap_or(1)
-        .max(1);
-    item.properties.enchanting = roll_enchanting_exact(
-        rng,
-        enchanting.table_for(&item.item_template_id),
-        count,
-        tier,
-    );
+    item.properties.enchanting.clear();
     true
 }
 
@@ -200,26 +159,7 @@ pub fn reroll_sigil_jewelry<R: Rng + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use blades_lib::static_data::{JewelryTierRollRange, WeightedProperty};
-
-    #[test]
-    fn measured_count_stays_inside_the_static_range() {
-        let template = Uuid::parse_str("240eb001-fe3e-4899-b0cc-dd87cb8a72b6").unwrap();
-        let mut ranges = JewelryRollRanges::default();
-        ranges.template_tiers.insert(template, 10);
-        ranges.by_item_tier.insert(
-            "7".to_string(),
-            JewelryTierRollRange {
-                observations: 8,
-                enchanting_count: [("2".to_string(), 1), ("3".to_string(), 7)].into(),
-                grade: HashMap::new(),
-            },
-        );
-        let mut rng = seeded(&[template.as_bytes()], 1);
-        for _ in 0..100 {
-            assert!((2..=3).contains(&measured_count(template, &ranges, &mut rng)));
-        }
-    }
+    use blades_lib::static_data::WeightedProperty;
 
     #[test]
     fn exact_enchanting_rolls_distinct_properties() {
