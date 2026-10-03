@@ -33,17 +33,25 @@
 //! Every number is confirmed against 18 retail `/end` captures, five of them
 //! single-floor, exact to the unit — see the tests at the bottom of this file.
 //!
-//! ## `initialPlayerLevel` is an open question
+//! ## `initialPlayerLevel` is the client's Effective Player Level
 //!
 //! It drives the kill score, the `/end` multiplier AND every slice's difficulty (see
-//! `slice_difficulty`), and we do not know how retail derives it. It is NOT the
-//! character level and not a fixed offset from it: captured (charLevel → ipl) pairs run
-//! 7→10, 8→11, 3→4, 38→40, 34→38, 66→67, 79→75, 81→76, 93→81, 100→84 — it tracks power
-//! and diverges DOWNWARD at high level. `start_abyss` still writes the character's level,
-//! which is therefore wrong for most characters; everything downstream reads the value
-//! persisted on the run (and the client reads the same value off `/start`), so client and
-//! server agree with each other whatever it is, and fixing the derivation later is a
-//! one-line change confined to `start_abyss`.
+//! `slice_difficulty`). The client does NOT read it off `/start`:
+//! `LevelManager.EndCreateLevelLoadTaskList` calls `AbyssController.NotifyStart(
+//! firstSliceFloorIndex, GameplayManager.EffectivePlayerLevel)` (call at RVA 0x1B01580),
+//! and `EffectivePlayerLevel` is `GearLevelParameters.GetEffectiveLevelForPlayer` — a
+//! blend of character level and the levels of the player's gear. `NotifyEnemyKill`
+//! then scores `GetKillScore(enemy.Level - thatLevel) * killScoreMultiplier`. Retail's
+//! server computed the same number, which is why its `/start` carried it: the captured
+//! (charLevel → ipl) pairs 7→10, 8→11, 3→4, 38→40, 34→38, 66→67, 79→75, 81→76, 93→81,
+//! 100→84 track power, and the client's own analytics report the identical value as
+//! `gear_rating` (10, 11 and 75 beside the three captured `/start`s).
+//!
+//! We do not compute the gear blend, so [`initial_player_level`] estimates it from the
+//! retail-measured EPL-by-level table. Writing the CHARACTER level instead (#468) broke
+//! deep runs: a level-100 player's floors are all difficulty 100, so the server scored
+//! every kill same-level (10) while the client, at an EPL near 84, scored it 30 — its
+//! gauge filled, the server never paid, and the gauge stuck (#294).
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -199,7 +207,10 @@ pub async fn start_abyss(
             let mut entry =
                 load_economy_for_update(&mut conn, &session.session, character_id).await?;
 
-            let player_level = entry.character.0.level as u32;
+            let character_level = entry.character.0.level as u32;
+            // NOT the character level: the client scores and shows everything against
+            // its own Effective Player Level (see [`initial_player_level`], #294).
+            let player_level = initial_player_level(&app_state.job_pools, character_level);
             let seed = generate_seed(character_id);
             let static_abyss = &app_state.static_data.abyss;
 
@@ -230,7 +241,8 @@ pub async fn start_abyss(
                 granted_future_rewards: Default::default(),
             };
 
-            let wire = run_to_wire(&run, u64::from(player_level));
+            // The gauge's reward ladder is keyed to the CHARACTER level, as on `/update`.
+            let wire = run_to_wire(&run, u64::from(character_level));
 
             // Generated data for the floor the run STARTS on — which is
             // `slices[0]`, not floor 1: a resumed run's first slice is the
@@ -924,10 +936,10 @@ const MAX_SLICE_DIFFICULTY: u32 = 100;
 ///
 /// This used to be a fixed ladder (1..10, 12, 14, 16, 20, 24, ... 100) copied from the
 /// one captured run that happened to have initialPlayerLevel 10, ramping on to 400 past
-/// floor 24. For any other player the bonus started on the wrong floor: at level 9,
-/// floor 10 paid x1.25 while the client showed x2, floor 11 x2 against x3 — the
-/// multiplier arriving a floor late (#312) — and above level 10 it arrived early. Past
-/// floor 24 enemies ran up to level 400 where retail stops at 100.
+/// floor 24. For any other player the bonus started on the wrong floor: at
+/// initialPlayerLevel 9, floor 10 paid x1.25 while the client showed x2, floor 11 x2
+/// against x3 — the multiplier arriving a floor late (#312) — and above 10 it arrived
+/// early. Past floor 24 enemies ran up to level 400 where retail stops at 100.
 fn slice_difficulty(floor: u32, initial_player_level: u32) -> u32 {
     let difficulty = if floor <= initial_player_level {
         floor
@@ -936,6 +948,47 @@ fn slice_difficulty(floor: u32, initial_player_level: u32) -> u32 {
         initial_player_level + DIFFICULTY_OFFSETS[k]
     };
     difficulty.min(MAX_SLICE_DIFFICULTY)
+}
+
+/// The `initialPlayerLevel` a run is started at: our estimate of the client's Effective
+/// Player Level, which is what the client scores kills and shows bonuses against (module
+/// docs). Retail's server sent the client's exact EPL; it blends the character level with
+/// the gear's, and we do not compute that blend. The estimate is the retail-measured EPL
+/// by character level (`job_pools.json` `globals.initialEplByPlayerLevel`, the job boards'
+/// `jobSetup.initialEPL` — the same quantity), linearly interpolated between measured
+/// levels and rounded. Exact on seven of the ten captured Abyss `/start` pairs and within
+/// 3 of the rest (8→10 for 11, 38→43 for 40, 66→66 for 67) — the character level misses
+/// all ten, by up to 16. Falls back to the character level when the table is absent.
+///
+/// The level-100 end of this is what deep runs need. Every floor from `ipl + 14` up is
+/// difficulty 100; with the character level (100) as ipl the server scored those kills
+/// same-level, 10 apiece, while a client at a retail EPL (83-84 at level 100) scored them
+/// 30 — and the gauge stuck on the first rung the client reached alone (#294).
+fn initial_player_level(job_pools: &serde_json::Value, character_level: u32) -> u32 {
+    let level = character_level.max(1);
+    let Some(table) = job_pools
+        .get("globals")
+        .and_then(|g| g.get("initialEplByPlayerLevel"))
+        .and_then(serde_json::Value::as_object)
+    else {
+        return level;
+    };
+    let mut points: Vec<(u32, u32)> = table
+        .iter()
+        .filter_map(|(k, v)| Some((k.parse().ok()?, u32::try_from(v.as_u64()?).ok()?)))
+        .collect();
+    points.sort_unstable();
+    let below = points.iter().rev().find(|(at, _)| *at <= level).copied();
+    let above = points.iter().find(|(at, _)| *at >= level).copied();
+    let epl = match (below, above) {
+        (Some((lo, lo_epl)), Some((hi, hi_epl))) if hi > lo => {
+            let t = f64::from(level - lo) / f64::from(hi - lo);
+            (f64::from(lo_epl) + t * (f64::from(hi_epl) - f64::from(lo_epl))).round() as u32
+        }
+        (Some((_, epl)), _) | (None, Some((_, epl))) => epl,
+        (None, None) => level,
+    };
+    epl.max(1)
 }
 
 /// How many floors one run is served with — retail's length for every start floor.
@@ -3400,6 +3453,162 @@ mod tests {
             replay(75, &RETAIL_RUN_IPL75),
             vec![(2, vec![35, 50]), (3, vec![70])]
         );
+    }
+
+    // ── A level-100 run from floor 149 (#294) ──────────────────────────────
+
+    /// The real `deploy/static/job_pools.json`, as the server loads it.
+    fn real_job_pools() -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/job_pools.json");
+        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        serde_json::from_str(&raw).expect("valid job_pools.json")
+    }
+
+    /// The client's gauge, as `AbyssController.NotifyEnemyKill` fills it: each kill adds
+    /// `GetKillScore(enemy.Level - EffectivePlayerLevel) * killScoreMultiplier` (RVA
+    /// 0x1C811D4), the level being the enemy's — the slice difficulty, which is the
+    /// `enemyLevel` the generated data carries — and the EPL the client's own
+    /// (`NotifyStart`'s argument, never `/start`'s `initialPlayerLevel`). Returns
+    /// `(kill number, rungs that kill reached)` for every kill that reached one.
+    fn client_gauge(epl: u32, floors: &[(u32, &str, u32, &[&str])]) -> Vec<(usize, Vec<u32>)> {
+        let sd = real_static_abyss();
+        let (mut score, mut kill_no, mut reached) = (0.0, 0, Vec::new());
+        for (_, dungeon, level, groups) in floors {
+            for group in *groups {
+                kill_no += 1;
+                let multiplier = abyss_kill_score::kill_multiplier(
+                    Uuid::parse_str(group).ok(),
+                    Uuid::parse_str(dungeon).unwrap(),
+                    *level,
+                )
+                .unwrap_or(FALLBACK_KILL_SCORE_MULTIPLIER);
+                let before = score;
+                score += multiplier * sd.kill_score(*level as i32 - epl as i32) as f64;
+                let rungs: Vec<u32> = abyss_rewards::ABYSS_LADDER
+                    .iter()
+                    .copied()
+                    .filter(|rung| before < f64::from(*rung) && score >= f64::from(*rung))
+                    .collect();
+                if !rungs.is_empty() {
+                    reached.push((kill_no, rungs));
+                }
+            }
+        }
+        reached
+    }
+
+    /// Retail's own deep-floor kills (character 97cf5fa6, floor 90, difficulty 100).
+    const DEEP_FLOOR_KILLS: &[&str] = &[
+        "16d2aa0a-70e4-4a6e-b423-a188b163beb9",
+        "473b13bd-0e2a-4efe-9c72-be5746d1ba33",
+        "473b13bd-0e2a-4efe-9c72-be5746d1ba33",
+    ];
+
+    /// The first four floors #294's run serves from floor 149 at `ipl`, each cleared
+    /// with retail's deep-floor kills — twelve kills.
+    fn level_100_run_from_149(ipl: u32) -> Vec<(u32, &'static str, u32, &'static [&'static str])> {
+        build_run_slices(&real_static_abyss(), 0x294, 149, ipl)
+            .iter()
+            .take(4)
+            .map(|s| {
+                (s.floor_index, "f00dea4c-025d-4233-a503-8ab28ef53c80", s.difficulty_level, DEEP_FLOOR_KILLS)
+            })
+            .collect()
+    }
+
+    /// #294's level-100 character, run from floor 149: the server pays every rung on the
+    /// kill the client's gauge reaches it, for any EPL a level-100 client can have (retail
+    /// measured 83-84; the range here is wider) — and `/end` pays the bonus the client
+    /// shows. Every one of these floors is difficulty 100, so each kill sits on the
+    /// kill-score table's flat tail (delta >= 7 → 30) on both sides.
+    #[test]
+    fn a_level_100_run_from_floor_149_pays_every_rung_on_the_clients_kill() {
+        let ipl = initial_player_level(&real_job_pools(), 100);
+        assert_eq!(ipl, 84, "retail's level-100 initialPlayerLevel");
+        let floors = level_100_run_from_149(ipl);
+        assert_eq!(floors[0].0, 149);
+        assert!(floors.iter().all(|f| f.2 == 100), "deep floors are difficulty 100: {floors:?}");
+
+        let server = replay(ipl, &floors);
+        assert_eq!(
+            server,
+            vec![
+                (2, vec![35, 50]),
+                (3, vec![70]),
+                (4, vec![95]),
+                (5, vec![135]),
+                (7, vec![190]),
+                (9, vec![260]),
+                (12, vec![360]),
+            ]
+        );
+        for epl in 77..=93 {
+            assert_eq!(client_gauge(epl, &floors), server, "client EPL {epl}");
+        }
+
+        // `/end`: the floor's bonus is the one the client shows for it,
+        // `GetGoldAndXPBonusMultipliers(149, epl)` = curve row 149 - epl, capped = x6.
+        let sd = real_static_abyss();
+        let shown = sd.multiplier_for_offset(DIFFICULTY_OFFSETS[DIFFICULTY_OFFSETS.len() - 1] as i32);
+        assert_eq!(sd.multiplier_for_offset(100 - ipl as i32), shown);
+        assert_eq!(shown.0, 6.0);
+    }
+
+    /// What #468 shipped and #294 reported ("the bar fills and gets stuck ... no reward
+    /// except gold"): `initialPlayerLevel` = the character level, 100. Every deep floor is
+    /// then same-level on the server (10 a kill) while the client, at a retail EPL of 84,
+    /// scores 30 — it reaches 35 and 50 on kill 2, where the server has 20. Not one rung
+    /// is paid on the kill the client reaches it, and `/end` pays the x1.25 row where the
+    /// client shows x6.
+    #[test]
+    fn the_character_level_as_initial_player_level_strands_a_level_100_gauge() {
+        let floors = level_100_run_from_149(100);
+        assert!(floors.iter().all(|f| f.2 == 100));
+        let server = replay(100, &floors);
+        let client = client_gauge(84, &floors);
+        assert_eq!(server, vec![(4, vec![35]), (5, vec![50]), (7, vec![70]), (10, vec![95])]);
+        assert_eq!(client.get(0), Some(&(2, vec![35, 50])));
+        for (kill, rungs) in &client {
+            assert!(
+                !server.iter().any(|(k, r)| k == kill && r == rungs),
+                "kill {kill}: the server must not have paid {rungs:?} with ipl 100"
+            );
+        }
+        let sd = real_static_abyss();
+        assert_eq!(sd.multiplier_for_offset(0).0, 1.25, "what #468's /end paid per floor");
+    }
+
+    /// The low end of the same estimate reproduces the captured low-level `/start`: a
+    /// level-7 character (78f2b668) was served initialPlayerLevel 10 and retail's
+    /// difficulty ladder, whose kills `replaying_the_retail_run_pays_every_rung_on_retails_kill`
+    /// replays rung for rung.
+    #[test]
+    fn a_level_7_character_is_served_the_captured_retail_run() {
+        let ipl = initial_player_level(&real_job_pools(), 7);
+        assert_eq!(ipl, 10);
+        let served = build_run_slices(&real_static_abyss(), 7, 1, ipl);
+        let (_, _, head, _) = RETAIL_STARTS[0];
+        let difficulties: Vec<u32> =
+            served.iter().take(head.len()).map(|s| s.difficulty_level).collect();
+        assert_eq!(difficulties, head.to_vec());
+    }
+
+    /// The estimate against all ten captured (character level → initialPlayerLevel)
+    /// pairs: within 3 everywhere, where the character level is off by up to 16.
+    #[test]
+    fn the_initial_player_level_estimate_tracks_the_captured_pairs() {
+        let pools = real_job_pools();
+        let pairs = [
+            (7, 10), (8, 11), (3, 4), (38, 40), (34, 38),
+            (66, 67), (79, 75), (81, 76), (93, 81), (100, 84),
+        ];
+        for (level, retail) in pairs {
+            let estimate = initial_player_level(&pools, level);
+            assert!(estimate.abs_diff(retail) <= 3, "level {level}: {estimate} vs retail {retail}");
+        }
+        assert_eq!(initial_player_level(&serde_json::Value::Null, 42), 42, "no table → level");
+        assert_eq!(initial_player_level(&pools, 0), 1);
     }
 }
 
