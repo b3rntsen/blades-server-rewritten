@@ -345,6 +345,33 @@ fn add_missing_dungeon_sections(
     changed
 }
 
+/// What a stored EVENT row is repaired against: its event's dungeon, every stage,
+/// at the row's own `difficultyLevel` — the level the client was shown — rather
+/// than the story path's fresh data at the player's current level.
+///
+/// Event rows minted before report #323 carry only the first stage of a
+/// multi-stage event, and `/dungeons/current/exit` handed the client the same
+/// first-stage-only data for the next run. The row is durable for the event's
+/// window, so without this the player would play every run of that event with
+/// later stages that show no experience, drop nothing and hold empty containers.
+fn event_row_fresh(
+    game_data: &blades_lib::game_data::GameData,
+    scaling: &blades_lib::static_data::QuestLevelScaling,
+    row_id: Uuid,
+    info: &blades_lib::user_data::Quest,
+) -> Option<DungeonGeneratedData> {
+    crate::dungeon::event_dungeon_data_for_run(
+        game_data,
+        info.gld_quest_id,
+        info.difficulty_level,
+        scaling,
+        row_id,
+        0,
+    )
+    .ok()
+    .map(|(_, data)| data)
+}
+
 /// Give a stored row the key a key-holder enemy should carry (#236).
 ///
 /// Rows generated before report #236 have the right enemies but no key: the
@@ -1433,8 +1460,9 @@ pub async fn get_quests(
                 if jobs_gen::is_job_row(&row.info.0) {
                     continue;
                 }
-                // Event rows take only the enemy-key repair below (#236): the story
-                // repairs were written for, and tested against, story rows.
+                // Event rows take the enemy-key repair (#236) and the missing-stage
+                // repair (#323) below: the other story repairs were written for, and
+                // tested against, story rows.
                 let is_event =
                     matches!(row.info.0.r#type, blades_lib::user_data::QuestType::GameEvent);
                 // Repair a story quest stamped with a job's difficulty.
@@ -1478,7 +1506,20 @@ pub async fn get_quests(
                 ) else {
                     continue;
                 };
-                let expanded = !is_event && add_missing_dungeon_sections(stored, &fresh);
+                // An event row gains the stages it was minted without (#323), from
+                // its own event dungeon at its own difficulty; the story repairs
+                // below stay story-only.
+                let expanded = if is_event {
+                    event_row_fresh(
+                        &globals.game_data,
+                        &globals.static_data.quests_daily.level_scaling,
+                        row.id,
+                        &row.info.0,
+                    )
+                    .is_some_and(|fresh| add_missing_dungeon_sections(stored, &fresh))
+                } else {
+                    add_missing_dungeon_sections(stored, &fresh)
+                };
                 let refreshed = !is_event && refresh_empty_item_loot(stored, fresh.clone());
                 let grew = !is_event && add_missing_item_tables(stored, &fresh);
                 let keyed = add_missing_enemy_key_loot(stored, &fresh);
@@ -4346,7 +4387,8 @@ pub(crate) mod event_quests {
                 .quests_daily
                 .level_scaling
                 .enemy_level(player_level);
-            dungeon = blades_lib::util::dungeon::generate_for_dungeon_with_seed(
+            // Every stage of the event's dungeon (#323), seeded per run.
+            dungeon = blades_lib::util::quest::generate_for_quest_dungeon_with_seed(
                 game_data,
                 &dungeon_id,
                 blades_lib::util::dungeon::run_loot_seed(&quest_id, 0),
@@ -8422,5 +8464,89 @@ mod report_306_job_gems {
                 ["jobSetup"]["duelBossId"],
             "01d82726-527f-4601-929c-182acd3fa9b7"
         );
+    }
+}
+
+#[cfg(test)]
+mod report323_event_row_stage_repair_tests {
+    use super::*;
+    use blades_lib::static_data::StaticData;
+
+    /// EQ24, open on 2026-10-03; stage `_A` is the one its template names.
+    const EQ24: &str = "816ff4c8-b56f-4645-bd2a-29bc7c1baf96";
+    const EQ24_A: &str = "88d3d9f4-fb63-4d2a-af60-66ef1ba74736";
+    const EQ24_B: &str = "6988a711-96b0-46d4-9264-c1c06216d621";
+    const CHAR: Uuid = Uuid::from_u128(0xf781_7aa6);
+    const REPORT_323_NOW: i64 = 1_791_007_200;
+
+    fn static_data() -> StaticData {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        crate::static_loader::load(&dir)
+    }
+
+    fn game_data() -> blades_lib::game_data::GameData {
+        super::report85_job_generated_data_tests::game_data()
+    }
+
+    /// An event row minted before #323 holds stage `_A` only, and the client is
+    /// handed that row by `/quests` for the rest of the event's window. The
+    /// `/quests` refresh gives it the missing stage at the row's own level, keeps
+    /// every roll already shown, and is a no-op the second time.
+    #[test]
+    fn a_first_stage_only_event_row_gains_its_later_stage_on_refresh() {
+        let (sd, gd) = (static_data(), game_data());
+        let scaling = &sd.quests_daily.level_scaling;
+        let eq24 = Uuid::parse_str(EQ24).unwrap();
+        let a = Uuid::parse_str(EQ24_A).unwrap();
+        let b = Uuid::parse_str(EQ24_B).unwrap();
+        let row = event_quests::mint(&sd, &gd, CHAR, 16, REPORT_323_NOW)
+            .into_iter()
+            .find(|m| m.quest.gld_quest_id == eq24)
+            .expect("EQ24 is open on 2026-10-03");
+        let level = row.quest.difficulty_level;
+
+        // What the old mint stored: the named stage only.
+        let mut stored = blades_lib::util::dungeon::generate_for_dungeon_with_seed(
+            &gd,
+            &a,
+            blades_lib::util::dungeon::run_loot_seed(&row.quest_id, 0),
+            level,
+            scaling.given_xp(level),
+        )
+        .unwrap();
+        let before = stored.clone();
+        assert!(
+            gd.dungeons[&b]
+                .spawn_info
+                .enemy_spawn_groups
+                .keys()
+                .all(|g| !stored.enemy_generated_data.contains_key(g)),
+            "precondition: the stale row has no stage _B"
+        );
+
+        let fresh = event_row_fresh(&gd, scaling, row.quest_id, &row.quest).unwrap();
+        assert!(add_missing_dungeon_sections(&mut stored, &fresh), "the row is repaired");
+
+        for group in gd.dungeons[&b].spawn_info.enemy_spawn_groups.keys() {
+            let rolls = &stored.enemy_generated_data[group];
+            assert!(
+                rolls.iter().flatten().all(|e| e.enemy_level == level
+                    && e.given_xp == scaling.given_xp(level)),
+                "stage _B group {group} is at the row's level {level}"
+            );
+        }
+        assert_eq!(stored.chest_generated_data.len(), 2, "stage _B's two chests");
+        for (group, rolls) in &before.enemy_generated_data {
+            assert_eq!(
+                serde_json::to_value(&stored.enemy_generated_data[group]).unwrap(),
+                serde_json::to_value(rolls).unwrap(),
+                "stage _A group {group} keeps what the client was shown"
+            );
+        }
+        assert!(!add_missing_dungeon_sections(&mut stored, &fresh), "idempotent");
+
+        // And a row minted now needs no repair at all.
+        let mut current = row.dungeon.clone().unwrap();
+        assert!(!add_missing_dungeon_sections(&mut current, &fresh));
     }
 }
