@@ -88,7 +88,10 @@ pub async fn get_town(
     // town when we have one. Any miss (no session, character not found, not owned,
     // or no stored town) falls through to the static default — serving the town
     // must never regress the menu/town load into an error.
-    if let Some(town) = load_personal_town(&session, &app_state, character_id).await {
+    if let Some(mut town) = load_personal_town(&session, &app_state, character_id).await {
+        // `backfill_on_load` already persisted this; repeat it on the copy we
+        // serve so a failed write cannot hand the client the #320 lock-out.
+        mark_named_town_validated(&mut town);
         return Ok(Json(GetTownResponse { town }));
     }
 
@@ -172,10 +175,7 @@ pub async fn set_town_name(
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
             let mut town = take_town(&mut entry, &globals)?;
 
-            // Set the town name
-            if let Some(obj) = town.as_object_mut() {
-                obj.insert("name".to_string(), json!(req.name));
-            }
+            name_town(&mut town, &req.name);
 
             // Persist the changes
             use crate::schema::characters;
@@ -193,6 +193,55 @@ pub async fn set_town_name(
         .scope_boxed()
     })
     .await
+}
+
+/// `ProfanityValidator.PROFANITY_BITMASK` in the APK: bit 0 of a town's (or a
+/// character's) `validationFlags` says the server accepted the name.
+const NAME_VALIDATED: u64 = 1;
+
+/// Give the town its name, as `POST …/towns/current/name` does on retail: the
+/// returned town carries the name AND `validationFlags` 1 (both captured
+/// responses, 6207 and 62998).
+///
+/// Report #320: we stored the name and left the flag at the default town's 0.
+/// The client's `ProfanityValidator.TownNameNeedsRevalidating` is
+/// `HasNamedTown && (validationFlags & 1) == 0`, and the main menu runs that
+/// validator before it opens the Arena or the Guilds menu, so a fresh character
+/// that named its town was locked out of both with no request ever sent.
+fn name_town(town: &mut Value, name: &str) {
+    if let Some(obj) = town.as_object_mut() {
+        obj.insert("name".to_string(), json!(name));
+    }
+    mark_named_town_validated(town);
+}
+
+/// Set the name-validated bit on a town that has a name, keeping any other
+/// bits. Returns whether anything changed.
+///
+/// An unnamed town is left at 0: that is the state retail served before the
+/// player named it (6 of 6 unnamed `GET towns/current` responses in the capture
+/// snapshot), while every named one carried 1 (150 of 150). Named-but-0 is a
+/// state only our server produced, so healing it on load is the one-time repair
+/// for the towns #320 already stranded.
+fn mark_named_town_validated(town: &mut Value) -> bool {
+    let named = town
+        .get("name")
+        .and_then(Value::as_str)
+        .is_some_and(|name| !name.is_empty());
+    if !named {
+        return false;
+    }
+    let flags = town.get("validationFlags").and_then(Value::as_u64).unwrap_or(0);
+    if flags & NAME_VALIDATED != 0 {
+        return false;
+    }
+    match town.as_object_mut() {
+        Some(obj) => {
+            obj.insert("validationFlags".to_string(), json!(flags | NAME_VALIDATED));
+            true
+        }
+        None => false,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2510,6 +2559,9 @@ fn take_town(
             town
         }
     };
+    // A town named before #320 was fixed is persisted validated by whichever
+    // write comes next, so no response hands the client the stale 0 again.
+    mark_named_town_validated(&mut town);
     // Before any mutation is priced: a town built under the old rules must have
     // its sites cleared first, or the next completion would number its site
     // points from zero.
@@ -2551,7 +2603,8 @@ fn backfill_town_sites_once(
 }
 
 /// Run the backfill when the owner loads their town, so the town XP it owes
-/// shows up on the first look rather than on the first build. Best-effort: any
+/// shows up on the first look rather than on the first build, and heal a town
+/// named while #320 stood (see [`repair_town_on_load`]). Best-effort: any
 /// failure leaves the town as it was, and the next load (or the next mutation,
 /// via [`take_town`]) tries again.
 async fn backfill_on_load(
@@ -2573,20 +2626,19 @@ async fn backfill_on_load(
                 // Owner-only: `load_town_economy` filters on the session's user,
                 // so a visitor's load 404s here and changes nothing.
                 let mut entry = load_town_economy(conn, character_id, user_id).await?;
-                if entry.server_state.0.town_sites_backfilled {
-                    return Ok(());
-                }
                 let Some(JsonDbWrapper(mut town)) = entry.town.take().filter(|t| !t.0.is_null())
                 else {
                     // No stored town yet: the default one owes nothing, and
                     // `take_town` will record the marker when it materialises.
                     return Ok(());
                 };
-                backfill_town_sites_once(
+                if !repair_town_on_load(
                     &mut entry.server_state.0,
                     &mut town,
                     &globals.building_upgrades,
-                );
+                ) {
+                    return Ok(());
+                }
                 use crate::schema::characters;
                 entry.town = Some(JsonDbWrapper(town));
                 diesel::update(characters::table)
@@ -2599,6 +2651,26 @@ async fn backfill_on_load(
             .scope_boxed()
         })
         .await;
+}
+
+/// The repairs the owner's town load applies, in order. Returns whether the
+/// town or the marker changed and so must be written back.
+///
+/// The site backfill runs once per character (its marker); the #320 name
+/// repair is idempotent on its own, so it runs on every load and costs nothing
+/// once the flag is set. It must not hide behind the backfill marker: every
+/// character that already loaded a town has that marker, newmunk included.
+fn repair_town_on_load(
+    state: &mut blades_lib::server_state::ServerState,
+    town: &mut Value,
+    building_upgrades: &Value,
+) -> bool {
+    let mut changed = mark_named_town_validated(town);
+    if !state.town_sites_backfilled {
+        backfill_town_sites_once(state, town, building_upgrades);
+        changed = true;
+    }
+    changed
 }
 
 /// Apply prestige and check for town level up
@@ -4866,5 +4938,100 @@ mod placement_materials {
             obs.len(),
             wrong.join("\n")
         );
+    }
+}
+
+/// Report #320: a fresh level-1 character that named its town could not open
+/// the Arena or the Guilds menu.
+#[cfg(test)]
+mod town_name_validation {
+    use super::*;
+
+    fn default_town() -> Value {
+        serde_json::from_str(include_str!("../../deploy/static/default_town.json")).unwrap()
+    }
+
+    fn shipped_upgrades() -> Value {
+        serde_json::from_str(include_str!("../../deploy/static/building_upgrades.json")).unwrap()
+    }
+
+    fn flags(town: &Value) -> u64 {
+        town["validationFlags"].as_u64().unwrap()
+    }
+
+    /// The client's `TownNameNeedsRevalidating`, as disassembled at RVA
+    /// 0x1A315F8: a named town whose bit 0 is clear. While it is true the main
+    /// menu's Arena and Guilds buttons stop at the validator.
+    fn client_blocks_arena_and_guilds(town: &Value) -> bool {
+        let named = town["name"].as_str().is_some_and(|n| !n.is_empty());
+        named && flags(town) & 1 == 0
+    }
+
+    #[test]
+    fn the_default_town_is_unnamed_and_unvalidated_as_on_retail() {
+        // Retail served 0 on all 6 unnamed-town responses in the snapshot; this
+        // is the state a fresh character starts in, and it does not block.
+        let town = default_town();
+        assert!(town["name"].as_str().is_none_or(str::is_empty), "the default town is unnamed");
+        assert_eq!(flags(&town), 0);
+        assert!(!client_blocks_arena_and_guilds(&town));
+    }
+
+    #[test]
+    fn naming_a_fresh_town_validates_it_as_retail_did() {
+        // Captures 6207 ("Gensokyo") and 62998 ("Prkiland"): the response town
+        // carries the new name and validationFlags 1.
+        let mut town = default_town();
+        name_town(&mut town, "moonbase");
+        assert_eq!(town["name"], json!("moonbase"));
+        assert_eq!(flags(&town), 1);
+        assert!(
+            !client_blocks_arena_and_guilds(&town),
+            "naming the town must not lock the Arena and Guilds menus"
+        );
+    }
+
+    #[test]
+    fn a_town_stranded_by_320_heals_on_load_even_after_the_site_backfill() {
+        // newmunk on prod: "moonbase", validationFlags 0, and — like every
+        // character that has loaded a town since #287 — the backfill marker set.
+        let mut town = default_town();
+        town["name"] = json!("moonbase");
+        let mut state = blades_lib::server_state::ServerState::default();
+        state.town_sites_backfilled = true;
+        assert!(client_blocks_arena_and_guilds(&town), "precondition: the #320 shape");
+
+        assert!(
+            repair_town_on_load(&mut state, &mut town, &shipped_upgrades()),
+            "the healed town must be written back"
+        );
+        assert_eq!(flags(&town), 1);
+        assert!(!client_blocks_arena_and_guilds(&town));
+
+        // Idempotent: the next load writes nothing.
+        assert!(!repair_town_on_load(&mut state, &mut town, &shipped_upgrades()));
+    }
+
+    #[test]
+    fn the_repair_leaves_unnamed_and_already_validated_towns_alone() {
+        let mut unnamed = default_town();
+        assert!(!mark_named_town_validated(&mut unnamed));
+        assert_eq!(flags(&unnamed), 0, "an unnamed retail town is 0, not 1");
+
+        let mut validated = default_town();
+        validated["name"] = json!("Mbase");
+        validated["validationFlags"] = json!(3);
+        assert!(!mark_named_town_validated(&mut validated));
+        assert_eq!(flags(&validated), 3, "other bits are kept");
+    }
+
+    #[test]
+    fn a_mutation_persists_the_healed_flag() {
+        // A building response returns the stored town; if `take_town` did not
+        // heal it, the next build would push the stale 0 back to the client.
+        let src = include_str!("town.rs");
+        let start = src.find("fn take_town(").expect("take_town exists");
+        let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+        assert!(body.contains("mark_named_town_validated(&mut town)"));
     }
 }
