@@ -1,0 +1,3389 @@
+{
+ "_meta": {
+  "description": "Abyss kill-score multiplier per enemy spawn group (#312). `steps` is [fromEnemyLevel, multiplier] pairs, a step holding until the next; `families[i]` names the family step i spawns.",
+  "evidence": "replaying retail run 78f2b668 (ipl 10, 61 kills) pays all 9 rungs on retail's kill; 11/11 captured rung payments overall",
+  "rule": "SpawnGroupEnemy.SetupEnemyData: EnemyDataPointer, else the first _fallbackEnemyData family with a band containing the level, else the primary; the variant is the band containing the level (nearest band outside the range); multiplier = variant stats.killScoreMultiplier",
+  "source": "APK dungeonsettings bundle + reference/game-defs/enemies.json; regenerate with script/build_abyss_spawn_group_multipliers.py"
+ },
+ "spawnGroups": {
+  "021ce309-2a44-45a9-98f5-06bd0462af39": {
+   "families": [
+    "Wisp Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "02c9133c-6a1f-4b4d-b267-e4da1d0b2652": {
+   "families": [
+    "Bear Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "02ed07b2-55e9-445d-ada9-6bb1a728b46b": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "045fcca0-bad3-4c4f-b418-1ae7dbb56839": {
+   "families": [
+    "Dragon Undead Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "054329d6-4984-410d-99d8-e5d83ead3f87": {
+   "families": [
+    "Spider Forest Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "054b89b7-e7eb-4e44-bb29-f54cc28f9f61": {
+   "families": [
+    "Mercenary Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "05ec6a2e-2b73-49b1-b532-c26d59f8dfa2": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "0c209702-e64f-4999-b8ac-c71fcfbd005e": {
+   "families": [
+    "Troll Forest Family Abyss",
+    "Spider Forest Critter Family Abyss",
+    "Troll Forest Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     16,
+     0.33
+    ],
+    [
+     18,
+     1
+    ]
+   ]
+  },
+  "0c39f844-8c30-41bf-8fc2-84b81f49d9a6": {
+   "families": [
+    "Wisp Monster Family Abyss",
+    "Spriggan Family Abyss",
+    "Wisp Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     3,
+     1
+    ],
+    [
+     24,
+     1
+    ]
+   ]
+  },
+  "0cb28975-4019-4504-a2fe-7a48ef773956": {
+   "families": [
+    "Mercenary Family Abyss",
+    "Warlord Family Abyss",
+    "Mercenary Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     53,
+     1
+    ],
+    [
+     95,
+     1
+    ]
+   ]
+  },
+  "0d061d9a-cce5-415d-b172-597ba20744eb": {
+   "families": [
+    "Dremora Warlock Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "0e302177-29b0-4808-8bb6-f429d1812102": {
+   "families": [
+    "Skeever Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "0f8c7c04-6ed4-4f17-896d-a0231a130fec": {
+   "families": [
+    "Dragon Undead Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "12c27a69-40a0-4cb6-a2ee-d85f481b4de2": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "16d2aa0a-70e4-4a6e-b423-a188b163beb9": {
+   "families": [
+    "Dremora Warlock Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "16dc5ca2-ec04-41fd-9220-e7effee367c4": {
+   "families": [
+    "Wisp Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "175812fd-ed3b-4d21-9c23-74f51e0712e9": {
+   "families": [
+    "Troll Ancient Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "17925ceb-e8d2-45dc-91af-2ee5a5cb92c3": {
+   "families": [
+    "Spider Cave Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "17fca83f-dfe0-484c-a1e8-6a96c104f621": {
+   "families": [
+    "Spider Forest Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "18386439-7db4-47a8-a1f9-75606931747c": {
+   "families": [
+    "Warlord Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "1867cb57-d03a-4e3c-86a7-5f6b419f6234": {
+   "families": [
+    "Spider Forest Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "19672140-c93b-444e-ab7b-b40f3b7eb8dc": {
+   "families": [
+    "Goblin Family Abyss",
+    "Spider Forest Monster Family Abyss",
+    "Goblin Family Abyss",
+    "Spider Forest Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     9,
+     1
+    ],
+    [
+     18,
+     1
+    ],
+    [
+     54,
+     1
+    ]
+   ]
+  },
+  "19f7ec97-ae31-454b-86c0-0bd2525f3958": {
+   "families": [
+    "Warlord Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "1ada80ca-bc23-4573-a407-8b35fda09253": {
+   "families": [
+    "Undead Caster Family Abyss",
+    "Undead Caster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     38,
+     2
+    ]
+   ]
+  },
+  "1be933c4-6ef4-49b5-8c49-4b15420af067": {
+   "families": [
+    "Wolf Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "1c87d0da-0b6d-4f56-bccb-d4b2e69e12ca": {
+   "families": [
+    "Bear Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "1e6be0ac-ebb6-4d9c-a698-c2fa84b96e37": {
+   "families": [
+    "Troll Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "1e6bfa99-8aae-457d-8206-912c5adbd770": {
+   "families": [
+    "Spider Forest Critter Family Abyss",
+    "Troll Forest Family",
+    "Spider Forest Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ],
+    [
+     7,
+     1
+    ],
+    [
+     9,
+     0.33
+    ]
+   ]
+  },
+  "1e93176b-0ce2-47f8-9881-f1e7de9d468f": {
+   "families": [
+    "Dremora Raider Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "1ed4f384-fcaf-4c97-a9be-7512a764339f": {
+   "families": [
+    "Goblin Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "1efcb1c5-fbdf-4b44-bf79-23e72fd6de54": {
+   "families": [
+    "Goblin Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "1f2436d6-5d00-495b-a3e4-e080adc22121": {
+   "families": [
+    "Wisp Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "2056838e-042c-4881-bebe-1ac53dd78e49": {
+   "families": [
+    "Troll Forest Family Abyss",
+    "Spider Forest Critter Family Abyss",
+    "Troll Forest Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     16,
+     0.33
+    ],
+    [
+     18,
+     1
+    ]
+   ]
+  },
+  "24995f54-3db0-49b1-875c-f4137370a6eb": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "277030be-b509-4aba-bf41-ae31abc8269b": {
+   "families": [
+    "Lich Outcast Family Abyss",
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     48,
+     1
+    ],
+    [
+     101,
+     1
+    ]
+   ]
+  },
+  "2796e9e9-b6c6-4c0c-a9a3-5f46d9801320": {
+   "families": [
+    "Dremora Raider Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "28d2f8ab-5943-4bbe-a34c-7e33bf35ea1d": {
+   "families": [
+    "Wight Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "2964d5ae-132f-4997-b636-60e501db9bf9": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "296ddde0-4200-4072-af05-c62dc4027581": {
+   "families": [
+    "Lich Nether Family Abyss",
+    "Wight Monster Family Abyss",
+    "Lich Outcast Family Abyss",
+    "Lich Nether Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     5,
+     1
+    ],
+    [
+     16,
+     1
+    ],
+    [
+     27,
+     1
+    ]
+   ]
+  },
+  "2c358a3a-747c-4262-b399-bf8777700247": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "2d2a213f-dd06-49bb-8925-c370a2b2d766": {
+   "families": [
+    "Skeever Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "2d7f041d-6b76-44b8-89f4-65a5148eec7c": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "2ea1ae15-1266-4089-9f9f-e4e9b27e5645": {
+   "families": [
+    "Dremora Warlock Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "2ea3f875-a3c8-4d96-8d02-ae4e5577f12c": {
+   "families": [
+    "Goblin Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "2ea57823-400c-4acd-85ad-abb28f3a8f7a": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "3069f1c4-3165-4097-aaef-5a4a71b7b79e": {
+   "families": [
+    "Dremora Raider Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "31495ea4-8aee-4e7c-8e45-903366182988": {
+   "families": [
+    "Dremora Raider Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "31f05e9d-b93f-460a-92c4-6726edad3b4b": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss",
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     10,
+     1
+    ],
+    [
+     49,
+     1
+    ],
+    [
+     54,
+     1
+    ]
+   ]
+  },
+  "34b38c17-275e-46d3-b120-e0fcca5a226e": {
+   "families": [
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss",
+    "Lich Nether Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     16,
+     1
+    ],
+    [
+     27,
+     1
+    ]
+   ]
+  },
+  "36a66494-0b45-430e-b6ad-32d7ff43ca37": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "37fde43a-2b2d-4c7b-b8b4-0994d2c252a4": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "38305a47-f0a2-4e10-9abc-31776fdb29e1": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss",
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     10,
+     1
+    ],
+    [
+     49,
+     1
+    ],
+    [
+     54,
+     1
+    ]
+   ]
+  },
+  "3917f9a5-9182-4042-a85d-43178e9bf161": {
+   "families": [
+    "Mercenary Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "3b654c5d-0458-4247-9ea6-59ffccaa477d": {
+   "families": [
+    "Lich Outcast Family Abyss",
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     48,
+     1
+    ],
+    [
+     101,
+     1
+    ]
+   ]
+  },
+  "3c6cf250-a94b-48bb-b1d6-84b345408ab4": {
+   "families": [
+    "Lich Family Abyss",
+    "Lich Family Abyss",
+    "Lich Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ],
+    [
+     29,
+     1
+    ],
+    [
+     38,
+     2
+    ]
+   ]
+  },
+  "3d5d3c01-a8ad-48b3-bd9f-b5860c8ef0d2": {
+   "families": [
+    "Wisp Monster Family Abyss",
+    "Spriggan Family Abyss",
+    "Wisp Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     3,
+     1
+    ],
+    [
+     24,
+     1
+    ]
+   ]
+  },
+  "3e450a8d-eece-4f16-a907-4531f0486755": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "409178a6-44a7-462b-aa96-bfd0b83e8df0": {
+   "families": [
+    "Wolf Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "40a64e5c-e470-40dd-9ef2-5911db0ba775": {
+   "families": [
+    "Wisp Monster Family Abyss",
+    "Spriggan Family Abyss",
+    "Wisp Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     3,
+     1
+    ],
+    [
+     24,
+     1
+    ]
+   ]
+  },
+  "40a8928a-4fc4-4dab-91d7-4e8853bdb5e4": {
+   "families": [
+    "Mercenary Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "41c19478-6c3b-480f-a59c-6ef5aa3ad3fd": {
+   "families": [
+    "Dragon Undead Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "41eff2cb-2b85-4f4f-b6bd-0cf1beba1ef2": {
+   "families": [
+    "Wisp Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "421ede71-4cf3-499c-aee3-ef83db34f22d": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss",
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     10,
+     1
+    ],
+    [
+     49,
+     1
+    ],
+    [
+     54,
+     1
+    ]
+   ]
+  },
+  "4236c900-e141-44e7-9281-dc3902ad9978": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "429b244e-c55f-4815-8826-881207af3f89": {
+   "families": [
+    "Troll Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "46538ab2-bddd-4639-b932-7514d44367cb": {
+   "families": [
+    "Wolf Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "470861aa-fd9d-4265-8042-c92128b48076": {
+   "families": [
+    "Undead Caster Family Abyss",
+    "Undead Caster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     38,
+     2
+    ]
+   ]
+  },
+  "473b13bd-0e2a-4efe-9c72-be5746d1ba33": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "4a4718b7-a2b3-45ee-92f0-689b2b67d23b": {
+   "families": [
+    "Goblin Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "4b52196a-11d6-454d-bdb9-c280efb9ace1": {
+   "families": [
+    "Bandit Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "4cd01bb5-64f5-486b-bb2c-ac0eac82393f": {
+   "families": [
+    "Dragon Ancient Frost Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "4d0e6b4d-22f8-4929-a8e4-117049fbedae": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "4eae6030-49ca-443c-a9a6-3fef89012e5b": {
+   "families": [
+    "Lich Nether Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "4eae6030-49ca-443c-a9a6-3fef89012e5c": {
+   "families": [
+    "Lich Outcast Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "4ee298cc-4b04-4852-b684-c3a504800c59": {
+   "families": [
+    "Mercenary Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "4fddbce5-a694-461f-8e5e-f180210d90a8": {
+   "families": [
+    "Goblin Wizard Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "50166af6-c625-4bda-8d18-c43bb84df43c": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "5102f486-c8f8-4ff6-b513-8ec981c99602": {
+   "families": [
+    "Wolf Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "52bd8d7a-3349-475b-8beb-1c01871ee51d": {
+   "families": [
+    "Mercenary Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "5441e33f-5734-45e8-a456-537360a3dfb2": {
+   "families": [
+    "Dragon Ancient Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "54ed9404-83c7-4d51-b509-441b70386bc4": {
+   "families": [
+    "Skeleton Family Abyss",
+    "Necromancer Family Abyss",
+    "Skeleton Family Abyss",
+    "Necromancer Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     12,
+     1
+    ],
+    [
+     60,
+     1
+    ],
+    [
+     101,
+     1
+    ]
+   ]
+  },
+  "55a939e8-5686-479a-b643-c50bf3dbd3af": {
+   "families": [
+    "Spider Forest Monster Family Abyss",
+    "Troll Forest Family",
+    "Spider Forest Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     7,
+     1
+    ],
+    [
+     9,
+     1
+    ]
+   ]
+  },
+  "5c0f447f-b423-4791-8027-fe70bb7a2e11": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "5d347995-4858-4442-bb7b-e43520ce1b74": {
+   "families": [
+    "Wight Monster Family Abyss",
+    "Lich Nether Family Abyss",
+    "Wight Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     100,
+     1
+    ],
+    [
+     101,
+     1
+    ]
+   ]
+  },
+  "5d5ab842-5614-4f95-9193-52b1889c02c7": {
+   "families": [
+    "Troll Ancient Family Abyss",
+    "Wisp Monster Family Abyss",
+    "Troll Ancient Family Abyss",
+    "Wisp Monster Family Abyss",
+    "Troll Ancient Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     24,
+     1
+    ],
+    [
+     27,
+     1
+    ],
+    [
+     61,
+     1
+    ],
+    [
+     100,
+     1
+    ]
+   ]
+  },
+  "5d6c7c7c-5ef3-4034-88ff-f6ad735b87a5": {
+   "families": [
+    "Dragon Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "5d7e2340-006f-4b33-b617-fd9303a48be7": {
+   "families": [
+    "Warlord Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "6086f8d2-0f0d-45d5-bbe1-3447781b70bd": {
+   "families": [
+    "Dremora Warlock Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "60e429be-3306-4a4c-b9b8-4f8fbe1ab06e": {
+   "families": [
+    "Skeever Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "60f23b1c-5cf5-4f6d-9b84-c453ffde1b36": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "623b58f8-f101-40b7-9d02-af683eeb7647": {
+   "families": [
+    "Troll Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "62c2f7e7-4127-4fb8-91c1-ac01096a4727": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss",
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     10,
+     1
+    ],
+    [
+     49,
+     1
+    ],
+    [
+     54,
+     1
+    ]
+   ]
+  },
+  "654575b2-783c-4f62-9c11-bc7f78462062": {
+   "families": [
+    "Warlord Family Abyss",
+    "Mercenary Family Abyss",
+    "Warlord Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     5,
+     1
+    ],
+    [
+     26,
+     1
+    ]
+   ]
+  },
+  "65769a2e-e83d-4b62-9729-652660145bad": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "66524384-da7f-4263-a2a4-f8b43ff95736": {
+   "families": [
+    "Mercenary Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "68c63e3a-e673-4591-a0c9-9cc94b3ee21b": {
+   "families": [
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss",
+    "Lich Nether Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     16,
+     1
+    ],
+    [
+     27,
+     1
+    ]
+   ]
+  },
+  "6a837afe-5488-46d3-9a56-12a9c7f23d57": {
+   "families": [
+    "Goblin Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "6ad2e6c0-40ac-456c-b294-7422dafe0fb0": {
+   "families": [
+    "Spider Cave Monster Family"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "6b9a1709-8993-40b4-b09b-5e4c26c63ab4": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "6bc3b6f8-5103-4ef4-8cb5-95c513cb3b48": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "6d7048b6-7219-4418-a6f1-5321ef66bb74": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "6e60d758-f9bf-43c8-925d-eb6052601acd": {
+   "families": [
+    "Bear Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "6e62afe7-173b-493a-af2a-5e15714522f5": {
+   "families": [
+    "Wight Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "6e7c0420-d877-4ae0-a65e-6b73df156a60": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "6ef09aa1-8e15-4471-9710-4ef4d6c7a874": {
+   "families": [
+    "Goblin Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "6ff3ff0b-1a03-4273-80a0-02e288e764ff": {
+   "families": [
+    "Spider Cave Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "71494634-9abb-4f04-8365-09708b1e3008": {
+   "families": [
+    "Dremora Warlock Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "714d0438-fea7-4ef6-8e41-ba32fde3f688": {
+   "families": [
+    "Wisp Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "743a4983-d356-4277-8f34-869e6ab29077": {
+   "families": [
+    "Wisp Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "74757bed-b869-4089-887d-aaddce542a75": {
+   "families": [
+    "Spider Forest Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "75862841-5e9d-4c85-8de2-0d36a41cfce7": {
+   "families": [
+    "Dremora Warlock Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "7597ec37-ca26-43ea-8aef-50cb2aed320b": {
+   "families": [
+    "Mercenary Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "7880c385-264c-4751-bf50-7f2a29e09b0c": {
+   "families": [
+    "Spider Cave Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "7a6110c8-afd5-43cc-b4e8-089144c19de4": {
+   "families": [
+    "Bear Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "7a93bc82-dad7-4927-be17-d96d2d35e75b": {
+   "families": [
+    "Skeleton Family Abyss",
+    "Lich Outcast Family Abyss",
+    "Lich Nether Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     16,
+     1
+    ],
+    [
+     27,
+     1
+    ]
+   ]
+  },
+  "7b8245e6-154a-4153-ad60-4deee17405d6": {
+   "families": [
+    "Wisp Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "7ce6de23-bbdd-4ba9-828e-3183dc9ea796": {
+   "families": [
+    "Wight Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "7d4e8432-9477-4642-a56d-80f88c62f817": {
+   "families": [
+    "Wolf Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "7e544050-4c30-49f5-8325-4a0122898733": {
+   "families": [
+    "Goblin Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "7f1b2ba0-c41c-4b56-9984-c7359305d795": {
+   "families": [
+    "Wolf Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "7f49c310-1f66-4187-87be-5e5bc84caed7": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "7f5ccf29-ec64-4f57-9155-8abed2d363d8": {
+   "families": [
+    "Dragon Ancient Frost Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "7fe6c7f9-4c33-42ba-9f04-a0c0f13e378c": {
+   "families": [
+    "Bandit Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "801ace86-8d6c-4e34-91a5-41fffd1a0cb7": {
+   "families": [
+    "Spider Forest Critter Family Abyss",
+    "Troll Forest Family Abyss",
+    "Spider Forest Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ],
+    [
+     7,
+     1
+    ],
+    [
+     9,
+     0.33
+    ]
+   ]
+  },
+  "82768d7f-3ff9-4f45-b089-260dc8d1eebe": {
+   "families": [
+    "Warlord Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "832b5f9a-6ce1-4391-829b-8457ad3172ff": {
+   "families": [
+    "Troll Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "85786c59-c25b-4b63-81c3-2c3664346892": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "8810f699-e2ef-4630-b337-c63d8da2f921": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "89f7c6a9-bfaa-4191-8a3b-ffff433f1766": {
+   "families": [
+    "Goblin Family Abyss",
+    "Spider Forest Monster Family Abyss",
+    "Goblin Family Abyss",
+    "Spider Forest Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     9,
+     1
+    ],
+    [
+     18,
+     1
+    ],
+    [
+     54,
+     1
+    ]
+   ]
+  },
+  "8a17b6da-9951-4411-a3a7-c09f2d9ad4db": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "8a626e16-f328-492e-84e8-249fca319089": {
+   "families": [
+    "Skeleton Family Abyss",
+    "Wight Monster Family Abyss",
+    "Skeleton Family Abyss",
+    "Wight Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     5,
+     1
+    ],
+    [
+     100,
+     1
+    ],
+    [
+     101,
+     1
+    ]
+   ]
+  },
+  "8b1e68b0-3644-4593-892b-38f346147fee": {
+   "families": [
+    "Dragon Undead Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "8b47d92c-2b16-4d4c-8fc5-e441d6d7c54c": {
+   "families": [
+    "Undead Caster Family Abyss",
+    "Undead Caster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     38,
+     2
+    ]
+   ]
+  },
+  "8d3b80f4-da9d-409e-8630-929c0c20a5b8": {
+   "families": [
+    "Spriggan Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "8d8a08b4-8185-4376-b448-f7985c3e10d7": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "8ec39fa3-f1f4-4857-9e25-5c93b6f785fd": {
+   "families": [
+    "Dremora Raider Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "8f912ebf-44b8-425d-ba02-ef99568697cd": {
+   "families": [
+    "Bandit Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "93de4206-3e21-4dac-9a79-846fb8e5133b": {
+   "families": [
+    "Spriggan Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "949c7223-ca35-489f-b059-d37dfb9e797e": {
+   "families": [
+    "Dremora Raider Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "955c2e6c-ce3c-42cb-b8c1-07887f349962": {
+   "families": [
+    "Spider Cave Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "9561548c-2d3f-4ae3-99e8-7f10964888f7": {
+   "families": [
+    "Dremora Warlock Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "974e7d2b-8cc5-4a9e-a37a-92b5551ff2a2": {
+   "families": [
+    "Spider Forest Critter Family Abyss",
+    "Troll Forest Family Abyss",
+    "Spider Forest Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ],
+    [
+     7,
+     1
+    ],
+    [
+     9,
+     0.33
+    ]
+   ]
+  },
+  "9755f0b4-f0eb-41a9-b96b-48cd9d8afad4": {
+   "families": [
+    "Wisp Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "98be2311-4d19-4da1-bc9b-a5c5bc01d9ad": {
+   "families": [
+    "Troll Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "9943d60f-485a-4b16-a689-547f3ae6693b": {
+   "families": [
+    "Lich Outcast Family Abyss",
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     48,
+     1
+    ],
+    [
+     101,
+     1
+    ]
+   ]
+  },
+  "9978bdb9-d93e-4e5b-8524-8044149cf181": {
+   "families": [
+    "Goblin Family Abyss",
+    "Spider Forest Critter Family Abyss",
+    "Goblin Family Abyss",
+    "Spider Forest Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     9,
+     0.33
+    ],
+    [
+     18,
+     1
+    ],
+    [
+     54,
+     0.33
+    ]
+   ]
+  },
+  "998b8cd8-75e2-4826-af97-253bd1ad378a": {
+   "families": [
+    "Spider Forest Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "9a057ca6-5f8d-4700-8665-6c56de0e1103": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss",
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     10,
+     1
+    ],
+    [
+     49,
+     1
+    ],
+    [
+     54,
+     1
+    ]
+   ]
+  },
+  "9a0f3748-af25-412a-a544-2176ead2b4b3": {
+   "families": [
+    "Lich Family Abyss",
+    "Lich Family Abyss",
+    "Lich Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ],
+    [
+     29,
+     1
+    ],
+    [
+     38,
+     2
+    ]
+   ]
+  },
+  "9af56b76-7c3e-4ae8-93b4-a28d38bc8cfa": {
+   "families": [
+    "Spider Cave Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "9c237ede-1f58-4e0b-a19f-8575451f56bd": {
+   "families": [
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss",
+    "Lich Nether Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     16,
+     1
+    ],
+    [
+     27,
+     1
+    ]
+   ]
+  },
+  "9c237ede-1f58-4e0b-a19f-8575451f56be": {
+   "families": [
+    "Lich Outcast Family Abyss",
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     48,
+     1
+    ],
+    [
+     101,
+     1
+    ]
+   ]
+  },
+  "9e7cd726-026b-4e3f-b05e-008bb64903a2": {
+   "families": [
+    "Wolf Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "9ebf1936-e656-49ba-adfa-af115bac00ae": {
+   "families": [
+    "Spider Cave Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "a2fa0e68-495d-4754-af0e-5130bb99e6f5": {
+   "families": [
+    "Bear Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "a370b2c3-be24-4ddf-b8de-d0743e1c8ce4": {
+   "families": [
+    "Troll Forest Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "a37c98b7-9ea2-4107-b5d2-304d114a4403": {
+   "families": [
+    "Lich Family Abyss",
+    "Lich Family Abyss",
+    "Lich Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ],
+    [
+     29,
+     1
+    ],
+    [
+     38,
+     2
+    ]
+   ]
+  },
+  "a75b049e-64ec-4631-8c85-50fd0d3419cf": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "a77cc819-0620-4311-b0f3-9c0dec127e84": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "a7bde279-5a49-4639-8265-36de746efee1": {
+   "families": [
+    "Wisp Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "a7c9b2ff-df56-4b83-89f8-f629ae278933": {
+   "families": [
+    "Dremora Raider Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "a7efc00e-0ad0-4c36-8c0c-aaad24d79fca": {
+   "families": [
+    "Skeleton Family Abyss",
+    "Lich Family Abyss",
+    "Lich Family Abyss",
+    "Lich Family Abyss",
+    "Skeleton Family Abyss",
+    "Lich Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     20,
+     2
+    ],
+    [
+     29,
+     1
+    ],
+    [
+     38,
+     2
+    ],
+    [
+     100,
+     1
+    ],
+    [
+     101,
+     2
+    ]
+   ]
+  },
+  "a860f28b-c51b-4e27-a190-73f6f76212e1": {
+   "families": [
+    "Skeleton Family Abyss",
+    "Necromancer Family Abyss",
+    "Skeleton Family Abyss",
+    "Necromancer Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     12,
+     1
+    ],
+    [
+     60,
+     1
+    ],
+    [
+     101,
+     1
+    ]
+   ]
+  },
+  "a9b4677d-09d8-4882-ac6d-1889bdb3368f": {
+   "families": [
+    "Wisp Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "ab91520b-81ff-4387-8c5e-4e77448b7116": {
+   "families": [
+    "Wolf Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "ac212a8a-18de-4171-a418-9b805f41d932": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "ad30570c-fb69-4d69-9f5f-8b15b8cb4fbb": {
+   "families": [
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss",
+    "Lich Nether Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     16,
+     1
+    ],
+    [
+     27,
+     1
+    ]
+   ]
+  },
+  "ad45b3fb-e719-4692-95ab-a1fefd0e0074": {
+   "families": [
+    "Dremora Raider Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "add50d94-3983-4feb-8baa-4bb4dd736380": {
+   "families": [
+    "Wight Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "adf3a4af-7268-4c2b-a3fe-0606d7fa0c97": {
+   "families": [
+    "Dremora Warlock Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "b01cdaaa-ad37-4c2a-84ed-8c5c2baf512e": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "b0a8bc48-5a3a-46d4-a34f-6682a832f47c": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "b1e06e58-5220-4b4e-b535-d9976572f57b": {
+   "families": [
+    "Necromancer Family"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "b1ef6530-5a39-4d29-a3b1-030355cdc7b2": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "b2c7a197-ccb6-44ac-9767-508bf8d5bb73": {
+   "families": [
+    "Wisp Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "b2f960f6-718b-4458-bcfd-f8a160f2024e": {
+   "families": [
+    "Wight Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "b495925b-b839-44ce-8bd8-5e26a8fe83fb": {
+   "families": [
+    "Goblin Family Abyss",
+    "Skeleton Family Abyss",
+    "Goblin Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     54,
+     1
+    ],
+    [
+     101,
+     1
+    ]
+   ]
+  },
+  "b4f3ccbf-0de9-4cdb-995b-1007b3f81f36": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss",
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     10,
+     1
+    ],
+    [
+     49,
+     1
+    ],
+    [
+     54,
+     1
+    ]
+   ]
+  },
+  "b5f7ffd3-a909-43a4-b622-ea414a28d6e5": {
+   "families": [
+    "Troll Forest Family Abyss",
+    "Spider Forest Critter Family",
+    "Troll Forest Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     16,
+     0.33
+    ],
+    [
+     18,
+     1
+    ]
+   ]
+  },
+  "b67b3405-6a67-49d2-a078-02cc60fa4a42": {
+   "families": [
+    "Wisp Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "b9b1cb4c-5778-492e-90ca-5427680b6751": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "bb1802fe-00c7-410f-81cf-c2cdca22d70b": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "bb555b53-8e22-4981-9094-3f1b5862e549": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "bc0b8dba-e1a4-43dd-a2ec-fefcd3683227": {
+   "families": [
+    "Wisp Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "be855b90-e255-483a-9e16-403dac4190f0": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss",
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     10,
+     1
+    ],
+    [
+     49,
+     1
+    ],
+    [
+     54,
+     1
+    ]
+   ]
+  },
+  "be970abc-ccf9-447c-96d7-036cbd080143": {
+   "families": [
+    "Bear Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "bf95cd96-74d9-4c07-be4c-7b08692b0fcf": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "c0e8e0c8-3cfd-4838-b7f7-ba42aa620ebe": {
+   "families": [
+    "Goblin Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "c12ba5be-a134-494c-a149-f0f08333ea11": {
+   "families": [
+    "Spider Forest Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "c38739b7-16b3-4247-8cf2-a9cc294317a0": {
+   "families": [
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss",
+    "Lich Nether Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     16,
+     1
+    ],
+    [
+     27,
+     1
+    ]
+   ]
+  },
+  "c39c5257-ce4f-4160-a992-1e3a523a253e": {
+   "families": [
+    "Spider Cave Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "c41668b3-ad8b-42b4-ba5d-a0574039a3cc": {
+   "families": [
+    "Goblin Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "c45159d4-9630-457c-a703-9f74fdf4be7e": {
+   "families": [
+    "Bandit Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "c5b5b072-0bd2-483b-8f32-a6991791096c": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "ca922efc-95f0-4444-a09e-b3891e35bd43": {
+   "families": [
+    "Dremora Warlock Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "cc150364-705d-4ae5-b5f4-9c0e46128f6a": {
+   "families": [
+    "Goblin Family Abyss",
+    "Spider Forest Critter Family Abyss",
+    "Goblin Family Abyss",
+    "Spider Forest Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     9,
+     0.33
+    ],
+    [
+     18,
+     1
+    ],
+    [
+     54,
+     0.33
+    ]
+   ]
+  },
+  "cc336d5c-7cae-479e-bf79-e9946f518cbc": {
+   "families": [
+    "Goblin Family Abyss",
+    "Spider Forest Critter Family Abyss",
+    "Goblin Family Abyss",
+    "Spider Forest Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     9,
+     0.33
+    ],
+    [
+     18,
+     1
+    ],
+    [
+     54,
+     0.33
+    ]
+   ]
+  },
+  "cc665608-5696-456d-bef9-61e4d1aaf7b9": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "cd20d169-2cf7-4490-825f-3342fbfa79ae": {
+   "families": [
+    "Bandit Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "ced6a4e4-ba5c-4c9d-8f95-9f9944d97bcc": {
+   "families": [
+    "Necromancer Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "d0ec4eee-089c-4909-ba6e-6cadcc453121": {
+   "families": [
+    "Goblin Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "d1608d25-fe35-445b-a4de-7f33ab977221": {
+   "families": [
+    "Dremora Warlock Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "d3f5848e-ba7f-4484-93be-52e15b2407ad": {
+   "families": [
+    "Goblin Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "d4eb635e-2fcd-410b-96e8-a2418d772ea4": {
+   "families": [
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss",
+    "Goblin Family Abyss",
+    "Goblin Wizard Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     10,
+     1
+    ],
+    [
+     49,
+     1
+    ],
+    [
+     54,
+     1
+    ]
+   ]
+  },
+  "d6a0f996-661a-4a15-b0b7-9a9add22aa22": {
+   "families": [
+    "Bear Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "d8330fbd-5334-4a21-82a4-6c265706a0c7": {
+   "families": [
+    "Troll Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "d8a6b795-a282-4e49-b641-7f6e92299e0b": {
+   "families": [
+    "Wight Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "d8de1b05-776c-49fd-8c73-dd718743a8d7": {
+   "families": [
+    "Goblin Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "da988347-e455-43ce-b205-f48724631301": {
+   "families": [
+    "Spriggan Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "daba7764-2e88-471e-b5a3-6c9ec14feb1d": {
+   "families": [
+    "Spriggan Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "dac364eb-983d-4c7c-9868-c40c64976e27": {
+   "families": [
+    "Spriggan Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "dc5b9bd9-f253-48d9-bb60-36ed94e70814": {
+   "families": [
+    "Bandit Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "dc8f31a6-a2c4-482e-b9b8-5181d3a63578": {
+   "families": [
+    "Goblin Family Abyss",
+    "Spider Forest Monster Family Abyss",
+    "Goblin Family Abyss",
+    "Spider Forest Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     9,
+     1
+    ],
+    [
+     18,
+     1
+    ],
+    [
+     54,
+     1
+    ]
+   ]
+  },
+  "de76993c-1946-4536-9647-b96145748f11": {
+   "families": [
+    "Bear Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "dfa68a9c-1c09-4518-993e-9adc79eae87f": {
+   "families": [
+    "Skeleton Family Abyss",
+    "Lich Outcast Family Abyss",
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     16,
+     1
+    ],
+    [
+     48,
+     1
+    ],
+    [
+     101,
+     1
+    ]
+   ]
+  },
+  "e096ab4d-d461-41f7-8183-a119291403b0": {
+   "families": [
+    "Dragon Ancient Frost Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "e0f58812-c99b-4325-b9ea-c9e0f6fa2659": {
+   "families": [
+    "Dragon Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "e27e7702-f7e5-432f-95d1-68f79d362f0b": {
+   "families": [
+    "Spider Forest Monster Family Abyss",
+    "Troll Forest Family Abyss",
+    "Spider Forest Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     7,
+     1
+    ],
+    [
+     9,
+     1
+    ]
+   ]
+  },
+  "e2bfe1bb-db6a-4139-a4db-877640698bed": {
+   "families": [
+    "Lich Family Abyss",
+    "Lich Family Abyss",
+    "Lich Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ],
+    [
+     29,
+     1
+    ],
+    [
+     38,
+     2
+    ]
+   ]
+  },
+  "e2c0d57f-e3af-4613-b08c-ea6f7cc631b9": {
+   "families": [
+    "Wisp Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "e4d6c07c-8cf6-4e67-8fdb-f978ff691185": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "e6fdb18d-9727-4868-8216-f4545122e9c7": {
+   "families": [
+    "Goblin Wizard Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "e778b8cf-c03e-4d20-b7af-88d5dd60e7bc": {
+   "families": [
+    "Dragon Ancient Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "e7d9d441-a294-4f7f-8b0e-62c825748dbc": {
+   "families": [
+    "Dremora Warlock Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "e7e9c563-d33d-4677-b5f8-343d909de0b6": {
+   "families": [
+    "Mixed Atronach Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "e885f3eb-a828-47a6-b4a8-96eec96d17c7": {
+   "families": [
+    "Bandit Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "ea3f95e0-780f-4c59-a357-5a3f268ddc9b": {
+   "families": [
+    "Necromancer Family"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "eaf9d5f0-3ee3-4e9e-bac6-0f866a704d2a": {
+   "families": [
+    "Spriggan Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "ed27c0c1-9fe1-4893-a900-b950c690637f": {
+   "families": [
+    "Troll Ancient Family Abyss",
+    "Wisp Monster Family Abyss",
+    "Troll Ancient Family Abyss",
+    "Wisp Monster Family Abyss",
+    "Troll Ancient Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     24,
+     1
+    ],
+    [
+     27,
+     1
+    ],
+    [
+     61,
+     1
+    ],
+    [
+     100,
+     1
+    ]
+   ]
+  },
+  "edfb9678-df63-44a6-b39c-1adfcef9c797": {
+   "families": [
+    "Spriggan Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "f0a2d1d4-ec4e-4d47-b500-919b44f4589a": {
+   "families": [
+    "Skeever Critter Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     0.33
+    ]
+   ]
+  },
+  "f2802cbe-7b75-4249-86f1-0c87a3fe8ef6": {
+   "families": [
+    "Wisp Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "f3c52cfa-9dd4-456e-948f-e7a9b5e8b569": {
+   "families": [
+    "Goblin Wizard Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "f4347a44-0188-426b-9ba9-515917c5d196": {
+   "families": [
+    "Troll Cave Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "f4588cef-6dc2-4055-897f-beadd07ba16e": {
+   "families": [
+    "Dragon Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "f6f42458-5dd7-4241-a0b2-0ec72b759680": {
+   "families": [
+    "Dragon Ancient Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  "f7407ef7-9dd7-48c4-9e29-9271d6742ac0": {
+   "families": [
+    "Skeleton Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "f774e4af-eb5b-4100-8f0c-1a5beef9b266": {
+   "families": [
+    "Lich Outcast Family Abyss",
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     48,
+     1
+    ],
+    [
+     101,
+     1
+    ]
+   ]
+  },
+  "fad51f8e-9ad3-43f9-b9c7-0481cf639e23": {
+   "families": [
+    "Spriggan Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "fb6c81eb-8174-4b0f-8fdc-89ba8241eb0e": {
+   "families": [
+    "Spider Forest Monster Family Abyss",
+    "Troll Forest Family Abyss",
+    "Spider Forest Monster Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     7,
+     1
+    ],
+    [
+     9,
+     1
+    ]
+   ]
+  },
+  "fba5166f-b9db-43f0-8b23-544cbf310639": {
+   "families": [
+    "Lich Outcast Family Abyss",
+    "Wight Monster Family Abyss",
+    "Lich Outcast Family Abyss",
+    "Lich Nether Family Abyss",
+    "Lich Outcast Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ],
+    [
+     5,
+     1
+    ],
+    [
+     16,
+     1
+    ],
+    [
+     48,
+     1
+    ],
+    [
+     101,
+     1
+    ]
+   ]
+  },
+  "fc76fa88-9202-4664-824b-ed01abb5b97c": {
+   "families": [
+    "Mercenary Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "fcd4caf6-4d9b-4296-b2b3-965c2386d1a8": {
+   "families": [
+    "Spriggan Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  },
+  "fe055a18-ae5e-49bb-8555-f8261faaf35a": {
+   "families": [
+    "Troll Forest Family Abyss"
+   ],
+   "steps": [
+    [
+     1,
+     1
+    ]
+   ]
+  }
+ }
+}
