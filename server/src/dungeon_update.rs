@@ -364,13 +364,21 @@ pub async fn dungeon_update(
     ).await
 }
 
-/// Regenerate this dungeon's data for the variant the client is actually walking.
+/// Add the data for the stage the client is actually walking.
 ///
 /// Returns `None` when nothing needs repairing — every reported spawner is already
 /// known, or the unknown one cannot be attributed to exactly one dungeon.
 ///
-/// The enemy level and XP are carried over from the data being replaced, so a
-/// repair cannot quietly re-roll the run at a different difficulty.
+/// The `_A`/`_B`/`_C` dungeons are the STAGES of one run, not alternatives: the
+/// client walks them in turn, and retail's generated data covered all of them
+/// (#260, #323). So the repair adds the reported dungeon's whole family and keeps
+/// every group the run already had. Replacing the data with the one stage threw
+/// away the stage before it, and on EQ22 the run was repaired twice, `_A` → `_B`
+/// → `_C`.
+///
+/// The enemy level and XP are carried over from the data being repaired, so a
+/// repair cannot quietly re-roll the run at a different difficulty, and existing
+/// rolls are never rewritten.
 fn repair_variant_mismatch(
     game_data: &crate::GameData,
     current: &DungeonGeneratedData,
@@ -400,7 +408,12 @@ fn repair_variant_mismatch(
         .map(|e| (e.enemy_level, e.given_xp))
         .unwrap_or((1, 100));
 
-    blades_lib::util::dungeon::generate_for_dungeon(game_data, &owner, level, xp)
+    let entrypoint = blades_lib::util::quest::variant_family_entrypoint(game_data, &owner);
+    let family =
+        blades_lib::util::quest::generate_for_quest_dungeon(game_data, &entrypoint, level, xp)?;
+    let mut repaired = current.clone();
+    blades_lib::util::quest::merge_dungeon_generated_data(&mut repaired, family);
+    Some(repaired)
 }
 
 async fn handle_quest_dungeon_update(
@@ -2288,5 +2301,81 @@ mod event_kill_rewards_tests {
         let mut old = generated.clone();
         old.enemy_generated_data.get_mut(&trolls).unwrap()[0].truncate(1);
         assert_eq!(kill_trolls(&old), (vec![0], 48));
+    }
+}
+
+#[cfg(test)]
+mod report323_stage_repair_tests {
+    use super::*;
+
+    /// EQ24's two stages. The template names `_A`; the client walks `_A`, then `_B`.
+    const EQ24_A: &str = "88d3d9f4-fb63-4d2a-af60-66ef1ba74736";
+    const EQ24_B: &str = "6988a711-96b0-46d4-9264-c1c06216d621";
+
+    fn game_data() -> crate::GameData {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static/parsed.json");
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn kill_in(group: Uuid) -> Vec<DungeonUpdateAction> {
+        let req: DungeonUpdateRequest = serde_json::from_value(serde_json::json!({
+            "currentState": {"b64": ""},
+            "actions": [{
+                "type": "enemy_killed", "spawnGroupId": group, "spawnerIndex": 0,
+                "enemyIndex": 0, "xpReward": 1.0, "time": 1
+            }]
+        }))
+        .unwrap();
+        req.actions
+    }
+
+    /// A run stored with stage `_A` only — every event attempt before #323, and
+    /// his live row on prod — reports its first kill in stage `_B`.
+    ///
+    /// The repair used to REPLACE the data with `_B`'s, so stage `_A` lost its
+    /// data the moment `_B` was reached, and EQ22 was repaired twice, `_A` → `_B`
+    /// → `_C`. It must ADD the missing stage and leave what was there alone.
+    #[test]
+    fn a_kill_in_a_later_stage_adds_that_stage_and_keeps_the_first() {
+        let gd = game_data();
+        let a = Uuid::parse_str(EQ24_A).unwrap();
+        let b = Uuid::parse_str(EQ24_B).unwrap();
+        let first_stage_only =
+            blades_lib::util::dungeon::generate_for_dungeon_with_seed(&gd, &a, 99, 18, 63).unwrap();
+        let b_group = *gd.dungeons[&b].spawn_info.enemy_spawn_groups.keys().next().unwrap();
+
+        let repaired = repair_variant_mismatch(&gd, &first_stage_only, &kill_in(b_group))
+            .expect("a kill in stage _B is repaired");
+
+        for (group, rolls) in &first_stage_only.enemy_generated_data {
+            assert_eq!(
+                serde_json::to_value(&repaired.enemy_generated_data[group]).unwrap(),
+                serde_json::to_value(rolls).unwrap(),
+                "stage _A group {group} must keep the rolls the client was shown"
+            );
+        }
+        for (container, rolls) in &first_stage_only.item_generated_data {
+            assert_eq!(
+                serde_json::to_value(&repaired.item_generated_data[container]).unwrap(),
+                serde_json::to_value(rolls).unwrap(),
+                "stage _A container {container}"
+            );
+        }
+        for group in gd.dungeons[&b].spawn_info.enemy_spawn_groups.keys() {
+            assert!(repaired.enemy_generated_data.contains_key(group), "stage _B group {group}");
+        }
+        for chest in gd.dungeons[&b].spawn_info.chest.keys() {
+            assert!(repaired.chest_generated_data.contains_key(chest), "stage _B chest {chest}");
+        }
+        let enemies: Vec<_> = repaired.enemy_generated_data.values().flatten().flatten().collect();
+        assert_eq!(enemies.len(), 20);
+        assert!(
+            enemies.iter().all(|e| e.enemy_level == 18 && e.given_xp == 63),
+            "the repair keeps the run's difficulty"
+        );
+
+        // Once repaired, further `_B` kills are known: no second repair.
+        assert!(repair_variant_mismatch(&gd, &repaired, &kill_in(b_group)).is_none());
     }
 }

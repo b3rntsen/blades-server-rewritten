@@ -518,9 +518,14 @@ pub(crate) fn event_dungeon_data(
 ) -> Result<(Uuid, DungeonGeneratedData), BladeApiError> {
     let dungeon_uuid = resolve_dungeon_settings_id(game_data, quest_id, None)?;
     let enemy_level = difficulty_level.max(1);
-    let generated_data =
-        generate_for_dungeon(game_data, &dungeon_uuid, enemy_level, scaling.given_xp(enemy_level))
-            .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
+    // Every stage, not just the one the template names (#323).
+    let generated_data = blades_lib::util::quest::generate_for_quest_dungeon(
+        game_data,
+        &dungeon_uuid,
+        enemy_level,
+        scaling.given_xp(enemy_level),
+    )
+    .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
     Ok((dungeon_uuid, generated_data))
 }
 
@@ -534,7 +539,10 @@ pub(crate) fn event_dungeon_data_for_run(
 ) -> Result<(Uuid, DungeonGeneratedData), BladeApiError> {
     let dungeon_uuid = resolve_dungeon_settings_id(game_data, quest_id, None)?;
     let enemy_level = difficulty_level.max(1);
-    let generated_data = generate_for_dungeon_with_seed(
+    // Every stage of a multi-stage event (`_A`, `_B`, `_C`), as retail generated it.
+    // Only the named first stage left the rest of the run without experience, drops
+    // or container loot (#323).
+    let generated_data = blades_lib::util::quest::generate_for_quest_dungeon_with_seed(
         game_data,
         &dungeon_uuid,
         run_loot_seed(&instance_quest_id, completion_count),
@@ -1187,7 +1195,9 @@ mod dungeon_settings_resolution {
     }
 
     /// Keep every shipped event template honest: its generated payload must name
-    /// exactly the spawn groups in the dungeon the template references.
+    /// exactly the spawn groups of the dungeon the template references — every
+    /// stage of it, for the three events whose dungeon is a `_A`/`_B`/`_C` family
+    /// (#323), and nothing else.
     #[test]
     fn every_event_quest_generates_the_referenced_dungeons_groups() {
         let (sd, gd) = (static_data(), game_data());
@@ -1197,22 +1207,28 @@ mod dungeon_settings_resolution {
             let (dungeon_id, generated) =
                 event_dungeon_data(&gd, *quest_id, 40, &sd.quests_daily.level_scaling)
                 .unwrap_or_else(|e| panic!("event quest {quest_id} cannot generate: {e}"));
-            let dungeon = gd.dungeons.get(&dungeon_id).expect("resolved dungeon exists");
+            assert!(gd.dungeons.contains_key(&dungeon_id), "resolved dungeon exists");
+            let stages: Vec<_> =
+                blades_lib::util::quest::quest_dungeon_family_ids(&gd, &dungeon_id)
+                    .unwrap()
+                    .into_iter()
+                    .map(|id| &gd.dungeons[&id].spawn_info)
+                    .collect();
 
             let expected_enemies: HashSet<_> =
-                dungeon.spawn_info.enemy_spawn_groups.keys().copied().collect();
+                stages.iter().flat_map(|s| s.enemy_spawn_groups.keys()).copied().collect();
             let actual_enemies: HashSet<_> =
                 generated.enemy_generated_data.keys().copied().collect();
             assert_eq!(actual_enemies, expected_enemies, "event quest {quest_id}");
 
             let expected_chests: HashSet<_> =
-                dungeon.spawn_info.chest.keys().copied().collect();
+                stages.iter().flat_map(|s| s.chest.keys()).copied().collect();
             let actual_chests: HashSet<_> =
                 generated.chest_generated_data.keys().copied().collect();
             assert_eq!(actual_chests, expected_chests, "event quest {quest_id}");
 
             let expected_items: HashSet<_> =
-                dungeon.spawn_info.item.keys().copied().collect();
+                stages.iter().flat_map(|s| s.item.keys()).copied().collect();
             let actual_items: HashSet<_> =
                 generated.item_generated_data.keys().copied().collect();
             assert_eq!(actual_items, expected_items, "event quest {quest_id}");
@@ -1358,6 +1374,100 @@ mod dungeon_settings_resolution {
         assert_eq!(
             serde_json::to_value(&data).unwrap(),
             serde_json::to_value(&same).unwrap()
+        );
+    }
+
+    // ------------------------------------------- multi-stage events (#323)
+
+    /// "EQ24_SQ104": stage `_A` (2 enemy groups, no chest) then `_B` (18 groups,
+    /// 2 chests). The template names only `_A`.
+    const EQ24: &str = "816ff4c8-b56f-4645-bd2a-29bc7c1baf96";
+    const EQ24_B: &str = "6988a711-96b0-46d4-9264-c1c06216d621";
+    /// "EQ22_SQ102": `_A`, `_B`, `_C`.
+    const EQ22: &str = "bd05e8f6-439a-4c77-919e-edf33595c044";
+    /// 2026-10-03 06:00 UTC, when report #323 was played: EQ24 is open.
+    const REPORT_323_NOW: i64 = 1_791_007_200;
+
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+
+    /// Report #323: in today's event (EQ24) kills showed no experience, dropped
+    /// nothing, and containers were empty — every one of them in stage `_B`, for
+    /// which the attempt had no data at all.
+    ///
+    /// Retail's generated data for an EQ24 run: 20 enemies over BOTH stages and two
+    /// tier-2 chests, in all 8 distinct captured objects; EQ22: 14 enemies over its
+    /// three stages and two chests, in all 5. The attempt must carry the same.
+    #[test]
+    fn a_multi_stage_event_attempt_covers_every_stage() {
+        let (sd, gd) = (static_data(), game_data());
+        let scaling = &sd.quests_daily.level_scaling;
+        let instance = Uuid::from_u128(0x323);
+        for (event, stages, enemy_count, chest_count) in [(EQ24, 2, 20, 2), (EQ22, 3, 14, 2)] {
+            let (dungeon, attempt) =
+                event_dungeon_data_for_run(&gd, uuid(event), 16, scaling, instance, 0).unwrap();
+            let family = blades_lib::util::quest::quest_dungeon_family_ids(&gd, &dungeon).unwrap();
+            assert_eq!(family.len(), stages, "event {event}");
+            for stage in &family {
+                for group in gd.dungeons[stage].spawn_info.enemy_spawn_groups.keys() {
+                    assert!(
+                        attempt.enemy_generated_data.contains_key(group),
+                        "event {event}: stage {} group {group} has no data — its kills \
+                         show no XP and drop nothing",
+                        gd.dungeons[stage].handle
+                    );
+                }
+                for container in gd.dungeons[stage].spawn_info.item.keys() {
+                    assert!(
+                        attempt.item_generated_data.contains_key(container),
+                        "event {event}: stage {} container {container} would be empty",
+                        gd.dungeons[stage].handle
+                    );
+                }
+            }
+            assert_eq!(enemies(&attempt).len(), enemy_count, "event {event}: retail's count");
+            let chests: usize = attempt.chest_generated_data.values().map(Vec::len).sum();
+            assert_eq!(chests, chest_count, "event {event}: retail's chests");
+            assert!(enemies(&attempt).iter().all(|e| e.enemy_level == 16 && e.given_xp > 0));
+
+            // The plain (unseeded) path the update handler heals empty rows with
+            // covers the same stages.
+            let (_, plain) = event_dungeon_data(&gd, uuid(event), 16, scaling).unwrap();
+            assert_eq!(enemies(&plain).len(), enemy_count, "event {event}: unseeded path");
+        }
+    }
+
+    /// The row `/quests` mints — the data the client plays the FIRST run with —
+    /// covers stage `_B` too, and is still exactly the first run's attempt.
+    #[test]
+    fn a_minted_multi_stage_event_row_covers_every_stage() {
+        let (sd, gd) = (static_data(), game_data());
+        let scaling = &sd.quests_daily.level_scaling;
+        let minted = crate::quest::event_quests::mint(&sd, &gd, CHAR, 16, REPORT_323_NOW);
+        let row = minted
+            .iter()
+            .find(|m| m.quest.gld_quest_id == uuid(EQ24))
+            .expect("the committed calendar opens EQ24 on 2026-10-03");
+        let shown = row.dungeon.as_ref().unwrap();
+        for group in gd.dungeons[&uuid(EQ24_B)].spawn_info.enemy_spawn_groups.keys() {
+            assert!(shown.enemy_generated_data.contains_key(group), "stage _B group {group}");
+        }
+        assert_eq!(enemies(shown).len(), 20);
+
+        let (_, attempt) = event_dungeon_data_for_run(
+            &gd,
+            uuid(EQ24),
+            row.quest.difficulty_level,
+            scaling,
+            row.quest_id,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&attempt).unwrap(),
+            serde_json::to_value(shown).unwrap(),
+            "the first run is the dungeon the client was shown"
         );
     }
 

@@ -104,24 +104,77 @@ pub fn generate_quest_data(
     Ok((quest, Some(generated_dungeon_data)))
 }
 
-fn generate_for_quest_dungeon(
+/// A quest dungeon's generated data: every stage of its variant family (#260).
+pub fn generate_for_quest_dungeon(
     game_data: &GameData,
     dungeon_uuid: &Uuid,
     enemy_level: i64,
     given_xp: u64,
 ) -> Option<DungeonGeneratedData> {
+    generate_for_family(game_data, dungeon_uuid, |id| {
+        crate::util::dungeon::generate_for_dungeon(game_data, id, enemy_level, given_xp)
+    })
+}
+
+/// [`generate_for_quest_dungeon`] with a per-run loot seed, for event attempts.
+///
+/// An event quest names its first stage (`EQ24_SQ104_DungeonSettings_A`) exactly as
+/// a story quest does, and retail's generated data for it covered every stage: all
+/// 8 distinct captured EQ24 objects carry both `_A` and `_B` (20 enemies, 2 chests),
+/// all 5 EQ22 objects `_A`, `_B` and `_C`. Generating only the named dungeon left every
+/// later stage without data, so its kills showed no experience, dropped nothing,
+/// and its containers were empty (report #323).
+pub fn generate_for_quest_dungeon_with_seed(
+    game_data: &GameData,
+    dungeon_uuid: &Uuid,
+    run_seed: u64,
+    enemy_level: i64,
+    given_xp: u64,
+) -> Option<DungeonGeneratedData> {
+    generate_for_family(game_data, dungeon_uuid, |id| {
+        crate::util::dungeon::generate_for_dungeon_with_seed(
+            game_data,
+            id,
+            run_seed,
+            enemy_level,
+            given_xp,
+        )
+    })
+}
+
+fn generate_for_family(
+    game_data: &GameData,
+    dungeon_uuid: &Uuid,
+    generate: impl Fn(&Uuid) -> Option<DungeonGeneratedData>,
+) -> Option<DungeonGeneratedData> {
     let mut ids = quest_dungeon_family_ids(game_data, dungeon_uuid)?;
     let first = ids.remove(0);
-    let mut out =
-        crate::util::dungeon::generate_for_dungeon(game_data, &first, enemy_level, given_xp)?;
+    let mut out = generate(&first)?;
 
     for id in ids {
-        let extra =
-            crate::util::dungeon::generate_for_dungeon(game_data, &id, enemy_level, given_xp)?;
-        merge_dungeon_generated_data(&mut out, extra);
+        merge_dungeon_generated_data(&mut out, generate(&id)?);
     }
 
     Some(out)
+}
+
+/// The first stage of the variant family `dungeon_uuid` belongs to, from ANY stage:
+/// `EQ24_SQ104_DungeonSettings_B` gives `..._A`. A dungeon outside a family is its
+/// own entrypoint. [`quest_dungeon_family_ids`] only expands from an entrypoint, so
+/// a caller holding a later stage resolves it here first.
+pub fn variant_family_entrypoint(game_data: &GameData, dungeon_uuid: &Uuid) -> Uuid {
+    let Some(prefix) = game_data
+        .dungeons
+        .get(dungeon_uuid)
+        .and_then(|d| variant_family_prefix(&d.handle))
+    else {
+        return *dungeon_uuid;
+    };
+    game_data
+        .dungeons
+        .iter()
+        .find(|(_, d)| first_variant_family_prefix(&d.handle) == Some(prefix))
+        .map_or(*dungeon_uuid, |(id, _)| *id)
 }
 
 /// Every dungeon a quest's generated data covers: the dungeon itself, or its whole
@@ -159,7 +212,8 @@ fn variant_family_prefix(handle: &str) -> Option<&str> {
         .filter(|prefix| prefix.ends_with("DungeonSettings"))
 }
 
-fn merge_dungeon_generated_data(out: &mut DungeonGeneratedData, extra: DungeonGeneratedData) {
+/// Add `extra`'s spawn groups to `out`; a group `out` already has keeps its rolls.
+pub fn merge_dungeon_generated_data(out: &mut DungeonGeneratedData, extra: DungeonGeneratedData) {
     for (id, data) in extra.enemy_generated_data {
         out.enemy_generated_data.entry(id).or_insert(data);
     }
