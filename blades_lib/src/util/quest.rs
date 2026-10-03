@@ -116,22 +116,69 @@ pub fn generate_for_quest_dungeon(
     })
 }
 
-/// [`generate_for_quest_dungeon`] with a per-run loot seed, for event attempts.
+/// `EQ23_SQ103_DungeonSettings_A`, "The Web Mother's Trap": an event dungeon whose
+/// named `_A` is the WHOLE run, although a `_B` shares its handle prefix (#329).
+///
+/// The event reuses the cave of story quest SQ103, whose `_B` is that story's second
+/// stage. Retail's EQ23 data covered `_A` alone: 9 of 9 captured generated-data
+/// objects (6 distinct, difficulty 18 to 72) carry `_A`'s 15 groups and none of
+/// `_B`'s 10, and 243 of 243 captured update actions in this dungeon name an `_A`
+/// group. Serving `_B` too (#465) ended every run of it with its Wispmothers and the
+/// spider boss already dead before the player reached them.
+pub const EQ23_SINGLE_STAGE: Uuid = Uuid::from_u128(0x401ffa22_79ba_4c1c_aaa2_d67730d76aad);
+
+/// Event dungeons whose generated data is the named dungeon alone, never its family.
+const SINGLE_STAGE_EVENT_DUNGEONS: &[Uuid] = &[EQ23_SINGLE_STAGE];
+
+/// Every stage an EVENT run covers: its dungeon's whole variant family (EQ22, EQ24:
+/// #323), except for an event that retail ran on the named dungeon alone (#329).
+pub fn event_dungeon_stage_ids(game_data: &GameData, dungeon_uuid: &Uuid) -> Option<Vec<Uuid>> {
+    if SINGLE_STAGE_EVENT_DUNGEONS.contains(dungeon_uuid) {
+        return game_data.dungeons.contains_key(dungeon_uuid).then(|| vec![*dungeon_uuid]);
+    }
+    quest_dungeon_family_ids(game_data, dungeon_uuid)
+}
+
+/// The dungeons sharing an event dungeon's handle family that its run does NOT
+/// cover — `EQ23_SQ103_DungeonSettings_B` for EQ23, nothing for any other event.
+pub fn event_dungeon_foreign_stage_ids(game_data: &GameData, dungeon_uuid: &Uuid) -> Vec<Uuid> {
+    let stages = event_dungeon_stage_ids(game_data, dungeon_uuid).unwrap_or_default();
+    quest_dungeon_family_ids(game_data, dungeon_uuid)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|id| !stages.contains(id))
+        .collect()
+}
+
+/// An event dungeon's generated data: [`event_dungeon_stage_ids`], unseeded.
+pub fn generate_for_event_dungeon(
+    game_data: &GameData,
+    dungeon_uuid: &Uuid,
+    enemy_level: i64,
+    given_xp: u64,
+) -> Option<DungeonGeneratedData> {
+    generate_for_ids(event_dungeon_stage_ids(game_data, dungeon_uuid)?, |id| {
+        crate::util::dungeon::generate_for_dungeon(game_data, id, enemy_level, given_xp)
+    })
+}
+
+/// An event attempt's generated data, with a per-run loot seed.
 ///
 /// An event quest names its first stage (`EQ24_SQ104_DungeonSettings_A`) exactly as
 /// a story quest does, and retail's generated data for it covered every stage: all
 /// 8 distinct captured EQ24 objects carry both `_A` and `_B` (20 enemies, 2 chests),
 /// all 5 EQ22 objects `_A`, `_B` and `_C`. Generating only the named dungeon left every
 /// later stage without data, so its kills showed no experience, dropped nothing,
-/// and its containers were empty (report #323).
-pub fn generate_for_quest_dungeon_with_seed(
+/// and its containers were empty (report #323). EQ23 is the exception: see
+/// [`EQ23_SINGLE_STAGE`].
+pub fn generate_for_event_dungeon_with_seed(
     game_data: &GameData,
     dungeon_uuid: &Uuid,
     run_seed: u64,
     enemy_level: i64,
     given_xp: u64,
 ) -> Option<DungeonGeneratedData> {
-    generate_for_family(game_data, dungeon_uuid, |id| {
+    generate_for_ids(event_dungeon_stage_ids(game_data, dungeon_uuid)?, |id| {
         crate::util::dungeon::generate_for_dungeon_with_seed(
             game_data,
             id,
@@ -147,7 +194,16 @@ fn generate_for_family(
     dungeon_uuid: &Uuid,
     generate: impl Fn(&Uuid) -> Option<DungeonGeneratedData>,
 ) -> Option<DungeonGeneratedData> {
-    let mut ids = quest_dungeon_family_ids(game_data, dungeon_uuid)?;
+    generate_for_ids(quest_dungeon_family_ids(game_data, dungeon_uuid)?, generate)
+}
+
+fn generate_for_ids(
+    mut ids: Vec<Uuid>,
+    generate: impl Fn(&Uuid) -> Option<DungeonGeneratedData>,
+) -> Option<DungeonGeneratedData> {
+    if ids.is_empty() {
+        return None;
+    }
     let first = ids.remove(0);
     let mut out = generate(&first)?;
 

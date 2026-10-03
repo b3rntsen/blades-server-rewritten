@@ -372,6 +372,48 @@ fn event_row_fresh(
     .map(|(_, data)| data)
 }
 
+/// Take out of a stored EVENT row every spawn group, chest and container of a
+/// stage its event never had (#329).
+///
+/// #465 gave The Web Mother's Trap (EQ23) the `_B` stage of the story cave it is
+/// built on, and its `/quests` repair added `_B` to every EQ23 row already
+/// minted: 10 live rows on 2026-10-03. Retail never served that stage, and the one
+/// player who ran such a row found the Wispmothers and the spider boss already
+/// dead. The row is durable for the event's 48-hour window, so it is healed here
+/// rather than left to the next mint. `_A`'s rolls are untouched; rows this server
+/// did not generate (`version != 0`) are left alone, as the other repairs leave them.
+fn drop_foreign_event_stages(
+    game_data: &blades_lib::game_data::GameData,
+    info: &blades_lib::user_data::Quest,
+    stored: &mut DungeonGeneratedData,
+) -> bool {
+    if stored.version != 0 {
+        return false;
+    }
+    let Some(dungeon_uuid) = game_data
+        .quests
+        .get(&info.gld_quest_id)
+        .and_then(|q| q.dungeon_info.as_ref())
+        .map(|d| d.dungeon_uuid)
+    else {
+        return false;
+    };
+    let mut changed = false;
+    for foreign in blades_lib::util::quest::event_dungeon_foreign_stage_ids(game_data, &dungeon_uuid) {
+        let spawn = &game_data.dungeons[&foreign].spawn_info;
+        for group in spawn.enemy_spawn_groups.keys() {
+            changed |= stored.enemy_generated_data.remove(group).is_some();
+        }
+        for container in spawn.item.keys() {
+            changed |= stored.item_generated_data.remove(container).is_some();
+        }
+        for chest in spawn.chest.keys() {
+            changed |= stored.chest_generated_data.remove(chest).is_some();
+        }
+    }
+    changed
+}
+
 /// Give a stored row the key a key-holder enemy should carry (#236).
 ///
 /// Rows generated before report #236 have the right enemies but no key: the
@@ -1033,6 +1075,98 @@ mod report260_variant_family_repair_tests {
 }
 
 #[cfg(test)]
+mod report329_foreign_event_stage_tests {
+    use super::*;
+
+    /// The Web Mother's Trap and its two dungeons; EQ24 is the control, whose `_B`
+    /// IS a stage of the event (#323).
+    const EQ23: &str = "2d1200ee-ecb8-4ea6-9892-54d1f538d83d";
+    const EQ23_A: &str = "401ffa22-79ba-4c1c-aaa2-d67730d76aad";
+    const EQ23_B: &str = "22d33501-f0df-4d0c-96e1-22da7f535ba8";
+    const EQ24: &str = "816ff4c8-b56f-4645-bd2a-29bc7c1baf96";
+    const EQ24_A: &str = "88d3d9f4-fb63-4d2a-af60-66ef1ba74736";
+
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+
+    fn event_row(
+        game_data: &blades_lib::game_data::GameData,
+        quest: &str,
+        level: i64,
+    ) -> blades_lib::user_data::Quest {
+        let (mut info, _) = generate_quest_data(
+            game_data,
+            uuid(quest),
+            level,
+            &blades_lib::static_data::QuestLevelScaling::default(),
+        )
+        .unwrap();
+        info.r#type = blades_lib::user_data::QuestType::GameEvent;
+        info
+    }
+
+    /// Raysiel's row on prod (#329): minted with `_A` on 2026-10-02, then given
+    /// `_B` by #465's `/quests` repair — 25 groups, 2 chests, 6 containers, all at
+    /// the row's level 2. Nine other players hold the same row.
+    ///
+    /// The repair takes `_B` back out and leaves every `_A` roll as it was shown.
+    #[test]
+    fn an_eq23_row_given_the_story_stage_loses_it_and_keeps_its_own() {
+        let gd = super::report85_job_generated_data_tests::game_data();
+        let info = event_row(&gd, EQ23, 2);
+        let a_only = blades_lib::util::dungeon::generate_for_dungeon_with_seed(
+            &gd,
+            &uuid(EQ23_A),
+            7,
+            2,
+            13,
+        )
+        .unwrap();
+        let mut stored = a_only.clone();
+        let b = blades_lib::util::dungeon::generate_for_dungeon(&gd, &uuid(EQ23_B), 2, 13).unwrap();
+        blades_lib::util::quest::merge_dungeon_generated_data(&mut stored, b);
+        assert_eq!(
+            (
+                stored.enemy_generated_data.len(),
+                stored.chest_generated_data.len(),
+                stored.item_generated_data.len()
+            ),
+            (25, 2, 6),
+            "the shape of the prod row"
+        );
+
+        assert!(drop_foreign_event_stages(&gd, &info, &mut stored));
+        assert_eq!(
+            serde_json::to_value(&stored).unwrap(),
+            serde_json::to_value(&a_only).unwrap(),
+            "exactly `_A`, every roll as the player was shown it"
+        );
+        assert!(!drop_foreign_event_stages(&gd, &info, &mut stored), "nothing left to drop");
+    }
+
+    /// CONTROL: an EQ24 row keeps its `_B` — that one is a stage of the event —
+    /// and a row the server did not generate is not touched.
+    #[test]
+    fn a_real_second_stage_and_a_captured_row_are_left_alone() {
+        let gd = super::report85_job_generated_data_tests::game_data();
+        let eq24 = event_row(&gd, EQ24, 16);
+        let mut both =
+            blades_lib::util::quest::generate_for_event_dungeon(&gd, &uuid(EQ24_A), 16, 60).unwrap();
+        let before = serde_json::to_value(&both).unwrap();
+        assert_eq!(both.enemy_generated_data.len(), 20);
+        assert!(!drop_foreign_event_stages(&gd, &eq24, &mut both));
+        assert_eq!(serde_json::to_value(&both).unwrap(), before);
+
+        let eq23 = event_row(&gd, EQ23, 2);
+        let mut captured =
+            blades_lib::util::dungeon::generate_for_dungeon(&gd, &uuid(EQ23_B), 2, 13).unwrap();
+        captured.version = 1;
+        assert!(!drop_foreign_event_stages(&gd, &eq23, &mut captured));
+    }
+}
+
+#[cfg(test)]
 mod report152_stale_story_loot_tests {
     use super::*;
     use blades_lib::static_data::QuestLevelScaling;
@@ -1506,6 +1640,19 @@ pub async fn get_quests(
                 ) else {
                     continue;
                 };
+                // An event row first loses any stage its event never had (#329), so
+                // the repairs below cannot touch what is about to go.
+                let pruned = is_event
+                    && drop_foreign_event_stages(&globals.game_data, &row.info.0, stored);
+                if pruned {
+                    log::info!(
+                        "quests: took the stage event quest {} ({}) never had out of character \
+                         {}'s row (#329)",
+                        row.id,
+                        row.info.0.gld_quest_id,
+                        character_id_var
+                    );
+                }
                 // An event row gains the stages it was minted without (#323), from
                 // its own event dungeon at its own difficulty; the story repairs
                 // below stay story-only.
@@ -1540,7 +1687,7 @@ pub async fn get_quests(
                         character_id_var
                     );
                 }
-                if expanded || refreshed || grew || keyed || filled {
+                if pruned || expanded || refreshed || grew || keyed || filled {
                     use crate::schema::quests;
                     diesel::update(
                         quests::table
@@ -4433,8 +4580,9 @@ pub(crate) mod event_quests {
                 .quests_daily
                 .level_scaling
                 .enemy_level(player_level);
-            // Every stage of the event's dungeon (#323), seeded per run.
-            dungeon = blades_lib::util::quest::generate_for_quest_dungeon_with_seed(
+            // Every stage of the event's dungeon (#323) and no other (#329), seeded
+            // per run.
+            dungeon = blades_lib::util::quest::generate_for_event_dungeon_with_seed(
                 game_data,
                 &dungeon_id,
                 blades_lib::util::dungeon::run_loot_seed(&quest_id, 0),

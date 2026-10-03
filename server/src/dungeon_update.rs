@@ -152,6 +152,72 @@ fn item_loot_grant(
     }
 }
 
+/// Take, from a corpse's stored loot, the ONE entry an `enemy_loot_collected`
+/// names, and leave the rest on the corpse (#328).
+///
+/// Retail's client loots a corpse entry by entry: every one of 1,929 captured
+/// `enemy_loot_collected` actions names exactly one stack, currency or item, at
+/// the amount the corpse's `enemyStatus.loot` showed (1,837 of 1,837 amounts
+/// equal). Retail removed just that entry -- the response's `enemyStatus` still
+/// carried the corpse's other entries in 1,059 of those responses -- and its
+/// backpack diff held at most that one stack (0 of 1,929 held another). We took
+/// the WHOLE corpse on the first action, so a corpse with several drops reported
+/// all of them in the first response, before the client had picked up the rest,
+/// and its pickup feed re-showed them as the later actions came in.
+///
+/// Only the stored amounts are paid; the request chooses which entry, never how
+/// much. A name the corpse does not hold pays nothing. A body naming nothing at
+/// all (no client sends one, but the field is optional) takes everything left,
+/// as before.
+fn take_named_corpse_loot(stored: &mut LootTableResult, named: &RewardGrant) -> RewardGrant {
+    let names_nothing = named.currencies.is_empty()
+        && named.stackable_items.is_empty()
+        && named.items.is_empty();
+    if names_nothing {
+        let all = std::mem::take(stored);
+        return RewardGrant {
+            currencies: all.currencies,
+            stackable_items: all.stackable_items,
+            items: all
+                .item
+                .0
+                .into_iter()
+                .map(|(id, item)| RewardItem { id, item })
+                .collect(),
+            ..Default::default()
+        };
+    }
+
+    let mut grant = RewardGrant::default();
+    for template in named.stackable_items.keys() {
+        if let Some(count) = stored.stackable_items.remove(template) {
+            grant.stackable_items.insert(*template, count);
+        }
+    }
+    for currency in named.currencies.keys() {
+        if let Some(amount) = stored.currencies.remove(currency) {
+            grant.currencies.insert(*currency, amount);
+        }
+    }
+    for wanted in &named.items {
+        // By instance id first; the item template when the client's id differs.
+        let id = if stored.item.0.contains_key(&wanted.id) {
+            Some(wanted.id)
+        } else {
+            stored
+                .item
+                .0
+                .iter()
+                .find(|(_, item)| item.item_template_id == wanted.item.item_template_id)
+                .map(|(id, _)| *id)
+        };
+        if let Some((id, item)) = id.and_then(|id| stored.item.0.remove_entry(&id)) {
+            grant.items.push(RewardItem { id, item });
+        }
+    }
+    grant
+}
+
 fn collected_chest_key(spawn_group_id: Uuid, spawn_group_index: usize) -> String {
     if spawn_group_index == 0 {
         // Backward compatibility: existing dungeon states stored a bare UUID
@@ -888,14 +954,11 @@ fn process_dungeon_actions(
                     continue;
                 };
 
-                // Looting the same corpse twice must not pay twice; taking the stored
-                // loot empties it.
-                let loot = std::mem::take(&mut status.loot);
-
                 // The server now rolls enemy loot at generation time
-                // (`roll_enemy_loot`), so the stored value is the answer and the
-                // client's `loot` body is not read at all -- naming your own payout
-                // off any corpse you had killed is exactly what it would allow.
+                // (`roll_enemy_loot`), so the stored value is the answer: the
+                // client's `loot` body only NAMES which stored entry it picked up,
+                // and never sets an amount -- naming your own payout off any corpse
+                // you had killed is exactly what trusting it would allow.
                 //
                 // Dungeons generated BEFORE that shipped carry no loot on any enemy,
                 // and their runs are still in progress. For those the request stays
@@ -904,19 +967,10 @@ fn process_dungeon_actions(
                 // legitimately rolled nothing must credit nothing, not hand the
                 // decision back to the client.
                 let grant = if dungeon_predates_generated_loot {
+                    status.loot = Default::default();
                     enemy_loot.loot.clone()
                 } else {
-                    RewardGrant {
-                        currencies: loot.currencies,
-                        stackable_items: loot.stackable_items,
-                        items: loot
-                            .item
-                            .0
-                            .into_iter()
-                            .map(|(id, item)| RewardItem { id, item })
-                            .collect(),
-                        ..Default::default()
-                    }
+                    take_named_corpse_loot(&mut status.loot, &enemy_loot.loot)
                 };
 
                 currency_moved |= !grant.currencies.is_empty();
@@ -2377,5 +2431,141 @@ mod report323_stage_repair_tests {
 
         // Once repaired, further `_B` kills are known: no second repair.
         assert!(repair_variant_mismatch(&gd, &repaired, &kill_in(b_group)).is_none());
+    }
+}
+
+#[cfg(test)]
+mod report328_corpse_loot_tests {
+    use super::*;
+    use blades_lib::user_data::CompleteInventory;
+
+    const GROUP: &str = "4295c814-e5e7-4a8a-939a-d3238471c906";
+    const IRON: &str = "4577fb2b-47f7-4112-b870-1479e2529b06";
+    const LEATHER: &str = "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50";
+    const GOLD: &str = "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2";
+
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+
+    fn action(json: serde_json::Value) -> Vec<DungeonUpdateAction> {
+        serde_json::from_value::<DungeonUpdateRequest>(serde_json::json!({
+            "currentState": {"b64": ""}, "actions": [json]
+        }))
+        .unwrap()
+        .actions
+    }
+
+    fn loot(entry: serde_json::Value) -> Vec<DungeonUpdateAction> {
+        action(serde_json::json!({
+            "type": "enemy_loot_collected", "spawnGroupId": GROUP, "spawnerIndex": 0,
+            "enemyIndex": 0, "loot": entry, "time": 2
+        }))
+    }
+
+    /// Report #328: "If I collect more items at once it bugs out and shows the
+    /// items again and again for some time."
+    ///
+    /// A corpse dropping iron x5, leather x2 and 304 gold. Retail's client loots it
+    /// one entry per action, and retail answered each with that entry alone: the
+    /// backpack diff held the one stack, the wallet moved only on the gold, and
+    /// `enemyStatus.loot` kept what was still on the corpse. We paid and reported
+    /// all three on the first action.
+    #[test]
+    fn a_corpse_is_looted_one_named_entry_at_a_time() {
+        let generated: DungeonGeneratedData = serde_json::from_value(serde_json::json!({
+            "enemyGeneratedData": {GROUP: [[{
+                "givenXP": 10, "enemyLevel": 5,
+                "lootTableLoot": {"00000000-0000-0000-0000-000000000328": {
+                    "stackableItems": {IRON: 5, LEATHER: 2},
+                    "currencies": {GOLD: 304}
+                }},
+                "spawnGroupLoot": {}
+            }]]},
+            "algorithmVersion": 1, "version": 0
+        }))
+        .unwrap();
+        let mut state: DungeonState = serde_json::from_value(serde_json::json!({
+            "dungeonStatus": {
+                "dungeonSettingsIds": [], "reviveCount": 0, "level": 5, "seed": 0,
+                "currentState": {"b64": ""}, "algorithmVersion": 1, "version": 1
+            }
+        }))
+        .unwrap();
+        let mut character = CharacterDbEntryCharacterWalletInventory {
+            id: Uuid::nil(),
+            user_id: Uuid::nil(),
+            character: JsonDbWrapper(Default::default()),
+            data: JsonDbWrapper(Default::default()),
+            wallet: JsonDbWrapper(Default::default()),
+            inventory: JsonDbWrapper(CompleteInventory {
+                backpack: Default::default(),
+                loadout: Default::default(),
+                treasury: Default::default(),
+                overflow_treasury: Default::default(),
+                backpack_version: 1,
+                treasury_version: 0,
+            }),
+            server_state: JsonDbWrapper(Default::default()),
+        };
+        let mut wallet = CompleteWallet::default();
+        let mut run = |actions: Vec<DungeonUpdateAction>| {
+            let mut tracker = InventoryChangeTracker::default();
+            let moved = process_dungeon_actions(
+                &actions, &generated, &mut state, &mut character, &mut wallet, &mut tracker,
+            );
+            let mut reported: Vec<Uuid> =
+                tracker.modified_backpack.stackable_items.into_iter().collect();
+            reported.sort();
+            let left = state.dungeon_status.enemy_status.values().next().unwrap().loot.clone();
+            (reported, moved, left)
+        };
+
+        run(action(serde_json::json!({
+            "type": "enemy_killed", "spawnGroupId": GROUP, "spawnerIndex": 0,
+            "enemyIndex": 0, "xpReward": 10.0, "time": 1
+        })));
+
+        let (reported, moved, left) = run(loot(serde_json::json!({"stackableItems": {LEATHER: 2}})));
+        assert_eq!(reported, vec![uuid(LEATHER)], "only the stack picked up is reported");
+        assert!(!moved, "no gold was picked up yet");
+        assert_eq!(left.stackable_items.get(&uuid(IRON)), Some(&5), "iron stays on the corpse");
+        assert_eq!(left.currencies.get(&uuid(GOLD)), Some(&304), "gold stays on the corpse");
+
+        let (reported, moved, left) = run(loot(serde_json::json!({"currencies": {GOLD: 304}})));
+        assert!(reported.is_empty() && moved);
+        assert!(left.currencies.is_empty());
+
+        // The client names the entry; the stored amount is what is paid.
+        let (reported, _, left) = run(loot(serde_json::json!({"stackableItems": {IRON: 999}})));
+        assert_eq!(reported, vec![uuid(IRON)]);
+        assert!(left.is_empty(), "the corpse is empty once every entry is taken");
+
+        // A replay of a taken entry pays nothing and reports nothing.
+        let (reported, moved, _) = run(loot(serde_json::json!({"stackableItems": {IRON: 5}})));
+        assert!(reported.is_empty() && !moved);
+
+        let backpack = &character.inventory.0.backpack.stackable_items;
+        assert_eq!(backpack.count(uuid(IRON)), 5, "each entry is paid exactly once");
+        assert_eq!(backpack.count(uuid(LEATHER)), 2);
+        assert_eq!(wallet.balance(uuid(GOLD)), 304);
+    }
+
+    /// A name the corpse never held pays nothing; a body naming nothing takes the rest.
+    #[test]
+    fn unknown_names_pay_nothing_and_an_empty_body_takes_the_rest() {
+        let mut stored = LootTableResult::default();
+        stored.stackable_items.insert(uuid(IRON), 5);
+        stored.currencies.insert(uuid(GOLD), 7);
+
+        let mut named = RewardGrant::default();
+        named.stackable_items.insert(uuid(LEATHER), 50);
+        assert!(take_named_corpse_loot(&mut stored, &named).is_empty());
+        assert_eq!(stored.stackable_items.len(), 1);
+
+        let all = take_named_corpse_loot(&mut stored, &RewardGrant::default());
+        assert_eq!(all.stackable_items.get(&uuid(IRON)), Some(&5));
+        assert_eq!(all.currencies.get(&uuid(GOLD)), Some(&7));
+        assert!(stored.is_empty());
     }
 }

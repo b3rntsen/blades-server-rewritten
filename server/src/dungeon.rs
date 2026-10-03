@@ -518,8 +518,9 @@ pub(crate) fn event_dungeon_data(
 ) -> Result<(Uuid, DungeonGeneratedData), BladeApiError> {
     let dungeon_uuid = resolve_dungeon_settings_id(game_data, quest_id, None)?;
     let enemy_level = difficulty_level.max(1);
-    // Every stage, not just the one the template names (#323).
-    let generated_data = blades_lib::util::quest::generate_for_quest_dungeon(
+    // Every stage, not just the one the template names (#323) — and no stage the
+    // event never had (#329).
+    let generated_data = blades_lib::util::quest::generate_for_event_dungeon(
         game_data,
         &dungeon_uuid,
         enemy_level,
@@ -541,8 +542,8 @@ pub(crate) fn event_dungeon_data_for_run(
     let enemy_level = difficulty_level.max(1);
     // Every stage of a multi-stage event (`_A`, `_B`, `_C`), as retail generated it.
     // Only the named first stage left the rest of the run without experience, drops
-    // or container loot (#323).
-    let generated_data = blades_lib::util::quest::generate_for_quest_dungeon_with_seed(
+    // or container loot (#323). A stage the event never had is left out (#329).
+    let generated_data = blades_lib::util::quest::generate_for_event_dungeon_with_seed(
         game_data,
         &dungeon_uuid,
         run_loot_seed(&instance_quest_id, completion_count),
@@ -1196,8 +1197,8 @@ mod dungeon_settings_resolution {
 
     /// Keep every shipped event template honest: its generated payload must name
     /// exactly the spawn groups of the dungeon the template references — every
-    /// stage of it, for the three events whose dungeon is a `_A`/`_B`/`_C` family
-    /// (#323), and nothing else.
+    /// stage of it, for the events whose dungeon is a `_A`/`_B`/`_C` family (#323),
+    /// no stage the event never had (#329), and nothing else.
     #[test]
     fn every_event_quest_generates_the_referenced_dungeons_groups() {
         let (sd, gd) = (static_data(), game_data());
@@ -1209,7 +1210,7 @@ mod dungeon_settings_resolution {
                 .unwrap_or_else(|e| panic!("event quest {quest_id} cannot generate: {e}"));
             assert!(gd.dungeons.contains_key(&dungeon_id), "resolved dungeon exists");
             let stages: Vec<_> =
-                blades_lib::util::quest::quest_dungeon_family_ids(&gd, &dungeon_id)
+                blades_lib::util::quest::event_dungeon_stage_ids(&gd, &dungeon_id)
                     .unwrap()
                     .into_iter()
                     .map(|id| &gd.dungeons[&id].spawn_info)
@@ -1469,6 +1470,102 @@ mod dungeon_settings_resolution {
             serde_json::to_value(shown).unwrap(),
             "the first run is the dungeon the client was shown"
         );
+    }
+
+    // ------------------------------------- a single-stage event (#329)
+
+    /// "EQ23_SQ103", The Web Mother's Trap. Its template names `_A`; a `_B` shares
+    /// the handle prefix but is the story quest SQ103's second stage, not the event's.
+    const EQ23: &str = "2d1200ee-ecb8-4ea6-9892-54d1f538d83d";
+    const EQ23_A: &str = "401ffa22-79ba-4c1c-aaa2-d67730d76aad";
+    const EQ23_B: &str = "22d33501-f0df-4d0c-96e1-22da7f535ba8";
+
+    /// Report #329: in The Web Mother's Trap the Wispmothers and the spider boss
+    /// were already dead, their loot under them out of reach, before the player got
+    /// there. Every run of it after #465 carried `_B`'s 10 enemy groups, chest and 3
+    /// containers on top of `_A`'s, and the boss objective completed 53–116 s into
+    /// each run against 242–535 s for all 15 runs before #465.
+    ///
+    /// Retail served `_A` alone: 9 of 9 captured EQ23 objects hold its 15 groups, 1
+    /// chest and 3 containers and nothing of `_B`, and 243 of 243 captured update
+    /// actions there name an `_A` group. Every path that builds EQ23 data must
+    /// match: the mint, the attempt, and the unseeded heal.
+    #[test]
+    fn the_web_mothers_trap_is_its_named_dungeon_alone() {
+        let (sd, gd) = (static_data(), game_data());
+        let scaling = &sd.quests_daily.level_scaling;
+        let a = &gd.dungeons[&uuid(EQ23_A)].spawn_info;
+        let b = &gd.dungeons[&uuid(EQ23_B)].spawn_info;
+        let keys = |d: &DungeonGeneratedData| {
+            (
+                d.enemy_generated_data.keys().copied().collect::<HashSet<_>>(),
+                d.chest_generated_data.keys().copied().collect::<HashSet<_>>(),
+                d.item_generated_data.keys().copied().collect::<HashSet<_>>(),
+            )
+        };
+        let retail = (
+            a.enemy_spawn_groups.keys().copied().collect::<HashSet<_>>(),
+            a.chest.keys().copied().collect::<HashSet<_>>(),
+            a.item.keys().copied().collect::<HashSet<_>>(),
+        );
+        assert_eq!((retail.0.len(), retail.1.len(), retail.2.len()), (15, 1, 3));
+
+        let minted = crate::quest::event_quests::mint(&sd, &gd, CHAR, 2, REPORT_323_NOW);
+        let row = minted
+            .iter()
+            .find(|m| m.quest.gld_quest_id == uuid(EQ23))
+            .expect("the committed calendar has EQ23 open on 2026-10-03");
+        let (_, attempt) = event_dungeon_data_for_run(
+            &gd,
+            uuid(EQ23),
+            row.quest.difficulty_level,
+            scaling,
+            row.quest_id,
+            0,
+        )
+        .unwrap();
+        let (_, plain) = event_dungeon_data(&gd, uuid(EQ23), 2, scaling).unwrap();
+
+        for (path, data) in
+            [("mint", row.dungeon.as_ref().unwrap()), ("attempt", &attempt), ("heal", &plain)]
+        {
+            assert_eq!(keys(data), retail, "{path}: EQ23 must be `_A`, exactly as retail");
+            for group in b.enemy_spawn_groups.keys() {
+                assert!(
+                    !data.enemy_generated_data.contains_key(group),
+                    "{path}: `_B` group {group} is not part of the event"
+                );
+            }
+        }
+        assert_eq!(
+            blades_lib::util::quest::event_dungeon_foreign_stage_ids(&gd, &uuid(EQ23_A)),
+            vec![uuid(EQ23_B)]
+        );
+    }
+
+    /// CONTROL: the multi-stage events keep every stage (#323), and no other event
+    /// dungeon has a stage held back.
+    #[test]
+    fn only_the_web_mothers_trap_has_a_stage_held_back() {
+        let (sd, gd) = (static_data(), game_data());
+        let held_back: Vec<Uuid> = sd
+            .event_quests
+            .templates
+            .keys()
+            .filter_map(|q| resolve_dungeon_settings_id(&gd, *q, None).ok())
+            .filter(|d| {
+                !blades_lib::util::quest::event_dungeon_foreign_stage_ids(&gd, d).is_empty()
+            })
+            .collect();
+        assert_eq!(held_back, vec![uuid(EQ23_A)]);
+        for (event, stages) in [(EQ24, 2), (EQ22, 3)] {
+            let d = resolve_dungeon_settings_id(&gd, uuid(event), None).unwrap();
+            assert_eq!(
+                blades_lib::util::quest::event_dungeon_stage_ids(&gd, &d).unwrap().len(),
+                stages,
+                "event {event}"
+            );
+        }
     }
 
     /// A row the server never wrote without `difficultyLevel` keeps the old level 1
