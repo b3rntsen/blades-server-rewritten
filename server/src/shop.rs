@@ -233,13 +233,12 @@ fn window_for(
             .refresh_seconds(&type_id, building_level)
             .unwrap_or(CATALOG_WINDOW_MS / 1000);
         window.expiration_ms = ((start + refresh_s * 1000) / 1000) * 1000;
-        let win_index = shop_gen::window_index(start, refresh_s);
         let bundles = shop_gen::generate_catalog(
             &app_state.shop_stock,
             &type_id,
             building_level,
             &shop_id,
-            win_index,
+            shop_gen::window_key(start),
         );
         if !bundles.is_empty() {
             window.template_id = type_id;

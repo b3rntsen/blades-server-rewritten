@@ -12,13 +12,15 @@
 //!   weights, quantities, refresh window) live in the JSON config, never in Rust,
 //!   so a backoffice can tweak the stock without a rebuild.
 //! - **Pure.** [`generate_catalog`] is a pure function of `(config, typeId, level,
-//!   shopId, window_index)` — no IO, no DB, no clock — so it is unit-testable and a
+//!   shopId, window_key)` — no IO, no DB, no clock — so it is unit-testable and a
 //!   future admin route can hot-reload the config and rebuild
 //!   [`crate::ServerGlobal::shop_stock`] without a restart (the RELOAD HOOK: swap
 //!   the parsed `ShopStockConfig` behind the `Arc` — nothing here holds state).
-//! - **Deterministic per window.** The roll is seeded from `shopId + window_index`,
-//!   so a shop's stock is stable within a refresh window and re-rolls when the
-//!   window advances.
+//! - **Deterministic per window.** The roll is seeded from `shopId + window_key`,
+//!   where the key is the window's start time ([`window_key`]). A window is stored
+//!   once rolled, so its stock is stable while it lives, and every new window —
+//!   an expired one reopened, or a restock (`/auth/refreshloot`) minutes after the
+//!   last — rolls fresh stock.
 //! - **Graceful.** A missing/partial config (unknown building typeId or level)
 //!   yields an EMPTY catalog rather than panicking; the caller then falls back to
 //!   the capture-derived templates so a vendor is never empty/timing-out.
@@ -144,9 +146,9 @@ impl ShopStockConfig {
     }
 }
 
-/// FNV-1a 64-bit over the shop id's bytes plus the window index — a stable,
-/// dependency-free seed so a shop's stock is deterministic within a refresh window.
-fn seed(shop_id: &Uuid, window_index: u64) -> u64 {
+/// FNV-1a 64-bit over the shop id's bytes plus the window key — a stable,
+/// dependency-free seed so a shop's stock is deterministic for one window.
+fn seed(shop_id: &Uuid, window_key: u64) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let feed = |h: &mut u64, b: u8| {
         *h ^= b as u64;
@@ -155,7 +157,7 @@ fn seed(shop_id: &Uuid, window_index: u64) -> u64 {
     for b in shop_id.as_bytes() {
         feed(&mut h, *b);
     }
-    for b in window_index.to_le_bytes() {
+    for b in window_key.to_le_bytes() {
         feed(&mut h, b);
     }
     h
@@ -178,7 +180,7 @@ impl SplitMix64 {
 }
 
 /// Generate a shop's catalog bundle list for `(type_id, level)`, deterministic per
-/// `(shop_id, window_index)`. Returns an EMPTY vec if the config lacks the building
+/// `(shop_id, window_key)`. Returns an EMPTY vec if the config lacks the building
 /// or level, or if no pool entry is unlocked at the level's `tierCap` (caller falls
 /// back to the capture-derived templates). Pure — safe to call from a test or a hot
 /// reload path.
@@ -187,7 +189,7 @@ pub fn generate_catalog(
     type_id: &Uuid,
     level: u64,
     shop_id: &Uuid,
-    window_index: u64,
+    window_key: u64,
 ) -> Vec<ShopBundleRef> {
     let Some(building) = config.generation.get(type_id) else {
         return Vec::new();
@@ -215,7 +217,7 @@ pub fn generate_catalog(
     }
     unlocked.sort_by(|a, b| a.bundle_id.cmp(&b.bundle_id));
 
-    let mut rng = SplitMix64(seed(shop_id, window_index));
+    let mut rng = SplitMix64(seed(shop_id, window_key));
 
     // Roll up to `maxItems` DISTINCT bundles by weighted selection without
     // replacement (retail catalogs never list the same bundle twice).
@@ -256,12 +258,16 @@ pub fn generate_catalog(
         .collect()
 }
 
-/// The current refresh-window index for a wall-clock time and window length. Kept
-/// here (pure) so the handler can compute it from `SystemTime::now()` and pass it
-/// into [`generate_catalog`] without this module touching the clock.
-pub fn window_index(now_ms: i64, refresh_seconds: i64) -> u64 {
-    let win_ms = (refresh_seconds.max(1)) * 1000;
-    (now_ms.max(0) / win_ms) as u64
+/// The seed key for a window that starts at `start_ms`: its start time.
+///
+/// Report #335: the key used to be the wall-clock-aligned 10-hour period
+/// (`start / refreshSeconds`). Retail windows start at the first visit, not on a
+/// wall-clock boundary, so a restock (`/auth/refreshloot`) or a reopen after a
+/// build completed usually fell in the same period as the window it replaced and
+/// re-rolled the identical catalog — same bundles, same quantities. Keyed on the
+/// start time, every window rolls its own stock.
+pub fn window_key(start_ms: i64) -> u64 {
+    start_ms.max(0) as u64
 }
 
 #[cfg(test)]
@@ -400,10 +406,14 @@ mod tests {
     fn enchanter_low_levels_keep_retails_locked_families_locked() {
         let cfg = load_committed();
         let ench = ty(ENCHANTER);
+        // Frost Salts used to be listed here as locked until level 3, and Emerald
+        // until level 6. Both rested on the June snapshot, which held no level-0
+        // Enchanter open and two level-5 ones. Prod's capture database holds six
+        // level-0 opens (two list Frost Salts) and five level-5 opens (two list an
+        // Emerald) (report #335).
         let locked = [
-            ("ec869ed3-e8ee-4aa2-9063-d6e12e7321cc", "Frost Salts", 3),
             ("3cb7b827-75f6-48f1-ae6b-47743e128e58", "Sapphire", 5),
-            ("c60c71e7-8bc3-4495-95c8-fbaee3c6860e", "Emerald", 6),
+            ("c60c71e7-8bc3-4495-95c8-fbaee3c6860e", "Emerald", 5),
             (
                 "01ada486-b642-43b2-8776-e444dbe9343e",
                 "Gold Emerald Ring",
@@ -648,7 +658,7 @@ mod tests {
             ALCHEMIST,
             9,
             "3059daf9-5d16-445d-8024-405dd988c433", // Blue Dartwing
-            21,
+            20,
             26,
         );
         assert_key_band(
@@ -691,11 +701,12 @@ mod tests {
 
     // ── Report #309: stock per building level, pinned to retail ────────────────
     //
-    // Every number below is a retail measurement from the 2026-06-07 capture
-    // snapshot, with each shop open labelled by its building's level from the
-    // latest town-bearing response (script/extract_shop_level_stock.py). All
-    // opens were of a building in the NORMAL state, and every catalog template
-    // maps to exactly one level.
+    // Every number below is a retail measurement from prod's capture database
+    // (retail traffic 2026-05-02..06-30; report #335 re-measured it, #309 had only
+    // the 2026-06-07 snapshot), with each shop open labelled by its building's
+    // level from the latest town-bearing response
+    // (script/extract_shop_level_stock.py). Every catalog template maps to exactly
+    // one level.
 
     const LUMBER: &str = "77bd02df-98c1-46f1-b170-1415bc6b51ae";
     const LIMESTONE: &str = "16b94858-6a39-4b53-b360-b944514407a8";
@@ -703,18 +714,19 @@ mod tests {
     /// Retail Workshop lumber and limestone per building level:
     /// `(level, lumber band, limestone band)`; `None` = retail never listed it.
     const RETAIL_WORKSHOP_STACKS: &[(u64, (u64, u64), Option<(u64, u64)>)] = &[
+        (0, (5, 10), Some((5, 15))),
         (2, (16, 16), None),
-        (3, (21, 22), Some((25, 25))),
-        (4, (28, 28), Some((27, 29))),
-        (5, (34, 38), Some((32, 35))),
+        (3, (20, 22), Some((22, 25))),
+        (4, (28, 30), Some((27, 30))),
+        (5, (30, 38), Some((32, 35))),
         (6, (40, 46), Some((40, 47))),
-        (7, (51, 58), Some((51, 52))),
+        (7, (51, 71), Some((50, 63))),
         (8, (78, 93), Some((99, 99))),
-        (9, (175, 200), Some((175, 199))),
+        (9, (175, 200), Some((175, 200))),
     ];
 
     /// The reported case: a level-4 Workshop offered one limestone. Retail's
-    /// level-4 Workshop listed 27-29.
+    /// level-4 Workshop listed 27-30.
     #[test]
     fn a_level_4_workshop_sells_limestone_by_the_stack_as_retail_did() {
         let cfg = load_committed();
@@ -729,13 +741,13 @@ mod tests {
             {
                 listed += 1;
                 assert!(
-                    (27..=29).contains(&b.quantity),
-                    "level-4 Workshop limestone {} (window {w}); retail listed 27..29",
+                    (27..=30).contains(&b.quantity),
+                    "level-4 Workshop limestone {} (window {w}); retail listed 27..30",
                     b.quantity
                 );
             }
         }
-        // Retail listed it in 2 of 2 level-4 catalogs.
+        // Retail listed it in 3 of 3 level-4 catalogs.
         assert!(
             listed >= 128,
             "level-4 Workshop listed limestone in only {listed}/256 windows"
@@ -760,7 +772,7 @@ mod tests {
                 "Workshop L{level} limestone"
             );
         }
-        // Levels 0-1 were never captured: they must still be smaller than level 2,
+        // Level 1 was never captured (level 0 is, six opens): both must still be smaller than level 2,
         // not the old 1..4 fallback and not bigger than an upgraded shop.
         let l2 = measured_band(measured_pool(&cfg, &ty(WORKSHOP), 2), lumber).unwrap();
         let mut prev = 0;
@@ -780,7 +792,7 @@ mod tests {
         }
     }
 
-    /// Retail's Workshop listed lumber and limestone in 21 of 21 level-9
+    /// Retail's Workshop listed lumber in 81 and limestone in 82 of 82 level-9
     /// catalogs. The pick weights are fitted so ours does too, near enough.
     #[test]
     fn a_level_9_workshop_nearly_always_lists_lumber_and_limestone() {
@@ -797,7 +809,7 @@ mod tests {
         }
         assert!(
             both * 100 >= n * 90,
-            "level-9 Workshop listed lumber and limestone together in {both}/{n} windows; retail 21/21"
+            "level-9 Workshop listed lumber and limestone together in {both}/{n} windows; retail 81/82"
         );
     }
 
@@ -805,9 +817,9 @@ mod tests {
     /// `[level 0..9]`, `0` = no retail open at that level.
     const RETAIL_CATALOG_LENGTH: [(&str, [usize; 10]); 4] = [
         (FORGE, [4, 5, 0, 6, 6, 7, 8, 9, 10, 11]),
-        (ENCHANTER, [0, 0, 4, 5, 5, 5, 5, 5, 5, 6]),
-        (WORKSHOP, [0, 0, 5, 5, 6, 6, 7, 7, 8, 8]),
-        (ALCHEMIST, [4, 0, 5, 6, 6, 6, 7, 7, 8, 8]),
+        (ENCHANTER, [4, 0, 4, 5, 5, 5, 5, 5, 5, 6]),
+        (WORKSHOP, [4, 0, 5, 5, 6, 6, 7, 7, 8, 8]),
+        (ALCHEMIST, [4, 5, 5, 6, 6, 6, 7, 7, 8, 8]),
     ];
 
     #[test]
@@ -856,8 +868,8 @@ mod tests {
             (
                 ENCHANTER,
                 2,
-                "ec869ed3-e8ee-4aa2-9063-d6e12e7321cc",
-                "Frost Salts (retail L3+)",
+                "337a0bbc-2408-49a9-9dca-598863bdd210",
+                "Amethyst (retail L3+)",
             ),
         ];
         for (type_id, level, bundle, what) in cases {
@@ -914,6 +926,131 @@ mod tests {
         );
     }
 
+    // ── Report #335: variety at the top level, pinned to retail ─────────────────
+    //
+    // Prod's capture database (retail traffic 2026-05-02..06-30) holds 507 level-9
+    // catalogs from the four merchants; the June snapshot #309 measured from held
+    // 91. Per merchant: catalogs opened, distinct bundles across them, and distinct
+    // bundle SETS (how many of those catalogs differed from every other).
+    const RETAIL_L9_VARIETY: [(&str, usize, usize, usize); 4] = [
+        (FORGE, 146, 52, 146),
+        (ENCHANTER, 171, 20, 170),
+        (WORKSHOP, 82, 34, 80),
+        (ALCHEMIST, 108, 42, 95),
+    ];
+
+    /// A level-9 merchant offers every bundle retail's level-9 merchant listed,
+    /// and its catalogs differ from one another as often as retail's did. The
+    /// June snapshot held 17 level-9 Alchemist catalogs and 23 distinct bundles,
+    /// so our pool lacked 19 of the bundles retail sold there.
+    #[test]
+    fn level_9_merchants_vary_their_stock_like_retail() {
+        let cfg = load_committed();
+        let shop = ty("4271dbf6-52bf-4fb0-85a7-3d5b69a35dab");
+        for (type_id, catalogs, bundles, distinct_sets) in RETAIL_L9_VARIETY {
+            let pool = measured_pool(&cfg, &ty(type_id), 9);
+            assert_eq!(
+                pool.len(),
+                bundles,
+                "{type_id} level-9 pool size vs retail's distinct bundles"
+            );
+
+            // Every pool bundle comes up within 40 retail-sized samples.
+            let mut listed = std::collections::HashSet::new();
+            for w in 0..(40 * catalogs as u64) {
+                listed.extend(
+                    generate_catalog(&cfg, &ty(type_id), 9, &shop, w)
+                        .into_iter()
+                        .map(|b| b.id),
+                );
+            }
+            assert_eq!(
+                listed.len(),
+                bundles,
+                "{type_id} level-9 never lists some pool bundles"
+            );
+
+            // As many distinct catalogs per retail-sized sample as retail had, give
+            // or take 10 points (retail's own sample is one draw).
+            let mut sets = std::collections::HashSet::new();
+            for w in 0..catalogs as u64 {
+                let mut ids: Vec<Uuid> = generate_catalog(&cfg, &ty(type_id), 9, &shop, w)
+                    .into_iter()
+                    .map(|b| b.id)
+                    .collect();
+                ids.sort();
+                sets.insert(ids);
+            }
+            assert!(
+                sets.len() * 100 >= distinct_sets * 100 - catalogs * 10,
+                "{type_id} level 9: {} distinct catalogs in {catalogs}; retail {distinct_sets}",
+                sets.len()
+            );
+        }
+    }
+
+    const HEALTH_T8: &str = "ec0c90cf-7af6-407a-889a-65c03bc317a1";
+    const MAGICKA_T8: &str = "c7ca5ee2-2e59-45b3-b512-82915b3e7ff3";
+    const STAMINA_T8: &str = "814f52c4-0285-4414-9d21-24ba2ff45a20";
+    const MAGICKA_T9: &str = "ee0ef15a-d2f4-46f2-865b-399ff7a91c21";
+    const STAMINA_T9: &str = "86b3d8a7-16ea-4db5-a2a2-85db62c4ed22";
+    /// The one shop bundle holding a lone Health T9 potion. Retail's Alchemist
+    /// never listed it; T9/T10 healing came in the gem store's revive packs.
+    const HEALTH_T9: &str = "e0ffce3a-5180-4cbe-b5d4-1ac8a7755970";
+
+    /// The report: a level-9 Alchemist never offered the two highest potion tiers.
+    /// Neither did retail's, mostly. Of 108 retail level-9 Alchemist catalogs (22
+    /// characters), 4 listed a T9 restoration potion (Magicka T9 3, Stamina T9 1),
+    /// none listed Health T9, and none listed any T10. Every one listed Health T8
+    /// (2-4 of them); Magicka T8 19/108, Stamina T8 12/108.
+    #[test]
+    fn a_level_9_alchemist_sells_top_tier_potions_at_retails_rate() {
+        let cfg = load_committed();
+        let alch = ty(ALCHEMIST);
+        let pool = measured_pool(&cfg, &alch, 9);
+        for id in [MAGICKA_T9, STAMINA_T9] {
+            assert!(
+                measured_band(pool, ty(id)).is_some(),
+                "level-9 Alchemist pool lacks {id}"
+            );
+        }
+        assert!(
+            measured_band(pool, ty(HEALTH_T9)).is_none(),
+            "retail never listed a lone Health T9"
+        );
+
+        let shop = ty("523dcee9-677e-4c70-8efd-a5d02b099eed");
+        let n = 10_800u64;
+        let rate = |ids: &[&str]| {
+            let ids: Vec<Uuid> = ids.iter().map(|s| ty(s)).collect();
+            (0..n)
+                .filter(|w| {
+                    generate_catalog(&cfg, &alch, 9, &shop, *w)
+                        .iter()
+                        .any(|b| ids.contains(&b.id))
+                })
+                .count() as f64
+                / n as f64
+        };
+        let within = |what: &str, got: f64, retail: f64, slack: f64| {
+            assert!(
+                (got - retail).abs() <= slack,
+                "level-9 Alchemist lists {what} in {:.1}% of catalogs; retail {:.1}%",
+                got * 100.0,
+                retail * 100.0
+            );
+        };
+        within(
+            "a T9 restoration potion",
+            rate(&[MAGICKA_T9, STAMINA_T9]),
+            4.0 / 108.0,
+            0.025,
+        );
+        within("Health T8", rate(&[HEALTH_T8]), 1.0, 0.03);
+        within("Magicka T8", rate(&[MAGICKA_T8]), 19.0 / 108.0, 0.06);
+        within("Stamina T8", rate(&[STAMINA_T8]), 12.0 / 108.0, 0.05);
+    }
+
     #[test]
     fn empty_config_yields_empty_stock_no_panic() {
         let cfg = ShopStockConfig::default();
@@ -964,12 +1101,52 @@ mod tests {
         assert_eq!(uniq.len(), out.len(), "no duplicate bundles in a catalog");
     }
 
+    /// One window's catalog as comparable `(bundle, quantity)` pairs.
+    fn roll(
+        cfg: &ShopStockConfig,
+        type_id: &Uuid,
+        level: u64,
+        shop: &Uuid,
+        key: u64,
+    ) -> Vec<(Uuid, u64)> {
+        generate_catalog(cfg, type_id, level, shop, key)
+            .into_iter()
+            .map(|b| (b.id, b.quantity))
+            .collect()
+    }
+
+    /// Report #335: a restock minutes after a window opened must roll new stock.
+    /// Under the old key (the wall-clock 10-hour period) both windows below fell in
+    /// the same period and rolled the identical catalog; the control asserts that.
     #[test]
-    fn window_index_advances_with_time() {
-        assert_eq!(window_index(0, 3600), 0);
-        assert_eq!(window_index(3_600_000 - 1, 3600), 0);
-        assert_eq!(window_index(3_600_000, 3600), 1);
-        assert_eq!(window_index(7_200_000, 3600), 2);
+    fn a_restock_minutes_later_rolls_new_stock() {
+        let cfg = load_committed();
+        let alch = ty(ALCHEMIST);
+        let shop = ty("4271dbf6-52bf-4fb0-85a7-3d5b69a35dab");
+        let opened: i64 = 1_791_084_464_258; // a level-9 Alchemist window on prod
+        let restock = opened + 5 * 60 * 1000;
+        let ten_hours = 36_000_000;
+
+        // Control: the old key gave both windows the same seed, hence the same stock.
+        assert_eq!(opened / ten_hours, restock / ten_hours);
+        assert_eq!(
+            roll(&cfg, &alch, 9, &shop, (opened / ten_hours) as u64),
+            roll(&cfg, &alch, 9, &shop, (restock / ten_hours) as u64),
+        );
+
+        // Fix: across 64 restocks five minutes apart, no two consecutive windows
+        // carry the same catalog (bundles AND quantities).
+        let mut same = 0;
+        for i in 0..64 {
+            let a = opened + i * 300_000;
+            let b = a + 300_000;
+            if roll(&cfg, &alch, 9, &shop, window_key(a))
+                == roll(&cfg, &alch, 9, &shop, window_key(b))
+            {
+                same += 1;
+            }
+        }
+        assert_eq!(same, 0, "{same}/64 restocks re-served the previous catalog");
     }
 
     /// EVERY shop stocks its OWN merchant's goods.

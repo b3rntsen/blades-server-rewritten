@@ -27,8 +27,9 @@ Every capture response that carries a town (`GET /towns/current`,
 the character's last known state of each building, in timestamp order. Each
 `POST /shops/{id}` that opens a catalog is labelled with the building's level
 from that state. Every retail open in the snapshot found its building in the
-`NORMAL` state (none mid-upgrade), and every catalog template maps to exactly
-one level, which is checked below rather than assumed.
+`NORMAL` state (none mid-upgrade; prod's data adds two UPGRADING opens, which
+are skipped), and every catalog template maps to exactly one level, which is
+checked below rather than assumed.
 
 Note on the wire: retail raises a building's `level` when the upgrade STARTS
 (state `UPGRADING`); `/complete` only clears the state. A town fetched during an
@@ -50,12 +51,25 @@ are derived from the neighbouring measured levels and marked so in `_source`.
 
 Reproduce
 ---------
-  python3 script/extract_shop_level_stock.py \\
-      --db "$HOME/blades-prod-backups/20260607-112415/blades-snapshot-20260607-112415.db" \\
+Report #335 re-measured everything from prod's capture database, which holds
+retail traffic to 2026-06-30 (three weeks past the June snapshot #309 used:
+663 labelled catalogs instead of about 200; 108 level-9 Alchemist catalogs
+instead of 17). Its bodies sit in a second database, so the read runs on the
+box and the weight fit (CPU-heavy, about 40 s) runs elsewhere:
+
+  # on the box, read-only
+  sudo python3 extract_shop_level_stock.py \\
+      --db /var/lib/newblades/db/blades.db \\
+      --archive /var/lib/newblades/db/blades-archive.db \\
+      --dump-cells /tmp/shop-cells.json
+  # locally
+  python3 script/extract_shop_level_stock.py --cells shop-cells.json \\
       --stock deploy/static/shop_stock.json --write
 
-The snapshot is the 2026-06-07 copy of the capture database with response
-bodies inline (table `api_captures`). It is opened read-only.
+`--db` alone still reads a snapshot with bodies inline (table `api_captures`),
+e.g. the 2026-06-07 copy. Databases are opened read-only. Only
+`https://blades.bgs.services/` rows count: prod's table also holds our own
+server's responses from August.
 """
 
 from __future__ import annotations
@@ -83,16 +97,28 @@ SHOP_OPEN = re.compile(r"/characters/([0-9a-f-]{36})/shops/([0-9a-f-]{36})$")
 TOWN_URL = re.compile(r"/characters/([0-9a-f-]{36})/towns/current")
 
 
-def load_rows(db: str):
+def load_rows(db: str, archive: str | None = None):
+    """Retail shop opens and town-bearing responses, oldest first, streamed.
+
+    `archive` is the prod layout: `api_captures` keeps no bodies and they live in
+    a second database, `capture_bodies(capture_id PRIMARY KEY, response_body)`.
+    Only retail traffic counts: the prod table also holds our own server's
+    responses (`http://127.0.0.1:8087/...`), which must never measure retail.
+    """
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    rows = con.execute(
-        """select id, timestamp, url, response_status, response_body from api_captures
-           where (url like '%/shops/%' or url like '%/towns/current%')
-             and url not like '%/social/%' and response_status = 200
-           order by timestamp, id"""
-    ).fetchall()
+    if archive:
+        con.execute("attach database ? as ar", (f"file:{archive}?mode=ro",))
+        body_col = "coalesce(a.response_body, (select b.response_body from ar.capture_bodies b where b.capture_id = a.id))"
+    else:
+        body_col = "a.response_body"
+    yield from con.execute(
+        f"""select a.id, a.timestamp, a.url, a.response_status, {body_col} from api_captures a
+           where (a.url like '%/shops/%' or a.url like '%/towns/current%')
+             and a.url not like '%/social/%' and a.url like 'https://blades.bgs.services/%'
+             and a.response_status = 200
+           order by a.timestamp, a.id"""
+    )
     con.close()
-    return rows
 
 
 def body(raw):
@@ -119,10 +145,17 @@ def walk_buildings(node, out):
 
 
 def measure(rows):
-    """{(typeId, level): {catalogId: catalog}} plus the template->levels check."""
+    """{(typeId, level): {catalogId: catalog}} plus the template->levels check.
+
+    A catalog can be re-opened after a town fetch this capture never saw (the
+    player upgraded on another device, or between captured sessions), so the same
+    catalog id can carry two labels. The later open saw the fresher town, so the
+    catalog keeps its LAST label: one Forge catalog was opened under a level-3 town
+    fetched fifteen hours earlier and again, minutes later, under a fresh level-4
+    town, and its template is level 4's in every other open.
+    """
     state = {}
-    cells = collections.defaultdict(dict)
-    template_levels = collections.defaultdict(set)
+    label = {}
     states = collections.Counter()
     for _id, _ts, url, _st, raw in rows:
         path = url.split("?")[0]
@@ -137,15 +170,18 @@ def measure(rows):
             states[known.get("state")] += 1
             if known.get("state") != "NORMAL":
                 continue
-            level = int(known.get("level", 0))
             cat = j["catalog"]
-            cells[(known["typeId"], level)][cat["id"]] = cat
-            template_levels[(known["typeId"], cat["templateId"])].add(level)
+            label[cat["id"]] = (known["typeId"], int(known.get("level", 0)), cat)
             continue
         t = TOWN_URL.search(path)
         if t and isinstance(j, dict):
             for bid, b in walk_buildings(j.get("town", j), {}).items():
-                state[(t.group(1), bid)] = b
+                state[(t.group(1), bid)] = {k: b.get(k) for k in ("typeId", "level", "state")}
+    cells = collections.defaultdict(dict)
+    template_levels = collections.defaultdict(set)
+    for cid, (type_id, level, cat) in label.items():
+        cells[(type_id, level)][cid] = cat
+        template_levels[(type_id, cat["templateId"])].add(level)
     bad = {k: v for k, v in template_levels.items() if len(v) != 1}
     if bad:
         sys.exit(f"a catalog template maps to more than one level: {bad}")
@@ -280,12 +316,31 @@ def band(base: float):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--db", required=True)
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--db", help="capture database (api_captures)")
+    src.add_argument("--cells", help="measured cells written earlier by --dump-cells")
+    ap.add_argument("--dump-cells", help="write the measured cells here and stop (run the cheap read on the box, fit the weights elsewhere)")
+    ap.add_argument("--archive", help="prod layout: the database holding capture_bodies")
     ap.add_argument("--stock", default="deploy/static/shop_stock.json")
     ap.add_argument("--write", action="store_true")
     args = ap.parse_args()
 
-    cells, states = measure(load_rows(args.db))
+    if args.cells:
+        with open(args.cells) as f:
+            dumped = json.load(f)
+        cells = {(k.split("|")[0], int(k.split("|")[1])): v for k, v in dumped["cells"].items()}
+        states = dumped["states"]
+    else:
+        cells, states = measure(load_rows(args.db, args.archive))
+    if args.dump_cells:
+        slim = {
+            f"{t}|{l}": {cid: {k: c.get(k) for k in ("id", "templateId", "bundles", "wallet")} for cid, c in cats.items()}
+            for (t, l), cats in cells.items()
+        }
+        with open(args.dump_cells, "w") as f:
+            json.dump({"cells": slim, "states": dict(states)}, f)
+        print(f"wrote {sum(len(v) for v in slim.values())} catalogs in {len(slim)} cells to {args.dump_cells}")
+        return
     with open(args.stock) as f:
         stock = json.load(f)
 
@@ -374,8 +429,8 @@ def main():
                     }
 
     stock["_meta"]["_generation"]["levelPoolsSource"] = (
-        "script/extract_shop_level_stock.py (report #309): each retail shop open labelled with its building's level "
-        "from the latest town-bearing response (towns/current, upgrade, complete, styles, buildings); "
+        "script/extract_shop_level_stock.py (reports #309, #335; prod capture DB, retail traffic to 2026-06-30): each retail shop open labelled with its building's level "
+        "from the latest town-bearing response (towns/current, upgrade, complete, styles, buildings), a re-opened catalog keeping its last label; "
         f"open states seen {dict(states)}; one template per level verified."
     )
     print("\n".join(report))
