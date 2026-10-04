@@ -1222,6 +1222,34 @@ pub struct EventQuestTemplate {
     /// (`"0".."4"`). Every one of the 39 committed templates has all five observed.
     #[serde(default)]
     pub payable_rewards: HashMap<String, PayableTier>,
+    /// Retail's ladder per character LEVEL BAND, lowest band first (report #333).
+    ///
+    /// Retail minted every instance with the `rewards[]` + `finalReward` of the
+    /// character's band at that moment, and the instance kept it: two captured
+    /// instances minted at level 24 and finished at 26 paid band 2. Sigils, gold,
+    /// materials and the final bonus all scale together. `rewards[]` above is one
+    /// band picked by observation count, so without these a level-57 character was
+    /// paid whatever band happened to be captured most.
+    #[serde(default)]
+    pub level_bands: Vec<EventLevelBand>,
+}
+
+/// One level band of an event template: what an instance minted for a character of
+/// at least `min_level` (and below the next band's) shows and pays.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventLevelBand {
+    #[serde(default)]
+    pub min_level: i64,
+    /// The five milestones in wire form, as retail's instance carried them.
+    #[serde(default)]
+    pub rewards: Vec<crate::economy::RewardGrant>,
+    #[serde(default)]
+    pub final_reward: Option<crate::economy::RewardGrant>,
+    /// Provenance: `instancesObserved` + `alternatives` for a captured band,
+    /// `derived` + `note` for one the corpus never showed for this template.
+    #[serde(default, rename = "_meta", skip_serializing_if = "Value::is_null")]
+    pub meta: Value,
 }
 
 impl EventQuestTemplate {
@@ -1244,6 +1272,36 @@ impl EventQuestTemplate {
     /// How many times an instance of this quest can be completed.
     pub fn milestone_count(&self) -> usize {
         self.rewards.len().max(self.payable_rewards.len())
+    }
+
+    /// The band a character of `level` is minted at: the highest band whose
+    /// `min_level` it has reached, or the lowest band below every threshold.
+    /// `None` for a template without bands.
+    pub fn band_for_level(&self, level: i64) -> Option<&EventLevelBand> {
+        self.level_bands
+            .iter()
+            .filter(|b| b.min_level <= level && !b.rewards.is_empty())
+            .max_by_key(|b| b.min_level)
+            .or_else(|| {
+                self.level_bands
+                    .iter()
+                    .filter(|b| !b.rewards.is_empty())
+                    .min_by_key(|b| b.min_level)
+            })
+    }
+
+    /// The `rewards[]` an instance minted for a character of `level` carries.
+    pub fn rewards_for_level(&self, level: i64) -> Vec<crate::economy::RewardGrant> {
+        self.band_for_level(level)
+            .map_or_else(|| self.rewards.clone(), |b| b.rewards.clone())
+    }
+
+    /// The `finalReward` an instance minted for a character of `level` carries.
+    pub fn final_reward_for_level(&self, level: i64) -> Option<crate::economy::RewardGrant> {
+        match self.band_for_level(level) {
+            Some(b) => b.final_reward.clone(),
+            None => self.final_reward.clone(),
+        }
     }
 }
 

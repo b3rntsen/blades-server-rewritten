@@ -2135,9 +2135,25 @@ pub(crate) fn event_milestone_reward(
         );
         return None;
     };
-    let mut reward = tmpl.payout(completion)?;
-    if completion + 1 == tmpl.milestone_count() {
-        if let Some(final_reward) = &tmpl.final_reward {
+    // The instance's OWN ladder first (report #333): retail minted each instance with
+    // the rewards of the character's level band and paid exactly that, so the row
+    // carries it — and it is what the client has been showing the player. Only a row
+    // without one falls back to the template.
+    let (mut reward, final_reward, milestones) =
+        match quest.rewards.as_deref().filter(|r| !r.is_empty()) {
+            Some(ladder) => (
+                ladder.get(completion)?.clone(),
+                quest.final_reward.as_ref(),
+                ladder.len(),
+            ),
+            None => (
+                tmpl.payout(completion)?,
+                tmpl.final_reward.as_ref(),
+                tmpl.milestone_count(),
+            ),
+        };
+    if completion + 1 == milestones {
+        if let Some(final_reward) = final_reward {
             if !reward_already_carries(&reward, final_reward) {
                 merge_reward(&mut reward, final_reward);
             }
@@ -4596,9 +4612,11 @@ pub(crate) mod event_quests {
         quest.game_event_quest_data = Some(GameEventQuestData {
             game_event_instance_id: instance_id,
         });
+        // The ladder of the character's level band, fixed for the instance's
+        // lifetime as retail fixed it (report #333).
         if let Some(tmpl) = static_data.event_quests.templates.get(&def.quest_id) {
-            quest.rewards = Some(tmpl.rewards.clone());
-            quest.final_reward = tmpl.final_reward.clone();
+            quest.rewards = Some(tmpl.rewards_for_level(player_level));
+            quest.final_reward = tmpl.final_reward_for_level(player_level);
         }
         Some(MintedEventQuest {
             quest_id,
@@ -6153,6 +6171,154 @@ mod event_quest_tests {
             let retail: RewardGrant = serde_json::from_str(retail).unwrap();
             assert_eq!(paid, retail, "capture {capture} ({gld}): final tier");
         }
+    }
+
+    const SIGIL: &str = "c64bcb53-41f4-41ba-892a-fe2cca423caa";
+
+    /// Retail's sigil ladder per level band, keyed by the event's first-tier sigil
+    /// count (its "family"). Measured 2026-10-04 over every captured event instance
+    /// (snapshot 20260607 + prod `api_captures`): no captured ladder falls outside
+    /// this table, and each row matches the character's level — band 1 at levels
+    /// 10-15, band 2 at 17-25, band 3 at 26-35, band 4 at 37-43, band 5 at 48-100.
+    /// Family 5's band 1 was never captured.
+    const RETAIL_SIGIL_BANDS: &[(u64, [Option<[u64; 5]>; 5])] = &[
+        (1, [Some([1, 2, 5, 7, 10]), Some([1, 3, 6, 9, 12]), Some([1, 4, 7, 11, 16]), Some([1, 4, 8, 12, 18]), Some([1, 4, 9, 14, 22])]),
+        (3, [Some([3, 4, 7, 10, 15]), Some([3, 6, 9, 12, 16]), Some([3, 6, 9, 15, 21]), Some([3, 6, 10, 16, 24]), Some([3, 6, 12, 18, 27])]),
+        (4, [Some([4, 5, 8, 12, 17]), Some([4, 6, 10, 14, 20]), Some([4, 7, 11, 17, 24]), Some([4, 7, 12, 19, 29]), Some([4, 8, 14, 22, 34])]),
+        (5, [None, Some([5, 8, 12, 18, 26]), Some([5, 8, 14, 21, 32]), Some([5, 9, 15, 24, 37]), Some([5, 9, 16, 27, 43])]),
+    ];
+
+    fn sigils_paid(r: &RewardGrant) -> u64 {
+        let id: Uuid = SIGIL.parse().unwrap();
+        r.currencies.get(&id).copied().unwrap_or(0) + r.stackable_items.get(&id).copied().unwrap_or(0)
+    }
+
+    /// Every event row minted for a character of `level` over 50 days of the
+    /// calendar, with the sigils each of its five completions pays.
+    fn sigils_by_event_at(level: i64) -> std::collections::BTreeMap<Uuid, Vec<u64>> {
+        let (sd, gd) = (static_data(), game_data());
+        let mut out = std::collections::BTreeMap::new();
+        for day in 0..50 {
+            for m in event_quests::mint(&sd, &gd, CHAR, level, NOW + day * 86_400) {
+                out.entry(m.quest.gld_quest_id).or_insert_with(|| {
+                    (0..5)
+                        .map(|n| {
+                            event_milestone_reward(&sd, m.quest_id, &m.quest, n)
+                                .map_or(0, |r| sigils_paid(&r))
+                        })
+                        .collect()
+                });
+            }
+        }
+        out
+    }
+
+    /// Report #333: "Events are not awarding max sigils to my level 57 character."
+    /// On prod his level-57 character was paid 4/6/10/14/20 for The Seventh Seal
+    /// (7486296a) — band 2, a level 16-25 ladder. Retail paid level 46+ the top
+    /// band of every event; a level-10 character the bottom one.
+    #[test]
+    fn report_333_events_pay_the_sigil_band_of_the_characters_level() {
+        let family = |paid: &[u64]| RETAIL_SIGIL_BANDS.iter().find(|(f, _)| *f == paid[0]);
+        for (level, band) in [(57i64, 4usize), (10, 0)] {
+            let paid = sigils_by_event_at(level);
+            assert!(paid.len() >= 30, "level {level}: only {} events minted", paid.len());
+            let mut wrong = Vec::new();
+            let mut checked = 0;
+            for (gld, ladder) in &paid {
+                let (_, bands) = family(ladder).unwrap_or_else(|| panic!("{gld}: family {ladder:?}"));
+                let Some(want) = bands[band] else { continue };
+                checked += 1;
+                if ladder[..] != want[..] {
+                    wrong.push(format!("{gld}: paid {ladder:?}, retail {want:?}"));
+                }
+            }
+            assert!(checked >= 30, "level {level}: checked {checked}");
+            assert!(wrong.is_empty(), "level {level}, {} of {checked} events:\n{}", wrong.len(), wrong.join("\n"));
+        }
+    }
+
+    /// Identity test for the shipped data: every band of every template pays its
+    /// family's retail sigil ladder, in order, with the measured thresholds.
+    #[test]
+    fn report_333_every_shipped_band_is_a_retail_sigil_band() {
+        let sd = static_data();
+        for (gld, tmpl) in &sd.event_quests.templates {
+            let mins: Vec<i64> = tmpl.level_bands.iter().map(|b| b.min_level).collect();
+            assert_eq!(mins, [1, 16, 26, 36, 46], "{gld}");
+            let fam = sigils_paid(&tmpl.level_bands[4].rewards[0]);
+            let (_, rows) = RETAIL_SIGIL_BANDS.iter().find(|(f, _)| *f == fam).expect("family");
+            for (i, band) in tmpl.level_bands.iter().enumerate() {
+                let got: Vec<u64> = band.rewards.iter().map(sigils_paid).collect();
+                match rows[i] {
+                    Some(want) => assert_eq!(got, want, "{gld} band {}", i + 1),
+                    // Family 5's band 1 is not known; it stays at band 2's.
+                    None => assert_eq!(Some(got.as_slice()), rows[i + 1].as_ref().map(|r| &r[..]), "{gld} band 1"),
+                }
+            }
+        }
+    }
+
+    /// The band boundaries: 16, 26, 36, 46. 25 -> 26 is pinned by one character's
+    /// consecutive mints; the others sit inside the measured gaps.
+    #[test]
+    fn report_333_band_thresholds() {
+        let sd = static_data();
+        let tmpl = &sd.event_quests.templates[&"7486296a-335a-4b46-aee1-5102090ce34f".parse::<Uuid>().unwrap()];
+        let first_tier = |level| sigils_paid(&tmpl.rewards_for_level(level)[4]);
+        for (level, want) in [(0, 17), (1, 17), (15, 17), (16, 20), (25, 20), (26, 24), (35, 24), (36, 29), (45, 29), (46, 34), (57, 34), (100, 34)] {
+            assert_eq!(first_tier(level), want, "level {level}");
+        }
+    }
+
+    /// Retail fixed the ladder when it minted the instance: two of these were minted
+    /// at level 24 and finished at 26, and paid band 2. These are the 13 captured
+    /// final-tier `/complete` rewards of #324 again, each against a row minted at the
+    /// level its character had when the instance first appears in the corpus.
+    #[test]
+    fn report_333_an_instance_pays_the_band_it_was_minted_at() {
+        let sd = static_data();
+        let cases: &[(u32, i64, &str, &str)] = &[
+            (1928, 86, "a846b491-b439-447d-a8a1-9c2611522610", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":27,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":63000},"stackableItems":{"bafe6ed5-6473-4a4c-aef5-421d3af5c8cb":5}}"#),
+            (14396, 10, "0dd37f6b-28ad-4cb7-8e12-2ebbf43fb366", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":15},"stackableItems":{"b74a5c55-a687-4604-aa59-ba3ddfddcd2a":96}}"#),
+            (27198, 19, "26eb6ab5-2d8c-4993-820e-ada79f6f00a8", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":20},"stackableItems":{"19ce1a65-057f-4f34-a0ed-27de7c085662":5}}"#),
+            (34025, 22, "2d1200ee-ecb8-4ea6-9892-54d1f538d83d", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"f11fb90b-b441-4d72-a33f-50d14d3d6778":140,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":216}}"#),
+            (36532, 23, "816ff4c8-b56f-4645-bd2a-29bc7c1baf96", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":16,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":25200}}"#),
+            (38669, 24, "a85408a6-7107-433d-b616-50105080574e", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5":3,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":216}}"#),
+            (39364, 24, "f4023a38-195a-4977-bfbc-f443a257566f", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":20,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":38000},"stackableItems":{"21e6557f-17ca-4bd3-9379-00184efe0edc":24}}"#),
+            (40877, 26, "a008cbbc-a164-4183-8b69-470ac8cd5707", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":15,"c64bcb53-41f4-41ba-892a-fe2cca423caa":21},"stackableItems":{"e7193116-d761-479b-8a20-5633737977f5":410}}"#),
+            (43620, 86, "2290ab73-8f56-4dba-a4f0-7a23270eb93c", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":22},"stackableItems":{"e7193116-d761-479b-8a20-5633737977f5":372,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":560}}"#),
+            (48242, 28, "9181f784-9eb8-4872-953d-30ba8b6bc9d1", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":32},"stackableItems":{"16e102fb-b1c0-42de-8106-0aa27e77f7f0":3,"85ed5500-3581-4699-8095-4b5ff6514355":96}}"#),
+            (49507, 28, "a1aafdc9-a35c-45c9-89f6-27f7d3a628e6", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"1c5c5ce3-178b-4938-89f3-faf3fa7f0664":24,"e7193116-d761-479b-8a20-5633737977f5":410}}"#),
+            (52104, 29, "cd66c93c-5086-4311-b0f6-e90af54099b2", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":24},"stackableItems":{"790a188b-3fa0-4f38-99d9-bc8d3675bc46":5}}"#),
+            (62711, 30, "01121c2f-6806-4b8c-998e-adc5d0e21db7", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"16e102fb-b1c0-42de-8106-0aa27e77f7f0":3,"e7193116-d761-479b-8a20-5633737977f5":276}}"#),
+        ];
+        let mut wrong = Vec::new();
+        for (capture, minted_at, gld, retail) in cases {
+            let gld: Uuid = gld.parse().unwrap();
+            let tmpl = &sd.event_quests.templates[&gld];
+            let mut row = quest(gld);
+            row.rewards = Some(tmpl.rewards_for_level(*minted_at));
+            row.final_reward = tmpl.final_reward_for_level(*minted_at);
+            // Finished two levels later: the row's band still decides.
+            let paid = event_milestone_reward(&sd, Uuid::from_u128(0xE7), &row, 4).expect("last tier pays");
+            let retail: RewardGrant = serde_json::from_str(retail).unwrap();
+            // A band captured with more than one payload differs only in the
+            // seasonally rotated material (9181f784 band 3: 1 instance each way);
+            // there the currencies and XP must still be retail's.
+            let band = tmpl.band_for_level(*minted_at).expect("bands shipped");
+            let rotated = band.meta["alternatives"].as_u64().unwrap_or(0) > 0;
+            let same = if rotated {
+                (&paid.currencies, paid.character_xp) == (&retail.currencies, retail.character_xp)
+            } else {
+                paid == retail
+            };
+            if !same {
+                wrong.push(format!("capture {capture} ({gld}, minted at {minted_at}): paid {}, retail {}",
+                    serde_json::to_string(&paid).unwrap(), serde_json::to_string(&retail).unwrap()));
+            }
+        }
+        assert!(wrong.is_empty(), "{} of {}:\n{}", wrong.len(), cases.len(), wrong.join("\n"));
     }
 
     /// No event milestone may grant gold, sigils or gems as a backpack item:
