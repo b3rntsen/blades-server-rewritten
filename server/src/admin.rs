@@ -4026,9 +4026,15 @@ mod tests {
     #[test]
     fn a_season_starts_when_it_goes_live_not_when_it_was_scheduled() {
         // NBS-2: scheduled 21:14:40, activated 16:10:04 — early.
-        assert_eq!(activated_starts_at(1_791_148_480, 1_791_130_204), 1_791_130_204);
+        assert_eq!(
+            activated_starts_at(1_791_148_480, 1_791_130_204),
+            1_791_130_204
+        );
         // Activated after its scheduled start — late.
-        assert_eq!(activated_starts_at(1_791_148_480, 1_791_150_000), 1_791_150_000);
+        assert_eq!(
+            activated_starts_at(1_791_148_480, 1_791_150_000),
+            1_791_150_000
+        );
     }
 
     #[test]
