@@ -1814,16 +1814,18 @@ async fn handle_event_dungeon_entry(
     // event already dropped. Without that the counter is a lifetime total against
     // per-window tiers, so finishing an event locks the player out of it for ever.
     let mut completion = event_completion_in_window(conn, sd, character_id, quest_id, now).await?;
-    // The character's own record of how many tiers it has finished is the
-    // `completedQuests` entry the client draws its checkmarks from, and it travels
-    // with the character. A server counter AHEAD of it is not this character's
-    // progress: it is another alt's, left on the shared character id (#334), or a
-    // row that outlived the character it counted. Refusing on it is the 403
-    // "already completed" for an event the game shows as untouched; the
-    // character's own record wins and the counter is brought back to it.
+    // The character's own record of how many tiers of THIS window's instance it
+    // has finished is the `completedQuests` entry the client draws its checkmarks
+    // from, and it travels with the character. A counter that disagrees is not
+    // this character's: another alt's, left on the shared character id (#334) —
+    // refusing on it was the 403 "already completed" for an event the game showed
+    // as untouched — or missing because the alt arrived without its event rows,
+    // which would pay its finished tiers again. The character's record wins.
     let own_tiers = own_event_tiers(conn, character_id, instance_quest_id).await?;
-    if i64::from(completion.completion_count) > own_tiers {
-        completion.reconcile_down_to(conn, own_tiers as i32).await?;
+    if i64::from(completion.completion_count) != own_tiers {
+        completion
+            .reconcile_to(conn, own_tiers.min(i64::from(i32::MAX)) as i32)
+            .await?;
     }
     let completion_count = completion.completion_count as usize;
     let enemy_level = difficulty_level.max(1);
@@ -3324,6 +3326,30 @@ mod event_run_lifecycle_db {
         .id;
         crate::admin::apply_restore(&mut conn, a_version).await.expect("restore");
         assert_eq!(completions(&mut conn, &p).await, 1, "A's counter is back");
+    }
+
+
+    /// The other direction: an alt that arrived without its event rows (a version
+    /// kept before they were parked) but whose own record says every tier of this
+    /// window is done is still done. Fresh rows must not pay those tiers again.
+    #[tokio::test]
+    async fn an_alt_without_event_rows_but_a_finished_record_is_not_paid_again() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        let tiers = tiers_of(&p);
+        diesel::sql_query(
+            "UPDATE characters SET character = jsonb_set(character, '{completedQuests}', \
+               jsonb_build_object($2::text, $3::int)) WHERE id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(p.character)
+        .bind::<diesel::sql_types::Text, _>(p.instance.to_string())
+        .bind::<diesel::sql_types::Integer, _>(tiers as i32)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        let refused = enter(&mut conn, &p, Some("INSTANCE")).await.unwrap_err();
+        assert_eq!(refused.status_code().as_u16(), 403, "finished, as the game shows it");
+        assert_eq!(completions(&mut conn, &p).await as usize, tiers);
     }
 
 }

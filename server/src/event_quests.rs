@@ -327,31 +327,44 @@ impl EventCompletion {
         Ok(())
     }
 
-    /// Bring the counter back to `count` — the character's own record — when it
-    /// is ahead of it (report #334). Leaves `last_completed_at` alone: the window
-    /// it belongs to has not changed.
-    pub async fn reconcile_down_to(
+    /// Set the counter to `count` — the character's own record of this window's
+    /// instance — when the two disagree (report #334).
+    ///
+    /// Down: the counter is another alt's, left on the shared character id.
+    /// Up: the character arrived without its event rows (a version kept before
+    /// they were parked) but its own record says it has finished tiers; leaving
+    /// the counter at 0 would pay those tiers a second time. Raising also stamps
+    /// `last_completed_at`, so the window reset does not zero it again on the
+    /// next read — the record being matched is this window's by construction (the
+    /// instance id it is keyed by is minted per window).
+    pub async fn reconcile_to(
         &mut self,
         conn: &mut AsyncPgConnection,
         count: i32,
     ) -> Result<(), BladeApiError> {
         use crate::schema::event_completions::dsl::*;
 
-        if self.completion_count <= count {
+        if self.completion_count == count {
             return Ok(());
         }
         log::warn!(
             "event {}: character {} counter at {} but its own completedQuests says {} — \
-             the counter is not this character's (another alt's, #334); using {}",
+             the counter is not this character's (alt switch, #334); using {}",
             self.event_id,
             self.character_id,
             self.completion_count,
             count,
             count,
         );
+        if count > self.completion_count {
+            self.last_completed_at = chrono::Utc::now().naive_utc();
+        }
         self.completion_count = count;
         diesel::update(event_completions.filter(id.eq(self.id)))
-            .set(completion_count.eq(count))
+            .set((
+                completion_count.eq(count),
+                last_completed_at.eq(self.last_completed_at),
+            ))
             .execute(conn)
             .await?;
         Ok(())
