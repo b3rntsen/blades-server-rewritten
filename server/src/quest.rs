@@ -2237,11 +2237,9 @@ fn resolve_completion_reward(
         // Rows rolled before `job_reward` existed carry None. The board is re-rolled
         // at every daily reset, so this heals itself within a day; until it does,
         // pay the XP the difficulty implies rather than nothing. No gold: the count
-        // was a per-job roll and is not recoverable from the row.
-        let xp = static_data
-            .quests_daily
-            .level_scaling
-            .given_xp(quest.difficulty_level.max(1));
+        // was a per-job roll and is not recoverable from the row. The XP is: retail
+        // fixes it by difficulty (#337). This paid ONE enemy's kill XP before.
+        let xp = jobs_gen::job_reward_xp(quest.difficulty_level);
         log::info!(
             "[quest] job {quest_id} predates jobSetup reward capture — paying {xp} xp, no gold"
         );
@@ -3356,13 +3354,42 @@ pub(crate) mod jobs_gen {
     //
     // The previous constants (15 and 30, invented) underpaid XP by about a fifth
     // and overpaid gold by about half.
-    /// XP per point of `difficultyLevel`.
-    const XP_PER_DIFFICULTY: u64 = 19;
-    /// XP a difficulty-0 job would pay — the fitted intercept.
-    const XP_BASE: u64 = 48;
-    /// Spread around the fitted line. The retail residual is not noise (see
-    /// `report92_reward_curve`), but a spread of this size reproduces its shape.
+    /// RETIRED: the spread the old fitted XP line drew. A job's XP is now retail's
+    /// exact value for its difficulty ([`job_reward_xp`]); the draw is still made so
+    /// every later roll (gold, name, gather item, duel boss) keeps its position.
     const XP_JITTER: u64 = 90;
+
+    /// Retail's job `rewardXp` for `difficultyLevel` 1..=84 (index 0 = difficulty 1).
+    ///
+    /// MEASURED (tracker #337): 1,443 distinct retail jobs in the pre-shutdown
+    /// `/quests` captures (2026-05-02 .. 2026-06-29), and `rewardXp` is a pure
+    /// function of `difficultyLevel` — **0 conflicts** at any of the 83 difficulties
+    /// seen. Character level, `initialEPL`, job type, pool and secret room do not
+    /// move it. 83 is the only gap; 51..=84 is exactly `+10` per level, so it is 1606.
+    const RETAIL_JOB_XP: [u64; 84] = [
+        50, 60, 70, 82, 94, 106, 120, 134, 148, 164, // 1-10
+        180, 196, 214, 232, 250, 270, 290, 310, 332, 354, // 11-20
+        376, 400, 424, 448, 474, 500, 528, 556, 586, 616, // 21-30
+        648, 680, 714, 748, 784, 820, 846, 874, 902, 932, // 31-40
+        962, 994, 1026, 1060, 1094, 1128, 1164, 1200, 1238, 1276, // 41-50
+        1286, 1296, 1306, 1316, 1326, 1336, 1346, 1356, 1366, 1376, // 51-60
+        1386, 1396, 1406, 1416, 1426, 1436, 1446, 1456, 1466, 1476, // 61-70
+        1486, 1496, 1506, 1516, 1526, 1536, 1546, 1556, 1566, 1576, // 71-80
+        1586, 1596, 1606, 1616, // 81-84
+    ];
+
+    /// The XP a job of `difficulty` pays on `/complete` — retail's table, not a fit.
+    /// Below 1 pays difficulty 1's; above 84 (never seen in retail) continues the
+    /// `+10` per level that 51..=84 follows without exception.
+    pub fn job_reward_xp(difficulty: i64) -> u64 {
+        let top = RETAIL_JOB_XP.len() as i64;
+        let d = difficulty.max(1);
+        if d <= top {
+            RETAIL_JOB_XP[(d - 1) as usize]
+        } else {
+            RETAIL_JOB_XP[RETAIL_JOB_XP.len() - 1] + 10 * (d - top) as u64
+        }
+    }
     /// Gold per point of `difficultyLevel`.
     const GOLD_PER_DIFFICULTY: u64 = 19;
     /// Gold a difficulty-0 job would pay — the fitted intercept.
@@ -4246,7 +4273,8 @@ pub(crate) mod jobs_gen {
         // captured `/quests` bodies. See `report92_reward_curve` for the fit, the
         // spread, and the negative result that stopped it being exact.
         let d = difficulty.max(1) as u64;
-        let reward_xp = d * XP_PER_DIFFICULTY + XP_BASE + rng.below(XP_JITTER);
+        let reward_xp = job_reward_xp(difficulty); // #337: retail's table, exact
+        let _retired_xp_jitter = rng.below(XP_JITTER);
         // A featured or boss job pays a flat gem count INSTEAD of gold; a standard
         // job pays gold and never gems (tracker #306, `report_306_job_gems`). The
         // draws are the retired roll's, in the same order and under the same
@@ -5038,17 +5066,13 @@ mod jobs_tests {
 /// 148 of 802 jobs (18.5%) pay NO gold at all
 /// ```
 ///
-/// THE NEGATIVE RESULT, recorded so nobody re-derives it. Retail's exact value is
-/// **not** a function of anything observable on the job. For 105 of 157
-/// `(characterLevel, difficultyLevel)` groups the XP is a single exact value — so it
-/// is deterministic, not rolled — but the other 52 carry exactly two values, and none
-/// of `jobType`, `jobPoolId`, `hasSecretRoom`, character level or capture time
-/// separates them. Both populations span nearly the whole corpus by capture id, so it
-/// is not a version change either. There is a hidden input, most likely in the job
-/// pool or dungeon template definitions we do not read.
-///
-/// So this reproduces the right magnitude and spread, not the exact value. That is
-/// stated here rather than implied by a formula that looks exact.
+/// XP: SUPERSEDED by #337. The "negative result" once recorded here — two XP
+/// populations per `(characterLevel, difficultyLevel)` with a hidden input — was a
+/// measurement artefact: the capture DB also holds 641 jobs that OUR server rolled
+/// after the shutdown (2026-06-30 onward), and those carried the fitted line plus
+/// jitter. Restricted to the 1,443 pre-shutdown retail jobs, `rewardXp` is an exact
+/// function of `difficultyLevel` with 0 conflicts, and [`job_reward_xp`] is that
+/// table. The gold fit below is unchanged.
 #[cfg(test)]
 mod report92_reward_curve {
     use super::jobs_gen::*;
@@ -5089,21 +5113,15 @@ mod report92_reward_curve {
         out
     }
 
-    /// Mean XP per point of difficulty must sit near retail's 18.92, not the 15 the
-    /// invented constant produced.
+    /// Every rolled job advertises retail's exact XP for its difficulty (#337) — no
+    /// spread. The fitted line plus jitter it replaces paid 466-504 for a
+    /// difficulty-21 job; retail paid 376 on all 11 it rolled.
     #[test]
-    fn xp_per_difficulty_matches_the_retail_fit() {
+    fn every_rolled_job_pays_retails_xp_for_its_difficulty() {
         let s = sample();
-        let ratio: f64 = s
-            .iter()
-            .filter(|(d, ..)| *d > 0)
-            .map(|(d, xp, _)| *xp as f64 / *d as f64)
-            .sum::<f64>()
-            / s.iter().filter(|(d, ..)| *d > 0).count() as f64;
-        assert!(
-            (17.0..=26.0).contains(&ratio),
-            "xp/difficulty {ratio:.2} is outside the retail band (fit 18.92);              the old constant gave about 15"
-        );
+        for (d, xp, _) in &s {
+            assert_eq!(*xp, job_reward_xp(*d), "difficulty {d} job advertised {xp} xp");
+        }
     }
 
     /// Gold likewise — and this one moved the other way, from 30 down to 19.
@@ -5157,6 +5175,106 @@ mod report92_reward_curve {
                 "captured rewardItemCount is always a round ten, got {g}"
             );
         }
+    }
+}
+
+/// Tracker #337 (Sephoris, level 22): "1000 XP per job today, 2000 yesterday".
+///
+/// Retail ground truth, 1,443 distinct pre-shutdown jobs from the capture DB:
+/// `rewardXp` is a pure function of `difficultyLevel` (0 conflicts). At character
+/// level 20-25 retail's 53 jobs sat at median difficulty 22 and paid median 400 XP
+/// on `/complete`; with ~11 enemies' kill XP (median 908) a whole job was worth a
+/// median 1,313 (range 885-1,847). We paid 456-614 on difficulties 19-27.
+#[cfg(test)]
+mod report337_job_xp {
+    use super::jobs_gen::*;
+    use serde_json::Value;
+
+    /// Values read straight off the retail corpus, with how many distinct retail
+    /// jobs carried each (every one of them, no other value seen).
+    #[test]
+    fn job_xp_is_retails_value_for_its_difficulty() {
+        for (difficulty, xp, retail_jobs) in [
+            (1, 50, 25),
+            (19, 332, 10),
+            (20, 354, 16),
+            (21, 376, 11),
+            (22, 400, 11),
+            (24, 448, 12),
+            (26, 500, 11),
+            (27, 528, 15),
+            (48, 1200, 6),
+            (50, 1276, 9),
+            (51, 1286, 19),
+            (75, 1526, 45),
+            (84, 1616, 2),
+        ] {
+            assert_eq!(
+                job_reward_xp(difficulty),
+                xp,
+                "difficulty {difficulty}: retail paid {xp} on {retail_jobs} of {retail_jobs} jobs"
+            );
+        }
+        // 83 is the corpus's one gap inside 1..=84; 51..=84 is +10 per level.
+        assert_eq!(job_reward_xp(83), 1606);
+        // Out of range: clamp low, continue the +10 line high.
+        assert_eq!(job_reward_xp(0), 50);
+        assert_eq!(job_reward_xp(-3), 50);
+        assert_eq!(job_reward_xp(85), 1626);
+        assert_eq!(job_reward_xp(100), 1776);
+    }
+
+    /// The table only ever climbs — a dip would make a harder job pay less.
+    #[test]
+    fn harder_jobs_never_pay_less() {
+        for d in 1..=110 {
+            assert!(job_reward_xp(d + 1) > job_reward_xp(d), "difficulty {d} -> {}", d + 1);
+        }
+    }
+
+    fn job_pools() -> Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/job_pools.json");
+        serde_json::from_str(&std::fs::read_to_string(path).expect("job_pools.json"))
+            .expect("valid job_pools.json")
+    }
+
+    /// The reporter's own 2026-10-04 board (level 20, cycle index 26), which prod
+    /// stored as: e4742b8e d21 504xp 590g, f950c41c d26 543xp 640g, 6f6de44d d20
+    /// 507xp 490g, 58d85b87 d21 466xp 580g, 684ab17d d23 563xp 12 gems, 6ac9d913
+    /// d21 479xp 4 gems. Everything but the XP must come out the same — the XP
+    /// draw is still taken, so no later roll moves — and the XP must be retail's.
+    #[test]
+    fn the_reporters_board_keeps_its_jobs_and_pays_retail_xp() {
+        let pools = job_pools();
+        let character = uuid::Uuid::parse_str("f7817aa6-5892-4794-871e-9b51a475a606").unwrap();
+        let boundary = 1_791_090_000; // 2026-10-04 05:00 UTC
+        let (jobs, _) = generate(&pools, character, 20, 26, boundary, boundary + 3600);
+        let got: Vec<(String, i64, u64, u64, u64)> = jobs
+            .iter()
+            .map(|j| {
+                let s = &j["jobSetup"];
+                (
+                    j["questId"].as_str().unwrap()[..8].to_string(),
+                    j["difficultyLevel"].as_i64().unwrap(),
+                    s["rewardXp"].as_u64().unwrap(),
+                    s["rewardItemCount"].as_u64().unwrap(),
+                    s["rewardGemCount"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        let want: Vec<(String, i64, u64, u64, u64)> = [
+            ("e4742b8e", 21, 376, 590, 0),
+            ("f950c41c", 26, 500, 640, 0),
+            ("6f6de44d", 20, 354, 490, 0),
+            ("58d85b87", 21, 376, 580, 0),
+            ("684ab17d", 23, 424, 0, 12),
+            ("6ac9d913", 21, 376, 0, 4),
+        ]
+        .into_iter()
+        .map(|(id, d, xp, gold, gems)| (id.to_string(), d, xp, gold, gems))
+        .collect();
+        assert_eq!(got, want);
     }
 }
 
@@ -6678,19 +6796,17 @@ mod report92_job_completion_reward_tests {
         );
 
         let reward = resolve_completion_reward(&sd, Uuid::from_u128(1), &legacy);
-        // From the SHIPPED table, not `QuestLevelScaling::default()`. The default is
-        // empty and answers with the last-resort `100 * level` formula, so asserting
-        // against it would have this test agree with exactly the bug that let the job
-        // board keep paying 7,500 xp for a difficulty-75 job where retail paid 261.
-        let expected = sd.quests_daily.level_scaling.given_xp(75);
+        // Retail's job XP for difficulty 75 (#337): 45 of 45 retail difficulty-75 jobs
+        // declared `rewardXp: 1526`, and job `1385706b-…`'s `/complete` paid exactly
+        // that. This path used to pay ONE enemy's kill XP (261) — a sixth of it.
         assert_eq!(
-            reward.character_xp, expected,
-            "the legacy path pays the difficulty's xp from the real table"
+            reward.character_xp, 1526,
+            "the legacy path pays retail's job xp for the row's difficulty"
         );
         assert_ne!(
-            expected,
-            100 * 75,
-            "and the real table is not the old formula, or this proves nothing"
+            reward.character_xp,
+            sd.quests_daily.level_scaling.given_xp(75),
+            "and not the kill xp of a single enemy, or this proves nothing"
         );
         assert!(
             reward.currencies.is_empty(),
@@ -8206,7 +8322,7 @@ mod report_237_duel_arena {
             "31be99a6-8557-4e9b-81e6-5503f900b7d2"
         );
         assert_eq!(js["bossLevelDelta"], 7);
-        assert_eq!(js["rewardXp"], 1429); // prod: 1543 at difficulty 76
+        assert_eq!(js["rewardXp"], 1476); // retail's for difficulty 70 (#337); prod: 1543 at 76
         assert_eq!(js["rewardItemCount"], 0);
         assert_eq!(js["questName"]["key"], "UI.Jobs.Names.Duel.002");
         assert_eq!(
@@ -8656,12 +8772,12 @@ mod report_306_daily_job_hang {
 
         // (id, type, arena it was in, values prod served that must not move)
         for (id, ty, old_arena, gems, xp, name_key) in [
-            ("a4a54f84-390f-4031-bf3a-c8fc9e8e11ed", 4, "19a3b1b0-c18b-4f2f-b73f-780f3759fe48", 0, 1476, "UI.Jobs.Names.Gather.004"),
-            // XP 1517: prod served 1593 before tracker #313 re-banded the difficulty
-            // it scales with; the draw itself is unchanged.
+            ("a4a54f84-390f-4031-bf3a-c8fc9e8e11ed", 4, "19a3b1b0-c18b-4f2f-b73f-780f3759fe48", 0, 1516, "UI.Jobs.Names.Gather.004"),
+            // XP 1526: retail's for difficulty 75 (#337). Prod served 1593 before
+            // tracker #313 re-banded the difficulty; the draw itself is unchanged.
             // Gems 0: prod served a 10-gem secret-room roll on this standard job;
             // retail pays standard jobs no gems (#306, `report_306_job_gems`).
-            ("72217ae0-4bdb-4079-973b-4ca252ee487f", 3, "e7418cc7-01de-4c84-ba00-e221f8783d51", 0, 1517, "UI.Jobs.Names.Rescue.003"),
+            ("72217ae0-4bdb-4079-973b-4ca252ee487f", 3, "e7418cc7-01de-4c84-ba00-e221f8783d51", 0, 1526, "UI.Jobs.Names.Rescue.003"),
         ] {
             let j = job(&jobs, id);
             let js = &j["jobSetup"];
@@ -8872,8 +8988,8 @@ mod report_306_job_gems {
 
     /// His actual Oct 3 board (these six ids are the rows prod stored at the 05:00
     /// reset). The highlighted two now pay gems; every other value — ids, names,
-    /// dungeons, difficulty, XP, the standard jobs' gold — is what prod served, so
-    /// the fix moves no other draw.
+    /// dungeons, difficulty, the standard jobs' gold — is what prod served, so the
+    /// fix moves no other draw. (XP is retail's table for the difficulty since #337.)
     #[test]
     fn his_oct3_board_pays_gems_on_the_highlighted_jobs_and_nothing_else_moves() {
         let pools = pools();
@@ -8883,14 +8999,14 @@ mod report_306_job_gems {
         let jobs = jobs_gen::generate(&pools, c, 100, 60, boundary, OCT3_FETCH).0;
         // (id, pool prefix, difficulty, xp, name, gems, gold)
         let want = [
-            ("a398cf65-6793-4a69-928e-f3492bb78ea9", "4956c6ab", 76, 1550, "UI.Jobs.Names.Defeat.009", 0, 1640),
-            ("346135d3-ad76-4658-b0f2-af7fb77c4a0d", "4956c6ab", 79, 1610, "UI.Jobs.Names.Rescue.006", 0, 1650),
-            ("01cda05c-b403-4ef6-97ed-a987f47b4a69", "4956c6ab", 75, 1480, "UI.Jobs.Names.Rescue.004", 0, 1650),
-            ("de1a54e3-7889-4e9b-a6d3-e24f344fdb5d", "4956c6ab", 73, 1459, "UI.Jobs.Names.Rescue.001", 0, 1570),
+            ("a398cf65-6793-4a69-928e-f3492bb78ea9", "4956c6ab", 76, 1536, "UI.Jobs.Names.Defeat.009", 0, 1640),
+            ("346135d3-ad76-4658-b0f2-af7fb77c4a0d", "4956c6ab", 79, 1566, "UI.Jobs.Names.Rescue.006", 0, 1650),
+            ("01cda05c-b403-4ef6-97ed-a987f47b4a69", "4956c6ab", 75, 1526, "UI.Jobs.Names.Rescue.004", 0, 1650),
+            ("de1a54e3-7889-4e9b-a6d3-e24f344fdb5d", "4956c6ab", 73, 1506, "UI.Jobs.Names.Rescue.001", 0, 1570),
             // boss Duel: prod served 0 gems / 1620 gold
-            ("4b25489e-7f63-4bac-8680-69f150deaa40", "361da91e", 75, 1510, "UI.Jobs.Names.Duel.002", 12, 0),
+            ("4b25489e-7f63-4bac-8680-69f150deaa40", "361da91e", 75, 1526, "UI.Jobs.Names.Duel.002", 12, 0),
             // Friday featured Rescue: prod served 0 gems / 1660 gold
-            ("71b53f82-cab9-4580-8012-ffba1c12d9c5", "8501a030", 81, 1624, "UI.Jobs.Names.Rescue.001", 4, 0),
+            ("71b53f82-cab9-4580-8012-ffba1c12d9c5", "8501a030", 81, 1586, "UI.Jobs.Names.Rescue.001", 4, 0),
         ];
         assert_eq!(jobs.len(), want.len());
         for (id, pool, d, xp, name, gem, gold_) in want {
