@@ -9,9 +9,11 @@
 //! bundle Bethesda's server actually returned **for a chest of that tier, at the
 //! nearest observed chest level**.
 //!
-//! The pick is deterministic in the chest id, so a given chest always yields the
-//! same thing however many times the client retries. The handler re-mints the
-//! instanced item ids before granting (capture ids would collide across players).
+//! Each chest is composed from parts of the retail openings nearest its level
+//! ([`compose_loot`], #335), deterministically in the chest's key, so a given
+//! chest always yields the same thing however many times the client retries. The
+//! handler re-mints the instanced item ids before granting (capture ids would
+//! collide across players).
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -140,13 +142,85 @@ fn stable_nonce(key: &str) -> u64 {
     })
 }
 
+/// The fewest retail openings a tier 1-3 roll draws its parts from (#335).
+///
+/// Twelve keeps a level-100 Gold chest on chests retail opened at 87-100 (the
+/// whole pool is 270 openings over levels 3-100), while turning the 1-4 candidates
+/// the nearest-level pick left at high levels into twelve or more.
+pub const MIN_NEIGHBOURS: usize = 12;
+
+/// The retail openings of this tier nearest to `level`: every opening within the
+/// distance of the [`MIN_NEIGHBOURS`]-th nearest one, ties included.
+pub fn neighbourhood(pool: &[ChestLootSample], level: u64) -> Vec<&ChestLootSample> {
+    let mut distances: Vec<u64> = pool.iter().map(|s| s.chest_level.abs_diff(level)).collect();
+    if distances.is_empty() {
+        return Vec::new();
+    }
+    distances.sort_unstable();
+    let radius = distances[MIN_NEIGHBOURS.min(distances.len()) - 1];
+    pool.iter()
+        .filter(|s| s.chest_level.abs_diff(level) <= radius)
+        .collect()
+}
+
+/// One draw from `samples`, uniform (every retail opening is one observation).
+fn draw<'a>(samples: &[&'a ChestLootSample], seed: u64) -> &'a ChestLootSample {
+    samples[(seed % samples.len() as u64) as usize]
+}
+
+/// Compose one chest's contents from parts of retail openings at its level (#335).
+///
+/// THE BUG. `pick_loot` replayed one whole recorded opening, chosen among the
+/// openings at the single nearest observed level. Above level 40 that is one to
+/// four openings for most levels: a Gold chest at level 80, 81, 82 or 87 could
+/// only ever pay one reward, a Wooden chest at 82-87 one, at 88-100 three. Retail
+/// rolled every chest afresh: 154/154, 305/305 and 270/270 distinct.
+///
+/// THE ROLL. Like the store chests (#310/#455): from the [`neighbourhood`] of
+/// openings at this level, the currencies (gold, and gems on Wooden and Silver)
+/// come from one opening, the stackables from another, and each item slot from
+/// its own opening, position for position. Whether an optional item slot is
+/// filled (Wooden chests pay an item 44 times in 154) follows the currencies'
+/// opening. Every part is something retail paid for this tier at this level;
+/// nothing is invented, and the payout stays in the neighbourhood's range.
+pub fn compose_loot(pool: &[ChestLootSample], level: u64, nonce: u64) -> Option<RewardGrant> {
+    use crate::features::store_bundles::mix;
+
+    let near = neighbourhood(pool, level);
+    if near.is_empty() {
+        return None;
+    }
+    let seed = mix(nonce ^ level.rotate_left(29));
+    let base = draw(&near, seed);
+    let stacks = draw(&near, mix(seed ^ 0x2545_F491_4F6C_DD1D));
+
+    let mut grant = RewardGrant {
+        currencies: base.reward.currencies.clone(),
+        stackable_items: stacks.reward.stackable_items.clone(),
+        character_xp: base.reward.character_xp,
+        town_xp: base.reward.town_xp,
+        ..RewardGrant::default()
+    };
+    for slot in 0..base.reward.items.len() {
+        let filled: Vec<&ChestLootSample> = near
+            .iter()
+            .copied()
+            .filter(|s| s.reward.items.len() > slot)
+            .collect();
+        let slot_seed = mix(seed ^ 0xA076_1D64_78BD_642F_u64.wrapping_mul(slot as u64 + 1));
+        grant.items.push(draw(&filled, slot_seed).reward.items[slot].clone());
+    }
+    Some(grant)
+}
+
 /// Roll the grant for a chest open.
 ///
 /// Tier-5 (Legendary) and tier-4 (Elder) treasury captures are too sparse to use
 /// directly (one and eleven openings), while the retail Legendary and Epic store
-/// chest corpora hold 4,697 and 405 same-shaped chest rewards. Other tiers stay on
-/// the capture-derived treasury table. `owned` is every item template the
-/// character holds: an artifact among them is never paid again (#310).
+/// chest corpora hold 4,697 and 405 same-shaped chest rewards. Tiers 1-3 are
+/// composed from the capture-derived treasury table ([`compose_loot`]). `owned`
+/// is every item template the character holds: an artifact among them is never
+/// paid again (#310). Deterministic in `chest_key`, so a retried open pays the same.
 pub fn roll_loot(
     tables: &ChestLootTables,
     tier: i64,
@@ -163,8 +237,11 @@ pub fn roll_loot(
     }
     // No other tier below 1 exists in the APK enum; treat one as tier 1.
     let tier = tier.max(1) as u64;
-    crate::features::store_bundles::roll_treasury_chest(tier, level, stable_nonce(chest_key), owned)
-        .or_else(|| pick_loot(tables, tier, level, chest_key).cloned())
+    let nonce = stable_nonce(chest_key);
+    crate::features::store_bundles::roll_treasury_chest(tier, level, nonce, owned).or_else(|| {
+        let (pool, _) = tables.pool_for(tier)?;
+        compose_loot(pool, level, nonce)
+    })
 }
 
 #[cfg(test)]
@@ -314,6 +391,141 @@ mod tests {
     #[test]
     fn lower_tiers_still_use_the_treasury_table() {
         let t = tables();
-        assert_eq!(roll_loot(&t, 1, 1, "1", &HashSet::new()).unwrap().currencies[&GOLD], 100);
+        for i in 0..20 {
+            let gold = roll_loot(&t, 1, 1, &format!("k{i}"), &HashSet::new()).unwrap().currencies
+                [&GOLD];
+            assert!([100, 900].contains(&gold), "tier 1 paid {gold}, not a tier-1 value");
+        }
+    }
+
+    // ---- #335: the committed retail table ------------------------------------
+
+    fn committed() -> ChestLootTables {
+        serde_json::from_str(include_str!("../../../deploy/static/chest_loots.json"))
+            .expect("deploy/static/chest_loots.json parses")
+    }
+
+    fn fingerprint(r: &RewardGrant) -> String {
+        let mut currencies: Vec<_> = r.currencies.iter().collect();
+        currencies.sort();
+        let mut stacks: Vec<_> = r.stackable_items.iter().collect();
+        stacks.sort();
+        let items: Vec<String> = r
+            .items
+            .iter()
+            .map(|i| serde_json::to_string(&i.item).unwrap())
+            .collect();
+        format!("{currencies:?}|{stacks:?}|{items:?}")
+    }
+
+    /// The levels a level-100 character's chests come at: its jobs (difficulty
+    /// 73-92 on HauDrauf's board) and its own level (Abyss, arena).
+    const HIGH_LEVELS: [u64; 7] = [73, 80, 81, 82, 87, 92, 100];
+
+    /// Report #335, "the wooden and silver chests repeat constantly". The old pick
+    /// replayed one whole opening from the single nearest observed level: one
+    /// possible Gold chest at 80, 81, 82 and 87, one Wooden chest at 82-87, three at
+    /// 88-100. Retail never repeated (154/154, 305/305, 270/270 distinct).
+    #[test]
+    fn high_level_chests_do_not_repeat() {
+        let t = committed();
+        const ROLLS: usize = 200;
+        for tier in 1..=3u64 {
+            for level in HIGH_LEVELS {
+                let mut seen: HashMap<String, usize> = HashMap::new();
+                let mut old = HashSet::new();
+                for i in 0..ROLLS {
+                    let key = format!("489620db:{}:{tier}:{level}:{}", i % 20 + 1, 300 + i);
+                    let r = roll_loot(&t, tier as i64, level, &key, &HashSet::new()).unwrap();
+                    *seen.entry(fingerprint(&r)).or_default() += 1;
+                    old.insert(fingerprint(pick_loot(&t, tier, level, &key).unwrap()));
+                }
+                let most = seen.values().copied().max().unwrap();
+                let floor = if tier == 1 { 100 } else { 180 };
+                assert!(
+                    seen.len() >= floor,
+                    "tier {tier} level {level}: {ROLLS} chests gave {} distinct rewards \
+                     (the old pick gave {})",
+                    seen.len(),
+                    old.len()
+                );
+                assert!(
+                    most <= 10,
+                    "tier {tier} level {level}: one reward came {most} times in {ROLLS}"
+                );
+            }
+        }
+        // Control: the measurement can see the bug. Gold at 80 had one reward.
+        let old: HashSet<String> = (0..ROLLS)
+            .map(|i| fingerprint(pick_loot(&t, 3, 80, &format!("k{i}")).unwrap()))
+            .collect();
+        assert_eq!(old.len(), 1, "control: the nearest-level pick is a one-reward trap at 80");
+    }
+
+    /// Report #335, "gold chests only contain low-level content". A level-100
+    /// Gold chest must pay what retail paid for Gold chests near level 100 — the
+    /// wider pool must not drag it down to mid-level openings. Every item is a
+    /// template retail paid in a Gold chest at level 81+, and the gold sits in the
+    /// level 81-100 range (8,069-9,675), far above level 31-40's floor (6,258).
+    #[test]
+    fn a_level_100_gold_chest_pays_level_100_loot() {
+        let t = committed();
+        let pool = &t.tiers[&3];
+        let high: Vec<&ChestLootSample> = pool.iter().filter(|s| s.chest_level >= 81).collect();
+        let high_templates: HashSet<Uuid> = high
+            .iter()
+            .flat_map(|s| &s.reward.items)
+            .map(|i| i.item.item_template_id)
+            .collect();
+        let gold_of = |r: &RewardGrant| r.currencies.get(&GOLD).copied().unwrap_or(0);
+        let lo = high.iter().map(|s| gold_of(&s.reward)).min().unwrap();
+        let hi = high.iter().map(|s| gold_of(&s.reward)).max().unwrap();
+
+        for i in 0..300 {
+            let r = roll_loot(&t, 3, 100, &format!("c:{i}:3:100:{i}"), &HashSet::new()).unwrap();
+            assert_eq!(r.items.len(), 2, "retail's Gold chest pays exactly two items");
+            let gold = gold_of(&r);
+            assert!((lo..=hi).contains(&gold), "level-100 Gold chest paid {gold} gold");
+            for item in &r.items {
+                assert!(
+                    high_templates.contains(&item.item.item_template_id),
+                    "level-100 Gold chest paid {}, which retail paid only below level 81",
+                    item.item.item_template_id
+                );
+            }
+        }
+        for s in neighbourhood(pool, 100) {
+            assert!(s.chest_level >= 85, "a level-100 roll drew on a level-{} opening", s.chest_level);
+        }
+    }
+
+    /// The tier shape survives composition: Gold always two items, Silver one,
+    /// Wooden zero or one; gems only on Wooden and Silver.
+    #[test]
+    fn composed_chests_keep_the_retail_shape() {
+        let t = committed();
+        let gem: Uuid = "470c8f58-a8dd-4c07-8c92-843b785e1139".parse().unwrap();
+        for tier in 1..=3u64 {
+            for level in [1, 10, 25, 40, 60, 86, 100] {
+                for i in 0..50 {
+                    let r = roll_loot(&t, tier as i64, level, &format!("s{i}"), &HashSet::new())
+                        .unwrap();
+                    match tier {
+                        1 => assert!(r.items.len() <= 1),
+                        2 => assert_eq!(r.items.len(), 1),
+                        _ => assert_eq!(r.items.len(), 2),
+                    }
+                    if tier == 1 {
+                        assert!(r.currencies.contains_key(&gem), "every Wooden chest paid gems");
+                    }
+                    if tier == 3 {
+                        assert!(!r.currencies.contains_key(&gem), "no Gold chest paid gems");
+                    }
+                    let key = format!("s{i}");
+                    let again = roll_loot(&t, tier as i64, level, &key, &HashSet::new()).unwrap();
+                    assert_eq!(fingerprint(&r), fingerprint(&again), "a retried open pays the same");
+                }
+            }
+        }
     }
 }
