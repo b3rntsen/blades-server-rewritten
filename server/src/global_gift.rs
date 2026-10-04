@@ -38,6 +38,32 @@ use crate::{
     util::get_only_single_character_and_check_permission,
 };
 
+/// Open the chests a season gift carries into `reward` itself, as retail did.
+///
+/// Report #335: season award rows build their chests with level 0, and this used
+/// to roll them at that level — so a level-100 character's Gold chest paid what
+/// retail paid for a level 1-3 Gold chest (1,716-4,655 gold and Iron gear instead
+/// of 8,000-9,700 gold and Ebony). A level-0 chest takes the claimant's level.
+fn open_season_chests(
+    reward: &mut RewardGrant,
+    tables: &chests::ChestLootTables,
+    character_level: u64,
+    owned: &std::collections::HashSet<Uuid>,
+    key_prefix: &str,
+) {
+    let season_chests = std::mem::take(&mut reward.chests);
+    for (index, chest) in season_chests.into_iter().enumerate() {
+        let level = if chest.level == 0 { character_level } else { chest.level };
+        let key = format!("{key_prefix}:{}:{index}", chest.tier);
+        if let Some(mut loot) = chests::roll_loot(tables, chest.tier as i64, level, &key, owned) {
+            for item in &mut loot.items {
+                item.id = Uuid::new_v4();
+            }
+            season_rewards::merge_reward(reward, loot);
+        }
+    }
+}
+
 /// Out-of-band service id for gift error envelopes (not a real Blades id).
 const GIFT_SERVICE_ID: u64 = 9003;
 
@@ -312,29 +338,6 @@ pub async fn claim_global_gift(
                         recorded.push((award, individual));
                     }
 
-                    // Retail's season gift opens its Gold/Elder chest during claim;
-                    // it does not leave a treasury chest. Use the same deterministic,
-                    // capture-derived loot pool as the normal chest endpoint.
-                    let season_chests = std::mem::take(&mut reward.chests);
-                    for (index, chest) in season_chests.into_iter().enumerate() {
-                        let key = format!(
-                            "arena-season:{gift_id}:{character_id}:{}:{index}",
-                            chest.tier
-                        );
-                        if let Some(loot) = chests::pick_loot(
-                            &globals.static_data.chest_loots,
-                            chest.tier,
-                            chest.level,
-                            &key,
-                        ) {
-                            let mut loot = loot.clone();
-                            for item in &mut loot.items {
-                                item.id = Uuid::new_v4();
-                            }
-                            season_rewards::merge_reward(&mut reward, loot);
-                        }
-                    }
-
                     let mut entry = {
                         use crate::schema::characters;
                         characters::table
@@ -346,6 +349,17 @@ pub async fn claim_global_gift(
                             .await
                             .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
                     };
+
+                    // Retail's season gift opens its Gold/Elder chest during claim;
+                    // it does not leave a treasury chest. The chest is opened at the
+                    // claiming character's level (#335) — season rows carry level 0.
+                    open_season_chests(
+                        &mut reward,
+                        &globals.static_data.chest_loots,
+                        entry.character.0.level as u64,
+                        &entry.inventory.0.item_templates(),
+                        &format!("arena-season:{gift_id}:{character_id}"),
+                    );
 
                     let mut tracker = InventoryChangeTracker::default();
                     apply_reward(
@@ -515,4 +529,57 @@ pub async fn claim_global_gift(
         .scope_boxed()
     })
     .await
+}
+
+#[cfg(test)]
+mod season_chest_tests {
+    use super::*;
+    use blades_lib::economy::{GOLD, RewardChest};
+    use std::collections::HashSet;
+
+    fn committed() -> chests::ChestLootTables {
+        serde_json::from_str(include_str!("chest_loots.json")).expect("chest_loots.json parses")
+    }
+
+    /// Report #335, "gold chests only contain content from low levels". Season
+    /// award rows carry their chest at level 0, and the claim used to open it at
+    /// that level: a level-100 character's Gold chest paid a level 1-3 Gold
+    /// chest's 1,716-4,655 gold. It opens at the claimant's level now, inside
+    /// retail's level 81-100 Gold range (8,069-9,675).
+    #[test]
+    fn a_season_gold_chest_opens_at_the_claimants_level() {
+        let tables = committed();
+        let mut paid = HashSet::new();
+        for i in 0..40 {
+            let mut reward = RewardGrant {
+                chests: vec![RewardChest { id: None, tier: 3, level: 0 }],
+                ..Default::default()
+            };
+            let prefix = format!("arena-season:{i}:489620db");
+            open_season_chests(&mut reward, &tables, 100, &HashSet::new(), &prefix);
+            assert!(reward.chests.is_empty(), "the season chest is opened, not granted");
+            assert_eq!(reward.items.len(), 2, "a Gold chest pays two items");
+            let gold = reward.currencies[&GOLD];
+            assert!(gold >= 8_069, "a level-100 season Gold chest paid {gold} gold");
+            let templates: Vec<Uuid> = reward.items.iter().map(|i| i.item.item_template_id).collect();
+            paid.insert(format!("{gold}:{templates:?}"));
+        }
+        assert!(paid.len() > 30, "40 season chests paid only {} distinct rewards", paid.len());
+
+        // Control: what the level-0 roll paid.
+        let low = chests::pick_loot(&tables, 3, 0, "arena-season:0:489620db:3:0").unwrap();
+        assert!(low.currencies[&GOLD] <= 4_655, "control: level 0 is a level-1 Gold chest");
+    }
+
+    /// A chest that already carries a level keeps it.
+    #[test]
+    fn a_season_chest_with_a_level_keeps_it() {
+        let tables = committed();
+        let mut reward = RewardGrant {
+            chests: vec![RewardChest { id: None, tier: 3, level: 5 }],
+            ..Default::default()
+        };
+        open_season_chests(&mut reward, &tables, 100, &HashSet::new(), "k");
+        assert!(reward.currencies[&GOLD] < 8_069, "a level-5 chest pays level-5 gold");
+    }
 }

@@ -149,10 +149,15 @@ fn remint_reward_items(reward: &mut RewardGrant) {
     }
 }
 
+/// `roll_key` names this character's collect of this period. Keying the chest on
+/// the weekday's `reward_uid` alone paid every character at one level the very
+/// same chest every week (#335).
 fn collect_reward_for(
     payload: &DailyRewardPayload,
     chest_loots: &blades_lib::features::chests::ChestLootTables,
     reward_uid: Uuid,
+    roll_key: &str,
+    owned: &std::collections::HashSet<Uuid>,
 ) -> RewardGrant {
     let mut reward = RewardGrant {
         stackable_items: payload.stackable_items.clone(),
@@ -164,9 +169,11 @@ fn collect_reward_for(
     // distinct captured chest-daily collect responses all omit `reward.chests` and
     // instead carry `items`, `stackableItems` and `currencies`.
     for (idx, chest) in payload.chests.iter().enumerate() {
-        let key = format!("daily:{reward_uid}:{idx}:{}:{}", chest.tier, chest.level);
-        if let Some(loot) = chests::pick_loot(chest_loots, chest.tier, chest.level, &key) {
-            merge_reward(&mut reward, loot);
+        let key = format!("daily:{reward_uid}:{roll_key}:{idx}:{}:{}", chest.tier, chest.level);
+        if let Some(loot) =
+            chests::roll_loot(chest_loots, chest.tier as i64, chest.level, &key, owned)
+        {
+            merge_reward(&mut reward, &loot);
         }
     }
     remint_reward_items(&mut reward);
@@ -246,6 +253,8 @@ pub async fn collect_daily_reward(
                     &daily_reward,
                     &globals.static_data.chest_loots,
                     def.reward_uid,
+                    &format!("{character_id}:{period}"),
+                    &entry.inventory.0.item_templates(),
                 );
                 status_reward = collect_reward.clone();
                 if !already {
@@ -308,7 +317,7 @@ mod collect_response_tests {
     /// Build the `reward` exactly as `collect_daily_reward` does, for one day's
     /// definition. Kept beside the handler so the two cannot drift silently.
     fn reward_for(payload: &blades_lib::features::daily_reward::DailyRewardPayload) -> RewardGrant {
-        collect_reward_for(payload, &loot_tables(), Uuid::from_u128(0xDA11A))
+        collect_reward_for(payload, &loot_tables(), Uuid::from_u128(0xDA11A), "char:1", &Default::default())
     }
 
     fn loot_tables() -> ChestLootTables {
@@ -410,7 +419,7 @@ mod collect_response_tests {
             .expect("scaled daily reward def deserializes");
 
         let status_payload = def.daily_reward_for_level(74);
-        let collect_reward = collect_reward_for(&status_payload, &loot_tables(), def.reward_uid);
+        let collect_reward = collect_reward_for(&status_payload, &loot_tables(), def.reward_uid, "char:1", &Default::default());
 
         assert_eq!(
             collect_reward.stackable_items,
@@ -447,5 +456,33 @@ mod collect_response_tests {
         let payload: blades_lib::features::daily_reward::DailyRewardPayload =
             serde_json::from_value(serde_json::json!({})).expect("an empty day deserializes");
         assert!(reward_for(&payload).is_empty());
+    }
+
+    /// Report #335. The daily chest was keyed on the weekday's `rewardUid` and
+    /// the chest level only, so every level-100 character got the very same
+    /// Sunday Gold chest, every week. It is keyed per character and period now.
+    #[test]
+    fn the_daily_chest_differs_between_characters_and_weeks() {
+        let tables: ChestLootTables =
+            serde_json::from_str(include_str!("chest_loots.json")).expect("chest_loots.json");
+        let payload: blades_lib::features::daily_reward::DailyRewardPayload =
+            serde_json::from_value(serde_json::json!({ "chests": [{ "tier": 3, "level": 100 }] }))
+                .unwrap();
+        let uid: Uuid = "2c4ba1ff-517d-4a7f-b353-054d635ecd9e".parse().unwrap();
+        let mut seen = std::collections::HashSet::new();
+        for character in 0..5 {
+            for week in 0..4 {
+                let key = format!("{character}:{week}");
+                let r = collect_reward_for(&payload, &tables, uid, &key, &Default::default());
+                assert_eq!(r.items.len(), 2);
+                seen.insert(format!("{:?}{:?}", r.currencies, r.stackable_items));
+            }
+        }
+        assert!(seen.len() >= 15, "20 Sunday chests gave only {} distinct", seen.len());
+
+        // The same character's same period pays the same (status == collect).
+        let a = collect_reward_for(&payload, &tables, uid, "c:7", &Default::default());
+        let b = collect_reward_for(&payload, &tables, uid, "c:7", &Default::default());
+        assert_eq!(a.currencies, b.currencies);
     }
 }
