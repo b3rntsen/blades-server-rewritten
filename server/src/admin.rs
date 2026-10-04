@@ -2580,7 +2580,10 @@ pub async fn start_arena_season(
 
     if body.apply {
         diesel::update(s::arena_seasons.filter(s::id.eq(season_id)))
-            .set(s::status.eq("active"))
+            .set((
+                s::status.eq("active"),
+                s::starts_at.eq(activated_starts_at(season.starts_at, arena_season::now_unix())),
+            ))
             .execute(&mut conn)
             .await
             .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 56))?;
@@ -2861,7 +2864,10 @@ pub async fn end_arena_season(
         }
 
         diesel::update(s::arena_seasons.filter(s::id.eq(next_id)))
-            .set(s::status.eq("active"))
+            .set((
+                s::status.eq("active"),
+                s::starts_at.eq(activated_starts_at(next.starts_at, arena_season::now_unix())),
+            ))
             .execute(&mut conn)
             .await
             .map_err(|e| {
@@ -2878,6 +2884,20 @@ pub async fn end_arena_season(
         .await?;
 
     Ok(Json(resp))
+}
+
+/// The `starts_at` a season carries once it goes live: the instant it went live.
+///
+/// Every reader of a season's matches — the leaderboard's `RANKED_CTE` and the
+/// frozen standings at its end — counts `arena_match_results` from `starts_at`.
+/// A season activated EARLY (NBS-2, 2026-10-04: live at 16:10, scheduled for
+/// 21:14) kept its scheduled start, so the matches played in between counted for
+/// no season at all — a player saw cups in game and nothing on the board. Late
+/// activation is the mirror image: the matches before go-live were played on the
+/// previous season's counters and must not be counted twice. Either way the
+/// season begins when the counters were zeroed, which is now.
+fn activated_starts_at(_scheduled: i64, now: i64) -> i64 {
+    now
 }
 
 // ----------------------------------------------- arena season award granting
@@ -4001,6 +4021,14 @@ mod tests {
         let _: CompleteInventory = parsed.inventory;
         let _: CompleteWallet = parsed.wallet;
         let _: CompleteCharacterData = parsed.data;
+    }
+
+    #[test]
+    fn a_season_starts_when_it_goes_live_not_when_it_was_scheduled() {
+        // NBS-2: scheduled 21:14:40, activated 16:10:04 — early.
+        assert_eq!(activated_starts_at(1_791_148_480, 1_791_130_204), 1_791_130_204);
+        // Activated after its scheduled start — late.
+        assert_eq!(activated_starts_at(1_791_148_480, 1_791_150_000), 1_791_150_000);
     }
 
     #[test]
