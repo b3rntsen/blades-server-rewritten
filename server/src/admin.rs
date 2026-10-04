@@ -383,6 +383,7 @@ async fn snapshot_character(
     }
     if park_quests {
         park_quests_in_version(conn, character_id, version_id).await?;
+        park_events_in_version(conn, character_id, version_id).await?;
     }
     log::info!(
         "[versions] kept a snapshot of character {character_id} (user {user_id}, reason {reason}) as {version_id}"
@@ -484,6 +485,141 @@ async fn unpark_quests(
         .bind::<diesel::sql_types::Jsonb, _>(parked)
         .execute(conn)
         .await?;
+    Ok(())
+}
+
+/// Where a version keeps the event state of the character it was taken of:
+/// the `event_completions` rows (the per-event tier counter) and the
+/// `event_dungeons` rows (the attempt in progress). Same place and same reason
+/// as [`PARKED_QUESTS_KEY`].
+const PARKED_EVENT_COMPLETIONS_KEY: &str = "parkedEventCompletions";
+const PARKED_EVENT_DUNGEONS_KEY: &str = "parkedEventDungeons";
+
+/// Copy the character's event rows into the version just taken of it.
+///
+/// WHY. Both tables are keyed by `characters.id`, which every alt of a user
+/// shares, so before this an event finished on one alt was finished on all of
+/// them: SpaceMunk completed "Servants of the Blue God" on `spacemunk`, switched
+/// to the level-5 `newmunk`, and every attempt to enter the event answered
+/// 403 20001-1 "already completed all tiers" — the counter was spacemunk's
+/// 5/5 (report #334). The tier checkmarks the client draws come from
+/// `character.completedQuests`, which already travels with the alt, so the two
+/// disagreed: the game showed newmunk a fresh event the server refused.
+const PARK_EVENTS_SQL: &str = r#"
+UPDATE character_versions
+   SET server_state = server_state || jsonb_build_object(
+         'parkedEventCompletions',
+         COALESCE((SELECT jsonb_agg(to_jsonb(e) - 'character_id')
+                     FROM event_completions e
+                    WHERE e.character_id = $2), '[]'::jsonb),
+         'parkedEventDungeons',
+         COALESCE((SELECT jsonb_agg(to_jsonb(d) - 'character_id')
+                     FROM event_dungeons d
+                    WHERE d.character_id = $2), '[]'::jsonb))
+ WHERE id = $1
+"#;
+
+/// Put a version's parked event counters back under the live character id.
+///
+/// Columns named and every NOT NULL one coalesced, for the reason
+/// [`UNPARK_QUESTS_SQL`] gives: `jsonb_populate_record` reads a missing or JSON
+/// `null` field as SQL NULL, and one bad row would fail the whole switch.
+/// `ON CONFLICT DO NOTHING`: a counter started on the live character since is
+/// newer than the parked copy (the unique key is `(character_id, event_id)`).
+const UNPARK_EVENT_COMPLETIONS_SQL: &str = r#"
+INSERT INTO event_completions
+       (id, character_id, event_id, completion_count, last_completed_at, created_at)
+SELECT COALESCE(r.id, gen_random_uuid()), $1, r.event_id,
+       COALESCE(r.completion_count, 0),
+       COALESCE(r.last_completed_at, now()),
+       COALESCE(r.created_at, now())
+  FROM jsonb_array_elements($2) e,
+       LATERAL jsonb_populate_record(NULL::event_completions, e) r
+ WHERE r.event_id IS NOT NULL
+ON CONFLICT DO NOTHING
+"#;
+
+/// The same for the attempt rows. `generated_data` is NOT NULL and may hold a
+/// JSON `null`; it is kept as JSON `null`, as the quest rows are.
+const UNPARK_EVENT_DUNGEONS_SQL: &str = r#"
+INSERT INTO event_dungeons
+       (id, character_id, event_id, dungeon_id, dungeon_state, initial_state,
+        generated_data, entered_at, expires_at, entry_count, max_entries)
+SELECT COALESCE(r.id, gen_random_uuid()), $1, r.event_id, r.dungeon_id,
+       r.dungeon_state, r.initial_state,
+       COALESCE(r.generated_data, 'null'::jsonb),
+       COALESCE(r.entered_at, now()), r.expires_at,
+       COALESCE(r.entry_count, 0), COALESCE(r.max_entries, 0)
+  FROM jsonb_array_elements($2) e,
+       LATERAL jsonb_populate_record(NULL::event_dungeons, e) r
+ WHERE r.event_id IS NOT NULL AND r.dungeon_id IS NOT NULL
+ON CONFLICT DO NOTHING
+"#;
+
+async fn park_events_in_version(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    version_id: Uuid,
+) -> Result<(), diesel::result::Error> {
+    use crate::schema::{event_completions, event_dungeons};
+    use diesel_async::RunQueryDsl as _;
+    diesel::sql_query(PARK_EVENTS_SQL)
+        .bind::<diesel::sql_types::Uuid, _>(version_id)
+        .bind::<diesel::sql_types::Uuid, _>(character_id)
+        .execute(conn)
+        .await?;
+    diesel::delete(
+        event_completions::table.filter(event_completions::character_id.eq(character_id)),
+    )
+    .execute(conn)
+    .await?;
+    diesel::delete(event_dungeons::table.filter(event_dungeons::character_id.eq(character_id)))
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// A version's parked event rows, taken out of its `server_state`.
+///
+/// Each half is `None` for a version taken before events were parked. Unlike
+/// the quest rows that is not a reason to keep the live table's rows: the live
+/// rows are the OUTGOING alt's and were parked with it, so the alt arrives with
+/// no event state at all — a fresh event, which is what it has actually played
+/// here as far as anyone can tell.
+#[derive(Default)]
+struct ParkedEvents {
+    completions: Option<Value>,
+    dungeons: Option<Value>,
+}
+
+fn take_parked_events(server_state: &mut Value) -> ParkedEvents {
+    let Some(obj) = server_state.as_object_mut() else {
+        return ParkedEvents::default();
+    };
+    ParkedEvents {
+        completions: obj.remove(PARKED_EVENT_COMPLETIONS_KEY).filter(Value::is_array),
+        dungeons: obj.remove(PARKED_EVENT_DUNGEONS_KEY).filter(Value::is_array),
+    }
+}
+
+async fn unpark_events(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    parked: ParkedEvents,
+) -> Result<(), diesel::result::Error> {
+    use diesel_async::RunQueryDsl as _;
+    for (sql, rows) in [
+        (UNPARK_EVENT_COMPLETIONS_SQL, parked.completions),
+        (UNPARK_EVENT_DUNGEONS_SQL, parked.dungeons),
+    ] {
+        if let Some(rows) = rows {
+            diesel::sql_query(sql)
+                .bind::<diesel::sql_types::Uuid, _>(character_id)
+                .bind::<diesel::sql_types::Jsonb, _>(rows)
+                .execute(&mut *conn)
+                .await?;
+        }
+    }
     Ok(())
 }
 
@@ -4258,6 +4394,16 @@ mod tests {
             for stmt in SCHEMA {
                 diesel::sql_query(stmt).execute(&mut conn).await.unwrap();
             }
+            // The event tables, as their migration creates them: a switch parks
+            // their rows with the outgoing alt (#334).
+            diesel_async::SimpleAsyncConnection::batch_execute(
+                &mut conn,
+                include_str!(
+                    "../../migrations/2026-09-04-000000-0000_add_event_quest_tables/up.sql"
+                ),
+            )
+            .await
+            .unwrap();
             Some(conn)
         }
 
@@ -6260,7 +6406,7 @@ pub async fn restore_character_version(
 ///
 /// Caller supplies the transaction: a restore that snapshotted and then failed
 /// to write would leave a version nobody asked for.
-async fn apply_restore(
+pub(crate) async fn apply_restore(
     conn: &mut diesel_async::AsyncPgConnection,
     version_id: Uuid,
 ) -> Result<RestoreVersionResponse, BladeApiError> {
@@ -6304,6 +6450,9 @@ async fn apply_restore(
     // replaced keeps its own. A version from before quests were kept leaves the
     // quest table exactly as it was — it has nothing to put in their place.
     let parked = take_parked_quests(&mut server_state);
+    // Event rows follow the quest rows' rule for whether the live ones are
+    // parked at all (see `take_parked_events` for a version without them).
+    let parked_events = take_parked_events(&mut server_state);
 
     // Undoable, for the same reason the table exists at all.
     let replaced_saved_as = snapshot_character(
@@ -6333,6 +6482,9 @@ async fn apply_restore(
         .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
     if let Some(parked) = parked {
         unpark_quests(conn, character_id, parked).await.map_err(|_| {
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
+        })?;
+        unpark_events(conn, character_id, parked_events).await.map_err(|_| {
             BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
         })?;
     }
@@ -6555,7 +6707,7 @@ pub async fn switch_alt(
 
 /// The swap itself, separated from the handler so it can be tested against a
 /// real database without an HTTP stack. Caller supplies the transaction.
-async fn apply_switch_alt(
+pub(crate) async fn apply_switch_alt(
     conn: &mut diesel_async::AsyncPgConnection,
     body: &SwitchAltRequest,
 ) -> Result<SwitchAltResponse, BladeApiError> {
@@ -6628,6 +6780,7 @@ async fn apply_switch_alt(
 
     let (restored_from, character, data, inventory, wallet, town, mut server_state) = target;
     let parked = take_parked_quests(&mut server_state);
+    let parked_events = take_parked_events(&mut server_state);
     diesel::update(ch::characters.filter(ch::id.eq(character_id)))
         .set((
             ch::character.eq(character),
@@ -6646,6 +6799,11 @@ async fn apply_switch_alt(
             BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
         })?;
     }
+    // Independently of the quests: the outgoing alt's event rows were parked
+    // with it above, so a version without parked events arrives with none.
+    unpark_events(conn, character_id, parked_events).await.map_err(|_| {
+        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
+    })?;
 
     remember_device_alt(conn, body).await?;
 

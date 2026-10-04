@@ -621,6 +621,28 @@ pub(crate) async fn event_completion_in_window(
     Ok(completion)
 }
 
+/// How many tiers of the event instance `instance_quest_id` the character's own
+/// record says it has finished: its `character.completedQuests` entry, keyed by
+/// the instance id for an event (see `quest::completed_quests_key`). 0 when the
+/// entry, or the character, is missing.
+async fn own_event_tiers(
+    conn: &mut AsyncPgConnection,
+    char_id: Uuid,
+    instance_quest_id: Uuid,
+) -> Result<i64, BladeApiError> {
+    use crate::schema::characters::dsl as ch;
+    let character: Option<JsonDbWrapper<serde_json::Value>> = ch::characters
+        .filter(ch::id.eq(char_id))
+        .select(ch::character)
+        .first(conn)
+        .await
+        .optional()?;
+    Ok(character
+        .and_then(|c| c.0["completedQuests"][instance_quest_id.to_string()].as_i64())
+        .unwrap_or(0)
+        .max(0))
+}
+
 /// Put an event instance back to how its next run starts.
 ///
 /// Retail's exit after a completed run hands the instance back with
@@ -1791,7 +1813,20 @@ async fn handle_event_dungeon_entry(
     // The completion record, with any count left over from a PREVIOUS window of this
     // event already dropped. Without that the counter is a lifetime total against
     // per-window tiers, so finishing an event locks the player out of it for ever.
-    let completion = event_completion_in_window(conn, sd, character_id, quest_id, now).await?;
+    let mut completion = event_completion_in_window(conn, sd, character_id, quest_id, now).await?;
+    // The character's own record of how many tiers of THIS window's instance it
+    // has finished is the `completedQuests` entry the client draws its checkmarks
+    // from, and it travels with the character. A counter that disagrees is not
+    // this character's: another alt's, left on the shared character id (#334) —
+    // refusing on it was the 403 "already completed" for an event the game showed
+    // as untouched — or missing because the alt arrived without its event rows,
+    // which would pay its finished tiers again. The character's record wins.
+    let own_tiers = own_event_tiers(conn, character_id, instance_quest_id).await?;
+    if i64::from(completion.completion_count) != own_tiers {
+        completion
+            .reconcile_to(conn, own_tiers.min(i64::from(i32::MAX)) as i32)
+            .await?;
+    }
     let completion_count = completion.completion_count as usize;
     let enemy_level = difficulty_level.max(1);
     let (dungeon_uuid, dungeon_data) = event_dungeon_data_for_run(
@@ -1858,50 +1893,64 @@ async fn handle_event_dungeon_entry(
             // max_entries: bumping entry_count here on every resume was the bug —
             // a couple of reconnects would exhaust `max_entries: 1` and permanently
             // 403 a player who never actually re-entered the dungeon fresh.
-            if let Some(existing) = existing_entry {
-                if existing.dungeon_state.is_some() {
-                    let dungeon_state_value = existing.dungeon_state.unwrap();
-                    let mut dungeon_state_actual: DungeonState = serde_json::from_value(dungeon_state_value)
-                        .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, 20002, 2))?;
-
-                    dungeon_state_actual.dungeon_status.current_state = body.current_state;
-                    // Heal attempts created before report #135's fix. Their stored
-                    // status named the event quest UUID instead of the dungeon UUID,
-                    // and their generated data was therefore empty.
-                    dungeon_state_actual.dungeon_status.dungeon_settings_ids = vec![dungeon_uuid];
-                    // The generated data below is rewritten at the row's level, so the
-                    // level chests are minted at moves with it. Attempts started while
-                    // this path generated everything at level 1 are healed here too.
-                    dungeon_state_actual.dungeon_status.level = enemy_level as u64;
-
-                    {
-                        use crate::schema::event_dungeons::dsl::*;
-
-                        let dungeon_state_json = serde_json::to_value(&dungeon_state_actual)
-                            .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3))?;
-                        let generated_data_json = serde_json::to_value(&dungeon_data)
-                            .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3))?;
-
-                        diesel::update(event_dungeons)
-                            .filter(id.eq(existing.id))
-                            .set((
-                                dungeon_state.eq(Some(dungeon_state_json)),
-                                generated_data.eq(generated_data_json),
-                                // entry_count intentionally left unchanged — this is a resume.
-                            ))
-                            .execute(&mut conn)
-                            .await?;
-                    };
-
-                    return Ok(Json(EnterDungeonResponse {
-                        dungeon_status: dungeon_state_actual.dungeon_status,
-                    }));
+            // A stored attempt that no longer parses is not a live one: it is treated
+            // as finished and a fresh attempt starts below, rather than refusing the
+            // player an event they can see (#334).
+            let live_attempt = existing_entry.as_ref().and_then(|e| {
+                let parsed = e
+                    .dungeon_state
+                    .clone()
+                    .map(serde_json::from_value::<DungeonState>)?;
+                match parsed {
+                    Ok(state) => Some((e.id, state)),
+                    Err(err) => {
+                        log::warn!(
+                            "[event_dungeon] character {owner_id}: stored attempt {} of event quest \
+                             {dungeon_id_clone} does not parse ({err}) — starting a fresh one",
+                            e.id
+                        );
+                        None
+                    }
                 }
+            });
+            //
+            // Existing row but no live dungeon_state — the player finished that
+            // attempt and is starting the next run. Runs are unlimited by design:
+            // only `completion_count >= max_completions` is allowed to block a new
+            // attempt. Fall through, reusing this row's id.
+            if let Some((existing_id, mut dungeon_state_actual)) = live_attempt {
+                dungeon_state_actual.dungeon_status.current_state = body.current_state;
+                // Heal attempts created before report #135's fix. Their stored
+                // status named the event quest UUID instead of the dungeon UUID,
+                // and their generated data was therefore empty.
+                dungeon_state_actual.dungeon_status.dungeon_settings_ids = vec![dungeon_uuid];
+                // The generated data below is rewritten at the row's level, so the
+                // level chests are minted at moves with it. Attempts started while
+                // this path generated everything at level 1 are healed here too.
+                dungeon_state_actual.dungeon_status.level = enemy_level as u64;
 
-                // Existing row but dungeon_state is NULL — the player finished that
-                // attempt and is starting the next run. Runs are unlimited by design:
-                // only `completion_count >= max_completions` is allowed to block a new
-                // attempt. Fall through, reusing this row's id.
+                {
+                    use crate::schema::event_dungeons::dsl::*;
+
+                    let dungeon_state_json = serde_json::to_value(&dungeon_state_actual)
+                        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3))?;
+                    let generated_data_json = serde_json::to_value(&dungeon_data)
+                        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3))?;
+
+                    diesel::update(event_dungeons)
+                        .filter(id.eq(existing_id))
+                        .set((
+                            dungeon_state.eq(Some(dungeon_state_json)),
+                            generated_data.eq(generated_data_json),
+                            // entry_count intentionally left unchanged — this is a resume.
+                        ))
+                        .execute(&mut conn)
+                        .await?;
+                };
+
+                return Ok(Json(EnterDungeonResponse {
+                    dungeon_status: dungeon_state_actual.dungeon_status,
+                }));
             }
 
             if event_finished {
@@ -1915,7 +1964,7 @@ async fn handle_event_dungeon_entry(
             // Starting a new attempt — either no prior row at all, or the prior one
             // was finished and the player is on the next tier.
             let dungeon_instance = match body.dungeon_instance {
-                Some(instance) => instance,
+                Some(instance) => Some(instance),
                 // A resume with nothing to resume. Retail never answered a resume
                 // with an error (7/7 captured resumes 200, each after an exit that
                 // kept its attempt). This server did, by clearing the attempt on every
@@ -1923,13 +1972,19 @@ async fn handle_event_dungeon_entry(
                 // came back 400 with the quest spinning for good (2026-09-24). Rows
                 // stranded that way still hold the dungeon they were entered with, so
                 // start the run again from it.
+                //
+                // And with nothing stored either — an alt that arrived without
+                // event state, or a row lost some other way — the run still starts
+                // fresh rather than answering 400 (#334). The response is the
+                // dungeon status, which names the dungeon; the stored instance is
+                // only what a later resume would have restarted from.
                 None => {
                     let stored = stored_instance
-                        .and_then(|v| serde_json::from_value::<B64EncodedData>(v).ok())
-                        .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, 20002, 2))?;
+                        .and_then(|v| serde_json::from_value::<B64EncodedData>(v).ok());
                     log::info!(
                         "[event_dungeon] character {owner_id} resumed event quest {dungeon_id_clone} \
-                         with no live attempt — starting a fresh one from its stored dungeonInstance"
+                         with no live attempt — starting a fresh one ({})",
+                        if stored.is_some() { "from its stored dungeonInstance" } else { "nothing stored" }
                     );
                     stored
                 }
@@ -1982,7 +2037,10 @@ async fn handle_event_dungeon_entry(
                 dungeon_status: status.clone(),
             }).map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3))?;
 
-            let initial_state_json = serde_json::to_value(dungeon_instance.clone())
+            let initial_state_json = dungeon_instance
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()
                 .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3))?;
 
             let generated_data_json = serde_json::to_value(dungeon_data)
@@ -2000,7 +2058,7 @@ async fn handle_event_dungeon_entry(
                         .filter(id.eq(row_id))
                         .set((
                             dungeon_state.eq(Some(dungeon_state_json)),
-                            initial_state.eq(Some(initial_state_json)),
+                            initial_state.eq(initial_state_json),
                             generated_data.eq(generated_data_json),
                             entered_at.eq(chrono::Utc::now().naive_utc()),
                             entry_count.eq(current_entries + 1), // telemetry only, not a gate
@@ -2016,7 +2074,7 @@ async fn handle_event_dungeon_entry(
                         event_id: actual_event_id,
                         dungeon_id: dungeon_id_clone,
                         dungeon_state: Some(dungeon_state_json),
-                        initial_state: Some(initial_state_json),
+                        initial_state: initial_state_json,
                         generated_data: generated_data_json,
                         entered_at: chrono::Utc::now().naive_utc(),
                         expires_at: None, // No expiration for event quests
@@ -2240,6 +2298,18 @@ mod event_run_lifecycle_db {
             initial_state JSONB, PRIMARY KEY (id, character_id));";
     const EVENT_TABLES: &str =
         include_str!("../../migrations/2026-09-04-000000-0000_add_event_quest_tables/up.sql");
+    /// What an alt switch reads and writes besides the character (#334).
+    const ALT_TABLES: &str = "\
+        CREATE TABLE character_versions ( \
+            id UUID PRIMARY KEY, character_id UUID NOT NULL, user_id UUID NOT NULL, \
+            source_alt_uuid UUID, name TEXT NOT NULL DEFAULT '', \
+            level INTEGER NOT NULL DEFAULT 0, character JSONB NOT NULL, \
+            data JSONB NOT NULL, inventory JSONB NOT NULL, wallet JSONB NOT NULL, \
+            town JSONB, server_state JSONB NOT NULL, \
+            reason TEXT NOT NULL DEFAULT 'import', \
+            saved_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM now())::bigint); \
+        CREATE TABLE device_bindings ( \
+            device_id TEXT PRIMARY KEY, user_id UUID, active_alt_uuid UUID);";
 
     struct World {
         sd: StaticData,
@@ -2278,6 +2348,7 @@ mod event_run_lifecycle_db {
         .unwrap();
         conn.batch_execute(TABLES).await.unwrap();
         conn.batch_execute(EVENT_TABLES).await.unwrap();
+        conn.batch_execute(ALT_TABLES).await.unwrap();
         Some(conn)
     }
 
@@ -2709,18 +2780,14 @@ mod event_run_lifecycle_db {
     }
 
     /// A resume that finds NO live attempt — rows the old exit stranded — starts the
-    /// run again from the stored dungeon instead of 400ing. The control: with no row
-    /// at all there is nothing to start from, and it is still refused.
+    /// run again from the stored dungeon instead of 400ing. (With no row at all it
+    /// starts fresh too since #334 — `missing_or_unreadable_event_state_starts_a_fresh_run`;
+    /// it used to be refused here, which is what an alt arriving without event
+    /// state would have hit.)
     #[tokio::test]
     async fn a_resume_with_no_live_attempt_starts_a_fresh_one_from_the_stored_dungeon() {
         let mut conn = db!();
         let p = seed(&mut conn).await;
-
-        // CONTROL first: never entered, so no stored dungeon.
-        let err = enter(&mut conn, &p, None)
-            .await
-            .expect_err("nothing to resume or start");
-        assert_eq!(err.status_code().as_u16(), 400);
 
         let entered = enter(&mut conn, &p, Some("INSTANCE"))
             .await
@@ -2971,4 +3038,318 @@ mod event_run_lifecycle_db {
         assert!(ordinary_state(&mut conn, finished).await.is_none());
         assert!(out["character"]["currentQuestDungeon"].is_null());
     }
+
+    // ---------------------------------------------------------------------
+    // Report #334: an event is per ALT, not per account. Every alt of a user
+    // takes turns on one live character id, so the event rows keyed by it must
+    // travel with the alt the way its quest rows do (#451).
+    // ---------------------------------------------------------------------
+
+    const ALT_A: &str = "2e3e49ad-0000-4000-8000-00000000000a";
+    const ALT_B: &str = "478b5406-0000-4000-8000-00000000000b";
+
+    fn alt(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+
+    /// The live row as alt A, plus a kept version of alt B: a character that has
+    /// never played the event here, carrying `server_state` as given.
+    async fn two_alts(conn: &mut AsyncPgConnection, b_server_state: Value) -> Player {
+        let p = seed(conn).await;
+        diesel::sql_query("UPDATE characters SET source_alt_uuid = $2 WHERE id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(p.character)
+            .bind::<diesel::sql_types::Uuid, _>(alt(ALT_A))
+            .execute(conn)
+            .await
+            .unwrap();
+        diesel::sql_query(
+            "INSERT INTO character_versions \
+               (id, character_id, user_id, source_alt_uuid, name, level, character, data, \
+                inventory, wallet, town, server_state, reason, saved_at) \
+             SELECT $2, id, user_id, $3, 'newmunk', 5, $4::jsonb, data, inventory, wallet, \
+                    town, $5, 'switch', 1 \
+               FROM characters WHERE id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(p.character)
+        .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+        .bind::<diesel::sql_types::Uuid, _>(alt(ALT_B))
+        .bind::<diesel::sql_types::Text, _>(
+            serde_json::to_string(&blades_lib::user_data::CompleteCharacter::default()).unwrap(),
+        )
+        .bind::<diesel::sql_types::Jsonb, _>(b_server_state)
+        .execute(conn)
+        .await
+        .unwrap();
+        p
+    }
+
+    async fn switch_to(conn: &mut AsyncPgConnection, p: &Player, to: &str) {
+        crate::admin::apply_switch_alt(
+            conn,
+            &crate::admin::SwitchAltRequest {
+                user_id: p.user,
+                alt_uuid: alt(to),
+                device_id: None,
+            },
+        )
+        .await
+        .unwrap_or_else(|e| panic!("switch to {to}: {e}"));
+        // `/quests` mints the event instance for whichever alt is live; its id is
+        // deterministic per character id, so it is the same row id for both alts.
+        diesel::sql_query(
+            "INSERT INTO quests (id, character_id, info, generated_data) \
+             SELECT $1, $2, info, generated_data FROM ( \
+               SELECT $3::jsonb AS info, $4::jsonb AS generated_data) x \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(p.instance)
+        .bind::<diesel::sql_types::Uuid, _>(p.character)
+        .bind::<diesel::sql_types::Text, _>({
+            let m = minted(p);
+            serde_json::to_string(&m.quest).unwrap()
+        })
+        .bind::<diesel::sql_types::Text, _>({
+            let m = minted(p);
+            serde_json::to_string(&m.dungeon).unwrap()
+        })
+        .execute(conn)
+        .await
+        .unwrap();
+    }
+
+    fn minted(p: &Player) -> crate::quest::event_quests::MintedEventQuest {
+        let w = world();
+        crate::quest::event_quests::mint(&w.sd, &w.gd, p.character, 40, NOW)
+            .into_iter()
+            .next()
+            .unwrap()
+    }
+
+    fn tiers_of(p: &Player) -> usize {
+        world().sd.event_quests.templates.get(&p.template).unwrap().milestone_count()
+    }
+
+    /// One full run: enter, complete, walk out.
+    async fn run_once(conn: &mut AsyncPgConnection, p: &Player, label: &str) -> Value {
+        enter(conn, p, Some("INSTANCE"))
+            .await
+            .unwrap_or_else(|e| panic!("{label}: enter refused: {e}"));
+        let done = complete(conn, p).await;
+        exit(conn, p, false).await;
+        done
+    }
+
+    async fn count(conn: &mut AsyncPgConnection, sql: &str, c: Uuid) -> i64 {
+        #[derive(diesel::QueryableByName)]
+        struct N {
+            #[diesel(sql_type = diesel::sql_types::BigInt)]
+            n: i64,
+        }
+        diesel::sql_query(sql)
+            .bind::<diesel::sql_types::Uuid, _>(c)
+            .get_result::<N>(conn)
+            .await
+            .unwrap()
+            .n
+    }
+
+    /// The report, end to end. Alt A finishes every tier; alt B, switched to on
+    /// the same live character id, can start the event and complete a tier of its
+    /// own; switching back finds A still finished, and B's progress is kept for B.
+    #[tokio::test]
+    async fn an_event_finished_on_one_alt_is_fresh_on_another() {
+        let mut conn = db!();
+        let p = two_alts(&mut conn, json!({})).await;
+        let tiers = tiers_of(&p);
+
+        for n in 0..tiers {
+            run_once(&mut conn, &p, &format!("alt A run {n}")).await;
+        }
+        assert_eq!(completions(&mut conn, &p).await as usize, tiers);
+        let refused = enter(&mut conn, &p, Some("INSTANCE")).await.unwrap_err();
+        assert_eq!(refused.status_code().as_u16(), 403, "A has finished the event");
+
+        switch_to(&mut conn, &p, ALT_B).await;
+        assert_eq!(completions(&mut conn, &p).await, 0, "B arrives with a fresh event");
+        let first = run_once(&mut conn, &p, "alt B run 0").await;
+        let want = crate::quest::event_milestone_reward(
+            &world().sd,
+            p.instance,
+            &serde_json::from_value(quest_info(&mut conn, &p).await).unwrap(),
+            0,
+        )
+        .unwrap();
+        assert_eq!(first["reward"], serde_json::to_value(&want).unwrap(), "B is paid tier 1");
+        assert_eq!(completions(&mut conn, &p).await, 1);
+
+        switch_to(&mut conn, &p, ALT_A).await;
+        assert_eq!(completions(&mut conn, &p).await as usize, tiers, "A is still finished");
+        let refused = enter(&mut conn, &p, Some("INSTANCE")).await.unwrap_err();
+        assert_eq!(refused.status_code().as_u16(), 403, "and still cannot replay it");
+
+        switch_to(&mut conn, &p, ALT_B).await;
+        assert_eq!(completions(&mut conn, &p).await, 1, "B's own tier came back with B");
+        run_once(&mut conn, &p, "alt B run 1").await;
+        assert_eq!(completions(&mut conn, &p).await, 2);
+    }
+
+    /// A version kept before events were parked (it has `parkedQuests` but no
+    /// event keys) arrives with NO event state: the live rows are the outgoing
+    /// alt's and leave with it. An attempt in progress — with a JSON `null` in
+    /// its NOT NULL `generated_data`, as dialogue rows have in `quests` — makes
+    /// the round trip intact.
+    #[tokio::test]
+    async fn a_version_without_parked_events_arrives_with_none() {
+        let mut conn = db!();
+        let p = two_alts(&mut conn, json!({"parkedQuests": []})).await;
+        run_once(&mut conn, &p, "alt A run 0").await;
+        enter(&mut conn, &p, Some("INSTANCE")).await.expect("A's second run");
+        diesel::sql_query("UPDATE event_dungeons SET generated_data = 'null'::jsonb WHERE character_id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(p.character)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        let a_attempt = attempt(&mut conn, &p).await.expect("A mid-run");
+
+        switch_to(&mut conn, &p, ALT_B).await;
+        let c = p.character;
+        assert_eq!(count(&mut conn, "SELECT count(*) AS n FROM event_completions WHERE character_id = $1", c).await, 0);
+        assert_eq!(count(&mut conn, "SELECT count(*) AS n FROM event_dungeons WHERE character_id = $1", c).await, 0);
+        assert!(
+            live_server_state(&mut conn, c).await.get("parkedEventCompletions").is_none(),
+            "the parking keys never reach the live row"
+        );
+
+        switch_to(&mut conn, &p, ALT_A).await;
+        assert_eq!(completions(&mut conn, &p).await, 1, "A's counter came back");
+        assert_eq!(attempt(&mut conn, &p).await, Some(a_attempt), "A's attempt came back");
+        assert_eq!(
+            json_of(
+                &mut conn,
+                "SELECT generated_data AS v FROM event_dungeons WHERE character_id = $1 AND dungeon_id = $2",
+                p.character,
+                p.template
+            )
+            .await,
+            Some(Value::Null),
+            "JSON null stays JSON null"
+        );
+        assert!(live_server_state(&mut conn, c).await.get("parkedEventDungeons").is_none());
+    }
+
+    async fn live_server_state(conn: &mut AsyncPgConnection, c: Uuid) -> Value {
+        json_of(conn, "SELECT server_state AS v FROM characters WHERE id = $1 AND id = $2", c, c)
+            .await
+            .unwrap()
+    }
+
+    /// The state production is in today (#334): the counter on the live row says
+    /// every tier is done — another alt's — while this character's own
+    /// `completedQuests` has never seen the event. That is an inconsistency, not
+    /// a finished event: the player gets a fresh run and tier 1, not a 403.
+    #[tokio::test]
+    async fn a_counter_ahead_of_the_characters_own_record_is_not_a_403() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        let tiers = tiers_of(&p);
+        diesel::sql_query(
+            "INSERT INTO event_completions (character_id, event_id, completion_count) VALUES ($1, $2, $3)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(p.character)
+        .bind::<diesel::sql_types::Uuid, _>(p.template)
+        .bind::<diesel::sql_types::Integer, _>(tiers as i32)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+        let done = run_once(&mut conn, &p, "inconsistent counter").await;
+        assert!(
+            !serde_json::from_value::<blades_lib::economy::RewardGrant>(done["reward"].clone())
+                .unwrap()
+                .is_empty(),
+            "the run pays its first tier"
+        );
+        assert_eq!(completions(&mut conn, &p).await, 1);
+        assert_eq!(done["character"]["completedQuests"][p.instance.to_string()], json!(1));
+    }
+
+    /// Missing event state: a resume (no `dungeonInstance`) with no attempt row at
+    /// all, and a stored attempt that no longer parses. Both start a fresh run;
+    /// neither is a 400.
+    #[tokio::test]
+    async fn missing_or_unreadable_event_state_starts_a_fresh_run() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        let fresh = enter(&mut conn, &p, None).await.expect("a resume with nothing stored");
+        assert_eq!(fresh.revive_count, 0);
+        assert!(attempt(&mut conn, &p).await.is_some(), "a live attempt now");
+
+        diesel::sql_query(
+            "UPDATE event_dungeons SET dungeon_state = '{\"garbage\": true}'::jsonb WHERE character_id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(p.character)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        let again = enter(&mut conn, &p, Some("INSTANCE")).await.expect("an unreadable attempt");
+        assert_eq!(again.revive_count, 0);
+        assert!(
+            attempt(&mut conn, &p).await.unwrap().get("dungeonStatus").is_some(),
+            "replaced by a readable one"
+        );
+    }
+
+
+    /// Restoring a kept version brings its event rows back too, and the state it
+    /// replaces keeps its own (the same rule as its quest rows).
+    #[tokio::test]
+    async fn restoring_a_version_brings_its_event_state_back() {
+        let mut conn = db!();
+        let p = two_alts(&mut conn, json!({})).await;
+        run_once(&mut conn, &p, "alt A run 0").await;
+        switch_to(&mut conn, &p, ALT_B).await;
+        assert_eq!(completions(&mut conn, &p).await, 0);
+
+        #[derive(diesel::QueryableByName)]
+        struct V {
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            id: Uuid,
+        }
+        let a_version = diesel::sql_query(
+            "SELECT id FROM character_versions WHERE source_alt_uuid = $1 \
+             ORDER BY saved_at DESC LIMIT 1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(alt(ALT_A))
+        .get_result::<V>(&mut conn)
+        .await
+        .unwrap()
+        .id;
+        crate::admin::apply_restore(&mut conn, a_version).await.expect("restore");
+        assert_eq!(completions(&mut conn, &p).await, 1, "A's counter is back");
+    }
+
+
+    /// The other direction: an alt that arrived without its event rows (a version
+    /// kept before they were parked) but whose own record says every tier of this
+    /// window is done is still done. Fresh rows must not pay those tiers again.
+    #[tokio::test]
+    async fn an_alt_without_event_rows_but_a_finished_record_is_not_paid_again() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        let tiers = tiers_of(&p);
+        diesel::sql_query(
+            "UPDATE characters SET character = jsonb_set(character, '{completedQuests}', \
+               jsonb_build_object($2::text, $3::int)) WHERE id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(p.character)
+        .bind::<diesel::sql_types::Text, _>(p.instance.to_string())
+        .bind::<diesel::sql_types::Integer, _>(tiers as i32)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        let refused = enter(&mut conn, &p, Some("INSTANCE")).await.unwrap_err();
+        assert_eq!(refused.status_code().as_u16(), 403, "finished, as the game shows it");
+        assert_eq!(completions(&mut conn, &p).await as usize, tiers);
+    }
+
 }
