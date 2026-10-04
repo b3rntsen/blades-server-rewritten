@@ -327,6 +327,36 @@ impl EventCompletion {
         Ok(())
     }
 
+    /// Bring the counter back to `count` — the character's own record — when it
+    /// is ahead of it (report #334). Leaves `last_completed_at` alone: the window
+    /// it belongs to has not changed.
+    pub async fn reconcile_down_to(
+        &mut self,
+        conn: &mut AsyncPgConnection,
+        count: i32,
+    ) -> Result<(), BladeApiError> {
+        use crate::schema::event_completions::dsl::*;
+
+        if self.completion_count <= count {
+            return Ok(());
+        }
+        log::warn!(
+            "event {}: character {} counter at {} but its own completedQuests says {} — \
+             the counter is not this character's (another alt's, #334); using {}",
+            self.event_id,
+            self.character_id,
+            self.completion_count,
+            count,
+            count,
+        );
+        self.completion_count = count;
+        diesel::update(event_completions.filter(id.eq(self.id)))
+            .set(completion_count.eq(count))
+            .execute(conn)
+            .await?;
+        Ok(())
+    }
+
     pub async fn increment_completion(
         &mut self,
         conn: &mut AsyncPgConnection,
