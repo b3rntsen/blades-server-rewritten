@@ -119,6 +119,94 @@ struct ChestSpawnDefinition {
     #[cfg_attr(not(test), allow(dead_code))]
     tier: Option<u64>,
     quantity: u64,
+    /// The APK `ChestCycle` this spawn draws its tier from, when it has one.
+    #[serde(default, rename = "chestCycle")]
+    chest_cycle: Option<Uuid>,
+}
+
+/// One `ChestCycle.AdditionalChestRule`: `chests` positions in `start..=end` of
+/// every pass through the cycle hold `rarity` instead of the base chest.
+struct CycleRule {
+    chests: usize,
+    rarity: i64,
+    start: u64,
+    end: u64,
+}
+
+/// A shipped `ChestCycle` whose base `_rarityList` is one rarity throughout.
+struct ChestCycle {
+    id: Uuid,
+    length: u64,
+    base: i64,
+    rules: &'static [CycleRule],
+}
+
+/// The two chest cycles a dungeon spawn names, from the APK's `ChestCycleData`
+/// (both are the job chests in `JobSpawnGroupsReference`; no other spawn of the
+/// 292 names one). Retail's job chests followed them: over 463 distinct captured
+/// jobs the main chest was wooden 412, silver 35, gold 16, and the secret-room
+/// chest silver 420, gold 40, Elder 3. We sent the base rarity, wooden and
+/// silver, every time, so a job could never hold a gold or Elder chest (#337).
+const CHEST_CYCLES: &[ChestCycle] = &[
+    // "New Jobs Chest Cycle (Non-secret)": 100 x wooden; per pass one gold in each
+    // quarter, ten silver anywhere -- 86 / 10 / 4 by construction.
+    ChestCycle {
+        id: Uuid::from_u128(0x5b20edcb_ed53_44fe_805a_20a02fa3183e),
+        length: 100,
+        base: 1,
+        rules: &[
+            CycleRule { chests: 1, rarity: 3, start: 2, end: 24 },
+            CycleRule { chests: 1, rarity: 3, start: 26, end: 49 },
+            CycleRule { chests: 1, rarity: 3, start: 51, end: 74 },
+            CycleRule { chests: 1, rarity: 3, start: 76, end: 99 },
+            CycleRule { chests: 10, rarity: 2, start: 2, end: 99 },
+        ],
+    },
+    // "Job Secrets Chest Cycle": 500 x silver; per pass three Elder and fifty gold.
+    ChestCycle {
+        id: Uuid::from_u128(0xe814bc37_93eb_4480_817f_115edfb8ef11),
+        length: 500,
+        base: 2,
+        rules: &[
+            CycleRule { chests: 1, rarity: 4, start: 50, end: 125 },
+            CycleRule { chests: 1, rarity: 4, start: 175, end: 300 },
+            CycleRule { chests: 1, rarity: 4, start: 350, end: 475 },
+            CycleRule { chests: 10, rarity: 3, start: 5, end: 100 },
+            CycleRule { chests: 10, rarity: 3, start: 101, end: 200 },
+            CycleRule { chests: 10, rarity: 3, start: 201, end: 300 },
+            CycleRule { chests: 10, rarity: 3, start: 301, end: 400 },
+            CycleRule { chests: 10, rarity: 3, start: 401, end: 499 },
+        ],
+    },
+];
+
+/// The tier a cycle gives the chest at a hashed place in it.
+///
+/// Retail kept a position per player and placed each rule's chests at random
+/// in its window; its `allowRepeatSecs` cooldowns need that state, which we do
+/// not keep. So the pass and the position are derived from the run instead:
+/// the rarities come out in the proportions the cycle is built from, and the
+/// same run always describes the same chest. The first rule listed wins a
+/// position two rules picked.
+fn cycle_tier(cycle: &ChestCycle, ctx: LootSeedContext, spawn_id: &Uuid, index: usize) -> i64 {
+    let h = loot_seed(ctx, spawn_id, &cycle.id, index);
+    let position = h % cycle.length;
+    let pass = h / cycle.length;
+    for (r, rule) in cycle.rules.iter().enumerate() {
+        let mut rng = LootRng(mix64(pass ^ (r as u64).rotate_left(48) ^ cycle.id.as_u128() as u64));
+        let width = rule.end - rule.start + 1;
+        let mut placed: Vec<u64> = Vec::with_capacity(rule.chests);
+        while placed.len() < rule.chests.min(width as usize) {
+            let p = rule.start + rng.next() % width;
+            if !placed.contains(&p) {
+                placed.push(p);
+            }
+        }
+        if placed.contains(&position) {
+            return rule.rarity;
+        }
+    }
+    cycle.base
 }
 
 fn chest_tiers() -> &'static ChestTierCorpus {
@@ -810,9 +898,19 @@ fn generate_for_dungeon_inner(
                     .map(|d| d.rarity)
                     .unwrap_or(1);
                 let quantity = definition.map(|d| d.quantity).unwrap_or(1).max(1);
+                let cycle = definition
+                    .and_then(|d| d.chest_cycle)
+                    .and_then(|id| CHEST_CYCLES.iter().find(|c| c.id == id));
                 (
                     *chest_spawn_id,
-                    (0..quantity).map(|_| ChestGeneratedData { tier }).collect(),
+                    (0..quantity as usize)
+                        .map(|index| ChestGeneratedData {
+                            tier: match cycle {
+                                Some(cycle) => cycle_tier(cycle, seed_context, chest_spawn_id, index),
+                                None => tier,
+                            },
+                        })
+                        .collect(),
                 )
             })
             .collect(),
@@ -907,6 +1005,17 @@ mod chest_generation_tests {
                     .get(chest_id)
                     .expect("generated chest group");
                 assert_eq!(actual.len(), expected.quantity.max(1) as usize, "{chest_id}");
+                // The two job chests draw from a chest cycle instead (#337), whose
+                // base is this same rarity; their mix is pinned in server's
+                // `report_337_job_drops_and_families`.
+                if expected.chest_cycle.is_some() {
+                    assert!(
+                        CHEST_CYCLES.iter().any(|c| Some(c.id) == expected.chest_cycle && c.base == expected.rarity),
+                        "{chest_id} names a cycle we do not model, or one whose base is not its rarity"
+                    );
+                    checked += 1;
+                    continue;
+                }
                 // The APK rarity verbatim, INCLUDING the one spawn whose rarity
                 // is -1. This used to read `tier.unwrap_or(1)`, which is what
                 // turned retail's -1 into a 1 on the wire.

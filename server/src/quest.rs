@@ -3317,6 +3317,151 @@ pub(crate) mod jobs_gen {
         "de8e06be-5403-4fc1-b912-1a5cd9d608a6",
         "ea8096f9-6c1b-4b42-af71-9ceabd7de33d",
     ];
+    /// One enemy family a job may name, with what the client needs to field it.
+    ///
+    /// From the APK's `EnemyData` assets (`blades-capture
+    /// reference/game-defs/enemies.json`): `min_level`/`max_level` span the family's
+    /// level-banded variants (none of the 22 has a gap), `bosses` is its
+    /// `_bossFamilyIds`, and `leads` says whether retail ever made it a job's
+    /// primary enemy or boss.
+    pub struct JobFamily {
+        pub id: &'static str,
+        pub min_level: i64,
+        pub max_level: i64,
+        pub leads: bool,
+        pub bosses: &'static [&'static str],
+    }
+
+    impl JobFamily {
+        fn covers(&self, level: i64) -> bool {
+            (self.min_level..=self.max_level).contains(&level)
+        }
+    }
+
+    /// The families retail's jobs were drawn from (report #337).
+    ///
+    /// Measured over 417 distinct non-Duel retail jobs (222 captured `/quests`
+    /// bodies), 1,251 primary/secondary/boss slots:
+    ///
+    /// * The three Duelist families in [`ENEMY_FAMILIES`] (Avenger, Barbarian,
+    ///   Swordmage) filled **0** slots. They are armoured humans weak to Frost,
+    ///   Shock or Fire and resistant to Poison, so drawing them put "humans whose
+    ///   weakness keeps changing" into jobs where retail fielded Mercenaries,
+    ///   Warmasters and Bandits, every one of them weak to Poison at every level.
+    /// * The four critter families (Skeever, Wolf, critter Spider, Wisp) were
+    ///   secondaries only: 0 primaries, 0 bosses (`leads: false`).
+    /// * Every slot's family has a variant at that slot's level (1,251 of 1,251),
+    ///   the boss checked at `difficultyLevel + bossLevelDelta`.
+    /// * The boss is in the primary's or the secondary's boss list in 417 of 417
+    ///   jobs, and the secret boss in 59 of 59.
+    pub const JOB_FAMILIES: &[JobFamily] = &[
+        // Bear
+        JobFamily { id: "008cf5b0-2590-433b-832e-f2e6f0e0226f", min_level: 4, max_level: 99, leads: true, bosses: &["008cf5b0-2590-433b-832e-f2e6f0e0226f", "06591d48-8c3a-4f81-a2c6-dba2e7163788"] },
+        // Spriggan
+        JobFamily { id: "06591d48-8c3a-4f81-a2c6-dba2e7163788", min_level: 3, max_level: 99, leads: true, bosses: &["06591d48-8c3a-4f81-a2c6-dba2e7163788"] },
+        // Thalmor Agent
+        JobFamily { id: "1696d9c0-900f-4829-ae3f-f0441d92a37c", min_level: 6, max_level: 101, leads: true, bosses: &["1696d9c0-900f-4829-ae3f-f0441d92a37c"] },
+        // Troll
+        JobFamily { id: "1b2a30db-2871-43a2-bca0-eaa4bd804698", min_level: 7, max_level: 99, leads: true, bosses: &["1b2a30db-2871-43a2-bca0-eaa4bd804698", "06591d48-8c3a-4f81-a2c6-dba2e7163788"] },
+        // Skeever
+        JobFamily { id: "31be99a6-8557-4e9b-81e6-5503f900b7d2", min_level: 2, max_level: 22, leads: false, bosses: &["008cf5b0-2590-433b-832e-f2e6f0e0226f", "8c75bd1f-95a3-47d4-a28c-fdb1fc0de228", "06591d48-8c3a-4f81-a2c6-dba2e7163788"] },
+        // Warmaster
+        JobFamily { id: "33de9f64-8eb6-41d2-b62d-8b7fb3632729", min_level: 10, max_level: 101, leads: true, bosses: &["33de9f64-8eb6-41d2-b62d-8b7fb3632729"] },
+        // Dremora Raider
+        JobFamily { id: "340cd608-31ec-447f-9f72-2162639bff3c", min_level: 8, max_level: 106, leads: true, bosses: &["340cd608-31ec-447f-9f72-2162639bff3c", "ea8096f9-6c1b-4b42-af71-9ceabd7de33d", "50994925-f050-48b2-8cab-259b0f1a3531", "1696d9c0-900f-4829-ae3f-f0441d92a37c", "3fa0aa97-7a45-4c96-8b62-53e08691f746"] },
+        // Spider
+        JobFamily { id: "3d932102-3b5c-42ba-b96a-35405752c5a3", min_level: 9, max_level: 97, leads: false, bosses: &["6ee657a9-5cc3-45b7-ad14-db8828f7ae2c"] },
+        // Lich
+        JobFamily { id: "3fa0aa97-7a45-4c96-8b62-53e08691f746", min_level: 7, max_level: 100, leads: true, bosses: &["3fa0aa97-7a45-4c96-8b62-53e08691f746"] },
+        // Mercenary
+        JobFamily { id: "4c60bb97-3918-485a-822e-1017d2401dd2", min_level: 5, max_level: 100, leads: true, bosses: &["4c60bb97-3918-485a-822e-1017d2401dd2", "33de9f64-8eb6-41d2-b62d-8b7fb3632729"] },
+        // Necromancer
+        JobFamily { id: "50994925-f050-48b2-8cab-259b0f1a3531", min_level: 5, max_level: 100, leads: true, bosses: &["50994925-f050-48b2-8cab-259b0f1a3531", "33de9f64-8eb6-41d2-b62d-8b7fb3632729"] },
+        // Wight
+        JobFamily { id: "521bb612-587d-4a90-adee-904a48d89c33", min_level: 5, max_level: 99, leads: true, bosses: &["521bb612-587d-4a90-adee-904a48d89c33", "3fa0aa97-7a45-4c96-8b62-53e08691f746"] },
+        // Spider
+        JobFamily { id: "6ee657a9-5cc3-45b7-ad14-db8828f7ae2c", min_level: 9, max_level: 97, leads: true, bosses: &["6ee657a9-5cc3-45b7-ad14-db8828f7ae2c", "06591d48-8c3a-4f81-a2c6-dba2e7163788", "1b2a30db-2871-43a2-bca0-eaa4bd804698"] },
+        // Wolf
+        JobFamily { id: "7f9c2b46-e6b8-4a65-9caa-f2b952623c23", min_level: 4, max_level: 30, leads: false, bosses: &["008cf5b0-2590-433b-832e-f2e6f0e0226f", "06591d48-8c3a-4f81-a2c6-dba2e7163788", "33de9f64-8eb6-41d2-b62d-8b7fb3632729"] },
+        // Goblin
+        JobFamily { id: "8c75bd1f-95a3-47d4-a28c-fdb1fc0de228", min_level: 1, max_level: 101, leads: true, bosses: &["8c75bd1f-95a3-47d4-a28c-fdb1fc0de228", "9137d218-6f05-4e8f-a5e5-1c63c61c95ca"] },
+        // Wisp
+        JobFamily { id: "90a62106-6294-4456-8206-cf6817995bf8", min_level: 24, max_level: 99, leads: false, bosses: &["be99402d-c518-4e81-be00-9e2e20e690b0"] },
+        // Goblin Wizard
+        JobFamily { id: "9137d218-6f05-4e8f-a5e5-1c63c61c95ca", min_level: 1, max_level: 100, leads: true, bosses: &["9137d218-6f05-4e8f-a5e5-1c63c61c95ca", "8c75bd1f-95a3-47d4-a28c-fdb1fc0de228"] },
+        // Wispmother
+        JobFamily { id: "be99402d-c518-4e81-be00-9e2e20e690b0", min_level: 10, max_level: 99, leads: true, bosses: &["be99402d-c518-4e81-be00-9e2e20e690b0", "06591d48-8c3a-4f81-a2c6-dba2e7163788"] },
+        // Atronach
+        JobFamily { id: "d14a0ec0-39a5-417f-a21c-8c4840d60a56", min_level: 25, max_level: 100, leads: true, bosses: &["d14a0ec0-39a5-417f-a21c-8c4840d60a56", "340cd608-31ec-447f-9f72-2162639bff3c", "ea8096f9-6c1b-4b42-af71-9ceabd7de33d", "9137d218-6f05-4e8f-a5e5-1c63c61c95ca", "50994925-f050-48b2-8cab-259b0f1a3531", "1696d9c0-900f-4829-ae3f-f0441d92a37c", "3fa0aa97-7a45-4c96-8b62-53e08691f746"] },
+        // Skeleton
+        JobFamily { id: "de4686d9-f748-40f7-a8d3-7baadb46a695", min_level: 1, max_level: 100, leads: true, bosses: &["de4686d9-f748-40f7-a8d3-7baadb46a695", "50994925-f050-48b2-8cab-259b0f1a3531", "3fa0aa97-7a45-4c96-8b62-53e08691f746", "521bb612-587d-4a90-adee-904a48d89c33"] },
+        // Bandit
+        JobFamily { id: "de8e06be-5403-4fc1-b912-1a5cd9d608a6", min_level: 1, max_level: 98, leads: true, bosses: &["de8e06be-5403-4fc1-b912-1a5cd9d608a6", "4c60bb97-3918-485a-822e-1017d2401dd2", "33de9f64-8eb6-41d2-b62d-8b7fb3632729"] },
+        // Dremora Warlock
+        JobFamily { id: "ea8096f9-6c1b-4b42-af71-9ceabd7de33d", min_level: 8, max_level: 106, leads: true, bosses: &["ea8096f9-6c1b-4b42-af71-9ceabd7de33d", "340cd608-31ec-447f-9f72-2162639bff3c", "50994925-f050-48b2-8cab-259b0f1a3531", "1696d9c0-900f-4829-ae3f-f0441d92a37c", "3fa0aa97-7a45-4c96-8b62-53e08691f746"] },
+    ];
+
+    fn job_family(id: &str) -> Option<&'static JobFamily> {
+        JOB_FAMILIES.iter().find(|f| f.id == id)
+    }
+
+    /// Separate stream for the family draws, so the main stream's draws -- and
+    /// with them every other value on the board -- stay where they were.
+    const FAMILY_SIDE_STREAM: u64 = 0xFA41_1E55;
+
+    /// `(primary, secondary, boss, secretBoss)` for a non-Duel job.
+    ///
+    /// The boss rule is a fit, not a decoded algorithm: one time in five the
+    /// primary leads its own pack, otherwise the boss comes from the primary's
+    /// or the secondary's boss list with even odds, each list filtered to the
+    /// boss level. Against the 417 retail jobs that predicts the boss is in the
+    /// primary's list 326 times (retail 333), is the primary itself 201 times
+    /// (207) and the secondary 90 times (69).
+    pub(super) fn job_families(
+        base_seed: u64,
+        level: i64,
+        boss_level: i64,
+        secret_boss_level: i64,
+    ) -> (&'static str, &'static str, &'static str, &'static str) {
+        let mut rng = Rng::new(base_seed ^ FAMILY_SIDE_STREAM);
+        let draw = |rng: &mut Rng, ok: &dyn Fn(&JobFamily) -> bool| -> Option<&'static str> {
+            let pool: Vec<&'static str> = JOB_FAMILIES.iter().filter(|f| ok(f)).map(|f| f.id).collect();
+            rng.pick(&pool).copied()
+        };
+        // A level outside every range (none of today's job levels is) keeps the
+        // family rules and drops the level rule rather than emitting nothing.
+        let primary = draw(&mut rng, &|f| f.leads && f.covers(level))
+            .or_else(|| draw(&mut rng, &|f| f.leads))
+            .unwrap_or(JOB_FAMILIES[0].id);
+        let secondary = draw(&mut rng, &|f| f.covers(level))
+            .or_else(|| draw(&mut rng, &|_| true))
+            .unwrap_or(primary);
+        let boss_of = |rng: &mut Rng, at: i64| -> &'static str {
+            let list = |id: &str| -> Vec<&'static str> {
+                job_family(id)
+                    .map(|f| f.bosses.iter().copied())
+                    .into_iter()
+                    .flatten()
+                    .filter(|b| job_family(b).is_some_and(|b| b.covers(at)))
+                    .collect()
+            };
+            let (own, other) = (list(primary), list(secondary));
+            let primary_fits = job_family(primary).is_some_and(|f| f.covers(at));
+            let roll = rng.below(10);
+            let chosen = if roll < 2 && primary_fits {
+                Some(primary)
+            } else if roll < 6 || other.is_empty() {
+                rng.pick(&own).copied().or_else(|| rng.pick(&other).copied())
+            } else {
+                rng.pick(&other).copied()
+            };
+            chosen.unwrap_or(primary)
+        };
+        let boss = boss_of(&mut rng, boss_level);
+        let secret_boss = boss_of(&mut rng, secret_boss_level);
+        (primary, secondary, boss, secret_boss)
+    }
+
     const DUEL_BOSSES: &[&str] = &[
         "01d82726-527f-4601-929c-182acd3fa9b7",
         "024b4f81-c7ef-4322-a547-ee863b4c02ad",
@@ -3769,9 +3914,22 @@ pub(crate) mod jobs_gen {
     ) -> Option<DungeonGeneratedData> {
         let enemy_level = get_i64(job, "difficultyLevel", 1).max(1);
         let given_xp = scaling.given_xp(enemy_level);
-        let mut data = blades_lib::util::dungeon::generate_for_dungeon(
+        // Rolled per JOB (#337). Every job used to roll the reference dungeon's one
+        // fixed seed, so every job at a level carried the same corpse and floor
+        // loot position by position -- one board's secondary spawner 0 dropped
+        // Major Aversion to Poison in 9 of 9 jobs -- and the same two chests.
+        // Retail's loot differs job to job: 409 distinct (level, first primary
+        // enemy's loot) pairs among 417 captured jobs. Keyed on the job's own id
+        // and seed, so the board and the stored row describe one dungeon.
+        let job_id = get_str(job, "questId")
+            .and_then(|q| Uuid::parse_str(q).ok())
+            .unwrap_or_default();
+        let run_seed =
+            blades_lib::util::dungeon::run_loot_seed(&job_id, get_i64(job, "seed", 0) as u64);
+        let mut data = blades_lib::util::dungeon::generate_for_dungeon_with_seed(
             game_data,
             &JOB_SPAWN_GROUPS_REFERENCE,
+            run_seed,
             enemy_level,
             given_xp,
         )?;
@@ -4242,6 +4400,20 @@ pub(crate) mod jobs_gen {
         };
         let boss_level_delta = rng.range_incl(4, 8);
         let secret_room = job_type != 5 && rng.below(2) == 1;
+        // The families above are drawn for their place in the stream only; a
+        // non-Duel job takes retail's families from a side stream (#337). A Duel
+        // keeps its draw: there is no retail evidence about its family slot.
+        let (prim_fam, sec_fam, boss_fam, secret_boss_fam) = if job_type == 5 {
+            (prim_fam, sec_fam, boss_fam, boss_fam)
+        } else {
+            let (p, s, b, sb) = job_families(
+                base_seed,
+                difficulty,
+                difficulty + boss_level_delta,
+                difficulty + boss_level_delta + 2,
+            );
+            (nameable(job_type, dungeon, p, base_seed).1, s, b, sb)
+        };
         // Reward curve, fitted to 802 distinct retail jobs mined out of 200
         // captured `/quests` bodies. See `report92_reward_curve` for the fit, the
         // spread, and the negative result that stopped it being exact.
@@ -4293,7 +4465,7 @@ pub(crate) mod jobs_gen {
         job_setup.insert("secretRoom".into(), json!(secret_room));
         if secret_room {
             job_setup.insert("secretBossLevelDelta".into(), json!(boss_level_delta + 2));
-            job_setup.insert("secretBossEnemyFamilyId".into(), json!(boss_fam));
+            job_setup.insert("secretBossEnemyFamilyId".into(), json!(secret_boss_fam));
         }
         job_setup.insert("rewardGemCount".into(), json!(reward_gem));
         job_setup.insert("rewardItemId".into(), json!(REWARD_ITEM_GOLD));
@@ -8040,15 +8212,21 @@ mod quest_map_wedge_2026_09_25 {
     }
 
     /// The fix moves only the draws that could not be named. A job prod already
-    /// served with names keeps every one of them.
+    /// served with names keeps its name key and dungeon.
+    ///
+    /// Its enemy families did move once since, on purpose: report #337 draws them
+    /// from the families retail used (no Duelists, no critter leads, a variant at
+    /// the job's level). This Goblin Wizard job became a Dremora Raider one, and
+    /// its name elements follow the family, so it is still named.
     #[test]
     fn jobs_that_were_already_named_do_not_move() {
         let ht = board(HALLOWEEN_TEST, NOW);
         let goblins = &job(&ht, "c916c4f0-0323-45ac-ada5-c3b01bf74d7e")["jobSetup"];
         assert_eq!(
             goblins["primaryEnemyFamilyId"],
-            "9137d218-6f05-4e8f-a5e5-1c63c61c95ca"
+            "340cd608-31ec-447f-9f72-2162639bff3c"
         );
+        assert_eq!(goblins["questName"]["key"], "UI.Jobs.Names.Defeat.010");
         // Report #306: this Defeat was rolled into `JobArenaVariant_04`, where no
         // non-duel job can be started. It moves to a kitted dungeon; its enemy and
         // name stay.
@@ -8060,16 +8238,17 @@ mod quest_map_wedge_2026_09_25 {
             .contains(&goblins["dungeonTemplateId"].as_str().unwrap()));
         assert_eq!(
             goblins["questName"]["dynamicElements"][0]["localizationValue"],
-            "Enemy.Name.Goblin.Wizard"
+            "Enemy.Name.DremoraRaider"
         );
         let lumber = &job(&ht, "87e29b6b-e4c7-4caa-afe2-60b24e9ea4aa")["jobSetup"];
         assert_eq!(
             lumber["dungeonTemplateId"],
             "57d639c2-ec4c-4e6b-9995-ff6a7ef3e712"
         );
+        // Was the critter Spider (3d932102), which retail never made a primary.
         assert_eq!(
             lumber["primaryEnemyFamilyId"],
-            "3d932102-3b5c-42ba-b96a-35405752c5a3"
+            "06591d48-8c3a-4f81-a2c6-dba2e7163788"
         );
         assert_eq!(lumber["questName"]["key"], "UI.Jobs.Names.Gather.008");
     }
@@ -8992,5 +9171,261 @@ mod report323_event_row_stage_repair_tests {
         // And a row minted now needs no repair at all.
         let mut current = row.dungeon.clone().unwrap();
         assert!(!add_missing_dungeon_sections(&mut current, &fresh));
+    }
+}
+
+/// Report #337: job loot, job chest tiers and job enemy families, against retail.
+#[cfg(test)]
+mod report_337_job_drops_and_families {
+    use super::jobs_gen;
+    use serde_json::{json, Value};
+    use std::collections::{HashMap, HashSet};
+    use uuid::Uuid;
+
+    /// 2026-10-03 05:06 UTC, the window Sephoris played his jobs in.
+    const OCT3_FETCH: u64 = 1_791_004_000;
+    const PRIMARY: Uuid = Uuid::from_u128(0xb2a7471e_7a44_47a6_b483_503a9e5cae3d_u128);
+    const SECONDARY: Uuid = Uuid::from_u128(0xc9ad5aae_200b_48fd_860e_ad45e0349ef0_u128);
+
+    const DUELISTS: [&str; 3] = [
+        "20e856fc-9465-4ffe-8d0a-6118c2eed219", // Duelist Avenger
+        "225d747b-9d24-4ffc-9ece-541728b4aef0", // Duelist Barbarian
+        "878febe5-106b-4b48-972a-7debd771a079", // Duelist Swordmage
+    ];
+    /// Skeever, Spider (critter), Wolf, Wisp: retail secondaries only.
+    const CRITTERS: [&str; 4] = [
+        "31be99a6-8557-4e9b-81e6-5503f900b7d2",
+        "3d932102-3b5c-42ba-b96a-35405752c5a3",
+        "7f9c2b46-e6b8-4a65-9caa-f2b952623c23",
+        "90a62106-6294-4456-8206-cf6817995bf8",
+    ];
+    const MERCENARY: &str = "4c60bb97-3918-485a-822e-1017d2401dd2";
+    const WARMASTER: &str = "33de9f64-8eb6-41d2-b62d-8b7fb3632729";
+    const ATRONACH: &str = "d14a0ec0-39a5-417f-a21c-8c4840d60a56"; // min level 25
+
+    fn game_data() -> blades_lib::game_data::GameData {
+        super::report85_job_generated_data_tests::game_data()
+    }
+
+    fn pools() -> Value {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        serde_json::from_str(&std::fs::read_to_string(dir.join("job_pools.json")).unwrap()).unwrap()
+    }
+
+    /// Non-Duel jobs across many characters, levels and days.
+    fn ordinary_jobs() -> Vec<Value> {
+        let pools = pools();
+        let mut out = Vec::new();
+        for day in 0..7u64 {
+            let now = OCT3_FETCH + day * 86_400;
+            let boundary = jobs_gen::current_reset_boundary(&pools, now);
+            for c in 0..30u128 {
+                let character = Uuid::from_u128(0x337_0000 + c);
+                for level in [5u16, 12, 22, 40, 70, 100] {
+                    for j in jobs_gen::generate(&pools, character, level, 0, boundary, now).0 {
+                        if j["jobSetup"]["jobType"] != 5 {
+                            out.push(j);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn job(id: u128, seed: i64, level: i64) -> Value {
+        json!({
+            "questId": Uuid::from_u128(id).to_string(),
+            "difficultyLevel": level,
+            "seed": seed,
+            "objectiveStatuses": {},
+            "jobSetup": { "jobType": 0, "primaryEnemyCount": 6, "secondaryEnemyCount": 4 },
+        })
+    }
+
+    fn generated(gd: &blades_lib::game_data::GameData, j: &Value) -> blades_lib::user_data::DungeonGeneratedData {
+        jobs_gen::generated_data_for_job(gd, j, &crate::quest::shipped_scaling())
+            .expect("the reference dungeon is in the corpus")
+    }
+
+    fn loot_of(data: &blades_lib::user_data::DungeonGeneratedData, group: Uuid) -> String {
+        let enemies = &data.enemy_generated_data[&group];
+        let mut tables: Vec<String> = Vec::new();
+        for spawner in enemies {
+            for e in spawner {
+                let mut t: Vec<_> = e
+                    .loot_table_loot
+                    .iter()
+                    .map(|(k, v)| {
+                        let mut s: Vec<_> = v.stackable_items.iter().collect();
+                        s.sort();
+                        format!("{k}:{s:?}")
+                    })
+                    .collect();
+                t.sort();
+                tables.push(t.join(","));
+            }
+        }
+        tables.join("|")
+    }
+
+    /// Sephoris's board: every job at a level dropped the same things from the
+    /// same corpses -- secondary spawner 0 gave Major Aversion to Poison in 9 of
+    /// his 9 jobs. Retail's loot differed job to job (409 distinct first-enemy
+    /// loots among 417 captured jobs).
+    #[test]
+    fn two_jobs_at_one_level_roll_their_own_loot() {
+        let gd = game_data();
+        let mut primary = HashSet::new();
+        let mut secondary = HashSet::new();
+        for i in 0..12u128 {
+            let data = generated(&gd, &job(0x337_0001 + i, 1_000 + i as i64, 22));
+            primary.insert(loot_of(&data, PRIMARY));
+            secondary.insert(loot_of(&data, SECONDARY));
+        }
+        assert!(primary.len() >= 10, "12 jobs, {} distinct primary loots", primary.len());
+        assert!(secondary.len() >= 10, "12 jobs, {} distinct secondary loots", secondary.len());
+    }
+
+    /// The control: one job is described identically every time it is asked
+    /// for, so the board and the stored row hand the client one dungeon.
+    #[test]
+    fn one_job_is_described_identically_every_time() {
+        let gd = game_data();
+        let j = job(0x337_00ff, -42, 22);
+        let (a, b) = (generated(&gd, &j), generated(&gd, &j));
+        assert_eq!(loot_of(&a, PRIMARY), loot_of(&b, PRIMARY));
+        assert_eq!(loot_of(&a, SECONDARY), loot_of(&b, SECONDARY));
+        let tiers = |d: &blades_lib::user_data::DungeonGeneratedData| {
+            let mut t: Vec<_> = d
+                .chest_generated_data
+                .iter()
+                .map(|(k, v)| (*k, v.iter().map(|c| c.tier).collect::<Vec<_>>()))
+                .collect();
+            t.sort();
+            t
+        };
+        assert_eq!(tiers(&a), tiers(&b));
+    }
+
+    /// Retail's job chests followed the APK's two job chest cycles: over 463
+    /// captured jobs the main chest was wooden/silver/gold 412/35/16 and the
+    /// secret chest silver/gold/Elder 420/40/3. We sent wooden and silver on
+    /// every job, so his 10 jobs held 0 gold and 0 Elder chests.
+    #[test]
+    fn job_chests_follow_the_job_chest_cycles() {
+        let gd = game_data();
+        let main = Uuid::from_u128(0x5adb41cc_d48e_4505_a62b_ac092e95bcf7);
+        let secret = Uuid::from_u128(0x20640508_6ef7_466a_98ea_d79221356d97);
+        let mut seen: HashMap<(Uuid, i64), u32> = HashMap::new();
+        let n = 1_500u32;
+        for i in 0..n {
+            let data = generated(&gd, &job(0x337_1000 + i as u128, i as i64 * 7919, 22));
+            for (spawn, chests) in &data.chest_generated_data {
+                for c in chests {
+                    *seen.entry((*spawn, c.tier)).or_default() += 1;
+                }
+            }
+        }
+        let pct = |s: Uuid, t: i64| 100.0 * *seen.get(&(s, t)).unwrap_or(&0) as f64 / n as f64;
+        // Cycle: 86 / 10 / 4 per 100. Retail measured 89.0 / 7.6 / 3.5.
+        assert!((2.5..=5.5).contains(&pct(main, 3)), "main gold {:.1}%", pct(main, 3));
+        assert!((7.0..=12.5).contains(&pct(main, 2)), "main silver {:.1}%", pct(main, 2));
+        assert!(pct(main, 1) > 80.0, "main wooden {:.1}%", pct(main, 1));
+        // Cycle: 89.4 / 10 / 0.6 per 100. Retail measured 90.7 / 8.6 / 0.65.
+        assert!((7.5..=12.5).contains(&pct(secret, 3)), "secret gold {:.1}%", pct(secret, 3));
+        assert!((0.1..=1.5).contains(&pct(secret, 4)), "secret Elder {:.2}%", pct(secret, 4));
+        assert!(pct(secret, 2) > 85.0, "secret silver {:.1}%", pct(secret, 2));
+        // Nothing outside the cycles' own rarities.
+        for ((spawn, tier), _) in &seen {
+            assert!(
+                (*spawn == main && (1..=3).contains(tier)) || (*spawn == secret && (2..=4).contains(tier)),
+                "unexpected chest {spawn} tier {tier}"
+            );
+        }
+    }
+
+    /// Retail never put a Duelist in a job, and never led one with a critter.
+    #[test]
+    fn job_families_are_the_ones_retail_used() {
+        let jobs = ordinary_jobs();
+        assert!(jobs.len() > 1_000, "{} jobs", jobs.len());
+        for j in &jobs {
+            let s = &j["jobSetup"];
+            let fam = |k: &str| s[k].as_str().map(str::to_string);
+            for k in ["primaryEnemyFamilyId", "secondaryEnemyFamilyId", "bossEnemyFamilyId", "secretBossEnemyFamilyId"] {
+                if let Some(f) = fam(k) {
+                    assert!(!DUELISTS.contains(&f.as_str()), "{k} is a Duelist: {j}");
+                }
+            }
+            for k in ["primaryEnemyFamilyId", "bossEnemyFamilyId", "secretBossEnemyFamilyId"] {
+                if let Some(f) = fam(k) {
+                    assert!(!CRITTERS.contains(&f.as_str()), "{k} is a critter family: {j}");
+                }
+            }
+        }
+    }
+
+    /// Every family has a variant at the job's level (1,251 of 1,251 retail
+    /// slots); Atronachs start at 25, so a level-12 job may not field one.
+    #[test]
+    fn job_families_fit_the_job_level() {
+        for j in ordinary_jobs() {
+            let s = &j["jobSetup"];
+            let level = j["difficultyLevel"].as_i64().unwrap();
+            let boss_level = level + s["bossLevelDelta"].as_i64().unwrap();
+            for (k, at) in [
+                ("primaryEnemyFamilyId", level),
+                ("secondaryEnemyFamilyId", level),
+                ("bossEnemyFamilyId", boss_level),
+            ] {
+                let f = s[k].as_str().unwrap();
+                let family = jobs_gen::JOB_FAMILIES
+                    .iter()
+                    .find(|x| x.id == f)
+                    .unwrap_or_else(|| panic!("{k} {f} is not a job family"));
+                assert!(
+                    (family.min_level..=family.max_level).contains(&at),
+                    "{k} {f} has no variant at level {at}"
+                );
+                if at < 25 {
+                    assert_ne!(f, ATRONACH);
+                }
+            }
+            // And the boss comes from the primary's or the secondary's boss list.
+            let bosses = |k: &str| {
+                let id = s[k].as_str().unwrap();
+                jobs_gen::JOB_FAMILIES.iter().find(|x| x.id == id).unwrap().bosses
+            };
+            let boss = s["bossEnemyFamilyId"].as_str().unwrap();
+            assert!(
+                bosses("primaryEnemyFamilyId").contains(&boss)
+                    || bosses("secondaryEnemyFamilyId").contains(&boss)
+                    || boss == s["primaryEnemyFamilyId"].as_str().unwrap(),
+                "boss {boss} is in neither boss list: {j}"
+            );
+        }
+    }
+
+    /// Mercenaries and Warmasters lead jobs (16 and 16 retail primaries), every
+    /// variant of both weak to Poison, and a Mercenary job's boss is usually one
+    /// of them.
+    #[test]
+    fn mercenary_jobs_still_happen_and_bring_their_bosses() {
+        let jobs = ordinary_jobs();
+        let merc: Vec<_> = jobs
+            .iter()
+            .filter(|j| j["jobSetup"]["primaryEnemyFamilyId"] == MERCENARY)
+            .collect();
+        assert!(merc.len() >= 20, "{} Mercenary-led jobs", merc.len());
+        let own = merc
+            .iter()
+            .filter(|j| {
+                let b = &j["jobSetup"]["bossEnemyFamilyId"];
+                *b == MERCENARY || *b == WARMASTER
+            })
+            .count();
+        // Retail: 12 of 16.
+        assert!(own * 2 > merc.len(), "{own} of {} Mercenary jobs kept a human boss", merc.len());
     }
 }
