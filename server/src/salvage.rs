@@ -1,8 +1,8 @@
 //! Salvage — `POST /salvages`.
 //!
 //! Break gear into crafting materials at the smithy: remove each salvaged item (from
-//! the backpack or the loadout) and grant a representative material yield per recipe.
-//! Yield logic is the pure [`blades_lib::features::salvage`] layer.
+//! the backpack or the loadout) and grant the APK's yield for it at the item's
+//! tempering level. Yield logic is the pure [`blades_lib::features::salvage`] layer.
 
 use std::sync::Arc;
 
@@ -16,6 +16,7 @@ use blades_lib::features::salvage;
 use blades_lib::user_data::{CompleteInventory, CompleteInventoryUpdate, InventoryChangeTracker};
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -49,15 +50,16 @@ struct SalvageResponse {
 }
 
 /// Remove an instanced item by id from the backpack or the equipped loadout, marking
-/// the change. Returns whether anything was removed.
+/// the change. Returns `(itemTemplateId, temperingLevel)` of what was removed — the
+/// two things the salvage yield depends on.
 fn remove_owned_item(
     inv: &mut CompleteInventory,
     item_id: Uuid,
     tracker: &mut InventoryChangeTracker,
-) -> bool {
-    if inv.backpack.items.0.remove(&item_id).is_some() {
+) -> Option<(Uuid, u64)> {
+    if let Some(item) = inv.backpack.items.0.remove(&item_id) {
         tracker.modified_backpack.items.insert(item_id);
-        return true;
+        return Some((item.item_template_id, item.tempering_level));
     }
     let slot = inv
         .loadout
@@ -66,12 +68,12 @@ fn remove_owned_item(
         .iter()
         .find(|(_, e)| e.id == item_id)
         .map(|(s, _)| *s);
-    if let Some(slot) = slot {
-        inv.loadout.equipped_items.0.remove(&slot);
-        tracker.modified_loadout.modified_equipped_items.insert(slot);
-        return true;
-    }
-    false
+    let removed = inv.loadout.equipped_items.0.remove(&slot?)?;
+    tracker
+        .modified_loadout
+        .modified_equipped_items
+        .insert(removed.slot);
+    Some((removed.item.item_template_id, removed.item.tempering_level))
 }
 
 #[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/salvages")]
@@ -105,13 +107,27 @@ pub async fn salvage_items(
             };
 
             let mut tracker = InventoryChangeTracker::default();
-            let mut recipe_ids = Vec::new();
+            let mut salvaged = Vec::new();
             for info in &infos {
-                if remove_owned_item(&mut entry.inventory.0, info.item_id, &mut tracker) {
-                    recipe_ids.push(info.recipe_id);
+                if let Some((item_template_id, tempering_level)) =
+                    remove_owned_item(&mut entry.inventory.0, info.item_id, &mut tracker)
+                {
+                    salvaged.push(salvage::SalvagedItem {
+                        recipe_id: info.recipe_id,
+                        item_template_id,
+                        tempering_level,
+                    });
                 }
             }
-            let reward = salvage::salvage_materials(&recipe_ids, &globals.static_data.salvage_recipes);
+            // ThreadRng is not Send: keep it out of scope across the awaits below.
+            let reward = {
+                let mut rng = rand::rng();
+                salvage::salvage_reward(
+                    &salvaged,
+                    &globals.static_data.salvage_recipes,
+                    &mut |lo, hi| rng.random_range(lo..=hi),
+                )
+            };
             apply_reward(
                 &reward,
                 &mut entry.wallet.0,
