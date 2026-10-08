@@ -1,0 +1,2926 @@
+{
+ "_meta": {
+  "description": "Every item template whose APK definition carries mandatory_properties: fixed (legendary/artifact) items whose properties are authored on the template. Retail never rolled GRADING or ENCHANTING onto these (tracker report #8).",
+  "source": "blades-capture reference/game-defs/items.json (APK *TemplateList, APK sha256 fd6e55f561542cac41a016975318bc69759e512d5155b3c8945367883c833417), items.json sha256 3ceae0018dff25af134ee69094f17da84374d2712d7f50b8a389faa2d78f9e56",
+  "regenerate": "python3: {uuid: {name, type, mandatoryProperties: [[property_uuid, tier]]}} for every items.json entry with non-empty mandatory_properties",
+  "count": 180
+ },
+ "templates": {
+  "01f4a08e-ffd7-45eb-8a65-0a4ca6d0b7fd": {
+   "name": "Grand Inquisitor's Ring",
+   "type": 10,
+   "mandatoryProperties": [
+    [
+     "94aa3774-cd7e-400c-9d17-a4652fb88a93",
+     10
+    ],
+    [
+     "1d85511d-66bf-46ad-87b5-bd7a115afafd",
+     10
+    ],
+    [
+     "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+     10
+    ],
+    [
+     "7f66e203-4e89-47fc-8287-7e27590ad673",
+     1
+    ],
+    [
+     "f3adab07-7e2c-43a9-855e-66c1f4511a4c",
+     1
+    ],
+    [
+     "2af1fd3a-e7b4-488f-a15b-09243e1958e3",
+     1
+    ]
+   ]
+  },
+  "040c9078-6c7d-4bd8-b834-f8974e573146": {
+   "name": "Chitin Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     13
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     13
+    ]
+   ]
+  },
+  "046053f6-21a8-46ec-8fa6-6eb8e520ac48": {
+   "name": "Dwarven Mail Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     30
+    ],
+    [
+     "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
+     30
+    ]
+   ]
+  },
+  "05862206-b6db-4cd4-9f7a-ed2e03fc90af": {
+   "name": "Ring of Namira",
+   "type": 10,
+   "mandatoryProperties": [
+    [
+     "3335b921-b380-4144-8414-06832e29b011",
+     3
+    ],
+    [
+     "9ad367ca-794b-46d8-a098-c3bd4afe262f",
+     0
+    ]
+   ]
+  },
+  "0631caaf-28a6-43a3-8ac3-763a5dd95614": {
+   "name": "Sunderblade",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "af1e56bf-1974-452c-aa70-36b2140cbb07",
+     10
+    ],
+    [
+     "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+     10
+    ],
+    [
+     "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+     10
+    ]
+   ]
+  },
+  "08a302c9-fc5b-4a03-bd6c-e7974a81009f": {
+   "name": "Daedric Light Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "d2f7ca93-7234-4890-886d-60820350716b",
+     10
+    ],
+    [
+     "f5cba266-96df-45c2-b8c6-60bf37de2849",
+     10
+    ]
+   ]
+  },
+  "0a354320-1b3a-4349-bf5c-da6178523e09": {
+   "name": "Battlemage Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "da0ebf22-6d7b-4504-bfc1-b78b674c7c5c",
+     8
+    ],
+    [
+     "33f866a5-f2f5-46af-ac13-fa5f02bedfbf",
+     8
+    ],
+    [
+     "10f57d40-98e9-4181-972b-d654f81afc27",
+     8
+    ]
+   ]
+  },
+  "0a407b83-d146-438b-bfe5-1ad95b7f2bf7": {
+   "name": "Daedric Mail Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     29
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     29
+    ]
+   ]
+  },
+  "0a7a1e8b-29ae-4053-9cbb-b1584386fe78": {
+   "name": "Dark Seducer Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     29
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     29
+    ]
+   ]
+  },
+  "0c2869fb-3a95-45c6-8dcc-706d43f0fab0": {
+   "name": "Dark Seducer Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     20
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     20
+    ]
+   ]
+  },
+  "0c39d0f3-79c8-4e58-b435-3622a42e4d3d": {
+   "name": "Paladin's Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+     10
+    ],
+    [
+     "33f866a5-f2f5-46af-ac13-fa5f02bedfbf",
+     10
+    ],
+    [
+     "10f57d40-98e9-4181-972b-d654f81afc27",
+     10
+    ]
+   ]
+  },
+  "0d491a77-762d-4c31-85ad-5baf39eb90a7": {
+   "name": "Chitin Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     40
+    ],
+    [
+     "73e3dc29-0f39-4874-9761-b36ca07c4e59",
+     10
+    ]
+   ]
+  },
+  "1063c3f9-1bbf-4962-b80d-fb9832075c1c": {
+   "name": "Dark Seducer Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     10
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     10
+    ]
+   ]
+  },
+  "11f62e71-c013-4b78-8d12-bf225bc73b4f": {
+   "name": "Maul of the Aureal",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "c40ed851-8777-4d09-b169-0223dae8f67d",
+     10
+    ],
+    [
+     "bf107d7d-8777-4411-b07a-56819a58a709",
+     10
+    ],
+    [
+     "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+     10
+    ]
+   ]
+  },
+  "12c4920e-a9e0-4498-b134-3ce66fb9558f": {
+   "name": "Savior's Hide",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "dbc82d4d-3be1-4735-af21-316c54cfae55",
+     1
+    ],
+    [
+     "33f866a5-f2f5-46af-ac13-fa5f02bedfbf",
+     1
+    ],
+    [
+     "5d3eb782-7789-4f28-81b8-3b547f6633ea",
+     1
+    ],
+    [
+     "6c23174f-d4a4-4b4d-8dd7-88253b934b5a",
+     0
+    ],
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     42
+    ]
+   ]
+  },
+  "132cb9e8-49c7-4b29-b61b-9541d24a0671": {
+   "name": "Axe of the Frost Gladiator",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
+     8
+    ],
+    [
+     "a869f868-c23f-45bb-9159-d62b42236a4a",
+     8
+    ],
+    [
+     "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+     8
+    ]
+   ]
+  },
+  "15f9963e-059c-464c-86ad-3a7eaa7cea9d": {
+   "name": "Dark Seducer Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     30
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     30
+    ]
+   ]
+  },
+  "19bf17ce-784c-4ab6-b1a4-e517f0e5f2b7": {
+   "name": "Leather Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     22
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     22
+    ]
+   ]
+  },
+  "1a8c007c-5fbb-421d-bc6e-d0144c19e0dc": {
+   "name": "Bronzed Gladiator's Helm",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+     8
+    ],
+    [
+     "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+     8
+    ],
+    [
+     "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+     8
+    ],
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     20
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     20
+    ]
+   ]
+  },
+  "1c6fe3b5-def5-45d8-9b34-4962765f5431": {
+   "name": "Leather Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     30
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     30
+    ]
+   ]
+  },
+  "1da31a6c-e872-47a1-b880-5a95b9a38b70": {
+   "name": "Glass Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     37
+    ],
+    [
+     "0b414904-c1e5-40e0-9cdb-52969b0a4e65",
+     7
+    ]
+   ]
+  },
+  "1f174bab-d765-4f9c-917a-69d4c1abcd82": {
+   "name": "Baridan's Axe",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
+     10
+    ],
+    [
+     "a869f868-c23f-45bb-9159-d62b42236a4a",
+     10
+    ],
+    [
+     "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+     10
+    ]
+   ]
+  },
+  "1f763acc-0aee-4e69-beb3-28a672aa62d5": {
+   "name": "Dwarven Mail Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     15
+    ],
+    [
+     "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
+     15
+    ]
+   ]
+  },
+  "1fc67296-aa50-4de8-b23e-11c80cee9361": {
+   "name": "Breathtaker",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "af1e56bf-1974-452c-aa70-36b2140cbb07",
+     10
+    ],
+    [
+     "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+     10
+    ],
+    [
+     "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+     10
+    ]
+   ]
+  },
+  "208d05ed-74bf-4fef-b5e1-ed407d52432f": {
+   "name": "Chitin Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     23
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     23
+    ]
+   ]
+  },
+  "21218dd7-596a-401c-a079-a30907a2fa66": {
+   "name": "Lesser Boots of Dispersion",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "5297713f-c60e-42fd-ade0-500daf0d632e",
+     7
+    ],
+    [
+     "33f866a5-f2f5-46af-ac13-fa5f02bedfbf",
+     8
+    ],
+    [
+     "10f57d40-98e9-4181-972b-d654f81afc27",
+     8
+    ]
+   ]
+  },
+  "21a977f0-1382-4956-a7ce-afe9bb8f0fe7": {
+   "name": "Boots of Dispersion",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "5297713f-c60e-42fd-ade0-500daf0d632e",
+     10
+    ],
+    [
+     "33f866a5-f2f5-46af-ac13-fa5f02bedfbf",
+     10
+    ],
+    [
+     "10f57d40-98e9-4181-972b-d654f81afc27",
+     10
+    ],
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     30
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     30
+    ]
+   ]
+  },
+  "21ed2758-5cf5-4b7d-9047-59bbdbd61820": {
+   "name": "Onyx Cleaver",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "af1e56bf-1974-452c-aa70-36b2140cbb07",
+     9
+    ],
+    [
+     "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+     9
+    ],
+    [
+     "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+     9
+    ],
+    [
+     "6100fab3-3522-4ee3-bbdc-6063dba21c30",
+     0
+    ]
+   ]
+  },
+  "21f8b677-c1a9-4d5f-87ef-294fc6ba4ba5": {
+   "name": "Ebony Blade",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "cc432e27-813c-4afa-a3df-d587cfd550d2",
+     7
+    ],
+    [
+     "9e2361af-1893-4c3d-8ce0-3894937c9972",
+     0
+    ]
+   ]
+  },
+  "23607f09-a103-4ed3-a0de-33e0498f8018": {
+   "name": "Warlock's Ring",
+   "type": 10,
+   "mandatoryProperties": [
+    [
+     "874f28f1-cdc3-4af5-af4e-4e4d0e2a4969",
+     7
+    ],
+    [
+     "8a107a03-26ed-4ea9-97ac-e7f44c2bb5d3",
+     5
+    ],
+    [
+     "18ef65f2-7585-401b-b7a4-3fe66a830721",
+     5
+    ],
+    [
+     "7ea448a6-0415-461f-8ef8-2cec9f5004f9",
+     5
+    ],
+    [
+     "5665da58-5fce-4b5e-863d-0395afdf3554",
+     5
+    ]
+   ]
+  },
+  "239453b0-6b7d-4a8b-bccc-50563d51ccfb": {
+   "name": "Leather Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     22
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     22
+    ]
+   ]
+  },
+  "28000fc8-4208-4036-90d4-5e698b680d96": {
+   "name": "Deathsting",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "08ea75d0-5cf1-44a9-9816-d3c6740c4191",
+     8
+    ],
+    [
+     "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+     8
+    ],
+    [
+     "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+     8
+    ]
+   ]
+  },
+  "2aedce5f-fe36-423d-a1d1-67704d232760": {
+   "name": "Leather Hood",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     20
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     20
+    ]
+   ]
+  },
+  "2b4c67f8-da25-4d80-9c8f-e08532f3bd54": {
+   "name": "Golden Hammer",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "c40ed851-8777-4d09-b169-0223dae8f67d",
+     8
+    ],
+    [
+     "bf107d7d-8777-4411-b07a-56819a58a709",
+     8
+    ],
+    [
+     "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+     8
+    ]
+   ]
+  },
+  "2c9ac3da-4a90-4fcb-bb59-4202fdecffe0": {
+   "name": "Dark Seducer Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     30
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     30
+    ]
+   ]
+  },
+  "2f2ca094-8e82-49ba-8fa0-c8dc9f3138d0": {
+   "name": "Dark Seducer Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     19
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     19
+    ]
+   ]
+  },
+  "2f49aa6b-dc14-4e07-887e-9068a752ce5f": {
+   "name": "Serpentstrike",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "08ea75d0-5cf1-44a9-9816-d3c6740c4191",
+     10
+    ],
+    [
+     "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+     10
+    ],
+    [
+     "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+     10
+    ]
+   ]
+  },
+  "2f62ac95-a300-4bab-b39b-f2574224279a": {
+   "name": "Hide Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     70
+    ]
+   ]
+  },
+  "2fee3aa3-7ce8-4f28-85fc-bc03bf467bea": {
+   "name": "Paladin's Mail",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+     10
+    ],
+    [
+     "33f866a5-f2f5-46af-ac13-fa5f02bedfbf",
+     10
+    ],
+    [
+     "10f57d40-98e9-4181-972b-d654f81afc27",
+     10
+    ]
+   ]
+  },
+  "32b64e57-98c4-4b28-a654-9b7539da490a": {
+   "name": "Crimson Kiss",
+   "type": 10,
+   "mandatoryProperties": [
+    [
+     "b442ea19-02cb-4825-aa13-2f2f14ccd338",
+     1
+    ],
+    [
+     "fe2923dc-1869-40bf-800b-203a456d0f44",
+     1
+    ],
+    [
+     "0e570b97-87ba-4967-a7fa-cf51f40065fb",
+     1
+    ]
+   ]
+  },
+  "33ffc2ba-10d7-4f2a-9c1c-1dd9667334d6": {
+   "name": "Glass Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     40
+    ],
+    [
+     "0b414904-c1e5-40e0-9cdb-52969b0a4e65",
+     10
+    ]
+   ]
+  },
+  "35552ecd-f584-43bf-be8c-50fe5474022c": {
+   "name": "Chitin Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     30
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     30
+    ]
+   ]
+  },
+  "3833ad47-86c6-427a-b30e-8d3e1f27b1d7": {
+   "name": "Ring of Searing",
+   "type": 10,
+   "mandatoryProperties": [
+    [
+     "94aa3774-cd7e-400c-9d17-a4652fb88a93",
+     8
+    ],
+    [
+     "1d85511d-66bf-46ad-87b5-bd7a115afafd",
+     8
+    ],
+    [
+     "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+     8
+    ],
+    [
+     "7f66e203-4e89-47fc-8287-7e27590ad673",
+     1
+    ],
+    [
+     "6bc19568-2f76-4c0e-8482-dee16629dc5b",
+     1
+    ],
+    [
+     "f17be1d9-1c1e-4510-8514-3d108b92220f",
+     1
+    ]
+   ]
+  },
+  "388dd1da-b5c2-4484-840b-56c7adace1d9": {
+   "name": "Lichburner",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "c40ed851-8777-4d09-b169-0223dae8f67d",
+     8
+    ],
+    [
+     "bf107d7d-8777-4411-b07a-56819a58a709",
+     8
+    ],
+    [
+     "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+     8
+    ]
+   ]
+  },
+  "3d9627f1-81db-496e-8769-6e545d779fa3": {
+   "name": "Witsplinter",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+     10
+    ],
+    [
+     "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+     10
+    ],
+    [
+     "fea58213-6a41-4500-9f09-cd9c745bcc1e",
+     10
+    ]
+   ]
+  },
+  "3f0f41ec-6e92-40c4-9aab-9b58ab02f41b": {
+   "name": "Stalhrim Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     10
+    ],
+    [
+     "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
+     10
+    ]
+   ]
+  },
+  "4079609b-9692-4742-aab7-6701d9b34d97": {
+   "name": "Elven Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     60
+    ]
+   ]
+  },
+  "41b54ee3-0e05-4dfd-bcf0-44f70460b519": {
+   "name": "Stormkiss",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
+     10
+    ],
+    [
+     "a869f868-c23f-45bb-9159-d62b42236a4a",
+     10
+    ],
+    [
+     "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+     10
+    ]
+   ]
+  },
+  "43ec840f-f24f-4e84-8201-6c70885c14f6": {
+   "name": "Amulet of Mara",
+   "type": 11,
+   "mandatoryProperties": [
+    [
+     "360e3a3b-307f-401a-b357-e674d01dc834",
+     1
+    ],
+    [
+     "ff35b37f-7bc3-455f-81d7-3a2b60417ab5",
+     2
+    ],
+    [
+     "0e570b97-87ba-4967-a7fa-cf51f40065fb",
+     2
+    ]
+   ]
+  },
+  "4535a4bf-490a-46d5-b49c-a9bc0cc81fe6": {
+   "name": "Stalhrim Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     18
+    ],
+    [
+     "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
+     18
+    ]
+   ]
+  },
+  "48879d04-5675-4f64-8198-1cdef1e96c8a": {
+   "name": "Hide Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     50
+    ]
+   ]
+  },
+  "49698526-0c8f-4cd7-bab4-f5c802cbf6ad": {
+   "name": "Elven Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     70
+    ]
+   ]
+  },
+  "4a9fd901-aaf8-40bd-941e-971febf4daf8": {
+   "name": "Hide Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     51
+    ]
+   ]
+  },
+  "4add8afb-bfb4-4022-8681-c226ec05c0de": {
+   "name": "Ring of Preservation",
+   "type": 10,
+   "mandatoryProperties": [
+    [
+     "94aa3774-cd7e-400c-9d17-a4652fb88a93",
+     10
+    ],
+    [
+     "1d85511d-66bf-46ad-87b5-bd7a115afafd",
+     10
+    ],
+    [
+     "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+     10
+    ],
+    [
+     "40215e5f-767a-45b8-bf92-9012f66217bb",
+     1
+    ],
+    [
+     "2dc15011-e900-43dc-ab15-74dcbb76c85e",
+     1
+    ],
+    [
+     "611e1d55-8b23-4b4c-9db1-27532e83cbd0",
+     1
+    ]
+   ]
+  },
+  "4b59cdbe-f857-4673-9e40-741ca06aa5d0": {
+   "name": "Spellbane",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+     4
+    ],
+    [
+     "1674a05b-355a-4c01-9994-7a28e2654d4c",
+     5
+    ],
+    [
+     "1d85511d-66bf-46ad-87b5-bd7a115afafd",
+     4
+    ],
+    [
+     "33f866a5-f2f5-46af-ac13-fa5f02bedfbf",
+     3
+    ]
+   ]
+  },
+  "4b7b59bb-b3e9-4d24-b551-9885550dbde8": {
+   "name": "Orcish Scaled Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "93f65e60-b27b-42b4-b0da-44fd6314f1d3",
+     30
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     30
+    ]
+   ]
+  },
+  "4ca123c5-4891-4e78-9d48-5ecda6b6a797": {
+   "name": "Daedric Mail Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     29
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     29
+    ]
+   ]
+  },
+  "4e173739-f52c-4223-bdb5-b46b294fd609": {
+   "name": "Shield of Chorrol",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "338ec948-d1b7-4390-8a88-ab6ac11841aa",
+     10
+    ],
+    [
+     "9701ded5-e1d1-4436-8b14-d5d726ff4434",
+     10
+    ],
+    [
+     "2ac1e2f6-8f97-444e-97af-7efd46c71cca",
+     10
+    ],
+    [
+     "67e1de28-c9e1-44cc-bad8-338b912ce352",
+     10
+    ],
+    [
+     "0b414904-c1e5-40e0-9cdb-52969b0a4e65",
+     10
+    ]
+   ]
+  },
+  "4e52fca7-2961-49b7-bafc-9d3c1cac86cd": {
+   "name": "Dwarven Mail Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     10
+    ],
+    [
+     "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
+     10
+    ]
+   ]
+  },
+  "4e622931-ebfc-4a78-872c-5b52a8722212": {
+   "name": "Orcish Scaled Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "a99ab22b-9d16-46cd-9616-eb1ed40a135d",
+     4
+    ],
+    [
+     "f5cba266-96df-45c2-b8c6-60bf37de2849",
+     4
+    ]
+   ]
+  },
+  "4e841f5e-c5d7-47cd-899a-116846dbbfc0": {
+   "name": "Bloodthirst",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "13a46a9b-3d02-48c7-b57c-f9424f10ab1d",
+     1
+    ],
+    [
+     "874f28f1-cdc3-4af5-af4e-4e4d0e2a4969",
+     1
+    ],
+    [
+     "fea58213-6a41-4500-9f09-cd9c745bcc1e",
+     1
+    ]
+   ]
+  },
+  "515450b1-ab21-4cbf-a8ed-c4e0e51df4c0": {
+   "name": "Dragon's Blight",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "59c3b082-e57a-4243-ace5-9b55475e9b17",
+     8
+    ],
+    [
+     "8601e739-412b-4b6b-b4af-476cf1283a72",
+     0
+    ]
+   ]
+  },
+  "523f8b2a-b5ff-40e9-8ced-3306c8036a93": {
+   "name": "Dark Seducer Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     19
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     19
+    ]
+   ]
+  },
+  "52739560-b5f0-4a33-82ef-907ee227ba73": {
+   "name": "Sparkling Gold Sapphire Necklace",
+   "type": 11,
+   "mandatoryProperties": [
+    [
+     "ff35b37f-7bc3-455f-81d7-3a2b60417ab5",
+     1
+    ],
+    [
+     "0f7b4dcc-da92-4133-b716-b06a1afd6aaa",
+     1
+    ]
+   ]
+  },
+  "52d083b1-0770-4fd6-9e00-ed67b91c2b71": {
+   "name": "Glass Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     30
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     30
+    ]
+   ]
+  },
+  "52db2806-124d-405e-b246-e74c758bb8dd": {
+   "name": "Stalhrim Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     30
+    ],
+    [
+     "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
+     30
+    ]
+   ]
+  },
+  "52dc6085-3c3c-4a2e-96a2-2078f647272a": {
+   "name": "Chitin Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     10
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     10
+    ]
+   ]
+  },
+  "55853c6c-f62e-457e-9ee9-48fc453e7832": {
+   "name": "Dark Seducer Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     9
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     9
+    ]
+   ]
+  },
+  "575aa9f3-d127-4dfa-8634-12969a7e146b": {
+   "name": "Orcish Scaled Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "a99ab22b-9d16-46cd-9616-eb1ed40a135d",
+     10
+    ],
+    [
+     "f5cba266-96df-45c2-b8c6-60bf37de2849",
+     10
+    ]
+   ]
+  },
+  "591fad86-0cef-4e8e-aed1-990f8eaa8571": {
+   "name": "Lesser Ring of Preservation",
+   "type": 10,
+   "mandatoryProperties": [
+    [
+     "94aa3774-cd7e-400c-9d17-a4652fb88a93",
+     8
+    ],
+    [
+     "1d85511d-66bf-46ad-87b5-bd7a115afafd",
+     8
+    ],
+    [
+     "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+     8
+    ],
+    [
+     "40215e5f-767a-45b8-bf92-9012f66217bb",
+     1
+    ],
+    [
+     "2dc15011-e900-43dc-ab15-74dcbb76c85e",
+     1
+    ],
+    [
+     "611e1d55-8b23-4b4c-9db1-27532e83cbd0",
+     1
+    ]
+   ]
+  },
+  "59640134-520a-4a55-bd41-99704de3a044": {
+   "name": "Dragonscale Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "93f65e60-b27b-42b4-b0da-44fd6314f1d3",
+     30
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     30
+    ]
+   ]
+  },
+  "59c720fb-d761-4ad1-b14c-2aa8c1a4d554": {
+   "name": "Mace of Molag Bal",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "9fdbb542-ff37-4199-93a3-d9444cca9090",
+     3
+    ],
+    [
+     "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+     3
+    ]
+   ]
+  },
+  "5a47b50c-76f3-4880-a560-5a35806bbc4e": {
+   "name": "Lichslayer",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "c40ed851-8777-4d09-b169-0223dae8f67d",
+     10
+    ],
+    [
+     "bf107d7d-8777-4411-b07a-56819a58a709",
+     10
+    ],
+    [
+     "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+     10
+    ]
+   ]
+  },
+  "5a67da20-ddaa-4468-9b93-a4e60320f95c": {
+   "name": "Band of the Wraith",
+   "type": 10,
+   "mandatoryProperties": [
+    [
+     "94aa3774-cd7e-400c-9d17-a4652fb88a93",
+     10
+    ],
+    [
+     "1d85511d-66bf-46ad-87b5-bd7a115afafd",
+     10
+    ],
+    [
+     "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+     10
+    ],
+    [
+     "d5676014-c4f7-4da6-a6e7-3a5e3d495da9",
+     1
+    ],
+    [
+     "f3adab07-7e2c-43a9-855e-66c1f4511a4c",
+     1
+    ],
+    [
+     "8e9928a8-4793-4e15-ae24-91c41aebad9c",
+     1
+    ]
+   ]
+  },
+  "5c1d2998-2544-4969-be3e-38171ebdb093": {
+   "name": "Elven Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     50
+    ]
+   ]
+  },
+  "5f5dd00d-7d88-46b9-81b6-0b6665e805da": {
+   "name": "Chitin Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     30
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     30
+    ]
+   ]
+  },
+  "616b64ef-4184-4efb-af55-1a3f122431dc": {
+   "name": "Elven Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     80
+    ]
+   ]
+  },
+  "63130cda-c55b-4dac-b0f7-580c4da34cfc": {
+   "name": "Hide Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     70
+    ]
+   ]
+  },
+  "631ffc41-7385-4e3c-b571-76dc9a621922": {
+   "name": "Dwarven Mail Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     5
+    ],
+    [
+     "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
+     5
+    ]
+   ]
+  },
+  "6362ecf3-42d9-4d8d-af30-2b9fc2deb92a": {
+   "name": "Dragonscale Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "a99ab22b-9d16-46cd-9616-eb1ed40a135d",
+     10
+    ],
+    [
+     "73e3dc29-0f39-4874-9761-b36ca07c4e59",
+     10
+    ]
+   ]
+  },
+  "657f9abf-11bf-4278-938d-2cc3e1573ef1": {
+   "name": "Stormcaller",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+     7
+    ],
+    [
+     "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+     8
+    ],
+    [
+     "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+     8
+    ]
+   ]
+  },
+  "659dd496-f71e-4cf8-aaee-8f0c4723410e": {
+   "name": "Dragonscale Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "93f65e60-b27b-42b4-b0da-44fd6314f1d3",
+     10
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     10
+    ]
+   ]
+  },
+  "67b78223-916e-440b-8ec6-fc14b83e1150": {
+   "name": "Stalhrim Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     28
+    ],
+    [
+     "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
+     28
+    ]
+   ]
+  },
+  "6ab76008-dd08-461f-bdcc-6373799ea489": {
+   "name": "Rueful Axe",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "9fdbb542-ff37-4199-93a3-d9444cca9090",
+     3
+    ],
+    [
+     "fea58213-6a41-4500-9f09-cd9c745bcc1e",
+     1
+    ],
+    [
+     "4822df01-8163-4c11-8bde-3ffbb565de4b",
+     0
+    ]
+   ]
+  },
+  "6edb4102-9986-4bbb-80bf-283cb4a7aa53": {
+   "name": "Chitin Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     3
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     3
+    ]
+   ]
+  },
+  "72402010-1a8c-4cae-a5e4-a2fe98614564": {
+   "name": "Orcish Scaled Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "93f65e60-b27b-42b4-b0da-44fd6314f1d3",
+     20
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     20
+    ]
+   ]
+  },
+  "7278524f-02b2-4f10-a277-a6378e1909c7": {
+   "name": "Glass Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     27
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     27
+    ]
+   ]
+  },
+  "73b6d6e6-4bdb-434d-b2ac-d07a9fd1a9a5": {
+   "name": "Silver Hero's Helm",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+     9
+    ],
+    [
+     "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+     9
+    ],
+    [
+     "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+     9
+    ],
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     20
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     20
+    ]
+   ]
+  },
+  "7515e595-fcbc-48d6-a453-81bc54bb2aef": {
+   "name": "Dwarven Mail Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     20
+    ],
+    [
+     "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
+     20
+    ]
+   ]
+  },
+  "769fdae8-2341-494f-931e-40d8a4468286": {
+   "name": "Daedric Mail Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     10
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     10
+    ]
+   ]
+  },
+  "7721c775-6728-47d0-8215-a1fad880aa63": {
+   "name": "Purifier's Cocoon",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "dbc82d4d-3be1-4735-af21-316c54cfae55",
+     10
+    ],
+    [
+     "33f866a5-f2f5-46af-ac13-fa5f02bedfbf",
+     10
+    ],
+    [
+     "10f57d40-98e9-4181-972b-d654f81afc27",
+     10
+    ],
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     10
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     10
+    ]
+   ]
+  },
+  "7a1bb403-519e-4974-8ff3-7172f2b38ee9": {
+   "name": "Glass Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     27
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     27
+    ]
+   ]
+  },
+  "7d2dfa88-e7ca-4fd6-a173-862cfb077c04": {
+   "name": "Stendarr's Hammer",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "9fdbb542-ff37-4199-93a3-d9444cca9090",
+     10
+    ],
+    [
+     "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+     10
+    ],
+    [
+     "eb885073-2576-4298-ae93-986f2cd261a2",
+     0
+    ]
+   ]
+  },
+  "7dc650cf-4a9c-4650-b9fb-f1dcdb7192b9": {
+   "name": "Akaviri Blade",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "af1e56bf-1974-452c-aa70-36b2140cbb07",
+     7
+    ],
+    [
+     "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+     8
+    ],
+    [
+     "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+     8
+    ]
+   ]
+  },
+  "7f495ddd-f2ca-44d8-aeba-df09e25deda5": {
+   "name": "Leather Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     10
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     10
+    ]
+   ]
+  },
+  "80af12db-32e9-47b5-aa04-14a3d610e426": {
+   "name": "Stalhrim Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "67e1de28-c9e1-44cc-bad8-338b912ce352",
+     10
+    ],
+    [
+     "34469735-f126-46a5-bc26-ec8234c8c13f",
+     10
+    ]
+   ]
+  },
+  "81d242e6-de85-4960-9ce9-8bfa75b85730": {
+   "name": "Ring of Cinders",
+   "type": 10,
+   "mandatoryProperties": [
+    [
+     "94aa3774-cd7e-400c-9d17-a4652fb88a93",
+     10
+    ],
+    [
+     "1d85511d-66bf-46ad-87b5-bd7a115afafd",
+     10
+    ],
+    [
+     "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+     10
+    ],
+    [
+     "7f66e203-4e89-47fc-8287-7e27590ad673",
+     1
+    ],
+    [
+     "6bc19568-2f76-4c0e-8482-dee16629dc5b",
+     1
+    ],
+    [
+     "f17be1d9-1c1e-4510-8514-3d108b92220f",
+     1
+    ]
+   ]
+  },
+  "85c44edf-2fc6-4b4d-b8a9-3340f127f9f0": {
+   "name": "Master Ring of Shock",
+   "type": 10,
+   "mandatoryProperties": [
+    [
+     "94aa3774-cd7e-400c-9d17-a4652fb88a93",
+     10
+    ],
+    [
+     "1d85511d-66bf-46ad-87b5-bd7a115afafd",
+     10
+    ],
+    [
+     "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+     10
+    ],
+    [
+     "fe2923dc-1869-40bf-800b-203a456d0f44",
+     1
+    ],
+    [
+     "6d4e4437-3448-4a61-98e8-12a7e6850c8c",
+     1
+    ],
+    [
+     "2af1fd3a-e7b4-488f-a15b-09243e1958e3",
+     1
+    ]
+   ]
+  },
+  "863dd538-f520-40c5-886c-6e54539c1d23": {
+   "name": "Shield of Apathy",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "38ca6ee2-1765-4122-a5e5-d036a7d31fe3",
+     8
+    ],
+    [
+     "9701ded5-e1d1-4436-8b14-d5d726ff4434",
+     8
+    ],
+    [
+     "2ac1e2f6-8f97-444e-97af-7efd46c71cca",
+     8
+    ],
+    [
+     "67e1de28-c9e1-44cc-bad8-338b912ce352",
+     8
+    ],
+    [
+     "34469735-f126-46a5-bc26-ec8234c8c13f",
+     8
+    ]
+   ]
+  },
+  "86518ee9-45d5-4807-b27a-4629162c0d60": {
+   "name": "Flame Monarch's Crown",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "464bedb7-a631-43b6-a2df-f65f089d39da",
+     10
+    ],
+    [
+     "33f866a5-f2f5-46af-ac13-fa5f02bedfbf",
+     10
+    ],
+    [
+     "10f57d40-98e9-4181-972b-d654f81afc27",
+     10
+    ],
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     20
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     20
+    ]
+   ]
+  },
+  "86a4ad9d-e2e8-49cd-9642-b553475b6580": {
+   "name": "Pandemonium",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "b64fa9d4-4f13-4bb4-9129-16df08e84757",
+     3
+    ],
+    [
+     "366ce3d7-ac40-459b-b363-4565e3c5ce17",
+     3
+    ],
+    [
+     "2b253847-5061-4a07-acfe-fbdc3c702922",
+     3
+    ]
+   ]
+  },
+  "875aa16e-9d26-46a0-934e-6ba5b2a5299f": {
+   "name": "Stalhrim Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "67e1de28-c9e1-44cc-bad8-338b912ce352",
+     8
+    ],
+    [
+     "34469735-f126-46a5-bc26-ec8234c8c13f",
+     8
+    ]
+   ]
+  },
+  "87fd054f-e38d-4d0d-8927-e59523b24312": {
+   "name": "Orcish Scaled Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "93f65e60-b27b-42b4-b0da-44fd6314f1d3",
+     14
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     14
+    ]
+   ]
+  },
+  "8851a883-40d2-4b04-9cce-8943a0ba9ac3": {
+   "name": "Flame Knight's Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "464bedb7-a631-43b6-a2df-f65f089d39da",
+     8
+    ],
+    [
+     "33f866a5-f2f5-46af-ac13-fa5f02bedfbf",
+     8
+    ],
+    [
+     "10f57d40-98e9-4181-972b-d654f81afc27",
+     8
+    ]
+   ]
+  },
+  "894a8d94-9ee7-49d7-a78e-102026a06f80": {
+   "name": "Redoran Watchman's Helm",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     14
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     14
+    ],
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     14
+    ]
+   ]
+  },
+  "899b63a7-6eb7-4689-a450-8c6b507763c6": {
+   "name": "Guardian's Claymore",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "f8e9dec5-c6e7-4976-b24b-2155f1921692",
+     1
+    ],
+    [
+     "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+     1
+    ],
+    [
+     "10f57d40-98e9-4181-972b-d654f81afc27",
+     1
+    ]
+   ]
+  },
+  "8a69bdb2-d179-4f2d-984a-322f9397aedf": {
+   "name": "Rimelink",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "23746263-41c1-4023-8859-41e698dcf49d",
+     5
+    ],
+    [
+     "262ece9b-bd65-4876-b698-5926ca4422be",
+     5
+    ],
+    [
+     "59144365-ceb5-47a0-8f48-6eceecb15d2c",
+     0
+    ]
+   ]
+  },
+  "90381284-f800-4239-baa7-eef0f53daf21": {
+   "name": "Thunderfell",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "139024a7-3965-4e90-a4c1-60e3d7ca3133",
+     10
+    ],
+    [
+     "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+     10
+    ],
+    [
+     "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+     10
+    ]
+   ]
+  },
+  "9107fb63-f88b-45fa-bca9-7fe2f9bceb2c": {
+   "name": "Chillrend",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
+     10
+    ],
+    [
+     "a869f868-c23f-45bb-9159-d62b42236a4a",
+     10
+    ],
+    [
+     "be17fe64-c8f9-47e1-8803-49227119c2b3",
+     10
+    ],
+    [
+     "d6647f03-de86-40e2-9e7c-5b053f057d86",
+     0
+    ]
+   ]
+  },
+  "919009b4-e38c-408b-a972-b873831204bf": {
+   "name": "Daedric Mail Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     30
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     30
+    ]
+   ]
+  },
+  "9586ac2b-5ee1-4377-ae08-04bb61edfba7": {
+   "name": "Daedric Mail Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     30
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     30
+    ]
+   ]
+  },
+  "965a1b6c-ac12-45c6-b4a5-25c3d7aec594": {
+   "name": "Spiderfang",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "08ea75d0-5cf1-44a9-9816-d3c6740c4191",
+     10
+    ],
+    [
+     "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+     10
+    ],
+    [
+     "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+     10
+    ]
+   ]
+  },
+  "97193263-c9b7-4946-a86d-91250776e56c": {
+   "name": "Chitin Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     33
+    ],
+    [
+     "73e3dc29-0f39-4874-9761-b36ca07c4e59",
+     3
+    ]
+   ]
+  },
+  "975509a9-196f-41c9-8df4-6f0e2d1f02ce": {
+   "name": "Lord's Mail",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "dbc82d4d-3be1-4735-af21-316c54cfae55",
+     10
+    ],
+    [
+     "33f866a5-f2f5-46af-ac13-fa5f02bedfbf",
+     10
+    ],
+    [
+     "f1dff6c4-aa71-4989-ab77-448f9c220f0d",
+     0
+    ],
+    [
+     "d4b5dcd3-c08c-4a4a-83f9-e64e3b16f0fc",
+     0
+    ]
+   ]
+  },
+  "9935f4e7-74aa-4223-80c4-97fcfa4ee7f5": {
+   "name": "Chitin Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     20
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     20
+    ]
+   ]
+  },
+  "9a22b59a-cdbc-4987-bf4a-0cc812428aeb": {
+   "name": "Spellbreaker",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "5137a7eb-27a5-4b11-92b1-69ef3a3287b0",
+     0
+    ]
+   ]
+  },
+  "9bdcdbd1-2713-406a-ac6c-245b6964010a": {
+   "name": "Glass Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     30
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     30
+    ]
+   ]
+  },
+  "9dd7847c-47c5-41ec-9348-cadbbfe9eb3d": {
+   "name": "Elven Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     56
+    ]
+   ]
+  },
+  "9dff48fb-39f9-47f1-a4d2-175744ea7da3": {
+   "name": "Dark Seducer Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     39
+    ],
+    [
+     "73e3dc29-0f39-4874-9761-b36ca07c4e59",
+     9
+    ]
+   ]
+  },
+  "9fdc4010-f23d-4d60-93db-e580158aac98": {
+   "name": "Glass Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     7
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     7
+    ]
+   ]
+  },
+  "a0c419d0-613c-44fe-91a3-6e48f88e01cc": {
+   "name": "Daedric Mail Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     20
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     20
+    ]
+   ]
+  },
+  "a0d7dd5e-692e-4fbb-bbf2-19c6a874f3f5": {
+   "name": "Mehrunes' Razor",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "5dc5d4e7-75a3-4fd2-87d9-bb9b8723cae7",
+     0
+    ]
+   ]
+  },
+  "a1865b9a-4582-479d-ae33-c914c7aac8a2": {
+   "name": "Daedric Mail Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     19
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     19
+    ]
+   ]
+  },
+  "a34681fc-31ee-4327-ba48-6fb7c30cdf52": {
+   "name": "Hide Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     61
+    ]
+   ]
+  },
+  "a6d3d7dd-2193-462b-b28e-1a4b1e902df1": {
+   "name": "Leather Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "67e1de28-c9e1-44cc-bad8-338b912ce352",
+     2
+    ],
+    [
+     "0b414904-c1e5-40e0-9cdb-52969b0a4e65",
+     2
+    ]
+   ]
+  },
+  "a8308cf2-8206-4b3a-9ebb-e3747ea131bb": {
+   "name": "Hide Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     41
+    ]
+   ]
+  },
+  "a948c18d-9895-44fe-afd7-0dcb8789d41e": {
+   "name": "Ring of Dremora",
+   "type": 10,
+   "mandatoryProperties": [
+    [
+     "7f66e203-4e89-47fc-8287-7e27590ad673",
+     1
+    ],
+    [
+     "6bc19568-2f76-4c0e-8482-dee16629dc5b",
+     1
+    ],
+    [
+     "f17be1d9-1c1e-4510-8514-3d108b92220f",
+     1
+    ]
+   ]
+  },
+  "a9f2aefa-2e20-4293-afd1-a5779cfce68d": {
+   "name": "Stalhrim Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     30
+    ],
+    [
+     "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
+     30
+    ]
+   ]
+  },
+  "aa4ffedf-ad74-4aa1-bd82-18a041100f79": {
+   "name": "Leather Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "67e1de28-c9e1-44cc-bad8-338b912ce352",
+     10
+    ],
+    [
+     "0b414904-c1e5-40e0-9cdb-52969b0a4e65",
+     10
+    ]
+   ]
+  },
+  "aa7337ca-52dd-44ac-9ca4-2c8102a29f0e": {
+   "name": "Dwarven Mail Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     25
+    ],
+    [
+     "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
+     25
+    ]
+   ]
+  },
+  "aa96f1a4-9324-4dc6-83a0-5b24dc1b438a": {
+   "name": "Hide Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     60
+    ]
+   ]
+  },
+  "adc4c390-3352-44e6-8d86-90f2d6d872a1": {
+   "name": "Glass Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     17
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     17
+    ]
+   ]
+  },
+  "af7759d9-f38e-4384-bf36-1de0c3d150a7": {
+   "name": "Volendrung",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "9fdbb542-ff37-4199-93a3-d9444cca9090",
+     5
+    ],
+    [
+     "652d5ac9-3076-405b-a163-dde1a950fb26",
+     5
+    ]
+   ]
+  },
+  "b162ebdc-5133-44b6-875f-b0394aaa492e": {
+   "name": "Dwarven Mail Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     30
+    ],
+    [
+     "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
+     30
+    ]
+   ]
+  },
+  "b1941146-f63a-4f96-9add-5a2be06117de": {
+   "name": "Chitin Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     23
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     23
+    ]
+   ]
+  },
+  "b20d466a-1720-4040-a8ed-941a53f7e3eb": {
+   "name": "Dwarven Light Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "d2f7ca93-7234-4890-886d-60820350716b",
+     5
+    ],
+    [
+     "34469735-f126-46a5-bc26-ec8234c8c13f",
+     5
+    ]
+   ]
+  },
+  "b5710964-6ec9-48bd-8401-90282747136e": {
+   "name": "Areldur's Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "da0ebf22-6d7b-4504-bfc1-b78b674c7c5c",
+     10
+    ],
+    [
+     "33f866a5-f2f5-46af-ac13-fa5f02bedfbf",
+     10
+    ],
+    [
+     "10f57d40-98e9-4181-972b-d654f81afc27",
+     10
+    ],
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     50
+    ]
+   ]
+  },
+  "b73fa9ab-fdd0-49a0-8b16-de3b8a8961fd": {
+   "name": "Stalhrim Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     28
+    ],
+    [
+     "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
+     28
+    ]
+   ]
+  },
+  "b7720f92-6838-4b9d-ab4a-37c5fd0ce724": {
+   "name": "Conjurer's Gloves",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "94aa3774-cd7e-400c-9d17-a4652fb88a93",
+     10
+    ],
+    [
+     "1d85511d-66bf-46ad-87b5-bd7a115afafd",
+     10
+    ],
+    [
+     "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+     10
+    ],
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     70
+    ]
+   ]
+  },
+  "b7fa73f6-4a8b-40d6-b66f-5cd1b2b52b53": {
+   "name": "Gauntlets of the Companions",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "652d5ac9-3076-405b-a163-dde1a950fb26",
+     10
+    ],
+    [
+     "1d85511d-66bf-46ad-87b5-bd7a115afafd",
+     10
+    ],
+    [
+     "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+     10
+    ]
+   ]
+  },
+  "bab5c847-7b2f-4b79-9b93-d96b2fa10b80": {
+   "name": "Hide Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     61
+    ]
+   ]
+  },
+  "bad8c999-7ec2-4e12-b64a-ca232b88e7f3": {
+   "name": "Jailmaster's Ring",
+   "type": 10,
+   "mandatoryProperties": [
+    [
+     "94aa3774-cd7e-400c-9d17-a4652fb88a93",
+     8
+    ],
+    [
+     "1d85511d-66bf-46ad-87b5-bd7a115afafd",
+     8
+    ],
+    [
+     "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+     8
+    ],
+    [
+     "7f66e203-4e89-47fc-8287-7e27590ad673",
+     1
+    ],
+    [
+     "f3adab07-7e2c-43a9-855e-66c1f4511a4c",
+     1
+    ],
+    [
+     "2af1fd3a-e7b4-488f-a15b-09243e1958e3",
+     1
+    ]
+   ]
+  },
+  "bbff5eeb-43bf-41c1-83a9-f4b59bdb0fad": {
+   "name": "Dark Seducer Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     19
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     19
+    ]
+   ]
+  },
+  "bd2776db-a5a9-49cd-b1ac-244a3b36a995": {
+   "name": "Leather Hood",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     12
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     12
+    ]
+   ]
+  },
+  "be1484e6-c156-47db-bdab-3cf5b75096a0": {
+   "name": "Chrysamere",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "464bedb7-a631-43b6-a2df-f65f089d39da",
+     6
+    ],
+    [
+     "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
+     4
+    ],
+    [
+     "94aa3774-cd7e-400c-9d17-a4652fb88a93",
+     4
+    ],
+    [
+     "80980773-a388-4f71-9ba5-ac69a7e307be",
+     3
+    ]
+   ]
+  },
+  "c27073f5-a144-4c3a-a950-ad207e6ba94b": {
+   "name": "Elven Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     46
+    ]
+   ]
+  },
+  "c3ef8fda-5698-468e-9553-7a84f8cd9418": {
+   "name": "Elven Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     66
+    ]
+   ]
+  },
+  "c74b89cb-19cc-4529-9c7e-ec6b53bcac17": {
+   "name": "Stalhrim Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     8
+    ],
+    [
+     "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
+     8
+    ]
+   ]
+  },
+  "ca1e2d0f-b902-4c82-b8d6-e82b83dcc9e0": {
+   "name": "Dawnbreaker",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "c40ed851-8777-4d09-b169-0223dae8f67d",
+     8
+    ],
+    [
+     "bf107d7d-8777-4411-b07a-56819a58a709",
+     8
+    ],
+    [
+     "98757a01-33b8-40ea-bb45-6acd89811ae3",
+     8
+    ],
+    [
+     "9c4f5df1-9c67-4557-a103-822797ce58b4",
+     0
+    ]
+   ]
+  },
+  "d00c04af-562d-48d8-b38d-10621e55dadd": {
+   "name": "Dragonscale Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "93f65e60-b27b-42b4-b0da-44fd6314f1d3",
+     20
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     20
+    ]
+   ]
+  },
+  "d02538d2-5bba-4dbc-87b0-2347274d3b4f": {
+   "name": "Daedric Mail Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     9
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     9
+    ]
+   ]
+  },
+  "d0da3047-a813-412a-a16f-d42585110828": {
+   "name": "Elven Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     66
+    ]
+   ]
+  },
+  "d11338a1-c5f2-4a80-b326-f9c47c12d642": {
+   "name": "Leather Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     30
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     30
+    ]
+   ]
+  },
+  "d124bb0d-4653-40fc-be7c-076811540157": {
+   "name": "Glass Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     20
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     20
+    ]
+   ]
+  },
+  "d3851100-d3ee-4b24-b2b1-2d46a907bd56": {
+   "name": "Shield of Stasis",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "38ca6ee2-1765-4122-a5e5-d036a7d31fe3",
+     10
+    ],
+    [
+     "9701ded5-e1d1-4436-8b14-d5d726ff4434",
+     10
+    ],
+    [
+     "2ac1e2f6-8f97-444e-97af-7efd46c71cca",
+     10
+    ],
+    [
+     "67e1de28-c9e1-44cc-bad8-338b912ce352",
+     10
+    ],
+    [
+     "34469735-f126-46a5-bc26-ec8234c8c13f",
+     10
+    ]
+   ]
+  },
+  "d6923896-4d90-4545-9faa-956e43771ce9": {
+   "name": "Orcish Scaled Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "93f65e60-b27b-42b4-b0da-44fd6314f1d3",
+     24
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     24
+    ]
+   ]
+  },
+  "d7c9caba-4133-436e-b7bb-6d96f2283dcf": {
+   "name": "Orcish Scaled Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "93f65e60-b27b-42b4-b0da-44fd6314f1d3",
+     4
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     4
+    ]
+   ]
+  },
+  "d8e5cc8b-eebe-4ab6-bc0c-4360bcbcb4f5": {
+   "name": "Hide Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     71
+    ]
+   ]
+  },
+  "da0cf5aa-6d37-48da-8b18-3f4e914145d3": {
+   "name": "Onyx Saber",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "af1e56bf-1974-452c-aa70-36b2140cbb07",
+     9
+    ],
+    [
+     "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+     9
+    ],
+    [
+     "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+     9
+    ],
+    [
+     "72893e14-4bfe-4eca-b556-3b217c8dc9bf",
+     0
+    ]
+   ]
+  },
+  "db48367e-772a-4d55-90c9-5ba9d7a3ed10": {
+   "name": "Orcish Scaled Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "93f65e60-b27b-42b4-b0da-44fd6314f1d3",
+     30
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     30
+    ]
+   ]
+  },
+  "db5a2e9e-be6a-49f0-8158-03669791bd91": {
+   "name": "Mephala’s Teacher",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
+     10
+    ],
+    [
+     "a869f868-c23f-45bb-9159-d62b42236a4a",
+     10
+    ],
+    [
+     "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+     10
+    ]
+   ]
+  },
+  "def810af-e9f5-4e23-9247-1edf391d82e1": {
+   "name": "Ebony Mail",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "2b8fd511-80da-4128-81b1-bd7ab6023223",
+     6
+    ],
+    [
+     "1d85511d-66bf-46ad-87b5-bd7a115afafd",
+     6
+    ],
+    [
+     "7bb4c21c-c908-4d57-b406-eb402a5a0f9f",
+     0
+    ],
+    [
+     "4697a590-43e1-46a7-85e3-18975ea84d17",
+     0
+    ]
+   ]
+  },
+  "dfbf0135-2b27-4467-9e2b-3e88538f1d59": {
+   "name": "Dwarven Mail Boots",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b989c011-48de-492d-aca7-a2644fb3ca1b",
+     25
+    ],
+    [
+     "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
+     25
+    ]
+   ]
+  },
+  "e1fe3011-731e-402f-8fbf-e63d702616fe": {
+   "name": "Disciple's Mail",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+     8
+    ],
+    [
+     "33f866a5-f2f5-46af-ac13-fa5f02bedfbf",
+     8
+    ],
+    [
+     "10f57d40-98e9-4181-972b-d654f81afc27",
+     8
+    ]
+   ]
+  },
+  "e225e0bf-1fbb-432a-a118-e94a70507203": {
+   "name": "Elven Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     76
+    ]
+   ]
+  },
+  "e4a25391-9c8f-4353-9d48-4e30c4367312": {
+   "name": "Orcish Scaled Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "93f65e60-b27b-42b4-b0da-44fd6314f1d3",
+     10
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     10
+    ]
+   ]
+  },
+  "e5766843-04ef-49bb-91f7-eead31de26c8": {
+   "name": "Dwarven Light Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "d2f7ca93-7234-4890-886d-60820350716b",
+     10
+    ],
+    [
+     "34469735-f126-46a5-bc26-ec8234c8c13f",
+     10
+    ]
+   ]
+  },
+  "e5bf5f11-665a-4ca4-83c8-4bbaaebd6ada": {
+   "name": "Hide Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     80
+    ]
+   ]
+  },
+  "e7389711-4911-413e-b156-d439e73c9e14": {
+   "name": "Stalhrim Helmet",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     20
+    ],
+    [
+     "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
+     20
+    ]
+   ]
+  },
+  "e7be6731-5db2-48d7-8072-8bfbf923b25f": {
+   "name": "Elven Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
+     70
+    ]
+   ]
+  },
+  "e86a6f9a-4e40-40d6-a9dd-1036b4190caa": {
+   "name": "Fork of Horripilation",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
+     1
+    ],
+    [
+     "98d45845-ffd2-4e99-a2b4-acb270aa9666",
+     0
+    ]
+   ]
+  },
+  "e8ed4e66-2957-431e-a0a5-810ad443a88c": {
+   "name": "Golden Champion's Helm",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
+     10
+    ],
+    [
+     "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
+     10
+    ],
+    [
+     "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+     10
+    ],
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     20
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     20
+    ]
+   ]
+  },
+  "ebea463a-8084-400c-b583-6fab3fab0258": {
+   "name": "Captain Kordan’s Saber",
+   "type": 2,
+   "mandatoryProperties": [
+    [
+     "af1e56bf-1974-452c-aa70-36b2140cbb07",
+     10
+    ],
+    [
+     "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
+     10
+    ],
+    [
+     "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
+     10
+    ]
+   ]
+  },
+  "ecb35ffc-02fc-426a-b6b6-6150f4f09a49": {
+   "name": "Leather Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "48516321-3bf3-42bc-9b31-cca7f0ffa992",
+     2
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     2
+    ]
+   ]
+  },
+  "edb7414d-1672-4f34-aa23-a5f5e5b9dd94": {
+   "name": "Dragonscale Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "93f65e60-b27b-42b4-b0da-44fd6314f1d3",
+     30
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     30
+    ]
+   ]
+  },
+  "f3cb91ab-6ee6-4f49-aed1-3946145dccd8": {
+   "name": "Glass Armor",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     10
+    ],
+    [
+     "01842871-7f8c-48c1-86ce-6576601d6f02",
+     10
+    ]
+   ]
+  },
+  "f5a6289a-ecdf-4d8d-9f17-eb695231bdf1": {
+   "name": "Cascadia",
+   "type": 10,
+   "mandatoryProperties": [
+    [
+     "9ec3bb8a-050a-4b4e-ae82-c1b570b49278",
+     1
+    ],
+    [
+     "40215e5f-767a-45b8-bf92-9012f66217bb",
+     1
+    ],
+    [
+     "6c6d9c5d-814a-42aa-948b-c6210311c3da",
+     1
+    ]
+   ]
+  },
+  "f6d699a7-a90b-4038-90a0-262f35ac79fa": {
+   "name": "Dark Seducer Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "82f79c45-cf51-4287-9215-f53a75a19757",
+     29
+    ],
+    [
+     "b1f4ffe8-141a-4c69-92a4-238f8359438f",
+     29
+    ]
+   ]
+  },
+  "fce28f7f-f2f7-4098-b823-87ef526bb1e5": {
+   "name": "Orcish Scaled Gauntlets",
+   "type": 3,
+   "mandatoryProperties": [
+    [
+     "93f65e60-b27b-42b4-b0da-44fd6314f1d3",
+     24
+    ],
+    [
+     "11af0ed4-72de-4884-90d1-d465078247bc",
+     24
+    ]
+   ]
+  },
+  "fd3bd675-feb7-4656-a66c-a27fe15232c2": {
+   "name": "Daedric Light Shield",
+   "type": 9,
+   "mandatoryProperties": [
+    [
+     "d2f7ca93-7234-4890-886d-60820350716b",
+     9
+    ],
+    [
+     "f5cba266-96df-45c2-b8c6-60bf37de2849",
+     9
+    ]
+   ]
+  }
+ }
+}

@@ -47,6 +47,7 @@ mod dungeon;
 mod dungeon_update;
 mod error;
 mod event_quests;
+mod fixed_templates;
 mod free_for_all;
 mod gameevent;
 mod global_gift;

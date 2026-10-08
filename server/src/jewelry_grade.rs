@@ -127,6 +127,11 @@ pub fn grade_if_bare<R: Rng + ?Sized>(
     if item.grade.is_some() || !item.properties.grading.is_empty() {
         return;
     }
+    // A fixed (mandatory-property) template is never bare: its template IS its
+    // properties (#8).
+    if crate::fixed_templates::has_mandatory_properties(item.item_template_id) {
+        return;
+    }
     let Some(item_type) = items.get(&item.item_template_id).map(|t| t.r#type) else {
         return;
     };
@@ -217,6 +222,40 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(1);
         for t in [2u64, 3, 9] {
             assert!(roll(t, &mut rng).is_none());
+        }
+    }
+
+    /// #8: `grade_if_bare` (craft results, enchants, merchant mint) leaves a
+    /// fixed ring alone and still grades an ordinary one.
+    #[test]
+    fn a_fixed_ring_is_never_bare() {
+        let mut items = HashMap::new();
+        let shock: Uuid = "85c44edf-2fc6-4b4d-b8a9-3340f127f9f0".parse().unwrap();
+        let pearl: Uuid = "869bf6f4-f7fb-43cf-b264-02b84f9a5425".parse().unwrap();
+        for id in [shock, pearl] {
+            items.insert(
+                id,
+                GameDataItem {
+                    name: String::new(),
+                    r#type: RING,
+                },
+            );
+        }
+        let bare = |t: Uuid| -> Item {
+            serde_json::from_value(serde_json::json!({
+                "itemTemplateId": t, "temperingLevel": 0, "durability": 0.0
+            }))
+            .unwrap()
+        };
+        let mut rng = StdRng::seed_from_u64(8);
+        for _ in 0..20 {
+            let mut fixed = bare(shock);
+            grade_if_bare(&mut fixed, &items, &mut rng);
+            assert_eq!(fixed.grade, None);
+            assert!(fixed.properties.grading.is_empty());
+            let mut plain = bare(pearl);
+            grade_if_bare(&mut plain, &items, &mut rng);
+            assert!(plain.grade.is_some());
         }
     }
 }

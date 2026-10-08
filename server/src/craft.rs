@@ -2000,9 +2000,12 @@ mod tests {
     /// still has to carry the ability affixes the UI displays beside the enchant.
     #[test]
     fn enchanting_bare_jewelry_adds_grade_and_grading() {
-        const FIRE_RING: &str = "3833ad47-86c6-427a-b30e-8d3e1f27b1d7";
+        // An ordinary ring. This used to be the Ring of Searing, a fixed
+        // (mandatory-property) template that is never graded (#8): see
+        // `enchanting_a_fixed_ring_keeps_it_ungraded`.
+        const BRASS_PEARL_RING: &str = "869bf6f4-f7fb-43cf-b264-02b84f9a5425";
         let mut ring = item_with(0, vec![]);
-        ring.item_template_id = uuid(FIRE_RING);
+        ring.item_template_id = uuid(BRASS_PEARL_RING);
 
         let out = apply_item_mod(
             &ring,
@@ -2032,6 +2035,28 @@ mod tests {
             "graded jewelry has no wear fields on the wire"
         );
         assert_eq!(out.durability, 0.0, "graded jewelry has no durability");
+    }
+
+    /// #8: a fixed ring (template-authored properties) takes the player's enchant
+    /// but is never graded — retail's enchanted Rings of Dremora carry ENCHANTING
+    /// and no grade.
+    #[test]
+    fn enchanting_a_fixed_ring_keeps_it_ungraded() {
+        const RING_OF_SEARING: &str = "3833ad47-86c6-427a-b30e-8d3e1f27b1d7";
+        let mut ring = item_with(0, vec![]);
+        ring.item_template_id = uuid(RING_OF_SEARING);
+        let out = apply_item_mod(
+            &ring,
+            0,
+            uuid(MAGICKA_DAMAGE_T10),
+            None,
+            deploy_enchanting(),
+            deploy_items(),
+            &mut seeded(264),
+        );
+        assert!(!out.properties.enchanting.is_empty(), "the enchant itself is present");
+        assert_eq!(out.grade, None);
+        assert!(out.properties.grading.is_empty());
     }
 
     /// Negative control: the same enchant on ordinary gear must not invent jewelry-only
