@@ -694,6 +694,21 @@ fn apply_enchant_with_rating_and_multiplier(
             lo.health_regen_on_critical += CRITICAL_HEALTH_REGEN_PER_S
         }
 
+        // Lord's Mail: "+{0} Health per second during combat" (tracker #363).
+        // `AbsoluteHealingBonusInstance.Register` (libil2cpp `0x1E831D8`) adds
+        // `GetHealthGainedPerSecond` to the wearer's `RegenerationAdditiveSources`
+        // (`ActorBonusHandler+0x168`) — the same additive list Regenerate Health
+        // feeds. `GetHealthGainedPerSecond` (`0x1E83334`) returns `GetXValue()` when
+        // the asked stat is `_healingStat` (0 = Health), else 0. The generated tier
+        // row is 0.0, so the shipped asset value is used.
+        "AbsoluteHealthHealingPropertyLogic" => lo.health_regen += ADDITIONAL_REGENERATION_PER_S,
+
+        // Lord's Mail: "Target loses {0} Health per second" (tracker #363). Ticked by
+        // `resolve::apply_continuous_area_damage`; see `continuous_health_reduction`.
+        "ContinuousHealthReductionPropertyLogic" => {
+            lo.continuous_health_reduction += CONTINUOUS_HEALTH_REDUCTION_PER_S
+        }
+
         // Fork of Horripilation: "Prevents the wielder's Magicka regeneration."
         // `BlockRegenerationBonusInstance.ShouldBlockRegeneration` (`0x1D4AB04`) is
         // `_blockStats == stat`, and the asset's `_blockStats` is 2 (Magicka).
@@ -1009,6 +1024,17 @@ fn item_property_xvalue_multiplier(
 /// `reference/game-defs/property_logic_static.json` in blades-capture. A type-4
 /// (ArtifactPower) property, so `GetRawXValue` does not scale it by the item.
 const CRITICAL_HEALTH_REGEN_PER_S: f32 = 5.0;
+
+/// `AbsoluteHealthHealingPropertyLogic._xValueByTier[0]` — Lord's Mail's "Additional
+/// Regeneration", Health per second (`_healingStat = 0`). From
+/// `reference/game-defs/property_logic_static.json` in blades-capture. A type-4
+/// (ArtifactPower) property, so `GetRawXValue` does not scale it by the item.
+pub(crate) const ADDITIONAL_REGENERATION_PER_S: f32 = 6.9;
+
+/// `ContinuousHealthReductionPropertyLogic._xValueByTier[0]` — Lord's Mail's
+/// "Continuous Untyped Damage", Health per second taken from the wearer's target
+/// (`_reductionStats = 0`). Same source and same type-4 flat value as above.
+pub(crate) const CONTINUOUS_HEALTH_REDUCTION_PER_S: f32 = 6.9;
 
 pub(crate) fn apply_template_properties(lo: &mut Loadout, template: &str) {
     apply_template_properties_with_rating(lo, template, None);

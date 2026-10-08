@@ -1070,6 +1070,13 @@ pub struct Loadout {
     /// and its shipped rate in damage PER SECOND (`_xValueByTier`); the tick delivers
     /// `rate x CONTINUOUS_AREA_TICK_SECS`. See `resolve::apply_continuous_area_damage`.
     pub continuous_damage: Vec<(DamageType, f32)>,
+    /// Health per second the wearer's OPPONENT loses to
+    /// `ContinuousHealthReductionPropertyLogic` (Lord's Mail, 6.9). Unlike
+    /// `continuous_damage` this is untyped and unmitigated: retail's
+    /// `CombatManager.ResolveContinuousStatsReduction` hands it straight to the
+    /// target's `ReceiveDamage` without `ResolveDamageTaken`. See
+    /// `resolve::apply_continuous_area_damage`.
+    pub continuous_health_reduction: f32,
     /// `Weapon`/`Shield` `Ravage{Stamina,Magicka,Health}` — the flat amount this hit
     /// takes off the victim's **maximum** pool ("Reduces target's maximum Stamina by
     /// {0}"), per landed swing. Distinct from the drain families, which take the
@@ -1923,6 +1930,9 @@ pub struct Fighter {
     /// integral, and an Ebony Mail tick is 1.88: rounding each one would bill 2.0
     /// (10/s against the 9.4/s the item text states), truncating would bill 1.0.
     pub continuous_carry: f32,
+    /// The same carry for `loadout.continuous_health_reduction` (Lord's Mail), kept
+    /// apart so the two effects cannot borrow each other's fractions.
+    pub stats_reduction_carry: f32,
     /// The consumable item UUID this fighter has equipped, as declared by its own
     /// `EquipAbilitiesAndConsumables` (56) upload (`{4:String consumableUuid ·
     /// 5:Int charges}`). It is the ONLY source of the UUID the server must echo in
@@ -2249,6 +2259,7 @@ impl Fighter {
             consumables_used: 0,
             continuous_next_tick_at: None,
             continuous_carry: 0.0,
+            stats_reduction_carry: 0.0,
             equipped_consumable: None,
             pending_restore: None,
             active_poison: None,
@@ -4156,6 +4167,7 @@ impl MatchCombat {
             f.consumables_used = 0; // consumablesPerRound is PER ROUND [Phase 4.3]
             f.continuous_next_tick_at = None;
             f.continuous_carry = 0.0;
+            f.stats_reduction_carry = 0.0;
         }
         // These schedules belong to the MATCH rather than either Fighter, but their
         // contents are still per-round. Leaving them alive lets an old Frostbite
