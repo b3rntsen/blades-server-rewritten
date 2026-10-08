@@ -54,6 +54,7 @@ use actix_web::{
 };
 use blades_lib::economy::{GOLD, apply_reward};
 use blades_lib::features::merchant::{self, Buyback, MerchantWindow, SellPrices};
+use blades_lib::server_state::ServerState;
 use blades_lib::static_data::{ShopBundleRef, ShopWalletEntry};
 use blades_lib::user_data::{
     CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
@@ -66,8 +67,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    BladeApiError, ServerGlobal, models::CharacterDbEntryShop, session::SessionLookedUpMaybe,
-    shop_gen,
+    BladeApiError, ServerGlobal, json_db::JsonDbWrapper, models::CharacterDbEntryShop,
+    session::SessionLookedUpMaybe, shop_gen,
 };
 
 /// Catalog validity window used when the shop isn't a config-driven crafting
@@ -783,11 +784,13 @@ pub async fn buy_from_shop(
 //                                        "social":{"shop":…}}
 // ```
 //
-// The merchant's catalog comes from the OWNER's building — its type and level
-// pick the stock band, exactly as for the owner — but the window a visitor trades
-// against is the VISITOR's own: its stock, sales and revenue live on the visitor's
-// row, keyed by owner and shop (report #316). Retail, 1,671 answered requests from
-// 9 visitors across 67 owners and 223 shops:
+// The merchant's CATALOG is the owner's: every visitor, and the owner, see the
+// same bundles, the same rolled jewellery and the same window (report #364 — guilds
+// scouted towns for good wares, which only works if everyone sees the same shop).
+// The LEDGER a visitor trades against is the visitor's own: their sales and
+// revenue on that catalog live on the visitor's row, keyed by owner and shop
+// (report #316). Retail, 1,671 answered requests from 9 visitors across 67 owners
+// and 223 shops:
 //
 // * 0 of 498 first opens of a catalog showed any sale or revenue — not even when
 //   the catalog was hours old, which an owner who sells to their own merchant
@@ -796,14 +799,15 @@ pub async fn buy_from_shop(
 //   visitor had just bought, and 45 of 45 re-opens showed only that visitor's own
 //   purchases;
 // * 482 of the 498 catalogs started within 5 minutes of that visitor's open
-//   (median under a second) — the visit rolled it, not the owner.
+//   (median under a second) — the visit rolled it. None of the 67 owners is a
+//   captured player and no shop had two captured visitors, so the corpus cannot
+//   say whose catalog it was; a long-time retail player (#364) confirmed it was
+//   shared. A visit therefore rolls an expired catalog on the OWNER's merchant.
 //
-// We kept the window on the owner's row, so the first guildmate to shop there
-// bought it empty for everyone, owner included.
-//
-// The goods and gold move on the visitor, and the owner's own merchant is never
-// written. The owner's row is still loaded first (owner, then visitor) so a buy
-// in each other's towns at the same instant cannot deadlock on row locks.
+// The goods and gold move on the visitor. Of the owner's row only
+// `server_state.shops` is ever written, and only when the visit rolled a new
+// catalog. The owner's row is loaded first (owner, then visitor) so a buy in each
+// other's towns at the same instant cannot deadlock on row locks.
 
 /// The `social` envelope retail wraps a visited shop in.
 #[derive(Serialize)]
@@ -863,26 +867,94 @@ pub(crate) fn visited_shop_key(owner_character_id: Uuid, shop_id: Uuid) -> Strin
     format!("{owner_character_id}:{shop_id}")
 }
 
-/// The window `visitor` trades against at `owner`'s merchant `shop_id`.
+/// The catalog `owner`'s merchant `shop_id` offers right now — the one every
+/// visitor is shown (report #364).
 ///
-/// `roll` is [`window_for`] in production: given the owner's building (`typeId`,
-/// level) and the visitor's previous window, it returns that window while it is
-/// live and rolls a fresh one from the owner's building once it is not. The result
-/// is stored on the VISITOR, and the visitor's expired windows are pruned in the
-/// same step, so wandering many towns cannot grow the map without bound.
-fn visited_window_mut<'a>(
-    owner: &CharacterDbEntryShop,
-    visitor: &'a mut CharacterDbEntryShop,
+/// Retail gave every visitor the same wares: guilds scouted towns and told each
+/// other which one had powerful soul gems, which only works if the catalog belongs
+/// to the merchant, not to whoever walked in. So a visitor reads the OWNER's live
+/// window, and when the owner has none (never opened, expired, closed by a build
+/// completion) the visit rolls it ON THE OWNER, exactly as the owner's own open
+/// would have. Every later visitor, and the owner, then see that one catalog until
+/// it expires.
+///
+/// `roll` is [`window_for`] in production. Returns the window and whether it was
+/// rolled here, in which case the caller must persist the owner's `server_state`.
+/// Only the catalog is ever written to the owner: sales and revenue stay on the
+/// visitor (see [`visited_window_mut`]).
+fn owners_live_window<'a>(
+    owner: &'a mut CharacterDbEntryShop,
     shop_id: Uuid,
     now: i64,
     roll: impl FnOnce(Option<(Uuid, u64)>, Option<&MerchantWindow>) -> MerchantWindow,
+) -> (&'a MerchantWindow, bool) {
+    let building = stock_building_for(owner, shop_id);
+    let shops = &mut owner.server_state.0.shops;
+    let live = shops.get(&shop_id).is_some_and(|w| w.is_live(now));
+    if !live {
+        let rolled = roll(building, shops.get(&shop_id));
+        shops.insert(shop_id, rolled);
+        prune_stale_shops(shops, now);
+    }
+    (&shops[&shop_id], !live)
+}
+
+/// The window `visitor` trades against at `owner_character_id`'s merchant: the
+/// owner's current catalog (`shared` — its id, bundles, generated jewellery,
+/// merchant gold, start and expiry) with the VISITOR's own sales and revenue on it.
+///
+/// The visitor's ledger is kept while it is on the same catalog and starts empty
+/// once the owner's catalog has moved on, so one visitor's purchases never reduce
+/// what another visitor or the owner can buy (report #316). The result is stored
+/// on the visitor, and the visitor's expired windows are pruned in the same step,
+/// so wandering many towns cannot grow the map without bound.
+fn visited_window_mut<'a>(
+    owner_character_id: Uuid,
+    shared: &MerchantWindow,
+    visitor: &'a mut CharacterDbEntryShop,
+    shop_id: Uuid,
+    now: i64,
 ) -> &'a mut MerchantWindow {
-    let key = visited_shop_key(owner.id, shop_id);
+    let key = visited_shop_key(owner_character_id, shop_id);
     let visited = &mut visitor.server_state.0.visited_shops;
-    let window = roll(stock_building_for(owner, shop_id), visited.get(&key));
+    let mut window = MerchantWindow {
+        catalog_id: shared.catalog_id,
+        template_id: shared.template_id,
+        start_ms: shared.start_ms,
+        expiration_ms: shared.expiration_ms,
+        bundles: shared.bundles.clone(),
+        generated_grants: shared.generated_grants.clone(),
+        wallet_gold: shared.wallet_gold,
+        ..Default::default()
+    };
+    if let Some(mut prev) = visited.remove(&key) {
+        prev.expire_buybacks(now);
+        window.buybacks = prev.buybacks;
+        if prev.catalog_id == shared.catalog_id {
+            window.sales = prev.sales;
+            window.revenue_gold = prev.revenue_gold;
+        }
+    }
     prune_stale_shops(visited, now);
     visited.insert(key.clone(), window);
     visited.get_mut(&key).expect("just inserted")
+}
+
+/// Persist only `server_state` of a character row. Used for the owner of a visited
+/// merchant, whose row is locked but whose wallet, inventory and town a visit must
+/// never write.
+async fn write_server_state(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    server_state: JsonDbWrapper<ServerState>,
+) -> Result<(), BladeApiError> {
+    use crate::schema::characters;
+    diesel::update(characters::table)
+        .filter(characters::id.eq(character_id))
+        .set(characters::server_state.eq(server_state))
+        .execute(conn)
+        .await?;
+    Ok(())
 }
 
 /// `POST /characters/{visitor}/social/users/{u}/characters/{c}/shops/{s}` — open a
@@ -910,12 +982,16 @@ pub async fn open_social_shop(
             if owner_character_id == visitor_character_id {
                 return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 20000, 5));
             }
-            let owner = load_other(&mut conn, owner_character_id, owner_user_id).await?;
+            let mut owner = load_other(&mut conn, owner_character_id, owner_user_id).await?;
             let mut visitor = load_owned(&mut conn, visitor_character_id, user_id).await?;
-            let window = visited_window_mut(&owner, &mut visitor, shop_id, now, |b, prev| {
+            let (shared, rolled) = owners_live_window(&mut owner, shop_id, now, |b, prev| {
                 window_for(&globals, shop_id, b, prev, now, false)
             });
+            let window = visited_window_mut(owner_character_id, shared, &mut visitor, shop_id, now);
             let wire = window_to_wire(shop_id, window);
+            if rolled {
+                write_server_state(&mut conn, owner.id, owner.server_state).await?;
+            }
             write_back(&mut conn, visitor).await?;
 
             Ok::<_, BladeApiError>(Json(SocialShopEnvelope {
@@ -954,13 +1030,17 @@ pub async fn buy_from_social_shop(
             if owner_character_id == visitor_character_id {
                 return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 20000, 5));
             }
-            let owner = load_other(&mut conn, owner_character_id, owner_user_id).await?;
+            let mut owner = load_other(&mut conn, owner_character_id, owner_user_id).await?;
             let mut visitor = load_owned(&mut conn, visitor_character_id, user_id).await?;
 
-            let mut window = visited_window_mut(&owner, &mut visitor, shop_id, now, |b, prev| {
+            let (shared, rolled) = owners_live_window(&mut owner, shop_id, now, |b, prev| {
                 window_for(&globals, shop_id, b, prev, now, false)
-            })
-            .clone();
+            });
+            let mut window =
+                visited_window_mut(owner_character_id, shared, &mut visitor, shop_id, now).clone();
+            if rolled {
+                write_server_state(&mut conn, owner.id, owner.server_state).await?;
+            }
             let mut tracker = InventoryChangeTracker::default();
             buy_bundles(&globals, &mut window, &bundles, &mut visitor, &mut tracker)?;
 
@@ -1489,10 +1569,7 @@ mod tests {
             bundles: vec![(Uuid::from_u128(0xb1), 4)],
             wallet_gold: 1174,
             revenue_gold: -1174,
-            buybacks: vec![
-                buyback(shop, 1, now + 60_000),
-                buyback(shop, 2, now - 1),
-            ],
+            buybacks: vec![buyback(shop, 1, now + 60_000), buyback(shop, 2, now - 1)],
             ..Default::default()
         };
         drained.sales.insert(Uuid::from_u128(0xb1), 4);
@@ -1523,7 +1600,10 @@ mod tests {
         let mut shops = HashMap::from([(shop, live.clone()), (other, live)]);
         restock_on_build_complete(&mut shops, shop, now);
         assert!(!shops.contains_key(&shop));
-        assert!(shops[&other].is_live(now), "only the finished shop restocks");
+        assert!(
+            shops[&other].is_live(now),
+            "only the finished shop restocks"
+        );
         // A shop never opened before has nothing to close and still answers.
         restock_on_build_complete(&mut shops, Uuid::from_u128(10), now);
     }
@@ -1623,25 +1703,33 @@ mod tests {
         );
     }
 
-    // ── #316: a merchant in someone else's town is stocked per visitor ────────
+    // ── #316/#364: visitors see the owner's catalog, buy from their own stock ──
 
     const RING: Uuid = Uuid::from_u128(0x3161);
     const POTION: Uuid = Uuid::from_u128(0x3162);
+    const GEM: Uuid = Uuid::from_u128(0x3163);
 
-    /// The catalog the owner's building would roll: one ring, five potions.
+    /// A catalog the owner's building could roll: one ring, five potions, a
+    /// RANDOM number of soul gems and a random rolled grant on the ring — so two
+    /// independent rolls are told apart by every catalog field, not just the id.
     fn stocked_window(now: i64) -> MerchantWindow {
+        let gems = (Uuid::new_v4().as_u128() % 1_000) as u64 + 1;
+        let mut ring_grant = blades_lib::economy::RewardGrant::default();
+        ring_grant.stackable_items.insert(Uuid::new_v4(), 1);
         MerchantWindow {
             catalog_id: Uuid::new_v4(),
+            template_id: Uuid::new_v4(),
             start_ms: now,
             expiration_ms: merchant::expiration_for(now),
-            bundles: vec![(RING, 1), (POTION, 5)],
+            bundles: vec![(RING, 1), (POTION, 5), (GEM, gems)],
+            generated_grants: HashMap::from([(RING, ring_grant)]),
             wallet_gold: 1_000,
             ..Default::default()
         }
     }
 
     /// `window_for`'s contract without a `ServerGlobal`: reuse a live window, else
-    /// roll the owner's catalog.
+    /// roll a fresh catalog.
     fn roll(
         now: i64,
     ) -> impl FnOnce(Option<(Uuid, u64)>, Option<&MerchantWindow>) -> MerchantWindow {
@@ -1652,48 +1740,109 @@ mod tests {
         }
     }
 
-    /// What `visitor` sees opening `owner`'s merchant — the open route's state step.
+    /// What `visitor` sees opening `owner`'s merchant — the open route's state
+    /// step (owner's row first, then the visitor's).
     fn open_as(
-        owner: &CharacterDbEntryShop,
+        owner: &mut CharacterDbEntryShop,
         visitor: &mut CharacterDbEntryShop,
         shop: Uuid,
         now: i64,
     ) -> MerchantWindow {
-        visited_window_mut(owner, visitor, shop, now, roll(now)).clone()
+        let owner_id = owner.id;
+        let (shared, _) = owners_live_window(owner, shop, now, roll(now));
+        visited_window_mut(owner_id, shared, visitor, shop, now).clone()
     }
 
     /// `visitor` buying `qty` of `bundle` there — the purchase route's state step.
     fn buy_as(
-        owner: &CharacterDbEntryShop,
+        owner: &mut CharacterDbEntryShop,
         visitor: &mut CharacterDbEntryShop,
         shop: Uuid,
         bundle: Uuid,
         qty: u64,
         now: i64,
     ) -> u64 {
-        let window = visited_window_mut(owner, visitor, shop, now, roll(now));
+        let owner_id = owner.id;
+        let (shared, _) = owners_live_window(owner, shop, now, roll(now));
+        let window = visited_window_mut(owner_id, shared, visitor, shop, now);
         book_sale(window, bundle, qty, 100, GOLD)
     }
 
-    /// THE BUG (#316): one guildmate shopping at a merchant left the next one a
-    /// half-empty shop. Retail gave every visitor the full assortment.
+    /// The catalog half of a window — what every visitor must agree on.
+    fn catalog_of(w: &MerchantWindow) -> impl PartialEq + std::fmt::Debug {
+        (
+            w.catalog_id,
+            w.template_id,
+            w.start_ms,
+            w.expiration_ms,
+            w.bundles.clone(),
+            w.generated_grants.clone(),
+            w.wallet_gold,
+        )
+    }
+
+    /// THE BUG (#364): two guildmates in the same town were shown different wares,
+    /// so "town X has powerful soul gems" was useless advice. Retail showed every
+    /// visitor the same catalog.
     #[test]
-    fn two_visitors_each_see_the_owners_full_assortment() {
-        let shop = Uuid::from_u128(0x316);
+    fn two_visitors_see_the_same_catalog() {
+        let shop = Uuid::from_u128(0x364);
         let now = 1_780_000_000_000;
-        let owner = shop_entry(shop, 4, 20);
+        let mut owner = shop_entry(shop, 4, 20);
         let mut a = shop_entry(Uuid::new_v4(), 4, 20);
         let mut b = shop_entry(Uuid::new_v4(), 4, 20);
 
-        assert_eq!(buy_as(&owner, &mut a, shop, RING, 1, now), 1);
-        assert_eq!(buy_as(&owner, &mut a, shop, POTION, 3, now), 3);
-
-        let seen_by_b = open_as(&owner, &mut b, shop, now + 60_000);
+        let seen_by_a = open_as(&mut owner, &mut a, shop, now);
+        let seen_by_b = open_as(&mut owner, &mut b, shop, now + 3_600_000);
+        assert_eq!(catalog_of(&seen_by_a), catalog_of(&seen_by_b));
+        assert!(!seen_by_a.generated_grants.is_empty());
         assert_eq!(
-            seen_by_b.remaining_stock(RING),
-            1,
-            "B sees the ring A bought"
+            catalog_of(&owner.server_state.0.shops[&shop]),
+            catalog_of(&seen_by_a),
+            "the catalog the visit rolled is the owner's merchant's catalog"
         );
+    }
+
+    /// An owner who already opened their merchant: visitors get exactly that
+    /// catalog, not a re-roll of it.
+    #[test]
+    fn visitors_see_the_owners_live_catalog() {
+        let shop = Uuid::from_u128(0x364);
+        let now = 1_780_000_000_000;
+        let mut owner = shop_entry(shop, 4, 20);
+        let own = stocked_window(now - 3_600_000);
+        owner.server_state.0.shops.insert(shop, own.clone());
+        let mut a = shop_entry(Uuid::new_v4(), 4, 20);
+
+        let (_, rolled) = owners_live_window(&mut owner, shop, now, roll(now));
+        assert!(!rolled, "a live owner window is only read");
+        assert_eq!(
+            catalog_of(&open_as(&mut owner, &mut a, shop, now)),
+            catalog_of(&own)
+        );
+    }
+
+    /// #316 stays fixed: one guildmate's purchases never empty the shop for the
+    /// next, and the next sees only their own ledger.
+    #[test]
+    fn one_visitors_purchase_does_not_reduce_another_visitors_stock() {
+        let shop = Uuid::from_u128(0x316);
+        let now = 1_780_000_000_000;
+        let mut owner = shop_entry(shop, 4, 20);
+        let mut a = shop_entry(Uuid::new_v4(), 4, 20);
+        let mut b = shop_entry(Uuid::new_v4(), 4, 20);
+
+        open_as(&mut owner, &mut b, shop, now);
+        assert_eq!(buy_as(&mut owner, &mut a, shop, RING, 1, now), 1);
+        assert_eq!(buy_as(&mut owner, &mut a, shop, POTION, 3, now), 3);
+        assert_eq!(
+            buy_as(&mut owner, &mut a, shop, RING, 1, now),
+            0,
+            "A has none left"
+        );
+
+        let seen_by_b = open_as(&mut owner, &mut b, shop, now + 60_000);
+        assert_eq!(seen_by_b.remaining_stock(RING), 1, "B still has the ring");
         assert_eq!(seen_by_b.remaining_stock(POTION), 5);
         assert!(
             seen_by_b.sales.values().all(|q| *q == 0),
@@ -1704,8 +1853,9 @@ mod tests {
             seen_by_b.revenue_gold, 0,
             "A's spending is not on B's ledger"
         );
+        assert_eq!(buy_as(&mut owner, &mut b, shop, RING, 1, now + 60_000), 1);
 
-        let seen_by_a = open_as(&owner, &mut a, shop, now + 60_000);
+        let seen_by_a = open_as(&mut owner, &mut a, shop, now + 60_000);
         assert_eq!(
             seen_by_a.remaining_stock(RING),
             0,
@@ -1716,51 +1866,118 @@ mod tests {
     }
 
     #[test]
-    fn one_visitors_purchase_does_not_reduce_another_visitors_stock() {
-        let shop = Uuid::from_u128(0x316);
-        let now = 1_780_000_000_000;
-        let owner = shop_entry(shop, 4, 20);
-        let mut a = shop_entry(Uuid::new_v4(), 4, 20);
-        let mut b = shop_entry(Uuid::new_v4(), 4, 20);
-
-        // Both open first, then A buys the only ring.
-        open_as(&owner, &mut a, shop, now);
-        open_as(&owner, &mut b, shop, now);
-        assert_eq!(buy_as(&owner, &mut a, shop, RING, 1, now), 1);
-        assert_eq!(
-            buy_as(&owner, &mut a, shop, RING, 1, now),
-            0,
-            "A has none left"
-        );
-
-        assert_eq!(
-            buy_as(&owner, &mut b, shop, RING, 1, now),
-            1,
-            "B can still buy the ring A bought"
-        );
-    }
-
-    #[test]
-    fn a_visitor_never_writes_the_owners_own_merchant() {
+    fn a_visitor_never_books_on_the_owners_own_merchant() {
         let shop = Uuid::from_u128(0x316);
         let now = 1_780_000_000_000;
         let mut owner = shop_entry(shop, 4, 20);
-        let own = stocked_window(now);
+        let mut own = stocked_window(now);
+        own.sales.insert(POTION, 2);
+        own.revenue_gold = -50;
         owner.server_state.0.shops.insert(shop, own.clone());
         let mut a = shop_entry(Uuid::new_v4(), 4, 20);
 
-        buy_as(&owner, &mut a, shop, RING, 1, now);
-        buy_as(&owner, &mut a, shop, POTION, 5, now);
+        let first = open_as(&mut owner, &mut a, shop, now);
+        assert!(
+            first.sales.is_empty(),
+            "the owner's sales are not the visitor's"
+        );
+        assert_eq!(first.revenue_gold, 0);
+        assert_eq!(first.remaining_stock(POTION), 5);
+        buy_as(&mut owner, &mut a, shop, RING, 1, now);
+        buy_as(&mut owner, &mut a, shop, POTION, 5, now);
 
         let after = &owner.server_state.0.shops[&shop];
-        assert_eq!(after.catalog_id, own.catalog_id);
+        assert_eq!(catalog_of(after), catalog_of(&own));
+        assert_eq!(after.sales, own.sales);
         assert_eq!(after.remaining_stock(RING), 1);
-        assert_eq!(after.remaining_stock(POTION), 5);
-        assert_eq!(after.revenue_gold, 0);
+        assert_eq!(after.revenue_gold, -50);
         assert!(
             a.server_state.0.shops.is_empty(),
             "nor is it filed among the visitor's own merchants"
         );
+    }
+
+    /// At expiry the catalog rolls over once, on the owner, and every visitor —
+    /// including one holding a ledger on the old catalog — moves to the new one
+    /// with a full stock.
+    #[test]
+    fn the_catalog_rolls_over_for_everyone_at_expiry() {
+        let shop = Uuid::from_u128(0x364);
+        let now = 1_780_000_000_000;
+        let mut owner = shop_entry(shop, 4, 20);
+        let mut a = shop_entry(Uuid::new_v4(), 4, 20);
+        let mut b = shop_entry(Uuid::new_v4(), 4, 20);
+
+        let old = open_as(&mut owner, &mut a, shop, now);
+        assert_eq!(buy_as(&mut owner, &mut b, shop, RING, 1, now), 1);
+
+        let later = old.expiration_ms + 1;
+        let (_, rolled) = owners_live_window(&mut owner, shop, later, roll(later));
+        assert!(
+            rolled,
+            "an expired owner window is rolled and must be persisted"
+        );
+        let new_a = open_as(&mut owner, &mut a, shop, later + 60_000);
+        let new_b = open_as(&mut owner, &mut b, shop, later + 120_000);
+        assert_ne!(new_a.catalog_id, old.catalog_id);
+        assert_eq!(new_a.start_ms, later);
+        assert_eq!(catalog_of(&new_a), catalog_of(&new_b));
+        assert_eq!(
+            catalog_of(&new_a),
+            catalog_of(&owner.server_state.0.shops[&shop])
+        );
+        assert_eq!(
+            new_b.remaining_stock(RING),
+            1,
+            "B's old purchase is forgotten"
+        );
+        assert_eq!(new_b.revenue_gold, 0);
+    }
+
+    /// A build completion closes the owner's window (#450); the next visit rolls
+    /// the new one, and visitors follow it.
+    #[test]
+    fn visitors_follow_a_restock_on_build_complete() {
+        let shop = Uuid::from_u128(0x364);
+        let now = 1_780_000_000_000;
+        let mut owner = shop_entry(shop, 4, 20);
+        let mut a = shop_entry(Uuid::new_v4(), 4, 20);
+
+        let old = open_as(&mut owner, &mut a, shop, now);
+        buy_as(&mut owner, &mut a, shop, RING, 1, now);
+        restock_on_build_complete(&mut owner.server_state.0.shops, shop, now + 1_000);
+
+        let new = open_as(&mut owner, &mut a, shop, now + 2_000);
+        assert_ne!(new.catalog_id, old.catalog_id);
+        assert_eq!(new.remaining_stock(RING), 1);
+        assert_eq!(
+            catalog_of(&new),
+            catalog_of(&owner.server_state.0.shops[&shop])
+        );
+    }
+
+    /// A ledger written before #364 sits on a catalog the visitor rolled for
+    /// themselves. The next open replaces it with the owner's catalog.
+    #[test]
+    fn a_pre_364_visited_window_is_replaced_by_the_owners_catalog() {
+        let shop = Uuid::from_u128(0x364);
+        let now = 1_780_000_000_000;
+        let mut owner = shop_entry(shop, 4, 20);
+        let mut a = shop_entry(Uuid::new_v4(), 4, 20);
+        let mut private = stocked_window(now - 60_000);
+        private.sales.insert(RING, 1);
+        a.server_state
+            .0
+            .visited_shops
+            .insert(visited_shop_key(owner.id, shop), private.clone());
+
+        let seen = open_as(&mut owner, &mut a, shop, now);
+        assert_ne!(seen.catalog_id, private.catalog_id);
+        assert_eq!(
+            catalog_of(&seen),
+            catalog_of(&owner.server_state.0.shops[&shop])
+        );
+        assert!(seen.sales.is_empty());
     }
 
     #[test]
@@ -1768,17 +1985,22 @@ mod tests {
         let shop = Uuid::from_u128(0x316);
         let now = 1_780_000_000_000;
         // Two towns that happen to share a building instance id.
-        let owner1 = shop_entry(shop, 4, 20);
-        let owner2 = shop_entry(shop, 4, 20);
+        let mut owner1 = shop_entry(shop, 4, 20);
+        let mut owner2 = shop_entry(shop, 4, 20);
         let mut a = shop_entry(Uuid::new_v4(), 4, 20);
 
-        buy_as(&owner1, &mut a, shop, RING, 1, now);
-        assert_eq!(open_as(&owner2, &mut a, shop, now).remaining_stock(RING), 1);
+        buy_as(&mut owner1, &mut a, shop, RING, 1, now);
+        let in_town2 = open_as(&mut owner2, &mut a, shop, now);
+        assert_eq!(in_town2.remaining_stock(RING), 1);
+        assert_ne!(
+            in_town2.catalog_id, owner1.server_state.0.shops[&shop].catalog_id,
+            "each town has its own catalog"
+        );
         assert_eq!(a.server_state.0.visited_shops.len(), 2);
 
         // Eleven hours on, visiting owner2 forgets owner1's dead window.
         let later = now + 11 * 3_600_000;
-        let fresh = open_as(&owner2, &mut a, shop, later);
+        let fresh = open_as(&mut owner2, &mut a, shop, later);
         assert_eq!(
             fresh.start_ms, later,
             "an expired window re-rolls on the visit"

@@ -137,18 +137,21 @@ pub struct ServerState {
     /// player's first visit (tracker #30). `#[serde(default)]` so rows written
     /// before this field deserialize as an empty map.
     ///
-    /// Only this character's OWN merchants live here. A merchant in someone else's
-    /// town is tracked per visitor in [`Self::visited_shops`] instead.
+    /// Only this character's OWN merchants live here. A visitor to this town reads
+    /// the catalog from here (and rolls it here when it has expired, report #364),
+    /// but books their sales in their own [`Self::visited_shops`], never here.
     #[serde(default)]
     pub shops: HashMap<Uuid, MerchantWindow>,
     /// This character's own window on a merchant in SOMEONE ELSE's town, keyed by
     /// `"{ownerCharacterId}:{shopId}"` (see `shop::visited_shop_key` in the server).
     ///
-    /// Retail held a visited shop's stock per visitor (report #316): of 498
-    /// captured first opens of a visited shop by 9 visitors across 67 owners, none
-    /// showed any sale or revenue but the visitor's own, and 482 of them rolled a
-    /// fresh catalog at that open. Keeping it on the owner's row let one guildmate
-    /// buy the shop empty for everyone. Rows written before this field load empty.
+    /// The catalog in it is a copy of the owner's current one, so every visitor sees
+    /// the same wares (report #364); the sales and revenue are this visitor's own
+    /// (report #316): of 498 captured first opens of a visited shop by 9 visitors
+    /// across 67 owners, none showed any sale or revenue but the visitor's own.
+    /// Keeping the ledger on the owner's row let one guildmate buy the shop empty
+    /// for everyone. The ledger is dropped once the owner's catalog moves on. Rows
+    /// written before this field load empty.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub visited_shops: HashMap<String, MerchantWindow>,
     /// How many times each event-quest INSTANCE has been completed, keyed by the
