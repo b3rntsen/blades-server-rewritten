@@ -104,6 +104,12 @@ static SPAWN_LOOT_TABLES_RAW: &str = include_str!("../spawn_loot_tables.json");
 // still drawn pooled. Built by `script/mine_interactable_loot_by_level.py`.
 static INTERACTABLE_LOOT_BY_LEVEL_RAW: &str = include_str!("../interactable_loot_by_level.json");
 
+// How many containers the client places for each item spawn group: the APK's
+// `_spawnGroupsItem[]._quantity`, which parsed.json dropped. It is what a spawn
+// retail was never captured on falls back to (see `floor_pile_size`). Built by
+// `script/extract_item_spawn_quantities.py`; compiled in, so a merge ships it.
+static ITEM_SPAWN_QUANTITIES_RAW: &str = include_str!("../item_spawn_quantities.json");
+
 #[derive(Deserialize)]
 struct ChestTierCorpus {
     chests: HashMap<Uuid, ChestSpawnDefinition>,
@@ -226,14 +232,32 @@ fn floor_pile_sizes() -> &'static serde_json::Value {
     })
 }
 
-/// How many results this floor spawn holds. One when never observed, which is
-/// exactly the behaviour that preceded this change.
+fn item_spawn_quantities() -> &'static serde_json::Value {
+    static TABLE: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        serde_json::from_str(ITEM_SPAWN_QUANTITIES_RAW)
+            .unwrap_or_else(|_| serde_json::json!({ "groups": {} }))
+    })
+}
+
+/// How many results this floor spawn holds: what retail was observed sending,
+/// else how many containers the APK places for it, else one.
+///
+/// The APK count is not a guess at retail: it equals the retail count on 1,283
+/// of the 1,285 captured spawns, and the two exceptions are job-reference groups
+/// that are captured, so the retail value wins there. Without it a spawn retail
+/// was never captured on got ONE result however many containers the client put
+/// down: the 7 / 3 / 1 breakables of EQ30, EQ40 and seven other uncaptured
+/// event dungeons came out 1 / 1 / 1, and eight of eleven containers opened
+/// empty (#353, #358, #365).
 fn floor_pile_size(spawn_id: &Uuid) -> usize {
+    let key = spawn_id.to_string();
     floor_pile_sizes()
         .get("spawns")
-        .and_then(|s| s.get(spawn_id.to_string()))
+        .and_then(|s| s.get(&key))
         .and_then(|e| e.get("results"))
         .and_then(|n| n.as_u64())
+        .or_else(|| item_spawn_quantities()["groups"].get(&key).and_then(|n| n.as_u64()))
         .unwrap_or(1)
         .max(1) as usize
 }
@@ -746,6 +770,10 @@ struct SpawnGroupCount {
     #[cfg_attr(not(test), allow(dead_code))]
     min: u64,
     max: u64,
+    /// The APK's `_levelDeltaSequence`: spawner `i` stands at the dungeon's level
+    /// plus `seq[i % len]`. Empty for most groups.
+    #[serde(default, rename = "levelDeltaSequence")]
+    level_delta_sequence: Vec<i64>,
 }
 
 fn spawn_group_counts() -> &'static SpawnGroupCounts {
@@ -762,6 +790,57 @@ pub fn enemies_per_spawner(spawn_group_id: &Uuid) -> usize {
         .get(spawn_group_id)
         .map_or(1, |c| c.max)
         .max(1) as usize
+}
+
+/// How many levels above (or below) the dungeon's level spawner `spawner_index`
+/// of `spawn_group_id` stands: the APK's `_levelDeltaSequence`, cycled over the
+/// spawners. Zero for a group without one.
+///
+/// Retail applied it to every EVENT dungeon: 1,641 of 1,643 enemies in the
+/// captured event generated data sit at `difficultyLevel + delta`, 589 of them on
+/// a non-zero delta -- `Boss 01` of EQ25 at 78 on a level-72 quest. Story quests
+/// do NOT follow it (their `difficultyLevel` is not the enemy level), so only the
+/// event path reads this.
+pub fn spawn_group_level_delta(spawn_group_id: &Uuid, spawner_index: usize) -> i64 {
+    spawn_group_counts()
+        .groups
+        .get(spawn_group_id)
+        .map(|c| &c.level_delta_sequence)
+        .filter(|seq| !seq.is_empty())
+        .map_or(0, |seq| seq[spawner_index % seq.len()])
+}
+
+/// The level and experience of each enemy a generator writes.
+#[derive(Clone, Copy)]
+pub enum EnemyLevels<'a> {
+    /// Every enemy at one level, worth one XP figure: story quests, jobs, the Abyss.
+    Flat { level: i64, given_xp: u64 },
+    /// The dungeon's level plus each group's [`spawn_group_level_delta`], with
+    /// the XP of the level the enemy actually stands at: event dungeons.
+    WithDeltas {
+        base: i64,
+        scaling: &'a crate::static_data::QuestLevelScaling,
+    },
+}
+
+impl EnemyLevels<'_> {
+    fn at(&self, spawn_group_id: &Uuid, spawner_index: usize) -> (i64, u64) {
+        match *self {
+            EnemyLevels::Flat { level, given_xp } => (level, given_xp),
+            EnemyLevels::WithDeltas { base, scaling } => {
+                let level = (base + spawn_group_level_delta(spawn_group_id, spawner_index)).max(1);
+                (level, scaling.given_xp(level))
+            }
+        }
+    }
+
+    /// The dungeon's own level, which floor loot is rolled at.
+    fn base(&self) -> i64 {
+        match *self {
+            EnemyLevels::Flat { level, .. } => level,
+            EnemyLevels::WithDeltas { base, .. } => base,
+        }
+    }
 }
 
 /// Is `table_id` one the enemy corpus left out, so that rows generated before
@@ -817,8 +896,7 @@ pub fn generate_for_dungeon(
         game_data,
         dungeon_uuid,
         default_seed_context(dungeon_uuid),
-        enemy_level,
-        given_xp,
+        EnemyLevels::Flat { level: enemy_level, given_xp },
     )
 }
 
@@ -833,8 +911,31 @@ pub fn generate_for_dungeon_with_seed(
         game_data,
         dungeon_uuid,
         seeded_context(dungeon_uuid, run_seed),
-        enemy_level,
-        given_xp,
+        EnemyLevels::Flat { level: enemy_level, given_xp },
+    )
+}
+
+/// [`generate_for_dungeon`] with each enemy's level and XP from `levels`, unseeded.
+pub fn generate_for_dungeon_levelled(
+    game_data: &GameData,
+    dungeon_uuid: &Uuid,
+    levels: EnemyLevels,
+) -> Option<DungeonGeneratedData> {
+    generate_for_dungeon_inner(game_data, dungeon_uuid, default_seed_context(dungeon_uuid), levels)
+}
+
+/// [`generate_for_dungeon_with_seed`] with each enemy's level and XP from `levels`.
+pub fn generate_for_dungeon_levelled_with_seed(
+    game_data: &GameData,
+    dungeon_uuid: &Uuid,
+    run_seed: u64,
+    levels: EnemyLevels,
+) -> Option<DungeonGeneratedData> {
+    generate_for_dungeon_inner(
+        game_data,
+        dungeon_uuid,
+        seeded_context(dungeon_uuid, run_seed),
+        levels,
     )
 }
 
@@ -842,10 +943,10 @@ fn generate_for_dungeon_inner(
     game_data: &GameData,
     dungeon_uuid: &Uuid,
     seed_context: LootSeedContext,
-    enemy_level: i64,
-    given_xp: u64,
+    levels: EnemyLevels,
 ) -> Option<DungeonGeneratedData> {
     let dungeon = game_data.dungeons.get(dungeon_uuid)?;
+    let enemy_level = levels.base();
 
     Some(DungeonGeneratedData {
         enemy_generated_data: dungeon
@@ -856,6 +957,7 @@ fn generate_for_dungeon_inner(
                 let mut enemies_info = Vec::new();
                 let per_spawner = enemies_per_spawner(spawn_group_id);
                 for spawner_index in 0..spawn_group.quantity.max(1) as usize {
+                    let (enemy_level, given_xp) = levels.at(spawn_group_id, spawner_index);
                     enemies_info.push(
                         (0..per_spawner)
                             .map(|enemy_index| DungeonEnemyResult {

@@ -151,14 +151,22 @@ pub fn event_dungeon_foreign_stage_ids(game_data: &GameData, dungeon_uuid: &Uuid
 }
 
 /// An event dungeon's generated data: [`event_dungeon_stage_ids`], unseeded.
+///
+/// Enemies stand at `enemy_level` plus their spawn group's APK level delta, each
+/// worth the XP of its own level, as retail generated every event dungeon (see
+/// [`crate::util::dungeon::spawn_group_level_delta`]).
 pub fn generate_for_event_dungeon(
     game_data: &GameData,
     dungeon_uuid: &Uuid,
     enemy_level: i64,
-    given_xp: u64,
+    scaling: &QuestLevelScaling,
 ) -> Option<DungeonGeneratedData> {
+    let levels = crate::util::dungeon::EnemyLevels::WithDeltas {
+        base: enemy_level,
+        scaling,
+    };
     generate_for_ids(event_dungeon_stage_ids(game_data, dungeon_uuid)?, |id| {
-        crate::util::dungeon::generate_for_dungeon(game_data, id, enemy_level, given_xp)
+        crate::util::dungeon::generate_for_dungeon_levelled(game_data, id, levels)
     })
 }
 
@@ -176,15 +184,15 @@ pub fn generate_for_event_dungeon_with_seed(
     dungeon_uuid: &Uuid,
     run_seed: u64,
     enemy_level: i64,
-    given_xp: u64,
+    scaling: &QuestLevelScaling,
 ) -> Option<DungeonGeneratedData> {
+    let levels = crate::util::dungeon::EnemyLevels::WithDeltas {
+        base: enemy_level,
+        scaling,
+    };
     generate_for_ids(event_dungeon_stage_ids(game_data, dungeon_uuid)?, |id| {
-        crate::util::dungeon::generate_for_dungeon_with_seed(
-            game_data,
-            id,
-            run_seed,
-            enemy_level,
-            given_xp,
+        crate::util::dungeon::generate_for_dungeon_levelled_with_seed(
+            game_data, id, run_seed, levels,
         )
     })
 }
@@ -613,5 +621,174 @@ mod how_retail_scaled_enemies {
         assert_eq!(empty.enemy_level(37), 37, "the player's own level");
         assert_eq!(empty.enemy_level(0), 1, "clamped");
         assert_eq!(empty.given_xp(50), 5000, "the old formula, only as a last resort");
+    }
+}
+
+/// Event dungeons as retail generated them (tracker #353, #358, #365): every
+/// container filled, every enemy at its group's level.
+///
+/// Measured against the capture corpus: retail put the APK's `_quantity` of
+/// results on each container spawn (1,283 of 1,285 captured spawns), and stood
+/// each event enemy at `difficultyLevel + _levelDeltaSequence` (1,641 of 1,643).
+#[cfg(test)]
+mod event_dungeons_as_retail_built_them {
+    use super::*;
+    use crate::static_data::QuestLevelScaling;
+    use std::collections::HashMap;
+
+    /// EQ25 "Cave", captured: retail quest 2e3c2eca at difficulty 72.
+    const EQ25: &str = "8e2db517-ac60-4db8-b3cd-aefaed596ea5";
+    /// EQ40 (Sephoris, 10-05 and 10-06) and EQ30 "Spirit of the Hunt" (HauDrauf,
+    /// 10-08): never captured, so no retail count for any of their containers.
+    const EQ40: &str = "1806964b-c886-4e69-a494-c7d512698e95";
+    const EQ30: &str = "7e840c88-2952-48e4-8a6c-496a86612482";
+
+    fn game_data() -> GameData {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+        serde_json::from_str(&std::fs::read_to_string(path).expect("read parsed.json"))
+            .expect("parse game data")
+    }
+
+    fn shipped() -> QuestLevelScaling {
+        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/quests_daily.json");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(p).expect("read")).expect("json");
+        serde_json::from_value(json["levelScaling"].clone()).expect("levelScaling")
+    }
+
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).expect("uuid")
+    }
+
+    /// Container count per spawn, by the spawn's APK name (`Breakable T1` ...).
+    fn piles(gd: &GameData, dungeon: &str, data: &DungeonGeneratedData) -> Vec<(String, usize)> {
+        let spawns = &gd.dungeons[&uuid(dungeon)].spawn_info.item;
+        let mut out: Vec<(String, usize)> = data
+            .item_generated_data
+            .iter()
+            .map(|(id, pile)| (spawns[id].name.clone().unwrap_or_default(), pile.len()))
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn an_uncaptured_event_dungeon_fills_every_container() {
+        let gd = game_data();
+        for (dungeon, names) in [
+            (EQ40, ["Breakable T1", "Breakable T2", "Breakable T3"]),
+            (EQ30, ["Breakable_T1", "Breakable_T2", "Breakable_T3"]),
+        ] {
+            let data = generate_for_event_dungeon(&gd, &uuid(dungeon), 78, &shipped()).unwrap();
+            assert_eq!(
+                piles(&gd, dungeon, &data),
+                vec![(names[0].into(), 7), (names[1].into(), 3), (names[2].into(), 1)],
+                "{dungeon}: the 7 / 3 / 1 containers the client places, not 1 / 1 / 1"
+            );
+            // And every one of them holds a roll for each of its tables.
+            for pile in data.item_generated_data.values() {
+                assert!(pile.iter().all(|r| !r.loot_table_loot.is_empty()));
+            }
+        }
+    }
+
+    /// CONTROL: a captured event dungeon keeps exactly retail's piles.
+    #[test]
+    fn a_captured_event_dungeon_keeps_retails_piles() {
+        let gd = game_data();
+        let data = generate_for_event_dungeon(&gd, &uuid(EQ25), 72, &shipped()).unwrap();
+        let by_id: HashMap<String, usize> = data
+            .item_generated_data
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.len()))
+            .collect();
+        // Retail quest 2e3c2eca, difficulty 72.
+        assert_eq!(by_id["efbafb6d-0424-4310-83d3-d29021f28a20"], 7);
+        assert_eq!(by_id["8d207c3c-6b73-4035-b363-181a0cf3ab93"], 3);
+        assert_eq!(by_id["fb30ad34-3cb5-42fd-9bb5-e7fc101e0cfc"], 1);
+    }
+
+    /// Retail quest 2e3c2eca (EQ25, difficulty 72), every enemy's level and XP.
+    #[test]
+    fn event_enemies_stand_at_their_groups_level() {
+        let gd = game_data();
+        let data = generate_for_event_dungeon(&gd, &uuid(EQ25), 72, &shipped()).unwrap();
+        let retail: [(&str, i64, u64); 8] = [
+            ("08f503be-9dc1-4cb1-811a-df1226983de2", 72, 257),
+            ("29535b6a-7a48-4ba6-be65-47d28a754c7d", 72, 257),
+            ("38d12d9c-0f0f-421c-ab95-9cc57f2b4818", 69, 252),
+            ("70ab652e-692c-45a6-8397-e63352e4719b", 77, 264),
+            ("9094d04e-b35a-45c9-bf50-ec7d913f5c54", 72, 257),
+            ("9b886c9a-0502-42d3-ab2e-4a3d2ca0b0e1", 69, 252),
+            ("bbd417df-fb1c-4b94-902a-d00e2578c763", 78, 266),
+            ("d57b0525-f90d-4462-a4aa-7341ce8ea949", 78, 266),
+        ];
+        assert_eq!(data.enemy_generated_data.len(), retail.len());
+        for (group, level, xp) in retail {
+            let enemies: Vec<(i64, u64)> = data.enemy_generated_data[&uuid(group)]
+                .iter()
+                .flatten()
+                .map(|e| (e.enemy_level, e.given_xp))
+                .collect();
+            assert_eq!(enemies, vec![(level, xp)], "group {group}");
+        }
+    }
+
+    /// HauDrauf's 10-08 event: five bosses, each at the dungeon's level + 6.
+    #[test]
+    fn the_spirit_of_the_hunt_bosses_stand_six_levels_up() {
+        let gd = game_data();
+        let data = generate_for_event_dungeon(&gd, &uuid(EQ30), 78, &shipped()).unwrap();
+        assert_eq!(data.enemy_generated_data.len(), 5);
+        for spawners in data.enemy_generated_data.values() {
+            for e in spawners.iter().flatten() {
+                assert_eq!(e.enemy_level, 84);
+                assert_eq!(e.given_xp, shipped().given_xp(84));
+            }
+        }
+    }
+
+    /// The seeded path a run and the `/quests` row use agrees with the unseeded one
+    /// on levels and pile sizes.
+    #[test]
+    fn the_seeded_run_is_built_the_same_way() {
+        let gd = game_data();
+        let a = generate_for_event_dungeon(&gd, &uuid(EQ40), 50, &shipped()).unwrap();
+        let b = generate_for_event_dungeon_with_seed(&gd, &uuid(EQ40), 0xC0FFEE, 50, &shipped())
+            .unwrap();
+        for (spawn, pile) in &a.item_generated_data {
+            assert_eq!(pile.len(), b.item_generated_data[spawn].len());
+        }
+        for (group, spawners) in &a.enemy_generated_data {
+            let lv = |s: &Vec<Vec<crate::user_data::DungeonEnemyResult>>| {
+                s.iter().flatten().map(|e| (e.enemy_level, e.given_xp)).collect::<Vec<_>>()
+            };
+            assert_eq!(lv(spawners), lv(&b.enemy_generated_data[group]));
+        }
+        // EQ40's boss and its two +5 groups are above the dungeon's level.
+        let max = a.enemy_generated_data.values().flatten().flatten().map(|e| e.enemy_level).max();
+        assert_eq!(max, Some(56));
+    }
+
+    /// CONTROL: a story quest's enemies stay flat. Retail story rows do not follow
+    /// the delta (their `difficultyLevel` is not the enemy level), so only the
+    /// event path applies it. SA01's `[-3]` group is the discriminating case.
+    #[test]
+    fn story_quest_enemies_are_not_levelled_by_group() {
+        let gd = game_data();
+        let (id, _) = gd
+            .dungeons
+            .iter()
+            .find(|(_, d)| d.handle == "SA01_DungeonSettings")
+            .expect("SA01");
+        assert!(gd.dungeons[id]
+            .spawn_info
+            .enemy_spawn_groups
+            .keys()
+            .any(|g| crate::util::dungeon::spawn_group_level_delta(g, 0) != 0));
+        let data = generate_for_quest_dungeon(&gd, id, 40, 123).unwrap();
+        for e in data.enemy_generated_data.values().flatten().flatten() {
+            assert_eq!((e.enemy_level, e.given_xp), (40, 123));
+        }
     }
 }

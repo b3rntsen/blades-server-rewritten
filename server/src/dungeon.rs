@@ -524,7 +524,7 @@ pub(crate) fn event_dungeon_data(
         game_data,
         &dungeon_uuid,
         enemy_level,
-        scaling.given_xp(enemy_level),
+        scaling,
     )
     .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
     Ok((dungeon_uuid, generated_data))
@@ -548,7 +548,7 @@ pub(crate) fn event_dungeon_data_for_run(
         &dungeon_uuid,
         run_loot_seed(&instance_quest_id, completion_count),
         enemy_level,
-        scaling.given_xp(enemy_level),
+        scaling,
     )
     .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
     Ok((dungeon_uuid, generated_data))
