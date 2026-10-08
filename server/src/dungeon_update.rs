@@ -2272,7 +2272,12 @@ mod event_kill_rewards_tests {
             assert!(enemies > 0, "event {template} has enemies to kill");
 
             let (xp, gold) = clear_the_dungeon(&attempt);
-            assert_eq!(xp, enemies * 258, "event {template}: 258 XP a kill");
+            // 258 XP a kill at level 73, more for an enemy its group stands above
+            // the row (#365) -- exactly what the attempt says each is worth.
+            let shown: u64 =
+                attempt.enemy_generated_data.values().flatten().flatten().map(|e| e.given_xp).sum();
+            assert_eq!(xp, shown, "event {template}: each kill pays its enemy's XP");
+            assert!(xp >= enemies * 258, "event {template}: at least 258 XP a kill");
             assert_eq!(
                 (xp, gold),
                 clear_the_dungeon(row.dungeon.as_ref().unwrap()),

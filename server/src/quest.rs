@@ -9353,11 +9353,17 @@ mod report323_event_row_stage_repair_tests {
 
         for group in gd.dungeons[&b].spawn_info.enemy_spawn_groups.keys() {
             let rolls = &stored.enemy_generated_data[group];
-            assert!(
-                rolls.iter().flatten().all(|e| e.enemy_level == level
-                    && e.given_xp == scaling.given_xp(level)),
-                "stage _B group {group} is at the row's level {level}"
-            );
+            for (i, spawner) in rolls.iter().enumerate() {
+                // The row's level plus the group's APK delta (#365).
+                let want =
+                    (level + blades_lib::util::dungeon::spawn_group_level_delta(group, i)).max(1);
+                assert!(
+                    spawner
+                        .iter()
+                        .all(|e| e.enemy_level == want && e.given_xp == scaling.given_xp(want)),
+                    "stage _B group {group} is at the row's level {level} + its delta"
+                );
+            }
         }
         assert_eq!(stored.chest_generated_data.len(), 2, "stage _B's two chests");
         for (group, rolls) in &before.enemy_generated_data {
