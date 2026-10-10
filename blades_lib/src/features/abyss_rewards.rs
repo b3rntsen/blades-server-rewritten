@@ -30,7 +30,9 @@
 //! at floor 149 could be handed six Garlic.
 //!
 //! THE `/end` PACKAGE. Retail's `/end` paid one stackable besides the per-floor
-//! gold and XP — a material, or a stack of soul gems — see [`end_package`].
+//! gold and XP — a material, or a stack of soul gems — see [`end_package`]. A band
+//! with no captured gem package (everything below level 60) still pays gems, at
+//! the pooled retail rate and graded to the character's level (report #371).
 
 use std::collections::HashMap;
 
@@ -190,13 +192,26 @@ pub const END_PACKAGE_MIN_SCORE: f64 = 10.0;
 ///
 /// Drawn whole from the retail packages paid in the character's level band. In
 /// the 60+ band that is 5 soul-gem stacks (4-6 Greater/Grand/Elevated/Glorious)
-/// in 10 runs; below level 60 retail paid none in 6. Seeded from the run, so a
-/// retried `/end` pays the same thing. Gear, which retail added to 3 of the 4
-/// runs that passed rung 360, is not modelled here.
+/// in 10 runs. Seeded from the run, so a retried `/end` pays the same thing.
+/// Gear, which retail added to 3 of the 4 runs that passed rung 360, is not
+/// modelled here.
 ///
 /// A soul-gem stack is TRANSCENDENT, 4-7 of them, one time in
 /// [`TRANSCENDENT_ONE_IN`] — see [`TRANSCENDENT_SOUL_GEM`] for why that rests on
 /// players' reports and not on a capture.
+///
+/// BELOW LEVEL 60 (report #371). The six captured packages under level 60 are all
+/// materials, and drawing only from them meant a level-43 character could never
+/// be paid a soul gem at `/end` — while a level-60 one was paid them every other
+/// run. Six draws are too few to say retail never did: at the level-blind rate
+/// of all 16 paid packages (5 gem stacks) six materials in a row happen one time
+/// in nine. And retail's own package table (`AbyssPackageRewardLootTable`, in
+/// `dump.cs`) is keyed by score tier, then by LEVEL — a `_levelList` of loot
+/// entries — so level decides what a stack holds, not whether one is paid. A band
+/// with no gem package of its own therefore pays one at that pooled rate, a
+/// retail stack re-graded to the character's level ([`regrade_soul_gems`]). The
+/// rest of the time it pays its own band's material, as before. The 60+ band is
+/// unchanged.
 pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGrant {
     let mut grant = RewardGrant::default();
     if score < END_PACKAGE_MIN_SCORE {
@@ -213,11 +228,28 @@ pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGra
         return grant;
     }
     let seed = mix((run_seed as u64) ^ 0xE4D0_A55E_5EED_0294);
+    let gem_packages: Vec<&&EndObservation> =
+        paid.iter().filter(|o| is_soul_gem_package(o)).collect();
+    if !pool.iter().any(|o| is_soul_gem_package(o)) && !gem_packages.is_empty() {
+        // A band retail was never seen paying gems in (see the doc above).
+        let roll = mix(seed ^ 0x50_017E_4D00_0371);
+        if roll % paid.len() as u64 >= gem_packages.len() as u64 {
+            if let Some(package) = &pool[(seed % pool.len() as u64) as usize].package {
+                grant.stackable_items = package.stackable_items.clone();
+            }
+            return grant;
+        }
+        let drawn = gem_packages[((roll >> 32) % gem_packages.len() as u64) as usize];
+        if let Some(package) = &drawn.package {
+            grant.stackable_items =
+                regrade_soul_gems(&package.stackable_items, drawn.level, character_level);
+        }
+        return grant;
+    }
     if let Some(package) = &pool[(seed % pool.len() as u64) as usize].package {
         grant.stackable_items = package.stackable_items.clone();
     }
-    let is_soul_gems = !grant.stackable_items.is_empty()
-        && grant.stackable_items.keys().all(|id| SOUL_GEMS.contains(&id.to_string().as_str()));
+    let is_soul_gems = is_soul_gem_stack(&grant.stackable_items);
     let upgrade = mix(seed ^ 0x7EA5_CE4D_E400_0294);
     if is_soul_gems && upgrade % TRANSCENDENT_ONE_IN == 0 {
         let count = 4 + (upgrade >> 32) % 4; // 4..=7
@@ -225,6 +257,46 @@ pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGra
             HashMap::from([(Uuid::parse_str(TRANSCENDENT_SOUL_GEM).unwrap(), count)]);
     }
     grant
+}
+
+fn is_soul_gem_stack(stacks: &HashMap<Uuid, u64>) -> bool {
+    !stacks.is_empty() && stacks.keys().all(|id| soul_gem_grade(id).is_some())
+}
+
+fn is_soul_gem_package(o: &EndObservation) -> bool {
+    o.package.as_ref().is_some_and(|p| is_soul_gem_stack(&p.stackable_items))
+}
+
+/// 0 for Petty (SoulGem1) .. 9 for Transcendent (SoulGem10).
+fn soul_gem_grade(id: &Uuid) -> Option<usize> {
+    let id = id.to_string();
+    SOUL_GEMS.iter().position(|g| *g == id)
+}
+
+/// A retail soul-gem stack paid at `observed_level`, moved to `level`: one grade
+/// down per ten levels below the observation (rounded), never below Petty, same
+/// count. Never moved UP — it is only used for characters below every gem
+/// observation.
+///
+/// The slope is retail's own: its `/end` stacks went Greater-Grand at level 66 and
+/// Glorious at 79 and 93, and its enemy corpses dropped Common to Greater gems at
+/// enemy level 40-45 (`enemy_loot.json`, tables 871c2e9b and 9217b4cd) — which is
+/// what this gives a level-43 character from those five stacks.
+fn regrade_soul_gems(
+    stacks: &HashMap<Uuid, u64>,
+    observed_level: u64,
+    level: u64,
+) -> HashMap<Uuid, u64> {
+    let shift = (observed_level.saturating_sub(level) + 5) / 10;
+    let mut out = HashMap::new();
+    for (id, count) in stacks {
+        let to = match soul_gem_grade(id) {
+            Some(grade) => Uuid::parse_str(SOUL_GEMS[grade.saturating_sub(shift as usize)]).unwrap(),
+            None => *id,
+        };
+        *out.entry(to).or_default() += count;
+    }
+    out
 }
 
 /// The ten soul gems, Petty (SoulGem1) to Transcendent (SoulGem10).
@@ -612,7 +684,7 @@ mod tests {
     /// #294: "at the end of a run, randomly up to 7 greater, glorious or
     /// transcendent soul gems, but not every run". Retail, level 60 and up: 5 of 10
     /// paid packages were a soul-gem stack of 4-6 (Greater, Grand, Elevated,
-    /// Glorious x2); below level 60, 0 of 6. Transcendent (4-7) is the reporter's
+    /// Glorious x2). Transcendent (4-7) is the reporter's
     /// and Discord's account, not a capture — see [`TRANSCENDENT_SOUL_GEM`].
     #[test]
     fn the_end_soul_gem_roll_matches_retails_frequency_and_range() {
@@ -646,13 +718,69 @@ mod tests {
         let upgraded = f64::from(transcendent) / f64::from(gems);
         assert!((0.17..=0.23).contains(&upgraded), "transcendent on {upgraded:.3} of gem stacks");
         assert_eq!(counts, (4..=7).collect(), "4 to 7 transcendent gems");
+    }
 
-        for level in [3u64, 7, 34, 57] {
-            for seed in 0..2_000i64 {
-                let (item, _) = single_stack(&end_package(100.0, level, seed));
-                assert!(!all_gems.contains(&item), "level {level} seed {seed}: retail paid no gems below 60");
+    /// Report #371: a level-43 character (Sephoris) was never paid a soul gem at
+    /// `/end`, because the six retail packages below level 60 are all materials.
+    /// It now gets one at the level-blind retail rate (5 gem stacks in 16 paid
+    /// packages), re-graded to its level: Common, Exceptional or Greater — the
+    /// grades retail's own enemies dropped at level 40-45 — 4 to 6 of them, never
+    /// Transcendent. Otherwise it is still its band's retail material.
+    #[test]
+    fn a_mid_level_end_pays_soul_gems_of_its_own_grade() {
+        let all_gems = ALL_SOUL_GEMS.map(uuid);
+        let mid_grades = [ALL_SOUL_GEMS[3], ALL_SOUL_GEMS[4], ALL_SOUL_GEMS[5]].map(uuid);
+        let materials: std::collections::HashSet<Uuid> = corpus()
+            .end_package
+            .observations
+            .iter()
+            .filter(|o| LEVEL_BANDS[1].contains(&o.level))
+            .filter_map(|o| o.package.as_ref())
+            .flat_map(|p| p.stackable_items.keys().copied())
+            .collect();
+        let runs = 20_000;
+        let mut gems = 0;
+        let mut kinds = std::collections::HashSet::new();
+        for seed in 0..runs {
+            let (item, count) = single_stack(&end_package(100.0, 43, seed));
+            if all_gems.contains(&item) {
+                gems += 1;
+                assert!(mid_grades.contains(&item), "seed {seed}: level 43 paid {item}");
+                assert!((4..=6).contains(&count), "seed {seed}: {count} gems, retail paid 4-6");
+                kinds.insert(item);
+            } else {
+                assert!(materials.contains(&item), "seed {seed}: {item} is not a level 20-59 retail package");
             }
         }
+        let rate = f64::from(gems) / runs as f64;
+        assert!((0.27..=0.36).contains(&rate), "soul gems on {rate:.3} of level-43 /ends, pooled retail 5/16");
+        assert_eq!(kinds.len(), 3, "Common, Exceptional and Greater all come up: {kinds:?}");
+    }
+
+    /// The same rule at the ends of the range below 60: a level-3 character is paid
+    /// Petty or Lesser gems, a level-57 one Exceptional to Elevated — one grade per ten levels
+    /// below the retail stack, never below Petty and never above what retail paid.
+    #[test]
+    fn soul_gems_below_60_follow_the_level() {
+        let all_gems = ALL_SOUL_GEMS.map(uuid);
+        for (level, allowed) in [(3u64, &ALL_SOUL_GEMS[0..2]), (57, &ALL_SOUL_GEMS[4..7])] {
+            let allowed: Vec<Uuid> = allowed.iter().map(|s| uuid(s)).collect();
+            let mut gems = 0;
+            for seed in 0..5_000i64 {
+                let (item, _) = single_stack(&end_package(100.0, level, seed));
+                if all_gems.contains(&item) {
+                    gems += 1;
+                    assert!(allowed.contains(&item), "level {level} seed {seed}: {item}");
+                }
+            }
+            assert!(gems > 1_000, "level {level}: only {gems} gem packages in 5000");
+        }
+        // Re-grading is downward only, and leaves a material alone.
+        let greater = HashMap::from([(uuid(ALL_SOUL_GEMS[5]), 4)]);
+        assert_eq!(regrade_soul_gems(&greater, 66, 43), HashMap::from([(uuid(ALL_SOUL_GEMS[3]), 4)]));
+        assert_eq!(regrade_soul_gems(&greater, 66, 80), greater);
+        let lumber = HashMap::from([(uuid("f2ba4bb2-6a4a-4b4b-9d8e-2c2d4c5e6f70"), 9)]);
+        assert_eq!(regrade_soul_gems(&lumber, 66, 3), lumber);
     }
 
     /// No package below the threshold; the same run always pays the same package.
