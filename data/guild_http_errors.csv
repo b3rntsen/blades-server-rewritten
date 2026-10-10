@@ -1,0 +1,100 @@
+ID,Service Name,Service ID,Error Name,HTTP Code,Error Code,Description,Action,Localization Title Message,Localization Message,UserOption1,UserOption2,UserOption3,Context,LogLevel,ClientAction
+124_0,GUILD,124,INVALID_USER_INFO,400,0,Invalid user info.,ShowMessage,Http.Error.Window.Title,UI.Error.AccountError,SoftResync,,,,Error,
+124_1,GUILD,124,INVALID_GUILD_CREATION_REQUEST,400,1,Invalid guild creation request.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericGuildError,SoftResync,,,,Error,
+124_3,GUILD,124,INVALID_APPLICANT_ID,400,3,The applicant user ID can't be null.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericGuildError,SoftResync,,,,Error,
+124_4,GUILD,124,INVALID_GUILD_ID,400,4,Guild ID can't be null.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericGuildError,SoftResync,,,,Error,
+124_5,GUILD,124,INVALID_GUILD_MEMBER_USER_ID,400,5,Guild member user ID can't be null.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericGuildError,SoftResync,,,,Error,
+124_6,GUILD,124,INVALID_PAGE,400,6,Page has to be a positive integer,ShowMessage,Http.Error.Window.Title,UI.Error.GenericError,SoftResync,,,,Error,
+124_8,GUILD,124,ALREADY_IN_GUILD,400,8,Can't join a guild while in another guild.,Ignore,Http.Error.Window.Title,UI.Error.AlreadyInAGuild,Ok,,,,Log,ResyncCurrentGuild
+124_8_GuildApplicationAction,GUILD,124,ALREADY_IN_GUILD,400,8,Can't join a guild while in another guild.,Ignore,Http.Error.Window.Title,UI.Error.AlreadyInAGuild,Ok,,,GuildApplicationAction,Log,ResyncCurrentGuild
+124_9,GUILD,124,GUILD_NOT_FOUND,404,9,Guild not found.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericGuildError,SoftResync,,,,Error,
+124_9_GuildMemberAction,GUILD,124,GUILD_NOT_FOUND,404,9,Guild not found.,Ignore,Http.Error.Window.Title,UI.Error.GenericGuildError,Ok,,,GuildMemberAction,Log,RemoveUserFromGuild
+124_10,GUILD,124,GUILD_MUST_HAVE_NAME,400,10,Guild must have a name.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericGuildError,SoftResync,,,,Error,
+124_11,GUILD,124,GUILD_MUST_HAVE_TYPE,400,11,Guild must have a type.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericGuildError,SoftResync,,,,Error,
+124_12,GUILD,124,INVALID_GUILD,400,12,Guild doesn't have the required fields.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericGuildError,SoftResync,,,,Error,
+124_13,GUILD,124,INVALID_MEMBER_BNET_ID,400,13,Guild member BNet ID can't be null.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericGuildError,SoftResync,,,,Error,
+124_14,GUILD,124,INVALID_APPLICANT_BNET_ID,400,14,Applicant BNet ID can't be null.,ShowMessage,Http.Error.Window.Title,UI.Error.BNetIDError,SoftResync,,,,Error,
+124_15,GUILD,124,INVALID_GUILD_NAME,400,15,Invalid guild name.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericGuildError,SoftResync,,,,Error,InvalidUserInput
+124_16,GUILD,124,INVALID_GUILD_TAG_GENERATION_DATA,400,16,Invalid guild tag generation data.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericGuildError,SoftResync,,,,Error,
+124_17,GUILD,124,INVALID_GUILD_SEARCH_TERM_SEPARATOR_COUNT,400,17,Search term has too many separators.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericError,SoftResync,,,,Error,
+124_18,GUILD,124,INVALID_GUILD_SEARCH_TERM_TAG_ID,400,18,Search term has an invalid tag ID.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericError,SoftResync,,,,Error,
+124_19,GUILD,124,GUILD_MUST_HAVE_SHORT_DESCRIPTION,400,19,Guild must have a short description.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericGuildError,SoftResync,,,,Error,
+124_20,GUILD,124,INVALID_BANNED_USER_ID,400,20,Banned user ID can't be null.,ShowMessage,Http.Error.Window.Title,UI.Error.BNetIDError,SoftResync,,,,Error,
+124_21,GUILD,124,INVALID_BNET_ID,400,21,BNet ID can't be null.,ShowMessage,Http.Error.Window.Title,UI.Error.BNetIDError,SoftResync,,,,Error,
+124_22,GUILD,124,CANNOT_BAN_SELF,400,22,A user may not ban themselves from a guild.,ShowMessage,Http.Error.Window.Title,UI.Error.CannotBanSelf,SoftResync,,,,Error,
+124_23,GUILD,124,INVALID_CHARACTER_ID,400,23,Invalid character ID.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericError,SoftResync,,,,Error,
+124_24,GUILD,124,GUILD_MEMBER_NOT_FOUND,400,24,Guild member not found.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericGuildError,SoftResync,,,,Error,
+124_25,GUILD,124,INVALID_USER_TO_UPDATE_RANK_BNET_ID,400,25,BNet ID of user that should have its rank updated can't be null.,ShowMessage,Http.Error.Window.Title,UI.Error.BNetIDError,SoftResync,,,,Error,
+124_26,GUILD,124,INVALID_GUILD_RANK,400,26,Guild rank can't be null.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericGuildError,SoftResync,,,,Error,
+124_27,GUILD,124,INVALID_GUILD_SEARCH,400,27,Invalid guild search request.,ShowMessage,Http.Error.Window.Title,Http.Error.InvalidGuildSearch,SoftResync,,,,Error,
+124_28,GUILD,124,INVALID_GUILD_SEARCH_MEMBER_COUNTS,400,28,Invalid guild search member counts.,ShowMessage,Http.Error.Window.Title,Http.Error.InvalidGuildSearchMemberCounts,SoftResync,,,,Error,
+124_29,GUILD,124,INVALID_GUILD_SEARCH_APPLICATION_COUNTS,400,29,Invalid guild search application counts.,ShowMessage,Http.Error.Window.Title,Http.Error.InvalidGuildSearchApplicationCounts,SoftResync,,,,Error,
+124_30,GUILD,124,INVALID_BUID,400,30,Invalid buid.,ShowMessage,Http.Error.Window.Title,Http.Error.InvalidBuid,SoftResync,,,,Error,
+124_31,GUILD,124,INVALID_PLATFORM,400,31,Invalid platform.,ShowMessage,Http.Error.Window.Title,Http.Error.InvalidPlatform,SoftResync,,,,Error,
+124_32,GUILD,124,INVALID_GUILD_SEARCH_PVP_TROPHIES,400,32,Invalid guild search PvP trophies,ShowMessage,Http.Error.Window.Title,Http.Error.InvalidGuildSearchPvpTrophies,SoftResync,,,,Error,
+124_33,GUILD,124,INVALID_GUILD_UPDATE_REQUEST,400,33,Invalid guild update request,ShowMessage,Http.Error.Window.Title,Http.Error.InvalidGuildUpdateRequest,SoftResync,,,,Error,
+124_34,GUILD,124,GUILD_MUST_HAVE_GRANDMASTER,400,34,Guild must have a grandmaster,ShowMessage,Http.Error.Window.Title,Http.Error.GuildMustHaveGrandmaster,SoftResync,,,,Error,
+124_35,GUILD,124,REQUEST_MUST_HAVE_COMMENT,400,35,Request must have a comment,ShowMessage,Http.Error.Window.Title,Http.Error.RequestMustHaveComment,SoftResync,,,,Error,
+124_200,GUILD,124,ACCOUNT_NOT_FOUND,404,200,Can't find the account of the guild member.,ShowMessage,Http.Error.Window.Title,UI.Error.AccountError,SoftResync,,,,Error,
+124_201,GUILD,124,ACCOUNT_NO_BUID,400,201,Can't find BNet ID associated to the provided account.,ShowMessage,Http.Error.Window.Title,UI.Error.AccountError,SoftResync,,,,Error,
+124_202,GUILD,124,CHARACTER_NOT_FOUND,400,202,Can't find the character of the guild member.,ShowMessage,Http.Error.Window.Title,Http.Error.CharacterNotFound,SoftResync,,,,Error,
+124_300,GUILD,124,BNET_UNKNOWN_INVITE_STATE,400,300,Unknown clan invite state.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericError,SoftResync,,,,Error,
+124_301,GUILD,124,BNET_EXPECTED_APPLIED_STATE,400,301,Expected invite state to be APPLIED (0).,ShowMessage,Http.Error.Window.Title,UI.Error.GenericError,SoftResync,,,,Error,
+124_302,GUILD,124,BNET_UNKNOWN_CLAN_ROLE,400,302,Unknown clan role.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericError,SoftResync,,,,Error,
+124_303,GUILD,124,BNET_UNIMPLEMENTED_GUILD_TYPE,500,303,Support was not implemented to read the given guild type.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericError,SoftResync,,,,Error,
+124_304,GUILD,124,BNET_UNIMPLEMENTED_CLAN_FLAGS,500,304,Support was not implemented to read the given clan flags.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericError,SoftResync,,,,Error,
+124_305,GUILD,124,BNET_CLAN_GRANDMASTER_NOT_FOUND,500,305,Bnet did not find any grandmaster for requested guild.,ShowMessage,Http.Error.Window.Title,Http.Error.BnetClanGrandmasterNotFound,SoftResync,,,,Error,
+124_306,GUILD,124,BNET_CLAN_LEADERBOARD_NOT_RETURNED,500,306,Bnet did not return the clan leaderboard.,ShowMessage,Http.Error.Window.Title,Http.Error.BnetClanLeaderboardNotReturned,SoftResync,,,,Error,
+124_400,GUILD,124,TAG_VERSION_CHECK_FAILED,500,400,Version check failed while persisting tag data,ShowMessage,Http.Error.Window.Title,UI.Error.GenericError,SoftResync,,,,Error,
+124_401,GUILD,124,TAG_INVALID_FORMAT,400,401,Could not split guild tag into expected parts,ShowMessage,Http.Error.Window.Title,UI.Error.GenericError,SoftResync,,,,Error,
+124_402,GUILD,124,TAG_ID_NO_MORE_AVAILABLE,400,402,No more tag ID available for the provided name,ShowMessage,Http.Error.Window.Title,UI.Error.GenericError,SoftResync,,,,Error,
+124_500,GUILD,124,GUILD_NAME_TOO_SHORT,400,500,Guild name is too short.,ShowMessage,Http.Error.Window.Title,Http.Error.GuildShortDescriptionTooShort,SoftResync,,,,Error,
+124_501,GUILD,124,GUILD_NAME_TOO_LONG,400,501,Guild name is too long.,ShowMessage,Http.Error.Window.Title,Http.Error.GuildShortDescriptionTooLong,SoftResync,,,,Error,
+124_502,GUILD,124,GUILD_NAME_OUT_OF_RANGE_CODE_POINT,400,502,Guild name code point is out of the allowed ranges.,ShowMessage,Http.Error.Window.Title,Http.Error.GuildShortDescriptionOutOfRangeCodePoint,SoftResync,,,,Error,
+124_502_GuildCreationAction,GUILD,124,GUILD_NAME_OUT_OF_RANGE_CODE_POINT,400,502,Guild name code point is out of the allowed ranges.,Ignore,Http.Error.Window.Title,Http.Error.GuildShortDescriptionOutOfRangeCodePoint,SoftResync,,,GuildCreationAction,Log,InvalidUserInput
+124_503,GUILD,124,GUILD_NAME_INVALID_CODE_POINT,400,503,Guild name code point is invalid.,ShowMessage,Http.Error.Window.Title,Http.Error.GuildShortDescriptionInvalidCodePoint,SoftResync,,,,Error,
+124_503_GuildCreationAction,GUILD,124,GUILD_NAME_INVALID_CODE_POINT,400,503,Guild name code point is invalid.,Ignore,Http.Error.Window.Title,Http.Error.GuildShortDescriptionInvalidCodePoint,SoftResync,,,GuildCreationAction,Log,InvalidUserInput
+124_504,GUILD,124,GUILD_NAME_PROFANITY_FILTER_CHECK_FAILED,400,504,Guild name profanity filter check failed.,ShowMessage,Http.Error.Window.Title,Http.Error.GuildNameProfanityFilterCheckFailed,SoftResync,,,,Error,
+124_504_GuildCreationAction,GUILD,124,GUILD_NAME_PROFANITY_FILTER_CHECK_FAILED,400,504,Guild name profanity filter check failed.,Ignore,Http.Error.Window.Title,Http.Error.GuildNameProfanityFilterCheckFailed,SoftResync,,,GuildCreationAction,Log,InvalidUserInput
+124_600,GUILD,124,GUILD_SHORT_DESCRIPTION_TOO_SHORT,400,600,Guild short description is too short.,ShowMessage,Http.Error.Window.Title,Http.Error.GuildShortDescriptionTooShort,SoftResync,,,,Error,
+124_601,GUILD,124,GUILD_SHORT_DESCRIPTION_TOO_LONG,400,601,Guild short description is too long.,ShowMessage,Http.Error.Window.Title,Http.Error.GuildShortDescriptionTooLong,SoftResync,,,,Error,
+124_602,GUILD,124,GUILD_SHORT_DESCRIPTION_OUT_OF_RANGE_CODE_POINT,400,602,Guild short description code point is out of the allowed ranges.,ShowMessage,Http.Error.Window.Title,Http.Error.GuildShortDescriptionOutOfRangeCodePoint,SoftResync,,,,Error,
+124_602_GuildMemberAction,GUILD,124,GUILD_SHORT_DESCRIPTION_OUT_OF_RANGE_CODE_POINT,400,602,Guild short description code point is out of the allowed ranges.,Ignore,Http.Error.Window.Title,Http.Error.GuildShortDescriptionOutOfRangeCodePoint,SoftResync,,,GuildMemberAction,Log,InvalidUserInput
+124_602_GuildCreationAction,GUILD,124,GUILD_SHORT_DESCRIPTION_OUT_OF_RANGE_CODE_POINT,400,602,Guild short description code point is out of the allowed ranges.,Ignore,Http.Error.Window.Title,Http.Error.GuildShortDescriptionOutOfRangeCodePoint,SoftResync,,,GuildCreationAction,Log,InvalidUserInput
+124_603,GUILD,124,GUILD_SHORT_DESCRIPTION_INVALID_CODE_POINT,400,603,Guild short description code point is invalid.,ShowMessage,Http.Error.Window.Title,Http.Error.GuildShortDescriptionInvalidCodePoint,SoftResync,,,,Error,
+124_603_GuildMemberAction,GUILD,124,GUILD_SHORT_DESCRIPTION_INVALID_CODE_POINT,400,603,Guild short description code point is invalid.,Ignore,Http.Error.Window.Title,Http.Error.GuildShortDescriptionInvalidCodePoint,SoftResync,,,GuildMemberAction,Log,InvalidUserInput
+124_603_GuildCreationAction,GUILD,124,GUILD_SHORT_DESCRIPTION_INVALID_CODE_POINT,400,603,Guild short description code point is invalid.,Ignore,Http.Error.Window.Title,Http.Error.GuildShortDescriptionInvalidCodePoint,SoftResync,,,GuildCreationAction,Log,InvalidUserInput
+124_604,GUILD,124,GUILD_SHORT_DESCRIPTION_PROFANITY_FILTER_CHECK_FAILED,400,604,Guild short description profanity filter check failed.,ShowMessage,Http.Error.Window.Title,Http.Error.GuildShortDescriptionProfanityFilterCheckFailed,SoftResync,,,,Error,
+124_604_GuildMemberAction,GUILD,124,GUILD_SHORT_DESCRIPTION_PROFANITY_FILTER_CHECK_FAILED,400,604,Guild short description profanity filter check failed.,Ignore,Http.Error.Window.Title,Http.Error.GuildShortDescriptionProfanityFilterCheckFailed,SoftResync,,,GuildMemberAction,Log,InvalidUserInput
+124_604_GuildCreationAction,GUILD,124,GUILD_SHORT_DESCRIPTION_PROFANITY_FILTER_CHECK_FAILED,400,604,Guild short description profanity filter check failed.,Ignore,Http.Error.Window.Title,Http.Error.GuildShortDescriptionProfanityFilterCheckFailed,SoftResync,,,GuildCreationAction,Log,InvalidUserInput
+124_700,GUILD,124,GUILD_LONG_DESCRIPTION_TOO_SHORT,400,700,Guild long description is too short.,ShowMessage,Http.Error.Window.Title,Http.Error.GuildLongDescriptionTooShort,SoftResync,,,,Error,
+124_701,GUILD,124,GUILD_LONG_DESCRIPTION_TOO_LONG,400,701,Guild long description is too long.,ShowMessage,Http.Error.Window.Title,Http.Error.GuildLongDescriptionTooLong,SoftResync,,,,Error,
+124_702,GUILD,124,GUILD_LONG_DESCRIPTION_OUT_OF_RANGE_CODE_POINT,400,702,Guild long description code point is out of the allowed ranges.,ShowMessage,Http.Error.Window.Title,Http.Error.GuildLongDescriptionOutOfRangeCodePoint,SoftResync,,,,Error,
+124_702_GuildMemberAction,GUILD,124,GUILD_LONG_DESCRIPTION_OUT_OF_RANGE_CODE_POINT,400,702,Guild long description code point is out of the allowed ranges.,Ignore,Http.Error.Window.Title,Http.Error.GuildLongDescriptionOutOfRangeCodePoint,SoftResync,,,GuildMemberAction,Log,InvalidUserInput
+124_702_GuildCreationAction,GUILD,124,GUILD_LONG_DESCRIPTION_OUT_OF_RANGE_CODE_POINT,400,702,Guild long description code point is out of the allowed ranges.,Ignore,Http.Error.Window.Title,Http.Error.GuildLongDescriptionOutOfRangeCodePoint,SoftResync,,,GuildCreationAction,Log,InvalidUserInput
+124_703,GUILD,124,GUILD_LONG_DESCRIPTION_INVALID_CODE_POINT,400,703,Guild long description code point is invalid.,ShowMessage,Http.Error.Window.Title,Http.Error.GuildLongDescriptionInvalidCodePoint,SoftResync,,,,Error,
+124_703_GuildMemberAction,GUILD,124,GUILD_LONG_DESCRIPTION_INVALID_CODE_POINT,400,703,Guild long description code point is invalid.,Ignore,Http.Error.Window.Title,Http.Error.GuildLongDescriptionInvalidCodePoint,SoftResync,,,GuildMemberAction,Log,InvalidUserInput
+124_703_GuildCreationAction,GUILD,124,GUILD_LONG_DESCRIPTION_INVALID_CODE_POINT,400,703,Guild long description code point is invalid.,Ignore,Http.Error.Window.Title,Http.Error.GuildLongDescriptionInvalidCodePoint,SoftResync,,,GuildCreationAction,Log,InvalidUserInput
+124_704,GUILD,124,GUILD_LONG_DESCRIPTION_PROFANITY_FILTER_CHECK_FAILED,400,704,Guild long description profanity filter check failed.,ShowMessage,Http.Error.Window.Title,Http.Error.GuildLongDescriptionProfanityFilterCheckFailed,SoftResync,,,,Error,
+124_704_GuildMemberAction,GUILD,124,GUILD_LONG_DESCRIPTION_PROFANITY_FILTER_CHECK_FAILED,400,704,Guild long description profanity filter check failed.,Ignore,Http.Error.Window.Title,Http.Error.GuildLongDescriptionProfanityFilterCheckFailed,SoftResync,,,GuildMemberAction,Log,InvalidUserInput
+124_704_GuildCreationAction,GUILD,124,GUILD_LONG_DESCRIPTION_PROFANITY_FILTER_CHECK_FAILED,400,704,Guild long description profanity filter check failed.,Ignore,Http.Error.Window.Title,Http.Error.GuildLongDescriptionProfanityFilterCheckFailed,SoftResync,,,GuildCreationAction,Log,InvalidUserInput
+124_800,GUILD,124,BNET_CLAN_BAD_REQUEST,500,800,Bad request error from BNET clan service.,ShowMessage,Http.Error.Window.Title,UI.Error.GenericError,SoftResync,,,,Error,
+124_800_GuildApplicationAction,GUILD,124,BNET_CLAN_BAD_REQUEST,500,800,Bad request error from BNET clan service.,Ignore,Http.Error.Window.Title,UI.Guild.TypeChanged,SoftResync,,,GuildApplicationAction,Log,RefreshDisplayedData
+124_800_GuildMemberAction,GUILD,124,BNET_CLAN_BAD_REQUEST,500,800,Bad request error from BNET clan service.,Ignore,Http.Error.Window.Title,UI.Message.Guild.InvalidOperation,SoftResync,,,GuildMemberAction,Log,ResyncCurrentGuild
+124_801,GUILD,124,BNET_CLAN_UNAUTHORIZED,500,801,Unauthorized request error from BNET clan service.,ShowMessage,Http.Error.Window.Title,UI.Error.BNetError,SoftResync,,,,Error,
+124_802,GUILD,124,BNET_CLAN_FORBIDDEN,500,802,Forbidden error from BNET clan service.,ShowMessage,Http.Error.Window.Title,UI.Error.BNetError,SoftResync,,,,Error,
+124_802_GuildApplicationAction,GUILD,124,BNET_CLAN_FORBIDDEN,500,802,Forbidden error from BNET clan service.,Ignore,Http.Error.Window.Title,UI.Guild.UnableToJoin,SoftResync,,,GuildApplicationAction,Log,RefreshDisplayedData
+124_803,GUILD,124,BNET_CLAN_NOT_FOUND,404,803,Not found error from BNET clan service.,Ignore,Http.Error.Window.Title,UI.Guild.InvalidGuild,SoftResync,,,,Log,RefreshDisplayedData
+124_803_GuildMemberAction,GUILD,124,BNET_CLAN_NOT_FOUND,404,803,Not found error from BNET clan service.,Ignore,Http.Error.Window.Title,UI.Message.Guild.InvalidOperation,SoftResync,,,GuildMemberAction,Log,ResyncCurrentGuild
+124_803_GuildApplicationAction,GUILD,124,BNET_CLAN_NOT_FOUND,404,803,Not found error from BNET clan service.,Ignore,Http.Error.Window.Title,UI.Guild.InvalidGuild,SoftResync,,,GuildApplicationAction,Log,DisplayedInvalidGuild
+124_804,GUILD,124,BNET_CLAN_SERVICE_INTERNAL_SERVER_ERROR,500,804,BNET replied that it's clan service has an internal server error.,ShowMessage,Http.Error.Window.Title,Http.Error.BnetClanServiceInternalServerError,SoftResync,,,,Error,
+124_805,GUILD,124,BNET_CLAN_SERVICE_UNAVAILABLE,500,805,BNET replied that it's clan service is unavailable.,ShowMessage,Http.Error.Window.Title,Http.Error.BnetClanServiceUnavailable,SoftResync,,,,Error,
+124_900,GUILD,124,VERSION_CHECK_FAILED,500,900,The version to save does not match the version read. Concurrent edit?,ShowMessage,Http.Error.Window.Title,UI.Error.GenericError,SoftResync,,,,Error,
+124_1000,GUILD,124,CHARACTER_LEVEL_TOO_LOW,400,1000,Character level is too low to join a guild,ShowMessage,Http.Error.Window.Title,UI.Error.TooLowToJoinGuild,SoftResync,,,,Error,
+124_1001,GUILD,124,GUILD_FULL,400,1001,Maximum number of players allowed in guild reached,ShowMessage,Http.Error.Window.Title,UI.Error.GuildFull,SoftResync,,,,Error,
+124_1001_GuildMemberAction,GUILD,124,GUILD_FULL,400,1001,Maximum number of players allowed in guild reached,Ignore,Http.Error.Window.Title,UI.Error.GuildFull,SoftResync,,,GuildMemberAction,Log,ResyncCurrentGuild
+124_1001_GuildApplicationAction,GUILD,124,GUILD_FULL,400,1001,Maximum number of players allowed in guild reached,Ignore,Http.Error.Window.Title,UI.Error.GuildFull,SoftResync,,,GuildApplicationAction,Log,RefreshDisplayedData
+124_1002,GUILD,124,GUILD_MAX_APPLICATIONS_REACHED,400,1002,Maximum number of concurrent applications in guild reached,ShowMessage,Http.Error.Window.Title,Http.Error.GuildMaxApplicationsReached,SoftResync,,,,Error,
+124_1100,GUILD,124,GUILD_MISSING_AUTHENTICATION,400,1100,Authentication missing,ShowMessage,Http.Error.Window.Title,Http.Error.GuildMissingAuthentication,SoftResync,,,,Error,
+124_1101,GUILD,124,GUILD_FEATURE_NOT_ALLOWED,400,1101,Your account does not allow access to guild feature,ShowMessage,Http.Error.Window.Title,UI.Error.AccountGuildNotAllowed,SoftResync,,,,Error,
+124_1102,GUILD,124,GUILD_OFFLINE,503,1102,Guild feature is currently offline,Ignore,Http.Error.Window.Title,Http.Error.GuildOffline,SoftResync,,,,Log,StopGuildServices
