@@ -161,6 +161,25 @@ pub struct ImportCharacterRequest {
     /// its previous state snapshotted and restorable, just not grouped.
     #[serde(default)]
     pub source_alt_uuid: Option<Uuid>,
+    /// This import STARTS a new alt (the website's "New level-48 character",
+    /// #318), so it gets the same checks as `new-alt`: the alt must be new to
+    /// this account, the account must have room for it (`MAX_ALTS_PER_USER`),
+    /// and a live row with no alt of its own needs `outgoing_alt_uuid`. Absent
+    /// for an ordinary transfer, which is unchanged.
+    #[serde(default)]
+    pub new_alt: bool,
+    /// What to keep the OUTGOING character under when its row carries no alt of
+    /// its own. Without it such a row is kept under `source_alt_uuid` — the alt
+    /// ARRIVING — which files the old character under the new alt's id.
+    #[serde(default)]
+    pub outgoing_alt_uuid: Option<Uuid>,
+}
+
+/// The alt a snapshot of an unstamped live row is filed under: the caller's
+/// hint for the OUTGOING character when it gave one, else (as before the hint
+/// existed) the incoming alt. A hint naming the incoming alt is ignored.
+fn snapshot_fallback_alt(outgoing: Option<Uuid>, incoming: Option<Uuid>) -> Option<Uuid> {
+    outgoing.filter(|o| Some(*o) != incoming).or(incoming)
 }
 
 #[derive(Serialize)]
@@ -757,6 +776,34 @@ pub async fn import_character(
                     .into_iter()
                     .next();
 
+                if body.new_alt {
+                    let Some(alt_uuid) = incoming_alt else {
+                        return Err(BladeApiError::new(
+                            StatusCode::BAD_REQUEST,
+                            IMPORT_SERVICE_ID,
+                            NEW_ALT_NEEDS_ALT,
+                        ));
+                    };
+                    let live_alt = match existing.as_ref() {
+                        Some(row) => Some(
+                            characters::table
+                                .filter(characters::id.eq(row.id))
+                                .select(characters::source_alt_uuid)
+                                .first::<Option<Uuid>>(&mut conn)
+                                .await?,
+                        ),
+                        None => None,
+                    };
+                    refuse_unless_new_alt(
+                        &mut conn,
+                        user_id,
+                        live_alt,
+                        alt_uuid,
+                        body.outgoing_alt_uuid,
+                    )
+                    .await?;
+                }
+
                 let (character_id, created) = match existing {
                     Some(row) => (row.id, false),
                     None => (Uuid::new_v4(), true),
@@ -787,7 +834,7 @@ pub async fn import_character(
                         &mut conn,
                         character_id,
                         user_id,
-                        body.source_alt_uuid,
+                        snapshot_fallback_alt(body.outgoing_alt_uuid, body.source_alt_uuid),
                         "import",
                         import_parks_quests(live_alt, incoming_alt),
                     )
@@ -4354,8 +4401,9 @@ mod tests {
     /// TEST_DATABASE_URL (CI provides one) rather than failing.
     mod character_versions {
         use super::super::{
-            apply_new_alt, apply_restore, apply_switch_alt, import_parks_quests, snapshot_character,
-            NewAltRequest, SwitchAltRequest,
+            apply_new_alt, apply_restore, apply_switch_alt, import_parks_quests,
+            refuse_unless_new_alt, snapshot_character, snapshot_fallback_alt, NewAltRequest,
+            SwitchAltRequest, MAX_ALTS_PER_USER,
         };
         use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
         use uuid::Uuid;
@@ -5375,6 +5423,148 @@ mod tests {
                 Some(own),
                 "a row that knows its alt is filed under it"
             );
+        }
+
+        fn error_code(err: &crate::BladeApiError) -> String {
+            format!("{err:?}")
+        }
+
+        /// #318: a player may start fresh alts again and again — each one a new
+        /// alt, each previous one kept under its own id — until the account
+        /// holds MAX_ALTS_PER_USER. The next is refused with 94 and nothing
+        /// moves; switching between the alts it already has still works.
+        #[tokio::test]
+        async fn new_alts_can_be_started_repeatedly_up_to_the_cap() {
+            let mut c = db!();
+            let uid = Uuid::new_v4();
+            let alts: Vec<Uuid> = (0..MAX_ALTS_PER_USER).map(|_| Uuid::new_v4()).collect();
+            for (i, alt) in alts.iter().enumerate() {
+                let req = NewAltRequest {
+                    name: Some(format!("Adventurer {}", i + 1)),
+                    ..new_alt(uid, *alt)
+                };
+                let out = apply_new_alt(&mut c, &req, &appearance_cost())
+                    .await
+                    .unwrap();
+                assert_eq!(out.now_playing, *alt);
+                assert_eq!(out.name, format!("Adventurer {}", i + 1));
+                if i > 0 {
+                    assert_eq!(out.was_playing, Some(alts[i - 1]));
+                    assert_eq!(
+                        version(&mut c, out.left_behind_saved_as.unwrap())
+                            .await
+                            .source_alt_uuid,
+                        Some(alts[i - 1]),
+                        "the alt it replaced is kept under its own id"
+                    );
+                }
+            }
+            let kept: i64 = diesel::sql_query(
+                "SELECT count(DISTINCT source_alt_uuid) AS count FROM character_versions WHERE user_id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(uid)
+            .get_result::<CountRow>(&mut c)
+            .await
+            .unwrap()
+            .count;
+            assert_eq!(
+                kept as usize,
+                MAX_ALTS_PER_USER - 1,
+                "one kept alt per earlier start"
+            );
+
+            let err = apply_new_alt(&mut c, &new_alt(uid, Uuid::new_v4()), &appearance_cost())
+                .await
+                .unwrap_err();
+            assert_eq!(status(&err), actix_web::http::StatusCode::CONFLICT);
+            assert!(error_code(&err).contains("error_code: 94"), "{err:?}");
+            assert_eq!(
+                fresh_live(&mut c, uid).await.source_alt_uuid,
+                alts.last().copied()
+            );
+
+            // At the cap, moving between existing alts is untouched.
+            let back = apply_switch_alt(
+                &mut c,
+                &SwitchAltRequest {
+                    user_id: uid,
+                    alt_uuid: alts[0],
+                    device_id: None,
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(back.now_playing, alts[0]);
+        }
+
+        /// The cap counts what the account holds: every kept alt, plus the live
+        /// character under its own id or, unstamped, under the hint it is about
+        /// to be filed under — a hint naming a kept alt is not a second one.
+        /// This is the check an import flagged `newAlt` (a level-48 clone) runs.
+        #[tokio::test]
+        async fn the_alt_cap_counts_the_live_character_once() {
+            let mut c = db!();
+            let (cid, uid) = seed_character(&mut c, "Adventurer", 48, 10).await;
+            let kept: Vec<Uuid> = (0..MAX_ALTS_PER_USER - 2).map(|_| Uuid::new_v4()).collect();
+            for alt in &kept {
+                snapshot_character(&mut c, cid, uid, Some(*alt), "import", false)
+                    .await
+                    .unwrap();
+            }
+            let live_unstamped = Some(None);
+            // 8 kept + the live one under a new hint = 9: room for a tenth.
+            refuse_unless_new_alt(
+                &mut c,
+                uid,
+                live_unstamped,
+                Uuid::new_v4(),
+                Some(Uuid::new_v4()),
+            )
+            .await
+            .unwrap();
+            // Under a hint that is already kept: still 8.
+            refuse_unless_new_alt(&mut c, uid, live_unstamped, Uuid::new_v4(), Some(kept[0]))
+                .await
+                .unwrap();
+
+            snapshot_character(&mut c, cid, uid, Some(Uuid::new_v4()), "import", false)
+                .await
+                .unwrap();
+            // 9 kept + the live one under a new hint = 10: full.
+            let err = refuse_unless_new_alt(
+                &mut c,
+                uid,
+                live_unstamped,
+                Uuid::new_v4(),
+                Some(Uuid::new_v4()),
+            )
+            .await
+            .unwrap_err();
+            assert!(error_code(&err).contains("error_code: 94"), "{err:?}");
+            // 9 kept, live filed under one of them: room for one more.
+            refuse_unless_new_alt(&mut c, uid, live_unstamped, Uuid::new_v4(), Some(kept[1]))
+                .await
+                .unwrap();
+            // Starting an alt that is already kept is refused as before (91).
+            let err = refuse_unless_new_alt(&mut c, uid, live_unstamped, kept[2], Some(kept[1]))
+                .await
+                .unwrap_err();
+            assert!(error_code(&err).contains("error_code: 91"), "{err:?}");
+        }
+
+        /// An import's snapshot of an unstamped row goes under the outgoing
+        /// hint when there is one, never under the alt arriving.
+        #[test]
+        fn an_import_files_an_unstamped_row_under_the_outgoing_hint() {
+            let (incoming, hint) = (Some(Uuid::new_v4()), Some(Uuid::new_v4()));
+            assert_eq!(snapshot_fallback_alt(hint, incoming), hint);
+            assert_eq!(
+                snapshot_fallback_alt(None, incoming),
+                incoming,
+                "unchanged without a hint"
+            );
+            assert_eq!(snapshot_fallback_alt(incoming, incoming), incoming);
+            assert_eq!(snapshot_fallback_alt(None, None), None);
         }
 
         /// CONTROL: restoring a version taken before quests were kept leaves
@@ -6924,6 +7114,74 @@ const NEW_ALT_OUTGOING_UNKNOWN: u64 = 92;
 /// `outgoingAltUuid` names the new alt itself — the misfiling
 /// `SNAPSHOT_CHARACTER_SQL` exists to prevent.
 const NEW_ALT_OUTGOING_IS_NEW: u64 = 93;
+/// The account already holds `MAX_ALTS_PER_USER` alts (#318).
+const NEW_ALT_LIMIT_REACHED: u64 = 94;
+/// An import flagged `newAlt` that does not say which alt it is.
+const NEW_ALT_NEEDS_ALT: u64 = 95;
+
+/// The most alts one account may hold before starting another is refused (#318).
+///
+/// The owner's call (2026-10-10) is that players may start as many level-1 and
+/// level-48 characters as they like. Each one is a full character row in
+/// `character_versions` every time it is left, and each starts with an empty
+/// gift-claim history, so "as many as they like" is bounded here rather than
+/// left open to a script pressing the button. Counts every alt the account
+/// holds — captured mains included — and applies only when STARTING one: an
+/// import of a player's own capture and a switch between existing alts are
+/// never refused by it. Production's largest account held 3 when this was set.
+pub const MAX_ALTS_PER_USER: usize = 10;
+
+/// Refuse a request to START an alt that is not new, or that the account has no
+/// room for. Shared by `new-alt` (level 1) and an import flagged `newAlt` (the
+/// level-48 starter clones) so the two creation paths cannot drift apart.
+///
+/// `live_alt` is the live row's own alt: `None` when there is no live row,
+/// `Some(None)` for a row with no alt id.
+async fn refuse_unless_new_alt(
+    conn: &mut diesel_async::AsyncPgConnection,
+    user_id: Uuid,
+    live_alt: Option<Option<Uuid>>,
+    alt_uuid: Uuid,
+    outgoing_alt_uuid: Option<Uuid>,
+) -> Result<(), BladeApiError> {
+    use crate::schema::character_versions::dsl as cv;
+
+    let refuse = |status, code| Err(BladeApiError::new(status, IMPORT_SERVICE_ID, code));
+    if outgoing_alt_uuid == Some(alt_uuid) {
+        return refuse(StatusCode::BAD_REQUEST, NEW_ALT_OUTGOING_IS_NEW);
+    }
+    if live_alt == Some(None) && outgoing_alt_uuid.is_none() {
+        return refuse(StatusCode::CONFLICT, NEW_ALT_OUTGOING_UNKNOWN);
+    }
+    if live_alt == Some(Some(alt_uuid)) {
+        return refuse(StatusCode::CONFLICT, NEW_ALT_ALREADY_LIVE);
+    }
+    let mut alts: Vec<Uuid> = cv::character_versions
+        .filter(cv::user_id.eq(user_id))
+        .filter(cv::source_alt_uuid.is_not_null())
+        .select(cv::source_alt_uuid)
+        .distinct()
+        .load::<Option<Uuid>>(conn)
+        .await?
+        .into_iter()
+        .flatten()
+        .collect();
+    if alts.contains(&alt_uuid) {
+        return refuse(StatusCode::CONFLICT, NEW_ALT_EXISTS);
+    }
+    // The live character is an alt too, kept under its own id or — with none —
+    // under the hint it is about to be filed under.
+    if let Some(live) = live_alt.and_then(|a| a.or(outgoing_alt_uuid)) {
+        if !alts.contains(&live) {
+            alts.push(live);
+        }
+    }
+    if alts.len() >= MAX_ALTS_PER_USER {
+        return refuse(StatusCode::CONFLICT, NEW_ALT_LIMIT_REACHED);
+    }
+    Ok(())
+}
+
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -7011,7 +7269,6 @@ async fn apply_new_alt(
     body: &NewAltRequest,
     appearance_cost: &Value,
 ) -> Result<NewAltResponse, BladeApiError> {
-    use crate::schema::character_versions::dsl as cv;
     use crate::schema::characters::dsl as ch;
 
     let internal = |_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8);
@@ -7043,44 +7300,14 @@ async fn apply_new_alt(
         .await
         .optional()?;
 
-    if body.outgoing_alt_uuid == Some(body.alt_uuid) {
-        return Err(BladeApiError::new(
-            StatusCode::BAD_REQUEST,
-            IMPORT_SERVICE_ID,
-            NEW_ALT_OUTGOING_IS_NEW,
-        ));
-    }
-    if let Some((_, None)) = live {
-        if body.outgoing_alt_uuid.is_none() {
-            return Err(BladeApiError::new(
-                StatusCode::CONFLICT,
-                IMPORT_SERVICE_ID,
-                NEW_ALT_OUTGOING_UNKNOWN,
-            ));
-        }
-    }
-    if let Some((_, Some(live_alt))) = live {
-        if live_alt == body.alt_uuid {
-            return Err(BladeApiError::new(
-                StatusCode::CONFLICT,
-                IMPORT_SERVICE_ID,
-                NEW_ALT_ALREADY_LIVE,
-            ));
-        }
-    }
-    let kept: i64 = cv::character_versions
-        .filter(cv::user_id.eq(body.user_id))
-        .filter(cv::source_alt_uuid.eq(body.alt_uuid))
-        .count()
-        .get_result(conn)
-        .await?;
-    if kept > 0 {
-        return Err(BladeApiError::new(
-            StatusCode::CONFLICT,
-            IMPORT_SERVICE_ID,
-            NEW_ALT_EXISTS,
-        ));
-    }
+    refuse_unless_new_alt(
+        conn,
+        body.user_id,
+        live.map(|(_, alt)| alt),
+        body.alt_uuid,
+        body.outgoing_alt_uuid,
+    )
+    .await?;
 
     let name = new_alt_name(body.name.as_deref());
     let customization = body
