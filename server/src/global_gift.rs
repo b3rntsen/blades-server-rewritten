@@ -64,6 +64,22 @@ fn open_season_chests(
     }
 }
 
+/// The alt occupying a live character row (`None` for a row from before alts
+/// were tracked, or no such row).
+async fn live_alt(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+) -> Result<Option<Uuid>, BladeApiError> {
+    use crate::schema::characters::dsl as c;
+    Ok(c::characters
+        .filter(c::id.eq(character_id))
+        .select(c::source_alt_uuid)
+        .first::<Option<Uuid>>(conn)
+        .await
+        .optional()?
+        .flatten())
+}
+
 /// Out-of-band service id for gift error envelopes (not a real Blades id).
 const GIFT_SERVICE_ID: u64 = 9003;
 
@@ -182,12 +198,17 @@ pub async fn get_global_gift(
         .optional()?;
     if let Some(season) = season {
         use crate::schema::arena_season_awards::dsl as a;
+        let alt = live_alt(&mut conn, character_id).await?;
         let awards: Vec<season_store::AwardClaimRow> = a::arena_season_awards
             .filter(a::season_id.eq(gift_id))
             .filter(a::character_id.eq(character_id))
             .select(season_store::AwardClaimRow::as_select())
             .load(&mut conn)
-            .await?;
+            .await?
+            .into_iter()
+            // Only the awards of the alt playing now (owner decision 2026-10-10).
+            .filter(|award| season_store::award_belongs_to_alt(award.source_alt_uuid, alt))
+            .collect();
         if awards.is_empty() {
             return Err(map_gift_err(GiftError::NotFound));
         }
@@ -300,13 +321,22 @@ pub async fn claim_global_gift(
                     // Lock awards before the character, matching the admin fallback
                     // grant's lock order so the two claim paths cannot deadlock.
                     use crate::schema::arena_season_awards::dsl as a;
+                    // The alt claiming. A user's alts share this character id,
+                    // so without this the alt live at claim time took every
+                    // alt's placing (#348). Read without a lock to keep the
+                    // awards-then-character lock order; re-checked once the
+                    // character row is locked below.
+                    let alt = live_alt(&mut conn, character_id).await?;
                     let awards: Vec<season_store::AwardClaimRow> = a::arena_season_awards
                         .filter(a::season_id.eq(gift_id))
                         .filter(a::character_id.eq(character_id))
                         .select(season_store::AwardClaimRow::as_select())
                         .for_update()
                         .load(&mut conn)
-                        .await?;
+                        .await?
+                        .into_iter()
+                        .filter(|award| season_store::award_belongs_to_alt(award.source_alt_uuid, alt))
+                        .collect();
                     if awards.is_empty() {
                         return Err(map_gift_err(GiftError::NotFound));
                     }
@@ -349,6 +379,12 @@ pub async fn claim_global_gift(
                             .await
                             .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
                     };
+                    // An alt switch committed between the alt read above and this
+                    // lock would pay one alt's placing to the other. Now that the
+                    // row is locked the alt cannot change; refuse if it did.
+                    if live_alt(&mut conn, character_id).await? != alt {
+                        return Err(BladeApiError::new(StatusCode::CONFLICT, GIFT_SERVICE_ID, 6));
+                    }
 
                     // Retail's season gift opens its Gold/Elder chest during claim;
                     // it does not leave a treasury chest. The chest is opened at the
@@ -358,7 +394,11 @@ pub async fn claim_global_gift(
                         &globals.static_data.chest_loots,
                         entry.character.0.level as u64,
                         &entry.inventory.0.item_templates(),
-                        &format!("arena-season:{gift_id}:{character_id}"),
+                        // Per alt: two alts claiming one season must not roll the same chest.
+                        &match alt {
+                            Some(alt) => format!("arena-season:{gift_id}:{character_id}:{alt}"),
+                            None => format!("arena-season:{gift_id}:{character_id}"),
+                        },
                     );
 
                     let mut tracker = InventoryChangeTracker::default();

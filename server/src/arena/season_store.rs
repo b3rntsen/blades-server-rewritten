@@ -96,6 +96,9 @@ impl SeasonRow {
 pub struct StandingRow {
     pub season_id: Uuid,
     pub character_id: Uuid,
+    /// The alt this placing belongs to. A user's alts share `character_id` (one
+    /// live row per user), so the alt is what tells two placings apart.
+    pub source_alt_uuid: Option<Uuid>,
     pub rank: i32,
     pub trophies: i64,
     pub matches: i32,
@@ -113,6 +116,7 @@ pub struct StandingRow {
 pub struct StandingInsertRow {
     pub season_id: Uuid,
     pub character_id: Uuid,
+    pub source_alt_uuid: Option<Uuid>,
     pub rank: i32,
     pub trophies: i64,
     pub matches: i32,
@@ -125,6 +129,7 @@ impl From<&StandingRow> for StandingInsertRow {
         Self {
             season_id: row.season_id,
             character_id: row.character_id,
+            source_alt_uuid: row.source_alt_uuid,
             rank: row.rank,
             trophies: row.trophies,
             matches: row.matches,
@@ -150,6 +155,9 @@ pub struct AwardRow {
     pub id: Uuid,
     pub season_id: Uuid,
     pub character_id: Uuid,
+    /// The alt that earned it; only that alt can claim it (owner decision
+    /// 2026-10-10, tracker #348).
+    pub source_alt_uuid: Option<Uuid>,
     pub kind: String,
     pub rank: i32,
     pub tier: String,
@@ -165,6 +173,8 @@ pub struct AwardGrantCandidate {
     pub id: Uuid,
     #[diesel(sql_type = diesel::sql_types::Uuid)]
     pub character_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+    pub source_alt_uuid: Option<Uuid>,
     #[diesel(sql_type = diesel::sql_types::Text)]
     pub kind: String,
     #[diesel(sql_type = diesel::sql_types::Text)]
@@ -180,6 +190,7 @@ pub struct AwardGrantCandidate {
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct AwardClaimRow {
     pub id: Uuid,
+    pub source_alt_uuid: Option<Uuid>,
     pub kind: String,
     pub tier: String,
     pub payload: Value,
@@ -224,6 +235,87 @@ pub fn award_payload(kind: &str, tier: &str, rank: i32) -> Value {
     })
 }
 
+/// Does an award (or standing) recorded for `award_alt` belong to the alt that
+/// currently occupies the live row?
+///
+/// A user's alts share one `characters.id`, so the id alone cannot say whose a
+/// season reward is — that is how spacemunk's claim screen paid out a placing
+/// recorded while another alt was live (#348). NULL on the award means it was
+/// recorded before alts were tracked: it stays claimable by whoever is live, as
+/// every award was before.
+pub fn award_belongs_to_alt(award_alt: Option<Uuid>, live_alt: Option<Uuid>) -> bool {
+    award_alt.is_none() || award_alt == live_alt
+}
+
+/// The same rule as [`award_belongs_to_alt`], as SQL over an award row `a`.
+pub const AWARD_BELONGS_TO_LIVE_ALT_SQL: &str = "(a.source_alt_uuid IS NULL \
+     OR a.source_alt_uuid IS NOT DISTINCT FROM \
+        (SELECT live.source_alt_uuid FROM characters live WHERE live.id = a.character_id))";
+
+/// The season ladder, one row per ALT (owner decision 2026-10-10).
+///
+/// Partitioned by `(character_id, alt)`: a user's alts share the character id,
+/// so partitioning by the id alone summed every alt's matches into one placing —
+/// NBS-1's rank 2 was three alts' 4018 cups added together. A match recorded
+/// before alts were tracked (`source_alt_uuid` NULL) counts for the alt live now,
+/// which is what this query did for every match before.
+///
+/// The guild is the one the alt itself is in: the live alt's membership row, or,
+/// for an alt switched out, the membership parked in its newest version — and
+/// only while that guild still exists.
+const FREEZE_STANDINGS_SQL: &str = "\
+    WITH season_results AS ( \
+         SELECT r.character_id, r.recorded_at, r.id, r.trophy_delta, r.win, \
+                COALESCE(r.source_alt_uuid, c.source_alt_uuid) AS alt \
+         FROM arena_match_results r \
+         JOIN characters c ON c.id = r.character_id \
+         WHERE r.recorded_at >= to_timestamp($1) \
+           AND r.recorded_at < to_timestamp($2) \
+     ), season_deltas AS ( \
+         SELECT character_id, alt, recorded_at, id, \
+                (SUM(trophy_delta) OVER ( \
+                    PARTITION BY character_id, alt ORDER BY recorded_at, id \
+                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW \
+                ))::bigint AS raw_score, \
+                COUNT(*) OVER (PARTITION BY character_id, alt) AS matches, \
+                COUNT(*) FILTER (WHERE win) OVER (PARTITION BY character_id, alt) AS wins, \
+                ROW_NUMBER() OVER ( \
+                    PARTITION BY character_id, alt ORDER BY recorded_at DESC, id DESC \
+                ) AS latest \
+         FROM season_results \
+     ), season_scores AS ( \
+         SELECT character_id, alt, recorded_at, id, matches, wins, latest, \
+                raw_score - LEAST( \
+                    0, \
+                    MIN(raw_score) OVER ( \
+                        PARTITION BY character_id, alt ORDER BY recorded_at, id \
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW \
+                    ) \
+                ) AS trophies \
+         FROM season_deltas \
+     ), season_matches AS ( \
+         SELECT character_id, alt, trophies, matches, wins, latest, \
+                MAX(trophies) OVER (PARTITION BY character_id, alt) AS high_water \
+         FROM season_scores \
+     ) \
+     SELECT c.id AS character_id, m.alt AS source_alt_uuid, m.trophies, m.matches, m.wins, \
+            m.high_water, \
+            CASE WHEN m.alt IS NOT DISTINCT FROM c.source_alt_uuid THEN gm.guild_id \
+                 ELSE pg.id END AS guild_id \
+     FROM season_matches m \
+     JOIN characters c ON c.id = m.character_id \
+     LEFT JOIN guild_members gm ON gm.character_id = c.id \
+     LEFT JOIN LATERAL ( \
+         SELECT v.server_state -> 'parkedGuildMembers' -> 0 ->> 'guild_id' AS guild_id \
+         FROM character_versions v \
+         WHERE v.character_id = m.character_id AND v.source_alt_uuid = m.alt \
+         ORDER BY v.saved_at DESC \
+         LIMIT 1 \
+     ) parked ON true \
+     LEFT JOIN guilds pg ON pg.id = parked.guild_id \
+     WHERE m.latest = 1 \
+     ORDER BY m.trophies DESC, m.matches DESC, c.id, m.alt";
+
 /// Live standings for every character that scored, best first.
 ///
 /// Replays the in-window trophy deltas from zero (including the zero floor), and
@@ -238,6 +330,8 @@ pub async fn freeze_standings(
     struct Row {
         #[diesel(sql_type = diesel::sql_types::Uuid)]
         character_id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+        source_alt_uuid: Option<Uuid>,
         #[diesel(sql_type = diesel::sql_types::BigInt)]
         trophies: i64,
         #[diesel(sql_type = diesel::sql_types::BigInt)]
@@ -261,44 +355,7 @@ pub async fn freeze_standings(
     // wins). The running-prefix minimum implements the per-result `max(0)` clamp:
     // final = raw_sum - min(0, lowest_prefix_sum).
     let cutoff = season.ends_at.min(super::arena_season::now_unix());
-    let rows: Vec<Row> = diesel::sql_query(
-        "WITH season_deltas AS ( \
-             SELECT character_id, recorded_at, id, \
-                    (SUM(trophy_delta) OVER ( \
-                        PARTITION BY character_id ORDER BY recorded_at, id \
-                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW \
-                    ))::bigint AS raw_score, \
-                    COUNT(*) OVER (PARTITION BY character_id) AS matches, \
-                    COUNT(*) FILTER (WHERE win) OVER (PARTITION BY character_id) AS wins, \
-                    ROW_NUMBER() OVER ( \
-                        PARTITION BY character_id ORDER BY recorded_at DESC, id DESC \
-                    ) AS latest \
-             FROM arena_match_results \
-             WHERE recorded_at >= to_timestamp($1) \
-               AND recorded_at < to_timestamp($2) \
-         ), season_scores AS ( \
-             SELECT character_id, recorded_at, id, matches, wins, latest, \
-                    raw_score - LEAST( \
-                        0, \
-                        MIN(raw_score) OVER ( \
-                            PARTITION BY character_id ORDER BY recorded_at, id \
-                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW \
-                        ) \
-                    ) AS trophies \
-             FROM season_deltas \
-         ), season_matches AS ( \
-             SELECT character_id, trophies, matches, wins, latest, \
-                    MAX(trophies) OVER (PARTITION BY character_id) AS high_water \
-             FROM season_scores \
-         ) \
-         SELECT c.id AS character_id, m.trophies, m.matches, m.wins, \
-                m.high_water, gm.guild_id AS guild_id \
-         FROM season_matches m \
-         JOIN characters c ON c.id = m.character_id \
-         LEFT JOIN guild_members gm ON gm.character_id = c.id \
-         WHERE m.latest = 1 \
-         ORDER BY m.trophies DESC, m.matches DESC, c.id",
-    )
+    let rows: Vec<Row> = diesel::sql_query(FREEZE_STANDINGS_SQL)
     .bind::<diesel::sql_types::BigInt, _>(season.starts_at)
     .bind::<diesel::sql_types::BigInt, _>(cutoff)
     .get_results(conn)
@@ -312,6 +369,7 @@ pub async fn freeze_standings(
             StandingRow {
                 season_id: season.id,
                 character_id: r.character_id,
+                source_alt_uuid: r.source_alt_uuid,
                 rank: (i as i32) + 1,
                 trophies: r.trophies,
                 matches: r.matches as i32,
@@ -427,6 +485,7 @@ pub fn awards_from(
             id: Uuid::new_v4(),
             season_id,
             character_id: s.character_id,
+            source_alt_uuid: s.source_alt_uuid,
             kind: "arena_reached".into(),
             rank: s.rank,
             tier,
@@ -438,6 +497,7 @@ pub fn awards_from(
                 id: Uuid::new_v4(),
                 season_id,
                 character_id: s.character_id,
+                source_alt_uuid: s.source_alt_uuid,
                 kind: "rank".into(),
                 rank: s.rank,
                 tier: tier.into(),
@@ -463,6 +523,7 @@ pub fn awards_from(
                 id: Uuid::new_v4(),
                 season_id,
                 character_id: s.character_id,
+                source_alt_uuid: s.source_alt_uuid,
                 kind: "guild_rank".into(),
                 rank,
                 tier: tier.into(),
@@ -481,6 +542,7 @@ mod tests {
         StandingRow {
             season_id: Uuid::nil(),
             character_id: id,
+            source_alt_uuid: None,
             rank,
             trophies,
             matches: 0,
@@ -490,6 +552,43 @@ mod tests {
             arena: 1,
             arena_level: 1,
         }
+    }
+
+    /// Owner decision 2026-10-10: a season reward belongs to the alt that
+    /// earned it. Legacy (unstamped) awards stay claimable by whoever is live.
+    #[test]
+    fn an_award_belongs_only_to_the_alt_that_earned_it() {
+        let (a, b) = (Uuid::from_u128(0xa), Uuid::from_u128(0xb));
+        assert!(award_belongs_to_alt(Some(a), Some(a)));
+        assert!(!award_belongs_to_alt(Some(a), Some(b)), "another alt must not claim it");
+        assert!(!award_belongs_to_alt(Some(a), None), "nor a row that lost its alt id");
+        assert!(award_belongs_to_alt(None, Some(b)), "a legacy award stays claimable");
+        assert!(award_belongs_to_alt(None, None));
+    }
+
+    /// Two alts of one user share the character id; each placing carries its
+    /// own alt onto every award it implies, guild awards included.
+    #[test]
+    fn awards_carry_the_alt_of_their_standing() {
+        let cid = Uuid::from_u128(7);
+        let (a, b) = (Uuid::from_u128(0xa), Uuid::from_u128(0xb));
+        let mut first = standing(cid, 1, 900, Some("g1"));
+        first.source_alt_uuid = Some(a);
+        let mut second = standing(cid, 2, 500, Some("g2"));
+        second.source_alt_uuid = Some(b);
+        let standings = vec![first, second];
+        let guilds = guild_standings_from(Uuid::nil(), &standings);
+        let awards = awards_from(Uuid::nil(), &standings, &guilds);
+        for alt in [a, b] {
+            let kinds: Vec<&str> = awards
+                .iter()
+                .filter(|w| w.source_alt_uuid == Some(alt))
+                .map(|w| w.kind.as_str())
+                .collect();
+            assert!(kinds.contains(&"rank") && kinds.contains(&"arena_reached"));
+            assert!(kinds.contains(&"guild_rank"), "guild award of {alt} missing: {kinds:?}");
+        }
+        assert!(awards.iter().all(|w| w.source_alt_uuid.is_some()));
     }
 
     #[test]

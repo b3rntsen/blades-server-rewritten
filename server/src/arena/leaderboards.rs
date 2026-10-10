@@ -144,7 +144,7 @@ struct CountRow {
 /// The ranked projection every query below selects from. Kept in one place so the
 /// page query, the count and the player's own row can never disagree about who is
 /// on the board or in what order.
-const RANKED_CTE: &str = "
+pub(crate) const RANKED_CTE: &str = "
     WITH active_season AS (
         SELECT id,
                starts_at,
@@ -154,14 +154,20 @@ const RANKED_CTE: &str = "
         ORDER BY starts_at DESC
         LIMIT 1
     ),
+    -- Per ALT, not per character id: a user's alts share the id, and grouping by
+    -- it alone credited every alt's wins to whichever one was live (owner
+    -- decision 2026-10-10). A match from before alts were tracked counts for the
+    -- alt live now, as it always did.
     season_wins AS (
         SELECT r.character_id,
+               COALESCE(r.source_alt_uuid, rc.source_alt_uuid) AS alt,
                COUNT(*) FILTER (WHERE r.win) AS wins
         FROM arena_match_results r
+        JOIN characters rc ON rc.id = r.character_id
         JOIN active_season s
           ON r.recorded_at >= to_timestamp(s.starts_at)
          AND r.recorded_at < to_timestamp(s.cutoff)
-        GROUP BY r.character_id
+        GROUP BY r.character_id, COALESCE(r.source_alt_uuid, rc.source_alt_uuid)
     ),
     ranked AS (
         SELECT e.id,
@@ -187,7 +193,9 @@ const RANKED_CTE: &str = "
                    COALESCE(w.wins, 0) AS wins
             FROM characters c
             CROSS JOIN active_season s
-            LEFT JOIN season_wins w ON w.character_id = c.id
+            LEFT JOIN season_wins w
+                   ON w.character_id = c.id
+                  AND w.alt IS NOT DISTINCT FROM c.source_alt_uuid
             LEFT JOIN guild_members gm ON gm.character_id = c.id
             LEFT JOIN guilds g ON g.id = gm.guild_id
             WHERE COALESCE((c.character ->> 'pvpTrophies')::bigint, 0) > 0
@@ -203,24 +211,26 @@ const RANKED_CTE: &str = "
                  OR c.character ->> 'pvpSeasonId' = s.id::text
               )
             UNION ALL
+            -- A switched-out alt keeps its own wins and its own guild: the
+            -- membership parked in its newest version, while that guild exists.
             SELECT saved.id,
                    saved.user_id,
                    saved.source_alt_uuid,
                    saved.name,
-                   saved.guild_name,
+                   pg.name AS guild_name,
                    saved.score,
                    saved.streak,
-                   saved.wins
+                   COALESCE(pw.wins, 0) AS wins
             FROM (
                 SELECT DISTINCT ON (v.user_id, v.source_alt_uuid)
                        COALESCE(v.source_alt_uuid, v.character_id) AS id,
+                       v.character_id,
                        v.user_id,
                        v.source_alt_uuid,
                        COALESCE(v.character ->> 'name', '') AS name,
-                       NULL::text AS guild_name,
+                       v.server_state -> 'parkedGuildMembers' -> 0 ->> 'guild_id' AS parked_guild_id,
                        COALESCE((v.character ->> 'pvpTrophies')::bigint, 0) AS score,
-                       COALESCE((v.character ->> 'pvpWinningStreak')::bigint, 0) AS streak,
-                       0::bigint AS wins
+                       COALESCE((v.character ->> 'pvpWinningStreak')::bigint, 0) AS streak
                 FROM character_versions v
                 CROSS JOIN active_season s
                 WHERE v.source_alt_uuid IS NOT NULL
@@ -242,6 +252,10 @@ const RANKED_CTE: &str = "
                          v.source_alt_uuid,
                          v.saved_at DESC
             ) saved
+            LEFT JOIN season_wins pw
+                   ON pw.character_id = saved.character_id
+                  AND pw.alt = saved.source_alt_uuid
+            LEFT JOIN guilds pg ON pg.id = saved.parked_guild_id
             WHERE saved.score > 0
         ) e
     )
