@@ -68,6 +68,9 @@ diesel::table! {
         chest_meter -> Int8,
         recorded_at -> Timestamptz,
         is_h2h -> Bool,
+        /// The alt that played this match. NULL = recorded before alts were
+        /// tracked; read as the alt live now.
+        source_alt_uuid -> Nullable<Uuid>,
     }
 }
 
@@ -105,6 +108,8 @@ diesel::table! {
         payload -> Jsonb,
         granted_at -> Nullable<Int8>,
         created_at -> Int8,
+        /// The alt that earned this award. NULL = legacy, claimable by any alt.
+        source_alt_uuid -> Nullable<Uuid>,
     }
 }
 
@@ -129,6 +134,8 @@ diesel::table! {
         wins -> Int4,
         guild_id -> Nullable<Text>,
         recorded_at -> Int8,
+        /// The alt this standing belongs to. NULL = legacy (pre alt tracking).
+        source_alt_uuid -> Nullable<Uuid>,
     }
 }
 

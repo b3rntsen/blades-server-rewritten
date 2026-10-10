@@ -2377,6 +2377,9 @@ mod event_run_lifecycle_db {
         conn.batch_execute(TABLES).await.unwrap();
         conn.batch_execute(EVENT_TABLES).await.unwrap();
         conn.batch_execute(ALT_TABLES).await.unwrap();
+        for ddl in crate::admin::ALT_ROW_TABLE_MIGRATIONS {
+            conn.batch_execute(ddl).await.unwrap();
+        }
         Some(conn)
     }
 

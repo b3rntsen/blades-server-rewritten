@@ -49,16 +49,22 @@ pub async fn get_announcements(
     // One indexed existence probe per ended season. The award unique index
     // starts `(season_id, character_id)`, so this remains cheap without adding
     // a production index or running a migration for the feature.
-    let pending: Vec<season_store::SeasonRow> = diesel::sql_query(
+    //
+    // Only the alt playing now is told about a reward: a user's alts share this
+    // character id, and advertising another alt's placing would offer a gift the
+    // claim then refuses (owner decision 2026-10-10).
+    let pending: Vec<season_store::SeasonRow> = diesel::sql_query(format!(
         "SELECT s.* FROM arena_seasons s \
          WHERE s.status = 'ended' AND s.ended_at IS NOT NULL \
            AND EXISTS ( \
              SELECT 1 FROM arena_season_awards a \
              WHERE a.season_id = s.id AND a.character_id = $1 \
                AND a.granted_at IS NULL \
+               AND {} \
            ) \
          ORDER BY s.ended_at DESC",
-    )
+        season_store::AWARD_BELONGS_TO_LIVE_ALT_SQL
+    ))
     .bind::<diesel::sql_types::Uuid, _>(character_id)
     .load(&mut conn)
     .await?;
