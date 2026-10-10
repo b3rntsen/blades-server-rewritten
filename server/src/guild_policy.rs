@@ -76,8 +76,9 @@ pub const MAX_APPLICATIONS: i64 = 10;
 /// `GuildData._minLevelToJoin`.
 pub const MIN_LEVEL_TO_JOIN: u16 = 5;
 
-/// How long a removal (kick, ban, or leaving voluntarily) blocks re-joining that
-/// same guild, in seconds.
+/// How long a removal (a kick; a ban never expires) blocks re-joining that same
+/// guild, in seconds. Leaving voluntarily is NOT a removal: retail let a player
+/// who had just left rejoin the same guild 16 s later (see `guild::leave_guild`).
 /// `GuildData._admissionTimeoutAfterRemovalFromGuildInSeconds` = 604800.0 —
 /// exactly 7 days.
 ///
@@ -349,8 +350,7 @@ impl JoinRefusal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Removal {
     pub removed_at: i64,
-    /// A ban never expires; a kick or a voluntary leave expires after
-    /// [`REJOIN_COOLDOWN_SECS`].
+    /// A ban never expires; a kick expires after [`REJOIN_COOLDOWN_SECS`].
     pub banned: bool,
 }
 

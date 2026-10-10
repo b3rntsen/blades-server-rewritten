@@ -104,9 +104,13 @@ ELDER and MEMBER, and `canKick = false` against GRANDMASTER. So:
 
 ### Removals and the re-join cooldown
 
-Leaving, being kicked, and being banned all write a `guild_removals` row.
+Being kicked or banned writes a `guild_removals` row. **Leaving voluntarily
+does not**: retail let a player who had just left rejoin the same guild 16 s later
+(capture snapshot 20260607, api_captures 19135 → 19143 leave → 19148 join, all
+`200`). Tracker #336 was the reboot this caused while we still armed the cooldown
+on a leave.
 
-- **Kick / leave** — blocks re-joining *that* guild for **7 days**
+- **Kick** — blocks re-joining *that* guild for **7 days**
   (`GuildData._admissionTimeoutAfterRemovalFromGuildInSeconds` = 604 800).
   Surfaces as `UI.Guild.Error.JoinTimeout.Body`: *"You have been removed from
   this guild. You may try to join again in {0}."*
@@ -208,19 +212,21 @@ Plus the pre-existing exchange endpoints under `/guilds/current/exchanges`.
 
 ### Join refusals
 
-`JoinRefusal` mirrors il2cpp `CanJoinGuildResult` one-for-one, and the error code
-is retail's own ordinal offset by 100:
+`JoinRefusal` mirrors il2cpp `CanJoinGuildResult` one-for-one. On the wire every
+refusal goes out under retail's GUILD service id **124** with a code that exists in
+the client's own `HttpErrorsHandling` table (the GUILD rows are committed at
+`data/guild_http_errors.csv`, extracted from `sharedassets0.assets` in the APK).
+An error the table does not know makes the client resync — the "game reboots" of
+tracker #336, when these went out as an invented service 9008.
 
-| Code | Meaning |
-|------|---------|
-| 101 | already in a guild |
-| 102 | already applied somewhere |
-| 103 | guild is closed |
-| 104 | guild is full |
-| 105 | removed too recently / banned |
-| 106 | too many pending applications |
-| 107 | no such guild |
-| 200 | below `minLevelToJoin` — **ours**, deliberately outside retail's range |
+| Refusal | HTTP | Code | Retail name |
+|---------|------|------|-------------|
+| already in a guild | 400 | 8 | `ALREADY_IN_GUILD` |
+| no such guild | 404 | 9 | `GUILD_NOT_FOUND` |
+| below `minLevelToJoin` | 400 | 1000 | `CHARACTER_LEVEL_TOO_LOW` |
+| guild is full | 400 | 1001 | `GUILD_FULL` |
+| too many pending applications | 400 | 1002 | `GUILD_MAX_APPLICATIONS_REACHED` |
+| already applied / closed / removed too recently or banned | 500 | 802 | `BNET_CLAN_FORBIDDEN` — **modelled**, retail has no dedicated code |
 
 Refusals are reported in that precedence order, so a caller who trips several
 conditions hears the one retail's client would have pre-checked.

@@ -393,7 +393,7 @@ impl ApplicationWire {
 //   30  not a member                        70  approval not permitted
 //   31  target is not in your guild         71  guild full on approval
 //   32  no such application
-//  100+ join refusals, offset by JoinRefusal::error_code()
+//  join refusals go out under retail's GUILD service (124) — see join_refused
 
 fn guild_not_found() -> BladeApiError {
     BladeApiError::new(StatusCode::NOT_FOUND, GUILD_SERVICE_ID, 1)
@@ -403,16 +403,42 @@ fn not_a_member() -> BladeApiError {
     BladeApiError::new(StatusCode::FORBIDDEN, GUILD_SERVICE_ID, 30)
 }
 
-/// Map a policy refusal onto the wire. The code carries retail's own
-/// `CanJoinGuildResult` ordinal (offset by 100 so it cannot collide with the
-/// codes above), so a log line says exactly which precondition failed.
+/// Retail's GUILD service id. Every refusal of a join or an application is
+/// reported under it, with an error code from the client's own
+/// `HttpErrorsHandling` table (`data/guild_http_errors.csv`), so the client finds
+/// a row and handles the refusal instead of falling through to a resync.
+const RETAIL_GUILD_SERVICE_ID: u64 = 124;
+
+/// Map a policy refusal onto the wire: `(http status, retail GUILD error code)`.
+///
+/// Tracker #336: these used to go out as service 9008 / codes 101-107, which do
+/// not exist in the client's error table, and an unknown error rebooted the game.
+///
+/// Five refusals have an exact retail code: `ALREADY_IN_GUILD` (8, whose row
+/// resyncs the current guild), `GUILD_NOT_FOUND` (9), `CHARACTER_LEVEL_TOO_LOW`
+/// (1000), `GUILD_FULL` (1001) and `GUILD_MAX_APPLICATIONS_REACHED` (1002). The
+/// other three — already applied, closed, removed too recently — have none:
+/// retail's membership rules lived in Battle.net's clan service, and the client
+/// pre-checked all three before sending anything (`GuildsManager.CanJoinGuild`).
+/// MODELLED: they report `BNET_CLAN_FORBIDDEN` (802), the clan service's "you may
+/// not", whose application-context row shows `UI.Guild.UnableToJoin`. The HTTP
+/// status is always the one the table records for that code.
+fn join_refusal_wire(refusal: JoinRefusal) -> (StatusCode, u64) {
+    match refusal {
+        JoinRefusal::AlreadyHasGuild => (StatusCode::BAD_REQUEST, 8),
+        JoinRefusal::GuildIsInvalid => (StatusCode::NOT_FOUND, 9),
+        JoinRefusal::BelowMinimumLevel => (StatusCode::BAD_REQUEST, 1000),
+        JoinRefusal::GuildIsAtMaxMembers => (StatusCode::BAD_REQUEST, 1001),
+        JoinRefusal::GuildIsAtMaxApplications => (StatusCode::BAD_REQUEST, 1002),
+        JoinRefusal::AlreadyAppliedToGuild
+        | JoinRefusal::GuildIsClosed
+        | JoinRefusal::UserRecentlyRemovedFromGuild => (StatusCode::INTERNAL_SERVER_ERROR, 802),
+    }
+}
+
 fn join_refused(refusal: JoinRefusal) -> BladeApiError {
-    let status = match refusal {
-        JoinRefusal::GuildIsInvalid => StatusCode::NOT_FOUND,
-        JoinRefusal::GuildIsClosed | JoinRefusal::BelowMinimumLevel => StatusCode::FORBIDDEN,
-        _ => StatusCode::CONFLICT,
-    };
-    BladeApiError::new(status, GUILD_SERVICE_ID, 100 + refusal.error_code())
+    let (status, code) = join_refusal_wire(refusal);
+    BladeApiError::new(status, RETAIL_GUILD_SERVICE_ID, code)
 }
 
 fn approval_refused(refusal: ApprovalRefusal) -> BladeApiError {
@@ -562,8 +588,8 @@ async fn find_removal(
         }))
 }
 
-/// Record that `uid` left or was removed from `gid`, starting the re-join
-/// cooldown. Upserts, so a later ban upgrades an earlier kick to permanent and a
+/// Record that `uid` was kicked or banned from `gid`, starting the re-join
+/// cooldown (a voluntary leave does not — see `leave_guild`). Upserts, so a later ban upgrades an earlier kick to permanent and a
 /// fresh kick restarts the clock.
 async fn record_removal(
     conn: &mut AsyncPgConnection,
@@ -1913,9 +1939,21 @@ async fn append_promote_message(
 
 /// `POST /guilds/current/leave`.
 ///
-/// Posts a `LEAVE` entry (captured shape: empty typeSpecificData, 14 examples),
-/// starts the re-join cooldown, and hands the guild on if the departing member was
-/// its Grand Master.
+/// Posts a `LEAVE` entry (captured shape: empty typeSpecificData, 14 examples) and
+/// hands the guild on if the departing member was its Grand Master.
+///
+/// Leaving does NOT start the re-join cooldown — only a kick or a ban does
+/// (`remove_other_member`). MEASURED against retail: in the 20260607 capture
+/// snapshot one player (api_captures 19135/19143/19148, 2026-05-15) joined
+/// `62206bc0…`, left it, and joined the SAME guild again 16 seconds later, and
+/// retail answered `200 {"member":…}`. The 7-day window is
+/// `_admissionTimeoutAfterRemovalFromGuild` — after REMOVAL — and the client
+/// shows its timer ("You have been removed from this guild…") from its own
+/// local record of being removed, before it ever sends a join.
+///
+/// Tracker #336: we armed the cooldown on a voluntary leave, so rejoining the
+/// guild you had just left was refused with an error the client has no entry
+/// for, and the game rebooted instead of rejoining.
 #[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/leave")]
 pub async fn leave_guild(
     session: SessionLookedUpMaybe,
@@ -1940,22 +1978,34 @@ pub async fn leave_guild(
 
     conn.transaction(move |conn| {
         async move {
-            // The LEAVE entry goes on the board BEFORE the guild might be deleted,
-            // so it is not orphaned by the teardown below.
-            append_message(conn, &gid, user_id, character_id, "LEAVE", json!({})).await?;
-            let heir =
-                remove_member_and_succeed(conn, &gid, me.stored_user_id, my_rank, ts).await?;
-            if let Some(heir) = heir {
-                append_promote_message(conn, &gid, user_id, character_id, heir).await?;
-            }
-            record_removal(conn, &gid, user_id, ts, false).await?;
-            Ok::<_, BladeApiError>(())
+            depart_guild(conn, &gid, user_id, character_id, me.stored_user_id, my_rank, ts).await
         }
         .scope_boxed()
     })
     .await?;
 
     Ok(Json(json!({})))
+}
+
+/// The body of a voluntary leave, run inside the caller's transaction.
+async fn depart_guild(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+    user_id: Uuid,
+    character_id: Uuid,
+    stored_user_id: Uuid,
+    rank: GuildRank,
+    ts: i64,
+) -> Result<(), BladeApiError> {
+    // The LEAVE entry goes on the board BEFORE the guild might be deleted, so it
+    // is not orphaned by the teardown below.
+    append_message(conn, gid, user_id, character_id, "LEAVE", json!({})).await?;
+    let heir = remove_member_and_succeed(conn, gid, stored_user_id, rank, ts).await?;
+    if let Some(heir) = heir {
+        append_promote_message(conn, gid, user_id, character_id, heir).await?;
+    }
+    // Deliberately no `record_removal` — see `leave_guild`.
+    Ok(())
 }
 
 /// Shared body of kick and ban: authorise the actor against the target's rank,
@@ -3696,5 +3746,188 @@ mod website_guild_board {
         });
         assert_eq!(board[1].member_count, 0, "a guild missing from the count has 0 members");
         assert_eq!(guild_board_from(&rows, &members, 2).len(), 2);
+    }
+}
+
+/// Tracker #336 — rejoining a guild you just left rebooted the game.
+///
+/// Two halves: a voluntary leave must not arm the re-join cooldown (retail let a
+/// player rejoin the guild they had left 16 s earlier), and whatever refusals
+/// remain must use an error the client's `HttpErrorsHandling` table knows.
+#[cfg(test)]
+mod rejoin_after_leaving {
+    use super::*;
+    use crate::guild_policy::Removal;
+    use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+
+    const GUILD_ERRORS: &str = include_str!("../../data/guild_http_errors.csv");
+
+    const ALL_REFUSALS: [JoinRefusal; 8] = [
+        JoinRefusal::AlreadyHasGuild,
+        JoinRefusal::AlreadyAppliedToGuild,
+        JoinRefusal::GuildIsClosed,
+        JoinRefusal::GuildIsAtMaxMembers,
+        JoinRefusal::UserRecentlyRemovedFromGuild,
+        JoinRefusal::GuildIsAtMaxApplications,
+        JoinRefusal::GuildIsInvalid,
+        JoinRefusal::BelowMinimumLevel,
+    ];
+
+    /// `(service id, http code, error code)` of every row in the client's table.
+    fn client_rows() -> Vec<(u64, u16, u64)> {
+        let mut lines = GUILD_ERRORS.lines();
+        let header: Vec<&str> = lines.next().unwrap().split(',').collect();
+        let col = |name: &str| header.iter().position(|h| *h == name).unwrap();
+        let (svc, http, code) = (col("Service ID"), col("HTTP Code"), col("Error Code"));
+        lines
+            .map(|l| {
+                let f: Vec<&str> = l.split(',').collect();
+                (f[svc].parse().unwrap(), f[http].parse().unwrap(), f[code].parse().unwrap())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_committed_table_is_the_clients_guild_service() {
+        let rows = client_rows();
+        assert!(rows.len() > 90, "precondition: the GUILD rows are all there");
+        assert!(rows.iter().all(|(svc, _, _)| *svc == RETAIL_GUILD_SERVICE_ID));
+    }
+
+    /// The reported failure, generalised: every join/apply refusal must be a
+    /// (service, code, status) triple the client can look up. Service 9008 — what
+    /// we sent before — has no row at all.
+    #[test]
+    fn every_join_refusal_is_an_error_the_client_knows() {
+        let rows = client_rows();
+        assert!(!rows.iter().any(|(svc, _, _)| *svc == GUILD_SERVICE_ID));
+        for refusal in ALL_REFUSALS {
+            let err = join_refused(refusal);
+            let (status, code) = join_refusal_wire(refusal);
+            assert_eq!(err.error_code(), code);
+            assert_eq!(actix_web::ResponseError::status_code(&err), status);
+            assert!(
+                rows.contains(&(RETAIL_GUILD_SERVICE_ID, status.as_u16(), code)),
+                "{refusal:?} -> 124/{code} ({status}) is not in the client's table"
+            );
+        }
+    }
+
+    #[test]
+    fn the_exact_retail_codes_are_used_where_retail_had_one() {
+        assert_eq!(join_refusal_wire(JoinRefusal::AlreadyHasGuild).1, 8);
+        assert_eq!(join_refusal_wire(JoinRefusal::GuildIsInvalid).1, 9);
+        assert_eq!(join_refusal_wire(JoinRefusal::BelowMinimumLevel).1, 1000);
+        assert_eq!(join_refusal_wire(JoinRefusal::GuildIsAtMaxMembers).1, 1001);
+        assert_eq!(join_refusal_wire(JoinRefusal::GuildIsAtMaxApplications).1, 1002);
+    }
+
+    async fn fixture() -> Option<AsyncPgConnection> {
+        let Some(url) = std::env::var("TEST_DATABASE_URL").ok() else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — leave/rejoin SQL not verified");
+            return None;
+        };
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction().await.unwrap();
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        for sql in [
+            format!("CREATE SCHEMA {schema}"),
+            format!("SET LOCAL search_path TO {schema}"),
+            "CREATE TABLE characters (id UUID PRIMARY KEY, user_id UUID NOT NULL,
+                 character JSONB NOT NULL DEFAULT '{}')"
+                .into(),
+            "CREATE TABLE guild_members (guild_id TEXT NOT NULL, user_id UUID NOT NULL,
+                 character_id UUID NOT NULL, rank TEXT NOT NULL, join_date BIGINT NOT NULL,
+                 PRIMARY KEY (guild_id, user_id))"
+                .into(),
+            "CREATE TABLE guild_messages (message_id TEXT PRIMARY KEY, guild_id TEXT NOT NULL,
+                 user_id UUID NOT NULL, character_id UUID NOT NULL, message_type TEXT NOT NULL,
+                 type_specific_data JSONB NOT NULL, creation_time BIGINT NOT NULL)"
+                .into(),
+            "CREATE TABLE guild_removals (guild_id TEXT NOT NULL, user_id UUID NOT NULL,
+                 removed_at BIGINT NOT NULL, banned BOOLEAN NOT NULL DEFAULT FALSE,
+                 PRIMARY KEY (guild_id, user_id))"
+                .into(),
+        ] {
+            diesel::sql_query(sql).execute(&mut conn).await.unwrap();
+        }
+        Some(conn)
+    }
+
+    const GUILD: &str = "2805411b527f45b487ef8698";
+    const GM_USER: Uuid = Uuid::from_u128(0xA);
+    const GM_CHAR: Uuid = Uuid::from_u128(0xA1);
+    const USER: Uuid = Uuid::from_u128(0xB);
+    const CHAR: Uuid = Uuid::from_u128(0xB1);
+
+    async fn seat(conn: &mut AsyncPgConnection, user: Uuid, character: Uuid, rank: GuildRank) {
+        diesel::sql_query(
+            "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date)
+             VALUES ($1, $2, $3, $4, 1)",
+        )
+        .bind::<diesel::sql_types::Text, _>(GUILD)
+        .bind::<diesel::sql_types::Uuid, _>(user)
+        .bind::<diesel::sql_types::Uuid, _>(character)
+        .bind::<diesel::sql_types::Text, _>(rank.as_wire())
+        .execute(conn)
+        .await
+        .unwrap();
+    }
+
+    /// What `join_guild` would decide for USER right now, against an OPEN guild.
+    async fn rejoin(conn: &mut AsyncPgConnection) -> (Option<Removal>, Result<JoinAdmission, JoinRefusal>) {
+        let removal = find_removal(conn, GUILD, USER).await.unwrap();
+        let verdict = evaluate_join(JoinContext {
+            guild_type: Some(GuildType::Open),
+            character_level: 30,
+            already_in_guild: find_membership(conn, USER).await.unwrap().is_some(),
+            already_applied: false,
+            member_count: member_count(conn, GUILD).await.unwrap(),
+            application_count: 0,
+            removal,
+            now: now_secs(),
+        });
+        (removal, verdict)
+    }
+
+    #[tokio::test]
+    async fn leaving_then_rejoining_the_same_guild_is_admitted() {
+        let Some(mut conn) = fixture().await else {
+            return;
+        };
+        seat(&mut conn, GM_USER, GM_CHAR, GuildRank::Grandmaster).await;
+        seat(&mut conn, USER, CHAR, GuildRank::Member).await;
+
+        depart_guild(&mut conn, GUILD, USER, CHAR, USER, GuildRank::Member, now_secs())
+            .await
+            .unwrap();
+
+        let (removal, verdict) = rejoin(&mut conn).await;
+        assert_eq!(removal, None, "a voluntary leave must not arm the cooldown");
+        assert_eq!(verdict, Ok(JoinAdmission::Join));
+    }
+
+    /// THE CONTROL: the same rejoin after a KICK is still refused — the fix must
+    /// not have switched the cooldown off altogether — and the refusal is one the
+    /// client can look up.
+    #[tokio::test]
+    async fn rejoining_after_a_kick_is_still_refused_with_a_known_error() {
+        let Some(mut conn) = fixture().await else {
+            return;
+        };
+        seat(&mut conn, GM_USER, GM_CHAR, GuildRank::Grandmaster).await;
+        seat(&mut conn, USER, CHAR, GuildRank::Member).await;
+
+        remove_other_member(&mut conn, GM_USER, GM_CHAR, USER, false)
+            .await
+            .unwrap();
+
+        let (removal, verdict) = rejoin(&mut conn).await;
+        assert!(removal.is_some_and(|r| !r.banned));
+        assert_eq!(verdict, Err(JoinRefusal::UserRecentlyRemovedFromGuild));
+        let err = join_refused(verdict.unwrap_err());
+        assert_eq!(err.error_code(), 802);
     }
 }
