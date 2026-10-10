@@ -1434,7 +1434,63 @@ pub struct SetCurrentCharacterNameResponse {
     pub previous_name: String,
 }
 
-const CURRENT_CHARACTER_NAME_MAX_LEN: usize = 24;
+/// The game's own rule for a character name (tracker #372), read out of the
+/// APK: `BGS.Game.Menu.NameValidator.ValidateName` trims the name, compares its
+/// `.Length` (UTF-16 units) with the `CharacterTagData` asset's
+/// `_nameValidation` min/max, and tests every char against that asset's
+/// code-point whitelist. The client runs it again whenever the appearance
+/// screen's "Done" is pressed, and a name it refuses there never reaches us —
+/// the player is just stuck ("Contains too many characters."). So a name we
+/// set must be one the client would have let the player type. The web applies
+/// the same rule (web/lib/alt-name.ts); retail's server answers it with
+/// `Http.Error.CharacterNameTooLong` / `…TooShort` / `…InvalidCodePoint`.
+const GAME_NAME_MIN_LEN: usize = 3;
+const GAME_NAME_MAX_LEN: usize = 16;
+
+/// `CharacterTagData._nameValidation`: its `_validCodePointRanges` with its 507
+/// `_invalidCodePoints` removed — 253 characters, all in the BMP.
+const GAME_NAME_CHARS: &[(u32, u32)] = &[
+    (0x20, 0x20),   // space
+    (0x27, 0x27),   // '
+    (0x2d, 0x2d),   // -
+    (0x30, 0x39),   // 0-9
+    (0x41, 0x5a),   // A-Z
+    (0x5f, 0x5f),   // _
+    (0x61, 0x7a),   // a-z
+    (0xc0, 0xd6),   // À-Ö
+    (0xd8, 0xf6),   // Ø-ö
+    (0xf8, 0xff),   // ø-ÿ
+    (0x102, 0x109), // Ă-ĉ
+    (0x10c, 0x10f), // Č-ď
+    (0x118, 0x11b), // Ę-ě
+    (0x11e, 0x11f), // Ğğ
+    (0x130, 0x133), // İ-ĳ
+    (0x141, 0x144), // Ł-ń
+    (0x147, 0x148), // Ňň
+    (0x14a, 0x14b), // Ŋŋ
+    (0x150, 0x153), // Ő-œ
+    (0x158, 0x161), // Ř-š
+    (0x164, 0x165), // Ťť
+    (0x16e, 0x171), // Ů-ű
+    (0x178, 0x17e), // Ÿ-ž
+    (0x191, 0x192), // Ƒƒ
+    (0x401, 0x401), // Ё
+    (0x410, 0x44f), // А-я
+    (0x451, 0x451), // ё
+];
+
+fn is_game_name_char(ch: char) -> bool {
+    let cp = ch as u32;
+    GAME_NAME_CHARS.iter().any(|&(lo, hi)| (lo..=hi).contains(&cp))
+}
+
+/// Whether the client would accept this (already trimmed) name. The whitelist
+/// also excludes every control, zero-width and bidi character, so a name cannot
+/// reorder the leaderboard row it is drawn on.
+fn is_game_name(name: &str) -> bool {
+    let len = name.encode_utf16().count();
+    (GAME_NAME_MIN_LEN..=GAME_NAME_MAX_LEN).contains(&len) && name.chars().all(is_game_name_char)
+}
 const AI_NAME_SUFFIX: &str = "(AI)";
 
 fn current_character_summary(
@@ -1517,31 +1573,17 @@ pub async fn set_current_character_name(
     .map(Json)
 }
 
+/// NFC, trim, then the game's rule. NFC first: a decomposed "å" is two chars,
+/// and the game refuses the combining ring.
 fn normalise_current_character_name(raw: &str) -> Result<String, ()> {
     let name = raw.nfc().collect::<String>().trim().to_string();
-    if name.is_empty()
-        || name.chars().count() > CURRENT_CHARACTER_NAME_MAX_LEN
-        || has_undisplayable_name_char(&name)
-        || is_reserved_ai_name(&name)
-    {
+    // "(AI)" is already outside the whitelist; checked by name anyway, because
+    // the reservation is a policy of ours that must not hinge on the game's
+    // character set.
+    if !is_game_name(&name) || is_reserved_ai_name(&name) {
         return Err(());
     }
     Ok(name)
-}
-
-fn has_undisplayable_name_char(name: &str) -> bool {
-    name.chars().any(|ch| {
-        let cp = ch as u32;
-        matches!(
-            cp,
-            0x00..=0x1f
-                | 0x7f..=0x9f
-                | 0x200b..=0x200f
-                | 0x2028..=0x202e
-                | 0x2060..=0x2064
-                | 0x2066..=0x206f
-        )
-    })
 }
 
 fn is_reserved_ai_name(name: &str) -> bool {
@@ -3699,11 +3741,64 @@ mod tests {
                 "Sövngård"
             );
             assert!(normalise_current_character_name("   ").is_err());
-            assert!(normalise_current_character_name(&"a".repeat(25)).is_err());
             assert!(normalise_current_character_name("Hero\nName").is_err());
             assert!(normalise_current_character_name("Hero\u{200b}Name").is_err());
             assert!(normalise_current_character_name("Fighter (AI)").is_err());
             assert!(normalise_current_character_name("(AI)").is_err());
+        }
+
+        /// Tracker #372: the client refuses a name over 16 UTF-16 units on the
+        /// appearance screen's "Done", so "Tureduus Callidus" (17), set through
+        /// this endpoint, locked its owner out of changing their look.
+        #[test]
+        fn names_follow_the_games_own_length_rule() {
+            assert_eq!(normalise_current_character_name("Tureduus Callidu").unwrap().len(), 16);
+            assert_eq!(normalise_current_character_name("  Abc  ").unwrap(), "Abc");
+            for long in [
+                "Tureduus Callidus",
+                "Arwald of Søvngård",
+                "Jornicorn Fallibret",
+                "Gretchen the Formidable",
+            ] {
+                assert!(normalise_current_character_name(long).is_err(), "{long}");
+            }
+            assert!(normalise_current_character_name("Ab").is_err());
+        }
+
+        #[test]
+        fn names_use_only_the_games_characters() {
+            for good in ["J'zargo-the_2nd", "Søvngård", "Мрсири", "AbĂ", "Abƒ", "AbЁ", "Abё", "Abÿ"] {
+                assert!(normalise_current_character_name(good).is_ok(), "{good}");
+            }
+            for bad in [
+                "Мрշιрι",       // Armenian and Greek
+                "\u{1f5e1}Sheo", // emoji
+                "Sheo.grath",   // full stop
+                "Sheo\u{101}g",  // ā: in the ranges, on the invalid list
+                "Sheo\u{400}g",  // Ѐ: likewise
+                "\u{202e}Sheogorath",
+            ] {
+                assert!(normalise_current_character_name(bad).is_err(), "{bad:?}");
+            }
+        }
+
+        /// 253 characters: the asset's ranges minus its 507 invalid code points.
+        /// A typo in a range changes this count.
+        #[test]
+        fn the_whitelist_is_exactly_the_games_253_characters() {
+            let n = (0u32..=0xffff)
+                .filter_map(char::from_u32)
+                .filter(|&c| is_game_name_char(c))
+                .count();
+            assert_eq!(n, 253);
+        }
+
+        #[test]
+        fn a_new_alt_name_is_held_to_the_same_rule() {
+            assert_eq!(new_alt_requested_name(None), Ok(None));
+            assert_eq!(new_alt_requested_name(Some("   ")), Ok(None));
+            assert_eq!(new_alt_requested_name(Some(" Adventurer ")), Ok(Some("Adventurer".into())));
+            assert!(new_alt_requested_name(Some("Tureduus Callidus")).is_err());
         }
 
         #[actix_web::test]
@@ -6975,7 +7070,11 @@ pub async fn new_alt(
     body: web::Json<NewAltRequest>,
 ) -> Result<Json<NewAltResponse>, BladeApiError> {
     check_import_token(&app_state, &req)?;
-    let body = body.into_inner();
+    let mut body = body.into_inner();
+    // A name the caller supplies is held to the game's rule, like a rename;
+    // blank still means the starter name.
+    body.name = new_alt_requested_name(body.name.as_deref())
+        .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 26))?;
     let appearance_cost = app_state.appearance_change_cost.clone();
 
     let mut conn = app_state
@@ -6989,6 +7088,15 @@ pub async fn new_alt(
     })
     .await
     .map(Json)
+}
+
+/// The caller's name for a new alt, normalised and checked against the game's
+/// rule; `None` when blank or absent (the starter name applies).
+fn new_alt_requested_name(name: Option<&str>) -> Result<Option<String>, ()> {
+    match name.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(n) => normalise_current_character_name(n).map(Some),
+    }
 }
 
 /// The display name a new alt gets: the caller's, trimmed and bounded, or the
