@@ -309,8 +309,13 @@ fn required_levels() -> &'static std::collections::HashMap<Uuid, u64> {
 /// (`script/extract_item_required_levels.py`). It is the item's material tier as
 /// the unlock level the gear UI shows: Iron/Steel 1, Silver 8, Orcish 13,
 /// Dwarven 18, Elven 23, Glass 28, Ebony/Stalhrim 33, Daedric 39, Dragon 45.
+/// A generated piece (#368) can be any template of the tier's loot pool, so the
+/// pool answers for the few templates the corpus never paid.
 fn required_level(template: &Uuid) -> Option<u64> {
-    required_levels().get(template).copied()
+    required_levels()
+        .get(template)
+        .copied()
+        .or_else(|| super::legendary_gear::required_level(template))
 }
 
 /// How many levels short of the next tier's unlock a buyer can already see it
@@ -493,8 +498,13 @@ fn legendary_slot_part(
 /// of the SAME band: gold, stackables, town XP and the optional artifact slot
 /// from one recorded reward, and each regular item slot from its own
 /// independently drawn reward, position for position (slot 0 and slot 1 roll
-/// different item families, so they are never mixed). Nothing is invented and
-/// the payout stays in the band's observed range.
+/// different item families, so they are never mixed). The payout stays in the
+/// band's observed range.
+///
+/// THE GEAR (#368). A Legendary chest's regular gear slot is then generated
+/// around that retail piece, as retail generated it: a loot template of the same
+/// tier and enchantments rolled from the APK tables, keeping the piece's
+/// tempering, enchant count and tier (see [`super::legendary_gear`]).
 ///
 /// THE ARTIFACT RULE (#310). An artifact is unique. An artifact the buyer
 /// already holds — or one this same chest already paid — is replaced by a
@@ -536,10 +546,19 @@ pub fn roll_bundle_for(
         } else {
             None
         };
-        match tiered {
-            Some(item) => items.push(item.clone()),
-            None => items.push(draw(band, slot_seed)?.reward.items[slot].clone()),
-        }
+        let shell = match tiered {
+            Some(item) => item.clone(),
+            None => draw(band, slot_seed)?.reward.items[slot].clone(),
+        };
+        // Legendary gear is then GENERATED around that retail piece, as retail
+        // generated it (#368); the other chests keep the retail piece.
+        let piece = if product.product_id == LEGENDARY_CHEST_CORPUS_ID {
+            super::legendary_gear::generate(&shell, mix(slot_seed ^ 0x4F1B_BCDC_BFA5_3E0B))
+                .unwrap_or(shell)
+        } else {
+            shell
+        };
+        items.push(piece);
     }
     items.extend(base.reward.items.iter().skip(core).cloned());
 
@@ -600,6 +619,7 @@ pub fn roll_treasury_chest(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::features::legendary_gear;
 
     const BIG: &str = "11102495-fde7-4e77-b6c4-d13b9303f1f5";
     const GOLD: &str = "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2";
@@ -886,23 +906,13 @@ mod tests {
         }
     }
 
-    /// A widened roll must still be made of retail parts: each item slot draws from
-    /// what retail paid in that same slot (since #339 in any band, at the buyer's
-    /// tier), and gold stays inside the band's observed range. This is the
-    /// control on the widening.
+    /// A widened roll keeps retail's payout: gold stays inside the band's observed
+    /// range and the chest keeps retail's shape. The gear is generated (#368), so
+    /// the control on it is that every piece is one the generator's retail rules
+    /// allow — the rules every retail piece obeys.
     #[test]
-    fn a_composed_chest_is_made_of_retail_parts() {
+    fn a_composed_chest_keeps_retail_gold_and_generated_gear() {
         let product = corpus_product(&legendary()).unwrap();
-        let slot_pool = |k: usize| -> HashSet<String> {
-            product
-                .by_level
-                .iter()
-                .flat_map(|b| &b.results)
-                .filter_map(|r| r.reward.items.get(k))
-                .map(|i| serde_json::to_string(i).unwrap())
-                .collect()
-        };
-        let (s0, s1) = (slot_pool(0), slot_pool(1));
         for band in &product.by_level {
             let level = band.min_buyer_level;
             let golds: Vec<u64> =
@@ -913,8 +923,11 @@ mod tests {
                 let gold = gold_of(&g);
                 assert!((lo..=hi).contains(&gold), "level {level}: gold {gold} not in {lo}..={hi}");
                 assert!((2..=3).contains(&g.items.len()), "level {level}: {} items", g.items.len());
-                assert!(s0.contains(&serde_json::to_string(&g.items[0].item).unwrap()));
-                assert!(s1.contains(&serde_json::to_string(&g.items[1].item).unwrap()));
+                for piece in &g.items[..2] {
+                    if let Some(why) = legendary_gear::rule_broken(&piece.item) {
+                        panic!("level {level}: {why}");
+                    }
+                }
             }
         }
     }
@@ -1152,5 +1165,242 @@ mod tests {
         let product = corpus_product(&legendary()).unwrap();
         assert_eq!(slot_ladder(product, 0), vec![1, 8, 13, 18, 23, 28, 39, 45]);
         assert_eq!(slot_ladder(product, 1), vec![1, 8, 13, 18, 23, 28, 33, 45]);
+    }
+
+    // ---- #368 (cont.): retail GENERATED the gear; it did not pick from a list ----
+
+    /// One chest per retail observation in every band of the Legendary corpus, at
+    /// levels spread over the band: the same sample shape the retail numbers were
+    /// measured on.
+    fn banded_rolls() -> Vec<(usize, RewardGrant)> {
+        let product = corpus_product(&legendary()).unwrap();
+        let mut out = Vec::new();
+        for (b, band) in product.by_level.iter().enumerate() {
+            let span = band.max_buyer_level - band.min_buyer_level + 1;
+            for i in 0..band.results.len() as u64 {
+                let level = band.min_buyer_level + i % span;
+                out.push((b, roll_bundle(&legendary(), level, i).unwrap()));
+            }
+        }
+        out
+    }
+
+    fn piece_key(item: &Item) -> String {
+        let mut e: Vec<String> =
+            item.properties.enchanting.iter().map(|p| format!("{}@{}", p.id, p.tier)).collect();
+        e.sort();
+        format!("{}|{}", item.item_template_id, e.join(","))
+    }
+
+    /// Exact repeats (same template, same enchantments) of a regular slot within a
+    /// band, summed over the bands, and the number of pieces.
+    fn banded_repeats(slot: usize, chests: &[(usize, Vec<Item>)]) -> (usize, usize) {
+        let mut seen: HashSet<(usize, String)> = HashSet::new();
+        let mut n = 0;
+        for (b, items) in chests {
+            n += 1;
+            seen.insert((*b, piece_key(&items[slot])));
+        }
+        (n - seen.len(), n)
+    }
+
+    /// The numbers for the PR, ours against retail's.
+    /// `cargo test -p blades_lib print_legendary_gear_variety -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn print_legendary_gear_variety() {
+        let ours: Vec<(usize, Vec<Item>)> = banded_rolls()
+            .into_iter()
+            .map(|(b, g)| (b, g.items.into_iter().map(|i| i.item).collect()))
+            .collect();
+        let product = corpus_product(&legendary()).unwrap();
+        let retail: Vec<(usize, Vec<Item>)> = product
+            .by_level
+            .iter()
+            .enumerate()
+            .flat_map(|(b, band)| band.results.iter().map(move |r| (b, r.reward.items.clone())))
+            .collect();
+        for (name, set) in [("retail", &retail), ("ours", &ours)] {
+            for slot in 0..2 {
+                let (rep, n) = banded_repeats(slot, set);
+                let mut by_tier: std::collections::BTreeMap<u64, HashSet<Uuid>> = Default::default();
+                let mut counts = [0usize; 4];
+                let mut sets: HashSet<String> = HashSet::new();
+                for (_, items) in set.iter() {
+                    let it = &items[slot];
+                    by_tier
+                        .entry(required_level(&it.item_template_id).unwrap())
+                        .or_default()
+                        .insert(it.item_template_id);
+                    counts[it.properties.enchanting.len().min(3)] += 1;
+                    let mut e: Vec<_> = it.properties.enchanting.iter().map(|p| p.id).collect();
+                    e.sort();
+                    sets.insert(format!("{e:?}"));
+                }
+                let tiers: Vec<String> =
+                    by_tier.iter().map(|(t, s)| format!("{t}:{}", s.len())).collect();
+                println!(
+                    "{name} slot {slot}: n={n} repeats={rep} ({:.1}%) enchant# {counts:?} \
+                     distinct enchant sets {} templates/tier {}",
+                    100.0 * rep as f64 / n as f64,
+                    sets.len(),
+                    tiers.join(" ")
+                );
+            }
+        }
+    }
+
+    fn retail_banded() -> Vec<(usize, Vec<Item>)> {
+        corpus_product(&legendary())
+            .unwrap()
+            .by_level
+            .iter()
+            .enumerate()
+            .flat_map(|(b, band)| band.results.iter().map(move |r| (b, r.reward.items.clone())))
+            .collect()
+    }
+
+    fn ours_banded() -> Vec<(usize, Vec<Item>)> {
+        banded_rolls()
+            .into_iter()
+            .map(|(b, g)| (b, g.items.into_iter().map(|i| i.item).collect()))
+            .collect()
+    }
+
+    /// THE IDENTITY TEST for the generator: every regular-slot piece retail paid in
+    /// 4,697 Legendary purchases is one the generator's rules allow — a loot
+    /// template of its tier, durability at its tempering level, a primary allowed
+    /// on the template at the enchant tier, distinct secondaries from its table.
+    /// If retail broke a rule, the rule would be ours, not retail's.
+    #[test]
+    fn every_retail_legendary_piece_obeys_the_generation_rules() {
+        let mut checked = 0;
+        for (_, items) in retail_banded() {
+            for item in &items[..2] {
+                checked += 1;
+                if let Some(why) = legendary_gear::rule_broken(item) {
+                    panic!("a retail piece breaks a rule: {why}");
+                }
+            }
+        }
+        assert_eq!(checked, 2_372);
+    }
+
+    /// THE REPORT (#368). Sephoris: retail could give ANY piece of the tier, not
+    /// ~30. In the corpus retail paid all 21 loot templates of Silver, Daedric and
+    /// Dragon (and of every tier with enough draws); a slot at one tier now spans
+    /// them all too.
+    #[test]
+    fn legendary_gear_spans_every_template_of_the_tier() {
+        // (level, slot, tier as its unlock level)
+        for (level, slot, tier) in [(10u64, 1usize, 8u64), (30, 1, 28), (60, 0, 39), (60, 1, 45)] {
+            let mut templates = HashSet::new();
+            for nonce in 0..400u64 {
+                let g = roll_bundle(&legendary(), level, nonce).unwrap();
+                let t = g.items[slot].item.item_template_id;
+                if required_level(&t) == Some(tier) {
+                    templates.insert(t);
+                }
+            }
+            assert_eq!(
+                templates.len(),
+                legendary_gear::tier_pool_size(tier),
+                "level {level} slot {slot}: {} of the tier's templates",
+                templates.len()
+            );
+        }
+    }
+
+    /// Exact repeats (same template AND same enchantments) of a slot within a level
+    /// band: retail 75 of 1,186 in slot 0 and 40 in slot 1. #495's 12+ recorded
+    /// parts repeated 473 and 486 times; generated gear repeats about as rarely as
+    /// retail did.
+    #[test]
+    fn a_slot_repeats_exactly_about_as_rarely_as_retail() {
+        let (retail, ours) = (retail_banded(), ours_banded());
+        for slot in 0..2 {
+            let (r, n) = banded_repeats(slot, &retail);
+            let (o, m) = banded_repeats(slot, &ours);
+            assert_eq!(n, m);
+            assert!(
+                o * 10 <= r * 13,
+                "slot {slot}: {o} exact repeats in {m} chests, retail {r} in {n}"
+            );
+        }
+    }
+
+    /// Share of each enchantment count, ours against retail, per slot. The count
+    /// (and tier) is retail's own, carried by the retail piece the tier rule picks.
+    #[test]
+    fn enchantment_counts_follow_retail() {
+        let shares = |set: &[(usize, Vec<Item>)], slot: usize| -> [f64; 4] {
+            let mut c = [0f64; 4];
+            for (_, items) in set {
+                c[items[slot].properties.enchanting.len().min(3)] += 1.0;
+            }
+            c.map(|x| x / set.len() as f64)
+        };
+        let (retail, ours) = (retail_banded(), ours_banded());
+        for slot in 0..2 {
+            let (r, o) = (shares(&retail, slot), shares(&ours, slot));
+            for k in 0..4 {
+                assert!(
+                    (r[k] - o[k]).abs() <= 0.04,
+                    "slot {slot}: {k} enchantments on {:.1}% of ours, {:.1}% of retail",
+                    o[k] * 100.0,
+                    r[k] * 100.0
+                );
+            }
+        }
+    }
+
+    /// "Enchantments in all combinations": distinct enchantment sets per slot are
+    /// at least retail's variety (625 and 691 in 1,186 retail pieces).
+    #[test]
+    fn enchantments_come_in_retails_variety_of_combinations() {
+        let sets = |set: &[(usize, Vec<Item>)], slot: usize| -> usize {
+            set.iter()
+                .map(|(_, items)| {
+                    let mut e: Vec<Uuid> =
+                        items[slot].properties.enchanting.iter().map(|p| p.id).collect();
+                    e.sort();
+                    e
+                })
+                .collect::<HashSet<_>>()
+                .len()
+        };
+        let (retail, ours) = (retail_banded(), ours_banded());
+        for slot in 0..2 {
+            let (r, o) = (sets(&retail, slot), sets(&ours, slot));
+            assert!(o * 10 >= r * 9, "slot {slot}: {o} distinct enchantment sets, retail {r}");
+        }
+    }
+
+    /// Weapons, shields, each armour slot, rings and necklaces come up in retail's
+    /// proportions (weapons 755 of 2,372 regular-slot pieces, each armour slot
+    /// about 260, rings 148, necklaces 159).
+    #[test]
+    fn equipment_kinds_come_up_as_often_as_retail() {
+        let kinds = |set: &[(usize, Vec<Item>)]| {
+            let mut c: std::collections::BTreeMap<&'static str, f64> = Default::default();
+            for (_, items) in set {
+                for item in &items[..2] {
+                    *c.entry(legendary_gear::kind_of(&item.item_template_id).unwrap())
+                        .or_default() += 1.0 / (2 * set.len()) as f64;
+                }
+            }
+            c
+        };
+        let (retail, ours) = (kinds(&retail_banded()), kinds(&ours_banded()));
+        assert_eq!(retail.len(), 8, "{retail:?}");
+        for (kind, r) in &retail {
+            let o = ours.get(kind).copied().unwrap_or(0.0);
+            assert!(
+                (r - o).abs() <= 0.03,
+                "{kind}: {:.1}% of ours, {:.1}% of retail",
+                o * 100.0,
+                r * 100.0
+            );
+        }
     }
 }
