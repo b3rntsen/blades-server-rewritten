@@ -1403,4 +1403,38 @@ mod tests {
             );
         }
     }
+
+    /// Every retail piece, used as a shell, generates: never `None` (which would
+    /// silently pay the recorded piece), always at the shell's own material tier,
+    /// with the shell's tempering, enchant count and tier, a primary distinct
+    /// from the secondaries, and jewellery keeping its kind, grade and GRADING.
+    #[test]
+    fn every_retail_shell_generates_at_its_own_tier() {
+        for (i, (_, items)) in retail_banded().iter().enumerate() {
+            for shell in &items[..2] {
+                for k in 0..4u64 {
+                    let g = legendary_gear::generate(shell, mix(i as u64 ^ k.rotate_left(40)))
+                        .expect("a retail shell must generate");
+                    let (s, t) = (&shell.item_template_id, &g.item_template_id);
+                    assert_eq!(legendary_gear::tier_group_of(t), legendary_gear::tier_group_of(s));
+                    assert_eq!(g.tempering_level, shell.tempering_level);
+                    let (ge, se) = (&g.properties.enchanting, &shell.properties.enchanting);
+                    assert_eq!(ge.len(), se.len());
+                    assert!(ge.iter().zip(se).all(|(a, b)| a.tier == b.tier));
+                    if let Some(p) = ge.first() {
+                        assert!(ge[1..].iter().all(|e| e.id != p.id), "secondary repeats primary");
+                    }
+                    let kind = legendary_gear::kind_of(s).unwrap();
+                    if kind == "ring" || kind == "necklace" {
+                        assert_eq!(legendary_gear::kind_of(t), Some(kind));
+                        assert_eq!(g.grade, shell.grade);
+                        assert_eq!(g.properties.grading, shell.properties.grading);
+                    }
+                    if let Some(why) = legendary_gear::rule_broken(&g) {
+                        panic!("{why}");
+                    }
+                }
+            }
+        }
+    }
 }

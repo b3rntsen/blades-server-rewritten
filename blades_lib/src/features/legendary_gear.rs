@@ -284,6 +284,13 @@ pub(crate) fn kind_of(template: &Uuid) -> Option<&'static str> {
         .map(|t| t.category.as_str())
 }
 
+/// The (required level, APK material tier) group a template belongs to.
+#[cfg(test)]
+pub(crate) fn tier_group_of(template: &Uuid) -> Option<(u64, u64)> {
+    pool().table.templates.get(template).map(|t| (t.required_level, t.tier))
+}
+
+/// Pool templates at an unlock level (21 per tier; 42 at level 1, Iron and Steel).
 #[cfg(test)]
 pub(crate) fn tier_pool_size(required_level: u64) -> usize {
     pool()
