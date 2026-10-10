@@ -347,32 +347,78 @@ const SLOT0_OTHER_ONE_IN: u64 = 7;
 /// already pays it: 18 of 93 retail purchases within two levels of an unlock (8
 /// of 30 at level 17, 10 of 30 at 21, none of 33 at 6, 7 and 26); the one outlier
 /// is level 10, three short of Orcish, at 26 of 60.
-fn legendary_slot_tier(ladder: &[u64], slot: usize, level: u64, seed: u64) -> Option<u64> {
+///
+/// THE SLOT LADDERS (#368). The two slots do not climb the same ladder at the
+/// top. Retail paid Daedric in the upper slot once in 4,697 purchases and Ebony
+/// in the lower slot five times; the 36-50 band pairs Glass+Ebony (18) and then
+/// Daedric+Dragon (38), never Ebony+Daedric, and 54-89 is Daedric+Dragon. So
+/// slot 1 pays the lowest tier of ITS ladder at or above the buyer's unlock
+/// (Daedric -> Dragon), and slot 0 pays the highest tier of its own ladder below
+/// that, catching up only to a tier slot 0 actually pays. Below Ebony both
+/// ladders are the whole ladder and the rule above is unchanged.
+fn legendary_slot_tier(
+    ladder: &[u64],
+    slot_ladders: &[Vec<u64>; 2],
+    slot: usize,
+    level: u64,
+    seed: u64,
+) -> Option<u64> {
     let top_idx = ladder.iter().rposition(|&r| r <= level.max(1)).unwrap_or(0);
     let top = *ladder.get(top_idx)?;
-    let ceiling = top_idx + 1 == ladder.len();
+    // The lowest tier slot 1 pays at or above `tier`, else its highest.
+    let upper = |tier: u64| {
+        let l = &slot_ladders[1];
+        l.iter().copied().find(|&t| t >= tier).or(l.last().copied())
+    };
+    let t1 = upper(top)?;
     match slot {
         0 => {
-            let prev = ladder[top_idx.saturating_sub(1)];
-            let caught_up = !ceiling && level >= top + CATCH_UP_LEVELS;
-            let (usual, other) = if caught_up { (top, prev) } else { (prev, top) };
+            let lower = &slot_ladders[0];
+            let prev = lower.iter().copied().filter(|&t| t < t1).max().unwrap_or(t1);
+            let ceiling = Some(&t1) == ladder.last();
+            let caught_up = !ceiling && level >= t1 + CATCH_UP_LEVELS && lower.contains(&t1);
+            let (usual, other) = if caught_up { (t1, prev) } else { (prev, t1) };
             if mix(seed ^ 0x7F4A_7C15_9E37_79B9) % SLOT0_OTHER_ONE_IN == 0 {
                 Some(other)
             } else {
                 Some(usual)
             }
         }
-        1 => match ladder.get(top_idx + 1) {
-            Some(&next)
-                if next.saturating_sub(level) <= LOOKAHEAD_LEVELS
+        1 => match ladder.get(top_idx + 1).and_then(|&next| upper(next).map(|a| (next, a))) {
+            Some((next, ahead))
+                if ahead > t1
+                    && next.saturating_sub(level) <= LOOKAHEAD_LEVELS
                     && mix(seed ^ 0x2545_F491_4F6C_DD1D) % LOOKAHEAD_ONE_IN == 0 =>
             {
-                Some(next)
+                Some(ahead)
             }
-            _ => Some(top),
+            _ => Some(t1),
         },
         _ => None,
     }
+}
+
+/// The tiers retail paid in regular `slot` often enough to be a tier of that
+/// slot: at least [`MIN_TIER_PARTS`] distinct parts across the corpus (#368).
+fn slot_ladder(product: &Product, slot: usize) -> Vec<u64> {
+    let mut parts: Vec<(u64, &Item)> = Vec::new();
+    for band in &product.by_level {
+        if slot >= core_slots(band) {
+            continue;
+        }
+        for item in band.results.iter().map(|r| &r.reward.items[slot]) {
+            if let Some(tier) = required_level(&item.item_template_id)
+                && !parts.contains(&(tier, item))
+            {
+                parts.push((tier, item));
+            }
+        }
+    }
+    let mut ladder: Vec<u64> = parts.iter().map(|(t, _)| *t).collect();
+    ladder.sort_unstable();
+    ladder.dedup();
+    ladder.retain(|&t| parts.iter().filter(|(x, _)| *x == t).count() >= MIN_TIER_PARTS);
+    ladder
 }
 
 /// Every tier unlock level the product pays in its regular slots, ascending.
@@ -397,7 +443,9 @@ const MIN_TIER_PARTS: usize = 12;
 /// A retail part for a Legendary chest's regular `slot`, at the tier retail paid
 /// there at `level`: what retail paid in that same slot at that tier, from the
 /// bands nearest the buyer, widening band by band until there are at least
-/// [`MIN_TIER_PARTS`] candidates. `None` leaves the slot on the band draw.
+/// [`MIN_TIER_PARTS`] DISTINCT candidates (#368: a retail part is counted once,
+/// however many recorded chests carried it). `None` leaves the slot on the band
+/// draw.
 fn legendary_slot_part(
     product: &'static Product,
     slot: usize,
@@ -405,8 +453,11 @@ fn legendary_slot_part(
     seed: u64,
 ) -> Option<&'static Item> {
     static LADDER: std::sync::OnceLock<Vec<u64>> = std::sync::OnceLock::new();
+    static SLOT_LADDERS: std::sync::OnceLock<[Vec<u64>; 2]> = std::sync::OnceLock::new();
     let ladder = LADDER.get_or_init(|| tier_ladder(product));
-    let tier = legendary_slot_tier(ladder, slot, level, seed)?;
+    let slot_ladders =
+        SLOT_LADDERS.get_or_init(|| [slot_ladder(product, 0), slot_ladder(product, 1)]);
+    let tier = legendary_slot_tier(ladder, slot_ladders, slot, level, seed)?;
 
     let mut bands: Vec<&Band> = product.by_level.iter().collect();
     bands.sort_by_key(|b| level_distance(level, b.min_buyer_level, b.max_buyer_level));
@@ -418,12 +469,13 @@ fn legendary_slot_part(
         if slot >= core_slots(band) {
             continue;
         }
-        candidates.extend(
-            band.results
-                .iter()
-                .map(|r| &r.reward.items[slot])
-                .filter(|i| required_level(&i.item_template_id) == Some(tier)),
-        );
+        for item in band.results.iter().map(|r| &r.reward.items[slot]) {
+            if required_level(&item.item_template_id) == Some(tier)
+                && !candidates.contains(&item)
+            {
+                candidates.push(item);
+            }
+        }
     }
     if candidates.is_empty() {
         return None;
@@ -1025,7 +1077,7 @@ mod tests {
     #[ignore]
     fn print_legendary_tier_table() {
         let ladder = [1u64, 8, 13, 18, 23, 28, 33, 39, 45];
-        for level in [23u64, 33, 74, 100] {
+        for level in [23u64, 33, 37, 40, 43, 74, 100] {
             let mut counts = [0u64; 9];
             for nonce in 0..5_000u64 {
                 let g = roll_bundle(&legendary(), level, nonce).unwrap();
@@ -1038,5 +1090,67 @@ mod tests {
                 counts.iter().map(|c| format!("{:3.0}", *c as f64 / 100.0)).collect();
             println!("L{level}: {}", shares.join(" "));
         }
+    }
+
+    // ---- #368: tier right, but the same piece every time ----
+
+    /// THE REPORT. Sephoris (level 43) after #489: "ten times the same gloves with
+    /// the same enchantments". At 39-44 the tier rule sent slot 1 to Daedric, and
+    /// retail paid Daedric in slot 1 once in 4,697 purchases, so the widening ran
+    /// out of bands with one candidate: Daedric Plate Gauntlets in 200 of 200
+    /// chests at 39-42 (he holds 17 identical pairs). Ebony in slot 0 (five parts)
+    /// did the same at 36-41, one piece in a fifth of chests. Every level, both
+    /// slots: no one part in more than 15% of chests, and a wide spread in 50.
+    #[test]
+    fn legendary_chests_never_collapse_onto_one_part() {
+        for level in 1u64..=100 {
+            for slot in 0..2 {
+                let mut counts: std::collections::HashMap<String, u32> = Default::default();
+                let mut first50 = HashSet::new();
+                for nonce in 0..200u64 {
+                    let g = roll_bundle(&legendary(), level, nonce).unwrap();
+                    let part = serde_json::to_string(&g.items[slot].item).unwrap();
+                    if nonce < 50 {
+                        first50.insert(part.clone());
+                    }
+                    *counts.entry(part).or_default() += 1;
+                }
+                let top = *counts.values().max().unwrap();
+                assert!(
+                    top <= 30,
+                    "level {level} slot {slot}: one part in {top} of 200 chests"
+                );
+                assert!(
+                    first50.len() >= 12,
+                    "level {level} slot {slot}: only {} distinct parts in 50 chests",
+                    first50.len()
+                );
+            }
+        }
+    }
+
+    /// The tiers at 36-50 follow retail's pairs there: Glass+Ebony (18 of 62) and
+    /// then Daedric+Dragon (38), never Ebony+Daedric (once). So a level-37 buyer
+    /// gets Glass below Ebony, and a level-40 buyer Daedric below Dragon.
+    #[test]
+    fn legendary_slots_at_36_to_50_pair_as_retail_did() {
+        let (glass, _) = slot_share(37, 0, 28, 1_000);
+        let (ebony, _) = slot_share(37, 1, 33, 1_000);
+        assert!(glass > 0.7 && ebony > 0.7, "level 37: Glass {glass:.2}, Ebony {ebony:.2}");
+        for level in [39u64, 40, 43, 50] {
+            let (daedric, _) = slot_share(level, 0, 39, 1_000);
+            let (dragon, _) = slot_share(level, 1, 45, 1_000);
+            assert!(daedric > 0.8, "level {level}: Daedric in {daedric:.2} of lower slots");
+            assert!(dragon > 0.99, "level {level}: Dragon in {dragon:.2} of upper slots");
+        }
+    }
+
+    /// The slot ladders are the corpus's own: every tier except Ebony in slot 0
+    /// and Daedric in slot 1, which retail paid 5 and 1 times.
+    #[test]
+    fn each_slot_climbs_the_tiers_retail_paid_in_it() {
+        let product = corpus_product(&legendary()).unwrap();
+        assert_eq!(slot_ladder(product, 0), vec![1, 8, 13, 18, 23, 28, 39, 45]);
+        assert_eq!(slot_ladder(product, 1), vec![1, 8, 13, 18, 23, 28, 33, 45]);
     }
 }
