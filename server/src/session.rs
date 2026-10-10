@@ -2,7 +2,7 @@ use actix_web::{FromRequest, get, http::StatusCode, web};
 use log::error;
 use serde::Serialize;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     future::Future,
     pin::Pin,
     sync::{
@@ -27,6 +27,11 @@ pub struct Session {
     // incremented each (connected) request by the middleware
     pub request_count: AtomicU64,
     pub matchmaking_ws: Mutex<Option<UnboundedSender<MatchmakingMessage>>>,
+    /// The latest `gear_rating` the client's analytics reported per character (#360) —
+    /// its Effective Player Level, the number it scores Abyss kills against. Kept on the
+    /// session, not the character, so only the logged-in player can set their own, and
+    /// never persisted: the client re-reports it in every analytics batch.
+    pub client_gear_ratings: std::sync::Mutex<HashMap<Uuid, u32>>,
 }
 
 impl Session {
@@ -47,7 +52,20 @@ impl Session {
             extra_secret: Uuid::new_v4(),
             request_count: AtomicU64::new(1),
             matchmaking_ws: Mutex::new(None),
+            client_gear_ratings: Default::default(),
         }
+    }
+
+    /// Remember the gear rating the client reported for `character_id`.
+    pub fn record_gear_rating(&self, character_id: Uuid, gear_rating: u32) {
+        if let Ok(mut ratings) = self.client_gear_ratings.lock() {
+            ratings.insert(character_id, gear_rating);
+        }
+    }
+
+    /// The gear rating the client last reported for `character_id`, if any.
+    pub fn gear_rating(&self, character_id: Uuid) -> Option<u32> {
+        self.client_gear_ratings.lock().ok()?.get(&character_id).copied()
     }
 
     pub fn generate_token(&self, session_id: &Uuid) -> String {
@@ -492,6 +510,7 @@ async fn load_persisted_session(db: &DbPool, session_id: Uuid) -> Option<Session
         expire_unix_timestamp: row.expires_at_secs.max(0) as u64,
         request_count: AtomicU64::new(1),
         matchmaking_ws: Mutex::new(None),
+        client_gear_ratings: Default::default(),
     })
 }
 

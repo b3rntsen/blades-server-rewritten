@@ -212,8 +212,12 @@ pub async fn start_abyss(
 
             let character_level = entry.character.0.level as u32;
             // NOT the character level: the client scores and shows everything against
-            // its own Effective Player Level (see [`initial_player_level`], #294).
-            let player_level = initial_player_level(&app_state.job_pools, character_level);
+            // its own Effective Player Level (#294) — the number its analytics report as
+            // `gear_rating` when we have it, else the retail estimate (#360).
+            let player_level = run_initial_player_level(
+                initial_player_level(&app_state.job_pools, character_level),
+                session.session.gear_rating(character_id),
+            );
             // A fresh seed per RUN, not per character (#294: "I always get the same
             // two rewards"). Persisted on the run, so /current, /update and /end of
             // this run all resolve the same draws.
@@ -1141,6 +1145,30 @@ fn initial_player_level(job_pools: &serde_json::Value, character_level: u32) -> 
         (None, None) => level,
     };
     epl.max(1)
+}
+
+/// How far a client-reported `gear_rating` may sit from the [`initial_player_level`]
+/// estimate and still be believed. Retail's ten captured (level → EPL) pairs sit within 3
+/// of the estimate; the band is wide enough for a player whose gear lags or leads their
+/// level by a lot, and stops a doctored analytics batch from claiming an EPL of 1 at level
+/// 100 to pump the gauge.
+const REPORTED_EPL_BAND: u32 = 20;
+
+/// The `initialPlayerLevel` a run starts at: the client's own Effective Player Level when
+/// its analytics reported one (`gear_rating`, [`crate::analytics`]) within
+/// [`REPORTED_EPL_BAND`] of the estimate, else the estimate.
+///
+/// Why the reported number matters (#360): the client scores each kill
+/// `GetKillScore(enemyLevel - EPL)`, and below the player's level that table falls off a
+/// cliff (delta -1 → 10, -7 → 1). A level-20 character starting low is estimated at EPL
+/// 22; a client whose gear puts it at 16 scores its floor-10..21 kills 2-10x what the
+/// server books, reaches rungs 50, 70, 95 while the server is still short of 50, and its
+/// gauge sits full for the rest of the run — "never advances past the first reward".
+/// Retail's server sent the client's exact EPL, so the two never disagreed.
+fn run_initial_player_level(estimate: u32, reported: Option<u32>) -> u32 {
+    reported
+        .filter(|epl| *epl >= 1 && epl.abs_diff(estimate) <= REPORTED_EPL_BAND)
+        .unwrap_or(estimate)
 }
 
 /// How many floors one run is served with — retail's length for every start floor.
@@ -4399,6 +4427,97 @@ mod tests {
         assert_eq!(with_package.currencies, gold_only.currencies);
         assert_eq!(with_package.character_xp, gold_only.character_xp);
         assert_eq!(with_package.stackable_items.len(), 1);
+    }
+
+    // ── #360: a level-20 run, scored against the client's own EPL ───────────
+
+    /// Rungs the client's gauge reached that the server never paid.
+    fn unpaid(server: &[(usize, Vec<u32>)], client: &[(usize, Vec<u32>)]) -> Vec<u32> {
+        client
+            .iter()
+            .flat_map(|(_, rungs)| rungs.iter().copied())
+            .filter(|rung| !server.iter().any(|(_, paid)| paid.contains(rung)))
+            .collect()
+    }
+
+    /// THE REPORT (#360, level-20 alt): every `/update` 200, the bar never moves past the
+    /// first reward. A level-20 character is estimated at EPL 22; a client whose gear
+    /// puts it at 16 starting low (floor 10, difficulties 10..21, all below the estimate)
+    /// scores kills the server books at 1-5 as 2-10. The client reaches 35, 50, 70, 95,
+    /// 135 and 190; the server pays 35 and 50, each a dozen-plus kills late, and the
+    /// gauge sits full from rung 70 on.
+    #[test]
+    fn a_level_20_run_off_the_estimate_strands_the_gauge_after_the_first_rung() {
+        let estimate = initial_player_level(&real_job_pools(), 20);
+        assert_eq!(estimate, 22);
+        let floors = served_run(estimate, 10, 12, MIXED_KILLS);
+        assert!(floors.iter().all(|f| f.2 < estimate), "all below the estimate: {floors:?}");
+        let server = replay(estimate, &floors);
+        let client = client_gauge(16, &floors);
+        assert_eq!(server.iter().flat_map(|(_, r)| r.clone()).collect::<Vec<_>>(), vec![35, 50]);
+        let (early, lag) = early_and_lag(&server, &client);
+        assert!(early.is_empty());
+        assert!(lag > MAX_LAG_KILLS, "lag {lag}: the gauge sat full that long");
+        assert!(unpaid(&server, &client).len() >= 4, "client {client:?} server {server:?}");
+    }
+
+    /// The fix: the run starts at the EPL the client's analytics reported. The served
+    /// floors and the server's kill score then follow the client's own number, as
+    /// retail's did, and every rung the client reaches is paid within a few kills —
+    /// for level 9 and level 20, from floor 1 and from below and at the EPL, for gear
+    /// below, at and above the estimate.
+    #[test]
+    fn low_level_runs_at_the_reported_epl_pay_every_rung_on_time() {
+        let pools = real_job_pools();
+        for level in [9u32, 20] {
+            let estimate = initial_player_level(&pools, level);
+            for reported in [estimate - 6, estimate - 3, estimate, estimate + 4] {
+                let ipl = run_initial_player_level(estimate, Some(reported));
+                assert_eq!(ipl, reported);
+                for start in [1, 5, 10, ipl.saturating_sub(4).max(1), ipl] {
+                    let floors = served_run(ipl, start, 14, MIXED_KILLS);
+                    let server = replay(ipl, &floors);
+                    let client = client_gauge(reported, &floors);
+                    let (early, lag) = early_and_lag(&server, &client);
+                    let case = format!("level {level}, EPL {reported}, start {start}: server {server:?} client {client:?}");
+                    assert!(early.is_empty(), "paid ahead {early:?} -- {case}");
+                    assert!(lag <= 3, "lag {lag} -- {case}");
+                    // At most the rung the client crossed on the last kills is still due.
+                    assert!(unpaid(&server, &client).len() <= 1, "{case}");
+                }
+            }
+        }
+    }
+
+    /// The deep end must not move (#468 broke it): a level-100 character from floor 149
+    /// at any reported EPL in the band still pays every rung on the client's kill —
+    /// every floor is difficulty 100, the flat tail, for both.
+    #[test]
+    fn a_level_100_run_from_floor_149_at_a_reported_epl_pays_on_the_clients_kill() {
+        let estimate = initial_player_level(&real_job_pools(), 100);
+        for reported in [70, 77, 84, 90, 100] {
+            let ipl = run_initial_player_level(estimate, Some(reported));
+            assert_eq!(ipl, reported);
+            let floors = level_100_run_from_149(ipl);
+            assert!(floors.iter().all(|f| f.2 == 100), "{floors:?}");
+            let server = replay(ipl, &floors);
+            assert_eq!(server, client_gauge(reported, &floors), "reported EPL {reported}");
+            if reported + 7 <= 100 {
+                // Delta >= 7: the flat tail, 30 a kill, rungs 35..360 in twelve kills.
+                assert_eq!(server.len(), 7, "reported EPL {reported}: {server:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_reported_epl_is_used_only_inside_the_band() {
+        assert_eq!(run_initial_player_level(22, None), 22);
+        assert_eq!(run_initial_player_level(22, Some(16)), 16);
+        assert_eq!(run_initial_player_level(22, Some(2)), 2);
+        assert_eq!(run_initial_player_level(22, Some(42)), 42);
+        assert_eq!(run_initial_player_level(22, Some(43)), 22, "too far above");
+        assert_eq!(run_initial_player_level(84, Some(1)), 84, "a level-100 EPL of 1 is a lie");
+        assert_eq!(run_initial_player_level(84, Some(0)), 84);
     }
 }
 
