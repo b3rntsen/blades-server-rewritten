@@ -284,6 +284,153 @@ fn artifact_fallback(level: u64, seed: u64) -> Option<&'static Item> {
     Some(candidates[(seed % candidates.len() as u64) as usize])
 }
 
+/// The corpus the Legendary chest (and its 1-gem promo window) is mined under.
+const LEGENDARY_CHEST_CORPUS_ID: Uuid = Uuid::from_u128(0x11102495_fde7_4e77_b6c4_d13b9303f1f5);
+
+static ITEM_REQUIRED_LEVELS_RAW: &str = include_str!("../item_required_levels.json");
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RequiredLevels {
+    required_level: std::collections::HashMap<Uuid, u64>,
+}
+
+fn required_levels() -> &'static std::collections::HashMap<Uuid, u64> {
+    static TABLE: std::sync::OnceLock<std::collections::HashMap<Uuid, u64>> =
+        std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        serde_json::from_str::<RequiredLevels>(ITEM_REQUIRED_LEVELS_RAW)
+            .map(|t| t.required_level)
+            .unwrap_or_default()
+    })
+}
+
+/// The APK's `ItemTemplate.requiredLevel` for a template the store corpus pays
+/// (`script/extract_item_required_levels.py`). It is the item's material tier as
+/// the unlock level the gear UI shows: Iron/Steel 1, Silver 8, Orcish 13,
+/// Dwarven 18, Elven 23, Glass 28, Ebony/Stalhrim 33, Daedric 39, Dragon 45.
+fn required_level(template: &Uuid) -> Option<u64> {
+    required_levels().get(template).copied()
+}
+
+/// How many levels short of the next tier's unlock a buyer can already see it
+/// in the top slot, and how often (one roll in [`LOOKAHEAD_ONE_IN`]).
+const LOOKAHEAD_LEVELS: u64 = 2;
+const LOOKAHEAD_ONE_IN: u64 = 5;
+/// How many levels past an unlock the lower slot catches up to the new tier.
+const CATCH_UP_LEVELS: u64 = 3;
+/// How often slot 0 pays the other of its two tiers (one roll in this many):
+/// retail's lower slot matched the rule in 167 of 193 purchases at exact
+/// levels and 150 of 161 in the 54-89 band.
+const SLOT0_OTHER_ONE_IN: u64 = 7;
+
+/// The material tier (as its unlock level) retail paid in regular `slot` of a
+/// Legendary chest bought at `level`, out of the ascending tier ladder `ladder`.
+///
+/// THE BUG (#339/#354/#366). Slots were drawn from the buyer's whole level band,
+/// and the bands are wide: 18-23, 29-35, 54-89. A level-23 buyer drew from
+/// chests retail paid mostly at 19-21, before Elven unlocks, so four in five
+/// pieces were Dwarven; a level-33 buyer got Ebony in about one slot in five, and
+/// over a third of the lower slot was Elven, two tiers down.
+///
+/// THE RULE, measured on 306 retail Legendary purchases at their exact buyer
+/// level (2026-06-07 capture snapshot) and consistent with every band of the
+/// 4,697-purchase corpus: the two regular slots are not interchangeable.
+/// Slot 1 pays the tier unlocked at the buyer's level (Elven at 23-27, Glass at
+/// 28-32, Ebony at 33-38). Slot 0 pays the tier below it until the buyer is
+/// [`CATCH_UP_LEVELS`] past the unlock, then the same tier: levels 17, 21 and 26
+/// paid the current tier in 58 of 70 lower slots, levels 19, 20, 25 and 28-30 the
+/// tier below in 78 of 90; the rest paid the other of the two, which slot 0
+/// does one roll in [`SLOT0_OTHER_ONE_IN`]. At the top of the ladder slot 0 stays a tier down:
+/// the 54-89 band paid Daedric in 150 of 161 lower slots and Dragon in all 161
+/// upper ones. Within [`LOOKAHEAD_LEVELS`] of the next unlock slot 1 sometimes
+/// already pays it: 18 of 93 retail purchases within two levels of an unlock (8
+/// of 30 at level 17, 10 of 30 at 21, none of 33 at 6, 7 and 26); the one outlier
+/// is level 10, three short of Orcish, at 26 of 60.
+fn legendary_slot_tier(ladder: &[u64], slot: usize, level: u64, seed: u64) -> Option<u64> {
+    let top_idx = ladder.iter().rposition(|&r| r <= level.max(1)).unwrap_or(0);
+    let top = *ladder.get(top_idx)?;
+    let ceiling = top_idx + 1 == ladder.len();
+    match slot {
+        0 => {
+            let prev = ladder[top_idx.saturating_sub(1)];
+            let caught_up = !ceiling && level >= top + CATCH_UP_LEVELS;
+            let (usual, other) = if caught_up { (top, prev) } else { (prev, top) };
+            if mix(seed ^ 0x7F4A_7C15_9E37_79B9) % SLOT0_OTHER_ONE_IN == 0 {
+                Some(other)
+            } else {
+                Some(usual)
+            }
+        }
+        1 => match ladder.get(top_idx + 1) {
+            Some(&next)
+                if next.saturating_sub(level) <= LOOKAHEAD_LEVELS
+                    && mix(seed ^ 0x2545_F491_4F6C_DD1D) % LOOKAHEAD_ONE_IN == 0 =>
+            {
+                Some(next)
+            }
+            _ => Some(top),
+        },
+        _ => None,
+    }
+}
+
+/// Every tier unlock level the product pays in its regular slots, ascending.
+fn tier_ladder(product: &Product) -> Vec<u64> {
+    let mut ladder: Vec<u64> = product
+        .by_level
+        .iter()
+        .flat_map(|b| {
+            let core = core_slots(b);
+            b.results.iter().flat_map(move |r| r.reward.items.iter().take(core))
+        })
+        .filter_map(|i| required_level(&i.item_template_id))
+        .collect();
+    ladder.sort_unstable();
+    ladder.dedup();
+    ladder
+}
+
+/// The fewest retail parts a tiered slot draws from, as for tier 1-3 chests (#335).
+const MIN_TIER_PARTS: usize = 12;
+
+/// A retail part for a Legendary chest's regular `slot`, at the tier retail paid
+/// there at `level`: what retail paid in that same slot at that tier, from the
+/// bands nearest the buyer, widening band by band until there are at least
+/// [`MIN_TIER_PARTS`] candidates. `None` leaves the slot on the band draw.
+fn legendary_slot_part(
+    product: &'static Product,
+    slot: usize,
+    level: u64,
+    seed: u64,
+) -> Option<&'static Item> {
+    static LADDER: std::sync::OnceLock<Vec<u64>> = std::sync::OnceLock::new();
+    let ladder = LADDER.get_or_init(|| tier_ladder(product));
+    let tier = legendary_slot_tier(ladder, slot, level, seed)?;
+
+    let mut bands: Vec<&Band> = product.by_level.iter().collect();
+    bands.sort_by_key(|b| level_distance(level, b.min_buyer_level, b.max_buyer_level));
+    let mut candidates: Vec<&Item> = Vec::new();
+    for band in bands {
+        if candidates.len() >= MIN_TIER_PARTS {
+            break;
+        }
+        if slot >= core_slots(band) {
+            continue;
+        }
+        candidates.extend(
+            band.results
+                .iter()
+                .map(|r| &r.reward.items[slot])
+                .filter(|i| required_level(&i.item_template_id) == Some(tier)),
+        );
+    }
+    if candidates.is_empty() {
+        return None;
+    }
+    Some(candidates[(mix(seed) % candidates.len() as u64) as usize])
+}
+
 /// [`roll_bundle`] for a buyer who already holds the item templates in `owned`.
 ///
 /// THE POOL (#310). A band is a bank of 60-250 whole recorded rewards, and
@@ -330,7 +477,17 @@ pub fn roll_bundle_for(
     let mut items: Vec<Item> = Vec::with_capacity(base.reward.items.len());
     for slot in 0..core {
         let slot_seed = mix(seed ^ 0xA076_1D64_78BD_642F_u64.wrapping_mul(slot as u64 + 1));
-        items.push(draw(band, slot_seed)?.reward.items[slot].clone());
+        // Legendary gear is picked at the buyer's own tier (#339), not anywhere
+        // in the band; the other chests keep the band draw.
+        let tiered = if product.product_id == LEGENDARY_CHEST_CORPUS_ID {
+            legendary_slot_part(product, slot, buyer_level, slot_seed)
+        } else {
+            None
+        };
+        match tiered {
+            Some(item) => items.push(item.clone()),
+            None => items.push(draw(band, slot_seed)?.reward.items[slot].clone()),
+        }
     }
     items.extend(base.reward.items.iter().skip(core).cloned());
 
@@ -678,24 +835,27 @@ mod tests {
     }
 
     /// A widened roll must still be made of retail parts: each item slot draws from
-    /// what retail paid in that slot within the band, and gold stays inside the
-    /// band's observed range. This is the control on the widening.
+    /// what retail paid in that same slot (since #339 in any band, at the buyer's
+    /// tier), and gold stays inside the band's observed range. This is the
+    /// control on the widening.
     #[test]
     fn a_composed_chest_is_made_of_retail_parts() {
         let product = corpus_product(&legendary()).unwrap();
+        let slot_pool = |k: usize| -> HashSet<String> {
+            product
+                .by_level
+                .iter()
+                .flat_map(|b| &b.results)
+                .filter_map(|r| r.reward.items.get(k))
+                .map(|i| serde_json::to_string(i).unwrap())
+                .collect()
+        };
+        let (s0, s1) = (slot_pool(0), slot_pool(1));
         for band in &product.by_level {
             let level = band.min_buyer_level;
             let golds: Vec<u64> =
                 band.results.iter().map(|r| r.reward.currencies[&gold_id()]).collect();
             let (lo, hi) = (*golds.iter().min().unwrap(), *golds.iter().max().unwrap());
-            let slot_pool = |k: usize| -> HashSet<String> {
-                band.results
-                    .iter()
-                    .filter_map(|r| r.reward.items.get(k))
-                    .map(|i| serde_json::to_string(i).unwrap())
-                    .collect()
-            };
-            let (s0, s1) = (slot_pool(0), slot_pool(1));
             for nonce in 0..200u64 {
                 let g = roll_bundle(&legendary(), level, nonce).unwrap();
                 let gold = gold_of(&g);
@@ -748,5 +908,135 @@ mod tests {
 
     fn gold_id() -> Uuid {
         GOLD.parse().unwrap()
+    }
+
+    // ---- #339/#354/#366: Legendary gear came out below the buyer's tier ----
+
+    /// Share of `rolls` Legendary chests at `level` whose regular `slot` is an item
+    /// of material tier `tier` (its unlock level), and the lowest tier seen there.
+    fn slot_share(level: u64, slot: usize, tier: u64, rolls: u64) -> (f64, u64) {
+        let mut hits = 0;
+        let mut lowest = u64::MAX;
+        for nonce in 0..rolls {
+            let g = roll_bundle(&legendary(), level, nonce).unwrap();
+            let r = required_level(&g.items[slot].item.item_template_id)
+                .expect("every paid template has an APK requiredLevel");
+            hits += u64::from(r == tier);
+            lowest = lowest.min(r);
+        }
+        (hits as f64 / rolls as f64, lowest)
+    }
+
+    #[test]
+    fn every_template_the_corpus_pays_has_a_required_level() {
+        if let Err(e) = serde_json::from_str::<RequiredLevels>(ITEM_REQUIRED_LEVELS_RAW) {
+            panic!("item_required_levels.json failed to parse: {e}");
+        }
+        for item in corpus()
+            .products
+            .iter()
+            .flat_map(|p| &p.by_level)
+            .flat_map(|b| &b.results)
+            .flat_map(|r| &r.reward.items)
+        {
+            assert!(required_level(&item.item_template_id).is_some(), "{}", item.item_template_id);
+        }
+        let ladder = tier_ladder(corpus_product(&legendary()).unwrap());
+        assert_eq!(ladder, vec![1, 8, 13, 18, 23, 28, 33, 39, 45], "the APK material ladder");
+    }
+
+    /// THE REPORTS. Sephoris at 23 ("Elven should be most of it"), at 33 ("hardly
+    /// any Ebony"), Huge Goober at 74 ("two armour pieces too low"). Slot 1 pays
+    /// the tier unlocked at the buyer's level and nothing falls below the tier
+    /// under it. On the band draw a level-23 buyer got Elven in 21% of top slots
+    /// and a level-33 buyer Ebony in 41%, with Elven (two tiers down) in 38% of
+    /// lower slots.
+    #[test]
+    fn legendary_gear_is_at_the_buyers_tier() {
+        const ROLLS: u64 = 2_000;
+        // (level, slot-1 tier, minimum slot-1 share, lowest tier allowed anywhere)
+        for (level, top, share, floor) in [
+            (23u64, 23u64, 0.70, 18u64), // Elven, Dwarven at worst
+            (33, 33, 0.70, 28),          // Ebony/Stalhrim, Glass at worst
+            (74, 45, 1.0, 39),           // Dragon, Daedric at worst
+            (100, 45, 1.0, 39),
+        ] {
+            let (s1, low1) = slot_share(level, 1, top, ROLLS);
+            let (_, low0) = slot_share(level, 0, top, ROLLS);
+            assert!(
+                s1 >= share,
+                "level {level}: tier {top} in only {:.0}% of top slots",
+                s1 * 100.0
+            );
+            assert!(
+                low0.min(low1) >= floor,
+                "level {level}: a piece of tier {} came out, below {floor}",
+                low0.min(low1)
+            );
+        }
+        let (daedric, _) = slot_share(74, 0, 39, ROLLS);
+        assert!(daedric > 0.8, "level 74 lower slot: Daedric {:.0}%", daedric * 100.0);
+    }
+
+    /// The rule against retail at the buyer's EXACT level: 306 retail Legendary
+    /// purchases in the 2026-06-07 capture snapshot (distinct rewards, buyer level
+    /// from the nearest `/characters/{id}` observation). (level, slot, tier,
+    /// retail count, retail purchases). Level 10 is left out: three levels short
+    /// of Orcish it is the one level the lookahead rule under-predicts.
+    #[test]
+    fn legendary_slots_match_retail_at_the_buyers_exact_level() {
+        const RETAIL: [(u64, usize, u64, u64, u64); 20] = [
+            (8, 0, 1, 19, 20),
+            (8, 1, 8, 18, 20),
+            (17, 0, 13, 21, 30),
+            (17, 1, 13, 21, 30),
+            (19, 0, 13, 16, 20),
+            (19, 1, 18, 20, 20),
+            (20, 0, 13, 8, 10),
+            (20, 1, 18, 10, 10),
+            (21, 0, 18, 27, 30),
+            (21, 1, 18, 20, 30),
+            (25, 0, 18, 18, 20),
+            (25, 1, 23, 18, 20),
+            (26, 0, 23, 10, 10),
+            (26, 1, 23, 10, 10),
+            (28, 0, 23, 18, 20),
+            (28, 1, 28, 18, 20),
+            (29, 0, 23, 10, 10),
+            (29, 1, 28, 10, 10),
+            (30, 0, 23, 8, 10),
+            (30, 1, 28, 10, 10),
+        ];
+        for (level, slot, tier, k, n) in RETAIL {
+            let retail = k as f64 / n as f64;
+            let (ours, _) = slot_share(level, slot, tier, 1_000);
+            assert!(
+                (ours - retail).abs() <= 0.25,
+                "level {level} slot {slot}: tier {tier} in {:.0}% of ours, {:.0}% of retail",
+                ours * 100.0,
+                retail * 100.0
+            );
+        }
+    }
+
+    /// The tier table for the PR: share of each material tier over both regular
+    /// slots. `cargo test -p blades_lib print_legendary_tier_table -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn print_legendary_tier_table() {
+        let ladder = [1u64, 8, 13, 18, 23, 28, 33, 39, 45];
+        for level in [23u64, 33, 74, 100] {
+            let mut counts = [0u64; 9];
+            for nonce in 0..5_000u64 {
+                let g = roll_bundle(&legendary(), level, nonce).unwrap();
+                for item in &g.items[..2] {
+                    let r = required_level(&item.item.item_template_id).unwrap();
+                    counts[ladder.iter().position(|&x| x == r).unwrap()] += 1;
+                }
+            }
+            let shares: Vec<String> =
+                counts.iter().map(|c| format!("{:3.0}", *c as f64 / 100.0)).collect();
+            println!("L{level}: {}", shares.join(" "));
+        }
     }
 }
