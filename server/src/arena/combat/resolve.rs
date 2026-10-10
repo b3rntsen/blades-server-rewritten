@@ -4689,7 +4689,8 @@ fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Ve
     out
 }
 
-/// Deliver continuous gear damage: Ebony Mail's poison, Rimelink's frost.
+/// Deliver continuous gear damage: Ebony Mail's poison, Rimelink's frost, and Lord's
+/// Mail's untyped Health drain (`continuous_health_reduction`, tracker #363).
 ///
 /// Before this, the property's arm in `apply_enchant` did not exist, so the effect
 /// fell through `_ => {}`. Ebony Mail's "Does {0} poison damage per second" did
@@ -4719,7 +4720,9 @@ fn apply_continuous_area_damage(combat: &mut MatchCombat, now: Instant) -> Vec<(
     let mut out = Vec::new();
     let interval = Duration::from_secs_f32(super::damage::CONTINUOUS_AREA_TICK_SECS);
     for wearer in 0..combat.fighters.len() {
-        if combat.fighters[wearer].loadout.continuous_damage.is_empty() {
+        if combat.fighters[wearer].loadout.continuous_damage.is_empty()
+            && combat.fighters[wearer].loadout.continuous_health_reduction <= 0.0
+        {
             continue;
         }
         if matches!(combat.phase, FlowState::RoundEnd | FlowState::NextState) {
@@ -4791,6 +4794,55 @@ fn apply_continuous_area_damage(combat: &mut MatchCombat, now: Instant) -> Vec<(
             debug!(
                 "combat event: gsid={} attacker_slot={wearer} target_slot={target} source=AreaEffect element={ty:?} damage={:.3} hp={hp_before}->{}",
                 combat.game_session_id, resolved.total, combat.fighters[target].health,
+            );
+            for v in 0..combat.fighters.len() {
+                out.push((v, msg.clone()));
+            }
+            if combat.fighters[target].is_dead() {
+                out.extend(on_round_ending_death(combat, wearer, due));
+                return out;
+            }
+        }
+
+        // Lord's Mail: "Target loses {0} Health per second" (tracker #363).
+        // `ResolveContinuousDamage` tail-calls `ResolveContinuousStatsReduction`
+        // (`0x1BD3650`) right after the area-effect pass, with the same deltaTime.
+        // That sums the wearer's `ContinuousStatsReductionSource` callbacks for
+        // Health, writes `sum x deltaTime` into a `DamageType.Health` (10) entry and
+        // hands the list straight to `target.ReceiveDamage(list, DamageSource.None,
+        // ActiveSide.None, attacker: wearer, fxOnly: false, wasOptimalBlocking)`.
+        // There is no `ResolveDamageTaken`, so no armour, resistance, block, Ward or
+        // Absorb touches it: the target loses exactly the rate.
+        let rate = combat.fighters[wearer].loadout.continuous_health_reduction;
+        if rate > 0.0 {
+            let amount = rate * super::damage::CONTINUOUS_AREA_TICK_SECS;
+            let owed = combat.fighters[wearer].stats_reduction_carry + amount;
+            let whole = owed.floor();
+            combat.fighters[wearer].stats_reduction_carry = owed - whole;
+            let hp_before = combat.fighters[target].health;
+            combat.fighters[target].take_damage_at(whole as u32, due);
+            let msg = {
+                let hit = &combat.fighters[target];
+                let wearing = &combat.fighters[wearer];
+                messages::receive_damage(
+                    hit.net_object_id,
+                    NetObjectType::Avatar as u8,
+                    hit.packed_stats(),
+                    wearing.packed_stats(),
+                    super::state::DamageSource::None,
+                    super::damage::flags::SHOW_DAMAGE
+                        | super::damage::flags::HAS_ATTACKER
+                        | hit.optimal_block_flag(due),
+                    amount,
+                    0,
+                    ActiveSide::None,
+                    super::state::DamageType::None,
+                    &[(super::state::DamageType::Health, amount)],
+                )
+            };
+            debug!(
+                "combat event: gsid={} attacker_slot={wearer} target_slot={target} source=None element=Health damage={amount:.3} hp={hp_before}->{}",
+                combat.game_session_id, combat.fighters[target].health,
             );
             for v in 0..combat.fighters.len() {
                 out.push((v, msg.clone()));
@@ -16767,6 +16819,196 @@ mod continuous_area_tests {
         combat.reset_fighters_for_next_round(now);
         assert_eq!(combat.fighters[0].continuous_next_tick_at, None);
         assert_eq!(combat.fighters[0].continuous_carry, 0.0);
+    }
+
+    // ---- Lord's Mail (tracker #363) -------------------------------------------
+    //
+    // "Target loses {0} Health per second" + "+{0} Health per second during combat",
+    // both 6.9 (`_xValueByTier = [6.9]` on the two logic assets). Before the fix both
+    // properties fell through `apply_enchant`'s `_ => {}`.
+
+    const LORDS_MAIL: &str = "975509a9-196f-41c9-8df4-6f0e2d1f02ce";
+    const RATE: f32 = 6.9;
+
+    fn wear_lords_mail(combat: &mut MatchCombat, slot: usize) {
+        apply_template_properties(&mut combat.fighters[slot].loadout, LORDS_MAIL);
+    }
+
+    /// op50s with `DamageSource::None` — the Lord's Mail drain's wire shape.
+    fn untyped(out: &[(usize, Vec<u8>)]) -> Vec<(i64, u8, u8, f32, Vec<(u8, f32)>)> {
+        op50s(out)
+            .into_iter()
+            .filter(|m| m.1 == DamageSource::None as u8)
+            .collect()
+    }
+
+    /// The tiered table carries 0.0 for both families; the shipped asset value is
+    /// what lands on the loadout. Control: the bare starter carries neither.
+    #[test]
+    fn lords_mail_loads_both_effects_at_6_9() {
+        let (mut combat, _) = live();
+        let base_regen = combat.fighters[0].loadout.health_regen;
+        assert_eq!(combat.fighters[0].loadout.continuous_health_reduction, 0.0);
+        wear_lords_mail(&mut combat, 0);
+        let lo = &combat.fighters[0].loadout;
+        assert_eq!(lo.continuous_health_reduction, RATE);
+        assert!((lo.health_regen - base_regen - RATE).abs() < 1e-5);
+        assert!(
+            lo.continuous_damage.is_empty(),
+            "the drain is not a typed AreaEffect"
+        );
+    }
+
+    /// THE REPORTED QUESTION, drain half. Five seconds in the mail: 25 ticks of
+    /// 6.9 x 0.2 = 1.38 on the opponent, as `DamageSource::None`, ActiveSide None,
+    /// one `DamageType::Health` (10) component. The wearer takes none of it.
+    #[test]
+    fn lords_mail_drains_the_opponent_at_6_9_per_second() {
+        let (mut combat, now) = live();
+        wear_lords_mail(&mut combat, 0);
+        let target_obj = combat.fighters[1].net_object_id as i64;
+        let hp0 = combat.fighters[1].health;
+        let max = combat.fighters[1].max_health as f32;
+
+        let out = run(&mut combat, now, 26.0 * TICK);
+        let ticks = untyped(&out);
+        assert_eq!(ticks.len(), 25, "one tick per {TICK}s over 5s");
+        for (obj, _, side, total, comps) in &ticks {
+            assert_eq!(*obj, target_obj, "the OPPONENT loses it, never the wearer");
+            assert_eq!(*side, 0, "ActiveSide.None");
+            assert_eq!(comps.len(), 1);
+            assert_eq!(comps[0].0, DamageType::Health as u8);
+            assert!((total - RATE * TICK).abs() < 1e-4, "tick {total}");
+            assert!((comps[0].1 - RATE * TICK).abs() < 1e-4);
+        }
+        // 25 x 1.38 = 34.5 → 34 whole HP billed; base health regen
+        // (0.005 x max / 3 per second) gives a little back.
+        let lost = hp0 - combat.fighters[1].health;
+        let regen_back = (0.005 * max / 3.0 * 5.0).ceil() as u32 + 1;
+        assert!(
+            lost <= 34 && lost + regen_back >= 34,
+            "5s at 6.9/s bills 34 HP, net lost {lost} (regen back <= {regen_back})"
+        );
+        assert!(
+            area_effect(&out).is_empty(),
+            "Lord's Mail has no AreaEffect component"
+        );
+    }
+
+    /// Regeneration half. A wounded wearer heals 6.9/s MORE than the same fighter
+    /// without the mail. The control isolates the property from base regen.
+    #[test]
+    fn lords_mail_heals_the_wearer_at_6_9_per_second() {
+        let healed = |mail: bool| {
+            let (mut combat, now) = live();
+            if mail {
+                wear_lords_mail(&mut combat, 0);
+            }
+            // Isolate the regeneration: no drain on the other side to end the round.
+            combat.fighters[0].loadout.continuous_health_reduction = 0.0;
+            let hp = combat.fighters[0].max_health / 2;
+            combat.fighters[0].health = hp;
+            run(&mut combat, now, 5.0);
+            combat.fighters[0].health - hp
+        };
+        let with = healed(true) as f32;
+        let without = healed(false) as f32;
+        let extra = with - without;
+        assert!(
+            (extra - RATE * 5.0).abs() <= 1.5,
+            "5s of Additional Regeneration = 34.5 HP, measured {extra} ({with} vs {without})"
+        );
+    }
+
+    /// Control: the bare starter emits no untyped drain frame and costs nothing.
+    #[test]
+    fn control_without_lords_mail_no_drain() {
+        let (mut combat, now) = live();
+        let hp0 = combat.fighters[1].health;
+        let out = run(&mut combat, now, 26.0 * TICK);
+        assert!(untyped(&out).is_empty());
+        assert_eq!(combat.fighters[1].health, hp0);
+    }
+
+    /// Untyped and unmitigated: `ResolveContinuousStatsReduction` skips
+    /// `ResolveDamageTaken`, so resistances of every kind, armour and a raised guard
+    /// leave the tick at exactly 1.38.
+    #[test]
+    fn lords_mail_drain_ignores_mitigation() {
+        let (mut combat, now) = live();
+        wear_lords_mail(&mut combat, 0);
+        let d = &mut combat.fighters[1].loadout;
+        d.resistances = [
+            DamageType::Fire,
+            DamageType::Frost,
+            DamageType::Shock,
+            DamageType::Poison,
+            DamageType::Health,
+        ]
+        .iter()
+        .map(|t| (*t, 5000.0))
+        .collect();
+        d.armor_rating = 5000.0;
+        let out = run(&mut combat, now, 6.0 * TICK);
+        let ticks = untyped(&out);
+        assert_eq!(ticks.len(), 5);
+        for (_, _, _, total, _) in ticks {
+            assert!((total - RATE * TICK).abs() < 1e-4, "tick {total}");
+        }
+    }
+
+    /// The drain kills, ends the round, and nothing ticks after: no further drain
+    /// frame, and the wearer's regeneration stops with the round.
+    #[test]
+    fn lords_mail_stops_at_death_and_round_end() {
+        let (mut combat, now) = live();
+        wear_lords_mail(&mut combat, 0);
+        combat.fighters[1].health = 2;
+        let wearer_hp = combat.fighters[0].max_health / 2;
+        combat.fighters[0].health = wearer_hp;
+        // 1.38 + 1.38 = 2.76 → 2 whole HP on the second tick.
+        let out = run(&mut combat, now, 3.0 * TICK);
+        assert_eq!(untyped(&out).len(), 2, "no tick after the killing one");
+        assert!(combat.fighters[1].is_dead());
+        assert!(
+            !matches!(combat.phase, FlowState::StateTimeout),
+            "the death ended the round"
+        );
+        let hp_at_end = combat.fighters[0].health;
+        let interval = Duration::from_secs_f32(TICK);
+        let mut later = Vec::new();
+        for i in 4..=8 {
+            later.extend(super::on_tick(&mut combat, now + interval * i, false));
+        }
+        assert!(untyped(&later).is_empty(), "no drain after the round ended");
+        assert_eq!(
+            combat.fighters[0].health, hp_at_end,
+            "no regeneration after the round ended"
+        );
+    }
+
+    /// A dead wearer drains nothing.
+    #[test]
+    fn a_dead_lords_mail_wearer_drains_nothing() {
+        let (mut combat, now) = live();
+        wear_lords_mail(&mut combat, 0);
+        combat.fighters[0].health = 0;
+        let hp0 = combat.fighters[1].health;
+        let out = run(&mut combat, now, 10.0 * TICK);
+        assert!(untyped(&out).is_empty());
+        assert_eq!(combat.fighters[1].health, hp0);
+    }
+
+    /// A new round clears the drain's fractional carry with the schedule.
+    #[test]
+    fn a_round_reset_clears_the_drain_carry() {
+        let (mut combat, now) = live();
+        wear_lords_mail(&mut combat, 0);
+        run(&mut combat, now, 2.0 * TICK);
+        assert!(combat.fighters[0].stats_reduction_carry > 0.0);
+        combat.reset_fighters_for_next_round(now);
+        assert_eq!(combat.fighters[0].stats_reduction_carry, 0.0);
+        assert_eq!(combat.fighters[0].continuous_next_tick_at, None);
     }
 }
 
