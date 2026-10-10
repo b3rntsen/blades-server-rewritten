@@ -513,9 +513,10 @@ async fn insert_match_audit(
          (id, character_id, opponent_character_id, game_session_id, win, \
           rounds_won, rounds_lost, gold, character_xp, trophy_delta, \
           trophies_after, matchmaking_trophies_after, arena, arena_level, chest_meter, \
-          recorded_at, is_h2h) \
+          recorded_at, is_h2h, source_alt_uuid) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
-                 to_timestamp($16), $17)",
+                 to_timestamp($16), $17, \
+                 (SELECT source_alt_uuid FROM characters WHERE id = $2))",
     )
     .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
     .bind::<diesel::sql_types::Uuid, _>(a.character_id)
@@ -957,7 +958,9 @@ mod tests {
                  trophies_after BIGINT NOT NULL DEFAULT 0, matchmaking_trophies_after BIGINT NOT NULL DEFAULT 0, \
                  arena INTEGER NOT NULL DEFAULT 1, arena_level INTEGER NOT NULL DEFAULT 1, \
                  chest_meter BIGINT NOT NULL DEFAULT 0, recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(), \
-                 is_h2h BOOLEAN NOT NULL DEFAULT false)",
+                 is_h2h BOOLEAN NOT NULL DEFAULT false, source_alt_uuid UUID)",
+            // Only what the audit insert reads: the alt the match is stamped with.
+            "CREATE TABLE characters (id UUID PRIMARY KEY, source_alt_uuid UUID)",
             "CREATE TABLE arena_h2h_ratings ( \
                  character_id UUID PRIMARY KEY, rating INTEGER NOT NULL, wins INTEGER NOT NULL DEFAULT 0, \
                  losses INTEGER NOT NULL DEFAULT 0, ties INTEGER NOT NULL DEFAULT 0, \
@@ -1088,6 +1091,66 @@ mod tests {
                 },
             ],
             "replay consumes the same durable flag that live match end stores"
+        );
+    }
+
+    /// Every alt is its own character (owner decision 2026-10-10): a match is
+    /// stamped with the alt occupying the live row when it was recorded, so a
+    /// switch afterwards cannot move it to another alt's season standing.
+    #[tokio::test]
+    async fn audit_insert_stamps_the_alt_that_played() {
+        let Some(mut conn) = h2h_fixture().await else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — alt stamp on match audit not verified");
+            return;
+        };
+        let cid = Uuid::from_u128(1);
+        let (alt_a, alt_b) = (Uuid::from_u128(0xa), Uuid::from_u128(0xb));
+        let legacy = Uuid::from_u128(2);
+        diesel::sql_query("INSERT INTO characters VALUES ($1, $2), ($3, NULL)")
+            .bind::<diesel::sql_types::Uuid, _>(cid)
+            .bind::<diesel::sql_types::Uuid, _>(alt_a)
+            .bind::<diesel::sql_types::Uuid, _>(legacy)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        let session = |n: u128| Uuid::from_u128(100 + n);
+        insert_match_audit(&mut conn, &h2h_outcome(cid, legacy, session(1), true), &applied(cid))
+            .await
+            .unwrap();
+        diesel::sql_query("UPDATE characters SET source_alt_uuid = $1 WHERE id = $2")
+            .bind::<diesel::sql_types::Uuid, _>(alt_b)
+            .bind::<diesel::sql_types::Uuid, _>(cid)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        insert_match_audit(&mut conn, &h2h_outcome(cid, legacy, session(2), false), &applied(cid))
+            .await
+            .unwrap();
+        insert_match_audit(&mut conn, &h2h_outcome(legacy, cid, session(3), true), &applied(legacy))
+            .await
+            .unwrap();
+
+        #[derive(diesel::QueryableByName, Debug, PartialEq)]
+        struct Stamp {
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            game_session_id: Uuid,
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+            source_alt_uuid: Option<Uuid>,
+        }
+        let stamps: Vec<Stamp> = diesel::sql_query(
+            "SELECT game_session_id, source_alt_uuid FROM arena_match_results ORDER BY game_session_id",
+        )
+        .get_results(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(
+            stamps,
+            vec![
+                Stamp { game_session_id: session(1), source_alt_uuid: Some(alt_a) },
+                Stamp { game_session_id: session(2), source_alt_uuid: Some(alt_b) },
+                // A character with no alt id stays unstamped: NULL reads as "live".
+                Stamp { game_session_id: session(3), source_alt_uuid: None },
+            ]
         );
     }
 

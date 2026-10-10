@@ -364,6 +364,30 @@ async fn snapshot_character(
     reason: &str,
     park_quests: bool,
 ) -> Result<Uuid, diesel::result::Error> {
+    snapshot_character_parking(
+        conn,
+        character_id,
+        user_id,
+        source_alt_uuid,
+        reason,
+        park_quests,
+        park_quests,
+    )
+    .await
+}
+
+/// [`snapshot_character`], with the alt-owned rows ([`ALT_ROW_TABLES`]) parked
+/// on their own condition. Only an import needs the two apart: see
+/// [`import_is_another_alt`].
+async fn snapshot_character_parking(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    user_id: Uuid,
+    source_alt_uuid: Option<Uuid>,
+    reason: &str,
+    park_quests: bool,
+    park_alt_rows: bool,
+) -> Result<Uuid, diesel::result::Error> {
     use diesel_async::RunQueryDsl as _;
 
     let version_id = Uuid::new_v4();
@@ -384,6 +408,9 @@ async fn snapshot_character(
     if park_quests {
         park_quests_in_version(conn, character_id, version_id).await?;
         park_events_in_version(conn, character_id, version_id).await?;
+    }
+    if park_alt_rows {
+        park_alt_rows_in_version(conn, character_id, user_id, version_id).await?;
     }
     log::info!(
         "[versions] kept a snapshot of character {character_id} (user {user_id}, reason {reason}) as {version_id}"
@@ -623,6 +650,402 @@ async fn unpark_events(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Everything else an alt owns (owner decision 2026-10-10).
+//
+// "Alts are different characters entirely. They are in different guilds, have
+// different gear, level etc., so nothing shared between, only the discord users
+// can switch between playing them by using our web-interface."
+//
+// Quests (#451) and event counters (#477) already travel with the alt. These
+// tables were still keyed only by the user or by the one shared `characters.id`,
+// so every alt of a user was in the same guild, carried the same ban list and
+// pending application, shared the same open donation requests, and could earn a
+// Free for All window or a creation allowance only once between them. They are
+// parked the same way: copied into the outgoing version's `server_state` under
+// their own key, removed from the live table, and written back when that alt
+// returns. A version without a key (every version taken before this) arrives
+// with none of that state — a fresh character, exactly as #477 treats events.
+//
+// What is NOT here, and why, is in the PR (b3rntsen/blades-server-rewritten):
+// match history, standings and season awards are stamped with their alt rather
+// than parked, because other players read them; the head-to-head rating is
+// rebuilt from match history by the reconcile task every few minutes, so a
+// parked copy would be overwritten.
+// ---------------------------------------------------------------------------
+
+/// Which ids a table's rows are found by.
+#[derive(Clone, Copy)]
+enum AltRowKey {
+    /// `$1` = character id (park: `$2`).
+    Character,
+    /// `$1` = character id, `$2` = user id (park: `$2`, `$3`). Guild rows are
+    /// keyed by user, and a membership row may still carry a user id from
+    /// before a re-link — `find_membership` matches either, so parking does too.
+    CharacterOrUser,
+    /// `$1` = user id (park: `$2`). For tables with no character column.
+    User,
+}
+
+/// One table whose rows belong to the alt that made them.
+struct AltRowTable {
+    /// Key in the version's `server_state`.
+    key: &'static str,
+    by: AltRowKey,
+    /// Copies the live rows into version `$1`.
+    park: &'static str,
+    /// Removes them from the live table.
+    delete: &'static str,
+    /// Writes a parked array (the last parameter, after the ids `by` names)
+    /// back under the live ids. Every NOT NULL column is named and coalesced, for
+    /// the reason [`UNPARK_QUESTS_SQL`] gives. `ON CONFLICT DO NOTHING`: a row
+    /// the live alt made since is newer than the parked copy.
+    restore: &'static str,
+}
+
+const PARKED_GUILD_MEMBERS_KEY: &str = "parkedGuildMembers";
+
+/// In restore order: membership first, so the alt is back in its guild before
+/// its requests reappear on that guild's board.
+const ALT_ROW_TABLES: &[AltRowTable] = &[
+    AltRowTable {
+        key: PARKED_GUILD_MEMBERS_KEY,
+        by: AltRowKey::CharacterOrUser,
+        park: r#"
+UPDATE character_versions
+   SET server_state = server_state || jsonb_build_object('parkedGuildMembers',
+         COALESCE((SELECT jsonb_agg(to_jsonb(m) - 'character_id' - 'user_id')
+                     FROM guild_members m
+                    WHERE m.character_id = $2 OR m.user_id = $3), '[]'::jsonb))
+ WHERE id = $1"#,
+        delete: "DELETE FROM guild_members WHERE character_id = $1 OR user_id = $2",
+        // Back into the guild only if it still exists. A guild that gained a
+        // Grand Master while this one was away (the console can appoint one)
+        // keeps it: the returning alt comes back as a member rather than making
+        // two.
+        restore: r#"
+INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date)
+SELECT r.guild_id, $2, $1,
+       CASE WHEN COALESCE(r.rank, 'MEMBER') = 'GRANDMASTER'
+                 AND EXISTS (SELECT 1 FROM guild_members o
+                              WHERE o.guild_id = r.guild_id AND o.rank = 'GRANDMASTER')
+            THEN 'MEMBER' ELSE COALESCE(r.rank, 'MEMBER') END,
+       COALESCE(r.join_date, 0)
+  FROM jsonb_array_elements($3) e,
+       LATERAL jsonb_populate_record(NULL::guild_members, e) r
+ WHERE r.guild_id IS NOT NULL
+   AND EXISTS (SELECT 1 FROM guilds g WHERE g.id = r.guild_id)
+ON CONFLICT DO NOTHING"#,
+    },
+    AltRowTable {
+        key: "parkedGuildApplications",
+        by: AltRowKey::CharacterOrUser,
+        park: r#"
+UPDATE character_versions
+   SET server_state = server_state || jsonb_build_object('parkedGuildApplications',
+         COALESCE((SELECT jsonb_agg(to_jsonb(a) - 'character_id' - 'user_id')
+                     FROM guild_applications a
+                    WHERE a.character_id = $2 OR a.user_id = $3), '[]'::jsonb))
+ WHERE id = $1"#,
+        delete: "DELETE FROM guild_applications WHERE character_id = $1 OR user_id = $2",
+        restore: r#"
+INSERT INTO guild_applications (guild_id, user_id, character_id, state, creation_time)
+SELECT r.guild_id, $2, $1, COALESCE(r.state, 'APPLIED'), COALESCE(r.creation_time, 0)
+  FROM jsonb_array_elements($3) e,
+       LATERAL jsonb_populate_record(NULL::guild_applications, e) r
+ WHERE r.guild_id IS NOT NULL
+   AND EXISTS (SELECT 1 FROM guilds g WHERE g.id = r.guild_id)
+ON CONFLICT DO NOTHING"#,
+    },
+    AltRowTable {
+        // The re-join cooldown and ban list: a guild's decision about THIS alt.
+        key: "parkedGuildRemovals",
+        by: AltRowKey::User,
+        park: r#"
+UPDATE character_versions
+   SET server_state = server_state || jsonb_build_object('parkedGuildRemovals',
+         COALESCE((SELECT jsonb_agg(to_jsonb(x) - 'user_id')
+                     FROM guild_removals x
+                    WHERE x.user_id = $2), '[]'::jsonb))
+ WHERE id = $1"#,
+        delete: "DELETE FROM guild_removals WHERE user_id = $1",
+        restore: r#"
+INSERT INTO guild_removals (guild_id, user_id, removed_at, banned)
+SELECT r.guild_id, $1, COALESCE(r.removed_at, 0), COALESCE(r.banned, false)
+  FROM jsonb_array_elements($2) e,
+       LATERAL jsonb_populate_record(NULL::guild_removals, e) r
+ WHERE r.guild_id IS NOT NULL
+ON CONFLICT DO NOTHING"#,
+    },
+    AltRowTable {
+        // Open donation requests. Redeeming pays whoever holds the requester's
+        // character id, which every alt shares — so before this, one alt could
+        // collect the items guildmates donated to another.
+        key: "parkedGuildExchanges",
+        by: AltRowKey::CharacterOrUser,
+        park: r#"
+UPDATE character_versions
+   SET server_state = server_state || jsonb_build_object('parkedGuildExchanges',
+         COALESCE((SELECT jsonb_agg(to_jsonb(x) - 'requester_character_id' - 'requester_user_id')
+                     FROM guild_exchanges x
+                    WHERE NOT x.redeemed
+                      AND (x.requester_character_id = $2 OR x.requester_user_id = $3)),
+                  '[]'::jsonb))
+ WHERE id = $1"#,
+        delete: "DELETE FROM guild_exchanges \
+                  WHERE NOT redeemed AND (requester_character_id = $1 OR requester_user_id = $2)",
+        restore: r#"
+INSERT INTO guild_exchanges
+       (id, guild_id, requester_user_id, requester_character_id, item_template_id,
+        requested_amount, max_donation_amount, donations, donation_sum, creation_time, redeemed)
+SELECT r.id, r.guild_id, $2, $1, r.item_template_id,
+       COALESCE(r.requested_amount, 10), COALESCE(r.max_donation_amount, 5),
+       COALESCE(r.donations, '[]'::jsonb), COALESCE(r.donation_sum, 0),
+       COALESCE(r.creation_time, 0), false
+  FROM jsonb_array_elements($3) e,
+       LATERAL jsonb_populate_record(NULL::guild_exchanges, e) r
+ WHERE r.id IS NOT NULL AND r.guild_id IS NOT NULL AND r.item_template_id IS NOT NULL
+   AND EXISTS (SELECT 1 FROM guilds g WHERE g.id = r.guild_id)
+ON CONFLICT DO NOTHING"#,
+    },
+    AltRowTable {
+        // A Free for All window pays once per CHARACTER; each alt is one.
+        key: "parkedFreeForAllGrants",
+        by: AltRowKey::Character,
+        park: r#"
+UPDATE character_versions
+   SET server_state = server_state || jsonb_build_object('parkedFreeForAllGrants',
+         COALESCE((SELECT jsonb_agg(to_jsonb(g) - 'character_id')
+                     FROM free_for_all_grants g
+                    WHERE g.character_id = $2), '[]'::jsonb))
+ WHERE id = $1"#,
+        delete: "DELETE FROM free_for_all_grants WHERE character_id = $1",
+        // Only for a window that still exists (the grant cascades with its run).
+        restore: r#"
+INSERT INTO free_for_all_grants (run_id, character_id, gems, granted_at)
+SELECT r.run_id, $1, COALESCE(r.gems, 0), COALESCE(r.granted_at, 0)
+  FROM jsonb_array_elements($2) e,
+       LATERAL jsonb_populate_record(NULL::free_for_all_grants, e) r
+ WHERE EXISTS (SELECT 1 FROM free_for_all_runs f WHERE f.id = r.run_id)
+ON CONFLICT DO NOTHING"#,
+    },
+    AltRowTable {
+        // The creation-allowance ledger (#193): one row per character created.
+        key: "parkedCreationAllowance",
+        by: AltRowKey::Character,
+        park: r#"
+UPDATE character_versions
+   SET server_state = server_state || jsonb_build_object('parkedCreationAllowance',
+         COALESCE((SELECT jsonb_agg(to_jsonb(a) - 'character_id')
+                     FROM character_creation_allowance a
+                    WHERE a.character_id = $2), '[]'::jsonb))
+ WHERE id = $1"#,
+        delete: "DELETE FROM character_creation_allowance WHERE character_id = $1",
+        restore: r#"
+INSERT INTO character_creation_allowance (character_id, currency_id, amount, reason, granted_at)
+SELECT $1, r.currency_id, COALESCE(r.amount, 0), COALESCE(r.reason, 'creation'),
+       COALESCE(r.granted_at, 0)
+  FROM jsonb_array_elements($2) e,
+       LATERAL jsonb_populate_record(NULL::character_creation_allowance, e) r
+ WHERE r.currency_id IS NOT NULL
+ON CONFLICT DO NOTHING"#,
+    },
+];
+
+/// The migrations that create every [`ALT_ROW_TABLES`] table, for test fixtures
+/// that exercise a switch: the real DDL, not a copy that could drift.
+#[cfg(test)]
+pub(crate) const ALT_ROW_TABLE_MIGRATIONS: [&str; 5] = [
+    include_str!("../../migrations/2026-06-20-010000-0000_add_guilds/up.sql"),
+    include_str!("../../migrations/2026-06-20-020000-0000_add_guild_exchanges/up.sql"),
+    include_str!("../../migrations/2026-08-25-000000-0000_add_guild_applications_and_ranks/up.sql"),
+    include_str!("../../migrations/2026-09-18-000000-0000_add_free_for_all/up.sql"),
+    include_str!("../../migrations/2026-09-20-000000-0000_add_character_creation_allowance/up.sql"),
+];
+
+/// Copy every [`ALT_ROW_TABLES`] row of the live character into the version just
+/// taken of it, then remove them from the live tables.
+async fn park_alt_rows_in_version(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    user_id: Uuid,
+    version_id: Uuid,
+) -> Result<(), diesel::result::Error> {
+    use diesel::sql_types::Uuid as SqlUuid;
+    use diesel_async::RunQueryDsl as _;
+    for t in ALT_ROW_TABLES {
+        match t.by {
+            AltRowKey::Character => {
+                diesel::sql_query(t.park)
+                    .bind::<SqlUuid, _>(version_id)
+                    .bind::<SqlUuid, _>(character_id)
+                    .execute(&mut *conn)
+                    .await?;
+                diesel::sql_query(t.delete)
+                    .bind::<SqlUuid, _>(character_id)
+                    .execute(&mut *conn)
+                    .await?;
+            }
+            AltRowKey::User => {
+                diesel::sql_query(t.park)
+                    .bind::<SqlUuid, _>(version_id)
+                    .bind::<SqlUuid, _>(user_id)
+                    .execute(&mut *conn)
+                    .await?;
+                diesel::sql_query(t.delete)
+                    .bind::<SqlUuid, _>(user_id)
+                    .execute(&mut *conn)
+                    .await?;
+            }
+            AltRowKey::CharacterOrUser => {
+                diesel::sql_query(t.park)
+                    .bind::<SqlUuid, _>(version_id)
+                    .bind::<SqlUuid, _>(character_id)
+                    .bind::<SqlUuid, _>(user_id)
+                    .execute(&mut *conn)
+                    .await?;
+                diesel::sql_query(t.delete)
+                    .bind::<SqlUuid, _>(character_id)
+                    .bind::<SqlUuid, _>(user_id)
+                    .execute(&mut *conn)
+                    .await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A version's parked [`ALT_ROW_TABLES`] rows, taken out of its `server_state`
+/// so they never land on the live row. One entry per table, `None` for a table
+/// the version predates.
+struct ParkedAltRows(Vec<Option<Value>>);
+
+impl ParkedAltRows {
+    /// Did the version carry any alt-owned rows at all (i.e. was it taken
+    /// after they started travelling with the alt)?
+    fn any(&self) -> bool {
+        self.0.iter().any(Option::is_some)
+    }
+}
+
+fn take_parked_alt_rows(server_state: &mut Value) -> ParkedAltRows {
+    let mut obj = server_state.as_object_mut();
+    ParkedAltRows(
+        ALT_ROW_TABLES
+            .iter()
+            .map(|t| {
+                obj.as_mut()
+                    .and_then(|o| o.remove(t.key))
+                    .filter(Value::is_array)
+            })
+            .collect(),
+    )
+}
+
+/// Write a version's parked rows back under the live ids. A table the version
+/// predates gets nothing: the live rows were the outgoing alt's and went with it.
+async fn unpark_alt_rows(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    user_id: Uuid,
+    parked: ParkedAltRows,
+) -> Result<(), diesel::result::Error> {
+    use diesel::sql_types::{Jsonb, Uuid as SqlUuid};
+    use diesel_async::RunQueryDsl as _;
+    for (t, rows) in ALT_ROW_TABLES.iter().zip(parked.0) {
+        let Some(rows) = rows else { continue };
+        match t.by {
+            AltRowKey::Character => {
+                diesel::sql_query(t.restore)
+                    .bind::<SqlUuid, _>(character_id)
+                    .bind::<Jsonb, _>(rows)
+                    .execute(&mut *conn)
+                    .await?;
+            }
+            AltRowKey::User => {
+                diesel::sql_query(t.restore)
+                    .bind::<SqlUuid, _>(user_id)
+                    .bind::<Jsonb, _>(rows)
+                    .execute(&mut *conn)
+                    .await?;
+            }
+            AltRowKey::CharacterOrUser => {
+                diesel::sql_query(t.restore)
+                    .bind::<SqlUuid, _>(character_id)
+                    .bind::<SqlUuid, _>(user_id)
+                    .bind::<Jsonb, _>(rows)
+                    .execute(&mut *conn)
+                    .await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) use crate::arena::season_store::award_belongs_to_alt as award_belongs_to_alt_for_tests;
+
+/// Is an import bringing in a DIFFERENT alt from the one live, known on both
+/// sides?
+///
+/// Stricter than [`import_parks_quests`] on purpose. Quests come back from the
+/// capture the import carries, so parking them on an unknown live alt costs
+/// nothing; guild membership, ban lists and the server-state ledgers do not come
+/// back from anywhere. 556 of 577 live rows carry no alt id (prod, 2026-10-10),
+/// and a re-import of one of them is overwhelmingly the SAME character arriving
+/// with its id — treating it as a stranger would throw it out of its guild and
+/// make every gift it claimed claimable again.
+fn import_is_another_alt(live_alt: Option<Uuid>, incoming_alt: Option<Uuid>) -> bool {
+    matches!((live_alt, incoming_alt), (Some(live), Some(incoming)) if live != incoming)
+}
+
+/// Give the live row the incoming alt's own server state and alt-owned rows:
+/// from its newest kept version if it has one, fresh otherwise. The parked
+/// quest and event keys are stripped and not restored — an import seeds its
+/// quests from the capture, as it always has.
+async fn restore_incoming_alt_state(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    user_id: Uuid,
+    incoming_alt: Option<Uuid>,
+) -> Result<(), BladeApiError> {
+    use crate::schema::character_versions::dsl as cv;
+    use crate::schema::characters::dsl as ch;
+    let kept: Option<Value> = match incoming_alt {
+        Some(alt) => cv::character_versions
+            .filter(cv::user_id.eq(user_id))
+            .filter(cv::source_alt_uuid.eq(alt))
+            .select(cv::server_state)
+            .order(cv::saved_at.desc())
+            .first(conn)
+            .await
+            .optional()?,
+        None => None,
+    };
+    let (server_state, parked_rows) = match kept {
+        Some(mut state) => {
+            let _ = take_parked_quests(&mut state);
+            let _ = take_parked_events(&mut state);
+            let rows = take_parked_alt_rows(&mut state);
+            (state, Some(rows))
+        }
+        None => (
+            serde_json::to_value(ServerState::default()).map_err(|_| {
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
+            })?,
+            None,
+        ),
+    };
+    diesel::update(ch::characters.filter(ch::id.eq(character_id)))
+        .set(ch::server_state.eq(server_state))
+        .execute(conn)
+        .await?;
+    if let Some(rows) = parked_rows {
+        unpark_alt_rows(conn, character_id, user_id, rows).await?;
+    }
+    Ok(())
+}
+
 /// Should an import park the live character's quests before writing over it?
 ///
 /// Yes whenever the incoming character is a DIFFERENT one — the outgoing alt's
@@ -775,6 +1198,7 @@ pub async fn import_character(
                 // has not been created yet the import still proceeds, because
                 // refusing a transfer because the archive is missing would be a
                 // worse failure than the one this prevents.
+                let mut another_alt = false;
                 if !created {
                     let live_alt: Option<Uuid> = characters::table
                         .filter(characters::id.eq(character_id))
@@ -783,13 +1207,15 @@ pub async fn import_character(
                         .await
                         .optional()?
                         .flatten();
-                    let _ = snapshot_character(
+                    another_alt = import_is_another_alt(live_alt, incoming_alt);
+                    let _ = snapshot_character_parking(
                         &mut conn,
                         character_id,
                         user_id,
                         body.source_alt_uuid,
                         "import",
                         import_parks_quests(live_alt, incoming_alt),
+                        another_alt,
                     )
                     .await;
                 }
@@ -847,6 +1273,17 @@ pub async fn import_character(
                             .filter(characters::id.eq(character_id))
                             .set(characters::town.eq(town))
                             .execute(&mut conn)
+                            .await?;
+                    }
+                    // A DIFFERENT alt arriving brings its own server state, never
+                    // the outgoing alt's. `server_state` holds the gift, daily
+                    // reward and season-chest ledgers, the abyss run, craft jobs and
+                    // shop windows; the import never wrote it, so the alt arriving
+                    // inherited all of it from the alt leaving — one alt's claimed
+                    // gifts showed as claimed on the other (#349). It takes its own
+                    // newest kept state if it has one, and a fresh one if not.
+                    if another_alt {
+                        restore_incoming_alt_state(&mut conn, character_id, user_id, incoming_alt)
                             .await?;
                     }
                 }
@@ -3069,13 +3506,21 @@ pub async fn grant_arena_season_awards(
 
             // Filter to catalogue keys before LIMIT. Otherwise unknown rows at
             // the head of the queue permanently starve later configured awards.
-            let candidates: Vec<season_store::AwardGrantCandidate> = diesel::sql_query(
-                "SELECT id, character_id, kind, tier, payload \
-                 FROM arena_season_awards \
-                 WHERE season_id = $1 AND granted_at IS NULL \
-                   AND (kind || ':' || tier) = ANY($2) \
-                 ORDER BY rank, kind, id LIMIT $3 FOR UPDATE SKIP LOCKED",
-            )
+            //
+            // Only awards whose alt is the one live now: the grant writes into the
+            // live character row, which a user's alts take turns occupying. An
+            // award of a switched-out alt stays pending — that alt claims it in
+            // game, or a later pass grants it while it is live (owner decision
+            // 2026-10-10, tracker #348).
+            let candidates: Vec<season_store::AwardGrantCandidate> = diesel::sql_query(format!(
+                "SELECT a.id, a.character_id, a.source_alt_uuid, a.kind, a.tier, a.payload \
+                 FROM arena_season_awards a \
+                 WHERE a.season_id = $1 AND a.granted_at IS NULL \
+                   AND (a.kind || ':' || a.tier) = ANY($2) \
+                   AND {} \
+                 ORDER BY a.rank, a.kind, a.id LIMIT $3 FOR UPDATE OF a SKIP LOCKED",
+                season_store::AWARD_BELONGS_TO_LIVE_ALT_SQL
+            ))
             .bind::<diesel::sql_types::Uuid, _>(season_id)
             .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(eligible_keys)
             .bind::<diesel::sql_types::BigInt, _>(limit)
@@ -3131,6 +3576,23 @@ pub async fn grant_arena_season_awards(
                             )
                         })?
                 };
+                // The candidate filter ran before this row was locked; a switch
+                // committed in between would pay this alt's placing into the
+                // other alt's row (#348). Locked now, so the alt is stable.
+                {
+                    use crate::schema::characters;
+                    let live: Option<Uuid> = characters::table
+                        .filter(characters::id.eq(award.character_id))
+                        .select(characters::source_alt_uuid)
+                        .first(&mut conn)
+                        .await
+                        .map_err(|_| {
+                            BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 64)
+                        })?;
+                    if !season_store::award_belongs_to_alt(award.source_alt_uuid, live) {
+                        continue;
+                    }
+                }
 
                 let mut tracker = InventoryChangeTracker::default();
                 // Catalogue item ids describe the reward template, not a
@@ -4438,6 +4900,24 @@ mod tests {
             )
             .await
             .unwrap();
+            // Everything else an alt owns (owner decision 2026-10-10), and the
+            // arena history that is stamped with its alt — real migrations, in
+            // order, ending with the one that adds the alt columns.
+            for ddl in super::super::ALT_ROW_TABLE_MIGRATIONS.into_iter().chain([
+                include_str!("../../migrations/2026-06-16-000000-0000_add_arena_matches/up.sql"),
+                include_str!("../../migrations/2026-07-25-000000-0000_add_arena_match_results/up.sql"),
+                include_str!(
+                    "../../migrations/2026-09-28-000000-0000_add_arena_match_results_h2h_flag/up.sql"
+                ),
+                include_str!("../../migrations/2026-09-05-000000-0000_add_arena_seasons/up.sql"),
+                include_str!(
+                    "../../migrations/2026-10-10-000000-0000_alts_own_arena_history/up.sql"
+                ),
+            ]) {
+                diesel_async::SimpleAsyncConnection::batch_execute(&mut conn, ddl)
+                    .await
+                    .unwrap();
+            }
             Some(conn)
         }
 
@@ -5404,6 +5884,621 @@ mod tests {
             assert!(import_parks_quests(None, a));
             assert!(import_parks_quests(a, None));
             assert!(import_parks_quests(None, None), "unknown is not 'the same'");
+        }
+
+        /// Owner decision 2026-10-10: "Alts are different characters entirely.
+        /// They are in different guilds, have different gear, level etc., so
+        /// nothing shared between." Guild membership, ban lists, open donation
+        /// requests, the Free for All and creation-allowance ledgers, arena
+        /// standings and season rewards all follow the alt that made them.
+        mod alts_are_separate_characters {
+            use super::super::super::{
+                apply_restore, award_belongs_to_alt_for_tests, import_is_another_alt,
+                restore_incoming_alt_state, snapshot_character_parking,
+            };
+            use super::*;
+            use crate::arena::season_store;
+            use diesel_async::SimpleAsyncConnection;
+
+            async fn sql(c: &mut AsyncPgConnection, statements: &str) {
+                c.batch_execute(statements).await.unwrap();
+            }
+
+            #[derive(diesel::QueryableByName)]
+            struct N {
+                #[diesel(sql_type = diesel::sql_types::BigInt)]
+                n: i64,
+            }
+
+            async fn n(c: &mut AsyncPgConnection, query: &str) -> i64 {
+                diesel::sql_query(query).get_result::<N>(c).await.unwrap().n
+            }
+
+            #[derive(diesel::QueryableByName, Debug, PartialEq)]
+            struct Membership {
+                #[diesel(sql_type = diesel::sql_types::Text)]
+                guild_id: String,
+                #[diesel(sql_type = diesel::sql_types::Text)]
+                rank: String,
+            }
+
+            async fn guild_of(c: &mut AsyncPgConnection, uid: Uuid) -> Option<(String, String)> {
+                diesel::sql_query(format!(
+                    "SELECT guild_id, rank FROM guild_members WHERE user_id = '{uid}'"
+                ))
+                .get_results::<Membership>(c)
+                .await
+                .unwrap()
+                .into_iter()
+                .next()
+                .map(|m| (m.guild_id, m.rank))
+            }
+
+            /// Give `alt` a kept version from BEFORE this change — no parked
+            /// keys at all — then put the live row back on `back_to`.
+            async fn legacy_version(
+                c: &mut AsyncPgConnection,
+                cid: Uuid,
+                uid: Uuid,
+                alt: Uuid,
+                back_to: Uuid,
+            ) {
+                sql(c, &format!("UPDATE characters SET source_alt_uuid = '{alt}' WHERE id = '{cid}'"))
+                    .await;
+                snapshot_character(c, cid, uid, None, "import", false).await.unwrap();
+                // Older than anything the test does next: `saved_at` has
+                // one-second resolution and `now()` is frozen in a transaction,
+                // so without this "newest version" would be a coin toss.
+                sql(c, &format!(
+                    "UPDATE character_versions SET saved_at = saved_at - 100 WHERE source_alt_uuid = '{alt}'; \
+                     UPDATE characters SET source_alt_uuid = '{back_to}' WHERE id = '{cid}'"
+                ))
+                .await;
+            }
+
+            /// Put `alt` on the live row with `character` JSON and keep a
+            /// version of it the way a real switch does (rows parked), then hand
+            /// the live row to `back_to`.
+            async fn parked_version(
+                c: &mut AsyncPgConnection,
+                cid: Uuid,
+                uid: Uuid,
+                alt: Uuid,
+                character: &str,
+                back_to: Uuid,
+            ) {
+                sql(c, &format!(
+                    "UPDATE characters SET source_alt_uuid = '{alt}', character = '{character}'::jsonb \
+                     WHERE id = '{cid}'"
+                ))
+                .await;
+                snapshot_character(c, cid, uid, None, "switch", true).await.unwrap();
+                sql(c, &format!("UPDATE characters SET source_alt_uuid = '{back_to}' WHERE id = '{cid}'"))
+                    .await;
+            }
+
+            async fn guilds(c: &mut AsyncPgConnection) {
+                sql(c, "INSERT INTO guilds (id, name, tag_id) VALUES \
+                        ('ga', 'Guild A', '0001'), ('gb', 'Guild B', '0002'), \
+                        ('gx', 'Banned From', '0003')")
+                    .await;
+            }
+
+            /// The full round trip A -> B -> A -> B, B's only version from before
+            /// this change.
+            #[tokio::test]
+            async fn guild_and_ledgers_follow_their_alt() {
+                let mut c = db!();
+                let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
+                let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_a)).await;
+                legacy_version(&mut c, cid, uid, alt_b, alt_a).await;
+                guilds(&mut c).await;
+                let (run, currency, item) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+                sql(&mut c, &format!(
+                    "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                         VALUES ('ga', '{uid}', '{cid}', 'GRANDMASTER', 100); \
+                     INSERT INTO guild_removals (guild_id, user_id, removed_at, banned) \
+                         VALUES ('gx', '{uid}', 5, true); \
+                     INSERT INTO guild_exchanges (id, guild_id, requester_user_id, \
+                         requester_character_id, item_template_id, donation_sum) \
+                         VALUES ('open', 'ga', '{uid}', '{cid}', '{item}', 3); \
+                     INSERT INTO guild_exchanges (id, guild_id, requester_user_id, \
+                         requester_character_id, item_template_id, donation_sum, redeemed) \
+                         VALUES ('done', 'ga', '{uid}', '{cid}', '{item}', 4, true); \
+                     INSERT INTO free_for_all_runs (id, opens_at, closes_at, gems) \
+                         VALUES ('{run}', 1, 2, 100); \
+                     INSERT INTO free_for_all_grants (run_id, character_id, gems, granted_at) \
+                         VALUES ('{run}', '{cid}', 100, 7); \
+                     INSERT INTO character_creation_allowance (character_id, currency_id, amount) \
+                         VALUES ('{cid}', '{currency}', 50);"
+                ))
+                .await;
+                let a_rows = format!(
+                    "SELECT (SELECT count(*) FROM guild_members WHERE user_id = '{uid}') \
+                          + (SELECT count(*) FROM guild_removals WHERE user_id = '{uid}') \
+                          + (SELECT count(*) FROM guild_exchanges WHERE id = 'open') \
+                          + (SELECT count(*) FROM free_for_all_grants WHERE character_id = '{cid}') \
+                          + (SELECT count(*) FROM character_creation_allowance \
+                              WHERE character_id = '{cid}') AS n"
+                );
+                assert_eq!(n(&mut c, &a_rows).await, 5, "control: A holds all five");
+
+                // A -> B. B's version predates this, so B arrives with none of it.
+                let out = apply_switch_alt(&mut c, &switch(uid, alt_b, None)).await.unwrap();
+                assert_eq!(n(&mut c, &a_rows).await, 0, "nothing of A's may stay live on B");
+                assert_eq!(
+                    n(&mut c, "SELECT count(*) AS n FROM guild_exchanges WHERE id = 'done'").await,
+                    1,
+                    "a redeemed request is guild history, not the alt's"
+                );
+                let kept = version(&mut c, out.left_behind_saved_as.unwrap()).await;
+                assert_eq!(kept.server_state["parkedGuildMembers"][0]["guild_id"], "ga");
+                assert_eq!(kept.server_state["parkedGuildMembers"][0]["rank"], "GRANDMASTER");
+                assert!(live(&mut c, cid).await.server_state.get("parkedGuildMembers").is_none());
+
+                // B makes its own: another guild, its own Free for All payout.
+                sql(&mut c, &format!(
+                    "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                         VALUES ('gb', '{uid}', '{cid}', 'MEMBER', 200); \
+                     INSERT INTO free_for_all_grants (run_id, character_id, gems, granted_at) \
+                         VALUES ('{run}', '{cid}', 100, 9);"
+                ))
+                .await;
+
+                // B -> A: everything of A's is back, exactly; B's went with B.
+                apply_switch_alt(&mut c, &switch(uid, alt_a, None)).await.unwrap();
+                assert_eq!(guild_of(&mut c, uid).await, Some(("ga".into(), "GRANDMASTER".into())));
+                assert_eq!(n(&mut c, &a_rows).await, 5);
+                assert_eq!(
+                    n(&mut c, &format!(
+                        "SELECT count(*) AS n FROM guild_exchanges WHERE id = 'open' \
+                           AND donation_sum = 3 AND requester_character_id = '{cid}' \
+                           AND requester_user_id = '{uid}' AND NOT redeemed"
+                    ))
+                    .await,
+                    1,
+                    "the open request comes back with the donations it had"
+                );
+                assert_eq!(
+                    n(&mut c, &format!(
+                        "SELECT count(*) AS n FROM free_for_all_grants WHERE granted_at = 7 \
+                           AND character_id = '{cid}'"
+                    ))
+                    .await,
+                    1,
+                    "A's own payout, not B's"
+                );
+                assert_eq!(
+                    n(&mut c, "SELECT count(*) AS n FROM guild_removals WHERE guild_id = 'gx' AND banned")
+                        .await,
+                    1
+                );
+
+                // A -> B again: B is in its own guild.
+                apply_switch_alt(&mut c, &switch(uid, alt_b, None)).await.unwrap();
+                assert_eq!(guild_of(&mut c, uid).await, Some(("gb".into(), "MEMBER".into())));
+                assert_eq!(
+                    n(&mut c, "SELECT count(*) AS n FROM guild_removals").await,
+                    0,
+                    "A's ban list is not B's"
+                );
+                assert_eq!(
+                    n(&mut c, "SELECT count(*) AS n FROM free_for_all_grants WHERE granted_at = 9").await,
+                    1
+                );
+            }
+
+            /// A guild that got a new Grand Master (the console can appoint one)
+            /// while the old one was switched out keeps it.
+            #[tokio::test]
+            async fn a_returning_grand_master_does_not_make_a_second_one() {
+                let mut c = db!();
+                let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
+                let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_a)).await;
+                legacy_version(&mut c, cid, uid, alt_b, alt_a).await;
+                guilds(&mut c).await;
+                let (other_u, other_c) = (Uuid::new_v4(), Uuid::new_v4());
+                sql(&mut c, &format!(
+                    "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                         VALUES ('ga', '{uid}', '{cid}', 'GRANDMASTER', 100)"
+                ))
+                .await;
+                apply_switch_alt(&mut c, &switch(uid, alt_b, None)).await.unwrap();
+                sql(&mut c, &format!(
+                    "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                         VALUES ('ga', '{other_u}', '{other_c}', 'GRANDMASTER', 300)"
+                ))
+                .await;
+                apply_switch_alt(&mut c, &switch(uid, alt_a, None)).await.unwrap();
+                assert_eq!(guild_of(&mut c, uid).await, Some(("ga".into(), "MEMBER".into())));
+                assert_eq!(
+                    n(&mut c, "SELECT count(*) AS n FROM guild_members \
+                               WHERE guild_id = 'ga' AND rank = 'GRANDMASTER'")
+                        .await,
+                    1
+                );
+            }
+
+            /// A guild deleted while the alt was away is not resurrected, and the
+            /// switch back still succeeds.
+            #[tokio::test]
+            async fn an_alt_does_not_rejoin_a_guild_that_is_gone() {
+                let mut c = db!();
+                let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
+                let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_a)).await;
+                legacy_version(&mut c, cid, uid, alt_b, alt_a).await;
+                guilds(&mut c).await;
+                sql(&mut c, &format!(
+                    "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                         VALUES ('ga', '{uid}', '{cid}', 'MEMBER', 100)"
+                ))
+                .await;
+                apply_switch_alt(&mut c, &switch(uid, alt_b, None)).await.unwrap();
+                sql(&mut c, "DELETE FROM guilds WHERE id = 'ga'").await;
+                apply_switch_alt(&mut c, &switch(uid, alt_a, None)).await.unwrap();
+                assert_eq!(guild_of(&mut c, uid).await, None);
+            }
+
+            /// Undoing to an older version of the SAME alt (the RonnieRaider
+            /// path) from before this change must not throw the character out
+            /// of its guild: that version has nothing to put in its place.
+            /// Restoring ANOTHER alt's version relabels the row with that alt.
+            #[tokio::test]
+            async fn a_restore_keeps_what_it_cannot_replace_and_relabels_the_row() {
+                let mut c = db!();
+                let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
+                let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_a)).await;
+                guilds(&mut c).await;
+                sql(&mut c, &format!(
+                    "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                         VALUES ('ga', '{uid}', '{cid}', 'GRANDMASTER', 1)"
+                ))
+                .await;
+                // A pre-change version of A: quests parked, no alt-row keys.
+                let old = snapshot_character_parking(&mut c, cid, uid, None, "import", true, false)
+                    .await
+                    .unwrap();
+                apply_restore(&mut c, old).await.unwrap();
+                assert_eq!(guild_of(&mut c, uid).await, Some(("ga".into(), "GRANDMASTER".into())));
+                // Older than what follows (one-second `saved_at`, frozen `now()`).
+                sql(&mut c, "UPDATE character_versions SET saved_at = saved_at - 200").await;
+
+                // B's version restored while A is live: A's guild goes with A,
+                // and the row now says B.
+                legacy_version(&mut c, cid, uid, alt_b, alt_a).await;
+                let b_version: Uuid = {
+                    #[derive(diesel::QueryableByName)]
+                    struct Id {
+                        #[diesel(sql_type = diesel::sql_types::Uuid)]
+                        id: Uuid,
+                    }
+                    diesel::sql_query(format!(
+                        "SELECT id FROM character_versions WHERE source_alt_uuid = '{alt_b}'"
+                    ))
+                    .get_result::<Id>(&mut c)
+                    .await
+                    .unwrap()
+                    .id
+                };
+                apply_restore(&mut c, b_version).await.unwrap();
+                assert_eq!(live_alt(&mut c, cid).await, Some(alt_b));
+                assert_eq!(guild_of(&mut c, uid).await, None);
+                apply_switch_alt(&mut c, &switch(uid, alt_a, None)).await.unwrap();
+                assert_eq!(guild_of(&mut c, uid).await, Some(("ga".into(), "GRANDMASTER".into())));
+            }
+
+            /// Only a KNOWN different alt counts as another character on import:
+            /// most live rows carry no alt id, and their re-import is the same
+            /// character arriving with one.
+            #[test]
+            fn an_import_is_another_alt_only_when_both_sides_are_known() {
+                let (a, b) = (Some(Uuid::new_v4()), Some(Uuid::new_v4()));
+                assert!(import_is_another_alt(a, b));
+                assert!(!import_is_another_alt(a, a));
+                assert!(!import_is_another_alt(None, a), "unknown live alt: keep its state");
+                assert!(!import_is_another_alt(a, None));
+                assert!(!import_is_another_alt(None, None));
+            }
+
+            /// #349: the import never wrote `server_state`, so an alt arriving by
+            /// import inherited the outgoing alt's gift claims (and its guild).
+            #[tokio::test]
+            async fn an_import_of_another_alt_brings_its_own_state() {
+                let mut c = db!();
+                let (alt_a, alt_b, alt_c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+                let (cid, uid) = seed_character_on_alt(&mut c, "Bryn", 30, 0, Some(alt_b)).await;
+                guilds(&mut c).await;
+                // B: a Halloween claim and a guild, kept the way a switch keeps it.
+                sql(&mut c, &format!(
+                    "UPDATE characters SET server_state = '{{\"giftClaims\":{{\"halloween\":1}}}}' \
+                       WHERE id = '{cid}'; \
+                     INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                         VALUES ('gb', '{uid}', '{cid}', 'MEMBER', 1);"
+                ))
+                .await;
+                parked_version(&mut c, cid, uid, alt_b, r#"{"name":"Bryn","level":30}"#, alt_a).await;
+                // A is live with its own claim and guild.
+                sql(&mut c, &format!(
+                    "UPDATE characters SET server_state = '{{\"giftClaims\":{{\"sunset\":1}}}}' \
+                       WHERE id = '{cid}'; \
+                     INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                         VALUES ('ga', '{uid}', '{cid}', 'MEMBER', 2);"
+                ))
+                .await;
+
+                // What the import does for a known different alt.
+                assert!(import_is_another_alt(Some(alt_a), Some(alt_b)));
+                snapshot_character_parking(&mut c, cid, uid, Some(alt_b), "import", true, true)
+                    .await
+                    .unwrap();
+                restore_incoming_alt_state(&mut c, cid, uid, Some(alt_b)).await.unwrap();
+                assert_eq!(
+                    live(&mut c, cid).await.server_state,
+                    serde_json::json!({"giftClaims": {"halloween": 1}}),
+                    "B's own claims, no parked keys, nothing of A's"
+                );
+                assert_eq!(guild_of(&mut c, uid).await, Some(("gb".into(), "MEMBER".into())));
+
+                // An alt the server has never kept arrives fresh.
+                snapshot_character_parking(&mut c, cid, uid, Some(alt_c), "import", true, true)
+                    .await
+                    .unwrap();
+                restore_incoming_alt_state(&mut c, cid, uid, Some(alt_c)).await.unwrap();
+                assert_eq!(
+                    live(&mut c, cid).await.server_state,
+                    serde_json::to_value(blades_lib::server_state::ServerState::default()).unwrap()
+                );
+                assert_eq!(guild_of(&mut c, uid).await, None);
+            }
+
+            async fn result(
+                c: &mut AsyncPgConnection,
+                cid: Uuid,
+                alt: Option<Uuid>,
+                at: i64,
+                delta: i64,
+            ) {
+                let alt = alt.map_or("NULL".to_string(), |a| format!("'{a}'"));
+                sql(c, &format!(
+                    "INSERT INTO arena_match_results \
+                         (id, character_id, win, trophy_delta, recorded_at, source_alt_uuid) \
+                     VALUES ('{}', '{cid}', {}, {delta}, to_timestamp({at}), {alt})",
+                    Uuid::new_v4(),
+                    delta > 0,
+                ))
+                .await;
+            }
+
+            fn season(id: Uuid, status: &str) -> season_store::SeasonRow {
+                season_store::SeasonRow {
+                    id,
+                    number: 9,
+                    name: "test".into(),
+                    starts_at: 1_000,
+                    ends_at: 4_000_000_000,
+                    status: status.into(),
+                    scoring: "shipped".into(),
+                    reset_rule: "hard_reset".into(),
+                    created_at: 0,
+                    ended_at: None,
+                }
+            }
+
+            /// #348: NBS-1's ladder summed every alt's matches into one placing,
+            /// and the reward went to whichever alt was live at the claim.
+            #[tokio::test]
+            async fn season_standings_and_awards_are_per_alt() {
+                let mut c = db!();
+                let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
+                let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_a)).await;
+                guilds(&mut c).await;
+                sql(&mut c, &format!(
+                    "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                         VALUES ('gb', '{uid}', '{cid}', 'MEMBER', 1)"
+                ))
+                .await;
+                parked_version(&mut c, cid, uid, alt_b, r#"{"name":"Bryn","level":30}"#, alt_a).await;
+                sql(&mut c, &format!(
+                    "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                         VALUES ('ga', '{uid}', '{cid}', 'MEMBER', 2)"
+                ))
+                .await;
+                result(&mut c, cid, Some(alt_a), 2_000, 30).await;
+                result(&mut c, cid, Some(alt_a), 2_001, 30).await;
+                result(&mut c, cid, Some(alt_b), 2_002, 20).await;
+                // Recorded before alts were tracked: counts for the alt live now.
+                result(&mut c, cid, None, 2_003, -10).await;
+
+                let s = season(Uuid::new_v4(), "active");
+                sql(&mut c, &format!(
+                    "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at, status) \
+                     VALUES ('{}', 9, 'test', 1000, 4000000000, 'active')",
+                    s.id
+                ))
+                .await;
+                let standings = season_store::freeze_standings(&mut c, &s).await.unwrap();
+                let got: Vec<_> = standings
+                    .iter()
+                    .map(|r| (r.source_alt_uuid, r.trophies, r.matches, r.wins, r.guild_id.clone()))
+                    .collect();
+                assert_eq!(
+                    got,
+                    vec![
+                        (Some(alt_a), 50, 3, 2, Some("ga".to_string())),
+                        (Some(alt_b), 20, 1, 1, Some("gb".to_string())),
+                    ],
+                    "one placing per alt, each in its own guild"
+                );
+
+                // Both alts' awards fit the table (the unique key is per alt now).
+                let guilds = season_store::guild_standings_from(s.id, &standings);
+                let awards = season_store::awards_from(s.id, &standings, &guilds);
+                let inserts: Vec<season_store::StandingInsertRow> =
+                    standings.iter().map(Into::into).collect();
+                diesel::insert_into(crate::schema::arena_season_standings::table)
+                    .values(&inserts)
+                    .execute(&mut c)
+                    .await
+                    .unwrap();
+                diesel::insert_into(crate::schema::arena_season_awards::table)
+                    .values(&awards)
+                    .execute(&mut c)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    n(&mut c, "SELECT count(*) AS n FROM arena_season_awards WHERE kind = 'rank'").await,
+                    2
+                );
+
+                // Only the live alt sees (and can claim) its own.
+                let claimable = format!(
+                    "SELECT count(*) AS n FROM arena_season_awards a \
+                      WHERE a.character_id = '{cid}' AND {}",
+                    season_store::AWARD_BELONGS_TO_LIVE_ALT_SQL
+                );
+                let per_alt = (awards.len() / 2) as i64;
+                assert_eq!(n(&mut c, &claimable).await, per_alt);
+                assert_eq!(
+                    n(&mut c, &format!(
+                        "{claimable} AND a.source_alt_uuid = '{alt_b}'"
+                    ))
+                    .await,
+                    0,
+                    "B's placing must not be offered to A"
+                );
+                sql(&mut c, &format!("UPDATE characters SET source_alt_uuid = '{alt_b}' WHERE id = '{cid}'"))
+                    .await;
+                assert_eq!(
+                    n(&mut c, &format!("{claimable} AND a.source_alt_uuid = '{alt_b}'")).await,
+                    per_alt
+                );
+                assert!(award_belongs_to_alt_for_tests(Some(alt_b), Some(alt_b)));
+            }
+
+            #[derive(diesel::QueryableByName, Debug, PartialEq)]
+            struct BoardRow {
+                #[diesel(sql_type = diesel::sql_types::Text)]
+                name: String,
+                #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+                guild_name: Option<String>,
+                #[diesel(sql_type = diesel::sql_types::BigInt)]
+                score: i64,
+                #[diesel(sql_type = diesel::sql_types::BigInt)]
+                wins: i64,
+            }
+
+            /// #331: each alt is its own leaderboard entry, with its own wins and
+            /// its own guild.
+            #[tokio::test]
+            async fn the_leaderboard_ranks_each_alt_with_its_own_wins_and_guild() {
+                let mut c = db!();
+                let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
+                let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_a)).await;
+                guilds(&mut c).await;
+                sql(&mut c, &format!(
+                    "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                         VALUES ('gb', '{uid}', '{cid}', 'MEMBER', 1)"
+                ))
+                .await;
+                parked_version(&mut c, cid, uid, alt_b, r#"{"name":"Bryn","pvpTrophies":20}"#, alt_a)
+                    .await;
+                sql(&mut c, &format!(
+                    "UPDATE characters SET character = '{{\"name\":\"Aran\",\"pvpTrophies\":60}}' \
+                       WHERE id = '{cid}'; \
+                     INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                         VALUES ('ga', '{uid}', '{cid}', 'MEMBER', 2); \
+                     INSERT INTO arena_seasons (id, number, name, starts_at, ends_at, status) \
+                         VALUES ('{}', 9, 'test', 1000, 4000000000, 'active');",
+                    Uuid::new_v4()
+                ))
+                .await;
+                result(&mut c, cid, Some(alt_a), 2_000, 30).await;
+                result(&mut c, cid, Some(alt_a), 2_001, 30).await;
+                result(&mut c, cid, Some(alt_b), 2_002, 20).await;
+                result(&mut c, cid, None, 2_003, 5).await;
+
+                let board: Vec<BoardRow> = diesel::sql_query(format!(
+                    "{} SELECT name, guild_name, score, wins FROM ranked ORDER BY rank",
+                    crate::arena::leaderboards::RANKED_CTE
+                ))
+                .get_results(&mut c)
+                .await
+                .unwrap();
+                assert_eq!(
+                    board,
+                    vec![
+                        BoardRow { name: "Aran".into(), guild_name: Some("Guild A".into()), score: 60, wins: 3 },
+                        BoardRow { name: "Bryn".into(), guild_name: Some("Guild B".into()), score: 20, wins: 1 },
+                    ]
+                );
+            }
+
+            /// The migration's backfill: the alt that played a match is the label
+            /// on the first snapshot taken after it, or the live alt if none was.
+            #[tokio::test]
+            async fn the_migration_backfills_which_alt_played_each_match() {
+                let mut c = db!();
+                let (alt_a, alt_b, alt_live, other) =
+                    (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+                let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_live)).await;
+                let (lone, _) = seed_character_on_alt(&mut c, "Solo", 5, 0, Some(other)).await;
+                let version = |alt: &str, at: i64| {
+                    format!(
+                        "INSERT INTO character_versions (id, character_id, user_id, source_alt_uuid, \
+                             character, data, inventory, wallet, server_state, saved_at) \
+                         VALUES ('{}', '{cid}', '{uid}', {alt}, '{{}}', '{{}}', '{{}}', '{{}}', '{{}}', {at});",
+                        Uuid::new_v4()
+                    )
+                };
+                sql(&mut c, &format!(
+                    "{}{}{}",
+                    version(&format!("'{alt_a}'"), 1_000),
+                    version(&format!("'{alt_b}'"), 2_000),
+                    version("NULL", 3_000)
+                ))
+                .await;
+                let pre_stamped = Uuid::new_v4();
+                for (at, alt) in [(500, None), (600, Some(pre_stamped)), (1_500, None), (2_500, None), (3_500, None)] {
+                    result(&mut c, cid, alt, at, 1).await;
+                }
+                result(&mut c, lone, None, 500, 1).await;
+
+                sql(&mut c, include_str!(
+                    "../../migrations/2026-10-10-000000-0000_alts_own_arena_history/up.sql"
+                ))
+                .await;
+
+                #[derive(diesel::QueryableByName)]
+                struct Stamp {
+                    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+                    source_alt_uuid: Option<Uuid>,
+                }
+                let stamps: Vec<Option<Uuid>> = diesel::sql_query(format!(
+                    "SELECT source_alt_uuid FROM arena_match_results \
+                      WHERE character_id = '{cid}' ORDER BY recorded_at"
+                ))
+                .get_results::<Stamp>(&mut c)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|s| s.source_alt_uuid)
+                .collect();
+                assert_eq!(
+                    stamps,
+                    vec![Some(alt_a), Some(pre_stamped), Some(alt_b), None, Some(alt_live)],
+                    "A before its snapshot, B before its, unknown under an unlabelled \
+                     snapshot, the live alt after the last; an existing stamp is kept"
+                );
+                assert_eq!(
+                    n(&mut c, &format!(
+                        "SELECT count(*) AS n FROM arena_match_results \
+                          WHERE character_id = '{lone}' AND source_alt_uuid IS NULL"
+                    ))
+                    .await,
+                    1,
+                    "a character never snapshotted is left alone"
+                );
+            }
         }
     }
 
@@ -6472,9 +7567,9 @@ pub(crate) async fn apply_restore(
         .await
         .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 6))?;
 
-    let character_id: Uuid = ch::characters
+    let (character_id, live_alt): (Uuid, Option<Uuid>) = ch::characters
         .filter(ch::user_id.eq(user_id))
-        .select(ch::id)
+        .select((ch::id, ch::source_alt_uuid))
         .for_update()
         .first(conn)
         .await
@@ -6487,15 +7582,23 @@ pub(crate) async fn apply_restore(
     // Event rows follow the quest rows' rule for whether the live ones are
     // parked at all (see `take_parked_events` for a version without them).
     let parked_events = take_parked_events(&mut server_state);
+    let parked_rows = take_parked_alt_rows(&mut server_state);
+    // The live guild membership and ledgers are set aside only when there is
+    // something to put in their place, or the version is of another alt. An
+    // undo of the same alt from a version older than this change (the
+    // RonnieRaider path) must not throw the character out of its guild or make a
+    // Free for All window payable twice.
+    let park_alt_rows = parked_rows.any() || import_is_another_alt(live_alt, source_alt_uuid);
 
     // Undoable, for the same reason the table exists at all.
-    let replaced_saved_as = snapshot_character(
+    let replaced_saved_as = snapshot_character_parking(
         conn,
         character_id,
         user_id,
         source_alt_uuid,
         "restore",
         parked.is_some(),
+        park_alt_rows,
     )
     .await
         .map_err(|_| {
@@ -6510,6 +7613,10 @@ pub(crate) async fn apply_restore(
             ch::wallet.eq(wallet),
             ch::town.eq(town),
             ch::server_state.eq(server_state),
+            // The row now holds the version's alt. Left on the old label, the
+            // live alt would be wrong for every per-alt check (season awards,
+            // the next snapshot's filing). A version with no alt keeps the label.
+            ch::source_alt_uuid.eq(source_alt_uuid.or(live_alt)),
         ))
         .execute(conn)
         .await
@@ -6519,6 +7626,11 @@ pub(crate) async fn apply_restore(
             BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
         })?;
         unpark_events(conn, character_id, parked_events).await.map_err(|_| {
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
+        })?;
+    }
+    if park_alt_rows {
+        unpark_alt_rows(conn, character_id, user_id, parked_rows).await.map_err(|_| {
             BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
         })?;
     }
@@ -6815,6 +7927,7 @@ pub(crate) async fn apply_switch_alt(
     let (restored_from, character, data, inventory, wallet, town, mut server_state) = target;
     let parked = take_parked_quests(&mut server_state);
     let parked_events = take_parked_events(&mut server_state);
+    let parked_rows = take_parked_alt_rows(&mut server_state);
     diesel::update(ch::characters.filter(ch::id.eq(character_id)))
         .set((
             ch::character.eq(character),
@@ -6838,6 +7951,12 @@ pub(crate) async fn apply_switch_alt(
     unpark_events(conn, character_id, parked_events).await.map_err(|_| {
         BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
     })?;
+    // Same rule for guild membership, donation requests and the per-character
+    // ledgers: the outgoing alt took its own, the incoming one brings its own
+    // or — for a version from before this — arrives with none.
+    unpark_alt_rows(conn, character_id, body.user_id, parked_rows)
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
 
     remember_device_alt(conn, body).await?;
 
