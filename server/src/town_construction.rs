@@ -62,16 +62,18 @@ pub(crate) struct BuildingConstruction {
     pub styles: HashMap<Uuid, StyleLevels>,
 }
 
-/// One style's per-level rows. The extractor also writes `prestigeForLevel` /
-/// `prestigeForStyle` beside these; the server does not read them (prestige is
-/// still paid from `building_upgrades.json` and the measured
-/// `style_prestige.json`; the level prestige agrees with the APK for every
-/// shop / house / town hall row, and the style prestige agrees with every
-/// measured restyle the server pays).
+/// One style's per-level rows. The extractor also writes `prestigeForLevel`
+/// beside these; the server does not read it (level prestige is still paid from
+/// `building_upgrades.json`, which agrees with the APK for every shop / house /
+/// town hall row).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct StyleLevels {
     pub require_town_level: Vec<u64>,
+    /// Town XP for applying this style to a building of this level — what a
+    /// restyle pays (report #371; see `town::prestige_on_style_change`).
+    #[serde(default)]
+    pub prestige_for_style: Vec<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,6 +126,17 @@ impl BuildingConstruction {
         self.styles
             .get(&style)?
             .require_town_level
+            .get(level as usize)
+            .copied()
+    }
+
+    /// Town XP for restyling a level-`level` building to `style`: the APK's
+    /// `_styles[style]._levels[level]._prestigeForStyle`. Exact index only — a
+    /// style or level the APK has no row for returns `None`.
+    pub fn prestige_for_style(&self, style: Uuid, level: u64) -> Option<u64> {
+        self.styles
+            .get(&style)?
+            .prestige_for_style
             .get(level as usize)
             .copied()
     }
