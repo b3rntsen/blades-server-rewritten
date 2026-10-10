@@ -753,7 +753,13 @@ fn grant_from_offer_contents_with_enchanting(
             // the way out.
             let wears =
                 !blades_lib::economy::template_skips_durability(entry.item_template_id, items);
-            let rolled_grading = if !wears && entry.grading.is_empty() && entry.arcane_tier > 0 {
+            // A template that authors its own properties is never rolled (#8).
+            let fixed = crate::fixed_templates::has_mandatory_properties(entry.item_template_id);
+            let rolled_grading = if !wears
+                && !fixed
+                && entry.grading.is_empty()
+                && entry.arcane_tier > 0
+            {
                 Some(blades_lib::features::sigil_grades::roll_grading(
                     entry.arcane_tier,
                     roll_nonce,
@@ -2610,6 +2616,72 @@ mod offer_contents_fallback {
         assert_eq!(a.items[0].item.properties, b.items[0].item.properties);
         assert_eq!(a.items[0].item.grade, None);
         assert!(a.items[0].item.durability > 0.0);
+    }
+
+    /// Tracker report #8: `SigilShop_Ultimate_RingOfShock` sold the Master Ring of
+    /// Shock with `grade: 4` and three rolled GRADING properties on top of the six
+    /// mandatory properties its template already carries. A fixed template must
+    /// arrive exactly as authored, on every purchase.
+    #[test]
+    fn the_ring_of_shock_offer_grants_an_unrolled_ring() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let sd = crate::static_loader::load(&dir);
+        let rd = repair_data();
+        let offer = Uuid::parse_str("5e77bc66-a80b-4f9b-b272-e738635cf2fd").unwrap();
+        let ring = Uuid::parse_str("85c44edf-2fc6-4b4d-b8a9-3340f127f9f0").unwrap();
+        let contents = sd
+            .global_shop_offer_contents
+            .get(&offer)
+            .expect("Ring of Shock offer present");
+        assert!(
+            !sd.enchanting.secondary_tables.is_empty(),
+            "the prod path (reroll_sigil_jewelry) needs the real enchanting tables"
+        );
+        for nonce in 0..40 {
+            let reward = grant_from_offer_contents_with_enchanting(
+                Some(contents),
+                &rd,
+                item_table(),
+                &sd.enchanting,
+                nonce,
+            )
+            .expect("Ring of Shock offer grantable");
+            assert_eq!(reward.items.len(), 1);
+            let item = &reward.items[0].item;
+            assert_eq!(item.item_template_id, ring);
+            assert_eq!(item.grade, None, "nonce {nonce}: a fixed ring must not be graded");
+            assert!(
+                item.properties.grading.is_empty(),
+                "nonce {nonce}: {:?}",
+                item.properties.grading
+            );
+            assert!(item.properties.enchanting.is_empty(), "nonce {nonce}");
+            assert_eq!(item.arcane_tier, None);
+        }
+    }
+
+    /// The same rule for an arcane offer of a fixed template: the arcane-tier
+    /// grade roll (#167) must skip it too.
+    #[test]
+    fn an_arcane_fixed_ring_is_not_graded_either() {
+        let ring = Uuid::parse_str("85c44edf-2fc6-4b4d-b8a9-3340f127f9f0").unwrap();
+        let mut e = entry(ring, 1, "items");
+        e.arcane_tier = 2;
+        let o = offer(OfferContentsKind::NeedsRoll, vec![e]);
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let sd = crate::static_loader::load(&dir);
+        for nonce in 0..40 {
+            let r = grant_from_offer_contents_with_enchanting(
+                Some(&o),
+                &repair_data(),
+                item_table(),
+                &sd.enchanting,
+                nonce,
+            )
+            .expect("grantable");
+            assert_eq!(r.items[0].item.grade, None);
+            assert!(r.items[0].item.properties.grading.is_empty());
+        }
     }
 
     /// THE CONTROL that matters: an arcane item whose grading retail ROLLED must

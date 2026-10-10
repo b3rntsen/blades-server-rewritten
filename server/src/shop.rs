@@ -1945,6 +1945,8 @@ mod tests {
                         crate::jewelry_roll::is_jewelry_template(
                             i.item.item_template_id,
                             deploy_items(),
+                        ) && !crate::fixed_templates::has_mandatory_properties(
+                            i.item.item_template_id,
                         )
                     })
                     .then_some((id, def))
@@ -1985,6 +1987,32 @@ mod tests {
         for item in &mut grant.items {
             crate::jewelry_roll::roll_generated_jewelry(&mut item.item, deploy_items(), rng);
         }
+    }
+
+    /// Tracker report #8: a fixed (mandatory-property) ring is never rolled, by
+    /// either merchant path — the window roll or the purchase-time grade.
+    #[test]
+    fn a_fixed_ring_bundle_is_never_rolled() {
+        // The Ring of Shock's own bundle (`SigilShop_Ultimate_RingOfShock`).
+        let def = deploy_bundle("d2826757-313b-4699-9d95-f19dc9b31d6a");
+        let authored = def.grant.items[0].item.clone();
+        assert!(crate::fixed_templates::has_mandatory_properties(authored.item_template_id));
+        for nonce in 0..20 {
+            let mut grant = def.grant.clone();
+            let mut rng = crate::jewelry_roll::seeded(&[b"shock"], nonce);
+            roll_like_the_window(&mut grant, &mut rng);
+            assert_eq!(grant.items[0].item, authored, "window roll touched a fixed ring");
+            let minted = mint_bundle(&def.grant, 1, deploy_items(), &mut rng);
+            assert_eq!(minted.items[0].item.grade, None);
+            assert!(minted.items[0].item.properties.grading.is_empty());
+        }
+        // Control: an ordinary ring bundle still rolls.
+        let plain = deploy_bundle(GOLD_EMERALD_RING);
+        let mut grant = plain.grant.clone();
+        let mut rng = crate::jewelry_roll::seeded(&[b"plain"], 1);
+        roll_like_the_window(&mut grant, &mut rng);
+        assert!(grant.items[0].item.grade.is_some());
+        assert!(!grant.items[0].item.properties.grading.is_empty());
     }
 
     /// THE BUG (#321): Enchanter stock was rolled with the Sigil store's measured

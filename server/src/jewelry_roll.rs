@@ -113,6 +113,10 @@ pub fn roll_generated_jewelry<R: Rng + ?Sized>(
     if !matches!(item_type, jewelry_grade::RING | jewelry_grade::NECKLACE) {
         return false;
     }
+    // A legendary ring arrives as its template defines it (#8).
+    if crate::fixed_templates::has_mandatory_properties(item.item_template_id) {
+        return false;
+    }
     if let Some((grade, grading)) = jewelry_grade::roll(item_type, rng) {
         item.grade = Some(grade);
         item.properties.grading = grading;
@@ -133,6 +137,12 @@ pub fn reroll_sigil_jewelry<R: Rng + ?Sized>(
     rng: &mut R,
 ) -> bool {
     if !is_jewelry_template(item.item_template_id, items) {
+        return false;
+    }
+    // The Master Ring of Shock bug (#8): its template already carries six
+    // mandatory properties, and retail never graded one (0 of 25 captured
+    // mandatory-property ring instances). Leave it exactly as authored.
+    if crate::fixed_templates::has_mandatory_properties(item.item_template_id) {
         return false;
     }
     if reroll_grading {
