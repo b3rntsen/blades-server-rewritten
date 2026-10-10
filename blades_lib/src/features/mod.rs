@@ -19,6 +19,7 @@ pub mod recipe_outputs;
 pub mod repair;
 pub mod revive;
 pub mod salvage;
+pub mod smithing_inputs;
 pub mod sigil_grades;
 pub mod store_bundles;
 pub mod level_up;

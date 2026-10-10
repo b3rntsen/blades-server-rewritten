@@ -7,8 +7,11 @@
 //!   enchant is refused with the economy 400 and nothing changes. See
 //!   [`charge_enchant_inputs`].
 //! * **Speed-up** (`speedUp` on finish): billed in gems from the shared skip-time curve.
-//! * **Plain craft and temper**: still LENIENT — no materials or gold are charged.
-//!   TODO: plain-craft and temper recipe inputs are not extracted yet.
+//! * **Forge (Smithing) craft**: the APK recipe's `_inputs` (materials + gold, × batch
+//!   size), charged when the craft STARTS, all or nothing — see
+//!   [`blades_lib::features::smithing_inputs`].
+//! * **Alchemy / decoration craft and temper**: still LENIENT — nothing is charged.
+//!   TODO: those recipe inputs are not extracted yet.
 //!
 //! ## Temper / enchant
 //! A `POST /crafts` request that carries an `itemId` MODIFIES an existing backpack item
@@ -649,6 +652,22 @@ async fn start_craft(
         // ── plain craft: mint from the recipe; unknown recipe → derive a valid
         //    crafting_type_id + a well-formed result (never 404, never echo
         //    recipe_id — both crash/freeze the client mid-craft) ──
+        //
+        // A forge (Smithing) craft is PAID first, from the APK's `Recipe._inputs`
+        // (materials + gold, × batch size), exactly as retail charged it. Unaffordable
+        // → the economy 400 with nothing minted or stored. Alchemy / decoration
+        // inputs are not extracted yet and stay free.
+        if let Some(inputs) =
+            blades_lib::features::smithing_inputs::inputs_for(&recipe_id, batch_size)
+        {
+            pay_craft_inputs(
+                &inputs,
+                &mut entry.wallet.0,
+                &mut entry.inventory.0,
+                &mut tracker,
+                req.gems_payment,
+            )?;
+        }
         match &plain_recipe {
             Some(recipe) => {
                 // Mint fresh, unique item ids now (the recipe's are shared
@@ -1046,16 +1065,30 @@ fn charge_enchant_inputs(
         .iter()
         .map(|i| (i.template_id, i.quantity))
         .collect();
+    pay_craft_inputs(&inputs, wallet, inventory, tracker, gems_payment)?;
+    Ok(inputs)
+}
+
+/// Take a craft's inputs, all or nothing: from stock, or — when the player chose to
+/// (`gemsPayment`) — buying what they are short of with gems. Refused with the economy
+/// 400 when unaffordable, before anything is minted or stored.
+fn pay_craft_inputs(
+    inputs: &[(Uuid, u64)],
+    wallet: &mut CompleteWallet,
+    inventory: &mut blades_lib::user_data::CompleteInventory,
+    tracker: &mut InventoryChangeTracker,
+    gems_payment: bool,
+) -> Result<(), BladeApiError> {
     if gems_payment {
         blades_lib::economy::missing_resources::pay_inputs_with_gems(
-            &inputs, wallet, inventory, tracker,
+            inputs, wallet, inventory, tracker,
         )
         .map_err(BladeApiError::from_economy)?;
     } else {
-        blades_lib::economy::pay_inputs(&inputs, wallet, inventory, tracker)
+        blades_lib::economy::pay_inputs(inputs, wallet, inventory, tracker)
             .map_err(BladeApiError::from_economy)?;
     }
-    Ok(inputs)
+    Ok(())
 }
 
 /// Repair a STORED craft job on the way out to the client.
@@ -5143,6 +5176,9 @@ mod tests {
             let sd = static_data_from_deploy();
             let rd = repair_data_from_deploy();
             let s = seed(&mut conn, 0).await;
+            // Forge crafts are paid now: stock exactly what the two recipes cost.
+            stock_inputs(&mut conn, &s, &[DRAGONSCALE_HELMET_RECIPE, DRAGONSCALE_ARMOR_RECIPE])
+                .await;
             // Precondition: both recipes really take the APK-output path (not a captured
             // recipe, not a smith craftable) — otherwise this proves nothing.
             for r in [DRAGONSCALE_HELMET_RECIPE, DRAGONSCALE_ARMOR_RECIPE] {
@@ -5422,6 +5458,127 @@ mod tests {
             let job = &after.server_state.0.craft_jobs[0];
             assert_eq!(job.crafting_type_id, item_mod_crafting_type(10));
             assert_eq!(job.results["items"][0]["temperingLevel"], 10);
+        }
+
+        /// Credit a seeded character with exactly the APK inputs of `recipes`.
+        async fn stock_inputs(conn: &mut AsyncPgConnection, s: &Seeded, recipes: &[&str]) {
+            let mut row = stored(conn, s).await;
+            for r in recipes {
+                for (t, q) in
+                    blades_lib::features::smithing_inputs::inputs_for(&uuid(r), 1).unwrap()
+                {
+                    if blades_lib::economy::is_currency(t) {
+                        row.wallet.0.credit(t, q);
+                    } else {
+                        row.inventory.0.backpack.stackable_items.add(t, q);
+                    }
+                }
+            }
+            write_back(conn, row).await.unwrap();
+        }
+
+        /// Tracker report #366. Stalhrim Boots (tier 8, the armour the client offers a
+        /// veteran at Forge level 8) start, mint Stalhrim Boots, and consume exactly
+        /// the APK's inputs: 8 Stalhrim, 5 Malachite, 3 Quicksilver and 3,367 gold.
+        #[tokio::test]
+        async fn a_stalhrim_forge_craft_mints_the_item_and_consumes_its_inputs() {
+            const STALHRIM_BOOTS_RECIPE: &str = "f1721857-3b94-4d2b-9a5d-9e6eaf8a2184";
+            const STALHRIM_BOOTS: &str = "b73fa9ab-fdd0-49a0-8b16-de3b8a8961fd";
+            const STALHRIM: &str = "ba9fe442-2cf8-48a8-9416-6d91c2a00cab";
+            const MALACHITE: &str = "85ed5500-3581-4699-8095-4b5ff6514355";
+            const QUICKSILVER: &str = "e80bee76-f92c-4005-9eff-20d1e8c64d24";
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+            let s = seed(&mut conn, 10_000).await;
+            let mut row = stored(&mut conn, &s).await;
+            for (t, n) in [(STALHRIM, 20), (MALACHITE, 5), (QUICKSILVER, 9)] {
+                row.inventory.0.backpack.stackable_items.add(uuid(t), n);
+            }
+            write_back(&mut conn, row).await.unwrap();
+            let before = stored(&mut conn, &s).await;
+
+            let started = start_craft(
+                &mut conn,
+                &sd,
+                rd,
+                deploy_items(),
+                s.user_id,
+                s.character_id,
+                plain_request(STALHRIM_BOOTS_RECIPE),
+            )
+            .await
+            .expect("an affordable Stalhrim craft starts");
+            assert_eq!(started.craft["results"]["items"][0]["itemTemplateId"], STALHRIM_BOOTS);
+            assert_eq!(
+                started.craft["craftingTypeId"],
+                "a47707e6-59e9-43b0-a29f-6d703acd8171",
+                "a Smithing job"
+            );
+            assert_eq!(started.wallet.balance(GOLD), 10_000 - 3367);
+
+            let after = stored(&mut conn, &s).await;
+            let count = |e: &CharacterDbEntryEconomy, t: &str| {
+                e.inventory.0.backpack.stackable_items.count(uuid(t))
+            };
+            assert_eq!(count(&before, STALHRIM) - count(&after, STALHRIM), 8);
+            assert_eq!(count(&before, MALACHITE) - count(&after, MALACHITE), 5);
+            assert_eq!(count(&before, QUICKSILVER) - count(&after, QUICKSILVER), 3);
+            assert_eq!(gold_of(&after), 10_000 - 3367);
+
+            let craft_id: Uuid = started.craft["id"].as_str().unwrap().parse().unwrap();
+            let fin = collect_craft(
+                &mut conn,
+                &sd,
+                rd,
+                None,
+                s.user_id,
+                s.character_id,
+                craft_id,
+                false,
+            )
+            .await
+            .expect("finish");
+            assert_eq!(fin.reward.items.len(), 1);
+            assert_eq!(fin.reward.items[0].item.item_template_id, uuid(STALHRIM_BOOTS));
+            assert_eq!(gold_of(&stored(&mut conn, &s).await), 10_000 - 3367, "finish is free");
+        }
+
+        /// CONTROL: one Stalhrim short and the forge craft is refused with the economy
+        /// 400 — nothing charged, nothing stored.
+        #[tokio::test]
+        async fn an_unaffordable_forge_craft_is_refused_and_persists_nothing() {
+            const STALHRIM_BOOTS_RECIPE: &str = "f1721857-3b94-4d2b-9a5d-9e6eaf8a2184";
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+            let s = seed(&mut conn, 10_000).await;
+            stock_inputs(&mut conn, &s, &[STALHRIM_BOOTS_RECIPE]).await;
+            let mut row = stored(&mut conn, &s).await;
+            row.inventory
+                .0
+                .backpack
+                .stackable_items
+                .remove(uuid("ba9fe442-2cf8-48a8-9416-6d91c2a00cab"), 1)
+                .unwrap();
+            write_back(&mut conn, row).await.unwrap();
+            let before = stored(&mut conn, &s).await;
+
+            let err = start_craft(
+                &mut conn,
+                &sd,
+                rd,
+                deploy_items(),
+                s.user_id,
+                s.character_id,
+                plain_request(STALHRIM_BOOTS_RECIPE),
+            )
+            .await;
+            assert!(err.is_err(), "one ingot short must refuse");
+            let after = stored(&mut conn, &s).await;
+            assert_eq!(gold_of(&after), gold_of(&before));
+            assert_eq!(counts(&after.inventory.0), counts(&before.inventory.0));
+            assert!(after.server_state.0.craft_jobs.is_empty());
         }
     }
 }
