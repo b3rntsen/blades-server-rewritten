@@ -308,6 +308,66 @@ fn add_missing_item_tables(
     changed
 }
 
+/// Give a stored row's short floor piles the results they are missing (#353,
+/// #358, #365).
+///
+/// A container spawn retail was never captured on used to get ONE result, though
+/// the client places the APK's `_quantity` of them: the uncaptured event dungeons
+/// (EQ30, EQ40 and seven more) went out with their 7 / 3 / 1 breakables as 1 / 1 / 1.
+/// The client draws every container's contents from this row, and an event row is
+/// durable for its whole 48-hour window, so a fixed generator alone would leave
+/// the players already holding one with empty containers until the next window.
+///
+/// Only results past the stored length are appended, from the row's own fresh
+/// generation; every result the player may already have opened stays as it was.
+/// Rows this server did not generate (`version != 0`) are left alone.
+fn grow_short_item_piles(stored: &mut DungeonGeneratedData, fresh: &DungeonGeneratedData) -> bool {
+    if stored.version != 0 {
+        return false;
+    }
+    let mut changed = false;
+    for (spawn, fresh_results) in &fresh.item_generated_data {
+        let Some(stored_results) = stored.item_generated_data.get_mut(spawn) else {
+            continue;
+        };
+        if stored_results.len() < fresh_results.len() {
+            stored_results.extend_from_slice(&fresh_results[stored_results.len()..]);
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Put a stored EVENT row's enemies at the levels the event dungeon gives them.
+///
+/// Retail stood each event enemy at the row's `difficultyLevel` plus its spawn
+/// group's APK level delta (1,641 of 1,643 captured event enemies; bosses
+/// typically +6), and the enemy's variant -- its name, damage and resistances --
+/// is picked by the client from that level. Rows minted before this stood every
+/// enemy at the bare difficulty. Only `enemyLevel` and `givenXP` move; loot
+/// stays as rolled. Rows this server did not generate are left alone.
+fn relevel_event_enemies(stored: &mut DungeonGeneratedData, fresh: &DungeonGeneratedData) -> bool {
+    if stored.version != 0 {
+        return false;
+    }
+    let mut changed = false;
+    for (group, fresh_spawners) in &fresh.enemy_generated_data {
+        let Some(stored_spawners) = stored.enemy_generated_data.get_mut(group) else {
+            continue;
+        };
+        for (stored_enemies, fresh_enemies) in stored_spawners.iter_mut().zip(fresh_spawners) {
+            for (enemy, want) in stored_enemies.iter_mut().zip(fresh_enemies) {
+                if enemy.enemy_level != want.enemy_level || enemy.given_xp != want.given_xp {
+                    enemy.enemy_level = want.enemy_level;
+                    enemy.given_xp = want.given_xp;
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
+}
+
 /// Add generated dungeon sections a stored row predates (#260).
 ///
 /// Retail generated every stage of a multi-part quest at accept time. Rows
@@ -1152,7 +1212,13 @@ mod report329_foreign_event_stage_tests {
         let gd = super::report85_job_generated_data_tests::game_data();
         let eq24 = event_row(&gd, EQ24, 16);
         let mut both =
-            blades_lib::util::quest::generate_for_event_dungeon(&gd, &uuid(EQ24_A), 16, 60).unwrap();
+            blades_lib::util::quest::generate_for_event_dungeon(
+                &gd,
+                &uuid(EQ24_A),
+                16,
+                &blades_lib::static_data::QuestLevelScaling::default(),
+            )
+            .unwrap();
         let before = serde_json::to_value(&both).unwrap();
         assert_eq!(both.enemy_generated_data.len(), 20);
         assert!(!drop_foreign_event_stages(&gd, &eq24, &mut both));
@@ -1656,17 +1722,36 @@ pub async fn get_quests(
                 // An event row gains the stages it was minted without (#323), from
                 // its own event dungeon at its own difficulty; the story repairs
                 // below stay story-only.
-                let expanded = if is_event {
+                let event_fresh = if is_event {
                     event_row_fresh(
                         &globals.game_data,
                         &globals.static_data.quests_daily.level_scaling,
                         row.id,
                         &row.info.0,
                     )
-                    .is_some_and(|fresh| add_missing_dungeon_sections(stored, &fresh))
                 } else {
-                    add_missing_dungeon_sections(stored, &fresh)
+                    None
                 };
+                let expanded = match &event_fresh {
+                    Some(ev) => add_missing_dungeon_sections(stored, ev),
+                    None if is_event => false,
+                    None => add_missing_dungeon_sections(stored, &fresh),
+                };
+                // Full container piles (#353, #358, #365) for every row, and the
+                // event's own enemy levels for an event row.
+                let piled = grow_short_item_piles(stored, event_fresh.as_ref().unwrap_or(&fresh));
+                let levelled = event_fresh
+                    .as_ref()
+                    .is_some_and(|ev| relevel_event_enemies(stored, ev));
+                if piled || levelled {
+                    log::info!(
+                        "quests: filled the containers ({piled}) / set the enemy levels \
+                         ({levelled}) of quest {} ({}) for character {} (#365)",
+                        row.id,
+                        row.info.0.gld_quest_id,
+                        character_id_var
+                    );
+                }
                 let refreshed = !is_event && refresh_empty_item_loot(stored, fresh.clone());
                 let grew = !is_event && add_missing_item_tables(stored, &fresh);
                 let keyed = add_missing_enemy_key_loot(stored, &fresh);
@@ -1687,7 +1772,7 @@ pub async fn get_quests(
                         character_id_var
                     );
                 }
-                if pruned || expanded || refreshed || grew || keyed || filled {
+                if pruned || expanded || refreshed || grew || keyed || filled || piled || levelled {
                     use crate::schema::quests;
                     diesel::update(
                         quests::table
@@ -4803,7 +4888,7 @@ pub(crate) mod event_quests {
                 &dungeon_id,
                 blades_lib::util::dungeon::run_loot_seed(&quest_id, 0),
                 enemy_level,
-                static_data.quests_daily.level_scaling.given_xp(enemy_level),
+                &static_data.quests_daily.level_scaling,
             );
         }
 
@@ -9268,11 +9353,17 @@ mod report323_event_row_stage_repair_tests {
 
         for group in gd.dungeons[&b].spawn_info.enemy_spawn_groups.keys() {
             let rolls = &stored.enemy_generated_data[group];
-            assert!(
-                rolls.iter().flatten().all(|e| e.enemy_level == level
-                    && e.given_xp == scaling.given_xp(level)),
-                "stage _B group {group} is at the row's level {level}"
-            );
+            for (i, spawner) in rolls.iter().enumerate() {
+                // The row's level plus the group's APK delta (#365).
+                let want =
+                    (level + blades_lib::util::dungeon::spawn_group_level_delta(group, i)).max(1);
+                assert!(
+                    spawner
+                        .iter()
+                        .all(|e| e.enemy_level == want && e.given_xp == scaling.given_xp(want)),
+                    "stage _B group {group} is at the row's level {level} + its delta"
+                );
+            }
         }
         assert_eq!(stored.chest_generated_data.len(), 2, "stage _B's two chests");
         for (group, rolls) in &before.enemy_generated_data {
@@ -9543,5 +9634,78 @@ mod report_337_job_drops_and_families {
             .count();
         // Retail: 12 of 16.
         assert!(own * 2 > merc.len(), "{own} of {} Mercenary jobs kept a human boss", merc.len());
+    }
+}
+
+/// Event rows minted before the container / level fix heal on the next `/quests`
+/// (tracker #353, #358, #365). An event row is durable for its 48-hour window and
+/// the client draws every container from it, so the generator fix alone would
+/// leave this window's players with empty containers.
+#[cfg(test)]
+mod report365_event_row_heal_tests {
+    use super::*;
+
+    /// EQ30 "Spirit of the Hunt", HauDrauf's 10-08 event; never captured.
+    const EQ30: &str = "11ffa10c-f587-432b-8901-fde27f37f65a";
+
+    fn row_and_fresh(level: i64) -> (DungeonGeneratedData, DungeonGeneratedData) {
+        let gd = super::report85_job_generated_data_tests::game_data();
+        let scaling = blades_lib::static_data::QuestLevelScaling::default();
+        let (mut info, _) =
+            generate_quest_data(&gd, Uuid::parse_str(EQ30).unwrap(), level, &scaling).unwrap();
+        info.r#type = blades_lib::user_data::QuestType::GameEvent;
+        info.difficulty_level = level;
+        let row_id = Uuid::from_u128(0x365);
+        let fresh = event_row_fresh(&gd, &scaling, row_id, &info).expect("EQ30 generates");
+        // The row as fork/main minted it: one result per container spawn, every
+        // enemy flat at the row's difficulty.
+        let mut stale = fresh.clone();
+        for pile in stale.item_generated_data.values_mut() {
+            pile.truncate(1);
+        }
+        for e in stale.enemy_generated_data.values_mut().flatten().flatten() {
+            e.enemy_level = level;
+            e.given_xp = scaling.given_xp(level);
+        }
+        (stale, fresh)
+    }
+
+    #[test]
+    fn a_minted_row_gets_its_missing_containers_and_keeps_the_ones_it_had() {
+        let (mut stored, fresh) = row_and_fresh(78);
+        let before = stored.clone();
+        assert!(grow_short_item_piles(&mut stored, &fresh));
+        let mut sizes: Vec<usize> = stored.item_generated_data.values().map(Vec::len).collect();
+        sizes.sort();
+        assert_eq!(sizes, vec![1, 3, 7], "EQ30's 7 / 3 / 1 breakables");
+        for (spawn, pile) in &before.item_generated_data {
+            assert_eq!(
+                serde_json::to_value(&pile[0]).unwrap(),
+                serde_json::to_value(&stored.item_generated_data[spawn][0]).unwrap(),
+                "a container the player may have opened is untouched"
+            );
+        }
+        assert!(!grow_short_item_piles(&mut stored, &fresh), "idempotent");
+    }
+
+    #[test]
+    fn a_minted_row_gets_its_bosses_six_levels_up() {
+        let (mut stored, fresh) = row_and_fresh(78);
+        assert!(relevel_event_enemies(&mut stored, &fresh));
+        for e in stored.enemy_generated_data.values().flatten().flatten() {
+            assert_eq!(e.enemy_level, 84);
+        }
+        assert!(!relevel_event_enemies(&mut stored, &fresh), "idempotent");
+    }
+
+    /// CONTROL: a row this server did not generate is the player's captured state.
+    #[test]
+    fn a_captured_row_is_left_alone() {
+        let (mut stored, fresh) = row_and_fresh(78);
+        stored.version = 1;
+        let before = serde_json::to_value(&stored).unwrap();
+        assert!(!grow_short_item_piles(&mut stored, &fresh));
+        assert!(!relevel_event_enemies(&mut stored, &fresh));
+        assert_eq!(serde_json::to_value(&stored).unwrap(), before);
     }
 }

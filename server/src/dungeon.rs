@@ -524,7 +524,7 @@ pub(crate) fn event_dungeon_data(
         game_data,
         &dungeon_uuid,
         enemy_level,
-        scaling.given_xp(enemy_level),
+        scaling,
     )
     .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
     Ok((dungeon_uuid, generated_data))
@@ -548,7 +548,7 @@ pub(crate) fn event_dungeon_data_for_run(
         &dungeon_uuid,
         run_loot_seed(&instance_quest_id, completion_count),
         enemy_level,
-        scaling.given_xp(enemy_level),
+        scaling,
     )
     .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
     Ok((dungeon_uuid, generated_data))
@@ -1265,6 +1265,25 @@ mod dungeon_settings_resolution {
         data.enemy_generated_data.values().flatten().flatten().collect()
     }
 
+    /// Every event enemy stands where retail stood it: `level` plus its group's
+    /// APK level delta, worth the XP of that level (1,641 of 1,643 captured event
+    /// enemies; #365).
+    fn assert_event_levels(data: &DungeonGeneratedData, level: i64, scaling: &QuestLevelScaling) {
+        for (group, spawners) in &data.enemy_generated_data {
+            for (i, spawner) in spawners.iter().enumerate() {
+                let want =
+                    (level + blades_lib::util::dungeon::spawn_group_level_delta(group, i)).max(1);
+                for e in spawner {
+                    assert_eq!(
+                        (e.enemy_level, e.given_xp),
+                        (want, scaling.given_xp(want)),
+                        "group {group} spawner {i}"
+                    );
+                }
+            }
+        }
+    }
+
     /// An event attempt is the dungeon the client was SHOWN.
     ///
     /// `/quests` mints the event row at the player's scaled level and sends its
@@ -1308,28 +1327,37 @@ mod dungeon_settings_resolution {
                 "event {}: the attempt must be the dungeon the client was shown",
                 m.quest.gld_quest_id
             );
-            for e in enemies(&attempt) {
-                assert_eq!(e.enemy_level, level);
-                assert_eq!(e.given_xp, scaling.given_xp(level));
-            }
+            assert_event_levels(&attempt, level, scaling);
         }
     }
 
     /// The worked example from prod, pinned against the shipped tables so a change
     /// to them is seen here rather than as a surprise in the PR's numbers.
+    ///
+    /// The row is level 73; its enemies stand at 73 plus their group's APK delta
+    /// (#365): EQ15's two `[4]` pairs and its `[4]` single at 77, its `[6]` boss at
+    /// 79, the rest at 73 -- as retail's EQ15 rows did.
     #[test]
     fn a_level_89_players_event_enemies_are_level_73_and_worth_258_xp() {
         let (sd, gd) = (static_data(), game_data());
         let scaling = &sd.quests_daily.level_scaling;
         assert_eq!(scaling.enemy_level(89), 73);
+        assert_eq!(scaling.given_xp(73), 258);
 
         // "A Battle Unceasing" (EQ15), the event the prod row was on.
         let eq15 = Uuid::parse_str("e8f3614c-8672-4f77-9dad-4b400676f4b6").unwrap();
         let (_, attempt) = event_dungeon_data(&gd, eq15, 73, scaling).unwrap();
-        let xp: u64 = enemies(&attempt).iter().map(|e| e.given_xp).sum();
         assert_eq!(enemies(&attempt).len(), 14);
-        assert!(enemies(&attempt).iter().all(|e| e.enemy_level == 73 && e.given_xp == 258));
-        assert_eq!(xp, 14 * 258, "3612 XP for the whole dungeon, was 1400");
+        let mut levels: Vec<i64> = enemies(&attempt).iter().map(|e| e.enemy_level).collect();
+        levels.sort();
+        assert_eq!(levels, [vec![73; 8], vec![77; 5], vec![79]].concat());
+        assert_event_levels(&attempt, 73, scaling);
+        let xp: u64 = enemies(&attempt).iter().map(|e| e.given_xp).sum();
+        assert_eq!(
+            xp,
+            8 * 258 + 5 * scaling.given_xp(77) + scaling.given_xp(79),
+            "was 1400 at level 1"
+        );
     }
 
     #[test]
@@ -1452,7 +1480,7 @@ mod dungeon_settings_resolution {
             assert_eq!(enemies(&attempt).len(), enemy_count, "event {event}: retail's count");
             let chests: usize = attempt.chest_generated_data.values().map(Vec::len).sum();
             assert_eq!(chests, chest_count, "event {event}: retail's chests");
-            assert!(enemies(&attempt).iter().all(|e| e.enemy_level == 16 && e.given_xp > 0));
+            assert_event_levels(&attempt, 16, scaling);
 
             // The plain (unseeded) path the update handler heals empty rows with
             // covers the same stages.
