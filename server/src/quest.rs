@@ -6678,22 +6678,133 @@ mod event_quest_tests {
             // Finished two levels later: the row's band still decides.
             let paid = event_milestone_reward(&sd, Uuid::from_u128(0xE7), &row, 4).expect("last tier pays");
             let retail: RewardGrant = serde_json::from_str(retail).unwrap();
-            // A band captured with more than one payload differs only in the
-            // seasonally rotated material (9181f784 band 3: 1 instance each way);
-            // there the currencies and XP must still be retail's.
-            let band = tmpl.band_for_level(*minted_at).expect("bands shipped");
-            let rotated = band.meta["alternatives"].as_u64().unwrap_or(0) > 0;
-            let same = if rotated {
-                (&paid.currencies, paid.character_xp) == (&retail.currencies, retail.character_xp)
-            } else {
-                paid == retail
-            };
+            // Exact, materials included. 9181f784's band 3 was once exempted here as
+            // a "seasonally rotated material" (Moonstone in one capture, Malachite in
+            // the other); it was the level — 27 and 28, either side of the Glass
+            // unlock — and the per-level material now pays it exactly (#362).
+            let same = paid == retail;
             if !same {
                 wrong.push(format!("capture {capture} ({gld}, minted at {minted_at}): paid {}, retail {}",
                     serde_json::to_string(&paid).unwrap(), serde_json::to_string(&retail).unwrap()));
             }
         }
         assert!(wrong.is_empty(), "{} of {}:\n{}", wrong.len(), cases.len(), wrong.join("\n"));
+    }
+
+    /// The milestone + final material a row minted at `level` actually PAYS on its
+    /// last completion — through `event_milestone_reward`, the grant path, not just
+    /// the ladder the row displays.
+    fn materials_paid_at(sd: &StaticData, gld: Uuid, level: i64) -> std::collections::HashMap<Uuid, u64> {
+        let tmpl = &sd.event_quests.templates[&gld];
+        let mut row = quest(gld);
+        row.rewards = Some(tmpl.rewards_for_level(level));
+        row.final_reward = tmpl.final_reward_for_level(level);
+        let last = tmpl.milestone_count() - 1;
+        event_milestone_reward(sd, Uuid::from_u128(0x362), &row, last)
+            .expect("the last tier pays")
+            .stackable_items
+    }
+
+    const ORICHALCUM: &str = "74f091b5-fd88-464b-a98a-f60a5e8a0f25";
+    const DWARVEN: &str = "f11fb90b-b441-4d72-a33f-50d14d3d6778";
+    const QUICKSILVER: &str = "e80bee76-f92c-4005-9eff-20d1e8c64d24";
+    const EBONY: &str = "75112030-b248-49b0-9c70-0da8dea150d1";
+    const DRAGON_BONES: &str = "d523932f-8c7f-4192-9112-5dbd60883c2b";
+
+    /// Report #362: "today's event gives me Ebony ingots; that does not match my
+    /// level" — Sephoris, level 26, The Spectral Forest (7f0d1508) on 2026-10-07.
+    ///
+    /// Retail paid this event's metal by the claimant's own level, stepping at the
+    /// gear unlock levels: Orichalcum at 15, Ebony at 33-34, Dragon Bones at 50+
+    /// (18 retail characters). We paid the 26-35 band's one captured material, Ebony,
+    /// from level 26 up. Tier 5 is 96 ingots at every level; only the metal moves.
+    #[test]
+    fn report_362_the_spectral_forest_pays_the_claimants_own_metal() {
+        let sd = static_data();
+        let gld: Uuid = "7f0d1508-312b-4036-970f-ff5f4c342526".parse().unwrap();
+        for (level, metal) in [
+            (15, ORICHALCUM),
+            (20, DWARVEN),
+            (26, QUICKSILVER),
+            (35, EBONY),
+            (60, DRAGON_BONES),
+            (100, DRAGON_BONES),
+        ] {
+            let paid = materials_paid_at(&sd, gld, level);
+            let metal: Uuid = metal.parse().unwrap();
+            assert_eq!(paid.get(&metal), Some(&96), "level {level}: paid {paid:?}");
+            assert_eq!(paid.len(), 1, "level {level}: one metal, nothing else: {paid:?}");
+        }
+        // The report itself: no Ebony below Ebony's unlock level.
+        let ebony: Uuid = EBONY.parse().unwrap();
+        for level in [20, 26, 32] {
+            assert!(!materials_paid_at(&sd, gld, level).contains_key(&ebony), "level {level} paid Ebony");
+        }
+    }
+
+    /// Report #367: soul gems "should be Greater, I only get Common" — Sephoris on
+    /// 26eb6ab5 (2026-10-09), minted in the 36-45 band.
+    ///
+    /// Retail stepped this event's soul gem by level: Petty 18-19, Middling 37,
+    /// Common 40-43, Exceptional 47, Grand 56-58, Glorious 61-100 (21 characters).
+    /// The band data gave every 16-35 character Petty and every 46+ one Glorious. The
+    /// retail captures never show an event paying Greater (or Elevated) at all; at
+    /// Sephoris's level retail paid Middling or Common, which is what is served now.
+    #[test]
+    fn report_367_soul_gems_follow_the_claimants_level() {
+        let sd = static_data();
+        let gld: Uuid = "26eb6ab5-2d8c-4993-820e-ada79f6f00a8".parse().unwrap();
+        for (level, gem) in [
+            (20, "19ce1a65-057f-4f34-a0ed-27de7c085662"),  // Petty
+            (26, "19ce1a65-057f-4f34-a0ed-27de7c085662"),  // Petty
+            (35, "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029"),  // Middling
+            (40, "1ba210b4-8cca-4f2f-b942-8fab80a52fd8"),  // Common
+            (47, "3932e499-441e-4c6d-b671-9a03131ebe6f"),  // Exceptional
+            (60, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
+            (100, "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb"), // Glorious
+        ] {
+            let paid = materials_paid_at(&sd, gld, level);
+            let gem: Uuid = gem.parse().unwrap();
+            assert_eq!(paid.get(&gem), Some(&5), "level {level}: paid {paid:?}");
+            assert_eq!(paid.len(), 1, "level {level}: {paid:?}");
+        }
+    }
+
+    /// Identity test against retail: every material any retail event instance paid,
+    /// at the level its character had when the instance first appears — 409 distinct
+    /// (template, level, slot, item) observations, 29 templates, levels 10-100
+    /// (`script/extract_event_material_ladders.py`). A row minted at that level must
+    /// carry exactly that item in the same slot. 31 of them failed on the band data
+    /// alone.
+    #[test]
+    fn report_362_every_retail_event_material_is_paid_at_its_level() {
+        #[derive(serde::Deserialize)]
+        struct File {
+            observations: Vec<(Uuid, i64, String, Uuid)>,
+        }
+        let raw = include_str!("../../blades_lib/src/event_material_observations.json");
+        let file: File = serde_json::from_str(raw).expect("observations parse");
+        assert!(file.observations.len() >= 400, "{} observations", file.observations.len());
+
+        let sd = static_data();
+        let mut wrong = Vec::new();
+        for (gld, level, slot, item) in &file.observations {
+            let tmpl = &sd.event_quests.templates[gld];
+            let carried = match slot.as_str() {
+                "rewards" => tmpl
+                    .rewards_for_level(*level)
+                    .iter()
+                    .any(|t| t.stackable_items.contains_key(item)),
+                "final" => tmpl
+                    .final_reward_for_level(*level)
+                    .is_some_and(|f| f.stackable_items.contains_key(item)),
+                other => panic!("slot {other}"),
+            };
+            if !carried {
+                wrong.push(format!("{gld} level {level} {slot}: retail paid {item}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{} of {}:\n{}", wrong.len(), file.observations.len(), wrong.join("\n"));
     }
 
     /// No event milestone may grant gold, sigils or gems as a backpack item:
